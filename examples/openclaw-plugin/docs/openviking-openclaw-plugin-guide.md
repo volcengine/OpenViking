@@ -770,7 +770,7 @@ openclaw config get plugins.slots.contextEngine
 | 配置项 | 作用范围 | 默认值 | 可否写入插件配置文件 | 可否用环境变量 | 环境变量名 | 说明 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `baseUrl` | 所有搜索/召回请求 | `http://127.0.0.1:1933` | 是 | 是 | `OPENVIKING_BASE_URL` / `OPENVIKING_URL` | OpenViking 服务地址；所有 context search、`find/read/grep/session` 都依赖它：`config.ts:139` |
-| `apiKey` | 所有搜索/召回请求 | 空 | 是 | 是 | `OPENVIKING_API_KEY` | HTTP 认证 key；不配通常只能访问关闭认证的本地服务：`config.ts:202` |
+| `apiKey` | 所有搜索/召回请求 | 空 | 是 | 是 | `OPENVIKING_API_KEY` | HTTP 认证 key；OpenViking Server 的所有受支持模式都要求有效凭据：`config.ts:202` |
 | `accountId` | 多租户搜索路由 | 空 | 是 | 是 | `OPENVIKING_ACCOUNT_ID` | Root key / trusted 部署下显式指定 account，影响搜索命中空间：`config.ts:212` |
 | `userId` | 多租户搜索路由 | 空 | 是 | 是 | `OPENVIKING_USER_ID` | Root key / trusted 部署下显式指定 user，影响 user memory 检索范围：`config.ts:216` |
 | `peer_role` | session peer 归因和 actor-peer 路由 | `none` | 是 | 安装脚本/setup 参数支持 | `OPENVIKING_PEER_ROLE`（安装脚本写入 setup 参数） | `none` 使用共享 user memory（默认）；`assistant` 用 runtime agent 归因到 `peers/<assistant_id>`；`sender` 用 sender 身份归因到 `peers/<sender_id>`；旧值 `person` 等价于 `sender` |

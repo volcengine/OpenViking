@@ -1,13 +1,11 @@
 """Configuration loading utilities."""
 
-import ipaddress
 import json
 import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
 from loguru import logger
@@ -317,8 +315,7 @@ def _merge_current_ov_server_config(
         api_key_source = "server.root_api_key"
 
     effective_auth_mode = _bot_auth_mode_from_api_key_type(api_key_type, server_auth_mode)
-    mode = "local" if effective_auth_mode == "dev" else "remote"
-    bot_data["mode"] = mode
+    bot_data["mode"] = "remote"
     return effective_auth_mode, "inherited", api_key_source
 
 
@@ -334,8 +331,6 @@ def _normalize_api_key_type(value: Any) -> str:
 def _bot_auth_mode_from_api_key_type(api_key_type: str, server_auth_mode: str) -> str:
     if api_key_type == "root":
         return "trusted"
-    if server_auth_mode == "dev":
-        return "dev"
     # Preserve external-auth modes inherited from the server config so that
     # downstream code can produce a clear "unsupported with bot" error instead
     # of silently treating them as api_key.
@@ -346,7 +341,7 @@ def _bot_auth_mode_from_api_key_type(api_key_type: str, server_auth_mode: str) -
 
 def _ov_server_auth_mode(ov_server: Any) -> str:
     effective_auth_mode = str(getattr(ov_server, "effective_auth_mode", "") or "").strip().lower()
-    if effective_auth_mode in {"trusted", "api_key", "dev", "oidc", "ldap"}:
+    if effective_auth_mode in {"trusted", "api_key", "oidc", "ldap"}:
         return effective_auth_mode
 
     api_key_type = _normalize_api_key_type(getattr(ov_server, "api_key_type", "user"))
@@ -488,8 +483,6 @@ def _inherited_auth_mode_change_hint(actual_auth_mode: str, current_auth_mode: s
             " If trusted mode is intended, configure server.auth_mode='trusted' and "
             "server.root_api_key in the same ov.conf."
         )
-    if current_auth_mode == "dev":
-        hint += " A dev-mode VikingBot gateway must listen on localhost."
     return hint
 
 
@@ -512,11 +505,6 @@ def _auth_mode_change_hint(
             "To use this server, set bot.ov_server.api_key_type to 'user' and configure "
             "bot.ov_server.api_key with an OpenViking User/Admin API key, or change the "
             "OpenViking server.auth_mode and restart the server."
-        )
-    if actual_auth_mode == "dev":
-        return (
-            "To use this server, let VikingBot inherit the same dev OpenViking server "
-            "configuration, or change the OpenViking server.auth_mode and restart the server."
         )
     return (
         "Update bot.ov_server.api_key_type or the OpenViking server.auth_mode so both "
@@ -583,43 +571,8 @@ def _set_runtime_auth_mode(ov_server: Any, auth_mode: str) -> None:
         ov_server.api_key_type = "root"
     elif auth_mode == "api_key":
         ov_server.api_key_type = "user"
-    if auth_mode == "dev":
-        ov_server.mode = "local"
-    elif auth_mode:
+    if auth_mode:
         ov_server.mode = "remote"
-
-
-def _is_loopback_host(host: str) -> bool:
-    host = str(host or "").strip().lower()
-    if host.startswith("[") and host.endswith("]"):
-        host = host[1:-1]
-    if host in {"localhost", "127.0.0.1", "::1"}:
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _is_loopback_url(url: str) -> bool:
-    try:
-        host = urlsplit(url).hostname or ""
-    except ValueError:
-        return False
-    return _is_loopback_host(host)
-
-
-def _validate_dev_boundary(config: Config, server_url: str) -> None:
-    gateway = getattr(config, "gateway", None)
-    gateway_host = str(getattr(gateway, "host", "127.0.0.1") or "127.0.0.1").strip()
-    if _is_loopback_host(gateway_host) and _is_loopback_url(server_url):
-        return
-    print(
-        "Error: OpenViking dev auth can only be used when gateway and OpenViking server "
-        "are localhost.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
 
 
 def _raise_api_key_mode_requires_user_key(ov_server: Any) -> None:
@@ -789,9 +742,6 @@ def validate_openviking_auth(config: Config) -> None:
     if auth_mode == "api_key":
         _validate_api_key_mode_key(ov_server, server_url)
         return
-    if auth_mode == "dev":
-        _validate_dev_boundary(config, server_url)
-        return
     if auth_mode in {"oidc", "ldap"}:
         # External-auth modes are not yet wired through VikingBot's tool
         # credential propagation. Fail fast with an actionable message
@@ -801,7 +751,7 @@ def validate_openviking_auth(config: Config) -> None:
             f"'{auth_mode}' auth mode, which is not supported by "
             "VikingBot yet.\n"
             f"Either switch the server to a supported auth mode "
-            "(trusted, api_key, dev) or start openviking-server without "
+            "(trusted, api_key) or start openviking-server without "
             "the --with-bot flag.",
             file=sys.stderr,
         )

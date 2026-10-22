@@ -41,7 +41,7 @@ export type QuickPlan = {
   upstreams: Upstream[]
   /** Existing profile to use; undefined means create the default one. */
   profile?: Profile
-  /** Root outside dev mode can't hold a key, so it picks the key's user. */
+  /** Root can't hold a gateway key, so it picks the key's user. */
   pickUser: boolean
 }
 

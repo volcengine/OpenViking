@@ -5,7 +5,9 @@
         "port": 1933,
         "executor_threads": 0,
         "timeout_keep_alive": 5,
+        "auth_mode": "api_key",
         "root_api_key": null,
+        "_comment": "Run `openviking-server init` and select `Generate one for me` to generate a random root API key before starting the server.",
         "cors_origins": ["*"],
         "agent_evolution": {
             "enabled": false,

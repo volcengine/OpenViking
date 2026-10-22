@@ -60,11 +60,12 @@ export async function runSetupWizard({
 
     const defaultUrl = current.url || LOCAL_URL;
     say("Where do you connect to OpenViking?");
-    say(`  1) Self-hosted / local        [${LOCAL_URL}]`);
+    say(`  1) Self-hosted / local (Trusted) [${LOCAL_URL}]`);
     say(`  2) Volcengine OpenViking Cloud [${CLOUD_URL}]`);
     say(`  3) Custom URL / keep current   [${defaultUrl}]`);
     const mode = (await rl.question("Choice [1/2/3, default 3]: ")).trim();
     let url = defaultUrl;
+    let trusted = mode === "1";
     if (mode === "1") {
       url = LOCAL_URL;
     } else if (mode === "2") {
@@ -72,23 +73,35 @@ export async function runSetupWizard({
     } else {
       const answer = (await rl.question(`Server URL [${defaultUrl}]: `)).trim();
       if (answer) url = answer;
+      const defaultAuth = url === current.url && (current.account || current.account_id || current.user || current.user_id) ? "1" : "2";
+      const auth = (await rl.question(`Server authentication [1 = Trusted, 2 = API Key, default ${defaultAuth}]: `)).trim();
+      trusted = (auth || defaultAuth) === "1";
     }
 
-    const keyPrompt = current.api_key
-      ? `API key [enter = keep ${maskSecret(current.api_key)}, '-' = clear]: `
-      : "API key (leave empty for unauthenticated local mode): ";
-    const keyAnswer = await rl.question(keyPrompt);
     let apiKey = current.api_key || "";
-    if (keyAnswer === "-") apiKey = "";
-    else if (keyAnswer.trim()) apiKey = keyAnswer.trim();
-    else if (!current.api_key) apiKey = "";
+    while (true) {
+      const keyPrompt = current.api_key
+        ? `API key [enter = keep ${maskSecret(current.api_key)}]: `
+        : "API key (required): ";
+      const keyAnswer = await rl.question(keyPrompt);
+      if (keyAnswer.trim()) apiKey = keyAnswer.trim();
+      else if (current.api_key) apiKey = current.api_key;
+      if (apiKey) break;
+      say("API key is required.");
+    }
 
     const next = { ...current, url, api_key: apiKey };
+    for (const field of ["account", "account_id", "user", "user_id"]) delete next[field];
+    if (trusted) {
+      next.account = (url === current.url && (current.account || current.account_id)) || "default";
+      next.user = (url === current.url && (current.user || current.user_id)) || "default";
+    }
 
     say("");
     say("Changes:");
     say(`  url:     ${current.url || "(not set)"} -> ${next.url}`);
     say(`  api_key: ${maskSecret(current.api_key)} -> ${maskSecret(next.api_key)}`);
+    say(`  account/user: ${trusted ? `${next.account}/${next.user} (Trusted)` : "(from API key)"}`);
     const confirm = (await rl.question("Write config? [Y/n] ")).trim().toLowerCase();
     if (confirm === "n" || confirm === "no") {
       say("Aborted; nothing written.");

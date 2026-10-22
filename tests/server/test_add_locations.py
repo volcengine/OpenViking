@@ -45,9 +45,9 @@ def _configure_test_env(monkeypatch, tmp_path):
 def user_role_client(app, client: httpx.AsyncClient):
     """Client whose requests carry a USER-role identity.
 
-    The dev auth plugin resolves every request to ROOT, which deliberately skips
-    current-user alias resolution; add-location targets are a user-facing feature,
-    so these tests exercise them as a real user.
+    The test auth plugin resolves requests to ROOT, which deliberately skips
+    current-user alias resolution; add-location targets are a user-facing
+    feature, so these tests exercise them as a real user.
     """
     from openviking.server.auth import get_request_context
     from openviking.server.identity import RequestContext, Role

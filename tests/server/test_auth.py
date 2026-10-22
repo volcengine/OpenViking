@@ -4,6 +4,7 @@
 """Tests for multi-tenant authentication (openviking/server/auth.py)."""
 
 import uuid
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -18,7 +19,7 @@ from openviking.server.app import create_app
 from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.auth.plugins.api_key import _api_key_root_can_access_path
 from openviking.server.auth.registry import get_registry
-from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
+from openviking.server.config import ServerConfig, validate_server_config
 from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
@@ -32,6 +33,8 @@ from openviking.service.task_tracker import (
 )
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+from tests.server.auth_test_utils import FixedIdentityAuthPlugin
 
 
 def _uid() -> str:
@@ -119,19 +122,22 @@ def _make_request(
     for key, value in request_headers.items():
         raw_headers.append((key.lower().encode("latin-1"), value.encode("latin-1")))
     app = FastAPI()
-    # When auth is disabled and mode is the default api_key, fall back to dev mode
-    effective_auth_mode = auth_mode if auth_enabled or auth_mode != "api_key" else "dev"
+    use_fixed_identity = not auth_enabled and auth_mode == "api_key"
+    effective_auth_mode = "test_fixed_identity" if use_fixed_identity else auth_mode
     app.state.config = ServerConfig(auth_mode=effective_auth_mode, root_api_key=root_api_key)
     app.state.api_key_manager = (
         api_key_manager if auth_enabled and api_key_manager is not None else None
     )
     # Set auth plugin based on mode
     registry = get_registry()
-    plugin_cls = registry.get(effective_auth_mode)
-    if plugin_cls is not None:
-        app.state.auth_plugin = plugin_cls()
-        if effective_auth_mode == "trusted":
-            app.state.auth_plugin._api_key_manager = api_key_manager
+    if not use_fixed_identity:
+        plugin_cls = registry.get(effective_auth_mode)
+        if plugin_cls is not None:
+            app.state.auth_plugin = plugin_cls()
+            if effective_auth_mode == "trusted":
+                app.state.auth_plugin._api_key_manager = api_key_manager
+    else:
+        app.state.auth_plugin = FixedIdentityAuthPlugin()
     scope = {
         "type": "http",
         "path": path,
@@ -160,15 +166,18 @@ def _build_auth_http_test_app(
         root_api_key = ROOT_KEY
 
     app = FastAPI()
-    # When auth is disabled and mode is the default api_key, fall back to dev mode
-    effective_auth_mode = auth_mode if auth_enabled or auth_mode != "api_key" else "dev"
+    use_fixed_identity = not auth_enabled and auth_mode == "api_key"
+    effective_auth_mode = "test_fixed_identity" if use_fixed_identity else auth_mode
     app.state.config = ServerConfig(auth_mode=effective_auth_mode, root_api_key=root_api_key)
     app.state.api_key_manager = object() if auth_enabled else None
     # Set auth plugin based on mode
     registry = get_registry()
-    plugin_cls = registry.get(effective_auth_mode)
-    if plugin_cls is not None:
-        app.state.auth_plugin = plugin_cls()
+    if not use_fixed_identity:
+        plugin_cls = registry.get(effective_auth_mode)
+        if plugin_cls is not None:
+            app.state.auth_plugin = plugin_cls()
+    else:
+        app.state.auth_plugin = FixedIdentityAuthPlugin()
 
     @app.exception_handler(OpenVikingError)
     async def openviking_error_handler(request: FastAPIRequest, exc: OpenVikingError):
@@ -249,12 +258,33 @@ def _build_task_http_test_app(identity: ResolvedIdentity | None) -> FastAPI:
 @pytest_asyncio.fixture(scope="function")
 async def auth_service(temp_dir):
     """Service for auth tests."""
+    OpenVikingConfigSingleton.reset_instance()
+    OpenVikingConfigSingleton.initialize(
+        config_dict={
+            "storage": {
+                "workspace": str(temp_dir / "auth_data"),
+                "agfs": {"backend": "local"},
+                "vectordb": {"backend": "local"},
+            },
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "model": "test-embedder",
+                    "api_key": "test-key",
+                    "dimension": 1024,
+                }
+            },
+        }
+    )
     svc = OpenVikingService(
         path=str(temp_dir / "auth_data"), user=UserIdentifier.the_default_user("auth_user")
     )
-    await svc.initialize()
-    yield svc
-    await svc.close()
+    try:
+        await svc.initialize()
+        yield svc
+    finally:
+        await svc.close()
+        OpenVikingConfigSingleton.reset_instance()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -374,12 +404,6 @@ async def test_bearer_without_prefix_fails(auth_client: httpx.AsyncClient):
         headers={"Authorization": ROOT_KEY},
     )
     assert resp.status_code == 401
-
-
-async def test_dev_mode_no_auth(client: httpx.AsyncClient):
-    """When no root_api_key configured (dev mode), all requests pass as ROOT."""
-    resp = await client.get("/api/v1/system/status")
-    assert resp.status_code == 200
 
 
 async def test_auth_on_multiple_endpoints(auth_client: httpx.AsyncClient):
@@ -758,8 +782,7 @@ async def test_root_debug_vector_requests_rejected_in_api_key_mode():
         await get_request_context(request, identity)
 
 
-async def test_dev_mode_root_tenant_scoped_requests_allow_implicit_identity():
-    """Dev mode should keep the existing implicit ROOT/default behavior."""
+async def test_fixed_identity_fixture_allows_root_tenant_scoped_requests():
     request = _make_request("/api/v1/resources", auth_enabled=False)
     identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
 
@@ -830,8 +853,8 @@ async def test_root_debug_vector_requests_return_structured_403_via_http():
     assert response.json()["error"]["code"] == "PERMISSION_DENIED"
 
 
-async def test_dev_mode_root_tenant_scoped_requests_keep_200_via_http():
-    """Dev mode HTTP routes should keep the existing implicit ROOT/default behavior."""
+async def test_fixed_identity_fixture_root_tenant_requests_keep_200_via_http():
+    """The test-only fixed identity can isolate tenant route behavior."""
     app = _build_auth_http_test_app(
         ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default"),
         auth_enabled=False,
@@ -1482,27 +1505,17 @@ async def test_trusted_mode_http_routes_accept_api_key_when_root_key_configured(
     assert response.json()["result"] == {"account_id": "acme", "user_id": "alice"}
 
 
-# ---- _is_localhost tests ----
-
-
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
-def test_is_localhost_true(host: str):
-    assert _is_localhost(host) is True
-
-
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.1", "10.0.0.1"])
-def test_is_localhost_false(host: str):
-    assert _is_localhost(host) is False
-
-
 # ---- validate_server_config tests ----
 
 
-def test_validate_no_key_localhost_passes():
-    """No root_api_key + localhost should pass validation."""
-    for host in ("127.0.0.1", "localhost", "::1"):
-        config = ServerConfig(host=host, root_api_key=None)
-        validate_server_config(config)  # should not raise
+def test_validate_no_key_fails_on_every_host():
+    with patch("logging.getLogger") as get_logger:
+        for host in ("127.0.0.1", "localhost", "::1"):
+            config = ServerConfig(host=host, root_api_key=None)
+            with pytest.raises(SystemExit):
+                validate_server_config(config)
+    messages = "\n".join(call.args[0] for call in get_logger.return_value.error.call_args_list)
+    assert "Update server & auth" in messages
 
 
 def test_validate_no_key_non_localhost_raises():
@@ -1510,6 +1523,20 @@ def test_validate_no_key_non_localhost_raises():
     config = ServerConfig(host="0.0.0.0", root_api_key=None)
     with pytest.raises(SystemExit):
         validate_server_config(config)
+
+
+def test_validate_removed_dev_mode_reports_migration(monkeypatch):
+    config = ServerConfig(host="127.0.0.1", auth_mode="dev")
+    messages = []
+    monkeypatch.setattr("openviking.server.config.logger.error", messages.append)
+
+    with pytest.raises(SystemExit):
+        validate_server_config(config)
+
+    text = "\n".join(messages)
+    assert "auth_mode='dev' has been removed" in text
+    assert "openviking-server init" in text
+    assert "Update server & auth" in text
 
 
 def test_validate_with_key_any_host_passes():

@@ -45,7 +45,7 @@ export function GatewayUnavailable({
   const { t } = useTranslation('gateway')
   const { connectionRole, serverMode, openvikingUrl, isGatewayHost } =
     useAppConnection()
-  const isRoot = serverMode === 'dev' || connectionRole === 'root'
+  const isRoot = connectionRole === 'root'
   // On an OpenViking server only root can change ov.conf; a standalone
   // gateway host keeps showing the instructions to its admins as well.
   const canConfigure = isRoot || (isGatewayHost && connectionRole === 'admin')

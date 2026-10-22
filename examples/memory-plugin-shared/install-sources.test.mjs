@@ -94,7 +94,7 @@ test("a default install of cursor, zcode and opencode downloads the bundle once 
 
   const result = run(home, bin, [
     "--harness", "cursor,zcode,opencode", "--lang", "en",
-    "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes",
   ]);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
@@ -136,7 +136,7 @@ test("a GitHub-channel Claude install moves to TOS, and its statusline follows t
   const install = (...extra) => {
     const result = run(home, bin, [
       "--harness", "claude", "--lang", "en",
-      "--url", "http://127.0.0.1:9", "--api-key", "", "--yes", ...extra,
+      "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes", ...extra,
     ], { OPENVIKING_DOWNLOAD_BASE: "https://tos.example.invalid" });
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     return result;
@@ -223,7 +223,7 @@ exit 0
 `);
 
   const result = run(home, bin, [
-    "--harness", "claude", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    "--harness", "claude", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes",
   ], { OPENVIKING_DOWNLOAD_BASE: "https://tos.example.invalid" });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /Skipping claude: it has no 'plugin' command\. The plugin needs Claude Code 2\.0 or newer/);
@@ -280,7 +280,7 @@ for (const inheritedKey of ["CODEX_HOME", "CODEX_CONFIG_FILE"]) {
       delete process.env.CODEX_CONFIG_FILE;
       process.env[inheritedKey] = inheritedKey === "CODEX_HOME" ? callerHome : callerConfig;
       result = run(home, bin, [
-        "--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+        "--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes",
       ]);
     } finally {
       for (const [key, value] of Object.entries(saved)) {
@@ -305,7 +305,7 @@ test("Codex moves to the git marketplace, falls back to the bundle, and says how
   const install = (extraEnv) => {
     rmSync(join(fake, "calls.log"), { force: true });
     const result = run(home, bin, [
-      "--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+      "--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes",
     ], extraEnv);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     return { stdout: result.stdout, calls: readFileSync(join(fake, "calls.log"), "utf8").split("\n") };
@@ -346,7 +346,7 @@ test("Codex drops the pre-unification marketplace and replaces a registration it
   }));
 
   const result = run(home, bin, [
-    "--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    "--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes",
   ]);
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -369,7 +369,7 @@ test("of several download locations, the first to answer serves the whole instal
   const base = join(home, "dl");
   mkdirSync(join(base, "plugins", "claude"), { recursive: true });
   writeFileSync(join(base, "plugins", "claude", "marketplace.json"), "{}");
-  const args = ["--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes"];
+  const args = ["--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes"];
 
   for (const bases of [`http://127.0.0.1:1/dl file://${base}/`, `file://${base} http://127.0.0.1:1/dl`]) {
     rmSync(join(fake, "calls.log"), { force: true });
@@ -381,7 +381,7 @@ test("of several download locations, the first to answer serves the whole instal
   }
 
   // With none answering, the first one is named in what fails.
-  const none = run(home, bin, ["--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes"], {
+  const none = run(home, bin, ["--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes"], {
     OPENVIKING_DOWNLOAD_BASE: "http://127.0.0.1:1/dl http://127.0.0.1:1/other",
   });
   assert.equal(none.status, 1, `${none.stdout}\n${none.stderr}`);
@@ -398,7 +398,7 @@ test("a handled CLI failure neither reports itself nor disarms the error report"
   mkdirSync(fake);
   writeFakeCodex(bin, fake);
   const install = () => spawnSync("/bin/bash", [
-    installer, "--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    installer, "--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes",
   ], { cwd: home, env: installEnv(home, bin, { CODEX_HOME: join(home, ".codex"), FAKE_CODEX_GIT_FAILS: "1" }), encoding: "utf8" });
 
   const fellBack = install();
@@ -434,7 +434,7 @@ test("Claude Code and Codex files go where CLAUDE_CONFIG_DIR and CODEX_HOME poin
   writeFileSync(cachedProxy, "");
 
   const result = run(home, bin, [
-    "--harness", "claude,codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--statusline", "--yes",
+    "--harness", "claude,codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--statusline", "--yes",
   ], { OPENVIKING_DOWNLOAD_BASE: "https://tos.example.invalid", CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexDir });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
@@ -453,7 +453,7 @@ test("retired GitHub-channel options are accepted, announced and ignored", () =>
   mkdirSync(bin);
   const notice = /The GitHub install channel was removed and its options are ignored/;
   const install = (args, extraEnv) => run(home, bin, [
-    "--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes", ...args,
+    "--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes", ...args,
   ], extraEnv);
 
   for (const [args, extraEnv] of [
@@ -486,7 +486,7 @@ test("the installer runs when bash reads it from stdin", () => {
   const help = piped(["--help"]);
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /^Usage: install\.sh/);
-  const installed = piped(["--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes"]);
+  const installed = piped(["--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes"]);
   assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
   assert.ok(existsSync(join(home, ".openviking", "agent-integrations", "cursor", "scripts", "hook.mjs")));
 });
@@ -497,7 +497,7 @@ test("a copy that is not a release build runs the release installer", () => {
   mkdirSync(bin);
   const release = join(home, "tos", "memory-plugin-shared", "install.sh");
   mkdirSync(dirname(release), { recursive: true });
-  const args = ["--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes"];
+  const args = ["--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes"];
   // A lib/install beside the script would be taken for the installer's own
   // helpers, so the release copy runs alone in a directory it then removes.
   const tmp = join(home, "tmp");
@@ -572,7 +572,7 @@ function resolverHome() {
   return { home, bin, downloads };
 }
 
-const cursorArgs = ["--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes"];
+const cursorArgs = ["--harness", "cursor", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes"];
 const latestZip = `file://${tosBase}/releases/latest/memory-plugin-marketplace.zip`;
 
 test("the resolver pins the release each harness installs, asked for under its public name", async () => {
@@ -593,7 +593,7 @@ exit 0
   requests.length = 0;
 
   const result = await runAsync(home, bin, [
-    "--harness", "cursor,trae-cli", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    "--harness", "cursor,trae-cli", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key", "--yes",
   ], siteEnv);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 

@@ -644,7 +644,7 @@ describe('OverviewPage quick mode', () => {
   })
 
   it('issues a key with the seeded upstream and profile in one request', async () => {
-    host.serverMode = 'dev'
+    host.serverMode = 'api_key'
     api.listUpstreams.mockResolvedValue([ARK])
     api.listProfiles.mockResolvedValue([DEFAULT_PROFILE])
     api.issueKey.mockResolvedValue(ISSUED)

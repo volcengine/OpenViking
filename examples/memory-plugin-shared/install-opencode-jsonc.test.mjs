@@ -211,7 +211,7 @@ for (const sourceMode of ["dev", "archive"]) {
         "--source", sourceMode,
         "--lang", "en",
         "--url", "http://127.0.0.1:9",
-        "--api-key", "",
+        "--api-key", "test-key",
         "--yes",
       ], {
         cwd: source,

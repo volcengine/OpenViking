@@ -140,7 +140,7 @@ docker compose -f examples/grafana/docker-compose.localhost.yml up -d
 - Prometheus 使用宿主机网络，直接抓取 `127.0.0.1:30300/metrics`
 - Grafana 也使用宿主机网络，并直接连接 `http://127.0.0.1:30909`
 - 不需要把 OpenViking 改成 `0.0.0.0`
-- Dev 模式可继续监听 loopback；更改 OpenViking 监听地址前，先查看[认证要求](04-authentication.md)
+- 已认证的本地模式可继续监听 loopback；更改 OpenViking 监听地址前，先查看[认证要求](04-authentication.md)
 
 访问地址仍然是：
 

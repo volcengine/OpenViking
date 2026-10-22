@@ -10,18 +10,19 @@ description: 开启 OpenViking 网关，签发网关密钥，发送测试请求�
 
 | 你的服务端 | 跟着做 |
 | --- | --- |
-| 绑定在 `127.0.0.1`，本地 dev 模式（未配置 `root_api_key`） | [本地服务](#local-server-no-api-key) |
+| 绑定在 `127.0.0.1`，使用 API Key 认证 | [本地服务](#local-server-no-api-key) |
 | 通过网络访问，使用 `api_key` 认证 | [远程服务](#remote-server-api-keys) |
 | 已有 OpenViking 服务，不想改它的配置 | 先按[独立部署](../guides/22-gateway-operations.md#standalone-deployment)运行网关，再回到[发送测试请求](#send-a-test-request) |
 
-## 本地服务（不需要 API 密钥） {#local-server-no-api-key}
+## 本地服务 {#local-server-no-api-key}
 
-本地 dev 模式的服务不需要 OpenViking API 密钥：打开 Studio 不用填密钥，签发的网关密钥以本地 `default` 用户的身份读写记忆。
+启用嵌入式网关后，本地服务也使用 API Key 认证。`openviking-server init` 会把原来的本地 Trusted 配置切换为 API Key 模式。
 
 1. **开启网关。** 运行 `openviking-server init`，在 **Enable OpenViking Gateway on the same port?** 处回答 yes；已有配置时，在菜单中选择 **Update gateway**。也可以手动把 `{"gateway": {"enabled": true}}` 合并进 `ov.conf`。
 2. **启动或重启 `openviking-server`。** 网关和 OpenViking 共用同一个端口，地址是 `http://127.0.0.1:1933/gateway`。
-3. **在 Studio 中打开网关。** 打开 <http://127.0.0.1:1933/studio/>，在侧边栏选择 **OpenViking 网关**。默认账号还没有[上游](../guides/15-gateway.md#key-terms)时，网关启动时会把服务端的 VLM 配置导入为上游，并创建一份上下文配置。此时“概览”标签页的**快速开始**清单应该已经完成了前两步（见[快速开始清单和快速模式](06-manage-in-studio.md#get-started-checklist)）。导入的 Coding Plan 上游需要你确认后才能使用，见[导入 OpenViking 模型配置](07-upstreams.md#import-openviking-model-settings)；没有可导入的配置时，按[上游](07-upstreams.md#upstreams)手动添加。
-4. **签发网关密钥。** 在“概览”标签页的**快速模式**卡片中点**一键生成密钥**；也可以手动签发：在“密钥”标签页点**签发密钥**，填写名称，选择上下文配置和上游，然后签发。随后会弹出**复制网关密钥**对话框，显示完整的 `ovgw_…` 密钥。密钥只显示这一次，关闭对话框前务必复制。
+3. **创建普通 OpenViking 身份。** 运行 `ov config`，使用 root key 连接，在**用户管理**中创建或选择 `default/default`，并保存其 User/Admin key。root key 不能作为网关业务密钥。
+4. **在 Studio 中打开网关。** 打开 <http://127.0.0.1:1933/studio/>，用该 User/Admin key 登录，在侧边栏选择 **OpenViking 网关**。可用**快速模式**导入可用 VLM 配置、创建默认上下文配置并签发网关密钥，也可以逐项手动配置。导入的 Coding Plan 上游需要确认后才能使用。
+5. **复制网关密钥。** 完整的 `ovgw_…` 只显示一次。
 
 网关地址是 `http://127.0.0.1:1933/gateway`。接下来[发送测试请求](#send-a-test-request)。
 

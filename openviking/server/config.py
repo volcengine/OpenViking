@@ -349,7 +349,7 @@ class ServerConfig(BaseModel):
     # connections the client still believes are reusable, causing sporadic
     # connection-reset / EOF errors.
     timeout_keep_alive: int = 5
-    auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
+    auth_mode: Optional[str] = None  # If None, default to api_key
     root_api_key: Optional[str] = None
     # OIDC/LDAP authentication configuration
     oidc: Optional[OIDCConfig] = None
@@ -391,18 +391,11 @@ class ServerConfig(BaseModel):
         return value.model_dump() if isinstance(value, UserConfig) else value
 
     def get_effective_auth_mode(self) -> str:
-        """Get effective auth mode, auto-detecting if not explicitly set.
-
-        - If root_api_key is configured (non-empty) and auth_mode is None: api_key
-        - If root_api_key is not configured and auth_mode is None: dev
-        """
+        """Get the configured auth mode, defaulting to API key authentication."""
         auth_mode_text = str(self.auth_mode).strip() if self.auth_mode is not None else ""
         if auth_mode_text:
             return auth_mode_text
-
-        if self.root_api_key is not None and str(self.root_api_key).strip():
-            return AuthMode.API_KEY.value
-        return AuthMode.DEV.value
+        return AuthMode.API_KEY.value
 
 
 def map_bind_host_to_loopback(host: str) -> str:
@@ -566,14 +559,6 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     )
 
 
-_LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-def _is_localhost(host: str) -> bool:
-    """Return True if *host* resolves to a loopback address."""
-    return host in _LOCALHOST_HOSTS
-
-
 def load_bot_gateway_token(config_path: Optional[str] = None) -> str:
     """Load bot gateway token from ov.conf bot.gateway.token."""
     path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
@@ -594,12 +579,8 @@ def validate_server_config(config: ServerConfig) -> None:
     """Validate server config for safe startup.
 
     Validation is delegated to the auth plugin registered for the effective
-    auth_mode. Built-in plugins (dev, api_key, trusted) preserve the original
+    auth_mode. Built-in plugins (api_key, trusted) preserve the original
     validation behaviour.
-
-    If auth_mode is not explicitly configured:
-    - If root_api_key is configured (non-empty): auto-select api_key mode
-    - If root_api_key is not configured: auto-select dev mode
 
     Raises:
         SystemExit: If the configuration is unsafe.
@@ -615,15 +596,23 @@ def validate_server_config(config: ServerConfig) -> None:
         sys.exit(1)
 
     effective_auth_mode = config.get_effective_auth_mode()
+    if effective_auth_mode == "dev":
+        logger.error(
+            "server.auth_mode='dev' has been removed because it exposed an "
+            "unauthenticated ROOT endpoint. Run `openviking-server init`, then choose "
+            "`Update server & auth` to update the configuration. Use trusted mode with "
+            "a non-empty root_api_key for local direct access, or api_key/OIDC/LDAP "
+            "for gateway, remote, or multi-user deployments."
+        )
+        sys.exit(1)
 
     # Ensure built-in plugins are registered before validation.
     # If a non-built-in plugin has already claimed a built-in mode name,
     # log a security warning and forcefully override it.
-    from openviking.server.auth.plugins import ApiKeyAuthPlugin, DevAuthPlugin, TrustedAuthPlugin
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin, TrustedAuthPlugin
 
     registry = get_registry()
     _BUILTIN_PLUGINS = {
-        "dev": DevAuthPlugin,
         "api_key": ApiKeyAuthPlugin,
         "trusted": TrustedAuthPlugin,
     }

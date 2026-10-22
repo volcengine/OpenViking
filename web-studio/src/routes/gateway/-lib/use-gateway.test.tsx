@@ -175,16 +175,13 @@ it('uses the ordinary OV key without an administrator key', () => {
   expect(result.current.allowed).toBe(true)
   expect(result.current.connection.apiKey).toBe('data-key')
 })
-it.each(['dev', 'trusted'])(
-  'asks /access in %s mode without either credential',
-  (serverMode) => {
-    state.serverMode = serverMode
-    state.adminApiKey = ''
-    state.apiKey = ''
-    const { result } = renderHook(() => useGateway(), { wrapper })
-    expect(result.current.allowed).toBe(true)
-  },
-)
+it('asks /access in trusted mode without either credential', () => {
+  state.serverMode = 'trusted'
+  state.adminApiKey = ''
+  state.apiKey = ''
+  const { result } = renderHook(() => useGateway(), { wrapper })
+  expect(result.current.allowed).toBe(true)
+})
 it('partitions caches by the management key without storing the secret in query keys', () => {
   const locked = gatewayScope('http://ov', 'default', 'ov-key')
   const unlocked = gatewayScope('http://ov', 'default', 'ov-key', 'ovgm-secret')

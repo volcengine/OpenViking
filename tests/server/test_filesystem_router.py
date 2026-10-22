@@ -238,10 +238,13 @@ async def test_mkdir_echoes_canonical_home_alias(monkeypatch, role):
 
 
 @pytest.mark.asyncio
-async def test_dev_root_http_mkdir_expands_home_alias_from_request_identity(
+async def test_fixed_root_http_mkdir_expands_home_alias_from_request_identity(
     app, client, monkeypatch
 ):
-    """Exercise the REST auth dependency and router with a dev-mode ROOT request."""
+    """Exercise the REST auth dependency and router with a fixed ROOT identity."""
+    from tests.server.auth_test_utils import FixedIdentityAuthPlugin
+
+    app.state.auth_plugin = FixedIdentityAuthPlugin(account_id="acct", user_id="alice")
     seen = {}
 
     async def fake_mkdir(uri, ctx=None, description=None):

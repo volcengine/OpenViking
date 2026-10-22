@@ -213,7 +213,8 @@ async def test_lifespan_shutdown_ignores_cancelled_service_close(monkeypatch):
         "openviking.server.app.get_task_tracker",
         lambda: SimpleNamespace(start_cleanup_loop=lambda: None, stop_cleanup_loop=lambda: None),
     )
-    app = create_app(config=ServerConfig())
+    monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", AsyncMock())
+    app = create_app(config=ServerConfig(root_api_key="test-root-key"))
 
     async with app.router.lifespan_context(app):
         pass
@@ -229,7 +230,7 @@ async def test_health_responds_during_initialization(monkeypatch):
     service = MockService()
     monkeypatch.setattr("openviking.server.dependencies._service", service)
 
-    app = create_app(config=ServerConfig(), service=service)
+    app = create_app(config=ServerConfig(root_api_key="test-root-key"), service=service)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/health")
@@ -247,7 +248,7 @@ async def test_ready_returns_503_before_initialized(monkeypatch):
     service = MockService()
     monkeypatch.setattr("openviking.server.dependencies._service", service)
 
-    app = create_app(config=ServerConfig(), service=service)
+    app = create_app(config=ServerConfig(root_api_key="test-root-key"), service=service)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/ready")
@@ -284,12 +285,8 @@ async def test_ready_returns_200_after_initialized(monkeypatch):
         "openviking_cli.utils.ollama.detect_ollama_in_config",
         lambda config: (False, None, None),
     )
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.open_viking_config.OpenVikingConfigSingleton.get_instance",
-        lambda: SimpleNamespace(embedding=SimpleNamespace(get_embedder=lambda: None)),
-    )
 
-    app = create_app(config=ServerConfig(), service=service)
+    app = create_app(config=ServerConfig(root_api_key="test-root-key"), service=service)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/ready")
@@ -311,7 +308,7 @@ async def test_slow_init_does_not_block_health(monkeypatch):
     service = MockService()
     monkeypatch.setattr("openviking.server.dependencies._service", service)
 
-    app = create_app(config=ServerConfig(), service=service)
+    app = create_app(config=ServerConfig(root_api_key="test-root-key"), service=service)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         start = time.perf_counter()

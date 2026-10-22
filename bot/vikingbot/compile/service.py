@@ -304,7 +304,7 @@ class BotCompileService:
                 if request.openviking_connection is not None
                 else None
             )
-            if not connection and self._openviking_auth_mode() != "dev":
+            if not connection:
                 raise CompileFailure(
                     "UNAVAILABLE",
                     "Compile requires an authenticated OpenViking connection.",
@@ -312,7 +312,7 @@ class BotCompileService:
                 )
             connection = connection or {}
             account_id = connection.get("account_id")
-            if self._openviking_auth_mode() != "dev" and not (account_id or "").strip():
+            if not (account_id or "").strip():
                 raise CompileFailure(
                     "UNAUTHENTICATED", "Compile requires account_id.", stage="queued"
                 )
@@ -671,9 +671,7 @@ class BotCompileService:
         request: SanitizedCompileRequest,
         connection: dict[str, Any],
     ) -> None:
-        account_id = (
-            "default" if self._openviking_auth_mode() == "dev" else connection["account_id"]
-        )
+        account_id = connection["account_id"]
         target = (account_id, request.to)
         task_lock = await self._retain_target_lock(target)
         acquired = False

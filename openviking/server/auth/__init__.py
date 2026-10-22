@@ -351,9 +351,8 @@ require_admin = require_role(Role.ADMIN)
 require_user = require_role(Role.USER)
 
 
-_DEV_MODE_ADMIN_API_MESSAGE = (
-    "Admin API requires api_key mode with root_api_key configured. Development mode does not "
-    'support account or user management. You should set server.auth_mode = "api_key" in ov.conf'
+_IDENTITY_MANAGEMENT_UNAVAILABLE_MESSAGE = (
+    "The active authentication mode does not provide local account and API key management."
 )
 
 
@@ -391,7 +390,7 @@ def require_auth_role(*allowed_roles: Role):
                 )
 
             if getattr(request.app.state, "api_key_manager", None) is None:
-                raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
+                raise PermissionDeniedError(_IDENTITY_MANAGEMENT_UNAVAILABLE_MESSAGE)
 
             if ctx.role not in allowed_roles:
                 raise PermissionDeniedError(
@@ -430,7 +429,7 @@ def get_api_key_manager_or_raise(request: Request):
     """Return the compatibility management facade exposed by the auth mode."""
     manager = getattr(request.app.state, "api_key_manager", None)
     if manager is None:
-        raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
+        raise PermissionDeniedError(_IDENTITY_MANAGEMENT_UNAVAILABLE_MESSAGE)
     return manager
 
 

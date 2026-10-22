@@ -760,16 +760,10 @@ const workspace = {
     },
   },
   connection: {
-    devMode: {
-      description:
-        '当前服务会自动提供身份，通常不需要填写账号、用户和 API 密钥。',
-      title: '服务端托管身份',
-    },
     dialog: {
       title: '连接设置',
     },
     identitySummary: {
-      dev: '服务端隐式身份',
       named: '{{identity}}',
       unset: '未设置身份',
     },
@@ -1193,7 +1187,6 @@ const workspace = {
       adminError: 'Root API 密钥校验失败：{{message}}',
       description:
         '租户数据 API 使用用户 API 密钥；控制 API 可另行使用 Root 或账号管理员 API 密钥。',
-      devMode: '当前为开发模式，身份会自动确定，无需 API 密钥。',
       keyGuide: {
         control: {
           primary:
@@ -1367,7 +1360,6 @@ const workspace = {
       adminApiKey: 'Root 或账号管理员 API 密钥',
       apiKey: '输入 X-API-Key 或 Bearer 令牌',
       baseUrl: 'http://127.0.0.1:1933',
-      devModeApiKey: '[开发模式，无需 API 密钥]',
       userApiKey: '用户 API 密钥',
       user: 'default',
     },
@@ -1379,7 +1371,6 @@ const workspace = {
     serverMode: {
       api_key: 'API 密钥模式',
       checking: '检查中...',
-      dev: '开发模式',
       ldap: 'LDAP 模式',
       offline: '离线',
       oidc: 'OIDC 模式',

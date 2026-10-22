@@ -296,17 +296,17 @@ describe('synchronizeConnectionRuntime', () => {
     })
   })
 
-  it('passes the selected identity to a keyless development service', () => {
+  it('passes the selected identity to a trusted service', () => {
     synchronizeConnectionRuntime(
       {
         serviceSelection: 'opensource',
         accountId: 'work-memory',
         userId: 'alice',
-        apiKey: '',
-        adminApiKey: '',
+        apiKey: 'trusted-key',
+        adminApiKey: 'trusted-key',
         baseUrl: 'http://127.0.0.1:1933',
       },
-      'dev',
+      'trusted',
     )
     expect(ovClient.getConnection()).toMatchObject({
       accountId: 'work-memory',
@@ -317,22 +317,8 @@ describe('synchronizeConnectionRuntime', () => {
 })
 
 describe('resolveConnectionRoleProbeState', () => {
-  it('treats dev mode as root without requiring an API key', () => {
-    expect(
-      resolveConnectionRoleProbeState({
-        apiKey: '',
-        baseUrl: 'http://localhost:3000',
-        serverMode: 'dev',
-      }),
-    ).toEqual({
-      isLoading: false,
-      role: 'root',
-      shouldProbe: false,
-    })
-  })
-
   it.each(['api_key', 'trusted'] as const)(
-    'keeps non-dev no-key connections unknown without probing: %s',
+    'keeps no-key connections unknown without probing: %s',
     (serverMode) => {
       expect(
         resolveConnectionRoleProbeState({

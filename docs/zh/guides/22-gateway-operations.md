@@ -4,7 +4,7 @@ description: 把 OpenViking 网关嵌入 Server、用 Docker Compose 或 Helm �
 
 # OpenViking 网关部署与运维
 
-本页写给把 OpenViking 网关作为服务来运行的人：按合适的方式部署、放到反向代理后面、控制谁能修改配置，以及在升级和迁移中保持服务正常。你需要一台使用 API 密钥认证或本地 dev 模式的 OpenViking Server，完整条件见[环境要求](#requirements)。第一次接触网关，请先读[OpenViking 网关](15-gateway.md)。
+本页写给把 OpenViking 网关作为服务来运行的人：按合适的方式部署、放到反向代理后面、控制谁能修改配置，以及在升级和迁移中保持服务正常。你需要一台使用 API Key 认证的 OpenViking Server，完整条件见[环境要求](#requirements)。第一次接触网关，请先读[OpenViking 网关](15-gateway.md)。
 
 > **注意**：网关目前处于 Beta 阶段，设置和接口可能随版本调整，升级前请先读发布说明。
 
@@ -21,10 +21,10 @@ description: 把 OpenViking 网关嵌入 Server、用 Docker Compose 或 Helm �
 
 | 条件 | 说明 |
 | --- | --- |
-| OpenViking 认证方式 | `api_key` 或本地 dev 模式。网关不支持 trusted 认证。 |
+| OpenViking 认证方式 | `api_key`。网关不支持 trusted 认证。 |
 | OpenViking 版本 | 嵌入运行时和 Server 同版本发布，无需额外检查；独立运行时要求 OpenViking Server 0.4.16 或更高版本。 |
 | 安装 | 网关包含在 OpenViking 核心包中。可选的 `gateway-fast` extra（`pip install "openviking[gateway-fast]"`）装上更快的事件循环和 HTTP 解析器。 |
-| 登录身份 | 远程部署需要 OpenViking API 密钥，普通用户、账号管理员和 root 都能登录 Studio 的网关页面。本地 dev 模式不需要密钥，固定使用 `default/default` 身份。 |
+| 登录身份 | 所有部署的正常网关使用都需要 OpenViking User/Admin API Key。root 用于部署管理和选择目标用户。 |
 | 存储 | 本地磁盘。网关的 SQLite 数据库只供一台主机使用，不支持网络文件系统或跨主机共享存储。 |
 
 ## 选择部署方式 {#deployment-options}
@@ -60,7 +60,7 @@ description: 把 OpenViking 网关嵌入 Server、用 Docker Compose 或 Helm �
 - 设置了 `OPENVIKING_GATEWAY_ENABLED` 时，它会覆盖 `ov.conf` 中的 `gateway.enabled`，值为 false 时重启后网关仍不开启。
 - `ov.conf` 只读时（例如由 Helm ConfigMap 挂载），Studio 改不了它。请在 Helm values 中设置 `gateway.enabled: true`，或者设置 `OPENVIKING_GATEWAY_ENABLED=true`，然后重启服务。
 
-**确认已经开启。** 打开服务端的 `/studio/`，在侧边栏选择 **OpenViking 网关**，应看到网关的各个标签页，而不是未开启的提示卡片。本地 dev 模式下，如果默认账号还没有上游，网关启动时会导入服务端可用的 VLM 凭证作为上游，并创建 `default` 上下文配置。导入的 Coding Plan 上游需要确认后才能使用；没有可导入的凭证时，请手动添加上游（见[添加上游](../gateway/07-upstreams.md#add-an-upstream)）。
+**确认已经开启。** 打开服务端的 `/studio/`，用 User/Admin key 登录，在侧边栏选择 **OpenViking 网关**。通过快速模式或“上游”页面导入模型配置并创建上下文配置；启动阶段不再隐式创建默认对象。
 
 **让 Agent 修改配置。** 持有 root API 密钥的 Agent 可以通过[运行时配置接口](../api/08-admin.md#runtime-configuration)修改 `ov.conf` 并重启服务。独立网关不提供这组接口。
 
@@ -136,7 +136,7 @@ NGINX annotations、创建 Secret 的命令和从 sidecar 版本升级的说明�
 独立网关启动前会先访问一次 OpenViking：
 
 - OpenViking 使用 trusted 认证时，网关拒绝启动。
-- 绑定非回环地址时，必须确认 OpenViking 使用 `api_key` 认证才会启动；OpenViking 连不上或处于本地 dev 模式时，网关直接退出。请先启动 OpenViking，或者只绑定 `127.0.0.1`。
+- 网关必须确认 OpenViking 使用 `api_key` 认证才会启动；OpenViking 连不上或使用其他认证模式时，网关直接退出。
 - 跨主机连接 OpenViking 时，请使用 TLS 或私有网络。
 
 ### 连接公共 OpenViking 服务 {#public-openviking-service}

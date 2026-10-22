@@ -165,7 +165,7 @@ Startup failures (printed by the server; exit 1 unless noted):
 |---|---|
 | `OpenViking configuration file not found.` | No ov.conf at any resolved path |
 | `Unknown config field '…' in OpenVikingConfig` / `Extra inputs are not permitted` | Unknown key — including a top-level block named after any harness (`claude_code`, `codex`, `cursor`, `trae`, `trae_cn`, `zcode`, `opencode`, `dsh`, `pi`) and `server.url`, which only the plugins read |
-| `SECURITY: server.auth_mode='dev' requires server.host to be localhost` | Dev mode (no `auth_mode`, no `root_api_key`) on a non-loopback bind |
+| `server.auth_mode='dev' has been removed` | Legacy Dev configuration; migrate to Trusted + root key locally, or API Key for shared deployments |
 | `Invalid server.root_api_key: empty string is not allowed` | `""` instead of `null` |
 | `Another OpenViking process is already using the data directory` | Two servers on one workspace (exit 3, `Application startup failed. Exiting.`) |
 | `EmbeddingRebuildRequiredError` / `embedding dimension (…) does not match current configuration` | Embedding model changed on an existing workspace (exit 3) |

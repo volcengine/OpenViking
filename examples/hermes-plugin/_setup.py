@@ -222,19 +222,9 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
                     ("User API key", "recommended; server derives account/user automatically" if is_local else "server derives account/user automatically"),
                     ("Root API key", "requires account and user IDs"),
                 ]
-                if is_local:
-                    options.append(("No API key", "only for explicitly unauthenticated local development"))
                 credential_choice = select("  OpenViking credential" if is_local else "  OpenViking API key type", options, default=0, cancel_returns=cancelled)
                 if credential_choice == cancelled:
                     raise _Cancelled
-                if is_local and credential_choice == 2:
-                    _say("Validating OpenViking local dev access...")
-                    valid, message, _role = ov._validate_openviking_setup_values(values)
-                    if valid:
-                        _say("OpenViking local dev access validated.")
-                        return values
-                    retry("  OpenViking credential failed", message)
-                    continue
                 api_key_type = "root" if credential_choice == 1 else "user"
 
             values["api_key_type"] = api_key_type

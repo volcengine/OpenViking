@@ -140,7 +140,7 @@ The characteristics of this approach are:
 - Prometheus uses the host network and directly scrapes `127.0.0.1:30300/metrics`
 - Grafana also uses the host network and directly connects to `http://127.0.0.1:30909`
 - There is no need to change OpenViking to `0.0.0.0`
-- Dev mode can remain bound to loopback; see [Authentication](04-authentication.md) before changing the OpenViking bind address
+- Authenticated local mode can remain bound to loopback; see [Authentication](04-authentication.md) before changing the OpenViking bind address
 
 The access addresses are still:
 

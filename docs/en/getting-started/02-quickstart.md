@@ -38,7 +38,7 @@ curl http://127.0.0.1:1933/health
 # {"status":"ok","healthy":true,...}
 ```
 
-The local endpoint is `http://127.0.0.1:1933`; the default local setup needs no API key. Web Studio is available at `/studio`. For Docker, persistent storage, and remote access, see [Deployment](../guides/03-deployment.md), [Model Configuration](../guides/01-configuration.md), and [Authentication](../guides/04-authentication.md).
+The local endpoint is `http://127.0.0.1:1933`. The setup wizard configures a root key even for local use; keep it for the CLI and Web Studio connection. Web Studio is available at `/studio`. For Docker, persistent storage, and remote access, see [Deployment](../guides/03-deployment.md), [Model Configuration](../guides/01-configuration.md), and [Authentication](../guides/04-authentication.md).
 
 ## 2. Install and connect the CLI
 

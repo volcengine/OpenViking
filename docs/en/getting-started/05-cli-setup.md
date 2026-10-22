@@ -69,11 +69,11 @@ Otherwise ASK me which target to use, unless I already told you:
 |---|---|---|
 | OpenViking Service (Volcengine) | Fixed. Do not pass `--url`. | Required. I get it in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_05-cli-setup) under User Management → API Key. |
 | Remote custom server | ASK me. | ASK me. |
-| Local custom server | `http://127.0.0.1:1933` | Usually none. |
+| Local custom server | `http://127.0.0.1:1933` | Required; use the server root key in Trusted mode. |
 
 For a local custom server only, check that it runs: `curl -fsS http://127.0.0.1:1933/health`. If the check fails, ASK me to start the server. See https://docs.openviking.ai/en/guides/03-deployment.
 
-Do not ask for `--account` or `--user` unless my administrator gave me these values.
+For a server in `trusted` mode, ASK me to confirm `--account` and `--user`; you may suggest `default/default` for local testing. In `api_key` mode, the key determines the identity, so these fields are not needed.
 
 ## Step 3: Save and activate the config
 
@@ -91,10 +91,10 @@ Remote custom server with an API key:
 printf '%s' "$OV_API_KEY" | ov config add custom --name <NAME> --url <URL> --api-key-stdin --activate -o json
 ```
 
-Local custom server without authentication:
+Local custom server in Trusted mode (use the confirmed account/user and server root key):
 
 ```bash
-ov config add custom --name <NAME> --url http://127.0.0.1:1933 --activate -o json
+printf '%s' "$OV_API_KEY" | ov config add custom --name <NAME> --url http://127.0.0.1:1933 --root-api-key-stdin --account <ACCOUNT> --user <USER> --activate -o json
 ```
 
 Special key cases:
@@ -148,7 +148,7 @@ You also need connection details. They depend on the server type:
 |---|---|---|
 | OpenViking Service (Volcengine) | Fixed. You do not enter it. | Required. Get it in the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_05-cli-setup) under **User Management → API Key**. |
 | Remote self-hosted server | Get it from your administrator. | Get it from your administrator. |
-| Self-hosted server on this machine | `http://127.0.0.1:1933` | Not needed for the default setup. |
+| Self-hosted server on this machine | `http://127.0.0.1:1933` | Required; use the server root key in Trusted mode. |
 
 ## 1. Install `ov`
 
@@ -173,8 +173,11 @@ Follow the prompts:
 1. Select **Add Config**.
 2. Select the server type. For OpenViking Service, select **OpenViking Service (VolcEngine Cloud)**. For a self-hosted server, select **Custom**.
 3. Enter a name for the config. If you leave it empty, `ov` generates a name.
-4. Enter the server URL and the API key that the prompts ask for.
-5. After validation passes, select **Save and activate**.
+4. Enter the server URL and API key. For a Trusted server, select **Root API key** and enter its `server.root_api_key`; data access in `api_key` mode uses a user/admin key.
+5. Once the wizard confirms Trusted mode, it prompts for Account ID and User ID. Missing values default to `default`: press Enter to use `default/default`, or enter your own identity. Editing the same server preserves existing values; changing the server URL requires confirming the identity again.
+6. After validation passes, select **Save and activate**.
+
+Identity defaults apply only to the interactive wizard after it confirms Trusted mode. Non-interactive `ov config add/edit` does not fill missing identity fields; pass `--account` and `--user` explicitly when needed.
 
 ## 3. Check the connection
 

@@ -632,8 +632,7 @@ class OpenVikingConfig(BaseModel):
 
     _server_managed: bool = PrivateAttr(default=False)
 
-    # Deprecated as user config. Kept for compatibility; load_config derives it
-    # from OpenViking's effective dev auth mode.
+    # Deprecated as user config. Kept for compatibility with older config files.
     mode: str = "remote"
     api_key_type: Literal["root", "user"] | None = None
     server_url: str = ""

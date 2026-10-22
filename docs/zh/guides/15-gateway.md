@@ -42,7 +42,7 @@ OpenViking 网关是一个模型 API 代理：客户端只要能修改 Base URL�
 | 提交 | 告诉 OpenViking 会话里已保存的轮次可以处理了：OpenViking 归档较早的轮次（会话中只留最新的消息），并在后台从中提取记忆。已保存的轮次要等提交之后才会变成记忆。 | [对话什么时候保存](../gateway/01-how-it-works.md#when-conversations-are-saved) |
 | 压缩 | 对话接近模型的上下文窗口时，让同一个模型写一份摘要，替换截断点之前的全部内容。 | [网关中的长对话](../gateway/05-long-conversations.md#long-conversations) |
 | 提示词缓存 | 服务商的计费机制：请求开头和上一次请求相同的部分按缓存价计费（通常只有原价的一小部分），从第一个不同的字节起按原价计费。 | [记忆原样放回与提示词缓存](../gateway/01-how-it-works.md#replay) |
-| 本地 dev 模式 | 以 dev 模式运行的 OpenViking 服务：绑定 `127.0.0.1`、未配置 `root_api_key`，打开 Studio 不需要 API 密钥，所有操作都以 `default` 用户身份进行。 | [本地服务](../gateway/02-quickstart.md#local-server-no-api-key) |
+| 本地 API Key 部署 | OpenViking 绑定 `127.0.0.1` 并启用嵌入式网关。使用 Studio 前先创建普通 `default/default` User/Admin key；root 只用于管理。 | [本地服务](../gateway/02-quickstart.md#local-server-no-api-key) |
 | OpenViking 工具 | 你的 OpenViking 服务提供的工具（名为 `openviking_…`），由网关提供给模型，并在模型回答时由网关自己执行。 | [OpenViking 工具](../gateway/04-openviking-tools.md#agentic-memory-for-any-client) |
 
 ## 一张图看懂架构 {#architecture-at-a-glance}

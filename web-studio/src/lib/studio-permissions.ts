@@ -23,7 +23,6 @@ export function resolveStudioManagementCapabilities({
   if (
     serviceProvider !== 'opensource' ||
     isRoleLoading ||
-    serverMode === 'dev' ||
     !hasControlCredential
   ) {
     return {
@@ -43,8 +42,7 @@ type ManagementInput = Parameters<typeof resolveStudioManagementCapabilities>[0]
 export function canManageStudioGateway(input: ManagementInput): boolean {
   return (
     (input.serviceProvider ?? 'opensource') === 'opensource' &&
-    (input.serverMode === 'dev' ||
-      input.serverMode === 'trusted' ||
+    (input.serverMode === 'trusted' ||
       (input.serverMode === 'api_key' &&
         !input.isRoleLoading &&
         input.role !== 'unknown'))

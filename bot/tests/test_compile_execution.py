@@ -18,7 +18,8 @@ from vikingbot.providers.base import LLMResponse, ToolCallRequest
 
 
 @pytest.mark.parametrize(
-    "mode,account,peak", [("api_key", "b", 2), ("api_key", "a", 1), ("dev", "b", 1)]
+    "mode,account,peak",
+    [("api_key", "b", 2), ("api_key", "a", 1), ("trusted", "b", 2), ("trusted", "a", 1)],
 )
 async def test_target_locks_follow_effective_account(tmp_path, mode, account, peak):
     config = Config(storage_workspace=str(tmp_path))
@@ -114,12 +115,12 @@ def test_compile_workspace_root_is_absolute_for_relative_storage(tmp_path, monke
     state_root.mkdir()
     monkeypatch.chdir(state_root)
     config = Config(storage_workspace="data")
-    config.ov_server.set_effective_auth_mode("dev")
+    config.ov_server.set_effective_auth_mode("trusted")
     manager = CompileSandboxManager(
         config,
         config.bot_data_path / "compile_workspaces" / "task-1",
         config.workspace_path,
-        connection={},
+        connection={"account_id": "test-account", "user_id": "test-user"},
     )
     expected = (state_root / "data" / "bot" / "compile_workspaces" / "task-1").resolve()
     assert manager.workspace == expected

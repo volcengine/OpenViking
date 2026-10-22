@@ -155,22 +155,11 @@ class ApiKeyAuthPlugin(AuthPlugin):
         import logging
 
         logger = logging.getLogger(__name__)
-        if _is_localhost(config.host):
-            logger.error(
-                "server.auth_mode='api_key' requires server.root_api_key to be configured.\n"
-                'To run without authentication on localhost, either set server.auth_mode="dev" '
-                "or simply remove the server.auth_mode setting to auto-detect."
-            )
-        else:
-            logger.error(
-                "SECURITY: server.auth_mode='api_key' requires server.root_api_key "
-                "to be configured when server.host is '%s' (non-localhost).",
-                config.host,
-            )
         logger.error(
-            "To fix, either:\n"
-            "  1. Set server.root_api_key in ov.conf, or\n"
-            '  2. Use server.auth_mode="dev" (localhost only)'
+            "server.auth_mode='api_key' requires a non-empty server.root_api_key, "
+            "including on localhost. Run `openviking-server init`, then choose "
+            "`Update server & auth` to update the configuration, or set "
+            "auth_mode='trusted' with a root_api_key for trusted local direct access."
         )
         sys.exit(1)
 
@@ -215,7 +204,3 @@ class ApiKeyAuthPlugin(AuthPlugin):
                 "Use a user/admin API key for data access, or trusted mode for upstream "
                 "identity assertion."
             )
-
-
-def _is_localhost(host: str) -> bool:
-    return host in {"127.0.0.1", "localhost", "::1"}

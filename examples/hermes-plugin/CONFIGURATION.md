@@ -106,7 +106,7 @@ home address requires OpenViking 0.4.16 or newer for user and admin keys, or
 User and admin API keys let OpenViking derive account/user identity from the key.
 In trusted deployments, set `OPENVIKING_API_KEY` to the server's root API key;
 Hermes sends `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` as identity headers.
-Only local dev mode allows access without an API key.
+OpenViking data access always requires authentication, including on localhost.
 Hermes also sends `User-Agent: openviking-memory-hermes/<version>` on
 OpenViking requests. This header contains the Hermes version. It does not
 contain a user identifier or require an extra request.

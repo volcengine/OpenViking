@@ -19,7 +19,7 @@ Clients accepting `mcpServers` and custom headers can use this example. For othe
 }
 ```
 
-No authentication is needed for a server running in `dev` mode. Keep it bound to loopback; an authenticated server still requires credentials when accessed locally.
+All supported server modes require credentials, including when the server is bound to loopback.
 
 ## Platform-specific notes
 

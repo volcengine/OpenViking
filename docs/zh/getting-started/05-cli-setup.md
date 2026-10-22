@@ -69,11 +69,11 @@ ov config add custom --help
 |---|---|---|
 | OpenViking 服务（火山引擎云） | 固定地址，不要传 `--url`。 | 必填。我在[控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_05-cli-setup)的“用户管理 → API Key”中获取。 |
 | 远程自建服务 | ASK 我。 | ASK 我。 |
-| 本机自建服务 | `http://127.0.0.1:1933` | 通常不需要。 |
+| 本机自建服务 | `http://127.0.0.1:1933` | 必填；Trusted 模式使用服务端 root key。 |
 
 只有目标是本机自建服务时，才检查服务是否运行：`curl -fsS http://127.0.0.1:1933/health`。检查失败时，ASK 我启动服务端。参见 https://docs.openviking.ai/zh/guides/03-deployment 。
 
-除非我的管理员提供了 `--account` 和 `--user` 的值，否则不要询问这两项。
+服务端为 `trusted` 模式时，ASK 我确认 `--account` 和 `--user`；本地测试可建议 `default/default`。`api_key` 模式由密钥确定身份，无需填写这两项。
 
 ## 第 3 步：保存并激活配置
 
@@ -91,10 +91,10 @@ printf '%s' "$OV_API_KEY" | ov config add ov-service --name <NAME> --api-key-std
 printf '%s' "$OV_API_KEY" | ov config add custom --name <NAME> --url <URL> --api-key-stdin --activate -o json
 ```
 
-无鉴权的本机自建服务：
+Trusted 模式的本机自建服务（使用确认过的 account/user 和服务端 root key）：
 
 ```bash
-ov config add custom --name <NAME> --url http://127.0.0.1:1933 --activate -o json
+printf '%s' "$OV_API_KEY" | ov config add custom --name <NAME> --url http://127.0.0.1:1933 --root-api-key-stdin --account <ACCOUNT> --user <USER> --activate -o json
 ```
 
 特殊密钥情况：
@@ -148,7 +148,7 @@ EXECUTE NOW：完成上面的 TODO 列表，达到：`ov config validate` 的检
 |---|---|---|
 | OpenViking 服务（火山引擎云） | 固定地址，无需填写。 | 必填。在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_05-cli-setup)的**用户管理 → API Key** 中获取。 |
 | 远程自建服务 | 向管理员获取。 | 向管理员获取。 |
-| 本机自建服务 | `http://127.0.0.1:1933` | 默认配置不需要。 |
+| 本机自建服务 | `http://127.0.0.1:1933` | 必填；Trusted 模式使用服务端 root key。 |
 
 ## 1. 安装 `ov`
 
@@ -173,8 +173,11 @@ ov config
 1. 选择**添加配置**。
 2. 选择服务类型。OpenViking 服务选择 **OpenViking 服务（火山引擎云）**；自建服务选择**自定义**。
 3. 输入配置名称。留空时，`ov` 自动生成名称。
-4. 按提示输入服务地址和 API Key。
-5. 校验通过后，选择**保存并设为当前配置**。
+4. 按提示输入服务地址和 API Key。Trusted 服务选择 **Root API key**，填写服务端 `server.root_api_key`；`api_key` 服务的数据访问使用 user/admin key。
+5. 向导确认服务端为 Trusted 模式后，会提示填写 Account ID 和 User ID。缺失身份时默认值为 `default`，直接回车可采用 `default/default`，也可输入自定义身份。编辑同一服务时优先保留已有身份；修改服务地址后需重新确认身份。
+6. 校验通过后，选择**保存并设为当前配置**。
+
+身份默认值仅用于已确认 Trusted 模式的交互向导。非交互式 `ov config add/edit` 不会自动补齐身份，缺失时需显式传入 `--account` 和 `--user`。
 
 ## 3. 检查连接
 

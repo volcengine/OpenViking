@@ -112,8 +112,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 |------|------|--------|
 | `url` | 服务端地址 | （必填） |
 | `api_key` | API Key | `null`（无认证） |
-| `account` | 账户请求头；trusted 和 dev 模式使用，api_key 模式忽略 | `null` |
-| `user` | 用户请求头；trusted 和 dev 模式使用，api_key 模式忽略 | `null` |
+| `account` | 账户请求头；trusted 模式使用，api_key 模式忽略 | `null` |
+| `user` | 用户请求头；trusted 模式使用，api_key 模式忽略 | `null` |
 | `timeout` | HTTP 请求超时时间（秒） | `60.0` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
@@ -207,7 +207,7 @@ ov -o json ls viking://resources/
 
 - **Authorization Bearer** 请求头：`Authorization: Bearer your-key` （建议的方式）
 - **X-API-Key** 请求头：`X-API-Key: your-key`
-- 只有 dev 模式跳过认证；未设置 `auth_mode` 且未设置 `server.root_api_key` 时自动选择 dev 模式。其他模式（api_key、trusted、OIDC、LDAP）按各自配置解析身份。
+- 数据和管理接口始终要求认证。未设置 `auth_mode` 时默认选择 `api_key`，并要求配置非空 `server.root_api_key`。
 - `/health` 和 `/ready` 端点始终不需要认证。
 
 ## 响应格式

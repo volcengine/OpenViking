@@ -71,7 +71,6 @@ class AuthMode(str, Enum):
 
     API_KEY = "api_key"
     TRUSTED = "trusted"
-    DEV = "dev"
 
 
 @dataclass

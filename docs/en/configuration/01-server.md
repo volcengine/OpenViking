@@ -61,7 +61,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 | `glob` | object | built-in defaults | Path glob engine |
 | `storage` | object | local | Workspace, file system, and vector database |
 | `queue_workers` | object | see below | Runtime concurrency for QueueFS consumer workers |
-| `server` | object | local development | HTTP, authentication, uploads, and observability |
+| `server` | object | local deployment | HTTP, authentication, uploads, and observability |
 | `memory` | object | see below | Memory and skill extraction on session commit |
 | `parsers` | object | parser defaults | PDF, code, image, audio, video, and text parsing |
 | `semantic` | object | built-in defaults | Abstract and overview generation limits |
@@ -298,7 +298,8 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
     "port": 1933,
     "workers": 1,
     "executor_threads": 0,
-    "auth_mode": "dev",
+    "auth_mode": "trusted",
+    "root_api_key": "replace-with-a-random-secret",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
     "temp_upload": {
@@ -317,8 +318,8 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `workers` | integer | `1` | Worker process count |
 | `executor_threads` | non-negative integer | `0` | Maximum threads in each worker process's default asyncio executor; `0` uses Python's default sizing policy |
 | `timeout_keep_alive` | integer (seconds) | `5` | Idle HTTP keep-alive timeout; raise it above the upstream's idle-connection lifetime |
-| `auth_mode` | `dev`, `api_key`, `trusted` / `null` | `null` | Auth mode; null is inferred from `root_api_key` |
-| `root_api_key` | string / `null` | `null` | Root key; setting it defaults auth to `api_key` |
+| `auth_mode` | `api_key`, `trusted` / `null` | `null` | Auth mode; null selects `api_key` |
+| `root_api_key` | string / `null` | `null` | Required root key for `api_key` and `trusted` |
 | `cors_origins` | string[] | `["*"]` | Allowed origins |
 | `profile_enabled` | boolean | `false` | Allow performance profiles |
 | `with_bot` | boolean | `false` | Enable the VikingBot API proxy |
@@ -353,9 +354,10 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 
 | Value | Use case |
 |---|---|
-| `dev` | Local-only development without API keys |
 | `api_key` | Validate root/user/admin keys |
 | `trusted` | Trust an upstream gateway to inject account/user identity |
+
+Both modes require a nonempty `root_api_key`, including on localhost. If `auth_mode` is omitted, the server selects `api_key`.
 
 ## Memory Settings
 

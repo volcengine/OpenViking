@@ -6,7 +6,7 @@ Model clients do not call these endpoints. They use a gateway key on `/gateway/v
 
 ## Credentials and account scope {#credentials-and-account-scope}
 
-Every management request carries an OpenViking API key in `X-API-Key` or `Authorization: Bearer`. The gateway asks OpenViking which account, user and role the key belongs to, and caches the answer for up to 30 seconds. Local dev mode needs no key; the caller is always the root identity `default/default`. The gateway does not support trusted authentication.
+Every management request carries an OpenViking API key in `X-API-Key` or `Authorization: Bearer`. The gateway asks OpenViking which account, user and role the key belongs to, and caches the answer for up to 30 seconds. The gateway supports API-key authentication only; it does not support trusted authentication.
 
 Upstreams and context profiles (called `policies` in the API) belong to an account and are shared by its users. A request acts on the caller's account by default. Root can name another account with the `account_id` query parameter; admins and users can only reach their own account.
 
@@ -16,7 +16,7 @@ The deployer can also set a gateway management key (see [Gateway management key]
 | --- | --- | --- |
 | Read upstreams and context profiles | Any user in the account | Any user in the account; the management key alone also works, for any account |
 | Create, change or delete upstreams and context profiles; test upstreams | Any user in the account | Only requests with the correct management key |
-| Import OpenViking's model settings | Root in an embedded deployment (including local dev) | Only requests with the correct management key, and only in an embedded deployment |
+| Import OpenViking's model settings | Root in an embedded deployment | Only requests with the correct management key, and only in an embedded deployment |
 | Issue, read and revoke gateway keys; reset saving | Users: their own keys; admins: their account; root: the selected account | Same; the management key adds no rights |
 | Read logs and the overview | Users: their own records; admins and root: the whole account | Same; always needs an OpenViking identity |
 | Delete a user's gateway data | An admin of that account, or root | Same |

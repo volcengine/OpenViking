@@ -104,7 +104,7 @@ describe('quickPlan', () => {
     [string, Partial<QuickInputs>, { shown: boolean; runnable: boolean }]
   >([
     [
-      'dev mode after seeding',
+      'after seeding',
       { upstreams: [usable], profiles: [recommended] },
       { shown: true, runnable: true },
     ],
@@ -179,10 +179,8 @@ describe('quickPlan', () => {
     expect(plan.pickUser).toBe(false)
   })
 
-  it('lets root outside dev mode pick the user', () => {
+  it('lets root pick the user', () => {
     const root = access({ role: 'root', can_issue_for_others: true })
-    const devRoot = access({ role: 'root' })
     expect(quickPlan(inputs({ access: root })).pickUser).toBe(true)
-    expect(quickPlan(inputs({ access: devRoot })).pickUser).toBe(false)
   })
 })

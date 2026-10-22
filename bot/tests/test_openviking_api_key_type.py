@@ -242,17 +242,17 @@ def test_viking_client_actor_peer_id_sets_actor_header(monkeypatch):
     assert first.kwargs["actor_peer_id"] == client.actor_peer_id
 
 
-def test_viking_client_uses_effective_auth_mode_for_dev(monkeypatch):
-    config = _make_config("user", mode="remote")
-    config.ov_server.effective_auth_mode = "dev"
+def test_viking_client_uses_effective_auth_mode_for_trusted(monkeypatch):
+    config = _make_config("root", mode="remote")
+    config.ov_server.effective_auth_mode = "trusted"
     monkeypatch.setattr(ov_server_module, "load_config", lambda: config)
 
     client = VikingClient()
 
     first = _DummyHTTPClient.instances[0]
-    assert client.auth_mode == "dev"
-    assert client.mode == "local"
-    assert first.kwargs == {"url": "http://ov.local"}
+    assert client.auth_mode == "trusted"
+    assert client.mode == "remote"
+    assert first.kwargs["api_key"] == "root-key"
 
 
 def test_user_key_current_memory_targets_use_home_alias(monkeypatch):
@@ -402,12 +402,12 @@ def test_ov_server_legacy_mode_is_ignored_for_current_api_key_server():
     assert bot_data["api_key_type"] == "user"
 
 
-def test_ov_server_current_dev_mode_ignores_legacy_api_key_for_mode():
+def test_ov_server_current_default_mode_requires_api_key_auth():
     bot_data = {"api_key": "bot-user-key"}
 
     config_loader_module._merge_ov_server_config(bot_data, {}, server_section_present=True)
 
-    assert bot_data["mode"] == "local"
+    assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "bot-user-key"
 
 
@@ -701,36 +701,6 @@ def test_validate_openviking_auth_exits_for_auth_mode_mismatch(monkeypatch, caps
     assert "user-key" not in captured.err
 
 
-def test_inherited_dev_config_mismatch_explains_stale_api_key_server(monkeypatch, capsys):
-    config = SimpleNamespace(
-        ov_server=SimpleNamespace(
-            _source="inherited",
-            effective_auth_mode="dev",
-            mode="local",
-            api_key_type="user",
-            api_key="",
-            root_api_key="",
-            server_url="http://127.0.0.1:1935",
-        )
-    )
-    monkeypatch.setattr(
-        config_loader_module,
-        "_request_openviking_json",
-        lambda *_args, **_kwargs: _auth_probe(data={"auth_mode": "api_key"}),
-    )
-
-    with pytest.raises(SystemExit):
-        config_loader_module.validate_openviking_auth(config)
-
-    captured = capsys.readouterr()
-    assert "Running server auth_mode: api_key" in captured.err
-    assert "Current ov.conf server auth_mode: dev" in captured.err
-    assert "started with different authentication settings" in captured.err
-    assert "configure bot.ov_server.api_key with an OpenViking User/Admin API key" in captured.err
-    assert "dev-mode VikingBot gateway must listen on localhost" in captured.err
-    assert "bot.ov_server.api_key_type" not in captured.err
-
-
 def test_validate_openviking_auth_exits_for_api_key_mode_without_user_key(monkeypatch, capsys):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
@@ -817,29 +787,6 @@ def test_validate_openviking_auth_allows_user_key(monkeypatch, capsys):
         return _auth_probe(data={"auth_mode": "api_key"})
 
     monkeypatch.setattr(config_loader_module, "_request_openviking_json", _fake_probe)
-
-    config_loader_module.validate_openviking_auth(config)
-
-    captured = capsys.readouterr()
-    assert captured.err == ""
-
-
-def test_validate_openviking_auth_uses_effective_auth_mode_not_legacy_mode(monkeypatch, capsys):
-    config = SimpleNamespace(
-        ov_server=SimpleNamespace(
-            effective_auth_mode="dev",
-            mode="remote",
-            api_key_type="user",
-            api_key="configured-key",
-            root_api_key="",
-            server_url="http://127.0.0.1:1935",
-        )
-    )
-    monkeypatch.setattr(
-        config_loader_module,
-        "_request_openviking_json",
-        lambda *_args, **_kwargs: _auth_probe(data={"auth_mode": "dev"}),
-    )
 
     config_loader_module.validate_openviking_auth(config)
 

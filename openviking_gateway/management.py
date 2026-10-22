@@ -154,7 +154,7 @@ class Caller:
 async def caller_tool_catalog(app, management, who):
     """Read the account's MCP tools with a credential OpenViking accepts."""
     key = who.credential
-    if who.role == "root" and who.identity.get("auth_mode") != "dev":
+    if who.role == "root":
         # OV refuses root on /mcp. Every caller sees the same catalog, so read it with
         # a key issued in this account, or fall back to the last catalog read.
         keys = await management.list(who.account_id, "keys")
@@ -236,8 +236,7 @@ def register_management(app):
             "managed": bool(app.state.config.management_key),
             "can_write_objects": who.can_write,
             "can_import_vlm": can_import(app, who),
-            "can_issue_for_others": who.role in {"root", "admin"}
-            and (who.identity or {}).get("auth_mode") != "dev",
+            "can_issue_for_others": who.role in {"root", "admin"},
             "role": who.role,
             "account_id": who.account_id,
             "user_id": who.user_id,
@@ -385,7 +384,7 @@ def register_management(app):
     async def issue_key(request: Request):
         who = await caller(request)
         value = await read_body(request, KeyRequest)
-        root = who.role == "root" and who.identity.get("auth_mode") != "dev"
+        root = who.role == "root"
         if root and not value.user_id and not value.openviking_key:
             fail(400, "user_required")
         user_id = value.user_id or who.user_id

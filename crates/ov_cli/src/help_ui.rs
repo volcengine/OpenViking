@@ -1223,8 +1223,8 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Create a custom config without prompts.",
         examples: &[
             HelpItem {
-                label: "ov config add custom --name local --url http://127.0.0.1:1933 --activate",
-                description: "Create a local no-key config.",
+                label: "ov config add custom --name local --url http://127.0.0.1:1933 --api-key-env OV_KEY --account default --user default --activate",
+                description: "Create an authenticated local config.",
             },
             HelpItem {
                 label: "ov config add custom --url https://ov.example.com --api-key-env OV_KEY --activate",

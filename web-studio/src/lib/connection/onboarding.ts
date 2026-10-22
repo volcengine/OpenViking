@@ -160,7 +160,6 @@ export async function verifyStudioSetup(
     throw new StudioSetupError('invalidService')
   const mode = resolveServerAuthMode(health)
   if (
-    mode !== 'dev' &&
     !connection.apiKey &&
     !(connection.serviceSelection === 'opensource' && connection.adminApiKey)
   )

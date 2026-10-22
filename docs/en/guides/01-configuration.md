@@ -1978,7 +1978,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `127.0.0.1` |
 | `port` | int | Bind port | `1933` |
-| `auth_mode` | str / null | Built-in modes: `"dev"`, `"api_key"`, `"trusted"`, `"oidc"`, `"ldap"`. When omitted/null, infer `api_key` from a non-empty `root_api_key`; otherwise infer `dev`. | `null` |
+| `auth_mode` | str / null | Built-in modes: `"api_key"`, `"trusted"`, `"oidc"`, `"ldap"`. When omitted/null, select `api_key`. | `null` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is required on every deployment, including localhost; it does not become the source of user identity | `null` |
 | `account_store.provider` | str | Complete Account store provider. Built-in values are `"file"`, `"mysql"`, and `"redis_mysql"`; it owns account, user, group, and API-key records. `"file"` preserves the existing AGFS JSON registry and owns its process-local lookup indexes. `"redis_mysql"` keeps MySQL authoritative and adds a shared Redis cache for authentication and request identity reads. | `"file"` |
 | `account_store.params` | object | Provider-specific startup parameters. Framework-owned filesystem and File-provider API-key hashing dependencies cannot be overridden here. | `{}` |
@@ -2100,7 +2100,7 @@ overall request deadline.
 }
 ```
 
-Omitting `auth_mode` (or setting it to `null`) selects `api_key` when a non-empty `root_api_key` is configured, and `dev` otherwise. `dev` is allowed only on localhost and accepts requests without authentication. An empty-string `root_api_key` is invalid.
+Omitting `auth_mode` (or setting it to `null`) selects `api_key`. A non-empty `root_api_key` is required, including on localhost; missing, empty, or whitespace-only values make startup fail. The removed `dev` value also fails with migration guidance.
 
 Explicit `auth_mode: "api_key"` requires a non-empty `root_api_key`, including on localhost; without it, startup fails instead of falling back to development mode. Use the root key with the Admin API to create accounts and user/admin keys; use those tenant-bound keys for data access. `trusted` mode accepts account/user identity headers from a trusted gateway and does not require user-key provisioning first. Its root key is required for startup and every authenticated request, including on localhost. For role resolution, OIDC/LDAP setup, and gateway requirements, see [Authentication](04-authentication.md).
 

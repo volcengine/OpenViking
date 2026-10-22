@@ -52,8 +52,6 @@ class VikingClient:
             result = await self.request("GET", "/health", credential, timeout=5)
             if result.get("auth_mode") == "trusted":
                 raise VikingError("trusted_mode_unsupported", 403)
-            if result.get("auth_mode") == "dev":
-                result = {**result, "role": "root", "account_id": "default", "user_id": "default"}
             if result.get("role", "").lower() not in {"root", "admin", "user"} or not all(
                 result.get(field) for field in ("account_id", "user_id")
             ):
@@ -67,7 +65,7 @@ class VikingClient:
     async def health(self, key="", require_identity=True):
         if require_identity:
             result = await self.identify(key)
-            if result["role"] == "root" and result.get("auth_mode") != "dev":
+            if result["role"] == "root":
                 raise VikingError("root_key_not_allowed", 403)
             try:
                 if Version(result.get("version", "0")) < Version(self.min_version):

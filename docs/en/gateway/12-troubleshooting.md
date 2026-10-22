@@ -62,7 +62,7 @@ Before it issues a [gateway key](09-gateway-keys.md#issue-a-key), the gateway ch
 | Message in Studio | Cause and fix |
 | --- | --- |
 | The server only stores a hash of this user's API key and cannot read it. Paste their user API key instead. (`user_key_unreadable`) | OpenViking Server stores only key hashes (`encryption.api_key_hashing.enabled`). Choose **Paste a user API key** and enter that user's own key. |
-| This is a root API key. Use the user API key of a user in this account. (`root_key_not_allowed`) | A root API key cannot be bound to a gateway key. Use the API key of a user or account admin instead. Local dev mode's `default/default` is exempt. |
+| This is a root API key. Use the user API key of a user in this account. (`root_key_not_allowed`) | A root API key cannot be bound to a gateway key. Use the API key of a user or account admin instead. |
 | A root API key has no user of its own. Choose the user this key is for. (`user_required`) | You are signed in to Studio as root and chose neither a user nor a pasted key. Choose the user, or paste their key. |
 | This OpenViking API key belongs to another account. (`other_account`) | The key belongs to a different account from the one you are managing in Studio. |
 | OpenViking rejected this key. (`openviking_http_401`, `openviking_http_403`) | The key is incomplete or was regenerated, or the user was deleted. Use the user's current key. |

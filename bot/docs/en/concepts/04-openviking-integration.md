@@ -40,7 +40,8 @@ Example:
   "server": {
     "auth_mode": "api_key",
     "host": "127.0.0.1",
-    "port": 1933
+    "port": 1933,
+    "root_api_key": "<openviking-root-api-key>"
   },
   "bot": {
     "ov_server": {
@@ -57,7 +58,7 @@ OpenViking connections support User keys and Root keys:
 
 | `api_key_type` | Typical scenario | Meaning |
 |----------------|------------------|---------|
-| `user` | `api_key` / `dev` auth mode | Access OpenViking as a User |
+| `user` | `api_key` auth mode | Access OpenViking as a User |
 | `root` | `trusted` auth mode | The Gateway uses a Root key and forwards trusted identity headers |
 
 If `api_key_type` is not configured explicitly, VikingBot derives it from the effective auth mode of OpenViking Server in the same `ov.conf`.

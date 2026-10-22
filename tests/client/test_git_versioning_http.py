@@ -108,19 +108,16 @@ async def http_service(http_temp_dir: Path, monkeypatch):
 
 @pytest_asyncio.fixture(scope="function")
 async def http_app(http_service: OpenVikingService):
-    """FastAPI app with the test service wired in (no auth)."""
-    from openviking.server.auth.plugins import DevAuthPlugin
-    from openviking.server.auth.registry import get_registry
+    """FastAPI app with the test service and a fixed test identity."""
     from openviking.server.dependencies import set_service
+    from tests.server.auth_test_utils import FixedIdentityAuthPlugin
 
-    config = ServerConfig()
+    config = ServerConfig(root_api_key="test-root-key")
     app = create_app(config=config, service=http_service)
     set_service(http_service)
-    # ASGITransport doesn't trigger lifespan, so wire up the auth plugin manually.
-    registry = get_registry()
-    if registry.get("dev") is None:
-        registry.register(DevAuthPlugin)
-    app.state.auth_plugin = registry.get("dev")()
+    app.state.auth_plugin = FixedIdentityAuthPlugin(
+        account_id="git_http_test_account", user_id="git_http_test_user"
+    )
     return app
 
 

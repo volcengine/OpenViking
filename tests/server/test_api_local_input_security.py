@@ -16,8 +16,8 @@ from openviking_cli.exceptions import PermissionDeniedError
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
 
 
-def _allow_admin_api_in_dev_mode(client: httpx.AsyncClient) -> None:
-    # Admin routes require the app to have an API key manager, even in dev-mode tests.
+def _install_test_api_key_manager(client: httpx.AsyncClient) -> None:
+    # Admin routes require the app to have an API key manager in fixed-identity tests.
     client._transport.app.state.api_key_manager = object()
 
 
@@ -183,7 +183,7 @@ async def test_import_ovpack_accepts_temp_uploaded_file(
     client: httpx.AsyncClient,
     upload_temp_dir,
 ):
-    _allow_admin_api_in_dev_mode(client)
+    _install_test_api_key_manager(client)
     ovpack_file = upload_temp_dir / "demo.ovpack"
     ovpack_file.write_bytes(build_ovpack_bytes())
 
@@ -204,7 +204,7 @@ async def test_import_ovpack_conflict_returns_structured_conflict(
     client: httpx.AsyncClient,
     upload_temp_dir,
 ):
-    _allow_admin_api_in_dev_mode(client)
+    _install_test_api_key_manager(client)
     ovpack_file = upload_temp_dir / "demo_conflict.ovpack"
     ovpack_file.write_bytes(build_ovpack_bytes())
 

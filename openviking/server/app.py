@@ -135,12 +135,9 @@ async def _initialize_auth_plugin(
     # Ensure built-in plugins are registered
     from openviking.server.auth.plugins import (
         ApiKeyAuthPlugin,
-        DevAuthPlugin,
         TrustedAuthPlugin,
     )
 
-    if registry.get("dev") is None:
-        registry.register(DevAuthPlugin)
     if registry.get("api_key") is None:
         registry.register(ApiKeyAuthPlugin)
     if registry.get("trusted") is None:
@@ -398,10 +395,6 @@ def create_app(
                 await stack.enter_async_context(gateway.router.lifespan_context(gateway))
             if service is not None:
                 await _initialize_runtime_state(app, service, config)
-            if gateway is not None and config.get_effective_auth_mode() == "dev":
-                from openviking_gateway.app import seed_defaults
-
-                await seed_defaults(gateway, "default")
             yield
 
         # Cleanup

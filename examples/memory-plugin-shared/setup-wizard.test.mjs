@@ -44,7 +44,28 @@ test("a missing config file is created at the candidate path", async () => {
     assert.deepEqual(JSON.parse(await readFile(target, "utf-8")), {
       url: "http://127.0.0.1:1933",
       api_key: "sk-test",
+      account: "default",
+      user: "default",
     });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a missing API key is rejected until a non-empty key is entered", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ov-wizard-key-required-"));
+  const target = join(dir, "ovcli.conf");
+  try {
+    const io = scriptedIo(["1", "", "sk-required", "y"]);
+    const result = await runSetupWizard({
+      input: io.input,
+      output: io.output,
+      env: { OPENVIKING_CLI_CONFIG_FILE: target },
+    });
+
+    assert.equal(result.written, true);
+    assert.match(io.transcript(), /API key is required/);
+    assert.equal(JSON.parse(await readFile(target, "utf-8")).api_key, "sk-required");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -56,7 +77,7 @@ test("an existing config file keeps unknown fields and its secret", async () => 
   try {
     await writeFile(
       target,
-      JSON.stringify({ url: "https://old.example.com", api_key: "sk-old", account: "acct" }),
+      JSON.stringify({ url: "http://127.0.0.1:1933", api_key: "sk-old", account: "acct", user: "alice", output: "table" }),
     );
     const io = scriptedIo(["1", "", "y"]);
     const result = await runSetupWizard({
@@ -70,6 +91,50 @@ test("an existing config file keeps unknown fields and its secret", async () => 
       url: "http://127.0.0.1:1933",
       api_key: "sk-old",
       account: "acct",
+      user: "alice",
+      output: "table",
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("switching servers resets stored identities for the selected authentication mode", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ov-wizard-cloud-"));
+  const target = join(dir, "ovcli.conf");
+  try {
+    for (const choice of ["1", "2"]) {
+      await writeFile(target, JSON.stringify({
+        url: "https://old.example.com", api_key: "sk-old",
+        account: "acct", user: "alice", account_id: "acct", user_id: "alice",
+      }));
+      const io = scriptedIo([choice, "sk-new", "y"]);
+      await runSetupWizard({
+        input: io.input, output: io.output,
+        env: { OPENVIKING_CLI_CONFIG_FILE: target },
+      });
+      assert.deepEqual(JSON.parse(await readFile(target, "utf-8")), {
+        url: choice === "1" ? "http://127.0.0.1:1933" : "https://api.vikingdb.cn-beijing.volces.com/openviking",
+        api_key: "sk-new",
+        ...(choice === "1" ? { account: "default", user: "default" } : {}),
+      });
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a custom localhost URL can explicitly use API Key authentication", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ov-wizard-custom-"));
+  const target = join(dir, "ovcli.conf");
+  try {
+    const io = scriptedIo(["3", "http://localhost:1933", "2", "sk-user", "y"]);
+    await runSetupWizard({
+      input: io.input, output: io.output,
+      env: { OPENVIKING_CLI_CONFIG_FILE: target },
+    });
+    assert.deepEqual(JSON.parse(await readFile(target, "utf-8")), {
+      url: "http://localhost:1933", api_key: "sk-user",
     });
   } finally {
     await rm(dir, { recursive: true, force: true });

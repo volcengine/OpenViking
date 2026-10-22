@@ -50,7 +50,7 @@ describe('ConnectionScopedRouteContent', () => {
     expect(screen.queryByTestId('identity-scoped-route')).toBeNull()
   })
 
-  it.each(['api_key', 'trusted', 'dev', 'oidc', 'ldap', 'offline'] as const)(
+  it.each(['api_key', 'trusted', 'oidc', 'ldap', 'offline'] as const)(
     'mounts route content after resolving %s mode',
     (serverMode) => {
       render(
@@ -89,7 +89,6 @@ it('shows the setup wizard at /config even after selecting a workspace', () => {
 
 describe('gateway navigation', () => {
   it.each([
-    ['dev', true, true],
     ['api_key', true, true],
     ['trusted', true, true],
     ['api_key', false, false],

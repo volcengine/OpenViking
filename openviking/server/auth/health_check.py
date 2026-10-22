@@ -344,8 +344,8 @@ class ApiKeyAuthChecker(AuthHealthChecker):
         else:
             results.append(HealthCheckResult(
                 name="api_key_root_key_configured",
-                status=HealthStatus.WARN,
-                message="Root API key is not configured (will auto-select dev mode)",
+                status=HealthStatus.FAIL,
+                message="API key mode requires a non-empty server.root_api_key",
                 duration_seconds=time() - start_time,
             ))
 
@@ -384,36 +384,6 @@ class TrustedAuthChecker(AuthHealthChecker):
         ]
 
 
-class DevAuthChecker(AuthHealthChecker):
-    """Health checker for dev auth mode."""
-
-    def name(self) -> str:
-        return "dev"
-
-    async def run_checks(self, config: ServerConfig) -> List[HealthCheckResult]:
-        from time import time
-        results: List[HealthCheckResult] = []
-
-        # Check host is localhost
-        start_time = time()
-        if config.host in ["localhost", "127.0.0.1", "::1"]:
-            results.append(HealthCheckResult(
-                name="dev_host_local",
-                status=HealthStatus.PASS,
-                message=f"Host is set to loopback: {config.host}",
-                duration_seconds=time() - start_time,
-            ))
-        else:
-            results.append(HealthCheckResult(
-                name="dev_host_local",
-                status=HealthStatus.WARN,
-                message=f"Dev mode should be used with localhost only, current host: {config.host}",
-                duration_seconds=time() - start_time,
-            ))
-
-        return results
-
-
 # Registry of health checkers
 _AUTH_CHECKERS: Dict[str, AuthHealthChecker] = {}
 
@@ -433,7 +403,6 @@ register_checker("oidc", OIDCAuthChecker())
 register_checker("ldap", LDAPAuthChecker())
 register_checker("api_key", ApiKeyAuthChecker())
 register_checker("trusted", TrustedAuthChecker())
-register_checker("dev", DevAuthChecker())
 
 
 async def run_health_check(config: ServerConfig, fail_on_warn: bool = False) -> HealthCheckReport:

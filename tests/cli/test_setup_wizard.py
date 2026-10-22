@@ -922,7 +922,11 @@ class TestServerWizard:
             patch("openviking_cli.setup_wizard._prompt_required_int", return_value=1933),
             patch("builtins.print"),
         ):
-            assert _wizard_server() == {"host": "127.0.0.1", "port": 1933}
+            result = _wizard_server()
+        assert result["host"] == "127.0.0.1"
+        assert result["port"] == 1933
+        assert result["auth_mode"] == "trusted"
+        assert len(result["root_api_key"]) == 64
 
     def test_local_mode_custom_port(self):
         with (
@@ -930,7 +934,11 @@ class TestServerWizard:
             patch("openviking_cli.setup_wizard._prompt_required_int", return_value=8080),
             patch("builtins.print"),
         ):
-            assert _wizard_server() == {"host": "127.0.0.1", "port": 8080}
+            result = _wizard_server()
+        assert result["host"] == "127.0.0.1"
+        assert result["port"] == 8080
+        assert result["auth_mode"] == "trusted"
+        assert len(result["root_api_key"]) == 64
 
     def test_remote_mode_manual_root_api_key(self):
         with (
@@ -946,6 +954,7 @@ class TestServerWizard:
             assert _wizard_server() == {
                 "host": "0.0.0.0",
                 "port": 1933,
+                "auth_mode": "api_key",
                 "root_api_key": "my-secret-key",
             }
 
@@ -963,7 +972,12 @@ class TestServerWizard:
         # 64-char hex, matching the repo's root-key convention (token_hex(32)).
         assert len(key) == 64
         int(key, 16)  # raises if not hex
-        assert result == {"host": "0.0.0.0", "port": 1933, "root_api_key": key}
+        assert result == {
+            "host": "0.0.0.0",
+            "port": 1933,
+            "auth_mode": "api_key",
+            "root_api_key": key,
+        }
         # The full key must be displayed to the user exactly once.
         output = "\n".join(
             " ".join(str(arg) for arg in call.args) for call in mock_print.call_args_list
@@ -981,18 +995,35 @@ class TestServerWizard:
 
 
 class TestServerWizardCurrentDefaults:
-    CURRENT = {"host": "0.0.0.0", "port": 2044, "root_api_key": "k" * 64}
+    CURRENT = {
+        "host": "0.0.0.0",
+        "port": 2044,
+        "auth_mode": "api_key",
+        "root_api_key": "k" * 64,
+    }
 
     def test_current_port_seeds_default(self):
         with (
-            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[1]),
+            patch("openviking_cli.setup_wizard._prompt_choice", side_effect=[1, 1]),
             patch(
                 "openviking_cli.setup_wizard._prompt_required_int", return_value=2044
             ) as mock_int,
             patch("builtins.print"),
         ):
-            result = _wizard_server(current={"host": "127.0.0.1", "port": 2044})
-        assert result == {"host": "127.0.0.1", "port": 2044}
+            result = _wizard_server(
+                current={
+                    "host": "127.0.0.1",
+                    "port": 2044,
+                    "auth_mode": "trusted",
+                    "root_api_key": "local-key",
+                }
+            )
+        assert result == {
+            "host": "127.0.0.1",
+            "port": 2044,
+            "auth_mode": "trusted",
+            "root_api_key": "local-key",
+        }
         mock_int.assert_called_once_with("Port", default=2044)
 
     def test_remote_current_defaults_to_remote_and_keeps_key(self):
@@ -1031,8 +1062,14 @@ class TestGatewayWizard:
         from openviking_cli.setup_wizard import _wizard_gateway
 
         with patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True) as prompt:
-            assert _wizard_gateway({"host": "127.0.0.1"}) == {"enabled": True}
-        assert prompt.call_count == 1
+            server = {
+                "host": "127.0.0.1",
+                "auth_mode": "trusted",
+                "root_api_key": "root-secret",
+            }
+            assert _wizard_gateway(server) == {"enabled": True}
+        assert server["auth_mode"] == "api_key"
+        assert prompt.call_count == 2
 
     def test_remote_restricted_generates_key_and_preserves_it_on_update(self):
         from openviking_cli.setup_wizard import _wizard_gateway
@@ -1479,7 +1516,11 @@ class TestPartialUpdate:
         with (
             patch(
                 "openviking_cli.setup_wizard._wizard_server",
-                return_value={"host": "0.0.0.0", "root_api_key": "rk"},
+                return_value={
+                    "host": "0.0.0.0",
+                    "auth_mode": "api_key",
+                    "root_api_key": "rk",
+                },
             ),
             patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
             patch("openviking_cli.setup_wizard._post_save_actions", return_value=None),
@@ -1491,13 +1532,13 @@ class TestPartialUpdate:
         assert data["server"] == {
             "host": "0.0.0.0",
             "root_api_key": "rk",
-            "auth_mode": "trusted",
+            "auth_mode": "api_key",
             "workers": 4,
             "temp_upload": {"default_mode": "shared"},
         }
         assert data["vlm"] == _existing_config()["vlm"]
 
-    def test_update_server_local_removes_root_key_only(self, tmp_path):
+    def test_update_server_local_keeps_root_key_for_trusted_mode(self, tmp_path):
         config_path = tmp_path / "ov.conf"
         original = _existing_config()
         original["server"].update({"auth_mode": "api_key", "root_api_key": "rk", "workers": 4})
@@ -1506,7 +1547,12 @@ class TestPartialUpdate:
         with (
             patch(
                 "openviking_cli.setup_wizard._wizard_server",
-                return_value={"host": "127.0.0.1", "port": 1933},
+                return_value={
+                    "host": "127.0.0.1",
+                    "port": 1933,
+                    "auth_mode": "trusted",
+                    "root_api_key": "rk",
+                },
             ),
             patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
             patch("openviking_cli.setup_wizard._post_save_actions", return_value=None),
@@ -1517,8 +1563,42 @@ class TestPartialUpdate:
         assert json.loads(config_path.read_text())["server"] == {
             "host": "127.0.0.1",
             "port": 1933,
+            "auth_mode": "trusted",
+            "root_api_key": "rk",
             "workers": 4,
         }
+
+    def test_update_server_summary_uses_gateway_forced_api_key_mode(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        original = _existing_config()
+        original["server"].update({"auth_mode": "api_key", "root_api_key": "rk"})
+        original["gateway"] = {"enabled": True}
+        config_path.write_text(json.dumps(original), encoding="utf-8")
+
+        with (
+            patch(
+                "openviking_cli.setup_wizard._wizard_server",
+                return_value={
+                    "host": "127.0.0.1",
+                    "port": 1933,
+                    "auth_mode": "trusted",
+                    "root_api_key": "rk",
+                },
+            ),
+            patch("openviking_cli.setup_wizard._prompt_gateway_access"),
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._post_save_actions", return_value=None),
+            patch("builtins.print") as mock_print,
+        ):
+            assert _update_existing_config(config_path, "server") == 0
+
+        output = "\n".join(
+            " ".join(str(arg) for arg in call.args) for call in mock_print.call_args_list
+        )
+        assert "→" in output
+        assert "auth api_key" in output
+        assert "auth trusted" not in output
+        assert json.loads(config_path.read_text())["server"]["auth_mode"] == "api_key"
 
     def test_embedding_dimension_change_requires_confirmation(self, tmp_path):
         config_path = tmp_path / "ov.conf"

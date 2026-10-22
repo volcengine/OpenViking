@@ -32,7 +32,7 @@ MCP uses the server authentication configuration. In API Key mode, use a User/Ad
 - `X-Api-Key: <your-key>`
 - `Authorization: Bearer <your-key>`
 
-Only `dev` mode disables authentication; binding to localhost alone does not. OAuth clients follow the authorization flow below; see [Authentication](04-authentication.md) for other server modes.
+All supported server modes require credentials, including on localhost. OAuth clients follow the authorization flow below; see [Authentication](04-authentication.md) for other server modes.
 
 ## Client Configuration
 
@@ -144,7 +144,7 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory). Deleting a skill directory this way leaves the skill's privacy configuration behind; remove a skill with `ov skills remove` or `DELETE /api/v1/skills/{name}` | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
 | `privacy_tree` | Check which credentials are saved; return active field metadata and references without values | `category` (optional) |
-| `privacy_resolve` | Turn a complete `{{ov_privacy:...}}` placeholder into one current field's actual value for immediate use | `reference` |
+| `privacy_resolve` | Turn a complete <code v-pre>{{ov_privacy:...}}</code> placeholder into one current field's actual value for immediate use | `reference` |
 | `privacy_upsert` | Save user-supplied credential fields with an atomic merge; return metadata and references without values | `category`, `target_key`, `values` |
 | `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true requires ADMIN/ROOT) |
 | `list_groups` | List group IDs in the caller's account without membership | None |
@@ -173,21 +173,19 @@ user spaces, not a shortcut to yours. See
 
 If a SKILL.md, document or tool result contains an authentication placeholder such as:
 
-```text
-Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}
-```
+<pre v-pre><code>Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}</code></pre>
 
 and the current task needs the credential, call `privacy_resolve` with the entire
 placeholder unchanged, excluding the surrounding `Authorization: Bearer` text:
 
-```json
+<pre v-pre><code class="language-json">
 {
   "name": "privacy_resolve",
   "arguments": {
     "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
   }
 }
-```
+</code></pre>
 
 These are the parameters for an MCP `tools/call` request. Use the returned `value`
 in the API's authentication field; the placeholder itself is not a working key.

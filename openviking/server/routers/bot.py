@@ -433,6 +433,8 @@ async def chat_stream(
             detail="Invalid JSON in request body",
         )
 
+    body = _attach_openviking_connection(body, request, _ctx)
+
     async def event_stream() -> AsyncGenerator[str, None]:
         """Generate SSE events from bot response stream."""
         try:
@@ -446,7 +448,7 @@ async def chat_stream(
                 async with client.stream(
                     "POST",
                     f"{bot_url}/bot/v1/chat/stream",
-                    json=_attach_openviking_connection(body, request, _ctx),
+                    json=body,
                     headers=headers,
                     timeout=300.0,
                 ) as response:

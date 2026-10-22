@@ -1,8 +1,8 @@
 # Authentication
 
-OpenViking Server supports multiple built-in authentication modes with role-based access control. The mode is auto-detected if not explicitly configured. In addition, custom authentication plugins can be registered to support arbitrary identity sources.
+OpenViking Server supports multiple built-in authentication modes with role-based access control. If the mode is not explicitly configured, the server selects API Key mode. In addition, custom authentication plugins can be registered to support arbitrary identity sources.
 
-API Key mode is recommended for most deployments; it is auto-selected when no mode is specified and a nonempty root key is configured. Use API Key mode when OpenViking should manage credentials, OIDC or LDAP for an existing identity service, and Trusted mode behind a gateway that validates callers.
+API Key mode is recommended for most deployments. Use API Key mode when OpenViking should manage credentials, OIDC or LDAP for an existing identity service, and Trusted mode behind a gateway that validates callers. API Key and Trusted modes both require a nonempty `root_api_key`, including on localhost.
 
 ## Authentication Modes Overview
 
@@ -12,13 +12,10 @@ API Key mode is recommended for most deployments; it is auto-selected when no mo
 | **OIDC Mode** | `oidc` | JWT tokens from external identity providers | Enterprise SSO integration with Okta/Auth0/Keycloak |
 | **LDAP Mode** | `ldap` | Enterprise LDAP/AD directory services | Integrate with existing enterprise user directory |
 | **Trusted Mode** | `trusted` | `X-OpenViking-Account` / `X-OpenViking-User`, plus `root_api_key` on every deployment. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary |
-| **Dev Mode** | `dev` | No authentication, always ROOT | Local development only |
 
-If `auth_mode` is not explicitly configured:
-- If `root_api_key` is set (non-empty): auto-selects `api_key` mode
-- If `root_api_key` is not set: auto-selects `dev` mode
+If `auth_mode` is not explicitly configured, the server selects `api_key`. It refuses to start without a nonempty `root_api_key`; it never falls back to unauthenticated access.
 
-> **Note:** Setting `root_api_key` to an empty string `""` is invalid. Either set a non-empty value or remove the setting entirely.
+> **Note:** A missing `root_api_key` and an empty string `""` are both invalid. Configure a nonempty value before starting the server.
 
 ## Quick Start: API Key Mode (Recommended)
 
@@ -588,32 +585,22 @@ client = ov.SyncHTTPClient(
 )
 ```
 
-## Dev Mode
+## Local Direct Access
 
-When `auth_mode = "dev"` (or auto-detected when no `root_api_key` is configured), authentication is disabled. Requests are accepted as ROOT; account/user default to `default` when identity headers are absent. **This is only allowed when the server binds to localhost** (`127.0.0.1`, `localhost`, or `::1`). If `host` is set to a non-loopback address (e.g. `0.0.0.0`) in `dev` mode, the server will refuse to start.
+Dev mode has been removed. Local direct access uses `trusted` mode with a non-empty root key and explicit account/user identity headers.
 
 ```json
 {
   "server": {
+    "auth_mode": "trusted",
+    "root_api_key": "replace-with-a-random-secret",
     "host": "127.0.0.1",
     "port": 1933
   }
 }
 ```
 
-Or explicitly:
-
-```json
-{
-  "server": {
-    "auth_mode": "dev",
-    "host": "127.0.0.1",
-    "port": 1933
-  }
-}
-```
-
-> The default `host` is `127.0.0.1`. Before binding to a network address, choose and configure API Key, OIDC, LDAP, or a protected Trusted deployment. Dev mode refuses non-loopback addresses.
+Configure clients with the same key plus `account=default` and `user=default`. Ordinary requests resolve to USER; root administration remains confined to the Admin API. Existing `auth_mode: "dev"` configurations fail at startup with migration guidance.
 
 ## Roles and Permissions
 
@@ -650,7 +637,7 @@ curl http://localhost:1933/health
 
 ## Custom Authentication Plugins
 
-The server uses a plugin-based auth architecture. Each `auth_mode` maps to an `AuthPlugin` implementation. Built-in plugins (`dev`, `api_key`, `trusted`, `oidc`, `ldap`) are auto-registered; third-party plugins can be added by subclassing `AuthPlugin` and registering it before startup.
+The server uses a plugin-based auth architecture. Each `auth_mode` maps to an `AuthPlugin` implementation. Built-in plugins (`api_key`, `trusted`, `oidc`, `ldap`) are auto-registered; third-party plugins can be added by subclassing `AuthPlugin` and registering it before startup.
 
 ### Plugin Interface (`openviking.server.auth.plugin.AuthPlugin`)
 
@@ -660,7 +647,7 @@ The server uses a plugin-based auth architecture. Each `auth_mode` maps to an `A
 | `validate_config(config)` | Validate `ServerConfig` at startup; should `sys.exit(1)` on fatal misconfiguration. |
 | `initialize(app, service, config)` | Initialize runtime state (e.g., `APIKeyManager`) on `app.state`. |
 | `get_request_context_checks(path, identity)` | Optional post-auth path/identity checks. |
-| `can_skip_api_key_for_bot_proxy()` | Whether the bot proxy may skip API key validation (e.g., `dev` mode). |
+| `can_skip_api_key_for_bot_proxy()` | Whether the bot proxy may skip API key validation for that authentication integration. |
 
 ### Register a Custom Plugin
 

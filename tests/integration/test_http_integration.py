@@ -11,6 +11,7 @@ import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import NotFoundError
+from tests.integration.conftest import HTTP_ROOT_API_KEY
 
 
 class TestHTTPClientIntegration:
@@ -19,7 +20,9 @@ class TestHTTPClientIntegration:
     @pytest_asyncio.fixture
     async def client(self, server_url):
         """Create and initialize AsyncHTTPClient."""
-        client = AsyncHTTPClient(url=server_url)
+        client = AsyncHTTPClient(
+            url=server_url, api_key=HTTP_ROOT_API_KEY, account="default", user="test_user"
+        )
         await client.initialize()
         yield client
         await client.close()
@@ -54,7 +57,7 @@ class TestHTTPClientIntegration:
     async def test_stat_not_found(self, client):
         """Test stat on non-existent path raises NotFoundError."""
         with pytest.raises(NotFoundError):
-            await client.stat("viking://nonexistent/path")
+            await client.stat("viking://resources/nonexistent/path")
 
     @pytest.mark.asyncio
     async def test_tree(self, client):
@@ -82,7 +85,9 @@ class TestSessionIntegration:
     @pytest_asyncio.fixture
     async def client(self, server_url):
         """Create and initialize AsyncHTTPClient."""
-        client = AsyncHTTPClient(url=server_url)
+        client = AsyncHTTPClient(
+            url=server_url, api_key=HTTP_ROOT_API_KEY, account="default", user="test_user"
+        )
         await client.initialize()
         yield client
         await client.close()
@@ -123,7 +128,9 @@ class TestAsyncHTTPClientIntegration:
     @pytest_asyncio.fixture
     async def client(self, server_url):
         """Create AsyncHTTPClient."""
-        client = AsyncHTTPClient(url=server_url)
+        client = AsyncHTTPClient(
+            url=server_url, api_key=HTTP_ROOT_API_KEY, account="default", user="test_user"
+        )
         await client.initialize()
         yield client
         await client.close()

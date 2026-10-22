@@ -25,10 +25,11 @@ use crate::{
 use serde_json::Value;
 
 use super::store::{
-    ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, IdentityField,
-    OPENVIKING_SERVICE_URL, build_config, custom_allows_empty_api_key, normalize_custom_url,
-    validate_candidate_config, validate_candidate_config_with_role, validate_config,
-    validate_config_name, validate_identity_value, validation_error_copy, validation_error_copy_zh,
+    ApiKeyRole, CandidateValidation, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore,
+    IdentityField, OPENVIKING_SERVICE_URL, build_config, custom_allows_empty_api_key,
+    normalize_custom_url, validate_candidate_config, validate_candidate_config_detailed,
+    validate_candidate_config_with_role, validate_config, validate_config_name,
+    validate_identity_value, validation_error_copy, validation_error_copy_zh,
 };
 
 const OPENVIKING_SERVICE_API_KEY_URL: &str =
@@ -40,13 +41,22 @@ const TEXT_INPUT_PROMPT: &str = "  > ";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum IdentityMode {
-    LocalNoKey,
     RootKey,
+    Trusted,
+}
+
+impl IdentityMode {
+    fn from_auth_mode(auth_mode: Option<&str>) -> Self {
+        if auth_mode == Some("trusted") {
+            Self::Trusted
+        } else {
+            Self::RootKey
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CustomKeyMode {
-    NoKey,
     UserKey,
     RootKey,
 }
@@ -366,10 +376,8 @@ fn custom_api_key_input_label(mode: CustomKeyMode) -> &'static str {
     match (Language::current(), mode) {
         (Language::En, CustomKeyMode::RootKey) => "Root API key",
         (Language::En, CustomKeyMode::UserKey) => "User API key",
-        (Language::En, CustomKeyMode::NoKey) => "API key",
         (Language::ZhCn, CustomKeyMode::RootKey) => "Root API Key",
         (Language::ZhCn, CustomKeyMode::UserKey) => "User API Key",
-        (Language::ZhCn, CustomKeyMode::NoKey) => "API Key",
     }
 }
 
@@ -379,12 +387,8 @@ fn custom_api_key_input_helper_lines(mode: CustomKeyMode) -> Vec<String> {
             "For self-hosted admin setup and --sudo commands."
         }
         (Language::En, CustomKeyMode::UserKey) => "For normal OpenViking commands.",
-        (Language::En, CustomKeyMode::NoKey) => {
-            "Optional for local servers. Add one if auth is enabled."
-        }
         (Language::ZhCn, CustomKeyMode::RootKey) => "用于自定义管理初始化和 --sudo 命令。",
         (Language::ZhCn, CustomKeyMode::UserKey) => "用于常规 OpenViking 命令。",
-        (Language::ZhCn, CustomKeyMode::NoKey) => "本地服务可不填；如果启用了认证，请填写。",
     };
     vec![theme::muted(copy).to_string()]
 }
@@ -395,18 +399,17 @@ fn custom_key_mode_labels(allow_empty: bool) -> Vec<&'static str> {
 }
 
 fn custom_key_mode_labels_for_language(allow_empty: bool, language: Language) -> Vec<&'static str> {
-    match (allow_empty, language) {
-        (true, Language::En) => vec!["No key / local dev", "User API key", "Root API key"],
-        (false, Language::En) => vec!["User API key", "Root API key"],
-        (true, Language::ZhCn) => vec!["无密钥 / 本地开发", "User API Key", "Root API Key"],
-        (false, Language::ZhCn) => vec!["User API Key", "Root API Key"],
+    let _ = allow_empty;
+    match language {
+        Language::En => vec!["User API key", "Root API key"],
+        Language::ZhCn => vec!["User API Key", "Root API Key"],
     }
 }
 
 fn custom_key_mode_for_selection(allow_empty: bool, index: usize) -> CustomKeyMode {
-    match (allow_empty, index) {
-        (true, 0) => CustomKeyMode::NoKey,
-        (true, 1) | (false, 0) => CustomKeyMode::UserKey,
+    let _ = allow_empty;
+    match index {
+        0 => CustomKeyMode::UserKey,
         _ => CustomKeyMode::RootKey,
     }
 }
@@ -1799,16 +1802,8 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         root_api_key = None;
                         account = None;
                         user = None;
-                        match selected {
-                            CustomKeyMode::NoKey => {
-                                identity_mode = Some(IdentityMode::LocalNoKey);
-                                stage = Stage::Account;
-                            }
-                            CustomKeyMode::UserKey | CustomKeyMode::RootKey => {
-                                identity_mode = None;
-                                stage = Stage::ApiKey;
-                            }
-                        }
+                        identity_mode = None;
+                        stage = Stage::ApiKey;
                     }
                     PromptResult::Back => stage = Stage::Url,
                     PromptResult::Quit => {
@@ -1867,13 +1862,14 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 }
             }
             Stage::Account => {
-                let mode = identity_mode.unwrap_or(IdentityMode::LocalNoKey);
+                let mode = identity_mode.unwrap_or(IdentityMode::RootKey);
                 match prompt_identity_value(
                     ui,
                     section_add(),
                     copy(Language::current(), "Account ID", "账户 ID"),
                     IdentityField::Account,
                     mode,
+                    account.as_deref(),
                 )? {
                     PromptResult::Value(value) => {
                         account = Some(value);
@@ -1882,10 +1878,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                     PromptResult::Back => {
                         account = None;
                         user = None;
-                        stage = match identity_mode {
-                            Some(IdentityMode::LocalNoKey) => Stage::KeyMode,
-                            Some(IdentityMode::RootKey) | None => Stage::ApiKey,
-                        };
+                        stage = Stage::ApiKey;
                     }
                     PromptResult::Quit => {
                         print_cancelled(ui)?;
@@ -1894,13 +1887,14 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 }
             }
             Stage::User => {
-                let mode = identity_mode.unwrap_or(IdentityMode::LocalNoKey);
+                let mode = identity_mode.unwrap_or(IdentityMode::RootKey);
                 match prompt_identity_value(
                     ui,
                     section_add(),
                     copy(Language::current(), "User ID", "用户 ID"),
                     IdentityField::User,
                     mode,
+                    user.as_deref(),
                 )? {
                     PromptResult::Value(value) => {
                         user = Some(value);
@@ -1935,8 +1929,9 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         mut config,
                         mut api_key_role,
                         root_api_key_role,
+                        server_auth_mode,
                     }) => {
-                        if root_key_used_for_normal_commands(&config) {
+                        if should_select_user_with_root_key(&config, server_auth_mode.as_deref()) {
                             let root_key = config.root_api_key.clone().unwrap_or_default();
                             match select_user_with_root_key(ui, section_add(), &config, &root_key)
                                 .await?
@@ -1981,9 +1976,13 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                                 PromptResult::Value(0) => {
                                     key_mode = Some(CustomKeyMode::RootKey);
                                     root_api_key = api_key.clone();
-                                    identity_mode = Some(IdentityMode::RootKey);
-                                    account = None;
-                                    user = None;
+                                    identity_mode = Some(IdentityMode::from_auth_mode(
+                                        server_auth_mode.as_deref(),
+                                    ));
+                                    if identity_mode != Some(IdentityMode::Trusted) {
+                                        account = None;
+                                        user = None;
+                                    }
                                     stage = Stage::Account;
                                     continue;
                                 }
@@ -2046,7 +2045,8 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                             account.as_deref(),
                             user.as_deref(),
                         ) {
-                            identity_mode = Some(IdentityMode::RootKey);
+                            identity_mode =
+                                Some(IdentityMode::from_auth_mode(server_auth_mode.as_deref()));
                             stage = Stage::Account;
                             continue;
                         }
@@ -2296,6 +2296,11 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 &[],
             )? {
                 PromptResult::Value(value) => {
+                    if value.trim_end_matches('/') != url.trim_end_matches('/') {
+                        account = None;
+                        user = None;
+                        identity_mode = None;
+                    }
                     url = value;
                     stage = Stage::ApiKeyChoice;
                 }
@@ -2371,13 +2376,8 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                                     api_key = None;
                                     root_api_key = None;
                                     key_mode = None;
-                                    if custom_allows_empty_api_key(&url) {
-                                        identity_mode = Some(IdentityMode::LocalNoKey);
-                                        stage = Stage::Account;
-                                    } else {
-                                        identity_mode = None;
-                                        stage = Stage::Validate;
-                                    }
+                                    identity_mode = None;
+                                    stage = Stage::Validate;
                                 }
                             }
                         }
@@ -2438,13 +2438,8 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                         key_mode = None;
                         key_edit_action = None;
                         api_key_was_entered = false;
-                        if kind == ConfigKind::Custom && custom_allows_empty_api_key(&url) {
-                            identity_mode = Some(IdentityMode::LocalNoKey);
-                            stage = Stage::Account;
-                        } else {
-                            identity_mode = None;
-                            stage = Stage::Validate;
-                        }
+                        identity_mode = None;
+                        stage = Stage::Validate;
                     }
                     PromptResult::Back => {
                         stage = if kind == ConfigKind::OpenVikingService {
@@ -2478,16 +2473,8 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                         root_api_key = None;
                         key_edit_action = None;
                         api_key_was_entered = false;
-                        match selected {
-                            CustomKeyMode::NoKey => {
-                                identity_mode = Some(IdentityMode::LocalNoKey);
-                                stage = Stage::Account;
-                            }
-                            CustomKeyMode::UserKey | CustomKeyMode::RootKey => {
-                                identity_mode = None;
-                                stage = Stage::ApiKeyInput;
-                            }
-                        }
+                        identity_mode = None;
+                        stage = Stage::ApiKeyInput;
                     }
                     PromptResult::Back => stage = Stage::ApiKeyChoice,
                     PromptResult::Quit => {
@@ -2570,13 +2557,14 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 }
             }
             Stage::Account => {
-                let mode = identity_mode.unwrap_or(IdentityMode::LocalNoKey);
+                let mode = identity_mode.unwrap_or(IdentityMode::RootKey);
                 match prompt_identity_value(
                     ui,
                     section_edit(),
                     copy(Language::current(), "Account ID", "账户 ID"),
                     IdentityField::Account,
                     mode,
+                    account.as_deref(),
                 )? {
                     PromptResult::Value(value) => {
                         account = Some(value);
@@ -2585,10 +2573,7 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                     PromptResult::Back => {
                         account = None;
                         user = None;
-                        stage = match identity_mode {
-                            Some(IdentityMode::LocalNoKey) => Stage::KeyMode,
-                            Some(IdentityMode::RootKey) | None => Stage::ApiKeyInput,
-                        };
+                        stage = Stage::ApiKeyInput;
                     }
                     PromptResult::Quit => {
                         print_cancelled(ui)?;
@@ -2597,19 +2582,18 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 }
             }
             Stage::User => {
-                let mode = identity_mode.unwrap_or(IdentityMode::LocalNoKey);
+                let mode = identity_mode.unwrap_or(IdentityMode::RootKey);
                 match prompt_identity_value(
                     ui,
                     section_edit(),
                     copy(Language::current(), "User ID", "用户 ID"),
                     IdentityField::User,
                     mode,
+                    user.as_deref(),
                 )? {
                     PromptResult::Value(value) => {
                         user = Some(value);
-                        if identity_mode == Some(IdentityMode::RootKey) {
-                            api_key_was_entered = false;
-                        }
+                        api_key_was_entered = false;
                         stage = Stage::Validate;
                     }
                     PromptResult::Back => {
@@ -2637,8 +2621,9 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                         mut config,
                         mut api_key_role,
                         root_api_key_role,
+                        server_auth_mode,
                     }) => {
-                        if root_key_used_for_normal_commands(&config) {
+                        if should_select_user_with_root_key(&config, server_auth_mode.as_deref()) {
                             let root_key = config.root_api_key.clone().unwrap_or_default();
                             match select_user_with_root_key(ui, section_edit(), &config, &root_key)
                                 .await?
@@ -2682,9 +2667,13 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                                     key_mode = Some(CustomKeyMode::RootKey);
                                     key_edit_action = Some(CustomEditKeyAction::SetRootKey);
                                     root_api_key = api_key.clone();
-                                    identity_mode = Some(IdentityMode::RootKey);
-                                    account = None;
-                                    user = None;
+                                    identity_mode = Some(IdentityMode::from_auth_mode(
+                                        server_auth_mode.as_deref(),
+                                    ));
+                                    if identity_mode != Some(IdentityMode::Trusted) {
+                                        account = None;
+                                        user = None;
+                                    }
                                     stage = Stage::Account;
                                     continue;
                                 }
@@ -2762,7 +2751,8 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                             account.as_deref(),
                             user.as_deref(),
                         ) {
-                            identity_mode = Some(IdentityMode::RootKey);
+                            identity_mode =
+                                Some(IdentityMode::from_auth_mode(server_auth_mode.as_deref()));
                             stage = Stage::Account;
                             continue;
                         }
@@ -4431,6 +4421,7 @@ async fn create_account_and_user(
         copy(Language::current(), "New account ID", "新账户 ID"),
         IdentityField::Account,
         IdentityMode::RootKey,
+        None,
     )? {
         PromptResult::Value(value) => value,
         PromptResult::Back => return Ok(PromptResult::Back),
@@ -4446,6 +4437,7 @@ async fn create_account_and_user(
         ),
         IdentityField::User,
         IdentityMode::RootKey,
+        None,
     )? {
         PromptResult::Value(value) => value,
         PromptResult::Back => return Ok(PromptResult::Back),
@@ -4820,6 +4812,7 @@ struct ValidatedConfig {
     config: Config,
     api_key_role: Option<ApiKeyRole>,
     root_api_key_role: Option<ApiKeyRole>,
+    server_auth_mode: Option<String>,
 }
 
 async fn validate_draft(
@@ -4839,7 +4832,7 @@ async fn validate_draft(
         ),
     ))?;
     let mut root_api_key_role = None;
-    let api_key_role = if config
+    let (api_key_role, server_auth_mode) = if config
         .api_key
         .as_deref()
         .is_some_and(|key| !key.trim().is_empty())
@@ -4852,7 +4845,10 @@ async fn validate_draft(
         let mut detection_config = config.clone();
         detection_config.account = None;
         detection_config.user = None;
-        let role = validate_candidate_config_with_role(&detection_config, require_api_key).await?;
+        let CandidateValidation {
+            api_key_role: role,
+            auth_mode,
+        } = validate_candidate_config_detailed(&detection_config, require_api_key).await?;
         if config.root_api_key.as_deref() == config.api_key.as_deref() {
             root_api_key_role = role;
         }
@@ -4889,15 +4885,16 @@ async fn validate_draft(
             config.account = None;
             config.user = None;
         }
-        role
+        (role, auth_mode)
     } else {
-        validate_candidate_config(&config, require_api_key).await?;
-        None
+        let validation = validate_candidate_config_detailed(&config, require_api_key).await?;
+        (validation.api_key_role, validation.auth_mode)
     };
     Ok(ValidatedConfig {
         config,
         api_key_role,
         root_api_key_role,
+        server_auth_mode,
     })
 }
 
@@ -5067,6 +5064,10 @@ fn root_key_used_for_normal_commands(config: &Config) -> bool {
     };
 
     !api_key.is_empty() && api_key == root_api_key
+}
+
+fn should_select_user_with_root_key(config: &Config, server_auth_mode: Option<&str>) -> bool {
+    server_auth_mode != Some("trusted") && root_key_used_for_normal_commands(config)
 }
 
 fn next_step_copy() -> String {
@@ -5248,8 +5249,9 @@ fn prompt_identity_value(
     prompt: &str,
     field: IdentityField,
     mode: IdentityMode,
+    current: Option<&str>,
 ) -> Result<PromptResult<String>> {
-    let (default, value_label, helper_lines) = identity_prompt_parts(mode);
+    let (default, value_label, helper_lines) = identity_prompt_parts(mode, current);
     let mut error: Option<String> = None;
     loop {
         let mut lines = helper_lines.clone();
@@ -5282,7 +5284,7 @@ fn prompt_new_user_id(
     prompt: &str,
     existing_users: &[RootUserSummary],
 ) -> Result<PromptResult<String>> {
-    let (_, _, helper_lines) = identity_prompt_parts(IdentityMode::RootKey);
+    let (_, _, helper_lines) = identity_prompt_parts(IdentityMode::RootKey, None);
     let mut error: Option<String> = None;
     loop {
         let mut lines = helper_lines.clone();
@@ -5317,20 +5319,9 @@ fn duplicate_user_id_error(user_id: &str) -> String {
 
 fn identity_prompt_parts(
     mode: IdentityMode,
-) -> (Option<&'static str>, Option<InputValueLabel>, Vec<String>) {
+    current: Option<&str>,
+) -> (Option<&str>, Option<InputValueLabel>, Vec<String>) {
     match mode {
-        IdentityMode::LocalNoKey => (
-            Some("default"),
-            Some(InputValueLabel::Default),
-            vec![
-                theme::muted(copy(
-                    Language::current(),
-                    "Local no-key identity.",
-                    "本地无密钥身份。",
-                ))
-                .to_string(),
-            ],
-        ),
         IdentityMode::RootKey => (
             None,
             None,
@@ -5343,6 +5334,25 @@ fn identity_prompt_parts(
                 .to_string(),
             ],
         ),
+        IdentityMode::Trusted => {
+            let current = current.filter(|value| !value.trim().is_empty());
+            (
+                Some(current.unwrap_or("default")),
+                Some(if current.is_some() {
+                    InputValueLabel::Current
+                } else {
+                    InputValueLabel::Default
+                }),
+                vec![
+                    theme::muted(copy(
+                        Language::current(),
+                        "Trusted mode: press Enter to use the shown identity, or enter your own.",
+                        "Trusted 模式：回车使用显示的身份，也可输入自定义身份。",
+                    ))
+                    .to_string(),
+                ],
+            )
+        }
     }
 }
 
@@ -6137,9 +6147,10 @@ mod tests {
         root_key_normal_command_notice_lines, root_key_redirect_labels,
         root_key_used_for_normal_commands, root_key_user_selection_labels, root_users_from_value,
         save_config, saved_summary_render_parts, select_live_lines,
-        should_confirm_detected_user_key, should_prompt_root_identity, status_box_frame_for_size,
-        status_box_lines, status_box_lines_with_runtime, status_box_lines_with_runtime_width,
-        status_box_width, status_payload_is_healthy, styled_logo_to_width_for_color_level,
+        should_confirm_detected_user_key, should_prompt_root_identity,
+        should_select_user_with_root_key, status_box_frame_for_size, status_box_lines,
+        status_box_lines_with_runtime, status_box_lines_with_runtime_width, status_box_width,
+        status_payload_is_healthy, styled_logo_to_width_for_color_level,
         styled_wordmark_line_for_color_level, switch_validation_error_lines,
         tagline_color_for_theme, user_key_from_response, user_key_redirect_labels,
         user_management_config_context, user_management_config_from_server_url,
@@ -7128,10 +7139,10 @@ mod tests {
     }
 
     #[test]
-    fn custom_key_mode_choices_distinguish_no_key_user_key_and_root_key() {
+    fn custom_key_mode_choices_require_user_or_root_key() {
         assert_eq!(
             custom_key_mode_labels(true),
-            ["No key / local dev", "User API key", "Root API key"]
+            ["User API key", "Root API key"]
         );
         assert_eq!(
             custom_key_mode_labels(false),
@@ -7171,28 +7182,9 @@ mod tests {
     }
 
     #[test]
-    fn local_no_key_identity_prompt_shows_default_identity() {
-        let (default, value_label, helper_lines) = identity_prompt_parts(IdentityMode::LocalNoKey);
-        let lines = input_live_lines(
-            "Create a new OpenViking config.",
-            "Account ID",
-            default,
-            value_label,
-            false,
-            &helper_lines,
-            None,
-        );
-        let text = lines.join("\n");
-
-        assert!(text.contains("Default:"));
-        assert!(text.contains("default"));
-        assert!(text.contains("Local no-key identity."));
-        assert!(!text.contains("Press Enter"));
-    }
-
-    #[test]
     fn root_key_identity_prompt_has_no_default_identity() {
-        let (default, value_label, helper_lines) = identity_prompt_parts(IdentityMode::RootKey);
+        let (default, value_label, helper_lines) =
+            identity_prompt_parts(IdentityMode::RootKey, None);
         let lines = input_live_lines(
             "Create a new OpenViking config.",
             "Account ID",
@@ -7207,6 +7199,49 @@ mod tests {
         assert!(!text.contains("Default:"));
         assert!(!text.contains("Current:"));
         assert!(text.contains("Root API keys require an explicit account and user."));
+    }
+
+    #[test]
+    fn trusted_identity_prompt_defaults_to_default() {
+        let mode = IdentityMode::from_auth_mode(Some("trusted"));
+        for current in [None, Some(""), Some("  ")] {
+            let (default, label, helper_lines) = identity_prompt_parts(mode, current);
+            assert_eq!(default, Some("default"));
+            assert!(matches!(label, Some(InputValueLabel::Default)));
+            let text = input_live_lines(
+                "test",
+                "Account ID",
+                default,
+                label,
+                false,
+                &helper_lines,
+                None,
+            )
+            .join("\n");
+            assert!(text.contains("Default:"));
+            assert!(text.contains("default"));
+            assert!(text.contains("Trusted mode:"));
+        }
+    }
+
+    #[test]
+    fn trusted_identity_prompt_keeps_existing_identity() {
+        let mode = IdentityMode::from_auth_mode(Some("trusted"));
+        for current in ["acme", "alice"] {
+            let (default, label, _) = identity_prompt_parts(mode, Some(current));
+            assert_eq!(default, Some(current));
+            assert!(matches!(label, Some(InputValueLabel::Current)));
+        }
+    }
+
+    #[test]
+    fn non_trusted_identity_prompt_has_no_default() {
+        for auth_mode in [None, Some("api_key"), Some("oidc")] {
+            let mode = IdentityMode::from_auth_mode(auth_mode);
+            let (default, label, _) = identity_prompt_parts(mode, Some("old-identity"));
+            assert_eq!(default, None);
+            assert!(label.is_none());
+        }
     }
 
     #[test]
@@ -7705,6 +7740,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trusted_root_key_config_keeps_deployment_key_without_user_key_selection() {
+        let url = spawn_trusted_probe_server("root-key").await;
+        let draft = ConfigDraft {
+            name: "local".to_string(),
+            kind: ConfigKind::Custom,
+            url,
+            api_key: Some("root-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("default".to_string()),
+            user: Some("default".to_string()),
+        };
+        let mut ui = super::LiveRegion::default();
+
+        let validated = validate_draft(&mut ui, "test", &draft)
+            .await
+            .expect("trusted root key and explicit identity should validate");
+
+        assert_eq!(validated.server_auth_mode.as_deref(), Some("trusted"));
+        assert_eq!(validated.config.api_key.as_deref(), Some("root-key"));
+        assert_eq!(validated.config.root_api_key.as_deref(), Some("root-key"));
+        assert_eq!(validated.config.account.as_deref(), Some("default"));
+        assert_eq!(validated.config.user.as_deref(), Some("default"));
+        assert!(!should_select_user_with_root_key(
+            &validated.config,
+            validated.server_auth_mode.as_deref(),
+        ));
+    }
+
+    #[tokio::test]
     async fn validated_user_key_config_preserves_separate_root_api_key_for_sudo() {
         let url = spawn_dual_key_probe_server("user-key", "root-key").await;
         let draft = ConfigDraft {
@@ -7822,6 +7886,47 @@ mod tests {
                     }
                 } else {
                     http_response(404, r#"{"error":{"message":"not found"}}"#)
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn spawn_trusted_probe_server(root_api_key: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            for _ in 0..6 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let lower_request = request.to_ascii_lowercase();
+                let root_header = format!("x-api-key: {root_api_key}");
+                let response = if request.starts_with("GET /health ") {
+                    http_response(200, r#"{"healthy":true,"auth_mode":"trusted"}"#)
+                } else if request.starts_with("GET /api/v1/admin/accounts ")
+                    && lower_request.contains(&root_header)
+                {
+                    http_response(200, r#"{"accounts":[]}"#)
+                } else if request.starts_with("GET /api/v1/system/status ")
+                    && lower_request.contains(&root_header)
+                    && lower_request.contains("x-openviking-account: default")
+                    && lower_request.contains("x-openviking-user: default")
+                {
+                    http_response(200, r#"{"status":"ok","result":{"initialized":true}}"#)
+                } else {
+                    http_response(
+                        401,
+                        r#"{"error":{"code":"AuthenticationError","message":"invalid identity"}}"#,
+                    )
                 };
                 let _ = stream.write_all(response.as_bytes()).await;
             }

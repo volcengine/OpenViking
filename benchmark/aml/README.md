@@ -14,21 +14,22 @@ aggregation.
 
 ## Add/Search adapter
 
-For a local OpenViking server using `server.auth_mode: dev`:
+For a local OpenViking server using `server.auth_mode: trusted`, set its root key and the account used by the adapter:
 
 ```bash
 export OPENVIKING_URL=http://127.0.0.1:1933
+export OPENVIKING_API_KEY='<trusted-mode root key>'
+export OPENVIKING_ACCOUNT=default
 export AML_API_KEY='<memory-system key>'
 
 python -m benchmark.aml.server --host 127.0.0.1 --port 8088
 ```
 
-Do not set an OpenViking key or account for this local `dev` setup. The SDK
-passes each AML `user_id` directly as the OpenViking user; there is no hash or
-second identity mapping. Like other OpenViking SDK clients, it also reads an
-existing `~/.openviking/ovcli.conf`, so that file must match the server being
-used (or be disabled with `OPENVIKING_CLI_CONFIG_FILE` pointing to a missing
-file).
+The SDK passes each AML `user_id` directly as the OpenViking user; there is no
+hash or second identity mapping. Like other OpenViking SDK clients, it also
+reads an existing `~/.openviking/ovcli.conf`, so that file must match the
+server being used (or be disabled with `OPENVIKING_CLI_CONFIG_FILE` pointing
+to a missing file).
 
 For a remote multi-user deployment, configure the OpenViking server with
 `server.auth_mode: trusted`, then set the trusted-mode root key and account:

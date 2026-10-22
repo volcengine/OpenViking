@@ -113,7 +113,7 @@ class AuthPlugin(abc.ABC):
         """Whether the bot proxy may skip API key validation.
 
         Returns:
-            True if the bot proxy can forward without an API key
-            (e.g. dev mode).
+            True if the active authentication mode lets the trusted bot proxy
+            forward without a user API key.
         """
         return False

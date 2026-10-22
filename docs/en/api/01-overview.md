@@ -117,8 +117,8 @@ Configuration field description:
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API Key | `null` (no auth) |
-| `account` | Account header; used in trusted and dev modes, ignored in api_key mode | `null` |
-| `user` | User header; used in trusted and dev modes, ignored in api_key mode | `null` |
+| `account` | Account header; used in trusted mode, ignored in api_key mode | `null` |
+| `user` | User header; used in trusted mode, ignored in api_key mode | `null` |
 | `timeout` | HTTP request timeout in seconds | `60.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
@@ -212,7 +212,7 @@ See the [Authentication Guide](../guides/04-authentication.md) for full details.
 
 - **Authorization Bearer** header: `Authorization: Bearer your-key` (recommended)
 - **X-API-Key** header: `X-API-Key: your-key`
-- Authentication is skipped only in dev mode, which is selected automatically when `server.root_api_key` is unset and `auth_mode` is not set. Other modes (api_key, trusted, OIDC, LDAP) resolve identity according to their configuration.
+- Authentication is always required for data and management APIs. When `auth_mode` is omitted, the server selects `api_key` and requires a non-empty `server.root_api_key`.
 - The `/health` and `/ready` endpoints never require authentication.
 
 ## Response Format

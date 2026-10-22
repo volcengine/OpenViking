@@ -106,7 +106,7 @@ def test_builtin_file_log_sink_is_built_from_config(tmp_path, monkeypatch):
     reporter.sinks[0].close()
 
 
-async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
+async def test_app_reuses_and_closes_usage_reporter(monkeypatch, tmp_path):
     built_reporters = []
     assigned_reporters = []
     assigned_agent_evolution_configs = []
@@ -162,7 +162,13 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
     monkeypatch.setattr("openviking.server.app.get_task_tracker", lambda: TaskTracker())
     monkeypatch.setattr("openviking.server.mcp_endpoint.mcp_lifespan", mcp_lifespan)
 
-    config = ServerConfig.model_validate({"agent_evolution": {"enabled": True}})
+    config = ServerConfig.model_validate(
+        {
+            "root_api_key": "test-root-key",
+            "agent_evolution": {"enabled": True},
+            "observability": {"usage_audit": {"sqlite_path": str(tmp_path / "usage-audit.db")}},
+        }
+    )
     app = create_app(config=config, service=Service())
     async with app.router.lifespan_context(app):
         pass

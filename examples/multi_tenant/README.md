@@ -47,17 +47,18 @@ cp ov.conf.example ov.conf
 # 编辑 ov.conf，填入 embedding 和 vlm 的 api_key
 ```
 
-关键配置项——`root_api_key` 启用多租户认证：
+配置 API Key 模式和非空 `root_api_key`：
 
 ```json
 {
   "server": {
+    "auth_mode": "api_key",
     "root_api_key": "my-root-key"
   }
 }
 ```
 
-不配置 `root_api_key` 时，认证禁用，所有请求以 ROOT 身份访问（开发模式）。
+`root_api_key` 缺失或为空时服务端会拒绝启动，包括 localhost。Root key 只用于 Admin API；示例在创建用户后使用返回的 user/admin key 访问租户数据。
 
 ### 2. 启动 Server
 

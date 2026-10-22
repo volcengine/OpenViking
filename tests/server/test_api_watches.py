@@ -274,7 +274,7 @@ async def test_home_alias_to_uri_resolves_to_canonically_keyed_task(
 
     Watch tasks are keyed on the canonical URI, and the router canonicalizes
     ``to_uri`` at the request boundary, so the alias resolves to the same task
-    and the response keeps echoing the stored canonical key. The dev auth plugin
+    and the response keeps echoing the stored canonical key. The test auth plugin
     resolves test requests to root, which never expands the alias, so this test
     overrides the request context with a user-role identity.
     """

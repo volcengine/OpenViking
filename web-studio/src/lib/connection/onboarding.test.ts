@@ -246,7 +246,7 @@ describe('verification', () => {
     ).rejects.toMatchObject({ stage: 'data', message: 'Forbidden' })
     expect(localStorage.getItem(PROFILES_STORAGE_KEY)).toBeNull()
   })
-  it('requires a key except in development mode', async () => {
+  it('requires a key', async () => {
     get.mockResolvedValueOnce({
       data: { version: 'test', auth_mode: 'api_key' },
     })

@@ -129,7 +129,8 @@ class TestMetricsEndpoint:
         ]
         service = SimpleNamespace(_agfs_client=SimpleNamespace(metrics=lambda: records))
         config = ServerConfig(
-            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))
+            root_api_key="test-root-key",
+            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True)),
         )
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app, service=service)
@@ -149,7 +150,7 @@ class TestMetricsEndpoint:
             shutdown_metrics(app=app)
 
     async def test_metrics_disabled_returns_404(self):
-        config = ServerConfig()
+        config = ServerConfig(root_api_key="test-root-key")
         app = create_app(config=config, service=None)
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -158,6 +159,7 @@ class TestMetricsEndpoint:
 
     async def test_metrics_enabled_returns_200(self):
         config = ServerConfig(
+            root_api_key="test-root-key",
             observability=ObservabilityConfig(
                 metrics=MetricsConfig(
                     enabled=True,
@@ -165,7 +167,7 @@ class TestMetricsEndpoint:
                         prometheus=PrometheusExporterConfig(enabled=True)
                     ),
                 )
-            )
+            ),
         )
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app)
@@ -185,7 +187,8 @@ class TestMetricsEndpoint:
 
     async def test_metrics_enabled_by_new_server_metrics_flag(self):
         config = ServerConfig(
-            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))
+            root_api_key="test-root-key",
+            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True)),
         )
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app)
@@ -199,6 +202,7 @@ class TestMetricsEndpoint:
 
     async def test_metrics_account_dimension_config_is_loaded(self):
         config = ServerConfig(
+            root_api_key="test-root-key",
             observability=ObservabilityConfig(
                 metrics=MetricsConfig(
                     enabled=True,
@@ -208,7 +212,7 @@ class TestMetricsEndpoint:
                         metric_allowlist=["openviking_http_requests_total"],
                     ),
                 )
-            )
+            ),
         )
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app)
@@ -244,6 +248,7 @@ class TestMetricsEndpoint:
         )
 
         config = ServerConfig(
+            root_api_key="test-root-key",
             observability=ObservabilityConfig(
                 metrics=MetricsConfig(
                     enabled=True,
@@ -252,7 +257,7 @@ class TestMetricsEndpoint:
                         prometheus=PrometheusExporterConfig(enabled=True)
                     ),
                 )
-            )
+            ),
         )
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app)

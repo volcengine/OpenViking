@@ -113,18 +113,11 @@ function useGatewayConnection() {
     [queryClient, scope],
   )
   return {
-    /**
-     * Dev mode needs no credential; trusted mode lets /access explain that
-     * the gateway doesn't support it.
-     */
+    /** Trusted mode lets /access explain that the gateway doesn't support it. */
     allowed:
       service.ready &&
       service.provider === 'opensource' &&
-      (serverMode === 'dev' ||
-        serverMode === 'trusted' ||
-        Boolean(apiKey.trim())),
-    /** Local development authenticates as default/default without a credential. */
-    devMode: serverMode === 'dev',
+      (serverMode === 'trusted' || Boolean(apiKey.trim())),
     isRoleLoading: isConnectionRoleLoading,
     connection: admin,
     scope,

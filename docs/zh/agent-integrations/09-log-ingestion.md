@@ -31,11 +31,11 @@
 
 ## 在 ov.conf 中开启
 
-先在运行 ingest 命令的同一 shell 中设置以下变量。示例连接本地 dev 服务；认证部署应替换 URL，并使用绑定租户身份的 user/admin API Key：
+先在运行 ingest 命令的同一 shell 中设置以下变量。即使连接本地服务，也应使用绑定租户身份的 user/admin API Key：
 
 ```bash
 export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_API_KEY=""  # 仅用于本地 dev；认证部署应填写 user/admin key。
+export OPENVIKING_API_KEY="<user-or-admin-api-key>"
 ```
 
 配置加载器会展开这些变量。未设置的变量会保留为字面字符串，因此使用下面的占位值时不要跳过此步骤。

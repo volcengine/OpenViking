@@ -96,19 +96,11 @@ describe('new management feature permissions', () => {
     ).toBe(true)
     expect(canEditStudioConfiguration({ ...input, role: 'admin' })).toBe(false)
   })
-  it('allows ordinary API-key users and development mode to query Gateway access', () => {
+  it('allows ordinary API-key users to query Gateway access', () => {
     expect(
       canManageStudioGateway({
         ...input,
         role: 'user',
-        hasControlCredential: false,
-      }),
-    ).toBe(true)
-    expect(
-      canManageStudioGateway({
-        ...input,
-        serverMode: 'dev',
-        role: 'unknown',
         hasControlCredential: false,
       }),
     ).toBe(true)

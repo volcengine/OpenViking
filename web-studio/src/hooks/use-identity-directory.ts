@@ -15,7 +15,7 @@ export type UseIdentityDirectory = IdentityDirectory & {
  * Builds the account/user directory backing the OAuth consent "select a
  * specific identity" mode, mirroring the Studio Connection & Identity page.
  *
- * Availability is gated on `api_key` server mode (trusted/dev modes never
+ * Availability is gated on `api_key` server mode (trusted mode never
  * expose per-user keys, and the backend rejects those identities for OAuth)
  * plus a root/admin caller. ROOT lists every account; an account-admin gets a
  * 403 on `GET /admin/accounts` and is therefore pinned to their own account.

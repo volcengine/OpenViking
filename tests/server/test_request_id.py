@@ -157,7 +157,7 @@ async def test_request_id_with_slash_suffix_is_accepted_verbatim() -> None:
 
 
 async def test_unhandled_500_keeps_request_id_for_log_and_response(monkeypatch) -> None:
-    app = create_app(config=ServerConfig(), service=SimpleNamespace())
+    app = create_app(config=ServerConfig(root_api_key="test-root-key"), service=SimpleNamespace())
     records: list[logging.LogRecord] = []
     completed_requests: list[dict] = []
     monkeypatch.setattr(
@@ -201,7 +201,7 @@ async def test_unhandled_500_keeps_request_id_for_log_and_response(monkeypatch) 
 
 
 async def test_mapped_exception_audit_matches_public_response(monkeypatch) -> None:
-    app = create_app(config=ServerConfig(), service=SimpleNamespace())
+    app = create_app(config=ServerConfig(root_api_key="test-root-key"), service=SimpleNamespace())
     completed_requests: list[dict] = []
     monkeypatch.setattr(
         HttpRequestLifecycleDataSource,

@@ -6,7 +6,7 @@
 
 ## 凭证和账号范围 {#credentials-and-account-scope}
 
-每个管理请求都要带 OpenViking API 密钥，放在 `X-API-Key` 或 `Authorization: Bearer` 中。网关向 OpenViking 确认这把密钥属于哪个账号、哪个用户、什么角色，确认结果最多缓存 30 秒。本地 dev 模式不需要密钥，调用方固定为 root 身份 `default/default`。网关不支持 trusted 认证。
+每个管理请求都要带 OpenViking API 密钥，放在 `X-API-Key` 或 `Authorization: Bearer` 中。网关向 OpenViking 确认这把密钥属于哪个账号、哪个用户、什么角色，确认结果最多缓存 30 秒。网关只支持 API Key 认证，不支持 trusted 认证。
 
 上游和上下文配置（API 中叫 `policies`）属于账号，同一账号的用户共用。请求默认作用于调用方所在的账号；root 可以用 query 参数 `account_id` 指定其他账号，admin 和 user 只能访问自己的账号。
 
@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | 读取上游和上下文配置 | 本账号的任何用户 | 本账号的任何用户；单独持有管理密钥也可以，并能指定任意账号 |
 | 创建、修改或删除上游和上下文配置；测试上游 | 本账号的任何用户 | 只有带正确管理密钥的请求 |
-| 导入 OpenViking 的模型配置 | 嵌入部署中的 root（包括本地 dev） | 只有带正确管理密钥的请求，且只限嵌入部署 |
+| 导入 OpenViking 的模型配置 | 嵌入部署中的 root | 只有带正确管理密钥的请求，且只限嵌入部署 |
 | 签发、读取、吊销网关密钥，重置保存 | user 只能操作自己的密钥；admin 操作本账号；root 操作所选账号 | 同左，管理密钥不增加任何权限 |
 | 读取日志和概览 | user 只看自己的；admin 和 root 看整个账号 | 同左，始终需要 OpenViking 身份 |
 | 删除某个用户的网关数据 | 本账号的 admin，或 root | 同左 |

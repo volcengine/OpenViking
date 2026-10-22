@@ -62,7 +62,7 @@ function runInstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
     "--source", "dev",
     "--lang", "en",
     "--url", "http://127.0.0.1:9",
-    "--api-key", "",
+    "--api-key", "test-key",
     "--yes",
   ]);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -90,7 +90,7 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
       "--source", "dev",
       "--lang", "en",
       "--url", "http://127.0.0.1:9",
-      "--api-key", "",
+      "--api-key", "test-key",
       "--yes",
     ]);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -183,7 +183,7 @@ exit 0
       "--source", "dev",
       "--lang", "en",
       "--url", "http://127.0.0.1:9",
-      "--api-key", "",
+      "--api-key", "test-key",
       "--yes",
     ], {
       PATH: `${binDir}:${dirname(installedNode)}:/usr/bin:/bin`,
@@ -249,7 +249,7 @@ exit 0
       "--source", "dev",
       "--lang", "en",
       "--url", "http://127.0.0.1:9",
-      "--api-key", "",
+      "--api-key", "test-key",
       "--yes",
     ], { PATH: `${binDir}:${dirname(installedNode)}:/usr/bin:/bin` });
 
@@ -296,7 +296,7 @@ exit 0
       "--source", "dev",
       "--lang", "en",
       "--url", "http://127.0.0.1:9",
-      "--api-key", "",
+      "--api-key", "test-key",
       "--yes",
     ], { PATH: `${binDir}:${dirname(installedNode)}:/usr/bin:/bin` });
 
@@ -522,7 +522,7 @@ for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
         "--source", "dev",
         "--lang", "en",
         "--url", "http://127.0.0.1:9",
-        "--api-key", "",
+        "--api-key", "test-key",
         "--yes",
       ]);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -615,7 +615,7 @@ test("cursor installs and uninstalls through a symlinked OPENVIKING_HOME", () =>
       "--source", "dev",
       "--lang", "en",
       "--url", "http://127.0.0.1:9",
-      "--api-key", "",
+      "--api-key", "test-key",
       "--yes",
     ], { OPENVIKING_HOME: ovHome });
     assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
@@ -648,7 +648,7 @@ test("malformed existing agent JSON fails without overwriting user configuration
       "--source", "dev",
       "--lang", "en",
       "--url", "http://127.0.0.1:9",
-      "--api-key", "",
+      "--api-key", "test-key",
       "--yes",
     ]);
     assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);

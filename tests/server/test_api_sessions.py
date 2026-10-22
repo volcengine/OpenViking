@@ -387,18 +387,19 @@ async def test_tool_result_externalization_read_and_search(client: httpx.AsyncCl
 
 
 async def test_tool_result_externalization_respects_server_config_disabled(service):
-    from openviking.server.auth.plugins import DevAuthPlugin
+    from tests.server.auth_test_utils import FixedIdentityAuthPlugin
 
     app = create_app(
         config=ServerConfig(
-            tool_output_externalization=ToolOutputExternalizationConfig(enabled=False)
+            root_api_key="test-root-key",
+            tool_output_externalization=ToolOutputExternalizationConfig(enabled=False),
         ),
         service=service,
     )
     set_service(service)
     # ASGITransport does not run the application lifespan that normally
     # initializes the configured auth plugin.
-    app.state.auth_plugin = DevAuthPlugin()
+    app.state.auth_plugin = FixedIdentityAuthPlugin()
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

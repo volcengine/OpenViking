@@ -1830,17 +1830,15 @@ def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
 def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Prompt for server binding, port, and auth (root API key when remote).
 
-    Auth mode is auto-detected by the server from ``root_api_key``: setting a
-    key switches to ``api_key`` mode, no key means ``dev`` mode (which the
-    server only permits on localhost) — so this step never writes
-    ``auth_mode`` explicitly. *current* (the existing server config, if any)
-    seeds all defaults so an update run can keep values by pressing Enter.
+    Local direct access uses trusted mode. Remote access uses API-key mode.
+    Both require a root key. *current* seeds defaults so an update run can keep
+    its existing key.
     """
     current = current or {}
     _rule("Server & auth")
     if current:
         print(f"  {_dim('Current: ' + _summarize_server(current))}")
-    print(f"  {_dim('Local: only this machine can reach the server (no auth, dev mode).')}")
+    print(f"  {_dim('Local: trusted direct access with an explicit identity and root key.')}")
     print(f"  {_dim('Remote: bind to 0.0.0.0 for Docker / LAN access — requires API-key auth.')}")
 
     is_remote_now = str(current.get("host") or "127.0.0.1") not in (
@@ -1851,7 +1849,7 @@ def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | No
     mode = _prompt_choice(
         "Bind server host to:",
         [
-            ("Local (127.0.0.1)", "(default, safer — no auth needed)"),
+            ("Local (127.0.0.1)", "(default, trusted direct access)"),
             ("Remote (0.0.0.0)", "(Docker / remote access — root API key required)"),
         ],
         default=2 if is_remote_now else 1,
@@ -1865,11 +1863,13 @@ def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | No
     if port is None:
         port = port_default
 
+    auth_mode = "trusted" if mode == 1 else "api_key"
     if mode == 1:
-        return {"host": "127.0.0.1", "port": port}
-
-    print(f"\n  {_dim('Non-local binding switches auth to api_key mode: every client must send')}")
-    print(f"  {_dim('the root API key as a Bearer token (Authorization: Bearer <key>).')}")
+        print(f"\n  {_dim('Local direct access uses trusted mode: clients send this key plus')}")
+        print(f"  {_dim('an explicit account and user identity (default/default for local use).')}")
+    else:
+        print(f"\n  {_dim('Non-local binding uses api_key mode. The root key manages accounts;')}")
+        print(f"  {_dim('normal data access uses a separately issued User/Admin key.')}")
 
     existing_key = str(current.get("root_api_key") or "")
     key_options: list[tuple[str, str]] = []
@@ -1897,7 +1897,12 @@ def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | No
             print(f"  {_red('Root API key is required for remote binding')}")
             return None
 
-    return {"host": "0.0.0.0", "port": port, "root_api_key": root_api_key}
+    return {
+        "host": "127.0.0.1" if mode == 1 else "0.0.0.0",
+        "port": port,
+        "auth_mode": auth_mode,
+        "root_api_key": root_api_key,
+    }
 
 
 def _wizard_gateway(
@@ -1914,6 +1919,11 @@ def _wizard_gateway(
         "Enable OpenViking Gateway on the same port?", default=gateway.get("enabled", False)
     )
     if gateway["enabled"]:
+        if server.get("auth_mode") == "trusted":
+            server["auth_mode"] = "api_key"
+            print(
+                f"\n  {_yellow('Gateway requires API-key authentication; server auth changed to api_key.')}"
+            )
         _check_gateway_public_url(server, gateway)
         _prompt_gateway_access(server, gateway)
     return gateway
@@ -2153,22 +2163,17 @@ def _update_existing_config(config_path: Path, section: str) -> int:
         if server_dict is None:
             print("\n  Setup cancelled.\n")
             return 0
+        updated_server = {**current_server, **server_dict}
+        gateway = _config_section(data, "gateway")
+        if gateway.get("enabled") and updated_server.get("auth_mode") == "trusted":
+            updated_server["auth_mode"] = "api_key"
         old_summary, new_summary = (
             _summarize_server(current_server),
-            _summarize_server(server_dict),
+            _summarize_server(updated_server),
         )
-        updated_server = {**current_server, **server_dict}
-        if server_dict.get("host") == "127.0.0.1":
-            updated_server.pop("auth_mode", None)
-            updated_server.pop("root_api_key", None)
         data["server"] = updated_server
-        gateway = _config_section(data, "gateway")
         if gateway.get("enabled"):
-            # Local dev has no restricted configuration; remote asks who may configure.
-            if server_dict.get("host") == "127.0.0.1":
-                gateway.pop("management_key", None)
-            else:
-                _prompt_gateway_access(updated_server, gateway)
+            _prompt_gateway_access(updated_server, gateway)
             data["gateway"] = gateway
 
     print(f"\n  {_bold('Change:')} {old_summary}")
@@ -2230,10 +2235,10 @@ def _summarize_model(section: dict[str, Any]) -> str:
 def _summarize_server(server: dict[str, Any]) -> str:
     """One-line, secret-free description of the server config block."""
     if not server:
-        return _dim("(defaults: 127.0.0.1:1933 · auth dev)")
+        return _dim("(not configured)")
     host = server.get("host", "127.0.0.1")
     port = server.get("port", 1933)
-    auth = "api_key (root key set)" if server.get("root_api_key") else "dev (no auth)"
+    auth = server.get("auth_mode") or ("api_key" if server.get("root_api_key") else "missing")
     return f"{host}:{port} · auth {auth}"
 
 

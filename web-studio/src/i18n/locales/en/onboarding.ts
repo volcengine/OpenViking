@@ -61,8 +61,7 @@ export default {
   healthRequestFailed: 'Service health check failed:',
   dataRequestFailed: 'Memory access check failed:',
   enter: 'Enter Studio',
-  keyHelp:
-    'Use the API Key provided by your service. Open-source development mode does not require a key.',
+  keyHelp: 'Use the API Key provided by your service.',
   hostedKeyHelp: 'Enter your Volcengine User API Key to access your memories.',
   advanced: 'Advanced open-source connection (optional)',
   loadUsers: 'Load users in this account',
@@ -70,14 +69,12 @@ export default {
   chooseUser: 'Choose a user',
   noUsers:
     'No users were found in this account. Check the account ID or enter a user ID manually.',
-  usersDevMode:
-    'This service is in development mode and does not provide a user list. Enter the account and user IDs manually to access that space.',
   usersNeedKey:
     'This service requires a Root or admin API key to list users. Enter the key and try again.',
   usersUnavailable:
     'Could not load users. Check the management key and account, or enter a user ID manually.',
   userSelectionHint:
-    'Use a management key to load users. In dev mode or without management access, enter the account and user IDs manually. API Key mode also requires that user’s key.',
+    'Use a management key to load users. Without management access, enter the account and user IDs manually. API Key mode also requires that user’s key.',
   storageError:
     'Unable to save your connection. Allow local storage for this site and retry.',
 }

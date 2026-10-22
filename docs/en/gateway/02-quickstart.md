@@ -10,18 +10,19 @@ Pick the path that matches your server:
 
 | Your server | Follow |
 | --- | --- |
-| Bound to `127.0.0.1` in local dev mode (no `root_api_key`) | [Local server](#local-server-no-api-key) |
+| Bound to `127.0.0.1` with API-key authentication | [Local server](#local-server-no-api-key) |
 | Reached over the network with `api_key` authentication | [Remote server](#remote-server-api-keys) |
 | An existing OpenViking service whose configuration you do not want to change | [Standalone deployment](../guides/22-gateway-operations.md#standalone-deployment), then come back to [Send a test request](#send-a-test-request) |
 
-## Local server (no API key) {#local-server-no-api-key}
+## Local server {#local-server-no-api-key}
 
-A local server in dev mode needs no OpenViking API key: Studio opens without one, and the gateway key you issue reads and writes memory as the local `default` user.
+A local server with the embedded gateway uses API-key authentication. Enabling the gateway through `openviking-server init` changes a Trusted local configuration to API Key mode.
 
 1. **Turn the gateway on.** Run `openviking-server init` and answer yes to **Enable OpenViking Gateway on the same port?**. With an existing configuration, choose **Update gateway** from the menu. You can also merge `{"gateway": {"enabled": true}}` into `ov.conf` by hand.
 2. **Start or restart `openviking-server`.** The gateway now answers on the same port as OpenViking, at `http://127.0.0.1:1933/gateway`.
-3. **Open the gateway in Studio.** Open <http://127.0.0.1:1933/studio/> and choose **OpenViking Gateway** in the sidebar. If the default account has no [upstreams](../guides/15-gateway.md#key-terms) yet, the gateway imports the server's VLM settings as upstreams at startup and creates a context profile. You should see the **Get started** checklist on the Overview tab with its first two steps already done (see [Get started checklist and Quick mode](06-manage-in-studio.md#get-started-checklist)). An imported Coding Plan upstream needs your confirmation before use; see [Import OpenViking model settings](07-upstreams.md#import-openviking-model-settings). If nothing could be imported, add an upstream as described in [Upstreams](07-upstreams.md#upstreams).
-4. **Issue a gateway key.** On the Overview tab, choose **Get a key** in the **Quick mode** card. Or issue one by hand: on the Keys tab, choose **Issue key**, enter a name, pick the context profile and an upstream, and issue it. You should see the **Copy your gateway key** dialog with the full `ovgw_…` key. It is shown only once, so copy it before you close the dialog.
+3. **Create a normal OpenViking identity.** Run `ov config`, connect with the root key, open **User Management**, create or select `default/default`, and save its User/Admin key. Root keys cannot be used as gateway business keys.
+4. **Open the gateway in Studio.** Open <http://127.0.0.1:1933/studio/>, sign in with that User/Admin key, and choose **OpenViking Gateway**. Use **Quick mode** to import usable VLM settings, create the default context profile, and issue a gateway key; or configure each object manually. An imported Coding Plan upstream needs confirmation before use.
+5. **Copy the gateway key.** The full `ovgw_…` value is shown only once.
 
 Your gateway address is `http://127.0.0.1:1933/gateway`. Continue with [Send a test request](#send-a-test-request).
 

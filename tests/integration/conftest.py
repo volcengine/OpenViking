@@ -30,6 +30,7 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingl
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_integration"
+HTTP_ROOT_API_KEY = "test-root-key"
 
 # ── Gemini integration test helpers ──────────────────────────────────────────
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
@@ -192,7 +193,7 @@ def server_url(temp_dir):
     )
     loop.run_until_complete(svc.initialize())
 
-    config = ServerConfig()
+    config = ServerConfig(auth_mode="trusted", root_api_key=HTTP_ROOT_API_KEY)
     fastapi_app = create_app(config=config, service=svc)
 
     # Find a free port

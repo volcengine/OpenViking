@@ -27,7 +27,10 @@ def _make_test_app():
         async def close(self):
             pass
 
-    return create_app(config=ServerConfig(profile_enabled=True), service=_Service())
+    return create_app(
+        config=ServerConfig(root_api_key="test-root-key", profile_enabled=True),
+        service=_Service(),
+    )
 
 
 def _make_test_app_with_config(config: ServerConfig):
@@ -100,7 +103,9 @@ async def test_profile_query_does_not_affect_following_request():
 
 @pytest.mark.asyncio
 async def test_profile_query_is_ignored_when_server_profile_disabled():
-    app = _make_test_app_with_config(ServerConfig(profile_enabled=False))
+    app = _make_test_app_with_config(
+        ServerConfig(root_api_key="test-root-key", profile_enabled=False)
+    )
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

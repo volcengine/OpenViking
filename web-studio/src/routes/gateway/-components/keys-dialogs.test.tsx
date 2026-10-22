@@ -31,7 +31,7 @@ const api = vi.hoisted(() => ({
   listKeyUsers: vi.fn(),
   getAccess: vi.fn(),
 }))
-const state = vi.hoisted(() => ({ role: 'admin', devMode: false }))
+const state = vi.hoisted(() => ({ role: 'admin' }))
 
 vi.mock('../-lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof Api>()),
@@ -61,7 +61,7 @@ vi.mock('#/hooks/use-app-connection', () => ({
     },
     connectionRole: state.role,
     isConnectionRoleLoading: false,
-    serverMode: state.devMode ? 'dev' : 'api_key',
+    serverMode: 'api_key',
   }),
 }))
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
@@ -75,11 +75,10 @@ afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   state.role = 'admin'
-  state.devMode = false
   api.getAccess.mockImplementation(async () => ({
     managed: false,
     can_write_objects: true,
-    can_issue_for_others: state.role !== 'user' && !state.devMode,
+    can_issue_for_others: state.role !== 'user',
     role: state.role,
     account_id: 'acme',
     user_id: 'admin',
@@ -408,27 +407,21 @@ describe('KeysIssueDialog', () => {
     )
   })
 
-  it.each([false, true])(
-    'issues for the current identity without an owner (dev: %s)',
-    async (devMode) => {
-      state.role = devMode ? 'root' : 'user'
-      state.devMode = devMode
-      api.issueKey.mockResolvedValue({})
-      renderIssueDialog()
-      fillName()
-      await screen.findByText(
-        devMode ? 'keys.form.user.developmentIdentity' : 'keys.form.user.self',
-      )
-      expect(
-        screen.queryByRole('combobox', { name: 'keys.form.user.label' }),
-      ).toBeNull()
-      submit()
-      await waitFor(() =>
-        expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), settings),
-      )
-      expect(api.listKeyUsers).not.toHaveBeenCalled()
-    },
-  )
+  it('issues for the current user without an owner override', async () => {
+    state.role = 'user'
+    api.issueKey.mockResolvedValue({})
+    renderIssueDialog()
+    fillName()
+    await screen.findByText('keys.form.user.self')
+    expect(
+      screen.queryByRole('combobox', { name: 'keys.form.user.label' }),
+    ).toBeNull()
+    submit()
+    await waitFor(() =>
+      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), settings),
+    )
+    expect(api.listKeyUsers).not.toHaveBeenCalled()
+  })
 
   it('focuses the paste field when a selected user key is unreadable', async () => {
     api.listKeyUsers.mockResolvedValue([hashed])

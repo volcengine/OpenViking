@@ -279,9 +279,6 @@ export function resolveConnectionRoleProbeState({
   if (serverMode === 'checking') {
     return { isLoading: true, role: 'unknown', shouldProbe: false }
   }
-  if (serverMode === 'dev') {
-    return { isLoading: false, role: 'root', shouldProbe: false }
-  }
   if (!apiKey) {
     return { isLoading: false, role: 'unknown', shouldProbe: false }
   }
@@ -317,7 +314,7 @@ function applyConnection(
     accountId: connection.accountId,
     adminApiKey: connection.adminApiKey,
     apiKey: connection.apiKey,
-    identityHeaders: serverMode === 'trusted' || serverMode === 'dev',
+    identityHeaders: serverMode === 'trusted',
     userId: connection.userId,
   })
 }
@@ -487,10 +484,6 @@ export function summarizeConnectionIdentity(
   connection: ConnectionDraft,
   serverMode: ServerMode,
 ): ConnectionIdentitySummary {
-  if (serverMode === 'dev') {
-    return { labelKey: 'identitySummary.dev' }
-  }
-
   const segments = [connection.accountId, connection.userId].filter(Boolean)
   if (!segments.length) {
     return { labelKey: 'identitySummary.unset' }
@@ -927,7 +920,7 @@ export function AppConnectionProvider({
         userId,
       }) => {
         assertSourceConnection()
-        if (serverMode === 'dev' || serverMode === 'checking') {
+        if (serverMode === 'checking') {
           throw createConnectionError('identitySwitchUnsupported')
         }
 

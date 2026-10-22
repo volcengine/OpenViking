@@ -40,7 +40,8 @@ VikingBot 从同一个 `ov.conf` 解析 OpenViking 连接，支持三种拓扑�
   "server": {
     "auth_mode": "api_key",
     "host": "127.0.0.1",
-    "port": 1933
+    "port": 1933,
+    "root_api_key": "<openviking-root-api-key>"
   },
   "bot": {
     "ov_server": {
@@ -57,7 +58,7 @@ OpenViking 连接支持 User key 和 Root key：
 
 | `api_key_type` | 典型场景 | 含义 |
 |----------------|----------|------|
-| `user` | `api_key` / `dev` auth mode | 以 OpenViking User 身份访问 |
+| `user` | `api_key` auth mode | 以 OpenViking User 身份访问 |
 | `root` | `trusted` auth mode | Gateway 使用 Root key，并转发可信身份头 |
 
 没有显式配置 `api_key_type` 时，VikingBot 根据同一 `ov.conf` 中 OpenViking Server 的有效 auth mode 推导默认值。

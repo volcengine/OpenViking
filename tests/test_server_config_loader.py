@@ -115,7 +115,7 @@ def test_load_bot_gateway_token_reads_token_from_bot_gateway_section(tmp_path):
 def test_server_config_get_effective_auth_mode():
     assert ServerConfig(auth_mode="trusted").get_effective_auth_mode() == "trusted"
     assert ServerConfig(root_api_key="root-key").get_effective_auth_mode() == "api_key"
-    assert ServerConfig().get_effective_auth_mode() == "dev"
+    assert ServerConfig().get_effective_auth_mode() == "api_key"
 
 
 def test_get_server_url_from_server_data_uses_server_host_and_port():

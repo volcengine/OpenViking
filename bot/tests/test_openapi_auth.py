@@ -144,99 +144,6 @@ class TestOpenAPIAuth:
         assert session_cancelled.json()["status"] == "cancelled"
         assert client.post("/bot/v1/compile/cmp_other/cancel").status_code == 404
 
-    def test_dev_compile_with_forwarded_connection_uses_same_principal_for_status(
-        self, message_bus, temp_workspace, monkeypatch
-    ):
-        class FakeCompileService:
-            def __init__(self):
-                self.scope = None
-                self.connection = "unset"
-
-            async def create_task(self, request, *, principal_scope, task_id=None):
-                assert task_id is None
-                self.scope = principal_scope
-                self.connection = request.openviking_connection
-                return CompileAccepted(
-                    session_id="cmp_dev",
-                    task_id="cmp_dev",
-                    to=request.to,
-                )
-
-            async def get_task(self, task_id, *, principal_scope):
-                if task_id != "cmp_dev" or principal_scope != self.scope:
-                    return None
-                return {
-                    "task_id": task_id,
-                    "status": "running",
-                    "stage": "agent",
-                    "created_at": "2026-07-20T00:00:00Z",
-                    "updated_at": "2026-07-20T00:00:01Z",
-                }
-
-        config = SimpleNamespace(
-            gateway=SimpleNamespace(host="127.0.0.1", token="gateway-secret"),
-            ov_server=SimpleNamespace(
-                server_url="http://127.0.0.1:1933",
-                effective_auth_mode="dev",
-                api_key_type="user",
-            ),
-        )
-        service = FakeCompileService()
-        channel = OpenAPIChannel(
-            OpenAPIChannelConfig(),
-            message_bus,
-            workspace_path=temp_workspace,
-            global_config=config,
-            compile_service=service,
-        )
-        runtime_probes = []
-
-        async def fake_runtime_probe(headers=None):
-            runtime_probes.append(headers)
-            return {"status": "ok", "auth_mode": "dev"}
-
-        monkeypatch.setattr(channel, "_assert_runtime_upstream_auth_mode", fake_runtime_probe)
-        app = FastAPI()
-        app.include_router(channel.get_router(), prefix="/bot/v1")
-        app.include_router(channel.get_gateway_router())
-        client = TestClient(app, client=("127.0.0.1", 50000))
-        headers = {
-            "X-Gateway-Token": "gateway-secret",
-            "X-API-Key": "stale-dev-key",
-            "X-OpenViking-Account": "default",
-            "X-OpenViking-User": "default",
-        }
-
-        created = client.post(
-            "/runtime/v1/tasks",
-            headers=headers,
-            json={
-                "task_type": "compile",
-                "payload": {
-                    "from": ["viking://resources/source"],
-                    "to": "viking://resources/wiki",
-                    "skill": "viking://agent/skills/wiki",
-                    "openviking_connection": {
-                        "api_key": "stale-dev-key",
-                        "account_id": "default",
-                        "user_id": "default",
-                        "server_url": "http://127.0.0.1:1933",
-                    },
-                },
-            },
-        )
-        status_response = client.post(
-            "/runtime/v1/tasks/status",
-            headers=headers,
-            json={"session_id": "cmp_dev"},
-        )
-
-        assert created.status_code == 202
-        assert status_response.status_code == 200
-        assert service.scope == channel._principal_scope("dev")
-        assert service.connection is None
-        assert runtime_probes == [{}, {}]
-
     def test_chat_returns_422_for_unsupported_context(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
 
@@ -1592,7 +1499,7 @@ class TestOpenAPIAuth:
             == "VikingBot gateway proxy is active, but no available OpenViking server is configured"
         )
 
-    def test_chat_rejects_runtime_upstream_dev_on_public_gateway(
+    def test_chat_rejects_removed_runtime_upstream_mode(
         self, message_bus, temp_workspace, monkeypatch
     ):
         config = SimpleNamespace(
@@ -1640,11 +1547,8 @@ class TestOpenAPIAuth:
             json={"message": "hello"},
         )
 
-        assert response.status_code == 403
-        assert (
-            response.json()["detail"]
-            == "OpenViking server auth_mode changed to dev, but dev auth can only be used when gateway and OpenViking server are localhost"
-        )
+        assert response.status_code == 503
+        assert "auth_mode changed after gateway startup" in response.json()["detail"]
 
     def test_gateway_proxy_forwards_openviking_request_without_gateway_token(
         self, message_bus, temp_workspace, monkeypatch
@@ -1809,7 +1713,7 @@ class TestOpenAPIAuth:
         assert captured["upstream_stream"].closed is True
         assert captured["proxy_client_closed"] is True
 
-    def test_gateway_proxy_rejects_runtime_upstream_dev_on_public_gateway(
+    def test_gateway_proxy_rejects_removed_runtime_upstream_mode(
         self, message_bus, temp_workspace, monkeypatch
     ):
         config = SimpleNamespace(
@@ -1857,11 +1761,8 @@ class TestOpenAPIAuth:
             headers={"X-Gateway-Token": "gateway-secret"},
         )
 
-        assert response.status_code == 403
-        assert (
-            response.json()["detail"]
-            == "OpenViking server auth_mode changed to dev, but dev auth can only be used when gateway and OpenViking server are localhost"
-        )
+        assert response.status_code == 503
+        assert "auth_mode changed after gateway startup" in response.json()["detail"]
 
     def test_bot_channel_accepts_requests_without_channel_api_key(
         self, message_bus, temp_workspace, monkeypatch

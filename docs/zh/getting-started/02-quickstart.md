@@ -38,7 +38,7 @@ curl http://127.0.0.1:1933/health
 # {"status":"ok","healthy":true,...}
 ```
 
-本地地址为 `http://127.0.0.1:1933`，默认本地配置不需要 API Key；Web Studio 位于 `/studio`。Docker、持久化存储和远程访问配置见[部署](../guides/03-deployment.md)、[模型配置](../guides/01-configuration.md)和[认证](../guides/04-authentication.md)。
+本地地址为 `http://127.0.0.1:1933`。配置向导在本地模式下也会生成 root key，请保留该 key，用于 CLI 和 Web Studio 连接。Web Studio 位于 `/studio`。Docker、持久化存储和远程访问配置见[部署](../guides/03-deployment.md)、[模型配置](../guides/01-configuration.md)和[认证](../guides/04-authentication.md)。
 
 ## 2. 安装并连接 CLI
 

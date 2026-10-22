@@ -137,10 +137,7 @@ def _cfg_field(key: str, description: str, **extra) -> dict:
 _NUM = {"type": "number", "minimum": 0.25, "maximum": 60.0, "step": 0.25}
 _CONFIG_SCHEMA = [
     _cfg_field("endpoint", "OpenViking server URL", required=True, default=_DEFAULT_ENDPOINT),
-    _cfg_field("api_key", (
-        "OpenViking API key (recommended; only leave blank for an explicitly "
-        "unauthenticated local development server)"
-    ), secret=True),
+    _cfg_field("api_key", "OpenViking API key (required for all supported server modes)", secret=True),
     _cfg_field("account", "Advanced local identity override (leave blank for user API keys)"),
     _cfg_field("user", "Advanced local user override (leave blank for user API keys)"),
     _cfg_field("agent", "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.", default=_DEFAULT_AGENT),

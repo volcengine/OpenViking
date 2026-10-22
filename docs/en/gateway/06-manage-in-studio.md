@@ -4,7 +4,7 @@ description: Find your way around the OpenViking Gateway pages in Studio, see wh
 
 # Manage OpenViking Gateway in Studio
 
-This page is for anyone who uses the gateway pages in Studio: what each tab is for, who can change what, and when saved changes take effect. Open Studio with your OpenViking API key (a server in [local dev mode](02-quickstart.md#local-server-no-api-key) needs none) and choose **OpenViking Gateway** in the sidebar; a standalone gateway serves its own Studio at `/studio/`. Upstreams and context profiles are shared by everyone in an OpenViking account, while gateway keys and request logs belong to each user.
+This page is for anyone who uses the gateway pages in Studio: what each tab is for, who can change what, and when saved changes take effect. Open Studio with your OpenViking User/Admin API key and choose **OpenViking Gateway** in the sidebar; a standalone gateway serves its own Studio at `/studio/`. Upstreams and context profiles are shared by everyone in an OpenViking account, while gateway keys and request logs belong to each user.
 
 ## Studio tabs {#studio-tabs}
 
@@ -28,7 +28,7 @@ Whether you can edit [upstreams and context profiles](../guides/15-gateway.md#ke
 | View upstreams and context profiles, and pick them when issuing a key | Every signed-in user in the account | Every signed-in user; read-only views leave out upstream API keys and headers |
 | Add, change or delete upstreams and context profiles | Every signed-in user in the account | Only after you [unlock editing](#unlock-editing), account admins and root included |
 | Test an upstream (connection test or model test) | Every signed-in user in the account | Only after unlocking; while Studio is read-only, the **Test** button is hidden |
-| Import OpenViking model settings (embedded deployments only) | Root only, including local dev mode | Only after unlocking |
+| Import OpenViking model settings (embedded deployments only) | Root only | Only after unlocking |
 | Issue gateway keys | Users for themselves; account admins for users in their account; root first switches account in the sidebar | Same; the management key adds no rights |
 
 Testing needs write access because a test uses the stored credentials, and a model test is billed by the provider. Key issuing is covered in [Gateway keys](09-gateway-keys.md#gateway-keys), and the full rules, including the management API, are in the [access matrix](../api/25-gateway.md#credentials-and-account-scope).
@@ -55,7 +55,7 @@ Until the first [gateway key](../guides/15-gateway.md#key-terms) exists, the che
 | --- | --- |
 | Upstream | Uses the usable upstreams you already have. If there is none, it [imports OpenViking's own model settings](07-upstreams.md#import-openviking-model-settings) (the VLM models in `ov.conf`) as upstreams. |
 | Context profile | Uses an existing context profile. If there is none, it creates one named "Default" with the recommended settings. |
-| Key | Issues a key named "Quick mode" for the current user, bound to every usable upstream. Outside local dev mode, root picks the key's user in the issue dialog instead. |
+| Key | Issues a key named "Quick mode" for the current user, bound to every usable upstream. Root picks the key's target user in the issue dialog. |
 
 An upstream counts as usable when all of these hold:
 
@@ -68,7 +68,7 @@ Exceptions:
 
 - If the imported settings still give no model the gateway can relay directly, the card says so, and you add an upstream yourself in step 1 (**Add an upstream**).
 - When a management key is configured and Quick mode needs to create a context profile or import models, the card first asks you to unlock with the management key.
-- Only some users can import model settings: root (or anyone in local dev mode) when no management key is set, and whoever unlocks with the management key when one is set. A standalone gateway cannot import them at all. If you can't import, the card appears only once a usable upstream exists.
+- Only root can import model settings when no management key is set; with a management key, whoever unlocks can import them. A standalone gateway cannot import them at all.
 
 ## When changes take effect {#when-changes-take-effect}
 

@@ -39,7 +39,6 @@ The gateway recalls and saves memory as the user you choose under **Who is this 
 | A user | Only yourself. Studio shows "Read and write memory as you (&lt;user&gt;)", and you never need to paste a key. |
 | An account admin | Any user or admin in your account. |
 | Root | Switch account in the sidebar first, then choose a user in that account. A root API key cannot be bound to a gateway key. |
-| Anyone, in local dev mode | Keys read and write memory as the `default` user. |
 
 Issuing a key for yourself never needs a pasted key, unless you are root. To issue a key for someone else, the gateway reads that user's API key from OpenViking. If OpenViking stores only key hashes, it cannot: the user is marked "The server can't read this user's API key; paste it instead", and a **Paste &lt;user&gt;'s user API key** field appears for that user's current key. You can also choose **Paste a user API key** to enter a key directly. If the user list cannot be loaded, Studio asks for an **OpenViking API key** instead.
 

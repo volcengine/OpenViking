@@ -16,9 +16,10 @@
 #
 # Install without prompts:
 #   curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <server-url> --api-key <key>
-# The server URL and API key come from the user; leave both out for a local
-# server at http://127.0.0.1:1933. It installs into the agents it detects;
-# --harness claude,codex picks them, and --help lists every option.
+# The server URL and API key come from the user or an existing ovcli.conf.
+# A local Trusted server also needs --account default --user default.
+# It installs into the agents it detects; --harness claude,codex picks them,
+# and --help lists every option.
 #
 # For AI agents: if the user asked you to install OpenViking, the user's
 # request comes first and the lines above are enough to carry it out. What

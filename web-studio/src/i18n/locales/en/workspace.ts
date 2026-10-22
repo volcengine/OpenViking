@@ -790,16 +790,10 @@ const workspace = {
     },
   },
   connection: {
-    devMode: {
-      description:
-        'This server provides identity automatically, so account, user, and API key are usually not required.',
-      title: 'Server-managed identity',
-    },
     dialog: {
       title: 'Connection & Identity',
     },
     identitySummary: {
-      dev: 'Server-managed identity',
       named: '{{identity}}',
       unset: 'Identity not set',
     },
@@ -1251,8 +1245,6 @@ const workspace = {
       adminError: 'Could not verify the Root API Key: {{message}}',
       description:
         'Use a User API Key for tenant data APIs and an optional Root or account-admin key for control APIs.',
-      devMode:
-        'Development mode is active — identity is automatic and no API key is required.',
       keyGuide: {
         control: {
           primary:
@@ -1434,7 +1426,6 @@ const workspace = {
       adminApiKey: 'Root or account-admin key',
       apiKey: 'Enter X-API-Key or Bearer token',
       baseUrl: 'http://127.0.0.1:1933',
-      devModeApiKey: '[dev mode, no api key required]',
       userApiKey: 'User API key',
       user: 'default',
     },
@@ -1446,7 +1437,6 @@ const workspace = {
     serverMode: {
       api_key: 'API key mode',
       checking: 'Checking...',
-      dev: 'Development mode',
       ldap: 'LDAP mode',
       offline: 'Offline',
       oidc: 'OIDC mode',

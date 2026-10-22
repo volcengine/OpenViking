@@ -51,6 +51,12 @@ pub(crate) enum ApiKeyRole {
     Regular,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CandidateValidation {
+    pub api_key_role: Option<ApiKeyRole>,
+    pub auth_mode: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IdentityField {
     Account,
@@ -526,18 +532,13 @@ pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
 }
 
 pub(crate) fn custom_requires_api_key(url: &str) -> bool {
-    !custom_allows_empty_api_key(url)
+    let _ = url;
+    true
 }
 
 pub(crate) fn custom_allows_empty_api_key(url: &str) -> bool {
-    let normalized = normalize_custom_url(url);
-    let Ok(parsed) = Url::parse(&normalized) else {
-        return false;
-    };
-    matches!(
-        parsed.host_str().map(|host| host.to_ascii_lowercase()),
-        Some(host) if matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]")
-    )
+    let _ = url;
+    false
 }
 
 pub(crate) fn normalize_custom_url(url: &str) -> String {
@@ -612,6 +613,15 @@ pub(crate) async fn validate_candidate_config_with_role(
     config: &Config,
     require_api_key: bool,
 ) -> Result<Option<ApiKeyRole>> {
+    validate_candidate_config_detailed(config, require_api_key)
+        .await
+        .map(|result| result.api_key_role)
+}
+
+pub(crate) async fn validate_candidate_config_detailed(
+    config: &Config,
+    require_api_key: bool,
+) -> Result<CandidateValidation> {
     config.validate_runtime_values()?;
 
     let api_key = non_empty_option(config.api_key.as_deref());
@@ -620,12 +630,11 @@ pub(crate) async fn validate_candidate_config_with_role(
     }
 
     let timeout = config.timeout.clamp(1.0, 10.0);
-    let auth = config.effective_auth(false);
-    let client = BaseClient::new(
+    let health_client = BaseClient::new(
         &config.url,
-        auth.api_key.clone(),
-        auth.account,
-        auth.user,
+        None,
+        None,
+        None,
         config.actor_peer_id.clone(),
         timeout,
         config.profile,
@@ -633,7 +642,7 @@ pub(crate) async fn validate_candidate_config_with_role(
     )
     .with_gateway_token(config.effective_gateway_token());
 
-    let value: Value = client.get("/health", &[]).await?;
+    let value: Value = health_client.get("/health", &[]).await?;
     if value
         .get("healthy")
         .and_then(Value::as_bool)
@@ -644,15 +653,65 @@ pub(crate) async fn validate_candidate_config_with_role(
         ));
     }
 
-    if should_run_authenticated_probe(&value, require_api_key, auth.api_key.is_some()) {
+    let auth_mode = value
+        .get("auth_mode")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if matches!(auth_mode.as_deref(), Some("api_key" | "trusted")) && api_key.is_none() {
+        return Err(Error::Config("API key is required".to_string()));
+    }
+
+    let auth = config.effective_auth(false);
+    let client = BaseClient::new(
+        &config.url,
+        auth.api_key.clone(),
+        auth.account.clone(),
+        auth.user.clone(),
+        config.actor_peer_id.clone(),
+        timeout,
+        config.profile,
+        config.effective_extra_headers(),
+    )
+    .with_gateway_token(config.effective_gateway_token());
+
+    if auth_mode.as_deref() == Some("trusted") {
+        let root_client = BaseClient::new(
+            &config.url,
+            auth.api_key,
+            None,
+            None,
+            config.actor_peer_id.clone(),
+            timeout,
+            config.profile,
+            config.effective_extra_headers(),
+        )
+        .with_gateway_token(config.effective_gateway_token());
+        let _: Value = root_client.get("/api/v1/admin/accounts", &[]).await?;
+        if auth.account.is_some() && auth.user.is_some() {
+            let _: Value = client.get("/api/v1/system/status", &[]).await?;
+        }
+        return Ok(CandidateValidation {
+            api_key_role: Some(ApiKeyRole::Root),
+            auth_mode,
+        });
+    }
+
+    if require_api_key
+        || auth.api_key.is_some()
+        || matches!(auth_mode.as_deref(), Some("api_key") | None)
+    {
         let _: Value = client.get("/api/v1/system/status", &[]).await?;
     }
 
-    if auth.api_key.is_some() {
-        return detect_api_key_role(&client).await.map(Some);
-    }
-
-    Ok(None)
+    let api_key_role = if auth.api_key.is_some() {
+        Some(detect_api_key_role(&client).await?)
+    } else {
+        None
+    };
+    Ok(CandidateValidation {
+        api_key_role,
+        auth_mode,
+    })
 }
 
 async fn detect_api_key_role(client: &BaseClient) -> Result<ApiKeyRole> {
@@ -692,22 +751,6 @@ fn admin_probe_regular_key_status(status: u16) -> bool {
 #[cfg(test)]
 fn admin_probe_ambiguous_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 500..=599)
-}
-
-fn should_run_authenticated_probe(
-    health: &Value,
-    require_api_key: bool,
-    has_api_key: bool,
-) -> bool {
-    if require_api_key || has_api_key {
-        return true;
-    }
-
-    match health.get("auth_mode").and_then(Value::as_str) {
-        Some("dev") => false,
-        Some("api_key" | "trusted") | None => true,
-        Some(_) => false,
-    }
 }
 
 pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
@@ -846,8 +889,7 @@ mod tests {
     use super::{
         ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
         admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
-        should_run_authenticated_probe, validate_candidate_config,
-        validate_candidate_config_with_role, validate_config_name,
+        validate_candidate_config, validate_candidate_config_with_role, validate_config_name,
     };
     use crate::config::Config;
     use std::fs;
@@ -1221,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_config_accepts_custom_url_and_optional_key() {
+    fn custom_config_requires_key_even_for_loopback() {
         let draft = ConfigDraft {
             name: "local".to_string(),
             kind: ConfigKind::Custom,
@@ -1231,11 +1273,7 @@ mod tests {
             account: Some("default".to_string()),
             user: Some("default".to_string()),
         };
-        let without_key = build_config(&draft).expect("custom config should build");
-        assert_eq!(without_key.url, "http://127.0.0.1:1933");
-        assert!(without_key.api_key.is_none());
-        assert_eq!(without_key.account.as_deref(), Some("default"));
-        assert_eq!(without_key.user.as_deref(), Some("default"));
+        assert!(build_config(&draft).is_err());
 
         let with_key = build_config(&ConfigDraft {
             api_key: Some("local-key".to_string()),
@@ -1268,7 +1306,7 @@ mod tests {
     }
 
     #[test]
-    fn bare_loopback_custom_urls_are_local_and_get_default_port() {
+    fn bare_loopback_custom_urls_get_default_port() {
         for (input, expected) in [
             ("127.0.0.1", "http://127.0.0.1:1933"),
             ("localhost", "http://localhost:1933"),
@@ -1281,7 +1319,7 @@ mod tests {
                 name: "local".to_string(),
                 kind: ConfigKind::Custom,
                 url: input.to_string(),
-                api_key: None,
+                api_key: Some("local-key".to_string()),
                 root_api_key: None,
                 account: Some("default".to_string()),
                 user: Some("default".to_string()),
@@ -1351,27 +1389,6 @@ mod tests {
             .expect_err("auth-required local server should reject empty API key");
 
         assert!(matches!(error, crate::error::Error::Api { .. }));
-    }
-
-    #[test]
-    fn authenticated_probe_runs_for_keys_or_auth_required_health_modes() {
-        let dev_health = serde_json::json!({ "healthy": true, "auth_mode": "dev" });
-        let api_key_health = serde_json::json!({ "healthy": true, "auth_mode": "api_key" });
-        let trusted_health = serde_json::json!({ "healthy": true, "auth_mode": "trusted" });
-
-        assert!(!should_run_authenticated_probe(&dev_health, false, false));
-        assert!(should_run_authenticated_probe(&dev_health, false, true));
-        assert!(should_run_authenticated_probe(&dev_health, true, false));
-        assert!(should_run_authenticated_probe(
-            &api_key_health,
-            false,
-            false
-        ));
-        assert!(should_run_authenticated_probe(
-            &trusted_health,
-            false,
-            false
-        ));
     }
 
     #[test]

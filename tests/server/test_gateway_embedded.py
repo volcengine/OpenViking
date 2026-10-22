@@ -11,11 +11,13 @@ from starlette.testclient import TestClient, WebSocketDenialResponse
 from openviking.crypto.encryptor import MAGIC, FileEncryptor
 from openviking.server import gateway_host
 from openviking_cli.utils.config.encryption_config import EncryptionConfig
+from openviking_gateway.app import seed_defaults
 from openviking_gateway.config import EmbeddedGatewayConfig
 
 
 def openviking_config(gateway, encryption=None):
     return SimpleNamespace(
+        service_name="openviking-server",
         gateway=gateway,
         encryption=encryption or EncryptionConfig(),
         oauth=SimpleNamespace(enabled=False),
@@ -130,13 +132,28 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
     monkeypatch.setattr(global_api, "shutdown_metrics_async", AsyncMock())
     monkeypatch.setattr(usage_audit, "init_usage_audit_from_server_config", AsyncMock())
     monkeypatch.setattr(usage_audit, "shutdown_usage_audit", AsyncMock())
-    # Calls back to OV are represented by its public health response, including dev identity rules.
     # A source checkout reports a dev version, which must not trip the minimum-version gate.
-    monkeypatch.setattr(
-        VikingClient,
-        "request",
-        AsyncMock(return_value={"status": "ok", "auth_mode": "dev", "version": "0.1.dev1"}),
-    )
+    async def openviking_request(self, method, path, key, body=None, timeout=30):
+        assert method == "GET" and path == "/health"
+        result = {"status": "ok", "auth_mode": "api_key", "version": "0.1.dev1"}
+        if key == "test-root":
+            return {
+                **result,
+                "role": "root",
+                "account_id": "default",
+                "user_id": "root",
+            }
+        if key == "default-admin-key":
+            return {
+                **result,
+                "role": "admin",
+                "account_id": "default",
+                "user_id": "default",
+            }
+        assert key == ""
+        return result
+
+    monkeypatch.setattr(VikingClient, "request", openviking_request)
     service = SimpleNamespace(
         vlm_resolver=SimpleNamespace(
             effective_vlm_config=AsyncMock(
@@ -157,7 +174,6 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
         # The gateway is running before deletion setup receives it.
         assert await app.state.gateway_app.state.management.list("default", "upstreams") == []
         initialized.append(True)
-        await server_module._initialize_auth_plugin(app, service, config)
 
     monkeypatch.setattr(server_module, "_initialize_runtime_state", initialize)
     from openviking.server import body_dump_middleware
@@ -171,7 +187,9 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
     monkeypatch.setattr(
         body_dump_middleware, "create_dump_http_body_middleware", lambda **kwargs: dump
     )
-    server_config = ServerConfig(host="127.0.0.1", port=1999)
+    server_config = ServerConfig(
+        host="127.0.0.1", port=1999, auth_mode="api_key", root_api_key="test-root"
+    )
     server_config.observability.dump_body.enabled = True
     app = server_module.create_app(server_config, service=service)
     assert app.state.gateway_app.state.openviking_url == "http://127.0.0.1:1999"
@@ -180,11 +198,19 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app), base_url="http://test"
         ) as client:
-            access = await client.get("/gateway/admin/access")
+            root_headers = {"X-API-Key": "test-root"}
+            access = await client.get("/gateway/admin/access", headers=root_headers)
             assert access.status_code == 200
             assert access.json()["can_import_vlm"] is True
             assert access.json()["role"] == "root"
-            upstreams = (await client.get("/gateway/admin/upstreams")).json()
+            upstreams = (
+                await client.get("/gateway/admin/upstreams", headers=root_headers)
+            ).json()
+            assert upstreams == []
+            await seed_defaults(app.state.gateway_app, "default")
+            upstreams = (
+                await client.get("/gateway/admin/upstreams", headers=root_headers)
+            ).json()
             assert len(upstreams) == 1
             policy = await app.state.gateway_app.state.management.get(
                 "default", "policies", "default"
@@ -192,11 +218,17 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
             assert policy["name"] == "Default"
             created = await client.post(
                 "/gateway/admin/keys",
-                json={"name": "test", "policy_id": "default", "upstream_ids": [upstreams[0]["id"]]},
+                headers=root_headers,
+                json={
+                    "name": "test",
+                    "user_id": "default",
+                    "openviking_key": "default-admin-key",
+                    "policy_id": "default",
+                    "upstream_ids": [upstreams[0]["id"]],
+                },
             )
             assert created.status_code == 200, created.text
-            key = created.json()["key"]
-            bearer = {"Authorization": "Bearer " + key}
+            bearer = {"Authorization": "Bearer " + created.json()["key"]}
             response = await client.get("/gateway/v1/models", headers=bearer)
             assert response.status_code == 200, response.text
             assert response.json()["data"][0]["id"] == "gpt"
@@ -215,16 +247,16 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
                     "gateway_tools": False,
                 },
             )
-            # Both model discovery and chat pass through the server to the embedded gateway.
             response = await client.post(
                 "/gateway/v1/chat/completions",
-                headers={"Authorization": "Bearer " + key},
+                headers=bearer,
                 json={"model": "gpt", "messages": [{"role": "user", "content": "hello"}]},
             )
             assert response.status_code == 200, response.text
             assert response.json()["choices"][0]["message"]["content"] == "hello"
-            # Other methods, the remaining path and the query string reach the upstream unchanged.
-            response = await client.patch("/gateway/v1/files/f-1?purpose=batch", headers=bearer)
+            response = await client.patch(
+                "/gateway/v1/files/f-1?purpose=batch", headers=bearer
+            )
             assert response.status_code == 200, response.text
             assert model_server.seen == [("PATCH", "/v1/files/f-1", "purpose=batch")]
             assert (await client.get("/admin")).status_code == 404

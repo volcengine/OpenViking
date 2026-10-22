@@ -216,7 +216,7 @@ printf '%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 test("the credentials step writes ovcli.conf when the stored key is kept", (t) => {
   const home = makeTempHome(t);
   const conf = join(home, "ovcli.conf");
-  writeFileSync(conf, `${JSON.stringify({ url: "http://127.0.0.1:1933", api_key: "stored-key", output: "table" }, null, 2)}\n`);
+  writeFileSync(conf, `${JSON.stringify({ url: "http://127.0.0.1:1933", api_key: "stored-key", account: "acct", user: "alice", account_id: "acct", user_id: "alice", output: "table" }, null, 2)}\n`);
 
   const result = runInstallerPrelude(`
 tui_menu() { TUI_MENU_CHOICE=1; }
@@ -234,6 +234,54 @@ write_ovcli
     api_key: "stored-key",
     output: "table",
   });
+});
+
+test("Trusted setup fills missing identities and preserves explicit ones when offline", (t) => {
+  const home = makeTempHome(t);
+  const conf = join(home, "ovcli.conf");
+  for (const identity of [{}, { account: "acct", user: "alice" }, { url: "https://old.example.com", account: "acct", user: "alice" }]) {
+    writeFileSync(conf, JSON.stringify({ url: "http://127.0.0.1:1933", api_key: "stored-key", ...identity }));
+    const result = runInstallerPrelude(`
+MENU_ANSWERS="1 0"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+probe_server() { PROBE_RESULT="unreachable"; PROBE_CODE="000"; }
+INTERACTIVE=1
+OV_HOME=${JSON.stringify(home)}
+OVCLI_CONF=${JSON.stringify(conf)}
+exec 3< <(printf '\\n')
+gather_credentials
+INTERACTIVE=0
+check_server
+write_ovcli
+`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(conf, "utf8")), {
+      url: "http://127.0.0.1:1933", api_key: "stored-key",
+      account: (!identity.url && identity.account) || "default",
+      user: (!identity.url && identity.user) || "default",
+    });
+  }
+});
+
+test("HTTP 400 stops installation before writing incomplete Trusted credentials", (t) => {
+  const home = makeTempHome(t);
+  const conf = join(home, "ovcli.conf");
+  for (const interactive of [0, 1]) {
+    const result = runInstallerPrelude(`
+probe_server() { PROBE_RESULT="http"; PROBE_CODE="400"; }
+tui_menu() { TUI_MENU_CHOICE=1; }
+INTERACTIVE=${interactive}
+OV_HOME=${JSON.stringify(home)}
+OVCLI_CONF=${JSON.stringify(conf)}
+CRED_URL="http://127.0.0.1:1933"
+CRED_KEY="local-key"
+check_server
+write_ovcli
+`);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /HTTP 400.*--account.*--user/);
+    assert.equal(existsSync(conf), false);
+  }
 });
 
 test("menu digit shortcuts move the cursor instead of confirming", () => {
@@ -326,17 +374,18 @@ write_ovcli
   assert.doesNotMatch(calls, /secret-api-key/);
 });
 
-test("a first-time setup offers the local server first", () => {
+test("a first-time local setup requires an API key", () => {
   const result = runInstallerPrelude(`
 tui_menu() { TUI_MENU_CHOICE="$2"; }
 INTERACTIVE=1
-exec 3< <(printf '\\n')
+exec 3< <(printf '\\nlocal-key\\n')
 prompt_connection "" ""
 printf '%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 `);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim().split("\n").pop(), "http://127.0.0.1:1933|");
+  assert.match(result.stdout, /API key is required/);
+  assert.equal(result.stdout.trim().split("\n").pop(), "http://127.0.0.1:1933|local-key");
 });
 
 test("without a terminal, the language follows --lang, OPENVIKING_LANG, the locale, then the macOS setting", (t) => {
@@ -445,7 +494,7 @@ test("re-entering after a failed server check probes the new values", async (t) 
 
   // First answer: re-enter; then the custom-URL arm, whose prompt keeps the URL.
   const result = await runInstallerPreludeAsync(`
-MENU_ANSWERS="0 2"
+MENU_ANSWERS="0 2 1"
 tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
 INTERACTIVE=1
 exec 3< <(printf '\\nfresh-key\\n')
@@ -526,7 +575,7 @@ tui_menu() {
 }
 ${mainMarker}`));
 
-  const result = run(["--harness", "cursor", "--url", "http://127.0.0.1:9", "--api-key", ""]);
+  const result = run(["--harness", "cursor", "--url", "http://127.0.0.1:9", "--api-key", "test-key"]);
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /^menu: Language \/ 语言\n/);
@@ -548,7 +597,7 @@ tui_menu() {
 ${mainMarker}`));
     writeFileSync(join(home, "bin", "claude"), '#!/bin/sh\n[ "$1" != --version ] || echo "2.1.224 (Claude Code)"\n', { mode: 0o755 });
 
-    const result = run(["--harness", "claude", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", ""]);
+    const result = run(["--harness", "claude", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "test-key"]);
 
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     const asked = result.stdout.indexOf("menu: Enable the OpenViking statusline?");
@@ -558,22 +607,25 @@ ${mainMarker}`));
   }
 });
 
-test("a non-interactive run with no server says so and how to re-run", (t) => {
+test("a non-interactive run without an API key fails before writing config", (t) => {
   const { home, run } = detachedInstaller(t);
-  const notice = /No server was given: the plugin is configured for http:\/\/127\.0\.0\.1:1933 without an API key\./;
 
   const result = run(["--harness", "dsh", "--lang", "en", "--yes"]);
 
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, notice);
-  assert.ok(result.stdout.indexOf("Review") < result.stdout.search(notice));
-  assert.match(result.stdout, /curl -fsSL https:\/\/openviking\.ai\/install \| bash -s -- --yes --harness dsh --url <server-url> --api-key <api-key>/);
-  assert.match(result.stdout, /\[4\/4\] Validation/);
-  assert.match(result.stdout, /DeepSeek Harness\n {4}Next: .*\n {4}Updates: re-run this installer\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
-  assert.equal(JSON.parse(readFileSync(join(home, ".openviking", "ovcli.conf"), "utf8")).url, "http://127.0.0.1:1933");
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /An OpenViking API key is required/);
+  assert.match(result.stderr, /--url <server-url> --api-key <api-key>/);
+  assert.equal(existsSync(join(home, ".openviking", "ovcli.conf")), false);
+});
 
-  // Once a server is configured, a re-run has nothing to warn about.
-  const again = run(["--harness", "dsh", "--lang", "en", "--yes"]);
-  assert.equal(again.status, 0, `${again.stdout}\n${again.stderr}`);
-  assert.doesNotMatch(again.stdout, notice);
+test("an explicitly empty API key is rejected", (t) => {
+  const { home, run } = detachedInstaller(t);
+  const result = run([
+    "--harness", "dsh", "--lang", "en", "--yes",
+    "--url", "http://127.0.0.1:1933", "--api-key", "",
+  ]);
+
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /An OpenViking API key is required/);
+  assert.equal(existsSync(join(home, ".openviking", "ovcli.conf")), false);
 });

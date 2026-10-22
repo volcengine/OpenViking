@@ -50,7 +50,6 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
       feature.id === 'gateway' &&
       service.provider === 'opensource' &&
       serverMode !== 'api_key' &&
-      serverMode !== 'dev' &&
       serverMode !== 'trusted'
     )
       reason = 'gatewayAuthMode'

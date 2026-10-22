@@ -547,7 +547,7 @@ def _build_http_client(config: BatchTrainEvalConfig) -> AsyncHTTPClient:
         auth_mode = AuthMode.API_KEY
 
     # Trusted mode uses X-API-Key as the gateway/root key and takes identity from
-    # X-OpenViking-Account/User. In api_key/dev modes, user API keys already pin
+    # X-OpenViking-Account/User. In api_key mode, user API keys already pin
     # identity and account/user assertion headers must not be sent.
     account = config.account_id if auth_mode == AuthMode.TRUSTED else None
     user = config.user_id if auth_mode == AuthMode.TRUSTED else None

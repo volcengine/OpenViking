@@ -30,7 +30,7 @@ async def client_with_no_repo(app):
     """Plain in-process client with no resources or commits added.
 
     The conftest's ``app`` fixture wires the service into the global
-    dependency store without authentication, so a vanilla AsyncClient
+    dependency store with a fixed test identity, so a vanilla AsyncClient
     is enough to hit ``/api/v1/snapshot/log`` against an empty repo.
     """
     transport = httpx.ASGITransport(app=app)
@@ -42,7 +42,7 @@ async def client_with_no_repo(app):
 async def snapshot_router_client():
     """Production app without running its service-initializing lifespan."""
     app = create_app(
-        config=ServerConfig(),
+        config=ServerConfig(root_api_key="test-root-key"),
         service=SimpleNamespace(sessions=None),
     )
 

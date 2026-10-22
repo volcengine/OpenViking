@@ -18,23 +18,17 @@ MANAGER = {"X-OpenViking-Gateway-Management-Key": "ovgm_" + "m" * 40}
 
 @pytest.mark.parametrize(
     "role,key",
-    [("user", "user-key"), ("admin", "admin-key"), ("root", "root"), ("dev", "")],
+    [("user", "user-key"), ("admin", "admin-key"), ("root", "root")],
 )
 @pytest.mark.parametrize("managed", [False, True])
 async def test_permissions_matrix(running_gateway, role, key, managed):
     app, client, _, _, _, _ = running_gateway
     if managed:
         app.state.config.management_key = MANAGER[next(iter(MANAGER))]
-    if role == "dev":
-        app.state.test_backend["auth_mode"] = "dev"
-        app.state.viking.identities.clear()
-        chat = await app.state.management.get("tenant", "upstreams", "chat")
-        await app.state.management.save("default", "upstreams", "chat", chat)
     headers = {"X-API-Key": key} if key else {}
     access = (await client.get(P + "/access", headers=headers)).json()
-    assert access["role"] == ("root" if role == "dev" else role)
+    assert access["role"] == role
     assert access["can_write_objects"] is not managed
-    # Dev has a single default user, so there is nobody else to issue for.
     assert access["can_issue_for_others"] is (role in {"admin", "root"})
     response = await client.put(P + "/policies/matrix", headers=headers, json={"name": "matrix"})
     assert response.status_code == (403 if managed else 200)
@@ -251,15 +245,6 @@ async def test_unconfirmed_revocation_keeps_key_and_serves(running_gateway, fail
     assert not app.state.viking.identities.entries
 
 
-async def test_dev_mode_does_not_revoke_keys_of_named_users(running_gateway):
-    app, client, _, key, _, _ = running_gateway
-    app.state.test_backend["auth_mode"] = "dev"
-    app.state.viking.identities.clear()
-    response = await client.get("/v1/models", headers={"X-API-Key": key["key"]})
-    assert response.status_code == 200
-    assert await app.state.management.get("tenant", "keys", key["id"])
-
-
 async def test_health_401_is_reachable_and_recall_works(running_gateway):
     app, client, _, key, _, _ = running_gateway
     app.state.test_backend["health_status"] = {"": 401}
@@ -279,23 +264,8 @@ async def test_health_401_is_reachable_and_recall_works(running_gateway):
     assert any(row.get("recall_count", 0) for row in logs)
 
 
-async def test_dev_and_trusted_identity(running_gateway):
+async def test_trusted_identity_is_rejected(running_gateway):
     app, client, _, _, _, _ = running_gateway
-    app.state.test_backend["auth_mode"] = "dev"
-    app.state.viking.identities.clear()
-    identity = await app.state.viking.health()
-    assert identity["user_id"] == identity["account_id"] == "default"
-    access = (await client.get(P + "/access")).json()
-    assert access["role"] == "root" and access["can_write_objects"]
-    await client.put(P + "/policies/default", json={})
-    await client.put(
-        P + "/upstreams/local",
-        json={"name": "local", "protocol": "chat", "base_url": "http://localhost/v1"},
-    )
-    response = await client.post(
-        P + "/keys", json={"name": "dev", "policy_id": "default", "upstream_ids": ["local"]}
-    )
-    assert response.status_code == 200 and response.json()["user_id"] == "default"
     app.state.test_backend["auth_mode"] = "trusted"
     app.state.viking.identities.clear()
     response = await client.get(P + "/access")
@@ -732,17 +702,17 @@ async def test_first_probe_does_not_block_startup(tmp_path, monkeypatch):
         assert app.state.health == {"status": "starting"}
 
 
-async def test_standalone_dev_requires_loopback(tmp_path, monkeypatch):
+async def test_standalone_trusted_is_rejected(tmp_path, monkeypatch):
     from openviking_gateway.client import VikingClient
 
     async def health(self, *args, **kwargs):
-        return {"auth_mode": "dev"}
+        return {"auth_mode": "trusted"}
 
     monkeypatch.setattr(VikingClient, "health", health)
     config = StandaloneGatewayConfig(
         storage_path=str(tmp_path), openviking_url="http://localhost:1933", host="0.0.0.0"
     )
-    with pytest.raises(ValueError, match="loopback"):
+    with pytest.raises(ValueError, match="API-key"):
         await check_openviking(config)
 
 

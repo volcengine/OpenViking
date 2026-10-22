@@ -256,7 +256,7 @@ def resolve_request_uri(uri: str, ctx: RequestContext) -> str:
     it fails closed with a hint pointing at ``viking://~/...``.
     """
     # Every authenticated request context carries an effective user identity,
-    # including ROOT contexts produced by dev, API-key, and trusted auth modes.
+    # including ROOT contexts produced by API-key and trusted auth modes.
     # Resolve only the unambiguous home alias for every role; preserve the
     # existing role-dependent handling of legacy/ambiguous spellings below.
     parts = uri_parts(uri)

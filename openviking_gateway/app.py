@@ -189,13 +189,9 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 # Unconfirmed is not revoked: like recall, the request degrades instead.
                 return credential, "revocation_check_unavailable"
             identity = None
-        # Dev identities are always default/default, so they say nothing about this key.
         if identity is None or (
-            identity.get("auth_mode") != "dev"
-            and (
-                identity["account_id"] != credential["account"]
-                or identity["user_id"] != credential["user_id"]
-            )
+            identity["account_id"] != credential["account"]
+            or identity["user_id"] != credential["user_id"]
         ):
             await management.delete(credential["account"], "keys", credential["id"])
             raise HTTPException(401, invalid)

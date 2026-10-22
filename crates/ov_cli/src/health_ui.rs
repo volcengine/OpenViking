@@ -176,10 +176,6 @@ fn format_auth_mode(value: Option<&str>, language: Language) -> String {
         Some("oidc") => "OIDC".to_string(),
         Some("ldap") => "LDAP".to_string(),
         Some("trusted") => "Trusted".to_string(),
-        Some("dev") => match language {
-            Language::En => "Dev".to_string(),
-            Language::ZhCn => "开发模式".to_string(),
-        },
         Some("none") => match language {
             Language::En => "None".to_string(),
             Language::ZhCn => "无".to_string(),
@@ -313,7 +309,7 @@ mod tests {
             "status": "ok",
             "healthy": true,
             "version": "0.3.18.dev29",
-            "auth_mode": "dev"
+            "auth_mode": "trusted"
         });
         let config = Config {
             account: Some("default".to_string()),

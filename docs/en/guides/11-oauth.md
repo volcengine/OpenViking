@@ -91,7 +91,7 @@ visiting the authorize page.
 
 ## Quick start (HTTP, local only)
 
-Use the same API Key mode and registered user/admin key described above. Do not use unauthenticated dev mode as the consent identity.
+Use the same API Key mode and registered user/admin key described above.
 
 The fastest way to verify OAuth is wired correctly is on `127.0.0.1`. The MCP
 SDK accepts `http://127.0.0.1` and `http://localhost` as issuer URLs without

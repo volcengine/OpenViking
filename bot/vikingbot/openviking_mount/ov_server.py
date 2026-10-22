@@ -17,10 +17,6 @@ if TYPE_CHECKING:
 viking_resource_prefix = "viking://resources/"
 
 
-def _is_session_key(agent_id: Optional[str]) -> bool:
-    return agent_id is not None and "__" in agent_id
-
-
 def _peer_id_from_external_id(peer_id: Optional[str]) -> Optional[str]:
     if not peer_id:
         return None
@@ -63,7 +59,7 @@ class VikingClient:
         self.agent_id = agent_id
         self.ov_path = config.ov_data_path
         self.auth_mode = self._resolve_auth_mode(openviking_config)
-        self.mode = "local" if self.auth_mode == "dev" else "remote"
+        self.mode = "remote"
         self.api_key_type = self._resolve_api_key_type(openviking_config)
 
         self._request_connection = self._normalize_connection(connection)
@@ -75,19 +71,6 @@ class VikingClient:
             self._request_connection.get("actor_peer_id") if self._request_connection else None
         )
         self.actor_peer_id = self._peer_id(actor_peer_id) or self._peer_id(connection_actor_peer_id)
-
-        if self._is_dev_mode():
-            client_kwargs = {"url": openviking_config.server_url}
-            self._apply_actor_peer_scope(client_kwargs)
-            if agent_id is None or _is_session_key(agent_id):
-                self.client = ov.AsyncHTTPClient(**client_kwargs)
-                self.agent_id = "default"
-            else:
-                self.client = ov.AsyncHTTPClient(**client_kwargs)
-            self.account_id = "default"
-            self.user_id = "default"
-            self.admin_user_id = "default"
-            return
 
         if self._request_connection:
             self._configure_request_connection(agent_id)
@@ -117,7 +100,7 @@ class VikingClient:
         effective_auth_mode = self._normalize_auth_value(
             getattr(openviking_config, "effective_auth_mode", None)
         )
-        if effective_auth_mode in {"trusted", "api_key", "dev"}:
+        if effective_auth_mode in {"trusted", "api_key"}:
             return effective_auth_mode
 
         api_key_type = self._normalize_auth_value(getattr(openviking_config, "api_key_type", None))
@@ -129,7 +112,7 @@ class VikingClient:
         api_key_type = self._normalize_auth_value(getattr(openviking_config, "api_key_type", None))
         if self.auth_mode == "trusted":
             api_key_type = "root"
-        elif self.auth_mode in {"api_key", "dev"}:
+        elif self.auth_mode == "api_key":
             api_key_type = "user"
         if api_key_type not in {"root", "user"}:
             raise ValueError(f"Invalid ov_server.api_key_type: {api_key_type}")
@@ -282,9 +265,6 @@ class VikingClient:
             and not self._has_request_connection()
         )
 
-    def _is_dev_mode(self) -> bool:
-        return self.auth_mode == "dev" and not self._has_request_connection()
-
     def _has_request_connection(self) -> bool:
         return self._request_connection is not None
 
@@ -299,7 +279,7 @@ class VikingClient:
         return user_id or self.admin_user_id
 
     def _effective_session_user_id(self, user_id: Optional[str] = None) -> Optional[str]:
-        if self._has_request_connection() or self._is_dev_mode() or self._is_user_key_mode():
+        if self._has_request_connection() or self._is_user_key_mode():
             return None
         return user_id or self.admin_user_id
 
@@ -945,7 +925,7 @@ class VikingClient:
     async def _session_client_for_user(self, user_id: Optional[str] = None):
         if self._has_request_connection():
             return self.client
-        if not user_id or self._is_dev_mode() or self._is_user_key_mode():
+        if not user_id or self._is_user_key_mode():
             return self._session_client(user_id)
         if user_id == self.admin_user_id and self.admin_user_client:
             return self.admin_user_client

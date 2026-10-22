@@ -31,11 +31,11 @@ The feature is doubly disabled and must be turned on explicitly:
 
 ## Enable in ov.conf
 
-Set these variables in the same shell that will run the ingest commands. This example targets a local dev server; for an authenticated server, replace the URL and use a tenant-bound user/admin API key:
+Set these variables in the same shell that will run the ingest commands. Use a tenant-bound user/admin API key even when the server runs locally:
 
 ```bash
 export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_API_KEY=""  # Local dev only; set a user/admin key for authenticated deployments.
+export OPENVIKING_API_KEY="<user-or-admin-api-key>"
 ```
 
 The config loader expands these variables. Unset variables remain literal strings, so do not skip this step when using the placeholders below.

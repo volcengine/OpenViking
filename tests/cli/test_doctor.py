@@ -786,18 +786,18 @@ class TestCheckVikingBot:
         assert "api_key mode" in detail
         assert fix is None
 
-    def test_pass_dev_mode_without_bot_ov_server(self, tmp_path: Path):
+    def test_warn_when_server_auth_is_missing(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({"bot": {}}))
 
         with patch("openviking_cli.doctor._find_config", return_value=config):
             status, detail, fix = check_vikingbot()
 
-        assert status == "pass"
-        assert "dev OpenViking auth" in detail
-        assert fix is None
+        assert status == "warn"
+        assert "bot.ov_server not configured" in detail
+        assert "User API key" in fix
 
-    def test_pass_dev_mode_with_ignored_bot_api_key(self, tmp_path: Path):
+    def test_pass_with_explicit_bot_api_key_when_server_auth_is_missing(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({"bot": {"ov_server": {"api_key": "stale-key"}}}))
 
@@ -805,7 +805,7 @@ class TestCheckVikingBot:
             status, detail, fix = check_vikingbot()
 
         assert status == "pass"
-        assert "dev OpenViking auth" in detail
+        assert "api_key mode" in detail
         assert fix is None
 
     def test_warn_when_bot_ov_server_missing_in_api_key_mode(self, tmp_path: Path):

@@ -101,7 +101,9 @@ async def assets_client():
     from openviking.server.auth import get_request_context
     from openviking.server.config import ServerConfig
 
-    app = create_app(config=ServerConfig(), service=SimpleNamespace(sessions=None))
+    app = create_app(
+        config=ServerConfig(root_api_key="test-root-key"), service=SimpleNamespace(sessions=None)
+    )
     app.dependency_overrides[get_request_context] = lambda: RequestContext(
         user=UserIdentifier(account_id="acct", user_id="alice"),
         role=Role.USER,

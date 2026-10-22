@@ -10,13 +10,12 @@
 | **OIDC** | 对接企业单点登录（Okta/Auth0/Keycloak/Azure AD 等） | 企业 SSO 集成 |
 | **LDAP** | 对接企业用户目录（Windows AD/OpenLDAP） | 已有企业目录服务 |
 | **Trusted** | 上游网关/反向代理断言身份 | 部署在受信任内网/网关后 |
-| **Dev** | 无认证，仅本地开发 | 本地开发，不接入公网 |
 
 ### 决策树
 
 已有单点登录服务选 OIDC，已有企业目录选 LDAP；由网关验证并注入身份时选 Trusted。没有这些上游服务时，使用 API Key 管理账号和凭证。
 
-未显式设置 `auth_mode` 时，有非空 `root_api_key` 会选用 `api_key`，未配置则选用 `dev`。空字符串 `root_api_key` 无效。
+未显式设置 `auth_mode` 时固定选用 `api_key`。包括 localhost 在内都必须配置非空 `root_api_key`。
 
 ---
 
@@ -392,7 +391,7 @@ OIDC Claims: {
 
 需要接入其他身份源时，可以实现并注册自定义认证插件。
 
-服务端采用插件化认证架构。每种 `auth_mode` 对应一个 `AuthPlugin` 实现。内置插件（`dev`, `api_key`, `trusted`, `oidc`, `ldap`）会自动注册；第三方插件可通过继承 `AuthPlugin` 并在启动前注册来扩展。
+服务端采用插件化认证架构。每种 `auth_mode` 对应一个 `AuthPlugin` 实现。内置插件（`api_key`, `trusted`, `oidc`, `ldap`）会自动注册；第三方插件可通过继承 `AuthPlugin` 并在启动前注册来扩展。
 
 ### 插件接口（`openviking.server.auth.plugin.AuthPlugin`）
 
@@ -402,7 +401,7 @@ OIDC Claims: {
 | `validate_config(config)` | 在启动时校验 `ServerConfig`；遇到致命错误应调用 `sys.exit(1)` |
 | `initialize(app, service, config)` | 在 `app.state` 上初始化运行时状态（如 `APIKeyManager`） |
 | `get_request_context_checks(path, identity)` | 可选的认证后路径/身份检查 |
-| `can_skip_api_key_for_bot_proxy()` | Bot 代理是否可以跳过 API Key 校验（如 `dev` 模式） |
+| `can_skip_api_key_for_bot_proxy()` | 当前认证集成是否允许 Bot 代理跳过 API Key 校验 |
 
 ### 注册自定义插件示例
 
@@ -601,19 +600,21 @@ Trusted 模式使用 root API key 验证上游，再从每个请求显式携带�
 
 角色默认从已注册用户查询，未注册时为 USER。配置并验证 root key 后，上游可用 `X-OpenViking-Role: user` 或 `admin` 断言角色，不接受 `root`。Admin API 的 ROOT 授权来自部署 root key。
 
-### Dev 模式
+### 本地直连
 
-当 `auth_mode = "dev"`（或未配置 `root_api_key` 时自动推导）时，认证禁用，请求使用 ROOT 身份；未提供身份请求头时，account 和 user 均为 `default`。Dev 模式只允许监听 `127.0.0.1`、`localhost` 或 `::1`，监听其他地址会拒绝启动。
+Dev 模式已删除。本地直连使用 `trusted` 模式，配置非空 root key，并由客户端显式发送 account/user 身份。
 
 ```json
 {
   "server": {
+    "auth_mode": "trusted",
+    "root_api_key": "替换为随机密钥",
     "host": "127.0.0.1"
   }
 }
 ```
 
-> 默认 `host` 为 `127.0.0.1`。监听网络地址前，选择并配置 API Key、OIDC、LDAP 或受保护的 Trusted 部署。
+客户端使用同一 key，并配置 `account=default`、`user=default`。普通请求按 USER 授权，root 管理权限仅用于 Admin API。旧配置中的 `auth_mode: "dev"` 会启动失败并给出迁移提示。
 
 ---
 

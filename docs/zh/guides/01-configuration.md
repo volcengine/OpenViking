@@ -1960,7 +1960,7 @@ ov add-resource ./docs --exclude "*.tmp"
 |------|------|------|--------|
 | `host` | str | 绑定地址 | `127.0.0.1` |
 | `port` | int | 绑定端口 | `1933` |
-| `auth_mode` | str / null | 内置模式：`"dev"`、`"api_key"`、`"trusted"`、`"oidc"`、`"ldap"`。省略或设为 null 时，有非空 `root_api_key` 则推导为 `api_key`，否则为 `dev`。 | `null` |
+| `auth_mode` | str / null | 内置模式：`"api_key"`、`"trusted"`、`"oidc"`、`"ldap"`。省略或设为 null 时选择 `api_key`。 | `null` |
 | `root_api_key` | str | `api_key` 模式必填的 Root API Key；`trusted` 模式在所有部署中均必填，包括 localhost，不负责解析普通用户身份 | `null` |
 | `account_store.provider` | str | 完整 Account Store Provider。内置 `"file"`、`"mysql"` 和 `"redis_mysql"`；统一持久化 Account、User、Group 和 API Key。`"file"` 兼容现有 AGFS JSON 注册表，并由 Provider 自身维护进程内查询索引。`"redis_mysql"` 保持 MySQL 为权威存储，并增加共享 Redis 认证和请求身份读取缓存。 | `"file"` |
 | `account_store.params` | object | Provider 启动参数。不能通过这里覆盖框架注入的 VikingFS 和 File Provider API Key Hash 配置。 | `{}` |
@@ -2068,7 +2068,7 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
 }
 ```
 
-省略 `auth_mode`（或设为 `null`）时，配置了非空 `root_api_key` 则选择 `api_key`，否则选择 `dev`。`dev` 仅允许监听 localhost，不进行身份认证。`root_api_key` 不能配置为空字符串。
+省略 `auth_mode`（或设为 `null`）时选择 `api_key`。包括 localhost 在内都必须配置非空 `root_api_key`；缺失、空字符串或纯空白都会启动失败。已删除的 `dev` 值也会启动失败并给出迁移提示。
 
 显式设置 `auth_mode: "api_key"` 时，包括 localhost 在内都必须提供非空 `root_api_key`；缺少该 key 会导致启动失败，不会回退到开发模式。使用 root key 调用 Admin API 创建 account 和 user/admin key，数据访问使用这些绑定租户身份的 key。`trusted` 模式接受可信网关注入的 account/user 身份头，无需预先创建 user key；其 root key 在启动和每个认证请求中均必填，包括 localhost。角色解析、OIDC/LDAP 配置与网关要求参见 [身份认证](04-authentication.md)。
 

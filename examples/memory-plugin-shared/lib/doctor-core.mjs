@@ -640,10 +640,6 @@ export function assessProbes(report, probes, conn, keyInfo) {
         report.info("account/user in config are redundant in api_key mode (identity comes from the key)");
       }
     }
-  } else if (summary.authMode === "dev") {
-    summary.authOk = true;
-    report.info("server runs in dev auth mode — any key is accepted; identity comes from X-OpenViking-Account/User headers (default 'default')");
-    if (identity?.account_id) summary.identity = { account: identity.account_id, user: identity.user_id, role: identity.role };
   } else if (conn.apiKey) {
     report.fail("api key rejected", `/health answered 200 but returned no identity for the key (${keyInfo?.display || "?"}) — the key is invalid, revoked, or belongs to another deployment`,
       "check the key in ovcli.conf / OPENVIKING_API_KEY against the one issued by the server admin");

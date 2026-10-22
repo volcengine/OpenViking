@@ -4,7 +4,7 @@ description: Deploy OpenViking Gateway inside the server, with Docker Compose or
 
 # OpenViking Gateway deployment and operations
 
-This page is for the people who run OpenViking Gateway as a service: deploy it in the form that suits you, put it behind a proxy, control who can change it, and keep it healthy through upgrades and migrations. You need an OpenViking Server that uses API-key authentication or local dev mode; the full list is under [Requirements](#requirements). If you are new to the gateway, read [OpenViking Gateway](15-gateway.md) first.
+This page is for the people who run OpenViking Gateway as a service: deploy it in the form that suits you, put it behind a proxy, control who can change it, and keep it healthy through upgrades and migrations. You need an OpenViking Server that uses API-key authentication; the full list is under [Requirements](#requirements). If you are new to the gateway, read [OpenViking Gateway](15-gateway.md) first.
 
 > **Note**: The gateway is in beta. Settings and APIs may change between releases, so read the release notes before you upgrade.
 
@@ -21,10 +21,10 @@ This page is for the people who run OpenViking Gateway as a service: deploy it i
 
 | Requirement | Details |
 | --- | --- |
-| OpenViking authentication | `api_key` or local dev mode. The gateway does not support trusted authentication. |
+| OpenViking authentication | `api_key`. The gateway does not support trusted authentication. |
 | OpenViking version | An embedded gateway ships with the server, so there is nothing to check. A standalone gateway needs OpenViking Server 0.4.16 or later. |
 | Installation | The gateway is part of the OpenViking core package. The optional `gateway-fast` extra (`pip install "openviking[gateway-fast]"`) adds a faster event loop and HTTP parser. |
-| Sign-in | Remote deployments need an OpenViking API key; users, account admins and root can all sign in to the gateway pages in Studio. Local dev mode needs no key and always uses the `default/default` identity. |
+| Sign-in | Every deployment needs an OpenViking User/Admin API key for normal Gateway use. Root is used for deployment administration and selecting a target user. |
 | Storage | A local disk. The gateway's SQLite databases serve one host only; network filesystems and storage shared between hosts are not supported. |
 
 ## Choose a deployment form {#deployment-options}
@@ -60,7 +60,7 @@ The embedded gateway runs inside the OpenViking Server on the same port, and it 
 - When `OPENVIKING_GATEWAY_ENABLED` is set, it overrides `gateway.enabled` in `ov.conf`, so a false value keeps the gateway off after the restart.
 - If `ov.conf` is read-only, for example mounted from a Helm ConfigMap, Studio cannot change it. Set `gateway.enabled: true` in the Helm values or `OPENVIKING_GATEWAY_ENABLED=true`, then restart the server.
 
-**Check that it is on.** Open `/studio/` on the server and choose **OpenViking Gateway** in the sidebar: you should see the gateway tabs instead of the not-enabled card. In local dev mode, if the default account has no upstreams, the gateway imports the server's usable VLM credentials as upstreams at startup and creates a `default` context profile. Imported Coding Plan upstreams need confirmation before use; if nothing can be imported, add an upstream by hand ([Upstreams](../gateway/07-upstreams.md#add-an-upstream)).
+**Check that it is on.** Open `/studio/` on the server, sign in with a User/Admin key, and choose **OpenViking Gateway**. Use Quick mode or the Upstreams page to import model settings and create a context profile; startup no longer seeds implicit defaults.
 
 **Letting an agent change the configuration.** An agent that holds the root API key can edit `ov.conf` and restart the server through the [runtime configuration API](../api/08-admin.md#runtime-configuration). A standalone gateway does not offer this API.
 
@@ -136,7 +136,7 @@ Without an OpenViking address from either source, the gateway exits and asks you
 Before it starts, a standalone gateway contacts OpenViking once:
 
 - If OpenViking uses trusted authentication, the gateway refuses to start.
-- When the gateway binds to a non-loopback address, it starts only after confirming that OpenViking uses `api_key` authentication. If OpenViking is unreachable or runs in local dev mode, the gateway exits. Start OpenViking first, or bind to `127.0.0.1`.
+- The gateway starts only after confirming that OpenViking uses `api_key` authentication. If OpenViking is unreachable or uses another mode, the gateway exits.
 - When OpenViking runs on another host, connect over TLS or a private network.
 
 ### Connecting to the public OpenViking service {#public-openviking-service}

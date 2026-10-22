@@ -63,11 +63,7 @@ OpenViking Server 支持两种多租户相关认证模式：
 - User key 由 Admin API 生成，用于普通业务读写
 - 服务端会从 user key 反解出 `account_id`、`user_id` 和角色
 
-如果 `auth_mode = "api_key"` 且未配置 `root_api_key`，服务端会进入开发模式：
-
-- 默认所有请求都被视为 ROOT
-- 默认身份是 `default/default`
-- 只允许绑定在 localhost 上使用
+缺少 `root_api_key` 时，服务端会拒绝启动，包括 localhost。本地直连请使用 `trusted` 模式，配置 root key，并显式指定 `default/default` 等 account/user 身份。
 
 ## 共享与隔离边界
 
@@ -268,7 +264,7 @@ openclaw config set plugins.entries.openviking.config.peer_prefix "<peer-prefix>
 | 一个 OpenClaw 实例对应一个固定身份 | OpenClaw 插件 + user key |
 | 一个网关/机器人服务承载很多最终用户 | 按用户配置连接或由受信入口传递 trusted 身份 |
 | 受信网关统一注入身份 | `trusted` 模式 |
-| 单机本地体验、无需真正租户隔离 | 开发模式（无 `root_api_key`） |
+| 单机本地体验、无需真正租户隔离 | `trusted` 模式 + root key + 显式 `default/default` 身份 |
 
 ## 常见误区
 
@@ -294,12 +290,9 @@ peer 集合过滤选择当前用户内的 peer 内容子空间，例如
 - user 边界由 `user_id` 决定
 - peer 内容仍位于该 user 边界内
 
-### 3. 不配置 `root_api_key` 不等于“单租户正式部署”
+### 3. 不配置 `root_api_key` 不是有效的本地捷径
 
-这只是开发模式：
-
-- 默认全部请求以 ROOT 身份运行
-- 不适合暴露到公网或团队共享环境
+服务端缺少 root key 时会拒绝启动。本地直连使用 Trusted 模式；Gateway 和多用户部署使用 API Key 模式。
 
 ### 4. OpenClaw 插件和 Vikingbot 不是同一种租户实践
 

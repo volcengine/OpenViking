@@ -197,13 +197,6 @@ async function probeAdminAccess(
   if (input.serverMode === 'checking' || input.serverMode === 'offline') {
     return { state: 'skipped' }
   }
-  if (input.serverMode === 'dev') {
-    return {
-      detailCode: 'adminModeRequired',
-      state: 'skipped',
-    }
-  }
-
   // The Root API key is the only control-plane credential. The User API key is
   // never promoted to admin access, so management stays gated behind the root
   // or account-admin key alone.
@@ -263,7 +256,7 @@ async function probeDataAccess(
   }
   const apiKey =
     input.apiKey || (input.serverMode === 'trusted' ? input.adminApiKey : '')
-  if (input.serverMode !== 'dev' && !apiKey) {
+  if (!apiKey) {
     return {
       detailCode:
         input.serverMode === 'trusted'

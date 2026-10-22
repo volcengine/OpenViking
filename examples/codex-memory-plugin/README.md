@@ -90,7 +90,7 @@ codex            # then trust the hooks at the startup prompt, or via /hooks
 > - **Codex version**: this path relies on Codex injecting and inline-substituting `${PLUGIN_ROOT}` in plugin hook commands (current Codex does both). On an older Codex that doesn't substitute `${PLUGIN_ROOT}`, the hook script paths won't resolve — use path **A**.
 > - **Catalog source**: the catalog entry (`.agents/plugins/marketplace.json`) uses a relative source (`./examples/codex-memory-plugin`). `codex plugin add` therefore installs the plugin from the same marketplace snapshot/ref that you added. This keeps fork, branch, tag, and upstream-main installs reproducible and testable without rewriting the catalog.
 
-This path works out of the box against an unauthenticated local OpenViking at `http://127.0.0.1:1933`. For remote/cloud servers, create `~/.openviking/ovcli.conf` with `url`, `api_key`, and optional `account` / `user`; the proxy reads it when Codex starts.
+Create `~/.openviking/ovcli.conf` with `url` and `api_key`, or run `node scripts/setup.mjs` from the plugin directory. A local Trusted server also requires `account` and `user` (both default to `default`); API Key servers derive identity from the key. The proxy reads this config when Codex starts.
 
 ### Manual setup
 
@@ -117,7 +117,7 @@ Connection / identity source (applies to hooks, MCP, and `ov` commands run insid
 
 1. **Default (auto)**: env-var credentials (`OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`) win when any is set; otherwise the active `ovcli.conf` is used: `OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`. With no credential env vars set, `ov config switch <name>` changes the active credentials for the CLI, hooks, MCP, and child `ov` commands together.
 2. **Forced**: set `OPENVIKING_CREDENTIAL_SOURCE=cli` to force `ovcli.conf`, or `OPENVIKING_CREDENTIAL_SOURCE=env` to read env vars only, with neither config file.
-3. **Fallback**: without credential env vars or an ovcli config, `ov.conf` is used (`server.url` / `server.root_api_key` plus legacy `codex.*` tuning); then `http://127.0.0.1:1933` unauthenticated.
+3. **Fallback**: without credential env vars or an ovcli config, `ov.conf` is used (`server.url` / `server.root_api_key` plus legacy `codex.*` tuning); the default URL is `http://127.0.0.1:1933`. Credentials are required, including `account` / `user` for Trusted mode.
 
 The MCP proxy loads its connection through the same `loadConfig()` as the hooks, so the model tools and lifecycle hooks use the same target and key, including one set only in ovcli.conf's `plugin.codex` section. Codex passes the proxy only the variables `.mcp.json` lists, and that list covers every variable the connection reads.
 

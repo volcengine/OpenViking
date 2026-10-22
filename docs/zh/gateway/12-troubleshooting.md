@@ -62,7 +62,7 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | Studio 中的提示 | 原因和处理 |
 | --- | --- |
 | 服务端只保存了这个用户 API 密钥的哈希，无法自动读取。请粘贴该用户的用户 API 密钥。（`user_key_unreadable`） | OpenViking Server 只保存了密钥哈希（`encryption.api_key_hashing.enabled`）。在**粘贴用户 API 密钥**中填入该用户自己的密钥。 |
-| 这是 Root API 密钥，请改用本账号中某个用户的用户 API 密钥。（`root_key_not_allowed`） | root API 密钥不能绑定到网关密钥，改用某个用户或账号管理员的 API 密钥。本地 dev 模式的 `default/default` 不受此限。 |
+| 这是 Root API 密钥，请改用本账号中某个用户的用户 API 密钥。（`root_key_not_allowed`） | root API 密钥不能绑定到网关密钥，改用某个用户或账号管理员的 API 密钥。 |
 | root API 密钥不属于任何用户，请选择这把密钥对应的用户。（`user_required`） | 你以 root 身份登录 Studio，既没有选择用户，也没有粘贴密钥。选择用户，或者粘贴该用户的密钥。 |
 | 这个 OpenViking API 密钥属于其他账号。（`other_account`） | 密钥所属的账号不是你在 Studio 中管理的账号。 |
 | OpenViking 拒绝了这个密钥。（`openviking_http_401`、`openviking_http_403`） | 密钥不完整、已被重新生成，或者用户已被删除。使用该用户当前的密钥。 |

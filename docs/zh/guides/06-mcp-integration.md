@@ -32,7 +32,7 @@ MCP 使用服务端认证配置。API Key 模式下，用 User/Admin key 传入�
 - `X-Api-Key: <your-key>`
 - `Authorization: Bearer <your-key>`
 
-只有 `dev` 模式无需认证，监听 localhost 本身不会关闭认证。OAuth 客户端使用下文授权流程，其他模式见[认证指南](04-authentication.md)。
+所有受支持的服务端模式都要求凭据，包括 localhost。OAuth 客户端使用下文授权流程，其他模式见[认证指南](04-authentication.md)。
 
 ## 客户端配置
 
@@ -140,7 +140,7 @@ claude mcp add --transport http openviking \
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`）。用它删 skill 目录会残留该 skill 的 privacy 配置，请改用 `ov skills remove` 或 `DELETE /api/v1/skills/{name}` | `uri`, `recursive`（可选） |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
 | `privacy_tree` | 盘点已保存的凭据；返回当前字段元数据及引用，不含值 | `category`（可选） |
-| `privacy_resolve` | 将完整的 `{{ov_privacy:...}}` 占位符解析为一个当前字段的实际值，供立即使用 | `reference` |
+| `privacy_resolve` | 将完整的 <code v-pre>{{ov_privacy:...}}</code> 占位符解析为一个当前字段的实际值，供立即使用 | `reference` |
 | `privacy_upsert` | 原子合并用户提供的凭据字段；返回元数据和引用，不回显值 | `category`, `target_key`, `values` |
 | `list_users` | 查询当前 account 的用户 ID；默认不返回凭证，管理员也一样 | `query`(可选，ID 子串), `limit`(默认 100), `page`(默认 1), `include_credentials`(默认 false，仅 ADMIN/ROOT 可设为 true) |
 | `list_groups` | 查询当前 account 的组 ID，不返回成员名单 | 无 |
@@ -167,20 +167,18 @@ claude mcp add --transport http openviking \
 
 当 SKILL.md、文档或工具结果中出现以下认证占位符，且当前任务需要这个凭据时：
 
-```text
-Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}
-```
+<pre v-pre><code>Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}</code></pre>
 
 调用 `privacy_resolve`，原样传入完整占位符，不要带上外部的 `Authorization: Bearer`：
 
-```json
+<pre v-pre><code class="language-json">
 {
   "name": "privacy_resolve",
   "arguments": {
     "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
   }
 }
-```
+</code></pre>
 
 以上是 MCP `tools/call` 请求的参数。将返回的 `value` 填入 API 的认证字段；占位符本身不是
 可以直接使用的密钥。解析始终读取当前生效版本，并拒绝其他 owner 的引用，管理员也不例外。

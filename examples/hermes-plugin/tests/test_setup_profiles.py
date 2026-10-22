@@ -59,7 +59,7 @@ def select_profile(profile, route, menus, setup):
             "  OpenViking config source": 0,
             "  OpenViking profile": 0,
             "  OpenViking connection": 1,
-            "  OpenViking credential": 2,
+            "  OpenViking credential": 0,
             "  Save OpenViking config": 1 if route == "mirror" else 0,
         }.get(title, setup._CANCELLED)
 

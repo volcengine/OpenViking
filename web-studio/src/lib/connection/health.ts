@@ -4,13 +4,12 @@ import { createConnectionHealthHeaders } from './auth'
 import { getHealth } from '#/lib/ov-client'
 import { createClient } from '#/gen/ov-client/client'
 
-export type ServerAuthMode = 'api_key' | 'trusted' | 'dev' | 'oidc' | 'ldap'
+export type ServerAuthMode = 'api_key' | 'trusted' | 'oidc' | 'ldap'
 export type ServerMode = ServerAuthMode | 'checking' | 'offline'
 
 const SERVER_AUTH_MODES = new Set<ServerAuthMode>([
   'api_key',
   'trusted',
-  'dev',
   'oidc',
   'ldap',
 ])

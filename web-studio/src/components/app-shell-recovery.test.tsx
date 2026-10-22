@@ -129,7 +129,7 @@ function RecoveryForm() {
     </>
   )
 }
-it.each(['offline', 'api_key', 'trusted', 'dev'])(
+it.each(['offline', 'api_key', 'trusted'])(
   'retains recovery inputs and the configuration dialog after checking becomes %s',
   (mode) => {
     state.pathname = '/settings'

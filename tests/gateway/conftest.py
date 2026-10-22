@@ -226,7 +226,7 @@ async def running_gateway(tmp_path):
             status = override.get("health_status", {}).get(key, 200)
             if status != 200:
                 return web.json_response({}, status=status)
-            if override.get("auth_mode") in {"dev", "trusted"}:
+            if override.get("auth_mode") == "trusted":
                 return web.json_response({"version": "0.4.16", "auth_mode": override["auth_mode"]})
             return web.json_response(
                 {

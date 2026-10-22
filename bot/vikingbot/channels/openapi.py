@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
@@ -676,7 +675,7 @@ class OpenAPIChannel(BaseChannel):
         if ov_server is None or not self._ov_server_url():
             return ""
         effective = str(getattr(ov_server, "effective_auth_mode", "") or "").strip().lower()
-        if effective in {"api_key", "trusted", "dev"}:
+        if effective in {"api_key", "trusted"}:
             return effective
         api_key_type = str(getattr(ov_server, "api_key_type", "") or "").strip().lower()
         if api_key_type == "root":
@@ -718,23 +717,12 @@ class OpenAPIChannel(BaseChannel):
             return False
 
     @classmethod
-    def _is_loopback_url(cls, url: str) -> bool:
-        try:
-            host = urlsplit(url).hostname or ""
-        except ValueError:
-            return False
-        return cls._is_loopback_host(host)
-
-    @classmethod
     def _is_loopback_request(cls, request: Request) -> bool:
         client = getattr(request, "client", None)
         return cls._is_loopback_host(getattr(client, "host", "") or "")
 
     def _is_gateway_localhost(self) -> bool:
         return self._is_loopback_host(self._gateway_host())
-
-    def _is_safe_dev_boundary(self) -> bool:
-        return self._is_gateway_localhost() and self._is_loopback_url(self._ov_server_url())
 
     @staticmethod
     def _has_openviking_auth_headers(request: Request) -> bool:
@@ -870,14 +858,6 @@ class OpenAPIChannel(BaseChannel):
                 detail="OpenViking upstream health response did not include auth_mode",
             )
 
-        if actual_auth_mode == "dev" and not self._is_safe_dev_boundary():
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "OpenViking server auth_mode changed to dev, but dev auth can only "
-                    "be used when gateway and OpenViking server are localhost"
-                ),
-            )
         if actual_auth_mode != expected_auth_mode:
             raise HTTPException(
                 status_code=503,
@@ -957,24 +937,12 @@ class OpenAPIChannel(BaseChannel):
             rebuilt["agent_id"] = agent_id
             return OpenVikingConnection(**rebuilt)
 
-        # Only dev mode accepts forwarded identities without an API key.
-        if auth_mode != "dev":
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    "OpenViking API key required on forwarded connection "
-                    f"when upstream auth_mode is {auth_mode or 'unknown'}"
-                ),
-            )
-
-        # DEV forwards may omit api_key; keep proxy-asserted identity
-        # but never honor a client-chosen upstream URL.
-        values["server_url"] = self._ov_server_url()
-        values["agent_id"] = agent_id
-        if actor_peer_id:
-            values["actor_peer_id"] = actor_peer_id
-        return OpenVikingConnection(
-            **{key: value for key, value in values.items() if value not in ("", None)}
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "OpenViking API key required on forwarded connection "
+                f"when upstream auth_mode is {auth_mode or 'unknown'}"
+            ),
         )
 
     def _build_openviking_connection(
@@ -1165,13 +1133,6 @@ class OpenAPIChannel(BaseChannel):
                     status_code=403,
                     detail="openviking_connection is only accepted from trusted server proxy",
                 )
-        # Dev auth is a single principal, so forwarded credentials must not change task ownership.
-        if self._ov_server_auth_mode() == "dev":
-            _connection, scope = await self._resolve_request_identity(http_request, auth)
-            compile_request._principal_scope = scope
-            compile_request.openviking_connection = None
-            return
-
         if compile_request.openviking_connection is not None:
             if not self._ov_server_url():
                 raise HTTPException(
@@ -1203,14 +1164,6 @@ class OpenAPIChannel(BaseChannel):
         auth_mode = self._ov_server_auth_mode()
         if not auth_mode:
             return None, self._principal_scope("standalone")
-        if auth_mode == "dev":
-            if not self._is_safe_dev_boundary():
-                raise HTTPException(
-                    status_code=403,
-                    detail="OpenViking dev auth can only be used when gateway and OpenViking server are localhost",
-                )
-            await self._assert_runtime_upstream_auth_mode({})
-            return None, self._principal_scope("dev")
         if auth_mode == "api_key":
             if not self._has_openviking_auth_headers(http_request):
                 raise HTTPException(status_code=401, detail="OpenViking API key header required")

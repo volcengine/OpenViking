@@ -169,7 +169,6 @@ export function KeysIssueDialog({
     connection,
     invalidate,
     access,
-    devMode,
     readOnly,
     canIssueForOthers: canPickUser,
   } = useGateway()
@@ -358,12 +357,7 @@ export function KeysIssueDialog({
           {mode === 'self' ? (
             <SettingField label={t('keys.form.user.label')}>
               <p className="text-sm text-muted-foreground">
-                {t(
-                  devMode
-                    ? 'keys.form.user.developmentIdentity'
-                    : 'keys.form.user.self',
-                  { user: selfId },
-                )}
+                {t('keys.form.user.self', { user: selfId })}
               </p>
             </SettingField>
           ) : mode === 'user' ? (
