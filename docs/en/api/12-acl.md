@@ -63,6 +63,29 @@ The account's `acl.enabled` defaults to false: namespace rules apply and ACL is 
 
 ACL stays in the context index and follows existing asynchronous processing and wait semantics. Temporary inconsistency is accepted. Standalone ACL mutations require an existing context record. Vectorless records and empty-file support are outside this change.
 
+## Case Aliases and ACL
+
+When `localfs` runs on a case-insensitive filesystem, ACL is resolved from the requested URI while the underlying filesystem may resolve a URI that differs only by letter case to the same real file or directory. If the alias URI is authorized, later operations such as `read`, `stat`, `ls`, `write`, `rm`, `cp`, and `mv` may act on the real object.
+
+Example:
+
+```bash
+# Bob's directory grants access only to Bob
+ov acl set viking://resources/bob-private --acl-mode restricted --entry user:bob=manage
+
+# Alice reading the exact path should get 403
+ov read viking://resources/bob-private/private.md
+
+# On case-insensitive localfs, the alias directory may hit the same real directory
+ov read viking://resources/BOB-PRIVATE/private.md
+ov ls viking://resources/BOB-PRIVATE
+ov write viking://resources/BOB-PRIVATE/private.md --content changed --mode replace
+```
+
+The same risk applies to system-generated files that are reachable through public URIs in the shared resource tree, such as `.abstract.md` and `.overview.md`. For example, if the real file is `viking://resources/bob-private/.overview.md`, `viking://resources/BOB-PRIVATE/.OVERVIEW.md` may hit it. Internal databases, queues, and lock files that are not exposed through public URIs are not directly in scope for this URI alias issue.
+
+On case-sensitive systems, `BOB-PRIVATE` and `bob-private` are different paths; a missing alias target returns `NOT_FOUND` and does not trigger this issue.
+
 **CLI**
 
 ```bash

@@ -101,6 +101,7 @@ async def test_restore_forwards_all_kwargs(svc, viking_fs_mock):
         author_name="me",
         author_email="me@x",
         ctx=ctx,
+        record_restore=None,
     )
     assert out["result"] == "applied"
 

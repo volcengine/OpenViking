@@ -43,6 +43,7 @@ import { gatewayErrorMessage, kindLabel } from '../-lib/localize'
 import type { RequestsFilter } from '../-lib/search'
 import { useGateway, useKeys, useLogs, useUpstreams } from '../-lib/use-gateway'
 import { ConfirmDialog } from './confirm-dialog'
+import { DocsLink } from './docs-link'
 import { EmptyState, ErrorState, LoadingState } from './empty-state'
 import type { ResyncRequest } from './request-details'
 import { RequestRow, RequestsTableHeader } from './requests-row'
@@ -342,7 +343,10 @@ export function RequestsPage() {
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
-      <SectionHeader description={t('requests.description')} />
+      <SectionHeader
+        description={t('requests.description')}
+        actions={<DocsLink section="requests" />}
+      />
       <Card className="gap-0 overflow-hidden py-0">
         <CardHeader className="border-b bg-muted/20 px-4 py-3 [.border-b]:pb-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">

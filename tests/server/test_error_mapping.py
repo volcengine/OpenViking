@@ -3,6 +3,7 @@
 
 """Focused tests for HTTP server exception-to-error mapping."""
 
+import httpx
 import pytest
 
 from openviking.pyagfs.exceptions import (
@@ -20,6 +21,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.server.error_mapping import map_exception
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -186,12 +188,74 @@ def test_upstream_text_status_maps_to_permission_denied():
     assert mapped.details["upstream_status_code"] == 403
 
 
-def test_upstream_502_maps_to_unavailable():
-    mapped = map_exception(RuntimeError("Volcengine embedding failed: HTTP 502 Bad Gateway"))
+@pytest.mark.parametrize(
+    ("errors", "expected_code", "expected_status"),
+    [
+        ([RuntimeError("Volcengine embedding failed: HTTP 502 Bad Gateway")], "UNAVAILABLE", 503),
+        (
+            [httpx.ReadTimeout("Request timed out."), httpx.ConnectTimeout("Request timed out.")],
+            "DEADLINE_EXCEEDED",
+            504,
+        ),
+        (
+            [httpx.ConnectError("Connection refused"), httpx.ReadError("Connection reset")],
+            "UNAVAILABLE",
+            503,
+        ),
+        (
+            [
+                _UpstreamHTTPError(401, "invalid_api_key"),
+                _UpstreamHTTPError(401, "invalid_api_key"),
+            ],
+            "UNAUTHENTICATED",
+            401,
+        ),
+        (
+            [_UpstreamHTTPError(401, "invalid_api_key"), httpx.ReadTimeout("Request timed out.")],
+            "INTERNAL",
+            500,
+        ),
+        (
+            [httpx.ReadTimeout("Request timed out."), _UpstreamHTTPError(401, "invalid_api_key")],
+            "INTERNAL",
+            500,
+        ),
+        (
+            [httpx.ReadTimeout("Request timed out."), RuntimeError("Unexpected tensor shape")],
+            "INTERNAL",
+            500,
+        ),
+        (
+            [
+                ValueError("Embedding provider api_key is required"),
+                httpx.ReadTimeout("Request timed out."),
+            ],
+            "INTERNAL",
+            500,
+        ),
+    ],
+)
+def test_upstream_failures_keep_their_status_through_wrappers(
+    errors, expected_code, expected_status
+):
+    failures = []
+    for index, error in enumerate(errors):
+        wrapped = RuntimeError(f"Volcengine embedding failed: {error}")
+        wrapped.__cause__ = error
+        failures.append((f"credential-{index}", "unknown", wrapped, index))
+
+    aggregate = AllCredentialsFailedError(failures)
+    outer = RuntimeError(f"Embedding failed: {aggregate}")
+    outer.__cause__ = aggregate
+    mapped = map_exception(outer)
 
     assert mapped is not None
-    assert mapped.code == "UNAVAILABLE"
-    assert mapped.details["upstream_status_code"] == 502
+    assert mapped.code == expected_code
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == expected_status
+    if expected_code == "INTERNAL":
+        assert mapped.message == str(outer)
+    else:
+        assert mapped.details["upstream_error_type"] == "AllCredentialsFailedError"
 
 
 def test_model_api_key_configuration_error_maps_to_failed_precondition():

@@ -10,14 +10,12 @@ from conftest import MCP_TOOLS, mcp_tool
 from openviking_gateway.capture import capture_messages
 from openviking_gateway.models import Policy, Upstream
 from openviking_gateway.notices import TOOL_NOTICE, tool_tail
-from openviking_gateway.proxy import upstream_url
 from openviking_gateway.storage import SQLiteKernelStore
 from openviking_gateway.tool_catalog import notice_head, select_tools, tool_block_reason
 from openviking_gateway.tool_executor import ToolExecutor, attachment_bytes, attachments
 from openviking_gateway.tool_loop import HiddenToolLoop
 from openviking_gateway.tool_protocols import ResponseCapture, hidden_chain, tool_protocol
 from openviking_gateway.tool_protocols.common import sse
-from openviking_gateway.vendors import ark_url
 
 
 @pytest.mark.parametrize(
@@ -430,39 +428,6 @@ def test_omitted_hidden_history_drops_tool_notices(protocol):
         {"role": "assistant", "content": [messages[2]["content"][0], messages[2]["content"][2]]},
         messages[4],
     ]
-
-
-@pytest.mark.parametrize(
-    "base,path,expected",
-    [
-        ("https://ark/api/v3", "/v1/chat/completions", "https://ark/api/v3/chat/completions"),
-        ("https://ark", "/v1/responses/resp_1", "https://ark/api/v3/responses/resp_1"),
-        ("https://ark/api/compatible/v1", "/v1/messages", "https://ark/api/compatible/v1/messages"),
-    ],
-)
-def test_ark_base_paths(base, path, expected):
-    assert ark_url({"base_url": base}, path) == expected
-
-
-@pytest.mark.parametrize("vendor", ["ark", "byteplus"])
-@pytest.mark.parametrize(
-    "base,path,expected",
-    [
-        ("https://ark", "/v1/chat/completions", "https://ark/api/v3/chat/completions"),
-        ("https://ark", "/v1/responses", "https://ark/api/v3/responses"),
-        ("https://ark", "/v1/messages", "https://ark/api/compatible/v1/messages"),
-        (
-            "https://ark",
-            "/v1/messages/count_tokens",
-            "https://ark/api/compatible/v1/messages/count_tokens",
-        ),
-        ("https://ark", "/v1/models", "https://ark/api/v3/models"),
-        ("https://ark/api/v3", "/v1/responses", "https://ark/api/v3/responses"),
-        ("https://ark/api/compatible/v1", "/v1/messages", "https://ark/api/compatible/v1/messages"),
-    ],
-)
-def test_ark_vendors_share_upstream_paths(vendor, base, path, expected):
-    assert upstream_url({"base_url": base, "vendor": vendor}, path) == expected
 
 
 @pytest.mark.parametrize("json_response", [False, True])

@@ -16,9 +16,15 @@ import {
 import { Route } from './route'
 
 const mocks = vi.hoisted(() => ({
+  provider: 'opensource',
+  uploadProvider: vi.fn(),
+  preview: vi.fn(),
+  agent: vi.fn(),
+  terminal: vi.fn(),
   fetchFsStat: vi.fn(),
   invalidateList: vi.fn(),
   navigate: vi.fn(),
+  dataManagement: vi.fn(),
   refreshLabel: 'refresh',
   search: {} as { file?: string; uri?: string },
 }))
@@ -41,6 +47,9 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ provider: mocks.provider, ready: true }),
+}))
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
 }))
@@ -55,7 +64,13 @@ vi.mock('#/routes/resources/-lib/api', () => ({
 }))
 
 vi.mock('#/routes/resources/-hooks/use-resource-upload', () => ({
-  ResourceUploadProvider: ({ children }: PropsWithChildren) => children,
+  ResourceUploadProvider: ({
+    children,
+    enabled,
+  }: PropsWithChildren<{ enabled: boolean }>) => {
+    mocks.uploadProvider(enabled)
+    return children
+  },
   useResourceUpload: () => ({
     activeTaskCount: 0,
     hasActiveTasks: false,
@@ -66,9 +81,14 @@ vi.mock('#/routes/resources/-hooks/use-resource-upload', () => ({
 }))
 
 vi.mock('#/routes/resources/-components/lazy-file-preview', () => ({
-  LazyFilePreview: ({ file }: { file: { uri: string } | null }) => (
-    <div data-testid="preview">{file?.uri}</div>
-  ),
+  LazyFilePreview: (props: {
+    file: { uri: string } | null
+    readOnly?: boolean
+    defaultReadLimit?: number
+  }) => {
+    mocks.preview(props)
+    return <div data-testid="preview">{props.file?.uri}</div>
+  },
 }))
 
 vi.mock('./-components/context-explorer', () => ({
@@ -80,8 +100,16 @@ vi.mock('./-components/context-explorer', () => ({
   FilesystemResizeHandle: () => null,
 }))
 
-vi.mock('./-components/agent-panel', () => ({ AgentPanel: () => null }))
-vi.mock('./-components/terminal-panel', () => ({ TerminalPanel: () => null }))
+vi.mock('./-components/agent-panel', () => ({ AgentPanel: mocks.agent }))
+vi.mock('./-components/terminal-panel', () => ({
+  TerminalPanel: mocks.terminal,
+}))
+vi.mock('./-components/data-management-dialog', () => ({
+  DataManagementDialog: (props: { uri: string; isDirectory: boolean }) => {
+    mocks.dataManagement(props)
+    return <div data-testid="data-management-uri">{props.uri}</div>
+  },
+}))
 vi.mock('#/routes/resources/-components/find-palette', () => ({
   FindPalette: () => null,
 }))
@@ -101,10 +129,71 @@ describe('filesystem context tree refresh', () => {
   afterEach(cleanup)
 
   beforeEach(() => {
+    mocks.provider = 'opensource'
+    mocks.uploadProvider.mockClear()
+    mocks.preview.mockClear()
+    mocks.agent.mockReset().mockReturnValue(null)
+    mocks.terminal.mockReset().mockReturnValue(null)
     mocks.search = { file: firstFile, uri: parentDirectory }
     mocks.fetchFsStat.mockReset()
     mocks.invalidateList.mockReset().mockResolvedValue(undefined)
     mocks.navigate.mockReset()
+    mocks.dataManagement.mockReset()
+  })
+
+  it('offers OVPack for the parent resource directory while a file is selected', async () => {
+    mocks.search = {
+      file: 'viking://resources/preferences/response-tone.md',
+      uri: 'viking://resources/preferences/',
+    }
+    render(<FilesystemRoute />)
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
+    )
+    expect(screen.getByTestId('data-management-uri').textContent).toBe(
+      'viking://resources/preferences/',
+    )
+    expect(mocks.dataManagement.mock.lastCall?.[0].isDirectory).toBe(true)
+  })
+
+  it('offers OVPack on hosted resource directories too', async () => {
+    mocks.provider = 'volcengine'
+    mocks.search = {
+      file: 'viking://resources/preferences/response-tone.md',
+      uri: 'viking://resources/preferences/',
+    }
+    render(<FilesystemRoute />)
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
+    )
+    expect(screen.getByTestId('data-management-uri').textContent).toBe(
+      'viking://resources/preferences/',
+    )
+    expect(mocks.dataManagement.mock.lastCall?.[0].isDirectory).toBe(true)
+  })
+
+  it('offers snapshot history for hosted reads without incompatible local tools', async () => {
+    mocks.provider = 'volcengine'
+    render(<FilesystemRoute />)
+    await userEvent.click(
+      screen.getByRole('button', { name: 'dataManagement:historyTitle' }),
+    )
+    expect(screen.getByTestId('data-management-uri').textContent).toBe(
+      firstFile,
+    )
+    expect(
+      screen.queryByRole('button', { name: 'dataManagement:transferTitle' }),
+    ).toBeNull()
+    expect(screen.getByTestId('preview').textContent).toBe(firstFile)
+    expect(mocks.preview.mock.lastCall?.[0].readOnly).not.toBe(true)
+    expect(mocks.preview.mock.lastCall?.[0].defaultReadLimit).toBe(10000)
+    expect(mocks.uploadProvider.mock.lastCall?.[0]).toBe(false)
+    expect(mocks.agent).not.toHaveBeenCalled()
+    expect(mocks.terminal).not.toHaveBeenCalled()
+    expect(screen.queryByRole('tab')).toBeNull()
+    expect(screen.queryByText('addResource.title')).toBeNull()
   })
 
   it('clears a deleted selected file from the preview and URL search', async () => {

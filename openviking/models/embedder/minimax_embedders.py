@@ -6,10 +6,9 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
@@ -78,8 +77,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         if not self.api_key:
             raise ValueError("api_key is required for MiniMax embedder")
 
-        # Initialize session with retry logic
-        self.session = self._create_session()
+        self.session = requests.Session()
         self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension if not provided
@@ -89,20 +87,6 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             except Exception as e:
                 logger.warning(f"Failed to detect MiniMax dimension: {e}. Defaulting to 1536.")
                 self._dimension = 1536
-
-    def _create_session(self) -> requests.Session:
-        """Create a requests session with retry logic"""
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=self.max_retries,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["POST"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
-        return session
 
     def _detect_dimension(self) -> int:
         """Detect dimension by making an actual API call"""
@@ -129,7 +113,12 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             # Check for business error code
             base_resp = data.get("base_resp", {})
             if base_resp.get("status_code") != 0:
-                raise RuntimeError(f"MiniMax API error: {base_resp.get('status_msg')}")
+                raise ModelError(
+                    ModelErrorKind.UNKNOWN,
+                    f"MiniMax API error: {base_resp.get('status_msg')}",
+                    provider="minimax",
+                    code=str(base_resp.get("status_code")),
+                )
 
             vectors = data.get("vectors", [])
             if not vectors:
@@ -137,6 +126,8 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
             return vectors
 
+        except ModelError:
+            raise
         except requests.exceptions.RequestException as e:
             raise RuntimeError(f"MiniMax network error: {str(e)}") from e
         except Exception as e:
@@ -186,21 +177,33 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
             base_resp = data.get("base_resp", {})
             if base_resp.get("status_code") != 0:
-                raise RuntimeError(f"MiniMax API error: {base_resp.get('status_msg')}")
+                raise ModelError(
+                    ModelErrorKind.UNKNOWN,
+                    f"MiniMax API error: {base_resp.get('status_msg')}",
+                    provider="minimax",
+                    code=str(base_resp.get("status_code")),
+                )
 
             vectors = data.get("vectors", [])
             if not vectors:
                 raise RuntimeError("MiniMax API returned empty vectors")
 
             return vectors
+        except ModelError:
+            raise
         except httpx.HTTPError as e:
             raise RuntimeError(f"MiniMax network error: {str(e)}") from e
         except Exception as e:
             raise RuntimeError(f"MiniMax embedding failed: {str(e)}") from e
 
+    @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text"""
-        vectors = self._call_api([text], is_query=is_query)
+        vectors = self._run_once(
+            lambda: self._call_api([text], is_query=is_query),
+            logger=logger,
+            operation_name="MiniMax embedding",
+        )
         result = EmbedResult(dense_vector=vectors[0])
         # Estimate token usage
         estimated_tokens = self._estimate_tokens(text)
@@ -212,12 +215,13 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         )
         return result
 
+    @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
             vectors = await self._call_api_async([text], is_query=is_query)
             return EmbedResult(dense_vector=vectors[0])
 
-        result = await self._run_with_async_retry(
+        result = await self._run_once_async(
             _call,
             logger=logger,
             operation_name="MiniMax async embedding",

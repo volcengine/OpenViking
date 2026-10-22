@@ -130,7 +130,7 @@ async def test_kernel_and_capture_work_with_kv_ports(credential, protocol):
         async def get(self, *_):
             return credential
 
-        async def log(self, *_):
+        async def log(self, *_, **__):
             pass
 
     worker = CaptureWorker(ports, Management(), viking)
@@ -198,6 +198,9 @@ async def test_kernel_and_capture_work_with_kv_ports(credential, protocol):
         K.ROOT,
         K.INJECTION,
         K.DISABLED,
+        K.TOOLS,
+        K.TOOLS_CLOSED,
+        K.CLIENT_TOOLS,
         K.HIDDEN,
         K.REPLACEMENT,
         K.REPLY,
@@ -269,7 +272,8 @@ async def test_batched_reads_keep_scope_isolation_and_handle_cancellation(
 
 
 async def test_corrupt_record_does_not_fail_other_reads_in_batch(setup_kernel):
-    from cryptography.fernet import InvalidToken
+    from openviking.crypto import CorruptedCiphertextError
+    from openviking.crypto.encryptor import MAGIC
 
     _, store, _, _ = setup_kernel
     for scope in ("damaged", "healthy"):
@@ -278,7 +282,8 @@ async def test_corrupt_record_does_not_fail_other_reads_in_batch(setup_kernel):
     def corrupt():
         with store.connect() as connection:
             connection.execute(
-                "UPDATE replay SET value=? WHERE scope=?", (b"invalid ciphertext", "damaged")
+                "UPDATE replay SET value=? WHERE scope=?",
+                (MAGIC + b"invalid ciphertext", "damaged"),
             )
 
     await store.run(corrupt, write=True)
@@ -287,7 +292,7 @@ async def test_corrupt_record_does_not_fail_other_reads_in_batch(setup_kernel):
         store.load("healthy", "session", [""]),
         return_exceptions=True,
     )
-    assert isinstance(damaged, InvalidToken)
+    assert isinstance(damaged, CorruptedCiphertextError)
     assert healthy[0][K.ROOT, ""] == {"scope": "healthy"}
 
 

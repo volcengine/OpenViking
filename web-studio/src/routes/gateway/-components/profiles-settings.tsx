@@ -1,3 +1,4 @@
+import { useReadOnly } from './read-only'
 import * as React from 'react'
 import {
   BrainIcon,
@@ -230,10 +231,12 @@ function OptionCheckbox({
   /** Shown after the label, such as a tool's read-only mark. */
   badge?: React.ReactNode
 }) {
+  const readOnly = useReadOnly()
   if (!description && !badge) {
     return (
       <Label className="font-normal">
         <Checkbox
+          disabled={readOnly}
           checked={checked}
           aria-label={label}
           onCheckedChange={(value) => onCheckedChange(Boolean(value))}
@@ -245,6 +248,7 @@ function OptionCheckbox({
   return (
     <Label className="cursor-pointer items-start gap-3 rounded-lg border p-3 leading-normal font-normal transition-colors hover:bg-muted/30">
       <Checkbox
+        disabled={readOnly}
         checked={checked}
         aria-label={label}
         className="mt-0.5"
@@ -453,6 +457,7 @@ export function ProfileSettingsForm({
         icon={<BrainIcon />}
         title={t('profiles.recall.title')}
         description={t('profiles.recall.description')}
+        docs="recall"
         checked={value.recall}
         onCheckedChange={(recall) => onChange({ recall })}
         note={
@@ -523,6 +528,7 @@ export function ProfileSettingsForm({
         icon={<SaveIcon />}
         title={t('profiles.capture.title')}
         description={t('profiles.capture.description')}
+        docs="capture"
         checked={value.capture}
         onCheckedChange={(capture) => onChange({ capture })}
       >
@@ -539,6 +545,7 @@ export function ProfileSettingsForm({
         icon={<ScrollTextIcon />}
         title={t('profiles.longConversations.title')}
         description={t('profiles.longConversations.description')}
+        docs="longConversations"
         advanced={
           <div className="grid gap-5 md:grid-cols-2">
             {numberField('context_window')}
@@ -568,6 +575,7 @@ export function ProfileSettingsForm({
               {t('profiles.longConversations.agentWindows.experimental')}
             </Badge>
           }
+          docs="agentWindows"
           description={t('profiles.longConversations.agentWindows.description')}
           checked={value.agent_windows}
           invalid={Boolean(
@@ -593,6 +601,7 @@ export function ProfileSettingsForm({
         icon={<WrenchIcon />}
         title={t('profiles.tools.title')}
         description={t('profiles.tools.description')}
+        docs="tools"
         checked={value.gateway_tools}
         onCheckedChange={(gateway_tools) => onChange({ gateway_tools })}
         advanced={

@@ -19,6 +19,13 @@ from pathlib import Path, PurePosixPath
 from typing import Optional, Tuple, Union
 from urllib.parse import quote, urlparse
 
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    open_parser_url,
+    overlay_parser_subprocess_env,
+)
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils import (
     is_github_url,
     is_gitlab_url,
@@ -113,7 +120,11 @@ class GitAccessor(DataAccessor):
 
         try:
             # Create local temp directory (non-blocking)
-            temp_local_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_git_")
+            temp_local_dir = await asyncio.to_thread(
+                tempfile.mkdtemp,
+                prefix="ov_git_",
+                dir=get_parser_download_temp_dir(),
+            )
             logger.info(f"[GitAccessor] Created local temp dir for git: {temp_local_dir}")
 
             # Fetch content (Clone or Extract)
@@ -385,6 +396,10 @@ class GitAccessor(DataAccessor):
         """Clone a git repository into target_dir; return the repo name."""
         name = self._get_repo_name(url)
         logger.info(f"[GitAccessor] Cloning {url} to {target_dir}...")
+        network_env = overlay_parser_subprocess_env(
+            ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, url),
+            env,
+        )
 
         clone_args = [
             "git",
@@ -396,19 +411,19 @@ class GitAccessor(DataAccessor):
         if branch and not commit:
             clone_args.extend(["--branch", branch])
         clone_args.extend([url, target_dir])
-        await self._run_git(clone_args, env=env)
+        await self._run_git(clone_args, env=network_env)
 
         if commit:
             try:
                 await self._run_git(
                     ["git", "-C", target_dir, "fetch", "origin", commit],
-                    env=env,
+                    env=network_env,
                 )
             except RuntimeError:
                 try:
                     await self._run_git(
                         ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"],
-                        env=env,
+                        env=network_env,
                     )
                 except RuntimeError:
                     pass
@@ -417,7 +432,7 @@ class GitAccessor(DataAccessor):
                     try:
                         await self._run_git(
                             ["git", "-C", target_dir, "fetch", "--unshallow", "origin"],
-                            env=env,
+                            env=network_env,
                         )
                     except RuntimeError:
                         pass
@@ -432,7 +447,7 @@ class GitAccessor(DataAccessor):
                             "origin",
                             "+refs/heads/*:refs/remotes/origin/*",
                         ],
-                        env=env,
+                        env=network_env,
                     )
                     ok = await self._has_commit(target_dir, commit, env=env)
                     if not ok:
@@ -488,7 +503,8 @@ class GitAccessor(DataAccessor):
                 headers["Authorization"] = f"token {github_token}"
 
             req = urllib.request.Request(zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
+            context = ParserNetworkContext(ParserNetworkOperation.GIT_ARCHIVE, zip_url)
+            with open_parser_url(context, req, timeout=1800) as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
 
         try:
@@ -581,7 +597,8 @@ class GitAccessor(DataAccessor):
             headers = {"User-Agent": "OpenViking"}
 
             req = urllib.request.Request(zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
+            context = ParserNetworkContext(ParserNetworkOperation.GIT_ARCHIVE, zip_url)
+            with open_parser_url(context, req, timeout=1800) as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
 
         try:

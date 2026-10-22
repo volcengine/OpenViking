@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createInstance } from 'i18next'
 import { OvClientError } from '#/lib/ov-client'
 import { runCompileCommand, runCompileSubmission } from './terminal'
@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('./api', () => api)
 beforeEach(() => vi.resetAllMocks())
+afterEach(() => vi.unstubAllGlobals())
 
 describe('Compile terminal regressions', () => {
   it('keeps status filters in the executable next-page command', async () => {
@@ -127,6 +128,22 @@ it.each(['INVALID_ARGUMENT', 'INVALID_URI'])(
 
 const retryCommand =
   'compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s'
+it('submits over HTTP origins without crypto.randomUUID', async () => {
+  const getRandomValues = globalThis.crypto.getRandomValues.bind(
+    globalThis.crypto,
+  )
+  vi.stubGlobal('crypto', { getRandomValues })
+  api.createCompile.mockResolvedValueOnce({
+    task_id: 'task-1',
+    status: 'pending',
+  })
+
+  await runCompileSubmission(retryCommand, { current: null }, String, vi.fn())
+
+  expect(api.createCompile.mock.calls[0][1]).toMatch(
+    /^[0-9]+:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  )
+})
 it('recovers a persisted submission after remount without creating again', async () => {
   let saved: string | null = null
   const save = (key: string | null) => {

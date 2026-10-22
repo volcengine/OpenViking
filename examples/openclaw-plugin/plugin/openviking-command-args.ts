@@ -5,14 +5,12 @@ export type AddResourceCommandArgs = {
   reason?: string;
   instruction?: string;
   wait?: boolean;
-  timeout?: number;
 };
 
 export type AddSkillCommandArgs = {
   source?: string;
   data?: unknown;
   wait?: boolean;
-  timeout?: number;
 };
 
 export type OVSearchCommandArgs = {
@@ -136,7 +134,7 @@ export function parseAddResourceCommandArgs(args: string): AddResourceCommandArg
   const source =
     parsed.positionals.length <= 1 ? parsed.positionals[0] : parsed.positionals.join(" ").trim();
   if (!source) {
-    throw new Error("Usage: /add-resource <source> [--to URI] [--parent URI] [--reason TEXT] [--instruction TEXT] [--wait] [--timeout SEC]");
+    throw new Error("Usage: /add-resource <source> [--to URI] [--parent URI] [--reason TEXT] [--instruction TEXT] [--wait]");
   }
   const to = getStringFlag(parsed.flags, "to");
   const parent = getStringFlag(parsed.flags, "parent");
@@ -150,7 +148,6 @@ export function parseAddResourceCommandArgs(args: string): AddResourceCommandArg
     reason: getStringFlag(parsed.flags, "reason"),
     instruction: getStringFlag(parsed.flags, "instruction"),
     wait: getBoolFlag(parsed.flags, "wait"),
-    timeout: getNumberFlag(parsed.flags, "timeout"),
   };
 }
 
@@ -159,7 +156,7 @@ export function parseAddSkillCommandArgs(args: string): AddSkillCommandArgs {
   const source =
     parsed.positionals.length <= 1 ? parsed.positionals[0] : parsed.positionals.join(" ").trim();
   if (!source) {
-    throw new Error("Usage: /add-skill <source> [--wait] [--timeout SEC]");
+    throw new Error("Usage: /add-skill <source> [--wait]");
   }
   if (parsed.flags.has("to") || parsed.flags.has("parent") || parsed.flags.has("reason") || parsed.flags.has("instruction")) {
     throw new Error("--to, --parent, --reason, and --instruction are resource-only options.");
@@ -167,7 +164,6 @@ export function parseAddSkillCommandArgs(args: string): AddSkillCommandArgs {
   return {
     source,
     wait: getBoolFlag(parsed.flags, "wait"),
-    timeout: getNumberFlag(parsed.flags, "timeout"),
   };
 }
 

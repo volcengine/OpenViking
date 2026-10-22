@@ -53,6 +53,7 @@ from .consts import (
     SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
+from .expiry_config import ExpiryConfig, ExpiryRedisConfig
 from .git_config import GitConfig, GitLocalConfig, GitS3Config
 from .glob_config import GlobConfig, GlobEngine
 from .grep_config import GrepConfig, GrepEngine
@@ -146,6 +147,8 @@ __all__ = [
     "GrepEngine",
     "RerankConfig",
     "RetrievalConfig",
+    "ExpiryConfig",
+    "ExpiryRedisConfig",
     "StorageConfig",
     "OpenGaussConfig",
     "VectorDBBackendConfig",

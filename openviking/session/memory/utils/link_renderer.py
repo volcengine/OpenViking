@@ -18,7 +18,7 @@ class MarkdownLink:
 class LinkRenderer:
     """Renders and strips local markdown links in memory file content based on StoredLink metadata."""
 
-    _LINK_START_RE = re.compile(r"\[(?P<text>[^\]]+)\]\(")
+    _LINK_START_RE = re.compile(r"\[(?P<text>(?:\\.|[^\[\]\\])+)\]\(")
     _LINK_TITLE_SUFFIX_RE = re.compile(
         r"""\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\))\s*\Z""",
         re.DOTALL,

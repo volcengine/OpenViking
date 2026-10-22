@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Thread } from './thread'
 
 const m = vi.hoisted(() => ({
+  provider: 'opensource',
   create: vi.fn(),
   history: vi.fn(),
   send: vi.fn(),
@@ -12,6 +13,9 @@ const m = vi.hoisted(() => ({
 }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}))
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ provider: m.provider, ready: true }),
 }))
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
@@ -25,7 +29,13 @@ vi.mock('#/lib/sessions/use-sessions', () => ({
   useSessionMessages: m.history,
 }))
 vi.mock('#/lib/sessions/use-chat', () => ({
-  useChat: () => ({ messages: [], status: 'idle', send: m.send }),
+  useChat: () => ({
+    messages: [],
+    status: 'idle',
+    streamingParts: [],
+    streamingInsertIndex: undefined,
+    send: m.send,
+  }),
 }))
 vi.mock('./memory-impact', () => ({ MemoryImpact: () => null }))
 vi.mock('./composer', () => ({
@@ -37,6 +47,8 @@ vi.mock('./composer', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  m.provider = 'opensource'
+  m.onSend = undefined
   m.history.mockReturnValue({ isPending: true })
   Element.prototype.scrollIntoView = vi.fn()
 })
@@ -125,4 +137,24 @@ it('loads persisted history and continues after switching tabs', async () => {
   })
   expect(m.create).toHaveBeenCalledExactlyOnceWith('draft')
   expect(m.send).toHaveBeenLastCalledWith('second')
+})
+
+it('releases the composer after starting an existing session stream', async () => {
+  m.send.mockReturnValue(new Promise<void>(() => {}))
+  render(<Thread sessionId="existing" />)
+
+  await expect(m.onSend!('first')).resolves.toBe(true)
+  expect(m.send).toHaveBeenCalledWith('first')
+})
+
+it('preserves hosted session history without exposing a Bot composer or draft send', () => {
+  m.provider = 'volcengine'
+  m.history.mockReturnValue({ isPending: false, data: [] })
+  render(<Thread sessionId="hosted-session" />)
+  expect(m.history).toHaveBeenLastCalledWith('hosted-session')
+  expect(m.onSend).toBeUndefined()
+  expect(m.send).not.toHaveBeenCalled()
+  expect(m.create).not.toHaveBeenCalled()
+  expect(screen.getByText('chat.emptyReadDescription')).toBeTruthy()
+  expect(screen.queryByText('chat.emptyDescription')).toBeNull()
 })

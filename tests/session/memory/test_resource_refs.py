@@ -70,6 +70,10 @@ def test_extract_resource_uris_stops_at_common_sentence_delimiters():
             "viking://resources/images/foo.jpeg",
         ),
         (
+            "看了 viking://resources/images/foo.jpeg（临时上传）",
+            "viking://resources/images/foo.jpeg",
+        ),
+        (
             "read viking://resources/images/foo.jpeg, then commented",
             "viking://resources/images/foo.jpeg",
         ),
@@ -117,6 +121,64 @@ def test_sync_memory_resource_refs_keeps_bare_uri_clean_before_chinese_punctuati
             "match_text": "昨天晚上我看了",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (
+            "## Notes\n- saved at viking://resources/a\n- other",
+            "## Notes\n- [saved at](viking://resources/a)\n- other",
+        ),
+        ("# Title viking://resources/a", "# [Title](viking://resources/a)"),
+        (
+            "> quote viking://resources/a",
+            "> [quote](viking://resources/a)",
+        ),
+        (
+            "| col | viking://resources/a |",
+            "| col | viking://resources/a |",
+        ),
+        (
+            "| A \\| B viking://resources/a |",
+            "| [A \\| B](viking://resources/a) |",
+        ),
+        (
+            "fallback A | use B viking://resources/a",
+            "[fallback A | use B](viking://resources/a)",
+        ),
+        (
+            "- handoff viking://resources/a（temp_upload 通道）",
+            "- [handoff](viking://resources/a)（temp_upload 通道）",
+        ),
+        (
+            "> 2. [x] handoff viking://resources/a",
+            "> 2. [x] [handoff](viking://resources/a)",
+        ),
+        (
+            "#5 release viking://resources/a",
+            "[#5 release](viking://resources/a)",
+        ),
+        (
+            "-42 release viking://resources/a",
+            "[-42 release](viking://resources/a)",
+        ),
+        (
+            "1. viking://resources/a",
+            "1. viking://resources/a",
+        ),
+        (
+            "- [ ] viking://resources/a",
+            "- [ ] viking://resources/a",
+        ),
+    ],
+)
+def test_sync_memory_resource_refs_preserves_markdown_line_structure(content, expected):
+    mf = MemoryFile(content=content, extra_fields={})
+
+    assert sync_memory_resource_refs(mf, source="session.commit")
+    assert mf.content == expected
+    assert mf.extra_fields["resource_refs"][0]["resource_uri"] == "viking://resources/a"
 
 
 def test_unlink_resource_references_preserves_visible_markdown_text():

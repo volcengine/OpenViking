@@ -154,7 +154,7 @@ def _truncate_message_group(
 
     Durable messages are never mutated. Text/context bodies and tool outputs are
     the only fields shortened. Tool IDs, names and result pairing remain intact;
-    oversized tool inputs are replaced only when their fixed serialized cost
+    oversized tool inputs are omitted only when their fixed serialized cost
     would otherwise make the whole atomic Step impossible to return.
     """
     if token_budget <= 0 or not messages:
@@ -186,7 +186,7 @@ def _truncate_message_group(
             for part in message.parts:
                 if not isinstance(part, ToolPart) or not part.tool_input:
                     continue
-                part.tool_input = {}
+                part.tool_input = None
                 truncated_ids.add(message.id)
                 if _message_tokens(cloned) <= token_budget:
                     break

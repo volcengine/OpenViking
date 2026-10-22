@@ -124,6 +124,10 @@ export function RetrievalControls({
         ))}
       </div>
 
+      <p className="text-xs leading-5 text-muted-foreground" aria-live="polite">
+        {t(`modeDescriptions.${mode}`)}
+      </p>
+
       <div className="flex flex-wrap items-center gap-2">
         <Select
           value={String(options.resultCount)}
@@ -286,6 +290,7 @@ function SemanticAdvancedControls({
               <CheckPill
                 checked={options.levels.includes(level)}
                 key={level}
+                // eslint-disable-next-line studio-i18n/no-literal-message -- L plus a number is the retrieval level identifier.
                 label={`L${level}`}
                 onCheckedChange={(checked) => toggleLevel(level, checked)}
               />

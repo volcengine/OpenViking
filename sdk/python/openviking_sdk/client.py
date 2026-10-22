@@ -136,9 +136,11 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         raise
 
 
-def _normalize_image_input(image: Any) -> Optional[str]:
+def _normalize_image_input(image: Any) -> str | list[str] | None:
     if image is None:
         return None
+    if isinstance(image, list):
+        return [_normalize_image_input(item) for item in image]
     if isinstance(image, (bytes, bytearray, memoryview)):
         return _image_to_data_uri(image)
     value = os.fspath(image) if isinstance(image, os.PathLike) else str(image)
@@ -483,12 +485,6 @@ class AsyncHTTPClient:
         retry_headers[GATEWAY_TOKEN_HEADER] = self._gateway_token
         return await self._send_http_request(method, url, retry_headers, request_kwargs)
 
-    def _wait_request_kwargs(self, *, wait: bool, timeout: Optional[float]) -> Dict[str, Any]:
-        if not wait or timeout is None:
-            return {}
-        read_timeout = max(self._timeout, timeout + 30.0)
-        return {"timeout": httpx.Timeout(self._timeout, read=read_timeout)}
-
     async def close(self) -> None:
         if self._http:
             try:
@@ -717,7 +713,6 @@ class AsyncHTTPClient:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
-        timeout: Optional[float] = None,
         options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
         option_values = dict(options or {})
@@ -744,7 +739,6 @@ class AsyncHTTPClient:
                 "to": to,
                 "parent": parent,
                 "wait": wait,
-                "timeout": timeout,
             },
             protected={"path", "temp_file_id", "source_name"},
         )
@@ -794,7 +788,6 @@ class AsyncHTTPClient:
         self,
         data: Any,
         wait: bool = False,
-        timeout: Optional[float] = None,
         options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
         option_values = dict(options or {})
@@ -803,7 +796,7 @@ class AsyncHTTPClient:
         request_data = self._build_options_payload(
             option_values,
             AddSkillOptions,
-            fixed={"wait": wait, "timeout": timeout},
+            fixed={"wait": wait},
             protected={"data", "temp_file_id"},
         )
         if isinstance(data, str):
@@ -905,7 +898,6 @@ class AsyncHTTPClient:
         skill_name: str,
         data: Any,
         wait: bool = False,
-        timeout: Optional[float] = None,
         options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
         option_values = dict(options or {})
@@ -914,7 +906,7 @@ class AsyncHTTPClient:
         request_data = self._build_options_payload(
             option_values,
             UpdateSkillOptions,
-            fixed={"wait": wait, "timeout": timeout},
+            fixed={"wait": wait},
             protected={"data", "temp_file_id"},
         )
         if isinstance(data, str):
@@ -1041,13 +1033,11 @@ class AsyncHTTPClient:
             )
         return self._handle_response(response)
 
-    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
-        http_timeout = timeout if timeout else 600.0
+    async def wait_processed(self) -> Dict[str, Any]:
         response = await self._request(
             "POST",
             "/api/v1/system/wait",
-            json={"timeout": timeout},
-            timeout=http_timeout,
+            json={},
         )
         return self._handle_response(response)
 
@@ -1269,11 +1259,8 @@ class AsyncHTTPClient:
         uri: str,
         recursive: bool = False,
         wait: bool = False,
-        timeout: Optional[float] = None,
     ) -> None:
         params = {"uri": VikingURI.normalize(uri), "recursive": recursive, "wait": wait}
-        if timeout is not None:
-            params["timeout"] = timeout
         response = await self._request("DELETE", "/api/v1/fs", params=params)
         self._handle_response(response)
 
@@ -1340,7 +1327,6 @@ class AsyncHTTPClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
-        timeout: Optional[float] = None,
         options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
         payload = self._build_options_payload(
@@ -1351,7 +1337,6 @@ class AsyncHTTPClient:
                 "content": content,
                 "mode": mode,
                 "wait": wait,
-                "timeout": timeout,
             },
         )
         response = await self._request(
@@ -1366,7 +1351,6 @@ class AsyncHTTPClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
-        timeout: Optional[float] = None,
         options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         """Apply multiple content writes, then refresh semantics once."""
@@ -1382,14 +1366,12 @@ class AsyncHTTPClient:
                 "root_uri": VikingURI.normalize(root_uri),
                 "operations": normalized_operations,
                 "wait": wait,
-                "timeout": timeout,
             },
         )
         response = await self._request(
             "POST",
             "/api/v1/content/batch-write",
             json=payload,
-            **self._wait_request_kwargs(wait=wait, timeout=timeout),
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1551,6 +1533,7 @@ class AsyncHTTPClient:
         exclude_uri: Optional[str] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
+        level_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         request_json = {
             "uri": VikingURI.normalize(uri),
@@ -1558,6 +1541,8 @@ class AsyncHTTPClient:
             "case_insensitive": case_insensitive,
             "node_limit": node_limit,
         }
+        if level_limit is not None:
+            request_json["level_limit"] = level_limit
         if exclude_uri is not None:
             request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
         if tags is not None:
@@ -1962,6 +1947,14 @@ class AsyncHTTPClient:
         response = await self._request("GET", "/api/v1/admin/accounts", params=params)
         return self._handle_response(response)
 
+    async def admin_get_account(self, account_id: str) -> Dict[str, Any]:
+        """Return one account's credential-free metadata.
+
+        Raises NotFoundError when the account does not exist.
+        """
+        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}")
+        return self._handle_response(response)
+
     async def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         response = await self._request("DELETE", f"/api/v1/admin/accounts/{account_id}")
         return self._handle_response(response)
@@ -2007,6 +2000,18 @@ class AsyncHTTPClient:
             params["query"] = query
         response = await self._request(
             "GET", f"/api/v1/admin/accounts/{account_id}/users", params=params
+        )
+        return self._handle_response(response)
+
+    async def admin_get_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        """Return one user's credential-free membership info (user_id, role).
+
+        Raises NotFoundError when the user does not exist. Never returns
+        api_key or key_prefix.
+        """
+        response = await self._request(
+            "GET",
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}",
         )
         return self._handle_response(response)
 
@@ -2307,6 +2312,22 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
+    async def git_diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs under directories; a null base means an empty tree."""
+        params: Dict[str, Any] = {"paths": paths, "to": to_ref, "offset": offset, "limit": limit}
+        if from_ref is not None:
+            params["from"] = from_ref
+        response = await self._request("GET", "/api/v1/snapshot/diff-paths", params=params)
+        return self._handle_response(response)
+
     async def git_get_ignore(self) -> str:
         """Return the account ``.ovgitignore`` content (empty string if absent)."""
         response = await self._request("GET", "/api/v1/snapshot/ignore")
@@ -2365,7 +2386,6 @@ class SyncHTTPClient:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
-        timeout: Optional[float] = None,
         options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
@@ -2374,7 +2394,6 @@ class SyncHTTPClient:
                 to=to,
                 parent=parent,
                 wait=wait,
-                timeout=timeout,
                 options=options,
             )
         )
@@ -2391,12 +2410,9 @@ class SyncHTTPClient:
         self,
         data: Any,
         wait: bool = False,
-        timeout: Optional[float] = None,
         options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.add_skill(data, wait=wait, timeout=timeout, options=options)
-        )
+        return run_async(self._async_client.add_skill(data, wait=wait, options=options))
 
     def list_skills(
         self,
@@ -2472,13 +2488,10 @@ class SyncHTTPClient:
         skill_name: str,
         data: Any,
         wait: bool = False,
-        timeout: Optional[float] = None,
         options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.update_skill(
-                skill_name, data, wait=wait, timeout=timeout, options=options
-            )
+            self._async_client.update_skill(skill_name, data, wait=wait, options=options)
         )
 
     def delete_skill(
@@ -2539,8 +2552,8 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.trigger_watch(task_id, to_uri=to_uri))
 
-    def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return run_async(self._async_client.wait_processed(timeout))
+    def wait_processed(self) -> Dict[str, Any]:
+        return run_async(self._async_client.wait_processed())
 
     def ls(
         self,
@@ -2714,9 +2727,8 @@ class SyncHTTPClient:
         uri: str,
         recursive: bool = False,
         wait: bool = False,
-        timeout: Optional[float] = None,
     ) -> None:
-        run_async(self._async_client.rm(uri, recursive=recursive, wait=wait, timeout=timeout))
+        run_async(self._async_client.rm(uri, recursive=recursive, wait=wait))
 
     def mv(self, from_uri: str, to_uri: str) -> None:
         run_async(self._async_client.mv(from_uri, to_uri))
@@ -2742,13 +2754,10 @@ class SyncHTTPClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
-        timeout: Optional[float] = None,
         options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.write(
-                uri, content, mode=mode, wait=wait, timeout=timeout, options=options
-            )
+            self._async_client.write(uri, content, mode=mode, wait=wait, options=options)
         )
 
     def batch_write(
@@ -2756,13 +2765,10 @@ class SyncHTTPClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
-        timeout: Optional[float] = None,
         options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.batch_write(
-                root_uri, operations, wait=wait, timeout=timeout, options=options
-            )
+            self._async_client.batch_write(root_uri, operations, wait=wait, options=options)
         )
 
     def set_tags(
@@ -2865,6 +2871,7 @@ class SyncHTTPClient:
         exclude_uri: Optional[str] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
+        level_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.grep(
@@ -2875,6 +2882,7 @@ class SyncHTTPClient:
                 exclude_uri=exclude_uri,
                 tags=tags,
                 include_tags=include_tags,
+                level_limit=level_limit,
             )
         )
 
@@ -3085,6 +3093,9 @@ class SyncHTTPClient:
     def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_delete_account(account_id))
 
+    def admin_get_account(self, account_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_account(account_id))
+
     def admin_register_user(
         self,
         account_id: str,
@@ -3120,6 +3131,9 @@ class SyncHTTPClient:
 
     def admin_remove_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_remove_user(account_id, user_id))
+
+    def admin_get_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_user(account_id, user_id))
 
     def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_set_role(account_id, user_id, role))
@@ -3309,6 +3323,20 @@ class AsyncHTTPSnapshotNamespace:
             to_ref=to_ref,
         )
 
+    async def diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs between snapshots under the supplied directories."""
+        return await self._client.git_diff_paths(
+            paths, from_ref=from_ref, to_ref=to_ref, offset=offset, limit=limit
+        )
+
     async def get_gitignore(self) -> str:
         return await self._client.git_get_ignore()
 
@@ -3396,6 +3424,22 @@ class SyncHTTPSnapshotNamespace:
     ) -> Dict[str, Any]:
         """Compare one file between two snapshot refs."""
         return run_async(self._ns().diff(path, from_ref=from_ref, to_ref=to_ref))
+
+    def diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs between snapshots under the supplied directories."""
+        return run_async(
+            self._ns().diff_paths(
+                paths, from_ref=from_ref, to_ref=to_ref, offset=offset, limit=limit
+            )
+        )
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

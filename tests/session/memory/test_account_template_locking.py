@@ -30,8 +30,9 @@ class LockingAGFS:
         self.leases = {}
         self.timeouts = []
 
-    def pathlock_acquire_exact(self, ctx, path, timeout_secs=0, owner_lease_ref=None):
-        return self.pathlock_acquire_exact_batch(ctx, [path], timeout_secs, owner_lease_ref)
+    async def pathlock_acquire_batch_async(self, ctx, requests, *args):
+        paths = [request["path"] for request in requests]
+        return await asyncio.to_thread(self.pathlock_acquire_exact_batch, ctx, paths, *args)
 
     def pathlock_acquire_exact_batch(self, ctx, paths, timeout_secs=0, owner_lease_ref=None):
         self.timeouts.append(timeout_secs)

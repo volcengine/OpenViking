@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Iterable, Optional
 
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.internal_names import MULTIWRITE_PATH_LOCK_FILE
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils.logger import get_logger
 
@@ -84,4 +85,9 @@ class SemanticLockScope:
     async def close(self) -> None:
         """Release the owned lock lease if held."""
         if self.lock is not None and self._owned:
-            await get_viking_fs()._async_agfs.pathlock_release(self.lock)
+            guard = PathLockGuard(get_viking_fs()._async_agfs, self.lock)
+            try:
+                await guard.close()
+            finally:
+                self.lock = guard.lease
+                self._owned = self.lock is not None

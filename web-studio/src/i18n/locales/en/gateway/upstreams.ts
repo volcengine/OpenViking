@@ -1,4 +1,40 @@
 const upstreams = {
+  import: {
+    action: 'Import from OpenViking',
+    useSettings: "Use OpenViking's model settings",
+    hint: "Uses the server's VLM settings",
+    running: 'Importing…',
+    summary_one: 'Imported or updated {{count}} upstream.',
+    summary_other: 'Imported or updated {{count}} upstreams.',
+    nothing: "OpenViking's model settings have nothing to import.",
+    needsConfirmation:
+      'These Coding Plan upstreams stay blocked until you confirm the plan allows use through the gateway:',
+    skipped_one: '{{count}} credential was not imported:',
+    skipped_other: '{{count}} credentials were not imported:',
+    confirm: 'Review',
+    dismiss: 'Dismiss',
+    repeat:
+      "Importing again updates addresses and credentials from OpenViking's settings without creating duplicates. Your changes to the enabled state, priority and models are kept.",
+    reasons: {
+      invalid_configuration:
+        'The model configuration is invalid. Check the server settings and import again.',
+      openai_codex:
+        'Codex OAuth credentials refresh periodically and cannot be used long term by the gateway. Add an upstream manually.',
+      litellm_no_api_base:
+        'This LiteLLM credential has no api_base. Add api_base to the server configuration and import again.',
+      litellm_unsupported_route:
+        "This LiteLLM route doesn't speak an OpenAI-compatible protocol, so the gateway can't forward to it. Add an upstream manually.",
+      unknown:
+        'This credential could not be imported. Check the server model settings.',
+    },
+  },
+  readOnly: {
+    empty: 'Waiting for your gateway admin to add an upstream.',
+    managedKey: 'Your gateway admin keeps the API key.',
+    clientKey: 'Each client sends its own API key.',
+    codingAllowed: 'Coding Plan, allowed by your gateway admin',
+    codingBlocked: 'Coding Plan, requests blocked',
+  },
   description:
     'Model providers the gateway forwards requests to. Each upstream speaks one protocol; requests are never converted.',
   add: 'Add upstream',
@@ -42,36 +78,69 @@ const upstreams = {
   },
   test: {
     action: 'Test',
-    connection: 'Test connection',
+    connection: 'Test',
     running: 'Testing…',
-    hint: 'Asks the provider for its model list with the stored key and headers. This checks the address and the key, not the models or chat requests.',
+    hint: 'Checks the upstream connection, then lets you test a model.',
     savedOnly: 'Tests the saved settings. Save first to test your changes.',
     passthrough:
       'Each client sends its own key, so there is no stored key to test with.',
     noKey: 'Add an API key first.',
+    codingPlan:
+      'This Coding Plan has not been approved for model requests through the gateway.',
     result: {
-      ok: 'Reachable · {{status}}',
+      connected: 'Connected · {{status}}',
+      connectionUnverified: 'Connected · {{status}}',
+      ok: 'Model works · {{status}}',
       failed: 'Failed · {{status}}',
       unreachable: 'Unreachable',
       error: "Couldn't test",
     },
     explain: {
-      ok: 'The provider accepted the key and returned its model list.',
+      connected: 'The provider accepted the key and returned its model list.',
+      connectionUnverified:
+        'The address is reachable, but the provider does not offer a model list, so the key is not verified. You can still test a model.',
+      ok: 'The selected model generated a reply.',
       auth: 'The provider rejected the API key or one of the headers.',
-      notFound:
-        "There is no model list at this address. Check the base URL; if the provider doesn't offer a model list, real requests may still work.",
+      rateLimited:
+        'The provider rate limited the request, so model generation did not complete.',
+      requestRejected:
+        'The provider rejected the generation request (HTTP {{status}}). Check the model name, protocol and complete endpoint URL.',
+      invalidResponse:
+        'The provider returned a success status, but its response does not match the selected protocol.',
       status: 'The provider answered with HTTP {{status}}.',
       unreachable:
-        "The gateway couldn't connect within 10 seconds. Check the base URL and the network between the gateway and the provider.",
+        "The gateway couldn't connect or the request timed out. Check the base URL and the network between the gateway and the provider.",
+    },
+    dialog: {
+      title: 'Test “{{name}}”',
+      description:
+        'Checks the saved connection first, then sends one small non-streaming request to test the selected model.',
+      connection: 'Upstream connection',
+      checkingConnection: 'Checking connection…',
+      exactEndpoint:
+        'An exact endpoint has no model list to check. Test a model directly.',
+      model: 'Model',
+      modelPlaceholder: 'Enter a provider model name',
+      configuredModel:
+        'Choose a configured model or enter another provider model name.',
+      unconfiguredModel:
+        'This upstream allows any model. Enter a model name supported by the provider.',
+      response: 'Upstream response (JSON)',
+      run: 'Run test',
     },
   },
   delete: {
+    disable: 'Disable',
+    disableHint:
+      'You can disable it instead; those keys stop reaching it right away.',
+    inUse_one: '{{count}} key still uses this upstream.',
+    inUse_other: '{{count}} keys still use this upstream.',
     action: 'Delete',
     blocked_one: 'Used by {{count}} key — revoke it first',
     blocked_other: 'Used by {{count}} keys — revoke them first',
     title: 'Delete “{{name}}”?',
     description:
-      'The upstream is deleted together with its stored API key and headers. No gateway key uses it, so no client is affected.',
+      "The upstream is deleted together with its stored API key and headers. It can't be deleted while keys still use it.",
     confirm: 'Delete upstream',
   },
   toast: {
@@ -91,7 +160,7 @@ const upstreams = {
       description:
         'It may have been deleted. Go back to the list to see the current upstreams.',
     },
-    missing: 'Still needed: {{fields}}',
+    missing: 'Still to fill in or fix: {{fields}}',
     separator: ', ',
     create: 'Add upstream',
   },
@@ -138,17 +207,35 @@ const upstreams = {
       hints: {
         deepseek:
           'With tools present, DeepSeek needs the reasoning of every earlier reply. The gateway restores what clients drop, so OpenViking tools work; if you turn that off below, they are only offered when a request turns thinking off.',
-        ark: "Enter the Ark address without a path, such as https://ark.cn-beijing.volces.com. The gateway adds /api/v3 or /api/compatible/v1 for each protocol and keeps each conversation's prompt_cache_key stable so the cache keeps hitting.",
+        ark: 'For Chat and Responses use https://ark.cn-beijing.volces.com/api/v3; for Anthropic use https://ark.cn-beijing.volces.com/api/compatible. Coding Plan paths are /api/coding/v3 and /api/coding respectively. The gateway keeps each conversation’s prompt_cache_key stable for cache hits.',
         byteplus:
-          "Enter the ModelArk address without a path, such as https://ark.ap-southeast.bytepluses.com. The gateway adds /api/v3 or /api/compatible/v1 for each protocol and keeps each conversation's prompt_cache_key stable so the cache keeps hitting.",
+          'For Chat and Responses use https://ark.ap-southeast.bytepluses.com/api/v3; for Anthropic use https://ark.ap-southeast.bytepluses.com/api/compatible. Coding Plan paths are /api/coding/v3 and /api/coding respectively. The gateway keeps each conversation’s prompt_cache_key stable for cache hits.',
       },
     },
     baseUrl: {
       label: 'Base URL',
       description:
-        "The provider's API address, filled in when you choose a provider. It works with or without a trailing /v1.",
+        "Use base_url from the provider's SDK documentation. The gateway appends /chat/completions, /responses or /v1/messages. Add separate upstreams when a provider uses different base URLs for different protocols. The URL may include a query; write the key as {api_key}.",
       preview: 'Requests go to',
+      missingPath:
+        'This provider needs a path in base_url. A domain alone sends requests to the wrong address.',
+      anthropicVersion:
+        'Anthropic base_url must omit /v1. The gateway appends /v1/messages.',
+      removeVersion: 'Remove /v1',
+      correctPath: 'Use {{url}}',
       useDefault: 'Use default',
+    },
+    appendEndpointPath: {
+      label: 'Append protocol endpoint path',
+      description:
+        'Adds the path for the selected protocol to the Base URL. Turn this off when the Base URL is already the complete request endpoint.',
+    },
+    keyHeader: {
+      label: 'Send the key as',
+      authorization: 'Authorization: Bearer',
+      apiKey: 'api-key header (Azure OpenAI)',
+      xApiKey: 'x-api-key header',
+      inUrl: 'In the URL ({api_key}); no auth header is sent',
     },
     authMode: {
       label: 'Who provides the API key',
@@ -167,6 +254,8 @@ const upstreams = {
       placeholder: 'Paste the provider API key',
       stored: 'Key stored',
       description: 'Stored encrypted and never shown again.',
+      addressChanged:
+        'The address has changed. Enter the API key again. The stored API key will not be sent to the new address.',
       storedDescription:
         'Stored encrypted. Leave blank to keep it, or paste a new key to replace it.',
     },
@@ -177,16 +266,18 @@ const upstreams = {
       name: 'Header name',
       value: 'Value',
       add: 'Add header',
+      addressChanged:
+        "The address changed, so enter the header values again. Values stored for the old address aren't sent to the new one.",
     },
     codingPlan: {
       label: 'This key is a Coding Plan or subscription key',
       description:
         "Subscription keys are usually licensed for the provider's own tools only.",
       warning:
-        'While this is checked, the gateway rejects every request to this upstream. Use a model API key instead, or allow it if your plan permits use from other clients.',
-      allow: 'Allow it anyway',
+        'By default the gateway rejects every request to this upstream. Use a model API key instead, or, if your plan permits use outside the provider’s tools, turn on the option below.',
+      allow: 'Allow this plan through the gateway',
       allowDescription:
-        'Requests are forwarded with this key. Make sure your plan allows it.',
+        'Some Coding Plans only authorize use in the provider’s own tools. Check that your plan permits this before enabling it, or the provider may restrict your account.',
     },
     models: {
       label: 'Models',

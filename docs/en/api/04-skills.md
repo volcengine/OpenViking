@@ -189,7 +189,6 @@ This endpoint stores Skill instructions and supporting files, then generates sum
 | data | Any | No | - | Inline SKILL.md, structured/MCP data, or Git URL; choose this or `temp_file_id` |
 | temp_file_id | str | No | - | Temporary upload file ID (from `temp_upload`); choose this or `data` |
 | wait | bool | No | False | Wait for skill processing to complete |
-| timeout | float | No | None | Timeout in seconds, only effective when `wait=true` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 | target_uri | str | No | Target resolution order | Skills root, such as `viking://~/skills` or `viking://agent/skills` |
 | skills | List[str] | No | `[]` | Select directory names from a directory/Git collection; empty or `["*"]` selects all |
@@ -228,7 +227,7 @@ Local `.json` files are not automatically decoded into structured Skills. Parse 
 
 Single-Skill imports return a `task_id` by default. Query the [Task API](17-tasks.md) and search after the task reaches `completed`. With `wait=true`, the call waits for queue processing and returns `queue_status`. Multiple imports return an `installed` array with independent task information per result; the batch is not atomic. `list_only=true` returns source `skills` and `total` without creating import tasks.
 
-HTTP fields and SDK parameters do not have identical names or nesting. Python `add_skill(data, wait=False, timeout=None, options=None)` / `update_skill(skill_name, data, ...)` take `target_uri` and `telemetry` inside `options`. Put fields such as `skills`, `list_only`, `source_metadata` (add), and `from_source` (update) in `options["extra"]`. TypeScript uses `targetUri` and `extra`; Go uses `TargetURI` and `Extra`. TypeScript local path uploads require Node.js.
+HTTP fields and SDK parameters do not have identical names or nesting. Python `add_skill(data, wait=False, options=None)` / `update_skill(skill_name, data, ...)` take `target_uri` and `telemetry` inside `options`. Put fields such as `skills`, `list_only`, `source_metadata` (add), and `from_source` (update) in `options["extra"]`. TypeScript uses `targetUri` and `extra`; Go uses `TargetURI` and `Extra`. TypeScript local path uploads require Node.js.
 
 ```python
 # Preview a local collection without writing to OpenViking
@@ -488,7 +487,7 @@ If skill parsing or processing fails synchronously, raw HTTP returns the standar
 
 The Python HTTP SDK raises the corresponding mapped exception for this response.
 
-Error codes depend on the failure stage: invalid names/targets use `INVALID_ARGUMENT` / `INVALID_URI`, missing Skills use `NOT_FOUND`, oversized integrity manifests use `RESOURCE_EXHAUSTED`, and wait timeouts use `DEADLINE_EXCEEDED`. Success with `wait=false` only confirms the synchronous import stage; inspect task status for background failures. Standard responses may include optional `telemetry` / `profile`, but have no generic `time` field. SDKs normally return the `result` object directly.
+Error codes depend on the failure stage: invalid names/targets use `INVALID_ARGUMENT` / `INVALID_URI`, missing Skills use `NOT_FOUND`, oversized integrity manifests use `RESOURCE_EXHAUSTED`. Success with `wait=false` only confirms the synchronous import stage; inspect task status for background failures. Standard responses may include optional `telemetry` / `profile`, but have no generic `time` field. SDKs normally return the `result` object directly.
 
 ## Skill Management Operations
 
@@ -704,12 +703,12 @@ Missing names/descriptions and invalid YAML produce errors. Directory/name misma
 | `from_source` | `false` | Refresh from recorded Git source; cannot be combined with data/temp_file_id |
 | `target_uri` | Unspecified | Skills root to try first; see read resolution fallback |
 | `source_metadata` | Generated automatically | Updated source tracking |
-| `wait` / `timeout` | `false` / `null` | Wait for background processing and timeout in seconds |
+| `wait` | `false` | Wait for background processing |
 | `telemetry` | `false` | Telemetry configuration |
 
 Supply new content/an upload, or set `from_source=true`. The new name must match `skill_name` in the URL; update is neither rename nor a partial patch. The server parses and checks the new package before backing up and replacing the old one, and attempts restoration on synchronous failure. Include all auxiliary files that should remain in the replacement package.
 
-Background processing starts after the update's files, privacy configuration, and task setup are ready. When an update needs restoration, including a `wait=true` timeout, it cancels that update's summary and indexing work, waits for started writes to exit, and restores the original files, index, and privacy configuration. Restoration failures are reported. The timeout response may arrive after `timeout` while cancellation settles; it does not wait for the entire package to finish processing. Background failures after a successful `wait=false` response do not trigger restoration. A timeout when adding a new Skill still only ends the wait.
+Background processing starts after the update's files, privacy configuration, and task setup are ready. When an update fails or is cancelled while waiting, it cancels that update's summary and indexing work, waits for started writes to exit, and restores the original files, index, and privacy configuration. Restoration failures are reported. Background failures after a successful `wait=false` response do not trigger restoration.
 
 **Python SDK**
 

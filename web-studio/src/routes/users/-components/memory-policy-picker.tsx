@@ -238,6 +238,7 @@ export function MemoryDirectoryPreview({
           <FolderIcon className="mt-0.5 size-4 shrink-0" />
         )}
         <span>
+          {/* eslint-disable-next-line studio-i18n/no-literal-message -- Display the actual filename and extension. */}
           {['profile', 'identity', 'soul'].includes(type) ? `${type}.md` : type}
           <span className="ml-2 text-xs text-muted-foreground">
             {t(`memoryPolicy.directories.${type}`, { defaultValue: '' })}

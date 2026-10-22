@@ -23,6 +23,7 @@ const activity = {
       shortcut: '⌘ N to create a new session',
     },
     chat: {
+      emptyReadDescription: 'This session has no messages yet.',
       historyLoadFailed: 'Could not load conversation history: {{error}}',
       sendFailed: 'Could not send message: {{error}}',
       copy: 'Copy',
@@ -30,6 +31,7 @@ const activity = {
       placeholder: 'Type a message...',
       emptyState: 'Select or create a session to start chatting.',
       thinking: 'Thinking...',
+      generating: 'Generating',
       reasoning: 'Reasoning',
       iteration: 'Round {{count}}',
       toolCall: 'Tool call',
@@ -241,7 +243,7 @@ const activity = {
         'Opened the add-resource dialog. After submitting, the left tree refreshes; use /ls or /search to keep locating new content.',
       addResourceTitle: 'Add resource',
       sessionUsage:
-        'Usage: /session [current|list|create|switch|get|context|messages|archive|commit|extract|message|tool-results|tool-result|tool-search|delete] ...',
+        'Usage: /session [current|list|create|switch|get|context|messages|archive|commit|message|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: 'Usage: /session delete <session_id>',
       sessionMissing:
         'No active session. Open the Agent panel to create one, or pass a session_id.',
@@ -297,7 +299,7 @@ const activity = {
         sessionAction: {
           name: 'subcommand',
           description:
-            'current, list, create, switch, get, context, messages, archive, commit, extract, message, tool-results, tool-result, tool-search, delete.',
+            'current, list, create, switch, get, context, messages, archive, commit, message, tool-results, tool-result, tool-search, delete.',
         },
         sessionId: {
           name: 'session_id',
@@ -452,10 +454,6 @@ const activity = {
           commit: {
             code: '/session commit [session_id] --keep-recent 10',
             description: 'Archive and trigger memory extraction',
-          },
-          extract: {
-            code: '/session extract [session_id]',
-            description: 'Extract memories from a session',
           },
           message: {
             code: '/session message [session_id] user hello',

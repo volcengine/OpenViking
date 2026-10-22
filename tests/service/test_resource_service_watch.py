@@ -16,6 +16,7 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.service.task_domain import WorkSummary
 from openviking.service.task_tracker import TaskStatus
 from openviking.service.task_work_index import TASK_WORK_ID_FIELD
 from openviking.storage.content_write import ContentWriteCoordinator
@@ -284,14 +285,7 @@ class TestWatchTaskCreation:
         async def fake_set_tags(self, **kwargs):
             raise AssertionError("add_resource(tags=...) must write tags during ingest")
 
-        class FakeQueueManager:
-            async def wait_complete(self, timeout=None):
-                return {}
-
         monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
-        monkeypatch.setattr(
-            resource_service_module, "get_queue_manager", lambda: FakeQueueManager()
-        )
 
         result = await resource_service.add_resource(
             path="/test/path",
@@ -334,14 +328,7 @@ class TestWatchTaskCreation:
         async def fake_set_tags(self, **kwargs):
             return {"tags_updated": True}
 
-        class FakeQueueManager:
-            async def wait_complete(self, timeout=None):
-                return {}
-
         monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
-        monkeypatch.setattr(
-            resource_service_module, "get_queue_manager", lambda: FakeQueueManager()
-        )
 
         await resource_service.add_resource(
             path="/test/path",
@@ -404,9 +391,7 @@ class TestWatchTaskCreation:
         )
 
     def test_watch_persists_clear_without_tags(self, resource_service: ResourceService):
-        assert resource_service._watch_processor_kwargs({}, None, "clear") == {
-            "tag_mode": "clear"
-        }
+        assert resource_service._watch_processor_kwargs({}, None, "clear") == {"tag_mode": "clear"}
 
     def test_add_resource_message_round_trip_preserves_clear_without_tags(self):
         message = AddResourceMsg(
@@ -693,9 +678,7 @@ class TestAddResourceArgs:
             return resolver(
                 SimpleNamespace(
                     account=SimpleNamespace(feishu=None),
-                    cluster=SimpleNamespace(
-                        feishu=FeishuConfig(domain="https://open.feishu.cn")
-                    ),
+                    cluster=SimpleNamespace(feishu=FeishuConfig(domain="https://open.feishu.cn")),
                 )
             )
 
@@ -713,9 +696,7 @@ class TestAddResourceArgs:
             seen["config_domain"] = feishu_config.domain
             return SimpleNamespace(source_name=None, source_format="file")
 
-        resource_service._runtime_config_manager = SimpleNamespace(
-            resolve_account=resolve_account
-        )
+        resource_service._runtime_config_manager = SimpleNamespace(resolve_account=resolve_account)
         monkeypatch.setattr(
             "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
             preflight,
@@ -769,9 +750,7 @@ class TestAddResourceArgs:
                 )
             )
 
-        resource_service._runtime_config_manager = SimpleNamespace(
-            resolve_account=resolve_account
-        )
+        resource_service._runtime_config_manager = SimpleNamespace(resolve_account=resolve_account)
         disable_task_tracker(monkeypatch)
         to_uri = "viking://resources/feishu-account-watch"
         resource_service._plan_source_job_target = AsyncMock(
@@ -1043,11 +1022,15 @@ async def test_add_resource_processor_records_paused_watch_result(
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
-        wait_for_descendants=AsyncMock(),
+        wait_for_task_work=AsyncMock(),
+        get_work_summary=AsyncMock(return_value=WorkSummary()),
+        format_queue_status=Mock(return_value={}),
+        format_queue_timing=Mock(return_value={}),
+        get=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.CANCELLING)),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",

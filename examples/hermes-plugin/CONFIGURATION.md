@@ -101,13 +101,80 @@ home address requires OpenViking 0.4.16 or newer for user and admin keys, or
 | `OPENVIKING_ACCOUNT` | `default` | Tenant account for local/trusted mode |
 | `OPENVIKING_USER` | `default` | Tenant user for local/trusted mode |
 | `OPENVIKING_AGENT` | (none) | Optional peer ID for separate assistant context |
+| `OPENVIKING_EXTRA_HEADERS` | (none) | JSON object of extra HTTP headers (e.g. gateway service tokens); overrides `extra_headers` from the linked `ovcli.conf` |
 
 User and admin API keys let OpenViking derive account/user identity from the key.
-In local or trusted deployments without an API key,
+In trusted deployments, set `OPENVIKING_API_KEY` to the server's root API key;
 Hermes sends `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` as identity headers.
+Only local dev mode allows access without an API key.
 Hermes also sends `User-Agent: openviking-memory-hermes/<version>` on
 OpenViking requests. This header contains the Hermes version. It does not
 contain a user identifier or require an extra request.
+
+### Extra HTTP headers (authenticating gateways)
+
+A server published behind an authenticating gateway (Cloudflare Access,
+oauth2-proxy, an mTLS-terminating proxy) needs a client header on every request,
+including the startup health check.
+
+`extra_headers` is the documented client contract: it sits in the linked
+`ovcli.conf` next to `url`/`api_key` and is what the CLI and the Python/Rust/Go
+clients read. Hermes consumes the same key, so a deployment that already carries
+it needs nothing else:
+
+```json
+{
+  "url": "https://ov.example.com",
+  "api_key": "<user key>",
+  "extra_headers": {
+    "CF-Access-Client-Id": "<service token id>",
+    "CF-Access-Client-Secret": "<service token secret>"
+  }
+}
+```
+
+`OPENVIKING_EXTRA_HEADERS` (a JSON object, read from the profile `.env`) is an
+explicit override for deployment secrets that should not live in a file. It wins
+when both are set, so the resolution order is: profile `OPENVIKING_EXTRA_HEADERS`
+→ linked `ovcli.conf` `extra_headers` → none.
+
+Values must be scalars. `X-OpenViking-*` names are dropped, so an operator-supplied
+map can never assert tenant identity, and the plugin's own headers (authentication,
+tenant, actor) take precedence over the map. The client snapshots the map when it
+is built, so the headers also cover the startup `/health` probe.
+
+The identity probe stays anonymous first, so no credential is ever sent to an unknown
+host. Gateways that answer that anonymous request by *redirecting* to their own login
+page are handled like `401`/`403`, but only on a connection that carries gateway headers
+(`extra_headers` / `OPENVIKING_EXTRA_HEADERS`): those headers are what declare that an
+authenticating gateway sits in front of the endpoint. Cloudflare Access returns `302` with
+`Location: https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<host>`, and such a
+connection's probe is retried once with **only those gateway headers** — no API key, no
+peer identity, since a gateway never asks for them, and no API key is required for that
+retry either, because none is sent. If the gateway then lets the probe through to a server
+that asks for credentials itself, that `401`/`403` is answered by the ordinary key retry
+(bounded: two retries at most). Without that retry a protected server looks "reachable but
+not OpenViking", the client is dropped, and memory stays unavailable even though every
+authenticated request would have worked. A redirect that survives the gateway retry reports
+the gateway and points at `extra_headers` instead of "not valid OpenViking", and the login
+URL is never followed.
+
+A `401`/`403` is the endpoint asking for credentials, and the status alone does not say
+which kind. An OpenViking server wants the API key; a gateway that answers `401`/`403`
+instead of redirecting (oauth2-proxy, many WAFs) wants its own headers. So the probe tries
+the key when one is configured, and the gateway headers when they are configured. A
+gateway-only deployment has no key to try, so it gets the gateway retry — gating that retry
+on a key it never sends is what kept such a deployment from starting at all. With both
+configured the key is tried first, as before, and the gateway headers are not retried a
+second time.
+
+A redirect on a connection with *no* gateway headers is not retried: a `3xx` from an
+endpoint that has not been shown to be OpenViking is not authorization to resend the API
+key, so it keeps failing exactly as it did before, and no credential leaves the process.
+Every probe request sets `follow_redirects=False`, so the login URL is never fetched even
+when a `Location` is present. A `3xx` answered to a retry is never read as a payload
+either — a redirect whose body happens to look like `/health` is reported as a redirect,
+not as a healthy server.
 
 ### Optional peer identity
 
@@ -230,6 +297,12 @@ OpenViking in order. The active profile records each copied entry's exact URI in
 | `replace` | Match the committed event's full previous content and target, update the same URI, and wait for semantic/vector refresh |
 | `remove` | Match the committed event's full previous content and target, delete that exact URI, and wait for semantic cleanup |
 
+Hermes v0.22 and later expose `patch` instead of `replace` in the native
+`memory` tool. After a successful patch, Hermes sends the provider a `replace`
+event containing the complete updated entry and its full previous content.
+Older Hermes releases expose `replace` directly. Both paths update the same
+mapped OpenViking URI.
+
 Replacing a mapped entry recreates its file if it was deleted directly in
 OpenViking, for example with `viking_forget`.
 
@@ -326,7 +399,8 @@ exceed it, and the server may include other context during extraction.
 When Hermes initializes the provider with `agent_context` set to `cron`, `subagent`,
 or `flush`, recall and profile reads keep working. Automatic turn uploads,
 session-end/switch commits, and native memory mirroring are skipped for that
-context. Startup recovery can still commit pending messages from earlier sessions.
+context. Startup recovery also skips commits in these contexts. Pending messages
+remain available for recovery when the next primary context starts.
 Explicit `viking_*` tools keep their normal behavior, including writes and deletes.
 Interactive sessions (and hosts that predate `agent_context`) keep the previous
 automatic write behavior.

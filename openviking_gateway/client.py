@@ -3,6 +3,7 @@
 """OpenViking HTTP adapter. No imports from the server/service implementation."""
 
 import asyncio
+import hashlib
 from urllib.parse import urlencode
 
 import aiohttp
@@ -21,6 +22,7 @@ class VikingClient:
     def __init__(self, http: aiohttp.ClientSession, base_url: str, min_version: str):
         self.http, self.base_url, self.min_version = http, base_url.rstrip("/"), min_version
         self.unavailable_reason = ""
+        self.identities = TTLCache(ttl=30, capacity=4096)
         # Every caller sees the same MCP tools; the last good list outlives failures.
         self.tools_cache, self.last_tools = TTLCache(ttl=300, capacity=1), None
 
@@ -43,18 +45,44 @@ class VikingClient:
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
             raise VikingError("openviking_unavailable") from error
 
-    async def health(self, key="", require_identity=True):
-        result = await self.request("GET", "/health", key, timeout=5)
-        try:
-            if Version(result.get("version", "0")) < Version(self.min_version):
-                raise VikingError("openviking_version_mismatch")
-        except InvalidVersion as error:
-            raise VikingError("openviking_version_mismatch") from error
-        if require_identity:
-            if result.get("role", "").lower() == "root":
-                raise VikingError("root_key_not_allowed", 403)
-            if not result.get("user_id") or not result.get("account_id"):
+    async def identify(self, credential=""):
+        """Identify a caller; only successful identities are cached, for 30 seconds."""
+
+        async def load():
+            result = await self.request("GET", "/health", credential, timeout=5)
+            if result.get("auth_mode") == "trusted":
+                raise VikingError("trusted_mode_unsupported", 403)
+            if result.get("auth_mode") == "dev":
+                result = {**result, "role": "root", "account_id": "default", "user_id": "default"}
+            if result.get("role", "").lower() not in {"root", "admin", "user"} or not all(
+                result.get(field) for field in ("account_id", "user_id")
+            ):
                 raise VikingError("openviking_identity_missing", 401)
+            # OV answered, so recall and revocation checks may resume before the next probe.
+            self.unavailable_reason = ""
+            return {**result, "role": result["role"].lower()}
+
+        return await self.identities.get(hashlib.sha256(credential.encode()).hexdigest(), load)
+
+    async def health(self, key="", require_identity=True):
+        if require_identity:
+            result = await self.identify(key)
+            if result["role"] == "root" and result.get("auth_mode") != "dev":
+                raise VikingError("root_key_not_allowed", 403)
+            try:
+                if Version(result.get("version", "0")) < Version(self.min_version):
+                    raise VikingError("openviking_version_mismatch")
+            except InvalidVersion as error:
+                raise VikingError("openviking_version_mismatch") from error
+            return result
+        try:
+            result = await self.request("GET", "/health", key, timeout=5)
+        except VikingError as error:
+            if error.status == 401 and not key:
+                return {"status": "ok", "auth_mode": "api_key", "requires_authentication": True}
+            raise
+        if result.get("auth_mode") == "trusted":
+            raise VikingError("trusted_mode_unsupported", 403)
         return result
 
     async def recall(self, key, query, policy, exclude, budget):

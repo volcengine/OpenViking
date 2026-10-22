@@ -195,6 +195,8 @@ ov task status uuid-xxx
 }
 ```
 
+完成任务结果中的 `memories_extracted` 是本次提交各类别的提取数量；`token_usage` 通常是统计更新后的 session 累计用量。如果 Phase 2 无法读到有效的 session 元数据（临时存储错误会有限重试），提取仍可完成，保留 session 的 `.meta.json` 原样并记录统计失败日志。此时 `token_usage` 保持完整结构、所有计数返回 `0`，表示统计不可用，并不代表实际消耗为零。本次累计 token 和记忆数量不会自动补计，提取结果与遥测数据仍然保留。
+
 ---
 
 ### cancel_task()

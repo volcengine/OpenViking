@@ -63,6 +63,25 @@ func (c *Client) AdminDeleteAccount(ctx context.Context, accountID string) (map[
 	return result, err
 }
 
+// AdminGetAccount returns credential-free metadata for one account.
+// It returns an *Error with code NOT_FOUND when the account does not exist.
+func (c *Client) AdminGetAccount(ctx context.Context, accountID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID), nil, nil, &result)
+	return result, err
+}
+
+// AdminGetUser returns one user's credential-free membership info (user_id, role).
+// It returns an *Error with code NOT_FOUND when the user does not exist and never
+// exposes api_key or key_prefix.
+func (c *Client) AdminGetUser(ctx context.Context, accountID, userID string) (map[string]any, error) {
+	var result map[string]any
+	path := "/api/v1/admin/accounts/" + url.PathEscape(accountID) +
+		"/users/" + url.PathEscape(userID)
+	err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &result)
+	return result, err
+}
+
 // AdminRegisterUser registers a user in an account.
 func (c *Client) AdminRegisterUser(ctx context.Context, accountID, userID, role string) (map[string]any, error) {
 	return c.AdminRegisterUserWithOptions(ctx, accountID, userID, role, nil)

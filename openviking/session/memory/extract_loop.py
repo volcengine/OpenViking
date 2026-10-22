@@ -271,16 +271,14 @@ class ExtractLoop:
             self.context_provider.instruction()
         )
         output_contract = self._output_protocol.render_contract(self._output_context)
+        context_rules = self._output_protocol.render_context_rules(self._output_context)
         messages.append(
             {
                 "role": "system",
                 "content": f"""
 {provider_instruction}
 {reference_rules}
-## Read Format Rules
-- The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`.
-- Read content is returned in Claude Code format: each visible line is prefixed with `line_number<TAB>`.
-- When you copy text from read results into SEARCH/REPLACE or DELETE operations, copy the exact text after the line-number prefix. Never include the line-number prefix itself in `search`, `replace`, or `delete`.
+{context_rules}
 {output_contract}
         """,
             }
@@ -1327,13 +1325,21 @@ class ExtractLoop:
         )
         from openviking.session.memory.merge_op.patch_handler import unescape_markers
 
+        def field_value(memory_file: MemoryFile, field_name: str) -> str:
+            value = (
+                memory_file.plain_content()
+                if field_name == "content"
+                else memory_file.extra_fields.get(field_name)
+            )
+            # Other memory types can use the same field name for non-string data.
+            return value if isinstance(value, str) else ""
+
         errors = []
         patch_op = PatchOp(FieldType.STRING)
         read_files = self.context_provider.read_file_contents or {}
         for operation in operations.upsert_operations:
             if operation.old_memory_file_content is None:
                 continue
-            current_content = operation.old_memory_file_content.plain_content() or ""
             target_uri = (
                 operation.uris[0] if operation.uris else operation.old_memory_file_content.uri
             )
@@ -1349,7 +1355,7 @@ class ExtractLoop:
                             blocks.extend(StrPatch.model_validate({"blocks": [raw_block]}).blocks)
                 if not blocks:
                     continue
-                working_content = current_content
+                working_content = field_value(operation.old_memory_file_content, field_name)
                 for block_index, block in enumerate(blocks, start=1):
                     search = block.search or ""
                     if not search or search == block.replace:
@@ -1379,7 +1385,7 @@ class ExtractLoop:
                     found_in = [
                         uri
                         for uri, memory_file in read_files.items()
-                        if uri != target_uri and search in (memory_file.plain_content() or "")
+                        if uri != target_uri and search in field_value(memory_file, field_name)
                     ]
                     errors.append(
                         {

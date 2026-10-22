@@ -13,6 +13,7 @@ from openviking.parse.feishu_import import FeishuImportPlan
 from openviking.parse.parser_router import ParserRouter
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.understanding_api import UnderstandingAPI
+from openviking.service.task_domain import TaskPatch
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.parser_config import FeishuConfig
@@ -500,7 +501,7 @@ async def test_background_collection_restores_auth_and_child_checkpoint(monkeypa
 
     tracker = SimpleNamespace(
         get=AsyncMock(return_value=SimpleNamespace(meta={"feishu_responses": {"entry": "old"}})),
-        record_feishu_response=AsyncMock(),
+        patch_task=AsyncMock(),
     )
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     service = ResourceService()
@@ -527,8 +528,11 @@ async def test_background_collection_restores_auth_and_child_checkpoint(monkeypa
     saved, record = options["_feishu_checkpoint"]
     assert saved == {"entry": "old"}
     await record("next", "new")
-    tracker.record_feishu_response.assert_awaited_once_with(
-        "task", "next", "new", "account", "user"
+    tracker.patch_task.assert_awaited_once_with(
+        "task",
+        TaskPatch(meta={"feishu_responses": {"next": "new"}}),
+        account_id="account",
+        user_id="user",
     )
     assert saved["next"] == "new"
 

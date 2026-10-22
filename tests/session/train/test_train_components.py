@@ -90,6 +90,8 @@ class FakeVikingFS:
         ]
 
     async def read_file(self, uri: str, ctx=None):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
         return self.files[uri]
 
     async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
@@ -1279,12 +1281,8 @@ async def test_skill_policy_creation_preserves_lock_ownership(tmp_path, monkeypa
         await fs._async_agfs.pathlock_release(lease)
     finally:
         from openviking.telemetry import unregister_telemetry
-        from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 
         if queue.enqueue.await_args:
             msg = queue.enqueue.await_args.args[0]
-            tracker = get_request_wait_tracker()
-            tracker.mark_semantic_done(msg.telemetry_id, msg.id)
-            tracker.cleanup(msg.telemetry_id)
             unregister_telemetry(msg.telemetry_id)
         agfs.close()

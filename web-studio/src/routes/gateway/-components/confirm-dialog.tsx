@@ -25,6 +25,8 @@ type ConfirmDialogProps = {
   icon?: React.ReactNode
   /** Soft-red confirm button; on by default. */
   destructive?: boolean
+  /** Extra controls between the description and the buttons. */
+  children?: React.ReactNode
   /**
    * Runs on confirm. Return a promise (e.g. `mutateAsync`) to show a spinner
    * and close on success; a rejection keeps the dialog open.
@@ -45,6 +47,7 @@ export function ConfirmDialog({
   confirmLabel,
   icon,
   destructive = true,
+  children,
   onConfirm,
 }: ConfirmDialogProps) {
   const { t } = useTranslation('gateway')
@@ -80,6 +83,7 @@ export function ConfirmDialog({
             {open ? description : shown.description}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {children}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>
             {t('actions.cancel')}

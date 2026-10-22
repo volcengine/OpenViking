@@ -8,8 +8,8 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from openviking.server.account_user_keys import list_users_with_keys, pick_user_with_key
-from openviking.server.auth import get_api_key_manager_or_raise, get_request_context
+from openviking.server.account_user_keys import list_account_users, pick_account_user
+from openviking.server.auth import _auth_mode, get_api_key_manager_or_raise, get_request_context
 from openviking.server.config import get_server_url_from_server_data
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import bot
@@ -119,27 +119,31 @@ async def connections(ctx: RequestContext = Depends(manager)):
     return await dispatch(ctx, "list")
 
 
-async def account_users(request, ctx):
+async def account_users(request, ctx, *, expose_key=True):
     registry = get_api_key_manager_or_raise(request)
-    return await list_users_with_keys(registry, ctx.account_id, role="user")
+    return await list_account_users(registry, ctx.account_id, role="user", expose_key=expose_key)
 
 
 async def selected_identity(request, ctx, user_id):
-    row = pick_user_with_key(
-        await account_users(request, ctx),
+    trusted = _auth_mode(request) == "trusted"
+    row = pick_account_user(
+        await account_users(request, ctx, expose_key=not trusted),
         user_id,
         missing="Select an ordinary user in the current account",
         unreadable="This user's credential cannot be bound automatically",
+        require_key=not trusted,
     )
-    return {
+    identity = {
         "account_id": ctx.account_id,
         "user_id": row["user_id"],
         "role": "user",
-        "api_key_type": "user",
-        "api_key": row["api_key"],
+        "api_key_type": "root" if trusted else "user",
         "agent_id": "vikingbot",
         "server_url": get_server_url_from_server_data(getattr(request.app.state, "config", None)),
     }
+    if not trusted:
+        identity["api_key"] = row["api_key"]
+    return identity
 
 
 @router.post(ACCOUNT_BOT + "/connections")

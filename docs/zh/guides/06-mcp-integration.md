@@ -120,17 +120,20 @@ claude mcp add --transport http openviking \
 
 以下列出内置 MCP 工具。实际可用工具以所连接服务的 `tools/list` 响应为准：
 
+<div v-pre>
+
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
 | `find` | 无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选) |
 | `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具。`list` 模式下每个 skill 包也只出一条命中，URI 指向 `SKILL.md`、摘要取自包本身，但 `limit` 在合并之前生效，所以一个包在多个文件上命中时会占掉多个名额，返回条数少于 `limit` | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选), `events_time_decay_protection`（两种模式均可选），以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
-| `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频 | `uris`（单个字符串或数组）, `offset`, `limit`（文本行数） |
+| `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频；需要原始字节时用 `download` | `uris`（单个字符串或数组）, `offset`, `limit`（文本行数） |
+| `download` | 返回一个短时有效、只能使用一次的 URL，用 `curl` 获取单个文件的原始字节（任意类型，包括 PDF、图片、压缩包、音频和视频）；不返回文件内容。不支持目录 | `uri` |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `include_abstract`(可选——同时展示每个目录的摘要；skill 目录的摘要就是它的名字和描述) |
 | `remember` | 提交消息做长期记忆提取；立即返回后台任务的 `task_id`，提取结果可能什么都不保留 | `messages`（`{role, content}` 列表） |
-| `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit`。skill 包不要用它维护：调用方自己的 `skills/` 子树会被拒绝，写 `viking://agent/skills` 则生成绕过安装流程的普通文件，请改用 `add_skill` | `uri`, `content`, `mode`(可选:默认 `replace` — 覆盖或在缺失时创建,`append` — 追加或在缺失时创建,`create` — 已存在则失败), `wait`(可选,阻塞直到重建索引完成), `timeout`(可选), `acl`(可选) |
-| `edit` | 在已有 `viking://` 文件中把精确字符串替换为新文本——用于局部修改，避免整文件重写。若 `old_string` 找不到、或匹配多处且 `replace_all` 为 false，则编辑失败且文件保持不变。编辑 skill 包内的文件不会重新触发 skill 安装流程，请改用 `add_skill` | `uri`, `old_string`, `new_string`, `replace_all`(可选), `wait`(可选,阻塞直到重建索引完成), `timeout`(可选) |
-| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 access/refresh token，并可选传入 `feishu_app_id` / `feishu_app_secret`), `acl`(可选) |
+| `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit`。skill 包不要用它维护：调用方自己的 `skills/` 子树会被拒绝，写 `viking://agent/skills` 则生成绕过安装流程的普通文件，请改用 `add_skill` | `uri`, `content`, `mode`(可选:默认 `replace` — 覆盖或在缺失时创建,`append` — 追加或在缺失时创建,`create` — `replace` 的兼容别名), `wait`(可选,阻塞直到重建索引完成), `acl`(可选) |
+| `edit` | 在已有 `viking://` 文件中把精确字符串替换为新文本——用于局部修改，避免整文件重写。若 `old_string` 找不到、或匹配多处且 `replace_all` 为 false，则编辑失败且文件保持不变。编辑 skill 包内的文件不会重新触发 skill 安装流程，请改用 `add_skill` | `uri`, `old_string`, `new_string`, `replace_all`(可选), `wait`(可选,阻塞直到重建索引完成) |
+| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `parent`(可选,目标父目录，缺失时自动创建), `tags` / `tag_mode`(可选,检索标签), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 access/refresh token，并可选传入 `feishu_app_id` / `feishu_app_secret`), `acl`(可选) |
 | `add_skill` | 新建、安装或替换 agent skill。新 skill 直接传完整 SKILL.md 文本；Git 与 GitHub tree URL 默认安装源里的全部 skill，可用 `skills` 挑选；本地 SKILL.md、目录或 zip 会和 `add_resource` 一样返回签名上传 URL | `data`（SKILL.md 文本）或 `path`（Git URL 或本地路径）, `skills`(可选), `target_uri`(可选；`viking://agent/skills` 表示账户共享), `list_only`(可选) |
 | `list_watches` | 列出当前 Agent 可见的 watch 任务（自动刷新订阅），每行显示目标 URI、刷新间隔（分钟）、active/paused 状态以及下一次调度时间 | 无 |
 | `cancel_watch` | 按目标 URI 取消（删除）watch 任务。若需调整刷新周期或临时暂停，请取消后使用新的 `watch_interval` 重新添加 | `to_uri`（必须匹配 watch 任务的 `to` 值，例如 `viking://resources/...`） |
@@ -138,10 +141,15 @@ claude mcp add --transport http openviking \
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围), `node_limit` |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`）。用它删 skill 目录会残留该 skill 的 privacy 配置，请改用 `ov skills remove` 或 `DELETE /api/v1/skills/{name}` | `uri`, `recursive`（可选） |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
+| `privacy_tree` | 盘点已保存的凭据；返回当前字段元数据及引用，不含值 | `category`（可选） |
+| `privacy_resolve` | 将完整的 `{{ov_privacy:...}}` 占位符解析为一个当前字段的实际值，供立即使用 | `reference` |
+| `privacy_upsert` | 原子合并用户提供的凭据字段；返回元数据和引用，不回显值 | `category`, `target_key`, `values` |
 | `list_users` | 查询当前 account 的用户 ID；默认不返回凭证，管理员也一样 | `query`(可选，ID 子串), `limit`(默认 100), `page`(默认 1), `include_credentials`(默认 false，仅 ADMIN/ROOT 可设为 true) |
 | `list_groups` | 查询当前 account 的组 ID，不返回成员名单 | 无 |
 | `get_acl` | 查看共享资源的直接、继承和有效 ACL；要求该节点的 manage 或账号 ADMIN | `uri` |
 | `set_acl` | 设置共享资源 ACL；按修改前的权限校验 manage | `uri`, `acl` |
+
+</div>
 
 在 MCP 工具中访问自己的工作区，请使用家目录别名 `viking://~`。它在所有控制面
 （REST API、`ov` CLI、SDK 和 MCP）上都会展开为 `viking://user/<当前用户>`，因此
@@ -158,6 +166,38 @@ claude mcp add --transport http openviking \
 > 未传 `args.feishu_access_token` 的飞书/Lark 导入保持现有应用/tenant token 行为，也支持 watch。一次性用户 token 导入只传 `args.feishu_access_token`；用户 token watch 还必须传 `args.feishu_refresh_token`。可为该 watch 同时传入 `args.feishu_app_id` 和 `args.feishu_app_secret`，也可回退使用服务端应用凭证；实际使用的应用必须与用户 token 的签发应用一致。
 
 > `processing_mode=vectors_only` 会跳过 VLM 语义理解阶段，不生成或刷新 `.abstract.md` / `.overview.md`；它只向量化当前非隐藏资源文件，并保留已存在的旧语义产物。
+
+### 使用 skill 中引用的凭据
+
+当 SKILL.md、文档或工具结果中出现以下认证占位符，且当前任务需要这个凭据时：
+
+```text
+Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}
+```
+
+调用 `privacy_resolve`，原样传入完整占位符，不要带上外部的 `Authorization: Bearer`：
+
+```json
+{
+  "name": "privacy_resolve",
+  "arguments": {
+    "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+  }
+}
+```
+
+以上是 MCP `tools/call` 请求的参数。将返回的 `value` 填入 API 的认证字段；占位符本身不是
+可以直接使用的密钥。解析始终读取当前生效版本，并拒绝其他 owner 的引用，管理员也不例外。
+也支持字段级 Privacy URI。不知道引用时，先调用 `privacy_tree`，可用 `category` 缩小范围。
+
+用户提供 PAT 并要求保存时，调用 `privacy_upsert`，传入 `category="credential"`、
+`target_key="github"` 和 `values={"pat":"<user-provided-token>"}`。目标不存在时创建，存在时
+合并指定字段，保留 `username` 等其他字段。值变化后创建并激活版本，但不会到外部服务轮换凭据。
+成功响应只描述本次更新的字段，不回显它们的值。
+
+tree 和 resolve 标记为只读，upsert 标记为可能覆盖数据的写入。只读不等于不敏感：resolve
+会将明文返回给 MCP 客户端和 Agent 上下文。保存文档和记忆时保留引用，不在聊天中复述解析后的
+密钥。tree 和 upsert 的响应不返回保存的值。
 
 ### 资源权限与授权对象
 
@@ -205,7 +245,7 @@ claude mcp add --transport http openviking \
 
 #### 必须配置 `OPENVIKING_PUBLIC_BASE_URL` 的场景
 
-工具响应里给出的上传 URL,server 端按以下顺序解析:
+`add_resource`、`add_skill` 返回的上传 URL 和 `download` 返回的下载 URL,server 端都按以下顺序解析:
 
 1. 环境变量 `OPENVIKING_PUBLIC_BASE_URL`
 2. `ov.conf` 中的 `server.public_base_url`
@@ -229,6 +269,14 @@ services:
     environment:
       OPENVIKING_PUBLIC_BASE_URL: "https://ov.your-domain.com"
 ```
+
+### 下载原始文件
+
+`read` 返回文本，小体积的图片和音频返回 MCP 原生内容。要拿到任意文件的原始字节（例如 PDF、压缩包、视频或大图），用文件的 `uri` 调用 `download`。工具先确认文件存在且调用方有读权限，再返回一条 `curl -fL -o <本地路径> <url>` 命令。URL 指向 `GET /api/v1/content/download`，内嵌一次性 token（默认 10 分钟过期，与上传共用 `upload_signed_ttl_seconds`），无需 API Key。
+
+token 绑定调用方身份和这一个文件，带 token 的请求会忽略 `uri` 查询参数。取文件时会再次校验权限，所以签发链接后撤销访问权限，下载同样会失败。角色处理与上传一致：在 `api_key` 模式下，用户已不存在、身份正在删除或角色已降级时，下载会被拒绝。下载失败或链接已用过时，重新调用 `download` 获取新链接。带 API Key 的请求仍走原有路径，`ov get` 不受影响。
+
+下载 URL 与上文的上传 URL 使用同一套 base URL 解析规则。部署在反向代理后时，请配置 `OPENVIKING_PUBLIC_BASE_URL`，并确保代理把 `/api/v1/*` 转发到 server，而不只是 `/mcp`。
 
 ## 故障排除
 

@@ -9,13 +9,18 @@ import orjson
 import pytest
 import pytest_asyncio
 from aiohttp import web
-from cryptography.fernet import Fernet
 
+from openviking.crypto import FileEncryptor, LocalFileProvider
 from openviking_gateway.app import create_app
-from openviking_gateway.config import OpenVikingGatewayConfig
+from openviking_gateway.config import GatewayConfig
 from openviking_gateway.kernel import MemoryKernel
 from openviking_gateway.models import Policy
 from openviking_gateway.storage import SQLiteKernelStore
+
+
+def local_encryptor(key_file):
+    """OpenViking's local-provider encryptor; it creates the root key file on first use."""
+    return FileEncryptor(LocalFileProvider(str(key_file)))
 
 
 def mcp_tool(name, properties, required=()):
@@ -97,6 +102,9 @@ class FakeViking:
             return [{"name": "alice", "isDir": True}]
         return self.preferences if uri.endswith("/preferences") else self.entities
 
+    async def identify(self, key=""):
+        return await self.health(key)
+
     async def health(self, key="", require_identity=True):
         return {"version": "0.4.16", "role": "user", "account_id": "tenant", "user_id": "alice"}
 
@@ -139,12 +147,12 @@ def credential():
 
 @pytest_asyncio.fixture
 async def setup_kernel(tmp_path):
-    key = Fernet.generate_key().decode()
-    store = SQLiteKernelStore(tmp_path / "kernel.sqlite3", key)
+    encryptor = local_encryptor(tmp_path / "master.key")
+    store = SQLiteKernelStore(tmp_path / "kernel.sqlite3", encryptor)
     await store.initialize()
     viking = FakeViking()
     kernel = MemoryKernel(store, viking)
-    yield kernel, store, viking, key
+    yield kernel, store, viking, encryptor
     store.close()
 
 
@@ -189,7 +197,7 @@ async def make_due(store):
 
 
 @pytest_asyncio.fixture
-async def running_gateway(tmp_path, monkeypatch):
+async def running_gateway(tmp_path):
     captured = []
     writes = []
     override = {}
@@ -200,7 +208,8 @@ async def running_gateway(tmp_path, monkeypatch):
             key = request.headers.get("X-API-Key")
             override.setdefault("tools_calls", []).append(key)
             # Maps an OpenViking key to the HTTP status its tools/list gets.
-            status = override.get("tools_status", {}).get(key, 200)
+            # Like OV, /mcp refuses root keys.
+            status = override.get("tools_status", {}).get(key, 403 if key == "root" else 200)
             if status != 200:
                 return web.json_response({"error": "private server detail"}, status=status)
             return web.json_response(
@@ -213,17 +222,47 @@ async def running_gateway(tmp_path, monkeypatch):
         raw = await request.read()
         body = json.loads(raw) if raw else {}
         if request.path == "/health":
-            key = request.headers.get("X-API-Key")
+            key = request.headers.get("X-API-Key", "")
+            status = override.get("health_status", {}).get(key, 200)
+            if status != 200:
+                return web.json_response({}, status=status)
+            if override.get("auth_mode") in {"dev", "trusted"}:
+                return web.json_response({"version": "0.4.16", "auth_mode": override["auth_mode"]})
             return web.json_response(
                 {
                     "version": "0.4.16",
                     "status": "ok",
                     "auth_mode": "api_key",
-                    "role": "root" if key == "root" else "user",
+                    "role": "root" if key == "root" else "admin" if key == "admin-key" else "user",
                     "account_id": "other" if key == "other" else "tenant",
-                    "user_id": "alice",
+                    "user_id": "bob" if key == "bob-key" else "alice",
                 }
             )
+        if request.path == "/api/v1/admin/accounts":
+            return web.json_response({"status": "ok", "result": [{"account_id": "tenant"}]})
+        if request.path.startswith("/api/v1/admin/accounts/") and request.path.endswith("/users"):
+            override.setdefault("users_calls", []).append(
+                (str(request.rel_url), request.headers.get("X-API-Key"))
+            )
+            users = override.get(
+                "users",
+                [
+                    {"user_id": "alice", "role": "user", "api_key": "user-key"},
+                    {"user_id": "bob", "role": "user", "api_key": "bob-key"},
+                ],
+            )
+            if name := request.query.get("name"):
+                users = [u for u in users if u["user_id"] == name]
+            if request.query.get("include_credentials") == "false":
+                users = [
+                    {
+                        "user_id": u["user_id"],
+                        "role": u["role"],
+                        "api_key_available": bool(u.get("api_key")),
+                    }
+                    for u in users
+                ]
+            return web.json_response({"status": "ok", "result": users})
         if request.path == "/api/v1/search/search":
             assert body["mode"] == "context" and "session_id" not in body
             return web.json_response(
@@ -255,6 +294,8 @@ async def running_gateway(tmp_path, monkeypatch):
         if request.path == "/api/v1/content/read":
             return web.json_response({"status": "error"}, status=404)
         captured.append((request.path, raw, dict(request.headers)))
+        if request.path.endswith("/models"):
+            return web.json_response({"data": []})
         if body.get("model") == "error":
             return web.Response(
                 body=b'{"error":{"raw":"provider error"}}',
@@ -318,16 +359,18 @@ async def running_gateway(tmp_path, monkeypatch):
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     base = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
-    monkeypatch.setenv("OPENVIKING_GATEWAY_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    monkeypatch.setenv("OPENVIKING_GATEWAY_ADMIN_TOKEN", "admin-" + "x" * 32)
-    config = OpenVikingGatewayConfig(enabled=True, storage_path=str(tmp_path), openviking_url=base)
-    app = create_app(config)
+    config = GatewayConfig(storage_path=str(tmp_path))
+    app = create_app(
+        config, openviking_url=base, encryptor=local_encryptor(tmp_path / "master.key")
+    )
     app.state.test_backend = override
     async with app.router.lifespan_context(app):
+        # Requests arrive as the hosts mount the gateway: below root_path /gateway.
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+            transport=httpx.ASGITransport(app=app, root_path="/gateway"),
+            base_url="http://gateway/gateway",
         ) as client:
-            admin = {"Authorization": "Bearer admin-" + "x" * 32, "X-OpenViking-Account": "tenant"}
+            admin = {"X-API-Key": "admin-key"}
             for protocol in ("chat", "anthropic", "responses"):
                 response = await client.put(
                     f"/admin/upstreams/{protocol}",
@@ -335,7 +378,7 @@ async def running_gateway(tmp_path, monkeypatch):
                     json={
                         "name": protocol,
                         "protocol": protocol,
-                        "base_url": base,
+                        "base_url": base if protocol == "anthropic" else base + "/v1",
                         "api_key": "model-secret",
                         "models": ["model", "error"],
                     },

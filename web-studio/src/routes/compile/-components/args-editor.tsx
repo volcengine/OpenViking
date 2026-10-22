@@ -6,6 +6,9 @@ import { Input } from '#/components/ui/input'
 import { Textarea } from '#/components/ui/textarea'
 import { parseArgs } from '../-lib/commands'
 
+// Copyable JSON syntax example; preserve the protocol keys and values.
+const ARGS_EXAMPLE = JSON.stringify({ key: 'value' }, null, 2)
+
 type Row = { id: number; key: string; type: string; value: string }
 const TYPES = ['string', 'number', 'boolean', 'json'] as const
 function decode(value: string): Row[] {
@@ -142,7 +145,7 @@ export function ArgsEditor({
           value={value}
           rows={6}
           className="font-mono text-xs"
-          placeholder={JSON.stringify({ key: 'value' }, null, 2)}
+          placeholder={ARGS_EXAMPLE}
           onChange={(e) => {
             emit(e.target.value)
             try {

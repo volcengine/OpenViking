@@ -135,13 +135,9 @@ class QueueFSConfig(BaseModel):
         description="SQLite busy timeout for QueueFS in milliseconds.",
     )
 
-    cache_key_prefix: str = Field(
-        default="default",
-        description="Queue key namespace when backend is 'cache'.",
-    )
-
     @model_validator(mode="after")
     def validate_config(self):
+        """Validate QueueFS mode and backend choices."""
         valid_modes = {"shared", "worker"}
         if self.mode not in valid_modes:
             raise ValueError("queuefs mode must be one of: 'shared', 'worker'")
@@ -156,12 +152,6 @@ class QueueFSConfig(BaseModel):
             raise ValueError("queuefs recover_stale_sec must be >= 0")
         if self.busy_timeout_ms < 0:
             raise ValueError("queuefs busy_timeout_ms must be >= 0")
-        if not self.cache_key_prefix.strip() or any(
-            marker in self.cache_key_prefix for marker in ("{", "}")
-        ):
-            raise ValueError(
-                "queuefs cache_key_prefix must be non-empty and must not contain '{' or '}'"
-            )
         return self
 
 
@@ -179,7 +169,6 @@ class AGFSCacheFSConfig(BaseModel):
         default="local",
         description="CacheFS backend: 'local' | 'cache'",
     )
-    namespace: str = Field(default="openviking", description="RAGFS cache namespace")
     max_file_size_bytes: int = Field(
         default=1024 * 1024,
         description="Maximum full-file object size admitted to cache",
@@ -195,8 +184,7 @@ class AGFSCacheFSConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_config(self):
-        if not self.namespace.strip():
-            raise ValueError("cachefs namespace must not be empty")
+        """Validate CacheFS limits."""
         if self.max_file_size_bytes <= 0:
             raise ValueError("cachefs max_file_size_bytes must be > 0")
         return self
@@ -312,10 +300,6 @@ class AGFSPathLockConfig(BaseModel):
         default="filesystem",
         description="PathLock provider: 'filesystem' | 'memory' | 'cache'",
     )
-    namespace: Optional[str] = Field(
-        default=None,
-        description="OpenViking instance name used by cache-backed PathLock.",
-    )
     lock_timeout_secs: float = Field(
         default=0.0,
         description="Deprecated internal field. Runtime auto-pathlock wait timeout is fixed at 0.0 seconds.",
@@ -330,18 +314,6 @@ class AGFSPathLockConfig(BaseModel):
         """Validate provider and timeout/expiry ranges."""
         if self.provider not in {"filesystem", "memory", "cache"}:
             raise ValueError("pathlock provider must be one of: 'filesystem', 'memory', 'cache'")
-        if self.provider == "cache" and not (self.namespace or "").strip():
-            raise ValueError("pathlock namespace is required for provider 'cache'")
-        if self.namespace is not None and (
-            not self.namespace
-            or any(
-                not (char.isascii() and (char.isalnum() or char in "._-"))
-                for char in self.namespace
-            )
-        ):
-            raise ValueError(
-                "pathlock namespace must contain only ASCII letters, digits, '.', '_' or '-'"
-            )
         if not math.isfinite(self.lock_expire_secs) or self.lock_expire_secs < 1.0:
             raise ValueError("pathlock lock_expire_secs must be finite and >= 1.0")
         return self
@@ -446,7 +418,7 @@ class AGFSConfig(BaseModel):
         default=None, description="Multi-write backups configuration. None = single backend mode."
     )
     redirects: Optional[List[dict[str, Any]]] = Field(
-        default=None, description="Primary redirect policies."
+        default=None, description="[Deprecated] Primary redirect policies. Ignored by V2."
     )
 
     @model_validator(mode="after")
@@ -494,9 +466,38 @@ class AGFSConfig(BaseModel):
                     "db_path/queue_db_path will be ignored."
                 )
 
-        if self.redirects is not None and self.backups is None:
-            raise ValueError(
-                "redirects requires backups; single-backend mode does not support redirects"
-            )
+        if self.backups is not None:
+            initial_partitions = self.backups.get("initial_partitions", 16)
+            if (
+                not isinstance(initial_partitions, int)
+                or isinstance(initial_partitions, bool)
+                or not 1 <= initial_partitions <= 1024
+            ):
+                raise ValueError("backups initial_partitions must be between 1 and 1024")
+
+            checkpoint_interval_secs = self.backups.get("checkpoint_interval_secs", 86400)
+            if (
+                not isinstance(checkpoint_interval_secs, int)
+                or isinstance(checkpoint_interval_secs, bool)
+                or checkpoint_interval_secs < 60
+            ):
+                raise ValueError("backups checkpoint_interval_secs must be at least 60")
+
+            if self.backups.get("provider", "filesystem") not in {"filesystem", "cache"}:
+                raise ValueError("backups provider must be 'filesystem' or 'cache'")
+
+            names = set()
+            for item in self.backups.get("items", []):
+                if not isinstance(item, dict):
+                    raise ValueError("backups items must be objects")
+                name = item.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("backup name must not be empty")
+                name = name.strip()
+                if name == "primary":
+                    raise ValueError("backup name 'primary' is reserved")
+                if name in names:
+                    raise ValueError("backup names must be unique")
+                names.add(name)
 
         return self

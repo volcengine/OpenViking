@@ -23,7 +23,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | 注册/移除用户 | Y | Y（本 account） | N |
 | 管理用户组和成员 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
-| 重新生成 User Key | Y | Y（本 account） | N |
+| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | N |
 | 将用户提升为 ADMIN | Y | Y（本 account） | N |
 
 ## CLI `--sudo` 选项
@@ -59,13 +59,13 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 
 用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。`group_id` 由调用者创建时指定，使用与 `user_id` 相同的标识符规则，是 account 内唯一且稳定的标识；不存在单独的组名。组内只能加入当前 account 已存在的用户，不支持嵌套组。
 
-成员关系由服务端加入每次请求的 `RequestContext.group_ids`。添加或移除成员从下一次请求开始生效，不重写资源 ACL 或 context 记录。用户被删除时会自动退出所有组；用户组必须为空才能删除。
+成员关系由服务端加入每次请求的 `RequestContext.group_ids`。添加或移除成员从下一次请求开始生效，不重写资源 ACL 或 context 记录。用户被删除时会自动退出所有组。无论组是否为空，都可以直接删除；删除组会移除该组的全部成员关系，保留用户及其凭证，也不重写资源 ACL 或 context 记录。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建空组，请求体为 `{"group_id":"engineering"}` |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除空组 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除组及其全部成员关系，允许组内仍有成员 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 幂等添加成员；重复调用返回 `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
@@ -79,9 +79,61 @@ ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
 ```
 
+要直接删除仍有成员的组，可调用 `DELETE /api/v1/admin/accounts/acme/groups/engineering`。
+
 Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 
 ## API 参考
+
+### account / user 存在性查询
+
+创建 Account/User 前可用两个精确判存接口替代“列出后本地比对”。二者都命中内存注册表，时间复杂度 O(1)，且只返回无凭据信息；开启 `server.api_key_watch_enabled` 时直接读内存，关闭时会回退读取持久化的注册表。
+
+**查询单个 Account（仅 ROOT）**
+
+```
+GET /api/v1/admin/accounts/{account_id}
+```
+
+命中返回该 Account 的无凭据元数据；不存在返回 404。
+
+```bash
+curl "http://localhost:1933/api/v1/admin/accounts/team-a" \
+  -H "X-API-Key: <root-key>"
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "account_id": "team-a",
+    "created_at": "2026-10-20T03:00:00Z",
+    "user_count": 2,
+    "status": "active"
+  }
+}
+```
+
+`status` 为 `deleting` 时附带 `task_id`。响应不包含 `api_key`、`user_key`、`key_prefix` 或 `seed`。
+
+**查询单个 User 的成员信息（ROOT 或本 Account 的 ADMIN）**
+
+```
+GET /api/v1/admin/accounts/{account_id}/users/{user_id}
+```
+
+点读单个用户，仅返回无凭据的成员信息，刻意不复用任何会返回凭据的 user 读取形态：
+
+```bash
+curl "http://localhost:1933/api/v1/admin/accounts/team-a/users/alice" \
+  -H "X-API-Key: <root-key>"
+```
+
+```json
+{ "status": "ok", "result": { "user_id": "alice", "role": "admin" } }
+```
+
+返回仅含 `user_id` 与 `role`，**不包含** `api_key` 或 `key_prefix`。用户不存在返回 404。ADMIN 只能查询自己所属的 Account，跨 Account 返回 403。创建前的判重可据此进行；并发唯一性仍由创建时的写入冲突（`ALREADY_EXISTS`）兜底。
 
 ### get_agent_evolution_status
 
@@ -445,6 +497,117 @@ PATCH 会先做结构校验，再构造合并后的配置：未知路径和运�
 匹配的进程内 Consumer；Consumer 失败会记录日志但不会回滚已持久化的配置，因此接口成功只表示
 配置层更新成功，不保证所有派生客户端都已完成切换。配置存储和重载行为见[运行时配置来源与重载行为](../guides/01-configuration.md#runtime-configuration-source)。
 
+文件保存始终提交完整 `content` 和旧 `revision`。
+草稿预览（`source=file&dry_run=true`）可附带 VLM/Embedding 表单 `settings`；
+其他配置节通过完整文件编辑。
+
+文件含美元符号、Windows `%VAR%` 引用或转义的美元/百分号时，读取和预览返回 `form_readonly: true`，不返回模型表单数据，并拒绝表单修改。请使用文件模式编辑原文，包括带引号和未带引号的环境变量引用。验证沿用启动时对原文展开环境变量的流程，保存不会重新序列化文档。文件校验会应用 CLI 启动参数覆盖，与重启时的处理一致。
+
+#### 草稿模型连接测试
+
+ROOT 可以测试草稿 VLM 或 Embedding 连接，而不保存或发布提交的配置。
+这是 Studio 使用的私有接口，刻意不出现在生成的 OpenAPI schema 中，
+并始终返回 `Cache-Control: no-store`。
+
+```http
+POST /api/v1/admin/configuration/test-model
+Content-Type: application/json
+X-API-Key: <root-api-key>
+```
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `kind` | string | 是 | - | `vlm` 或 `embedding` |
+| `config` | object | 是 | - | 待测试的草稿 provider 凭证或端点字段 |
+| `fallback` | object | 否 | `{}` | 现有生效配置，用于补齐未提交的非敏感字段 |
+| `thinking` | boolean | 否 | `null` | 本次 VLM 探测的 thinking 模式覆盖 |
+| `mode` | string | 否 | `dense` | Embedding 模式：`dense`、`sparse` 或 `hybrid` |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/configuration/test-model \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-api-key>" \
+  -d '{
+    "kind": "vlm",
+    "config": {
+      "provider": "openai",
+      "api_key": "draft-key"
+    },
+    "fallback": {
+      "model": "gpt-4.1"
+    }
+  }'
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "ok": true,
+    "ms": 120
+  }
+}
+```
+
+该接口会脱敏 provider 错误，并且不会持久化提交的草稿配置。
+
+#### 服务端重启
+
+仅 ROOT 可以重启通过单 worker `openviking-server` CLI 启动的进程。
+多 worker 和嵌入式 ASGI 启动模式不支持远程重启。
+
+```http
+POST /api/v1/admin/restart
+Content-Type: application/json
+X-API-Key: <root-api-key>
+
+{"revision": "<已保存文件的版本>"}
+```
+
+`revision` 是必填的非空字符串。通过
+`GET /api/v1/admin/configuration?source=file` 获取当前文件版本和重启能力；
+`result.restart` 包含 `supported`、`instance_id` 和 `restarting`。
+重启接口不保存配置。修改配置时，先通过
+`PATCH /api/v1/admin/configuration?source=file` 提交 `content` 和旧 `revision`，
+再将保存响应中的新版本提交给重启接口。
+
+服务端接受重启前会核对当前文件版本并校验配置。
+版本过期或文件无效返回 `INVALID_ARGUMENT`；启动模式不支持或文件不可读返回
+`FAILED_PRECONDITION`。这些检查失败时不会请求重启。
+
+接受请求后，在优雅关闭前返回 **HTTP 202**：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "supported": true,
+    "instance_id": "current-instance-id",
+    "restarting": true
+  }
+}
+```
+
+CLI 等待现有请求结束，停止其管理的 Bot，再使用原解释器、启动参数、环境变量和
+工作目录替换当前进程。接受重启后拒绝文件保存请求。HTTP 202 只表示请求已接受，
+不代表服务已恢复；应轮询文件配置读取接口，直到 `instance_id` 改变且
+`restarting` 为 false。外部依赖仍可能阻止启动。如果地址、端口或 ROOT 凭证发生
+变化，需要先更新客户端连接设置再轮询。详见[服务端配置](../configuration/01-server.md)。
+
+CLI 在接受重启前保存当前进程启动时实际加载的文件原文，作为独立的私有恢复备份
+（0600，包含敏感配置）。新进程在配置加载、Bot 启动、应用初始化或监听端口时失败，
+会原子恢复此前运行的配置并重新启动一次；恢复后的配置读取响应中
+`result.restart.rolled_back` 为 true，Studio 会提示已回滚。
+应用初始化和端口绑定成功后删除恢复备份，不对后续运行期故障自动回滚。
+远程重启不能切换为多 worker；应通过部署平台执行这种变更。
+
+恢复备份与每次保存生成的 `.studio.bak` 不同：后者仅保留上一次保存前的文件，
+未必曾成功启动。自动恢复只回滚配置文件，不撤销存储或外部系统中的副作用，
+也不处理启动卡死、进程被强制终止或机器故障。若重启后文件被外部修改，拒绝覆盖；
+若恢复后的配置仍无法启动，不再重试，需要管理员在服务器上恢复服务。
+
 #### Account Configuration 接口参考
 
 Account 配置通过创建接口的 `settings` 初始化，并通过 configuration 接口读取和更新：
@@ -759,14 +922,15 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| account_id | str | 是 | - | 工作区 ID |
+| account_id | str | 是 | - | 工作区 ID；新建文件存储账户不超过 255 个 UTF-8 字节 |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 | user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
 | settings | object | 否 | `null` | Account 运行时初始配置。仅 ROOT 可提交；支持 `feishu`、`github`、`acl`、`agent_evolution`、`vlm`、`query_planner`、`embedding` 和 `vectordb`。其中 `vectordb` 及 Embedding 创建期字段只能在这里设置 |
 
 **说明：**
-- 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
+- 文件存储账户创建时，超过 255 个 UTF-8 字节的 `account_id` 会在写入账户注册表前返回 `INVALID_ARGUMENT`。新持久化的 user ID 在所有账户存储 Provider 中最多 255 个字符。trusted 模式会在加入自动注册队列前拒绝超长的新 user ID 和新建的超长账户，避免无效身份阻塞其他身份注册；已有的超长 File user 和 account 仍可读取。
+- 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
 - `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
 - Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
@@ -1163,7 +1327,7 @@ ov --sudo task status <task_id>
 | user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
 
 **说明：**
-- 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
+- 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
 - ADMIN 只能在自己所属的 account 中注册用户
 - 无法通过用户注册接口直接创建 `"root"` 角色
@@ -1295,7 +1459,7 @@ ov admin register-user acme bob-private --role user \
 | role | str | 否 | null | 按角色过滤 |
 | query | str | 否 | null | 仅 HTTP，按用户 ID 做不区分大小写的字面包含匹配 |
 | include_summary | bool | 否 | false | 仅 HTTP，以对象返回分页用户和账号统计 |
-| include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；默认保持现有按鉴权模式返回字段的行为。 |
+| include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；仅当服务端能读取完整 key 并用于服务端绑定时 `api_key_available` 才为 true，仅存哈希的凭据返回 false；默认保持现有按鉴权模式返回字段的行为。 |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
@@ -1614,6 +1778,7 @@ ov --sudo admin set-role acme bob admin
 | seed | str | 否 | `null` | JSON request body 中可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 
 **说明：**
+- `trusted` 模式拒绝此操作，返回 HTTP 412（`FAILED_PRECONDITION`），不生成或修改密钥。
 - ADMIN 只能为自己所属的 account 中的用户重新生成密钥
 - 随机生成或使用新 seed 时，旧密钥立即失效，需要更新使用该密钥的客户端
 - 省略 `seed` 时随机生成新密钥。确定性示例使用 `OV_KEY_SEED` 或 `OV_NEW_KEY_SEED`，运行前需将其设为安全生成的秘密值；Go 示例需导入 `os`。不要把示例变量名直接当作 seed。

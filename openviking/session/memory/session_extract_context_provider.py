@@ -69,9 +69,14 @@ class SessionExtractContextProvider(ExtractContextProvider):
         transaction_handle=None,
         memory_registry: MemoryTypeRegistry | None = None,
         vlm_config: Optional["VLMHandle"] = None,
+        *,
+        source_archive_uri: str = "",
+        extraction_scope: str = "",
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
+        self._source_archive_uri = source_archive_uri
+        self._extraction_scope = extraction_scope
         self._output_language = self._detect_language()
         self._registry = memory_registry  # Lazy defaults if no account snapshot was supplied.
         self._schema_directories = None
@@ -115,6 +120,8 @@ class SessionExtractContextProvider(ExtractContextProvider):
             self._extract_context = ExtractContext(
                 self.messages if isinstance(self.messages, list) else [],
                 split_long_text_messages=self.split_long_text_messages_for_extraction,
+                source_archive_uri=self._source_archive_uri,
+                extraction_scope=self._extraction_scope,
             )
         return self._extract_context
 

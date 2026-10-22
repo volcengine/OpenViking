@@ -1,4 +1,6 @@
 const profiles = {
+  inUseHelp:
+    '要删除它，请先吊销这些密钥；如果还需要它们，先签发使用其他上下文配置的新密钥来替换。',
   description:
     '决定对话如何使用 OpenViking 的记忆和工具。保存后的修改只对之后开始的对话生效。',
   defaultName: '默认',
@@ -18,6 +20,7 @@ const profiles = {
     title: '还没有上下文配置',
     description:
       '每个网关密钥都需要一份上下文配置。推荐设置会为每条新消息召回记忆、保存对话、为长对话生成摘要，并让模型使用只读的 OpenViking 工具，之后可以随时修改。',
+    readOnly: '等待网关管理员添加上下文配置。',
   },
   summary: {
     recallOn: '开启 · 每条消息 {{tokens}} Token',

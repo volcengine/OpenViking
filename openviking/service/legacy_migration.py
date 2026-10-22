@@ -120,7 +120,7 @@ class LegacyDataMigration:
 
     async def preflight(self) -> MigrationPlan:
         plan = MigrationPlan()
-        registry_accounts = self._registry_account_ids()
+        registry_accounts = await self._registry_account_ids()
         physical_accounts = await self._physical_account_ids()
         for account_id in sorted(physical_accounts - registry_accounts):
             if await self._exists(f"/local/{account_id}/session"):
@@ -135,11 +135,11 @@ class LegacyDataMigration:
 
         for account_id in sorted(registry_accounts):
             plan.account_users[account_id] = set()
-            for user_id in sorted(self._registry_user_ids(account_id)):
-                self._ensure_plan_user(account_id, user_id, plan)
+            for user_id in sorted(await self._registry_user_ids(account_id)):
+                await self._ensure_plan_user(account_id, user_id, plan)
             if await self._exists(f"/local/{account_id}/session"):
                 for user_id in sorted(await self._physical_user_ids(account_id)):
-                    self._ensure_plan_user(account_id, user_id, plan)
+                    await self._ensure_plan_user(account_id, user_id, plan)
             await self._plan_sessions(account_id, plan)
         return plan
 
@@ -153,10 +153,10 @@ class LegacyDataMigration:
 
         result = MigrationResult()
         for account_id, user_id in sorted(plan.created_users):
-            if self._has_user(account_id, user_id):
+            if await self._has_user(account_id, user_id):
                 continue
-            await self._api_key_manager.register_user(account_id, user_id, "user")
             user_ctx = RequestContext(user=UserIdentifier(account_id, user_id), role=Role.USER)
+            await self._api_key_manager.register_user(account_id, user_id, "user")
             await self._service.initialize_user_directories(user_ctx)
             result.created_users.append({"account_id": account_id, "user_id": user_id})
 
@@ -195,26 +195,27 @@ class LegacyDataMigration:
             result.removed.append(target_to_dict(target))
         return result.to_dict()
 
-    def _registry_account_ids(self) -> set[str]:
+    async def _registry_account_ids(self) -> set[str]:
         return {
             str(item.get("account_id", ""))
-            for item in self._api_key_manager.get_accounts()
+            for item in await self._api_key_manager.list_accounts()
             if item.get("account_id")
         }
 
-    def _registry_user_ids(self, account_id: str) -> set[str]:
-        users = self._api_key_manager.get_users(
+    async def _registry_user_ids(self, account_id: str) -> set[str]:
+        page = await self._api_key_manager.list_users_page(
             account_id,
             limit=1_000_000,
             expose_key=False,
         )
-        return {str(item.get("user_id", "")) for item in users if item.get("user_id")}
+        return {
+            str(item.get("user_id", ""))
+            for item in page["users"]
+            if item.get("user_id")
+        }
 
-    def _has_user(self, account_id: str, user_id: str) -> bool:
-        has_user = getattr(self._api_key_manager, "has_user", None)
-        if callable(has_user):
-            return bool(has_user(account_id, user_id))
-        return user_id in self._registry_user_ids(account_id)
+    async def _has_user(self, account_id: str, user_id: str) -> bool:
+        return await self._api_key_manager.has_user(account_id, user_id)
 
     async def _physical_account_ids(self) -> set[str]:
         entries = await self._ls("/local")
@@ -289,7 +290,7 @@ class LegacyDataMigration:
                 }
             )
             return
-        self._ensure_plan_user(account_id, owner, plan)
+        await self._ensure_plan_user(account_id, owner, plan)
         target_path = f"/local/{account_id}/user/{owner}/sessions/{session_id}"
         plan.operations.append(
             TreeCopy(
@@ -320,7 +321,7 @@ class LegacyDataMigration:
                 return True
         return False
 
-    def _ensure_plan_user(self, account_id: str, user_id: str, plan: MigrationPlan) -> bool:
+    async def _ensure_plan_user(self, account_id: str, user_id: str, plan: MigrationPlan) -> bool:
         if error := validate_user_id(user_id):
             detail = {
                 "account_id": account_id,
@@ -334,7 +335,7 @@ class LegacyDataMigration:
         if user_id in users:
             return True
         users.add(user_id)
-        if not self._has_user(account_id, user_id):
+        if not await self._has_user(account_id, user_id):
             plan.created_users.add((account_id, user_id))
         return True
 

@@ -86,7 +86,12 @@ export const PROFILE_LIMITS: Record<NumericField, NumberRule> = {
     unlimited: true,
     unit: 'seconds',
   },
-  tool_total_tokens: { min: 1024, integer: true, unlimited: true, unit: 'tokens' },
+  tool_total_tokens: {
+    min: 1024,
+    integer: true,
+    unlimited: true,
+    unit: 'tokens',
+  },
 }
 
 /** Per-category entry limit used by "Limit by category". */

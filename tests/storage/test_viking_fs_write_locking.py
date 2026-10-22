@@ -197,6 +197,62 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     assert fake.events[4] == ("release", {"lease_ref": "lease-1"})
 
 
+class _AsyncBusyAppendAGFS:
+    """Async AGFS stub whose exact lock is already held by another writer."""
+
+    def __init__(self):
+        self.released = []
+
+    async def pathlock_acquire_exact(self, path):
+        """Refuse the lease the way the native fail-fast lock layer does."""
+        from openviking.storage.errors import LockAcquisitionError
+
+        raise LockAcquisitionError("lock acquire timed out after 0ms")
+
+    async def pathlock_release(self, lease):
+        """Record any release attempt."""
+        self.released.append(lease)
+
+    async def read(self, path, fs_ctx=None):
+        """Return existing content; the acquire must fail first."""
+        return b"old"
+
+    async def write(self, path, data, fs_ctx=None):
+        """Record a write that must not be reached."""
+        raise AssertionError("write must not run when the lease was refused")
+
+
+@pytest.mark.asyncio
+async def test_append_file_surfaces_lock_conflict_as_conflict(monkeypatch):
+    """A busy exact lock must reach the client as CONFLICT, not as an unmappable IOError.
+
+    ``append_file`` collapses every failure into a bare ``IOError``. ``map_exception``
+    has no branch for ``OSError``, so the server falls through to its 500 handler and
+    the retryable conflict the API otherwise advertises is lost.
+    """
+    from openviking.server.error_mapping import map_exception
+
+    fs = VikingFS(agfs=_FakeAGFS())
+    fs._async_agfs = _AsyncBusyAppendAGFS()  # type: ignore[assignment]
+
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/default/resources/a.md")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_ensure_parent_dirs", AsyncMock())
+
+    with pytest.raises(Exception) as caught:
+        await fs.append_file("viking://a.md", "+new")
+
+    mapped = map_exception(caught.value, resource="viking://a.md", resource_type="file")
+    assert mapped is not None, (
+        f"{caught.value!r} is unmappable, so the router answers 500 INTERNAL "
+        "instead of a retryable conflict"
+    )
+    assert mapped.code == "CONFLICT"
+    assert mapped.details["conflict_type"] == "path_busy"
+    assert mapped.details["retryable"] is True
+
+
 @pytest.mark.asyncio
 async def test_mv_extends_outer_lease_with_owned_capability(monkeypatch):
     """Move must acquire uncovered source locks with the outer owned capability."""

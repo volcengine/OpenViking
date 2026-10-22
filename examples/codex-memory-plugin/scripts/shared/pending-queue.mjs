@@ -21,7 +21,7 @@
  *                                  (default: 50)
  */
 
-import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod, utimes } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -268,6 +268,10 @@ export async function claimForReplay(filename) {
   const dir = getPendingDir();
   const claimed = processingFilename(filename);
   try {
+    // Recovery measures claim age, not how long the item waited offline.
+    // Refresh before publishing .processing so recovery cannot see an old mtime.
+    const now = new Date();
+    await utimes(join(dir, filename), now, now);
     await rename(join(dir, filename), join(dir, claimed));
     return claimed;
   } catch {

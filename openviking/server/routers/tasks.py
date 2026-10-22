@@ -33,18 +33,21 @@ async def get_task(
 ):
     """Get the status of a single background task."""
     tracker = get_task_tracker()
+    get_task_record = tracker.get_with_events if include_events else tracker.get
     if _ctx.role == Role.ROOT:
-        task = await tracker.get(task_id)
+        task = await get_task_record(task_id)
         if task is None:
-            task = await tracker.get(task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id)
+            task = await get_task_record(
+                task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id
+            )
         if task is None:
-            task = await tracker.get(
+            task = await get_task_record(
                 task_id,
                 account_id=SYSTEM_TASK_ACCOUNT_ID,
                 user_id=SYSTEM_TASK_USER_ID,
             )
     else:
-        task = await tracker.get(
+        task = await get_task_record(
             task_id,
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,
@@ -104,10 +107,6 @@ async def list_tasks(
     if pagination == "cursor":
         from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
 
-        # ROOT retains the legacy system + cached visibility and its own
-        # persisted tasks, including submissions restored after restart.
-        account = SYSTEM_TASK_ACCOUNT_ID if _ctx.role == Role.ROOT else _ctx.account_id
-        user = SYSTEM_TASK_USER_ID if _ctx.role == Role.ROOT else _ctx.user.user_id
         filters = {
             "task_type": task_type,
             "status": status,
@@ -118,17 +117,32 @@ async def list_tasks(
         scope = page_scope(
             account=_ctx.account_id, user=_ctx.user.user_id, role=str(_ctx.role), **filters
         )
-        tasks = await tracker.list_page(
-            account_id=account,
-            user_id=user,
-            limit=limit + 1,
-            before=decode_cursor(cursor, scope),
-            include_cached=_ctx.role == Role.ROOT,
-            additional_owner=(_ctx.account_id, _ctx.user.user_id)
+        list_call = (
+            tracker.list_root_tasks(
+                account_id=_ctx.account_id,
+                user_id=_ctx.user.user_id,
+                limit=limit + 1,
+                before=decode_cursor(cursor, scope),
+                task_type=task_type,
+                status=status,
+                resource_id=resource_id,
+                include_internal=include_internal,
+                q=q,
+            )
             if _ctx.role == Role.ROOT
-            else None,
-            **filters,
+            else tracker.list_tasks(
+                account_id=_ctx.account_id,
+                user_id=_ctx.user.user_id,
+                limit=limit + 1,
+                before=decode_cursor(cursor, scope),
+                task_type=task_type,
+                status=status,
+                resource_id=resource_id,
+                include_internal=include_internal,
+                q=q,
+            )
         )
+        tasks = await list_call
         more = len(tasks) > limit
         items = [t.to_dict() for t in tasks[:limit]]
         return Response(

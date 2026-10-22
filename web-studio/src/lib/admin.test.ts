@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as Client from '#/gen/ov-client/client'
-import { fetchAdminUsersPage } from './admin'
+import { fetchAdminUserDirectory, fetchAdminUsersPage } from './admin'
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }))
 vi.mock('#/gen/ov-client/client', async (importOriginal) => {
@@ -70,4 +70,24 @@ describe('fetchAdminUsersPage', () => {
     ).rejects.toMatchObject({ message: 'Request failed' })
     expect(getMock).toHaveBeenCalledTimes(1)
   })
+})
+
+it('requests selectable users without credentials', async () => {
+  getMock.mockReset()
+  getMock.mockResolvedValue({
+    status: 200,
+    headers: {},
+    data: {
+      status: 'ok',
+      result: [{ user_id: 'alice', role: 'user', api_key_available: true }],
+    },
+  })
+  const users = await fetchAdminUserDirectory(connection, 'team')
+  expect(getMock).toHaveBeenCalledWith({
+    url: '/api/v1/admin/accounts/{account_id}/users',
+    path: { account_id: 'team' },
+    query: { include_credentials: false },
+  })
+  expect(users).toMatchObject([{ accountId: 'team', userId: 'alice' }])
+  expect(users[0].apiKey).toBeUndefined()
 })

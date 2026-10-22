@@ -44,6 +44,7 @@ from openviking.connector.routing import (
 from openviking.core.namespace import NamespaceShapeError
 from openviking.core.uri_validation import matches_content_kind
 from openviking.crypto.encryptor import MAGIC as ENCRYPTED_ENVELOPE_MAGIC
+from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
 from openviking.observability.http_error_context import (
     sanitize_public_error_details,
     sanitize_public_http_error,
@@ -55,6 +56,7 @@ from openviking.resource.processing_mode import (
     ProcessingMode,
 )
 from openviking.server.identity import RequestContext
+from openviking.service.task_domain import TaskPatch
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import InternalError, InvalidArgumentError
 from openviking_cli.utils import get_logger
@@ -701,6 +703,11 @@ class ConnectorDelegate:
                 raise InternalError(
                     f"Connector accepted the import but returned no task key: {result}"
                 )
+            ResourceIngestionEventDataSource.record_import(
+                pipeline="connector",
+                source_type="repository" if add_type == "git" else "document",
+                account_id=ctx.account_id,
+            )
             # Never log api_key / auth_config / param_config values here.
             logger.info(
                 "[ConnectorDelegate] Connector import accepted: add_type=%s to=%s "
@@ -871,9 +878,9 @@ class ConnectorDelegate:
                     )
                     last_status = status
 
-                await task_tracker.update_stage(
+                await task_tracker.patch_task(
                     ov_task_id,
-                    f"connector:{status}",
+                    TaskPatch(stage=f"connector:{status}"),
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )
@@ -902,7 +909,6 @@ class ConnectorDelegate:
                                 ctx=ctx,
                                 reason=reason,
                                 source_name=None,
-                                timeout=None,
                             )
                             for key in ("memory_linking", "warnings"):
                                 if key in link_result:

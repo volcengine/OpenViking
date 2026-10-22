@@ -6,13 +6,16 @@ use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
+/// Print the requested line range; propagate request and output errors to the CLI.
 pub async fn read(
     client: &HttpClient,
     uri: &str,
+    offset: i64,
+    limit: i64,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let content = client.read_profiled(uri).await?;
+    let content = client.read_profiled(uri, offset, limit).await?;
     output_content_result(content, output_format, compact)
 }
 
@@ -42,11 +45,11 @@ pub async fn write(
     content: &str,
     mode: &str,
     wait: bool,
-    timeout: Option<f64>,
     processing_mode: &str,
     tags: Vec<String>,
     tag_mode: &str,
     acl: Option<serde_json::Value>,
+    edit_source: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -56,11 +59,11 @@ pub async fn write(
             content,
             mode,
             wait,
-            timeout,
             processing_mode,
             tags,
             tag_mode,
             acl,
+            edit_source,
         )
         .await?;
     crate::output::output_success(result, output_format, compact);

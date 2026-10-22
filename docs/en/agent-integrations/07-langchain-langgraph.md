@@ -11,9 +11,11 @@ pip install langchain-openviking                 # LangChain adapters
 pip install "langchain-openviking[langgraph]"    # LangGraph middleware support
 ```
 
-The integration is released independently from the OpenViking server. The full
-package keeps forwarding the legacy `openviking.integrations.langchain` import
-path to `langchain-openviking` for existing applications.
+The integration is released independently from the OpenViking server. Starting
+with the next server release after v0.5.0, the legacy
+`openviking.integrations.langchain` namespace is removed without a compatibility
+shim. v0.5.0 still provides it. Install the standalone package and import from
+`langchain_openviking` instead; see the [Unreleased migration notes](../about/02-changelog.md#unreleased).
 
 ## Connection
 
@@ -254,7 +256,20 @@ from langchain_openviking import OpenVikingStore
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
+store.put(("users", "ada"), "preferences", None)  # a None value deletes the item
 ```
+
+Following LangGraph's `BaseStore` contract, passing `None` as the value deletes the item and is
+equivalent to `delete()`. Deleting a key that does not exist is a no-op.
+
+`put()` validates the namespace before changing records. Other removal errors propagate to
+the caller. Record and search-projection removal are separate operations: if only one
+succeeds, resolve the reported error and retry the operation to finish cleanup.
+
+Record reads return `None` only for a missing record; permission, backend, and invalid-JSON
+errors propagate, and `put()` does not overwrite a record after a failed read.
+`list_namespaces(prefix=("users", "*"))` matches one namespace label per `*`, including
+when `root_uri` uses a peer home alias such as `viking://~/peers/support/memories/langgraph_store`.
 
 ### LangGraph middleware
 
@@ -311,17 +326,17 @@ finish an async lifecycle with `recorder.close()`.
 The repository includes runnable examples that work without model credentials using an in-memory test client:
 
 ```bash
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langchain/rag/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langchain/context-backend/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langchain/message-history/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langgraph/agent/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langgraph/middleware/quick_app.py
 ```
 
-For a real OpenViking server and OpenAI-compatible model flow, see the [live LangGraph app](https://github.com/volcengine/OpenViking/blob/main/examples/langchain-langgraph/langgraph/agent/live_app.py).
+For a real OpenViking server and OpenAI-compatible model flow, see the [live LangGraph app](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/langgraph/agent/live_app.py).
 
 ## See also
 
 - [Capability Reference](./16-capability-reference.md)
-- [examples/langchain-langgraph/](https://github.com/volcengine/OpenViking/tree/main/examples/langchain-langgraph) — full source for all examples above
+- [integrations/frameworks/langchain/examples/](https://github.com/volcengine/OpenViking/tree/main/integrations/frameworks/langchain/examples) — full source for all examples above
 - [MCP Clients](./06-mcp-clients.md) — for non-SDK MCP integration

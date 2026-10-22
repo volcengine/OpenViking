@@ -45,6 +45,10 @@ def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
         return
     if hasattr(instance, "_token_tracker"):
         instance._token_tracker = tracker
+    inner = getattr(instance, "inner", None)
+    if inner is not None:
+        _bind_token_usage_tracker(inner, tracker)
+        return
     if hasattr(instance, "_vlm_instances"):
         for child in instance._vlm_instances:
             _bind_token_usage_tracker(child, tracker)
@@ -720,6 +724,10 @@ class VLMConfig(BaseModel):
             self.close()
         except Exception:
             pass
+
+    def build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
+        """Return the effective backend settings for one normalized credential."""
+        return self._build_vlm_config_dict_for_credential(credential)
 
     def _build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
         """Build VLM instance config dict for a specific credential."""

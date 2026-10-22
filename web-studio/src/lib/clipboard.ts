@@ -1,3 +1,5 @@
+import i18n from '#/i18n/core'
+
 export async function copyTextToClipboard(value: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(value)
@@ -7,7 +9,7 @@ export async function copyTextToClipboard(value: string): Promise<void> {
   }
 
   if (typeof document === 'undefined') {
-    throw new Error('Clipboard is unavailable')
+    throw new Error(i18n.t('studio:errors.clipboardUnavailable'))
   }
 
   const textArea = document.createElement('textarea')
@@ -23,7 +25,7 @@ export async function copyTextToClipboard(value: string): Promise<void> {
   try {
     const copied = document.execCommand('copy')
     if (!copied) {
-      throw new Error('Clipboard copy failed')
+      throw new Error(i18n.t('studio:errors.clipboardFailed'))
     }
   } finally {
     document.body.removeChild(textArea)

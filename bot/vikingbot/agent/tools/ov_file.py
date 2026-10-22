@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import itertools
 import json
 import tempfile
@@ -256,6 +257,69 @@ class VikingListTool(OVFileTool):
             await self._release_client(tool_context, client)
 
 
+class VikingDiffPathsTool(OVFileTool):
+    """Expose paginated snapshot changes, including deletions, without reading file bodies."""
+
+    @property
+    def name(self) -> str:
+        return "openviking_diff_paths"
+
+    @property
+    def description(self) -> str:
+        return (
+            "List added, modified and deleted file URIs under directories between snapshots. "
+            "Omit base or pass null to list all files at head. Results include has_more and "
+            "next_offset; query all pages to enumerate the complete change set. "
+            "Read required file contents separately with openviking_multi_read."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                    "description": "Source directory Viking URIs to compare.",
+                },
+                "base": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "description": "Base commit ID; omitted or null means an empty tree.",
+                },
+                "head": {"type": "string", "description": "Required target snapshot commit ID."},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
+            },
+            "required": ["paths", "head"],
+        }
+
+    async def execute(
+        self,
+        tool_context: ToolContext,
+        paths: list[str],
+        head: str,
+        base: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+        **kwargs: Any,
+    ) -> str:
+        """Return the requested change page as JSON, or an explicit query error."""
+        client = None
+        try:
+            client = await self._get_client(tool_context)
+            result = await client.diff_paths(
+                paths, base=base, head=head, offset=offset, limit=limit
+            )
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning(f"Error querying Viking snapshot changes: {exc}")
+            return f"Error querying Viking snapshot changes: {exc}"
+        finally:
+            await self._release_client(tool_context, client)
+
+
 class VikingSearchTool(OVFileTool):
     """Tool to search Viking resources."""
 
@@ -287,6 +351,12 @@ class VikingSearchTool(OVFileTool):
                     "type": "number",
                     "description": "Minimum relevance score threshold",
                     "default": 0.35,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum candidates per search scope; increase if needed.",
+                    "minimum": 1,
+                    "default": 10,
                 },
             },
             "required": ["query"],
@@ -425,6 +495,7 @@ class VikingSearchTool(OVFileTool):
         query: str,
         target_uri: Optional[str] = "",
         min_score: float = 0.35,
+        limit: int = 10,
         **kwargs: Any,
     ) -> str:
         client = None
@@ -496,7 +567,7 @@ class VikingSearchTool(OVFileTool):
             for search_target_uri, search_user_id in search_targets:
                 search_kwargs = {
                     "target_uri": search_target_uri,
-                    "limit": 10,
+                    "limit": limit,
                 }
                 if search_user_id:
                     search_kwargs["user_id"] = search_user_id
@@ -990,8 +1061,10 @@ class VikingMultiReadTool(OVFileTool):
         uris: list[str],
         offset: int = 0,
         limit: int = -1,
+        with_revision: bool = False,
         **kwargs: Any,
     ) -> str | MultimodalToolResult:
+        """Read content; with_revision returns raw UTF-8 ranges and full-file hashes as JSON."""
         level = "read"  # 默认获取完整内容
         client = None
         try:
@@ -1011,6 +1084,10 @@ class VikingMultiReadTool(OVFileTool):
                 async with semaphore:
                     try:
                         media_kind = self._media_kind(uri)
+                        if with_revision and (
+                            media_kind or offset < 0 or (limit != -1 and limit < 1)
+                        ):
+                            raise ValueError("Revision reads require text files and valid line ranges")
                         if media_kind == "image":
                             if index not in inline_image_indexes:
                                 return {
@@ -1118,6 +1195,17 @@ class VikingMultiReadTool(OVFileTool):
                                     "success": False,
                                     "media_kind": None,
                                 }
+                        if with_revision:
+                            raw = await client.download_bytes(uri)
+                            lines = raw.decode("utf-8").splitlines(keepends=True)
+                            return {
+                                "uri": uri,
+                                "content": "".join(
+                                    lines[offset:] if limit == -1 else lines[offset : offset + limit]
+                                ),
+                                "base_hash": hashlib.sha256(raw).hexdigest(),
+                                "success": True,
+                            }
                         content = await client.read_content(
                             uri, level=level, offset=offset, limit=limit
                         )
@@ -1144,6 +1232,8 @@ class VikingMultiReadTool(OVFileTool):
             # 并发读取所有URI
             read_tasks = [read_single_uri(index, uri) for index, uri in enumerate(uris)]
             results = await asyncio.gather(*read_tasks)
+            if with_revision:
+                return json.dumps(results, ensure_ascii=False)
 
             inline_media_bytes = 0
             for result in results:

@@ -252,15 +252,6 @@ async def test_archive_state_uses_server_terminal_markers(marker, expected):
     assert all("/api/v1/content/read?uri=viking%3A" in path for path in paths)
 
 
-def test_missing_optional_dependencies_explain_install(monkeypatch):
-    from openviking_gateway import cli
-
-    monkeypatch.setattr("sys.argv", ["openviking-gateway"])
-    monkeypatch.setattr(cli, "find_spec", lambda _: None)
-    with pytest.raises(SystemExit, match=r"openviking\[gateway\]"):
-        cli.main()
-
-
 async def test_capture_mailboxes_are_independent_and_lease_safe(setup_kernel):
     _, store, _, _ = setup_kernel
     await store.capture.swap("scope", "one", Document(), {"anchor": "same"}, 0)

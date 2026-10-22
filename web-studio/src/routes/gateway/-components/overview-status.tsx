@@ -15,6 +15,7 @@ import {
 import type { OpenVikingHealth, Overview } from '../-lib/api'
 import { formatNumber } from '../-lib/format'
 import { degradationInfo, healthReasonLabel } from '../-lib/localize'
+import { DocsLink } from './docs-link'
 import { EmptyState } from './empty-state'
 import { Notice } from './notice'
 import { EmptyValue, HealthBadge, ToneBadge } from './status-badges'
@@ -45,7 +46,12 @@ function SavingStatus({ issues }: { issues: Overview['capture_issues'] }) {
       <p className="text-sm font-medium">{t('overview.saving.title')}</p>
       {retrying > 0 || paused > 0 ? (
         <>
-          <Notice tone="warning">
+          <Notice
+            tone="warning"
+            action={
+              <DocsLink section="notSaved">{t('docs.troubleshoot')}</DocsLink>
+            }
+          >
             {retrying > 0 ? (
               <p>{t('overview.saving.retrying', { count: retrying })}</p>
             ) : null}
@@ -77,7 +83,7 @@ export function OpenVikingCard({
   captureIssues: Overview['capture_issues']
 }) {
   const { t } = useTranslation('gateway')
-  const { status, version, auth_mode: authMode, reason } = health
+  const { status, version, reason } = health
   return (
     <Card className="gap-4">
       <CardHeader>
@@ -98,24 +104,17 @@ export function OpenVikingCard({
             <dd className="truncate font-mono text-xs leading-5">
               {version || <EmptyValue />}
             </dd>
-            <dt className="text-muted-foreground">
-              {t('overview.openviking.authMode')}
-            </dt>
-            <dd>
-              {authMode ? (
-                t(`overview.openviking.authModes.${authMode}`, {
-                  defaultValue: authMode,
-                })
-              ) : (
-                <EmptyValue />
-              )}
-            </dd>
           </dl>
         ) : null}
         {status === 'degraded' ? (
           <Notice
             tone="danger"
             title={reason ? healthReasonLabel(t, reason) : undefined}
+            action={
+              <DocsLink section="openvikingDegraded">
+                {t('docs.troubleshoot')}
+              </DocsLink>
+            }
           >
             <p className="text-foreground/80">
               {t('overview.openviking.unreachable')}
@@ -124,7 +123,8 @@ export function OpenVikingCard({
         ) : null}
         {status === 'starting' ? (
           <p className="text-sm leading-6 text-muted-foreground">
-            {t('overview.openviking.starting')}
+            {t('overview.openviking.starting')}{' '}
+            <DocsLink section="openvikingDegraded" variant="text" />
           </p>
         ) : null}
         <SavingStatus issues={captureIssues} />
@@ -149,7 +149,10 @@ export function DegradedRequestsCard({
         <CardTitle>{t('overview.degraded.title')}</CardTitle>
         <CardDescription>{t('overview.degraded.description')}</CardDescription>
         {entries.length > 0 ? (
-          <CardAction>
+          <CardAction className="flex flex-wrap justify-end gap-1">
+            <DocsLink section="degradedRequests">
+              {t('docs.troubleshoot')}
+            </DocsLink>
             <IssuesLink />
           </CardAction>
         ) : null}

@@ -46,11 +46,11 @@ separate access.
 | Connection | What you need |
 |------------|---------------|
 | **Quick Local** | A language model already configured in Hermes. Setup installs a local server and embedding model. |
-| **OpenViking Service (VolcEngine Cloud)** | A service API key for VolcEngine's [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service). |
+| **OpenViking Service (VolcEngine Cloud)** | A service API key for VolcEngine's [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme). |
 | **Custom** | Your server URL and credentials. Setup can also reuse a saved `ovcli.conf`. |
 
 For the cloud service, activate it and create an API key in the
-[OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing).
+[OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=github&utm_medium=referral&utm_campaign=readme).
 Open **User Management**, then **API Key**. You do not need to install a server
 or configure local models.
 
@@ -84,12 +84,11 @@ Each Hermes profile has its own server, data and port. If the saved port is
 occupied, Quick Local selects a free port. Run setup again after changing the
 Hermes model or API key. Your data and downloaded model are kept.
 
-**Known issue:** OpenViking 0.4.22 and 0.4.23 can crash when local embedding
-calls overlap, such as during indexing and recall. This affects Quick Local
-and Custom servers using that local backend. It does not affect connections
-using remote embedding APIs. The [fix](https://github.com/volcengine/OpenViking/pull/5548)
-is merged and is expected in OpenViking 0.4.24. After that release, run Quick
-Local setup again to upgrade.
+Quick Local installs the latest compatible OpenViking 0.5 release. Version
+0.5.0 includes the [fix](https://github.com/volcengine/OpenViking/pull/5548)
+for overlapping local embedding calls that could crash 0.4.22 and 0.4.23.
+Run Quick Local setup again to upgrade an existing private runtime. This
+does not upgrade a separately managed Custom or OpenViking Service server.
 
 The server keeps running after Hermes exits. These commands are optional:
 
@@ -144,9 +143,17 @@ data are kept. Updates use the version reviewed in the Hermes catalog.
 For direct source installs, use the [source update command](CONFIGURATION.md#pinned-source-installation).
 
 To update a Quick Local server, run `hermes memory setup openviking` again and
-choose Quick Local. Setup selects the latest compatible OpenViking 0.4 release
+choose Quick Local. Setup selects the latest compatible OpenViking 0.5 release
 and restarts the server if needed. Normal chat and recovery use the installed
 server without checking for updates.
+
+If validation fails after installing a runtime update, chat keeps using the healthy
+existing server while it keeps running. If that process stops, recovery can start
+the installed runtime before setup validation has passed. The update still needs
+validation, even if the server is ready. `hermes openviking local status` reports
+this pending state. Correct the reported problem and run
+`hermes memory setup openviking` again, then choose Quick Local. Setup validates
+the update before requesting a restart.
 
 ## Existing users
 

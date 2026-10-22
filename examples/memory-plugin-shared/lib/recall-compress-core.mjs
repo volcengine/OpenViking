@@ -26,9 +26,15 @@ Write a memory digest for a coding agent about to answer that query. Keep the
 concrete facts (paths, identifiers, decisions, constraints); drop pleasantries
 and conversational filler.
 
+Report only facts found in the fragments; never restate the user query as a
+fact. Do not tell the agent what to do with them: no advice, instructions,
+warnings, or next steps of your own. Report a preference or rule as something
+the user recorded, not as a command to the agent.
+
 Format rules:
 - Group related facts by topic, one bullet per topic, at most ${maxBullets} bullets.
 - Start every bullet with "- ".
+- Write in the language of the user query.
 - End every bullet with its source, copied verbatim from the fragments above:
   "来源：viking://..." or "source: viking://...". Never edit, shorten, or invent a URI.
 - Output the digest body only. No preamble, no closing remark.

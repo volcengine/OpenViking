@@ -1,9 +1,11 @@
+// @vitest-environment jsdom
 import { AxiosError } from 'axios'
 import type { AxiosResponse } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   GatewayError,
+  getAccess,
   deleteUserData,
   getConnectionInfo,
   issueKey,
@@ -15,6 +17,7 @@ import {
   saveUpstream,
   toGatewayError,
 } from './api'
+import { getManagementKey, setManagementKey } from './management-key'
 import { UPSTREAM_DEFAULTS } from './upstream-schema'
 
 const { request } = vi.hoisted(() => ({ request: vi.fn() }))
@@ -45,6 +48,7 @@ function failure(status: number, data: unknown) {
 
 beforeEach(() => {
   request.mockReset()
+  sessionStorage.clear()
 })
 
 describe('gateway calls', () => {
@@ -55,7 +59,7 @@ describe('gateway calls', () => {
     const [options] = request.mock.calls[0]
     expect(options).toMatchObject({
       method: 'PUT',
-      url: '/api/v1/admin/gateway/upstreams/a%2Fb',
+      url: '/gateway/admin/upstreams/a%2Fb',
       body: input,
       headers: { 'Content-Type': 'application/json' },
     })
@@ -70,7 +74,7 @@ describe('gateway calls', () => {
     ])
     expect(request.mock.calls[0][0]).toMatchObject({
       method: 'GET',
-      url: '/api/v1/admin/gateway/logs',
+      url: '/gateway/admin/logs',
       query: { limit: 50 },
     })
     expect(request.mock.calls[0][0]).not.toHaveProperty('body')
@@ -89,7 +93,7 @@ describe('gateway calls', () => {
     await expect(listTools(connection)).resolves.toEqual(tools)
     expect(request.mock.calls[0][0]).toMatchObject({
       method: 'GET',
-      url: '/api/v1/admin/gateway/tools',
+      url: '/gateway/admin/tools',
     })
     request.mockResolvedValue(ok([]))
     await expect(listTools(connection)).resolves.toEqual([])
@@ -114,9 +118,9 @@ describe('gateway calls', () => {
     expect(
       request.mock.calls.map(([options]) => [options.method, options.url]),
     ).toEqual([
-      ['POST', '/api/v1/admin/gateway/keys/key-1/capture/reset'],
-      ['POST', '/api/v1/admin/gateway/keys'],
-      ['DELETE', '/api/v1/admin/gateway/users/alice/data'],
+      ['POST', '/gateway/admin/keys/key-1/capture/reset'],
+      ['POST', '/gateway/admin/keys'],
+      ['DELETE', '/gateway/admin/users/alice/data'],
     ])
   })
 })
@@ -150,72 +154,39 @@ describe('listKeyUsers', () => {
 describe('toGatewayError', () => {
   it.each([
     [
-      'a FastAPI detail',
+      'explicit in-use reason',
       409,
-      { detail: 'Revoke or update dependent keys before deleting this object' },
-      'conflict',
-      'Revoke or update dependent keys before deleting this object',
+      { reason: 'in_use', key_count: 3, detail: 'dependent keys' },
+      'in_use',
+      'dependent keys',
     ],
     [
-      'a disabled gateway (OpenViking envelope)',
-      503,
-      {
-        status: 'error',
-        error: {
-          code: 'UNAVAILABLE',
-          message: 'OpenViking Gateway is not enabled',
-        },
-      },
+      'disabled gateway',
+      404,
+      { reason: 'not_enabled', detail: 'disabled' },
       'not_enabled',
-      'OpenViking Gateway is not enabled',
+      'disabled',
     ],
     [
-      'a missing management token',
-      503,
-      {
-        status: 'error',
-        error: {
-          code: 'UNAVAILABLE',
-          message: 'OpenViking Gateway management token is not configured',
-        },
-      },
-      'token_missing',
-      'OpenViking Gateway management token is not configured',
-    ],
-    [
-      'an unreachable gateway',
-      503,
-      {
-        status: 'error',
-        error: {
-          code: 'UNAVAILABLE',
-          message: 'OpenViking Gateway management service is unavailable',
-          details: { original_http_status_code: 502 },
-        },
-      },
-      'unreachable',
-      'OpenViking Gateway management service is unavailable',
-    ],
-    [
-      'a management token that differs from the gateway',
+      'invalid management key',
       401,
-      { detail: 'Invalid gateway management credential' },
-      'token_mismatch',
-      'Invalid gateway management credential',
+      { reason: 'management_key_invalid', detail: 'invalid management key' },
+      'management_key_invalid',
+      'invalid management key',
     ],
     [
-      'an OpenViking reason from key issuance',
-      403,
-      { error: { message: 'root_key_not_allowed' } },
-      'forbidden',
-      'root_key_not_allowed',
-    ],
-    [
-      'a validation list',
+      'validation list',
       422,
       { detail: [{ msg: 'Field required' }, { msg: 'Input too long' }] },
       'invalid',
       'Field required; Input too long',
+    ],
+    [
+      'unknown wording without a reason',
+      503,
+      { detail: 'OpenViking Gateway management token is not configured' },
+      'other',
+      'OpenViking Gateway management token is not configured',
     ],
   ])('reads %s', async (_, status, body, reason, detail) => {
     request.mockRejectedValue(failure(status, body))
@@ -226,14 +197,7 @@ describe('toGatewayError', () => {
       reason,
       detail,
     ])
-    expect(thrown.unavailable).toBe(
-      [
-        'not_enabled',
-        'token_missing',
-        'token_mismatch',
-        'unreachable',
-      ].includes(reason),
-    )
+    expect(thrown.unavailable).toBe(reason === 'not_enabled')
   })
 
   it('reads a missing gateway route as a server without gateway support', async () => {
@@ -243,7 +207,7 @@ describe('toGatewayError', () => {
     const thrown = await getConnectionInfo(connection).catch((caught) => caught)
     expect([thrown.status, thrown.reason, thrown.unavailable]).toEqual([
       404,
-      'unsupported',
+      'not_enabled',
       true,
     ])
     // Elsewhere a 404 still means the item is gone.
@@ -270,4 +234,46 @@ it('creates distinct hex ids without crypto.randomUUID', () => {
   const ids = new Set(Array.from({ length: 50 }, newObjectId))
   expect(ids.size).toBe(50)
   for (const id of ids) expect(id).toMatch(/^[0-9a-f]{16}$/)
+})
+
+it('sends management secrets only to gateway calls, with account scope', async () => {
+  setManagementKey(connection.baseUrl, 'ovgm-management-secret')
+  request.mockResolvedValue(ok([]))
+  await listLogs(connection)
+  expect(request.mock.calls[0][0]).toMatchObject({
+    query: { account_id: 'acme' },
+    headers: {
+      'X-OpenViking-Gateway-Management-Key': 'ovgm-management-secret',
+    },
+  })
+  await listKeyUsers(connection)
+  expect(request.mock.calls[1][0].headers).toBeUndefined()
+})
+it('locks an expired stored key but does not store an unverified candidate', async () => {
+  setManagementKey(connection.baseUrl, 'old-key')
+  request.mockRejectedValue(
+    failure(401, { reason: 'management_key_invalid', detail: 'rotated' }),
+  )
+  await expect(
+    getAccess({ ...connection, managementKey: 'wrong-candidate' }),
+  ).rejects.toMatchObject({
+    reason: 'management_key_invalid',
+  })
+  expect(getManagementKey(connection.baseUrl)).toBe('old-key')
+  await expect(getAccess(connection)).rejects.toMatchObject({
+    reason: 'management_key_invalid',
+  })
+  expect(getManagementKey(connection.baseUrl)).toBe('')
+})
+
+it('uses the query credential snapshot even after the tab is unlocked or locked', async () => {
+  request.mockResolvedValue(ok([]))
+  setManagementKey(connection.baseUrl, 'new-management-key')
+  await listLogs({ ...connection, managementKey: '' })
+  expect(request.mock.calls[0][0].headers).toBeUndefined()
+  sessionStorage.clear()
+  await listLogs({ ...connection, managementKey: 'captured-key' })
+  expect(request.mock.calls[1][0].headers).toEqual({
+    'X-OpenViking-Gateway-Management-Key': 'captured-key',
+  })
 })

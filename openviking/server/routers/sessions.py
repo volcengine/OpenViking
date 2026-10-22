@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
+from openviking.session.auto_commit_policy import validate_idle_timeout_input
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.image_search import is_viking_uri
 from openviking_cli.utils import get_logger
@@ -78,9 +79,9 @@ PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 class AutoCommitPolicyRequest(BaseModel):
     """Session-level auto-commit policy overrides.
 
-    All fields are optional. Bounds are not enforced here: ``AutoCommitPolicy``
-    clamps every value into ``[0, max]`` so clamping lives in one place across
-    the HTTP, SDK, and CLI entrypoints.
+    All fields are optional. ``idle_timeout_seconds`` validates its write-time
+    minimum here so legacy stored policies remain readable. Other bounds are
+    clamped by ``AutoCommitPolicy``.
     """
 
     pending_token_threshold: Optional[int] = None
@@ -90,6 +91,11 @@ class AutoCommitPolicyRequest(BaseModel):
     min_commit_interval_seconds: Optional[int] = None
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("idle_timeout_seconds")
+    @classmethod
+    def validate_idle_timeout_seconds(cls, value: Optional[int]) -> Optional[int]:
+        return None if value is None else validate_idle_timeout_input(value)
 
     @model_validator(mode="after")
     def reject_explicit_null_fields(self) -> "AutoCommitPolicyRequest":
@@ -446,7 +452,7 @@ async def list_tool_results(
 ):
     """List externalized tool results for a session."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.list_tool_results(tool_name=tool_name, limit=limit)
     return Response(status="ok", result=_to_jsonable(result))
 
@@ -468,7 +474,7 @@ async def read_tool_result(
             details={"field": "limit", "value": limit},
         )
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.read_tool_result(
         tool_result_id,
         offset=offset,
@@ -489,7 +495,7 @@ async def search_tool_result(
 ):
     """Search within an externalized tool result."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.search_tool_result(
         tool_result_id,
         query=q,
@@ -529,7 +535,7 @@ async def get_session_archive(
     from openviking_cli.exceptions import NotFoundError
 
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     try:
         result = await session.get_session_archive(archive_id)
     except NotFoundError:
@@ -702,17 +708,6 @@ async def commit_session(
     ).model_dump(exclude_none=True)
 
 
-@router.post("/{session_id}/extract")
-async def extract_session(
-    session_id: str = Path(..., description="Session ID"),
-    _ctx: RequestContext = Depends(get_session_request_context),
-):
-    """Extract memories from a session."""
-    service = get_service()
-    result = await service.sessions.extract(session_id, _ctx)
-    return Response(status="ok", result=_to_jsonable(result))
-
-
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,
@@ -737,7 +732,7 @@ async def add_message(
     service = get_service()
 
     async def _add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         parts = _resolve_message_parts(request, _ctx)
 
         specs = [
@@ -792,7 +787,7 @@ async def batch_add_messages(
     service = get_service()
 
     async def _batch_add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         specs = []
         for msg_request in request.messages:
             parts = _resolve_message_parts(msg_request, _ctx)

@@ -190,9 +190,10 @@ def test_json_protocol_preserves_stable_parser_and_empty_contract():
 
 def test_python_contract_and_bindings_expose_only_selected_schema_fields():
     uri = "viking://user/alice/memories/preferences/editor.md"
+    body = 'Use Vim\n  Keep "quotes", tabs\tand 中文; literal \\n.'
     context = _context(
         [_preference_schema()],
-        files=[_existing_preference(uri, "editor", "Use Vim", 2)],
+        files=[_existing_preference(uri, "editor", body, 2)],
     )
     protocol = create_extraction_output_protocol("python")
 
@@ -201,9 +202,17 @@ def test_python_contract_and_bindings_expose_only_selected_schema_fields():
 
     assert "sdk.create_preferences" in contract
     assert "sdk.create_projects" not in contract
-    assert "preferences_1 = sdk.existing" in bindings
-    assert "topic='editor'" in bindings
-    assert "content='Use Vim'" in bindings
+    record = json.loads(bindings.split("\n", 1)[1])
+    assert record == {
+        "object_name": "preferences_1",
+        "memory_type": "preferences",
+        "fields": {"topic": "editor", "score": 2, "content": body},
+    }
+    assert "Existing-memory records are input context only." in contract
+    assert "Use each object_name as an already-bound variable" in contract
+    assert "sdk.existing" not in contract
+    assert "sdk.existing(" not in bindings
+    assert protocol.binding_name(uri) == record["object_name"]
     assert "version" not in bindings
     assert uri not in bindings
     assert protocol.render_new_bindings(context, source="duplicate read") == ""
@@ -239,6 +248,8 @@ def test_python_contract_includes_link_rules_when_enabled():
 
     assert "## Link Rules" in contract
     assert "obj.link(target" in contract
+    assert "weight=0.5" in contract
+    assert "description=''" in contract
     assert "match_text" in contract
     assert "obj_a.link(" in contract
     assert "assign the create/set call to a variable first" in contract
@@ -280,12 +291,64 @@ def test_python_field_description_keeps_dsl_patch_instructions():
     schema.fields[1].description = "Write content in {{ language.upper() }}."
     context = _context([schema], template_context={"language": "en"})
 
-    contract = create_extraction_output_protocol("python").render_contract(context)
+    protocol = create_extraction_output_protocol("python")
+    contract = protocol.render_contract(context)
 
     assert "content [editable string: obj.field.edit/drop/update]: Write content in EN." in contract
     assert "obj.content.edit(search=..., replace=...)" in contract
     assert "PATCH operation for" not in contract
     assert "Use a DELETE block" not in contract
+    assert "copied verbatim" in contract
+    assert "occur exactly once" in contract
+    assert "## Patch Context Rules" in protocol.render_context_rules(context)
+
+
+@pytest.mark.parametrize("output_format", ["python", "json"])
+def test_output_contract_preserves_core_add_only_and_upsert_capabilities(output_format):
+    context = _context([_preference_schema(operation_mode="add_only")], available_tools=())
+    protocol = create_extraction_output_protocol(output_format)
+    contract = protocol.render_contract(context)
+    rules = protocol.render_reference_rules(context)
+    assert "Create new memories only, with complete field values" in contract + rules
+    assert protocol.render_context_rules(context) == ""
+    for unsupported in (
+        "obj.update",
+        "obj.content.edit",
+        "obj.content.drop",
+        "replacement=",
+    ):
+        assert unsupported not in contract + rules + protocol.render_final_instruction(context)
+    assert "delete_ids" not in rules + protocol.render_final_instruction(context)
+
+    program = (
+        'sdk.create_preferences(topic="editor", content="""Use Vim""", score=1)\nsdk.commit()'
+        if output_format == "python"
+        else '{"preferences": [{"page_id": 100, "topic": "editor", "content": "Use Vim", "score": 1}]}'
+    )
+    operations, error = protocol.parse(program, context)
+    assert error is None
+    assert operations.preferences[0].content == "Use Vim"
+
+    # A mixed batch must retain upsert/delete support, without teaching patches
+    # from an add-only schema or exposing inspection tools it does not have.
+    mixed = _context(
+        [_preference_schema(operation_mode="add_only"), _project_schema()], available_tools=()
+    )
+    rules = protocol.render_reference_rules(mixed)
+    contract = protocol.render_contract(mixed)
+    assert "replacement" in rules
+    assert "preserving every unaffected fact" in rules
+    assert protocol.render_context_rules(mixed) == ""
+    if output_format == "python":
+        assert "obj.content.update(" in contract
+        assert "obj.delete(replacement=None)" in contract
+        assert "obj.content.edit" not in contract
+        assert "obj.content.drop" not in contract
+        assert "call the available native" not in contract.lower()
+        assert "never drop a unique fact" in rules
+    else:
+        assert "When editing an existing item" in rules
+        assert "DELETE blocks" not in rules
 
 
 @pytest.mark.asyncio
@@ -323,6 +386,8 @@ async def test_default_python_extract_loop_passes_language_to_field_descriptions
     assert f"Preferences in {language}." in prompt
     assert f"Write content in {language}." in prompt
     assert "{{ language }}" not in prompt
+    assert "## Read Format Rules" not in prompt
+    assert "## Patch Context Rules" in prompt
 
 
 def test_python_contract_omits_link_rules_when_disabled():
@@ -408,8 +473,10 @@ def test_python_protocol_renders_search_result_as_read_tool_comment():
     assert "read them with the read tool" in content
     assert f"# - {uri_a}" in content
     assert f"# - {uri_b}" in content
-    # Search yields no content, so it must not fabricate an sdk.existing() binding.
+    # Search yields no content, so it must not register an existing object.
     assert "sdk.existing(" not in content
+    assert protocol.binding_name(uri_a) is None
+    assert protocol.binding_name(uri_b) is None
     assert "search_results" not in content
     assert "0.9" not in content
 
@@ -483,8 +550,10 @@ def test_python_protocol_renders_read_result_directly_as_existing_binding():
     assert len(messages) == 1
     content = messages[0]["content"]
     assert content.startswith("# Existing memory loaded by tool call")
-    assert "preferences_1 = sdk.existing(" in content
-    assert "content='Keep plugins small'" in content
+    record = json.loads(content.split("\n", 1)[1].split("\n# Memory maintenance notice:", 1)[0])
+    assert record["object_name"] == "preferences_1"
+    assert record["fields"]["content"] == "Keep plugins small"
+    assert "sdk.existing(" not in content
     assert "2\\tKeep plugins small" not in content
     assert "Use Vim" not in content
     assert "tool_call_name" not in content
@@ -496,9 +565,23 @@ def test_python_protocol_renders_read_result_directly_as_existing_binding():
     assert "content_characters" not in content
     assert "choose split or compact" in content
 
+    reread = protocol.render_tool_result_messages(
+        context,
+        call_id="call-2",
+        tool_name="read",
+        params={"uri": uri},
+        result={"content": "Use Neovim\nKeep plugins small"},
+        source="tool call",
+    )
+    updated_record = json.loads(reread[0]["content"].split("\n", 1)[1])
+    assert updated_record["object_name"] == record["object_name"]
+    assert updated_record["fields"]["content"] == "Use Neovim\nKeep plugins small"
+    assert protocol.render_new_bindings(context, source="after reread") == ""
+
 
 def test_python_protocol_converts_prefetch_tool_messages_without_duplicating_read_content():
     uri = "viking://user/alice/memories/preferences/editor.md"
+    source_uri = "viking://user/alice/memories/trajectories/source.md"
     context = _context(
         [_preference_schema()],
         files=[_existing_preference(uri, "editor", "Use Vim", 2)],
@@ -533,6 +616,21 @@ def test_python_protocol_converts_prefetch_tool_messages_without_duplicating_rea
             ),
         },
     ]
+    prefetched.append(
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "tool_call_name": "read",
+                    "args": {"uri": source_uri},
+                    "result": {
+                        "context_role": "candidate_source_trajectory",
+                        "content": "Read-only source trajectory",
+                    },
+                }
+            ),
+        }
+    )
 
     messages = protocol.render_prefetch_messages(prefetched, context)
     combined = "\n".join(message["content"] for message in messages)
@@ -542,11 +640,27 @@ def test_python_protocol_converts_prefetch_tool_messages_without_duplicating_rea
     assert "read them with the read tool" in combined
     assert f"# - {uri}" in combined
     assert "search_results = [" not in combined
-    # The file that was actually read becomes a system-provided existing binding.
-    assert "preferences_1 = sdk.existing(" in combined
+    # Only the writable memory gets an object reference; source trajectories stay read-only.
+    assert '"object_name": "preferences_1"' in combined
+    assert "sdk.existing(" not in combined
     assert combined.count("Use Vim") == 1
     assert "tool_call_name" not in combined
     assert '"result"' not in combined
+    assert "Read-only context; this is not a mutable memory object." in combined
+    assert protocol.binding_name(source_uri) is None
+
+    operations, error = protocol.parse(
+        'preferences_1.content.edit(search="Use Vim", replace="Use Neovim")\nsdk.commit()',
+        context,
+    )
+    assert error is None
+    assert operations.model_dump()["preferences"][0]["content"]["blocks"] == [
+        {"search": "Use Vim", "replace": "Use Neovim"}
+    ]
+    operations, error = protocol.parse(
+        'candidate_source_trajectory.content.update("not allowed")', context
+    )
+    assert operations is None and "unknown name" in error
 
 
 def test_python_contract_uses_set_for_single_file_schema_and_create_for_collection():
@@ -586,7 +700,8 @@ def test_python_reserved_existing_retry_explains_new_replacement_binding():
         "Line 3: sdk.existing() is reserved for system-provided bindings"
     )
 
-    assert "existing-object variable names already supplied by the system" in retry
+    assert "object_name from the system-provided existing-memory context record" in retry
+    assert "already-bound variable" in retry
     assert "canonical = sdk.create_<type>(...)" in retry
     assert "duplicate_1.delete(replacement=canonical)" in retry
 
@@ -702,9 +817,11 @@ def test_python_edits_aliased_field_on_existing_object():
 
     bindings = _bind(protocol, context)
     # Existing-object binding exposes the field under its identifier alias.
-    assert "note_body=" in bindings
+    record = json.loads(bindings.split("\n", 1)[1])
+    assert record["fields"]["note_body"] == "Kickoff on 2023-06-09."
+    assert "note-body" not in record["fields"]
 
-    var = bindings.split(" = ", 1)[0].strip().splitlines()[-1]
+    var = record["object_name"]
     operations, error = protocol.parse(
         f"""
 {var}.note_body.edit(search=\"\"\"Kickoff on 2023-06-09.\"\"\", replace=\"\"\"Kickoff moved to 2023-07-01.\"\"\")
@@ -782,6 +899,24 @@ def test_python_syntax_error_includes_offending_source_line():
     assert "^" in error
 
 
+@pytest.mark.parametrize("ending", ["sdk.commit(", "sdk.commit())"])
+@pytest.mark.parametrize(
+    "wrapper", ["{}", "```python\n{}\n```", "Explanation\n```python\n{}\n```\nDone."]
+)
+def test_python_rejects_invalid_program_containing_fenced_example(ending, wrapper):
+    context = _context([_profile_schema()])
+    protocol = create_extraction_output_protocol("python")
+    program = (
+        'sdk.set_profile(content="""Example:\n```python\nsdk.commit()\n```\n'
+        f'Keep this example.""")\n{ending}'
+    )
+
+    operations, error = protocol.parse(wrapper.format(program), context)
+
+    assert operations is None
+    assert error is not None
+
+
 def test_memory_schema_identity_fields_follow_scope_and_uri_template():
     entities = MemoryTypeSchema(
         memory_type="entities",
@@ -829,17 +964,31 @@ def test_memory_schema_identity_fields_ignore_jinja_token_collisions():
     assert events.identity_fields() == ("peer_id", "event_name", "ranges")
 
 
-def test_python_set_single_file_memory_compiles_to_same_operations_as_json():
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Engineer",
+        'Config:\n```nginx\nadd_header Cache-Control "no-cache";\n```\nDone.',
+        "Example:\n```python\nsdk.commit()\n```\nKeep this example.",
+        "Use the literal ``` marker.",
+        "```text\nfirst\n```\n```python\nsdk.commit()\n```",
+    ],
+)
+@pytest.mark.parametrize(
+    "wrapper",
+    ["{}", "```python\n{}\n```", "Explanation\n```python\n{}\n```\nDone."],
+)
+def test_python_set_single_file_memory_compiles_to_same_operations_as_json(content, wrapper):
     context = _context([_profile_schema()])
     python_protocol = create_extraction_output_protocol("python")
     json_protocol = create_extraction_output_protocol("json")
 
     python_operations, python_error = python_protocol.parse(
-        "sdk.set_profile(content='Engineer')\nsdk.commit()",
+        wrapper.format(f'sdk.set_profile(content="""{content}""")\nsdk.commit()'),
         context,
     )
     json_operations, json_error = json_protocol.parse(
-        '{"profile":[{"page_id":100,"content":"Engineer"}],"delete_ids":[]}',
+        json.dumps({"profile": [{"page_id": 100, "content": content}], "delete_ids": []}),
         context,
     )
 
@@ -1034,7 +1183,7 @@ def test_python_existing_binding_exposes_but_does_not_update_dynamic_peer_id():
         context,
     )
 
-    assert "peer_id='bob'" in bindings
+    assert json.loads(bindings.split("\n", 1)[1])["fields"]["peer_id"] == "bob"
     assert error is None
     item = operations.model_dump()["preferences"][0]
     assert item["content"] == "Use Emacs"
@@ -1128,7 +1277,7 @@ sdk.commit()
 
 @pytest.mark.parametrize("memory_type", ["experiences", "entities"])
 @pytest.mark.parametrize("method", ['edit(search="old", replace="new")', 'drop(text="old")'])
-def test_python_builtin_content_edit_respects_merge_op_and_offers_valid_repair(memory_type, method):
+def test_python_builtin_content_edit_accepts_replace_but_keeps_update_guidance(memory_type, method):
     registry = MemoryTypeRegistry(load_schemas=False)
     registry.load_from_yaml(str(resolve_memory_templates_dir() / f"{memory_type}.yaml"))
     schema = registry.get(memory_type)
@@ -1152,20 +1301,21 @@ def test_python_builtin_content_edit_respects_merge_op_and_offers_valid_repair(m
     _bind(protocol, context)
     operations, error = protocol.parse(f"{memory_type}_1.content.{method}", context)
 
-    if memory_type == "entities":
+    assert error is None
+    assert operations is not None
+    assert operations.model_dump()[memory_type][0]["content"]["blocks"]
+    if memory_type == "experiences":
+        contract = protocol.render_contract(context)
+        rules = protocol.render_reference_rules(context)
+        assert "obj.content.update(" in contract
+        assert "obj.content.edit(" not in contract
+        assert "obj.content.drop(" not in contract
+        assert "delete(replacement=canonical)" in rules
+        assert "never drop a unique fact" in rules
+        operations, error = protocol.parse(
+            'experiences_1.content.update("complete new value")', context
+        )
         assert error is None
-        assert operations is not None
-        assert operations.model_dump()[memory_type][0]["content"]["blocks"]
-    else:
-        assert operations is None
-        assert error is not None
-        assert "merge_op=replace" in error
-        retry = protocol.render_format_retry(error)
-        correction = retry.split("`")[1]
-        assert correction.startswith("experiences_1.content.update(")
-        operations, error = protocol.parse(correction, context)
-        assert error is None
-        assert operations is not None
         assert operations.model_dump()[memory_type][0]["content"] == "complete new value"
 
 
@@ -1567,7 +1717,7 @@ def test_python_read_search_errors_keep_native_tools_available_for_retry(
     assert error_fragment in error
     assert protocol.keep_tools_enabled_after_parse_error(error)
     retry = protocol.render_format_retry(error)
-    assert "native search/read tool" in retry
+    assert "native read tool" in retry
     assert "Do not emit sdk.search(), sdk.read()" in retry
 
 

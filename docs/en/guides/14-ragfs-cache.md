@@ -4,7 +4,7 @@ RAGFS cache is an optional read-cache layer for OpenViking. It speeds up full fi
 
 CachedFileSystem assumptions:
 
-- Only one OpenViking / RAGFS process writes to the same namespace.
+- Only one OpenViking / RAGFS process writes to the same cache namespace.
 - File and directory changes go through RAGFS.
 - The backend is not modified externally by bypassing RAGFS.
 - After a cache Provider successfully writes or deletes one key, later reads of that key do not return the old value.
@@ -25,6 +25,7 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
 
 ```json
 {
+  "service_name": "openviking-server",
   "cache": {
     "provider": "redis",
     "params": {
@@ -42,13 +43,11 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
       "backend": "local",
       "cachefs": {
         "backend": "cache",
-        "namespace": "openviking",
         "max_file_size_bytes": 1048576,
         "bypass_prefixes": ["/queue", "/tmp"]
       },
       "pathlock": {
         "provider": "cache",
-        "namespace": "openviking",
         "lock_expire_secs": 30.0
       }
     }
@@ -87,20 +86,22 @@ Available Providers:
 
 Set `storage.agfs.pathlock.provider` to `cache` to coordinate path locks
 between OpenViking processes through the shared Redis CacheRuntime.
-`pathlock.namespace` is required and must be the same for every process in
-one OpenViking deployment; use distinct namespaces for independent deployments. Distributed path locking does not remove the single-writer requirement of CachedFileSystem. Cache-backed PathLock only supports the built-in
-Redis Provider.
+OpenViking derives the PathLock Redis namespace from top-level `service_name`.
+Use distinct service names for independent deployments. Distributed path
+locking does not remove the single-writer requirement of CachedFileSystem.
+Cache-backed PathLock only supports the built-in Redis Provider.
 
 Redis HASH keys are partitioned by logical path scope:
 
 ```text
-ov:pathlock:{namespace}:global:tokens
-ov:pathlock:{namespace}:scope:_system:tokens
-ov:pathlock:{namespace}:scope:account:{account}:tokens
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-`{namespace}` is the Redis Cluster hash tag, so all PathLock keys for one
-deployment remain in one slot. Tree conflict checks scan only the HASH for
+`{service_name}` is used as the Redis Cluster
+hash tag, so all PathLock keys for one deployment remain in one slot. Tree
+conflict checks scan only the HASH for
 the request scope. `/` and `/local` use the global HASH but do not scan
 account or `_system` HASHes. A batch containing paths from different scopes
 is rejected.
@@ -121,9 +122,6 @@ Legacy cache configuration is no longer accepted. Migrate before upgrading:
 | Redis `mode="singleton"` | `mode="standalone"` |
 | `tls_enabled=true` | use `rediss://` endpoints |
 | `read_from_replica` | removed; all reads use the primary |
-| Redis Provider `key_prefix` | CacheFS uses `cachefs.namespace`; QueueFS uses `queuefs.cache_key_prefix` |
-
-OpenViking rejects removed fields with a migration error instead of silently translating them.
 
 ## DynamicProvider
 
@@ -143,6 +141,10 @@ External Providers can be upgraded independently without rebuilding the default 
 
 ## Configuration
 
+Top-level `service_name` defaults to `"openviking-server"` and supplies the Redis
+namespace for CacheFS, QueueFS cache backend, cache-backed PathLock, and
+cache-backed multi-write metadata.
+
 The top-level `cache` section is a sibling of `storage`:
 
 | Option | Type | Default | Description |
@@ -155,7 +157,6 @@ The top-level `cache` section is a sibling of `storage`:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `backend` | str | `"local"` | `local` preserves existing behavior; `cache` enables CachedFileSystem |
-| `namespace` | str | `"openviking"` | Cache namespace for isolating deployments or tenants |
 | `max_file_size_bytes` | int | `1048576` | Maximum full-file object size admitted to cache |
 | `traversal_mode` | str | `"backend"` | Use backend traversal or `cached_traversal` for recursive APIs |
 | `bypass_prefixes` | list[str] | `[]` | Path prefixes that always bypass cache |
@@ -165,7 +166,6 @@ The top-level `cache` section is a sibling of `storage`:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `provider` | str | `"filesystem"` | `filesystem`, `memory`, or `cache` |
-| `namespace` | str or null | `null` | Required deployment namespace shared by collaborating processes when `provider=cache` |
 | `lock_expire_secs` | float | `30.0` | Lock stale timeout; must be at least `1.0` |
 
 Redis configuration:
@@ -235,7 +235,7 @@ RAGFS mainly caches three object types.
 File keys use a stable namespace and path hash:
 
 ```text
-ragfs:v1:{namespace}:file:{hash(path)}
+<service_name>:ov:cache:v1:file:<hash(path)>
 ```
 
 The file value is a `CacheEnvelope` containing file content, object kind, path, and generation snapshots. After a full-read cache hit, RAGFS validates the envelope and generation before returning the content.
@@ -247,7 +247,7 @@ The default policy prefers summary files such as `.abstract.md` and `.overview.m
 Directory key:
 
 ```text
-ragfs:v1:{namespace}:dir:{hash(path)}
+<service_name>:ov:cache:v1:dir:<hash(path)>
 ```
 
 The directory cache stores raw backend `read_dir` entries, not permission-filtered final results. Permission, role, and agent-context filtering still happens in the OpenViking upper layer at request time.
@@ -259,7 +259,7 @@ This lets one directory cache object serve `ls`, `tree`, `glob`, the file-collec
 Subtree generation key:
 
 ```text
-ragfs:v1:{namespace}:subtree:{hash(scope)}
+<service_name>:ov:cache:v1:subtree:<hash(scope)>
 ```
 
 `remove_all` and directory `rename` can leave descendant keys behind in the Provider. RAGFS bumps the subtree generation so old envelopes fail their generation snapshot check. Later real reads fall back to the backend and rebuild the cache.
