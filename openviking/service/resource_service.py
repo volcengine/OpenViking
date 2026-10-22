@@ -1916,12 +1916,14 @@ class ResourceService:
             watch_auth_state = None
             create_watch = bool(watch_manager and manage_watch and watch_interval > 0)
             if create_watch:
+                connector_watch_auth_args = dict(normalized_args.processor_kwargs)
+                connector_watch_auth_args.pop(CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG, None)
                 watch_auth_state = await connector.create_watch_auth_state(
                     api_key=ctx.api_key or "",
                     account_id=ctx.account_id,
                     add_type=resolved[0],
                     path=path,
-                    connector_args=normalized_args.processor_kwargs,
+                    connector_args=connector_watch_auth_args,
                 )
             connector_watch_processor_kwargs = self._watch_processor_kwargs(
                 {

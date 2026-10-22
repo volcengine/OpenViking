@@ -317,6 +317,10 @@ async def test_connector_watch_stores_only_encrypted_replay_state(
         "resource_name": "Team Docs",
         "resource_tag": "tos_docs",
     }
+    assert task.to_dict()["processor_kwargs"]["resource_config"] == {
+        "resource_name": "Team Docs",
+        "resource_tag": "tos_docs",
+    }
     assert task.auth_state["provider"] == "connector_encrypted"
     assert "secret" not in json.dumps(task.auth_state)
     assert "auth_state" not in task.to_dict()
@@ -327,14 +331,7 @@ async def test_connector_watch_stores_only_encrypted_replay_state(
     ) == (
         "secret",
         "tos",
-        {
-            "tos_prefix": ["tos://bucket/docs/"],
-            "resource_config": {
-                "resource_name": "Team Docs",
-                "resource_tag": "tos_docs",
-                "ignored": "value",
-            },
-        },
+        {"tos_prefix": ["tos://bucket/docs/"]},
     )
     assert connector_client.submit_doc_add.await_args.kwargs["param_config"] == {
         "tos_prefix": ["tos://bucket/docs/"]
