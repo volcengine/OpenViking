@@ -8,6 +8,7 @@ and service dependency, avoiding MCP protocol complexity.
 """
 
 import base64
+import json
 import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,10 +16,11 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
-from mcp.types import AudioContent, ImageContent, TextContent
+from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
+from openviking.privacy.reference import build_privacy_field_reference
 from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.dependencies import set_service
 from openviking.server.identity import AuthMode, RequestContext, Role
@@ -88,6 +90,194 @@ def test_get_ctx_raises_when_unset():
             _get_ctx()
     finally:
         _mcp_ctx.reset(token)
+
+
+async def test_privacy_tools_describe_placeholder_resolution_and_permissions():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    for name in ("privacy_tree", "privacy_resolve"):
+        assert tools[name].annotations.readOnlyHint is True
+    assert tools["privacy_upsert"].annotations.readOnlyHint is False
+    assert tools["privacy_upsert"].annotations.destructiveHint is True
+    resolve_tool = tools["privacy_resolve"]
+    assert (
+        "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+        in resolve_tool.description
+    )
+    assert "SKILL.md" in resolve_tool.description
+    assert "Authorization" in resolve_tool.description
+    assert set(resolve_tool.inputSchema["properties"]) == {"reference"}
+    assert resolve_tool.inputSchema["required"] == ["reference"]
+    assert set(tools["privacy_upsert"].inputSchema["required"]) == {
+        "category",
+        "target_key",
+        "values",
+    }
+    assert tools["privacy_upsert"].inputSchema["properties"]["values"]["type"] == "object"
+
+
+async def test_privacy_tools_merge_discover_and_resolve_without_echoing_saved_values(client):
+    secrets = ["pat-original-marker", "pat-updated-marker", "username-private-marker"]
+    saved = await mcp_endpoint.mcp.call_tool(
+        "privacy_upsert",
+        {
+            "category": "credential",
+            "target_key": "github",
+            "values": {"pat": secrets[0], "username": secrets[2]},
+        },
+    )
+    assert saved[1]["version"] == 1
+    update = {"category": "credential", "target_key": "github", "values": {"pat": secrets[1]}}
+    patched = await mcp_endpoint.mcp.call_tool("privacy_upsert", update)
+    assert patched[1]["version"] == 2
+    assert [field["field"] for field in patched[1]["fields"]] == ["pat"]
+    repeated = await mcp_endpoint.mcp.call_tool("privacy_upsert", update)
+    assert repeated[1]["version"] == 2
+    tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {"category": "credential"})
+    response = await client.get(
+        "/api/v1/privacy-configs/tree",
+        params={"category": "credential"},
+        headers={"X-OpenViking-User": DEFAULT_CTX.user.user_id},
+    )
+    assert response.status_code == 200, response.text
+    assert tree[1] == response.json()["result"]
+    for result in (saved, patched, repeated, tree):
+        assert all(secret not in repr(result) for secret in secrets)
+        assert '"values"' not in json.dumps(result[1])
+    target = tree[1]["categories"][0]["targets"][0]
+    assert target["version"] == 2
+    resolved = await mcp_endpoint.mcp.call_tool(
+        "privacy_resolve",
+        {
+            "reference": target["fields"][0]["reference"],
+        },
+    )
+    assert resolved[1]["value"] == secrets[1]
+    assert resolved[1]["version"] == 2
+    assert "username" not in resolved[1]
+    retained = await mcp_endpoint.mcp.call_tool(
+        "privacy_resolve",
+        {
+            "reference": "viking://~/privacy/credential/github#/values/username",
+        },
+    )
+    assert retained[1]["value"] == secrets[2]
+
+
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
+async def test_privacy_resolve_checks_owner_before_storage(service, monkeypatch, role):
+    exists = AsyncMock()
+    monkeypatch.setattr(service.privacy_configs, "exists", exists)
+    token = _mcp_ctx.set(RequestContext(DEFAULT_CTX.user, role))
+    try:
+        result = await mcp_endpoint.mcp.call_tool(
+            "privacy_resolve",
+            {
+                "reference": build_privacy_field_reference(
+                    "another-owner", "credential", "github", "pat"
+                ),
+            },
+        )
+    finally:
+        _mcp_ctx.reset(token)
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    assert result.structuredContent["error"]["code"] == "PERMISSION_DENIED"
+    exists.assert_not_awaited()
+
+
+async def test_privacy_tools_keep_same_owner_in_other_accounts_isolated():
+    await mcp_endpoint.mcp.call_tool(
+        "privacy_upsert",
+        {
+            "category": "credential",
+            "target_key": "github",
+            "values": {"pat": "account-private-marker"},
+        },
+    )
+    token = _mcp_ctx.set(
+        RequestContext(UserIdentifier("another-account", DEFAULT_CTX.user.user_id), Role.USER)
+    )
+    try:
+        tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {})
+        missing = await mcp_endpoint.mcp.call_tool(
+            "privacy_resolve",
+            {
+                "reference": build_privacy_field_reference(
+                    DEFAULT_CTX.user.user_id, "credential", "github", "pat"
+                ),
+            },
+        )
+    finally:
+        _mcp_ctx.reset(token)
+    assert tree[1]["categories"] == []
+    assert missing.isError is True
+    assert missing.structuredContent["error"]["code"] == "NOT_FOUND"
+    assert "account-private-marker" not in repr((tree, missing))
+
+
+async def test_privacy_tools_return_structured_errors_without_values():
+    await mcp_endpoint.mcp.call_tool(
+        "privacy_upsert",
+        {
+            "category": "credential",
+            "target_key": "github",
+            "values": {"pat": "private-input-marker"},
+        },
+    )
+    cases = [
+        ("privacy_tree", {"category": "../credential"}, "INVALID_ARGUMENT"),
+        (
+            "privacy_resolve",
+            {"reference": "Authorization: Bearer {{ov_privacy:...}}"},
+            "INVALID_ARGUMENT",
+        ),
+        (
+            "privacy_resolve",
+            {"reference": "viking://~/privacy/credential/github#/values/missing"},
+            "NOT_FOUND",
+        ),
+        (
+            "privacy_upsert",
+            {
+                "category": "credential",
+                "target_key": "bad/target",
+                "values": {"pat": "private-input-marker"},
+            },
+            "INVALID_ARGUMENT",
+        ),
+    ]
+    for name, arguments, code in cases:
+        result = await mcp_endpoint.mcp.call_tool(name, arguments)
+        assert isinstance(result, CallToolResult)
+        assert result.isError is True
+        assert result.structuredContent["error"]["code"] == code
+        assert "private-input-marker" not in repr(result)
+
+
+async def test_privacy_tools_handle_disabled_service(service, monkeypatch):
+    monkeypatch.setattr(service, "_privacy_config_service", None)
+    tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {})
+    assert tree[1] == {"owner_user_id": DEFAULT_CTX.user.user_id, "categories": []}
+    for name, arguments, code in [
+        (
+            "privacy_resolve",
+            {"reference": "viking://~/privacy/credential/github#/values/pat"},
+            "NOT_FOUND",
+        ),
+        (
+            "privacy_upsert",
+            {
+                "category": "credential",
+                "target_key": "github",
+                "values": {"pat": "disabled-private-marker"},
+            },
+            "FAILED_PRECONDITION",
+        ),
+    ]:
+        result = await mcp_endpoint.mcp.call_tool(name, arguments)
+        assert result.isError is True
+        assert result.structuredContent["error"]["code"] == code
+        assert "disabled-private-marker" not in repr(result)
 
 
 @pytest.mark.parametrize(
@@ -1377,7 +1567,7 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
             self.messages.append((role, parts, peer_id, created_at))
 
     fake_session = FakeSession()
-    monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr(service.sessions, "open", AsyncMock(return_value=fake_session))
     monkeypatch.setattr(
         service.sessions,
         "commit_async",

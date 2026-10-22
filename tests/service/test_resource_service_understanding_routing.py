@@ -75,7 +75,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
     service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
     queue_manager = SimpleNamespace(enqueue=AsyncMock())
@@ -169,7 +169,7 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
     queue_manager = SimpleNamespace(enqueue=AsyncMock())
@@ -269,7 +269,7 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
     queue_manager = SimpleNamespace(enqueue=AsyncMock())

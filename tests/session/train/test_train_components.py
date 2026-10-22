@@ -90,6 +90,8 @@ class FakeVikingFS:
         ]
 
     async def read_file(self, uri: str, ctx=None):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
         return self.files[uri]
 
     async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
@@ -941,7 +943,10 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
 
 
 @pytest.mark.asyncio
-async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all_source_links(monkeypatch):
+@pytest.mark.parametrize("supersedes", [None, "", "older_pattern"])
+async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all_source_links(
+    monkeypatch, supersedes
+):
     from openviking.session.memory.dataclass import (
         ResolvedOperation,
         ResolvedOperations,
@@ -949,6 +954,18 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
 
     policy_set = ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[])
     root = policy_set.root_uri
+    old_uri = f"{root}/older_pattern.md"
+    old_history = "viking://user/u/memories/trajectories/older.md"
+    policy_set.policies.append(
+        Experience(
+            name="older_pattern",
+            uri=old_uri,
+            version=1,
+            content="old insight",
+            status="production",
+            links=[StoredLink(from_uri=old_uri, to_uri=old_history, link_type="derived_from")],
+        )
+    )
     gradients = [
         _patch_gradient(
             name="重复预订处理",
@@ -982,6 +999,9 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
         ),
     ]
 
+    if supersedes is not None:
+        gradients[0].after_file.extra_fields["supersedes"] = supersedes
+
     class FakeExtractLoop:
         def __init__(self, **kwargs):
             pass
@@ -1006,7 +1026,9 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
                 [],
             )
 
-    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
 
     plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
         gradients,
@@ -1014,11 +1036,14 @@ async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all
         PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
     )
 
-    assert len(plan.items) == 1
-    assert {link.to_uri for link in plan.items[0].links} == {
+    upserts = [item for item in plan.items if item.kind == "upsert"]
+    deletes = [item for item in plan.items if item.kind == "delete"]
+    assert [item.target_uri for item in deletes] == ([old_uri] if supersedes else [])
+    assert len(upserts) == 1
+    assert {link.to_uri for link in upserts[0].links} == {
         "viking://user/u/memories/trajectories/traj1.md",
         "viking://user/u/memories/trajectories/traj2.md",
-    }
+    } | ({old_history} if supersedes else set())
 
 
 @pytest.mark.asyncio

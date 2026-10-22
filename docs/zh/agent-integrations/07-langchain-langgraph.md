@@ -244,7 +244,19 @@ from langchain_openviking import OpenVikingStore
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
+store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该条目
 ```
+
+按 LangGraph `BaseStore` 约定，传入 `None` 作为值表示删除该条目，等价于 `delete()`。
+删除不存在的键不会产生任何影响。
+
+`put()` 会在修改记录前校验命名空间。其他删除错误会向调用方抛出。
+记录和搜索索引文件分别删除；如果只完成其中一步，请解决报告的错误后重试，以完成清理。
+
+读取记录时，仅记录不存在才返回 `None`；权限、后端和 JSON 解析错误会向调用方抛出，
+`put()` 不会在读取失败后覆盖记录。
+`list_namespaces(prefix=("users", "*"))` 中的每个 `*` 匹配一层命名空间，
+也适用于 `viking://~/peers/support/memories/langgraph_store` 这样的 peer 主目录别名。
 
 ### LangGraph middleware
 

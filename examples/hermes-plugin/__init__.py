@@ -267,6 +267,10 @@ def _status_code_from_error(error: Exception) -> Optional[int]:
     return getattr(getattr(error, "response", None), "status_code", None)
 
 
+def _is_redirect(status: Optional[int]) -> bool:
+    return isinstance(status, int) and 300 <= status < 400
+
+
 def _format_openviking_exception(error: Exception) -> str:
     return _sanitize_openviking_error_message(str(error), _status_code_from_error(error))
 
@@ -452,12 +456,103 @@ class _VikingClient:
 
     def _anonymous_json(self, path: str) -> dict:
         """Probe server identity without disclosing credentials or tenant IDs."""
-        return self._parse_response(self._httpx.get(f"{self._endpoint}{path}", headers={"Accept": "application/json"}, timeout=3.0))
+        resp = self._httpx.get(
+            f"{self._endpoint}{path}",
+            headers={"Accept": "application/json"},
+            timeout=3.0,
+            follow_redirects=False,
+        )
+        status = getattr(resp, "status_code", None)
+        if isinstance(status, int) and 300 <= status < 400:
+            # An authenticating gateway answered the anonymous probe with a redirect to
+            # its own login page. Surface the status instead of parsing the HTML body
+            # into an empty dict, so callers can retry with credentials.
+            raise _OpenVikingHTTPError(f"HTTP {status}", status)
+        return self._parse_response(resp)
+
+    def _probe_retry_headers(self, *, gateway_only: bool) -> dict:
+        """Headers a retry may carry, limited to what that response authorizes.
+
+        ``gateway_only`` is the operator's ``extra_headers`` and nothing else: a gateway
+        never asks for the OpenViking key, so a redirect retry must not carry it. The other
+        set is the one every other request uses (the key, tenant-free).
+        """
+        if gateway_only:
+            return dict(self._extra_headers)
+        return self._headers(include_tenant=False)
+
+    def _probe_retry_json(self, *, gateway_only: bool) -> dict:
+        """One probe retry with either the gateway headers or the key."""
+        resp = self._httpx.get(
+            f"{self._endpoint}/health",
+            headers=self._probe_retry_headers(gateway_only=gateway_only),
+            timeout=3.0,
+            follow_redirects=False,
+        )
+        return self._probe_json(resp, gateway_only=gateway_only)
+
+    def _probe_json(self, resp, *, gateway_only: bool) -> dict:
+        """Parse a probe response, never reading a 3xx as if it were a payload.
+
+        ``_parse_response`` only raises at ``>= 400``, so a retry that lands on a redirect
+        would otherwise come back as an empty dict (an HTML login page) or — when the
+        redirect body happens to be JSON — as a healthy payload. Either way the probe would
+        accept an answer nobody gave: the endpoint is still gating the request.
+        """
+        status = getattr(resp, "status_code", None)
+        if _is_redirect(status):
+            if gateway_only:
+                sent = "extra_headers"
+                detail = ("the gateway is still redirecting, so check that the configured "
+                          "gateway credentials are valid")
+            else:
+                sent = "the API key"
+                detail = ("the endpoint is still redirecting, so check the API key and any "
+                          "gateway credentials")
+            raise _OpenVikingHTTPError(f"HTTP {status} after retrying with {sent}: {detail}", status)
+        return self._parse_response(resp)
+
+    def _probe_gateway_retry(self) -> dict:
+        """Retry the probe with the operator's gateway headers only.
+
+        Bounded to one extra request, and the redirect destination is never followed. If the
+        gateway lets the probe through and the server behind it then asks for credentials
+        (401/403), that explicit challenge is answered by the ordinary key retry, so the key
+        still stays out of the redirect attempt itself.
+        """
+        resp = self._httpx.get(
+            f"{self._endpoint}/health",
+            headers=self._probe_retry_headers(gateway_only=True),
+            timeout=3.0,
+            follow_redirects=False,
+        )
+        if getattr(resp, "status_code", None) in (401, 403) and self._api_key:
+            return self._probe_retry_json(gateway_only=False)
+        return self._probe_json(resp, gateway_only=True)
 
     def health_payload(self) -> dict:
         """``GET /health``, anonymous first so credentials never reach an unknown host.
-        Hosted OpenViking requires auth on /health: when an API key is configured and the
-        anonymous call gets 401/403, retry once with the key (no tenant headers).
+        Hosted OpenViking requires auth on /health: an explicit 401/403 challenge is retried
+        once with the key (no tenant headers), exactly as it always was.
+
+        A 3xx is a gateway answering. It is retried only when this connection carries gateway
+        headers — the operator's declaration that an authenticating gateway (Cloudflare
+        Access, oauth2-proxy, ...) fronts the endpoint — and that retry carries nothing but
+        those headers: no key, no peer identity, and no API key is required for it, because
+        none is sent. If the gateway then lets us through to a server that asks for
+        credentials itself, that 401/403 is handled by the ordinary key retry. An ordinary
+        redirect from an endpoint that has not been shown to be OpenViking is not
+        authorization to resend secrets, so it stays a failure, and the login URL is never
+        followed.
+
+        A ``401``/``403`` is the endpoint asking for credentials, and which credential it
+        wants is not knowable from the status alone: an OpenViking server wants the key, a
+        gateway (oauth2-proxy, many WAFs) wants its own headers and answers 401/403 rather
+        than redirecting. So the key is tried when one is configured, and the gateway headers
+        are tried when they are — a gateway-only deployment has no key to try, and gating the
+        gateway retry on a key it never sends is what kept such a deployment from starting at
+        all. When both are configured the key is tried first, which is the pre-existing
+        behaviour, and the gateway headers are not retried a second time.
 
         Prefer an anonymous probe so credentials are never sent to an unknown host during identity checks.
         See #78410.
@@ -465,9 +560,18 @@ class _VikingClient:
         try:
             return self._anonymous_json("/health")
         except _OpenVikingHTTPError as exc:
-            if not self._api_key or _status_code_from_error(exc) not in {401, 403}:
+            status = _status_code_from_error(exc)
+            if _is_redirect(status):
+                if not self._extra_headers:
+                    raise
+                return self._probe_gateway_retry()
+            if status not in (401, 403):
                 raise
-            return self._parse_response(self._httpx.get(f"{self._endpoint}/health", headers=self._headers(include_tenant=False), timeout=3.0))
+            if self._api_key:
+                return self._probe_retry_json(gateway_only=False)
+            if self._extra_headers:
+                return self._probe_gateway_retry()
+            raise
 
     def openapi_payload(self) -> dict:
         return self._anonymous_json("/openapi.json")
@@ -2453,14 +2557,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
     @classmethod
     def _select_recall_candidates(cls, items: List[Dict[str, Any]], query: str, *, limit: int, score_threshold: float) -> List[Dict[str, Any]]:
         """Threshold + dedupe (uri, then abstract+category — events/cases stay URI-distinct),
-        ranked by score + L2 leaf boost + query-token overlap."""
-        tokens = ["".join(ch for ch in raw if ch.isalnum()) for raw in query.lower().replace("_", " ").split()]
-        tokens = [token for token in tokens if len(token) >= 2][:8]
+        ranked by score + L2 leaf boost. No query-token overlap boost: server scores sit in a
+        band of about +/-0.01, so a literal-overlap bonus decided the order and buried
+        cross-language hits (queries and memories in different languages share no tokens)."""
 
         def rank(item: Dict[str, Any]) -> float:
-            text = f"{item.get('uri', '')} {cls._recall_abstract(item)}".lower()
-            overlap_boost = min(0.2, sum(1 for token in tokens if token in text) * 0.05)
-            return cls._clamp_score(item.get("score")) + (0.12 if item.get("level") == 2 else 0.0) + overlap_boost
+            return cls._clamp_score(item.get("score")) + (0.12 if item.get("level") == 2 else 0.0)
 
         seen_uri, seen_key = set(), set()
         filtered: List[Dict[str, Any]] = []

@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from openviking.parse.accessors.http_accessor import HTTPAccessor
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.parse.accessors.web_crawler import CrawlConfig, ScrapyWebCrawler
 from openviking.parse.accessors.web_feed_accessor import (
     FeedEntry,
@@ -98,7 +99,9 @@ class WebImporter:
                 raise FailedPreconditionError(message)
             raise RuntimeError(message)
 
-        temp_root = Path(tempfile.mkdtemp(prefix="ov_web_"))
+        temp_root = Path(
+            tempfile.mkdtemp(prefix="ov_web_", dir=get_parser_download_temp_dir())
+        )
         temp_dir = temp_root / _host_name(root_url)
         try:
             temp_dir.mkdir(parents=True, exist_ok=True)

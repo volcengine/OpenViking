@@ -509,9 +509,10 @@ class TestVolcenginePlans:
         assert coding.api_base == "https://ark.cn-beijing.volces.com/api/coding/v3"
         assert payg.api_base == "https://ark.cn-beijing.volces.com/api/v3"
         for plan in (agent, coding):
-            assert plan.default_vlm_model == "doubao-seed-2.0-lite"
+            assert plan.default_vlm_model == "doubao-seed-2.1-lite"
             assert plan.default_embedding_model == "doubao-embedding-vision"
             assert plan.default_embedding_dim == 1024
+        assert payg.default_vlm_model == "doubao-seed-2-1-lite-260915"
 
     def test_plan_menu_defaults_to_current_endpoint(self):
         from openviking_cli.setup_wizard import _select_access_plan
@@ -551,6 +552,7 @@ class TestVolcenginePlans:
         assert coding.default_embedding_model == "skylark-embedding-vision"
         assert coding.default_embedding_dim == 1024
         assert payg.api_base == "https://ark.ap-southeast.bytepluses.com/api/v3"
+        assert payg.default_vlm_model == "seed-2-0-lite-260428"
 
     def test_vlm_flow_byteplus_coding_plan(self):
         from openviking_cli.setup_wizard import _prompt_cloud_vlm
@@ -662,7 +664,7 @@ class TestVolcenginePlans:
             vlm_config, _ = _prompt_cloud_vlm()
 
         assert vlm_config["provider"] == "volcengine"
-        assert vlm_config["model"] == "doubao-seed-2.0-lite"
+        assert vlm_config["model"] == "doubao-seed-2.1-lite"
         assert vlm_config["api_base"] == "https://ark.cn-beijing.volces.com/api/coding/v3"
         assert vlm_config["api_key"] == "ark-key"
 

@@ -1,3 +1,4 @@
+import { formatNumber } from '#/i18n/format'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { Card, CardTitle } from '#/components/ui/card'
@@ -121,7 +122,7 @@ export function QueueStatusCard({ title, status = '', isHealthy = true, customRo
               : 'text-muted-foreground/60',
           )}
         >
-          {row.completed.toLocaleString()}
+          {formatNumber(row.completed)}
         </span>
 
         {/* 错误数 */}

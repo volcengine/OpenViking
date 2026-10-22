@@ -52,6 +52,27 @@ async def test_memory_semantic_enqueue_deduped_within_window():
 
 
 @pytest.mark.asyncio
+async def test_memory_semantic_worker_retry_bypasses_dedupe_window():
+    mock_agfs = MagicMock()
+    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
+        named_enqueue.return_value = "queued-id"
+        q = SemanticQueue(mock_agfs, "/queue", "semantic")
+        msg = SemanticMsg(
+            uri="viking://user/default/memories/entities",
+            context_type="memory",
+            account_id="acc",
+            user_id="u1",
+            peer_id="p1",
+        )
+
+        await q.enqueue(msg)
+        retry = await q.enqueue(msg, deduplicate_memory=False)
+
+        assert retry == "queued-id"
+        assert named_enqueue.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_memory_semantic_enqueue_different_uri_not_deduped():
     mock_agfs = MagicMock()
     with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:

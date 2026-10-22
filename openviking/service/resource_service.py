@@ -16,6 +16,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -30,6 +31,11 @@ from openviking.core.namespace import is_content_root_uri
 from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    overlay_parser_subprocess_env,
+)
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
@@ -61,7 +67,9 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
+from openviking.service.task_domain import TaskPatch
 from openviking.storage.acl import AclAction, AclSpec
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
@@ -79,6 +87,7 @@ from openviking.utils.git_auth import (
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
+from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
 from openviking_cli.exceptions import (
@@ -146,6 +155,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "tag_mode",
         "acl",
         "internal_task",
+        "target_validator",
     }
 )
 _ADD_RESOURCE_TRANSIENT_ARGS = frozenset({"tos_signature", "tos_access"})
@@ -166,6 +176,7 @@ _INTERNAL_INGESTION_FIELDS = frozenset(
         "parser_backend",
         "resolved_extension",
         "prepared_resource",
+        "target_validator",
     }
 )
 
@@ -219,6 +230,7 @@ class ResourceService:
         self._runtime_config_manager = runtime_config_manager
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._connector_delegate: Optional["ConnectorDelegate"] = None
+        self.compile_versions: Optional[Any] = None
 
     def set_dependencies(
         self,
@@ -243,6 +255,29 @@ class ResourceService:
         if not self._watch_scheduler:
             return None
         return self._watch_scheduler.watch_manager
+
+    async def _ensure_resource_target_available(
+        self, uri: str, ctx: RequestContext, *, is_parent: bool = False
+    ) -> None:
+        """Reject active Compile output destinations in this account before ingestion.
+
+        A parent only supplies a new child's location; an exact destination mirrors
+        its subtree and must also exclude Compile targets nested beneath it.
+        """
+        if self.compile_versions is None or not uri:
+            return
+        uri = normalize_storage_target_uri(uri)
+        await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        target = await self.compile_versions.owning_target(ctx.account_id, uri)
+        if target is None and not is_parent:
+            targets = await self.compile_versions._targets_under(ctx.account_id, uri)
+            if targets:
+                target = targets[0]
+        if target is not None:
+            raise ConflictError(
+                "Add-resource destination overlaps a Compile target.",
+                resource="COMPILE_TARGET",
+            )
 
     async def _hold_watch_execution(self, task_id: str) -> bool:
         """Keep the scheduler from running *task_id* while its first round is in flight."""
@@ -577,7 +612,7 @@ class ResourceService:
             return None
         async_agfs = getattr(self._viking_fs, "_async_agfs", None)
         if async_agfs is not None:
-            return await async_agfs.pathlock_to_handoff(lock_ref)
+            return await PathLockGuard(async_agfs, lock_ref).to_handoff()
         to_handoff = getattr(lock_ref, "to_handoff", None)
         if callable(to_handoff):
             handoff = to_handoff()
@@ -597,6 +632,17 @@ class ResourceService:
             result = handoff()
             if inspect.isawaitable(result):
                 await result
+
+    async def _adopt_lock_ref(self, handoff_ref: Any) -> Any:
+        """Recover ownership from a handoff after enqueue fails."""
+        async_agfs = getattr(self._viking_fs, "_async_agfs", None)
+        if async_agfs is not None:
+            return await async_agfs.pathlock_adopt(handoff_ref)
+        adopt = getattr(handoff_ref, "adopt", None)
+        if callable(adopt):
+            result = adopt()
+            return await result if inspect.isawaitable(result) else result
+        raise RuntimeError("Lock handoff cannot be adopted")
 
     async def _release_lock_ref(self, lock_ref: Any) -> None:
         """Release either a native pathlock ref or legacy lease."""
@@ -701,6 +747,12 @@ class ResourceService:
         tracker = get_task_tracker()
         task = None
         enqueued = False
+        lock_ops = getattr(self._viking_fs, "_async_agfs", None) or SimpleNamespace(
+            pathlock_handoff=self._handoff_lock_ref,
+            pathlock_adopt=self._adopt_lock_ref,
+            pathlock_release=self._release_lock_ref,
+        )
+        lock_guard = PathLockGuard(lock_ops, resource_lock)
         try:
             task = await tracker.create(
                 "add_resource",
@@ -715,25 +767,33 @@ class ResourceService:
             )
             task_account_id = getattr(task, "account_id", msg.account_id)
             task_user_id = getattr(task, "user_id", msg.user_id)
-            with bind_task_context(task.task_id, task_account_id, task_user_id):
-                await get_queue_manager().enqueue(queue_name, msg.to_dict())
-            enqueued = True
-            if on_enqueued is not None:
-                on_enqueued()
+
+            async def dispatch() -> str:
+                nonlocal enqueued
+                with bind_task_context(task.task_id, task_account_id, task_user_id):
+                    result = await get_queue_manager().enqueue(queue_name, msg.to_dict())
+                enqueued = True
+                if on_enqueued is not None:
+                    on_enqueued()
+                return result
+
             if resource_lock is not None:
-                await self._handoff_lock_ref(resource_lock)
-                resource_lock = None
-            await tracker.update_stage(
+                await lock_guard.handoff_and_dispatch(msg.lock_handoff, dispatch)
+            else:
+                await dispatch()
+            await tracker.patch_task(
                 task.task_id,
-                "queued",
+                TaskPatch(stage="queued"),
                 account_id=msg.account_id,
                 user_id=msg.user_id,
             )
         except BaseException:
-            if resource_lock is not None:
-                if on_failed_with_lock is not None:
-                    await on_failed_with_lock(resource_lock)
-                await self._release_lock_ref(resource_lock)
+            if lock_guard.lease is not None:
+                try:
+                    if on_failed_with_lock is not None:
+                        await on_failed_with_lock(lock_guard.lease)
+                finally:
+                    await lock_guard.close()
             if task is not None and not enqueued:
                 await tracker.fail(
                     task.task_id,
@@ -804,8 +864,11 @@ class ResourceService:
                 saved = dict(task.meta.get("feishu_responses", {})) if task else {}
 
                 async def save_response(entry: str, response_id: str) -> None:
-                    await tracker.record_feishu_response(
-                        msg.task_id, entry, response_id, ctx.account_id, ctx.user.user_id
+                    await tracker.patch_task(
+                        msg.task_id,
+                        TaskPatch(meta={"feishu_responses": {entry: response_id}}),
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
                     )
                     saved[entry] = response_id
 
@@ -1426,6 +1489,9 @@ class ResourceService:
             create_parent=create_parent,
         )
         if candidate_uri and defer_candidate_resolution:
+            await self._ensure_resource_target_available(
+                candidate_uri.rpartition("/")[0], ctx, is_parent=True
+            )
             await self._resource_processor.ensure_candidate_parent_write_access(
                 candidate_uri=candidate_uri,
                 ctx=ctx,
@@ -1435,9 +1501,11 @@ class ResourceService:
             root_uri, resource_lock = await self._resource_processor.reserve_unique_candidate(
                 candidate_uri=candidate_uri,
                 ctx=ctx,
+                target_validator=self._ensure_resource_target_available,
             )
             return root_uri, resource_lock, False, True
 
+        await self._ensure_resource_target_available(root_uri, ctx)
         await self._viking_fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
         # A tree lock may materialize an empty directory marker, so ownership
         # must be recorded immediately before acquiring it. The zero-timeout
@@ -1488,6 +1556,10 @@ class ResourceService:
         proc = None
         try:
             env = build_git_http_auth_env(auth_config, source) if auth_config is not None else None
+            env = overlay_parser_subprocess_env(
+                ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, source),
+                env,
+            )
             proc = await asyncio.create_subprocess_exec(
                 "git",
                 "ls-remote",
@@ -1791,6 +1863,10 @@ class ResourceService:
         self._ensure_single_resource_target(to=to, parent=parent)
         target_to = to or ""
         target_parent = parent or ""
+        await self._ensure_resource_target_available(
+            target_to, ctx, is_parent=is_content_root_uri(target_to, kind="resource")
+        )
+        await self._ensure_resource_target_available(target_parent, ctx, is_parent=True)
         target_create_parent = bool(kwargs.get("create_parent", False))
         if acl is not None:
             acl = AclSpec.model_validate(acl)
@@ -2060,6 +2136,9 @@ class ResourceService:
             code = task.result.get("code")
             if isinstance(code, str) and code:
                 failure["code"] = code
+            details = task.result.get("details")
+            if isinstance(details, dict):
+                failure["details"] = details
         return failure
 
     async def _execute_resource_ingestion(
@@ -2113,6 +2192,10 @@ class ResourceService:
             self._ensure_single_resource_target(to=to, parent=parent)
             target_to = to or ""
             target_parent = parent or ""
+            await self._ensure_resource_target_available(
+                target_to, ctx, is_parent=is_content_root_uri(target_to, kind="resource")
+            )
+            await self._ensure_resource_target_available(target_parent, ctx, is_parent=True)
             if to_is_directory is None:
                 to_is_directory = bool(target_to)
             watch_to_is_directory = to_is_directory
@@ -2137,6 +2220,7 @@ class ResourceService:
                 stage_callback=stage_callback,
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
+                target_validator=self._ensure_resource_target_available,
                 defer_post_processing=True,
                 tags=tags,
                 tag_mode=tag_mode,
@@ -2444,6 +2528,25 @@ class ResourceService:
         telemetry_id = get_current_telemetry().telemetry_id
         telemetry_cleanup_scheduled = False
 
+        async def record_package(skill_uri: str, lease_ref: Any) -> None:
+            """Preserve standalone ordinary packages under their lease for Compile rollback."""
+            if (
+                self.compile_versions is not None
+                and owner_lease_ref is None
+                and (source_metadata or {}).get("source") != "compile"
+                and (target := await self.compile_versions.owning_target(ctx.account_id, skill_uri))
+                and await self.compile_versions._write_meta(ctx.account_id, target)
+            ):
+                await self.compile_versions.record_operation(
+                    [skill_uri],
+                    ctx,
+                    "agent_revise",
+                    {},
+                    lambda: self.compile_versions.register_transfer(
+                        skill_uri, skill_uri, ctx, lease_ref=lease_ref
+                    ),
+                )
+
         try:
             # Establish ownership before any queue work can start. Descendant
             # semantic and embedding messages inherit this same cancellable task.
@@ -2485,6 +2588,7 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
+                            on_package_written=record_package,
                         )
                     else:
                         result = await self._skill_processor.process_skill(
@@ -2498,6 +2602,7 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
+                            on_package_written=record_package,
                         )
                 if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                     result["root_uri"] = result["uri"]

@@ -6,7 +6,7 @@ import copy
 
 import orjson
 
-from ..protocols import strip_thinking, text_content
+from ..protocols import string_type, strip_thinking, text_content
 from .common import (
     SUMMARY_HEADROOM,
     SummaryError,
@@ -15,6 +15,7 @@ from .common import (
     ToolRound,
     append,
     call,
+    merge_usage,
     strip_notices,
 )
 
@@ -26,6 +27,7 @@ class AnthropicProtocol(ToolProtocol):
     summary_drops = ("stop_sequences", "output_config.format")
     reply_ends = frozenset({"end_turn", "stop_sequence", "tool_use"})
     signed_thinking = True
+    usage_excludes_cache = True
 
     @staticmethod
     def thinking_as_text(message):
@@ -92,7 +94,7 @@ class AnthropicProtocol(ToolProtocol):
             blocks = [
                 [position, block]
                 for position, block in enumerate(content if isinstance(content, list) else [])
-                if isinstance(block, dict) and block.get("type") in THINKING
+                if string_type(block) in THINKING
             ]
             if blocks:
                 reasoning[index] = {"blocks": blocks}
@@ -106,7 +108,7 @@ class AnthropicProtocol(ToolProtocol):
         if (
             message.get("role") != "assistant"
             or not isinstance(content, list)
-            or any(isinstance(b, dict) and b.get("type") in THINKING for b in content)
+            or any(string_type(b) in THINKING for b in content)
         ):
             return [message]
         # Blocks go back where the reply had them, so the client's form must equal it without them.
@@ -150,7 +152,7 @@ class AnthropicProtocol(ToolProtocol):
         kind = value.get("type")
         if kind == "message_start":
             self.envelope = copy.deepcopy(value["message"])
-            self.usage.update(self.envelope.get("usage") or {})
+            merge_usage(self.usage, self.envelope.get("usage") or {})
             self.opened = True
         elif kind == "content_block_start":
             self.blocks[value["index"]] = copy.deepcopy(value["content_block"])
@@ -174,7 +176,7 @@ class AnthropicProtocol(ToolProtocol):
         elif kind == "message_delta":
             self.finish = value.get("delta", {}).get("stop_reason") or self.finish
             self.envelope.update(value.get("delta", {}))
-            self.usage.update(value.get("usage") or {})
+            merge_usage(self.usage, value.get("usage") or {})
         elif kind == "message_stop":
             self.stopped = True
 

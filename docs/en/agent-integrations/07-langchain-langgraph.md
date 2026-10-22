@@ -256,7 +256,20 @@ from langchain_openviking import OpenVikingStore
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
+store.put(("users", "ada"), "preferences", None)  # a None value deletes the item
 ```
+
+Following LangGraph's `BaseStore` contract, passing `None` as the value deletes the item and is
+equivalent to `delete()`. Deleting a key that does not exist is a no-op.
+
+`put()` validates the namespace before changing records. Other removal errors propagate to
+the caller. Record and search-projection removal are separate operations: if only one
+succeeds, resolve the reported error and retry the operation to finish cleanup.
+
+Record reads return `None` only for a missing record; permission, backend, and invalid-JSON
+errors propagate, and `put()` does not overwrite a record after a failed read.
+`list_namespaces(prefix=("users", "*"))` matches one namespace label per `*`, including
+when `root_uri` uses a peer home alias such as `viking://~/peers/support/memories/langgraph_store`.
 
 ### LangGraph middleware
 

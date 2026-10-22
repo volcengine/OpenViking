@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import threading
 import time
@@ -34,6 +35,7 @@ from openviking.service.task_domain import (
     TERMINAL_WORK_STATES,
     DeleteExpiredResult,
     QueueWorkSummary,
+    TaskPatch,
     TaskRecord,
     TaskRetentionPolicy,
     TaskStatus,
@@ -286,6 +288,8 @@ class TaskTracker:
     def __init__(self, store: TaskWorkStore) -> None:
         self._store = store
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
+        # Bound after Compile storage initialization; shares the cleanup clock and batch size.
+        self.compile_history_cleanup: Optional[Callable[..., Awaitable[int]]] = None
         self._cancel_poll_task: Optional[asyncio.Task[Any]] = None
         self._work_index = TaskWorkIndex()
         self._running: ContextVar[tuple[str, str, str, bool] | None] = ContextVar(
@@ -304,6 +308,22 @@ class TaskTracker:
     @property
     def work_recovery_mode(self) -> WorkRecoveryMode:
         return self._store.work_recovery_mode
+
+    async def load(self) -> None:
+        """Load backend resources without exposing backend transaction details."""
+        loader = getattr(self._store, "load", None)
+        if loader is not None:
+            result = loader()
+            if inspect.isawaitable(result):
+                await result
+
+    async def close(self) -> None:
+        """Release backend resources owned by the tracker."""
+        closer = getattr(self._store, "close", None)
+        if closer is not None:
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
 
     async def restore_work_tasks(self, owners: Dict[str, tuple[str, str]]) -> List[TaskRecord]:
         restored = []
@@ -359,9 +379,15 @@ class TaskTracker:
                 logger.exception("[TaskTracker] cancel-poll error")
 
     async def delete_expired(self) -> DeleteExpiredResult:
+        now = time.time()
+        if self.compile_history_cleanup is not None:
+            try:
+                await self.compile_history_cleanup(now=now, limit=self.CLEANUP_BATCH)
+            except Exception:
+                logger.exception("[TaskTracker] Compile history cleanup error")
         result = await self._store.delete_expired(
             TaskRetentionPolicy(self.TTL_COMPLETED, self.TTL_FAILED),
-            now=time.time(),
+            now=now,
             limit=self.CLEANUP_BATCH,
         )
         for deleted in result.deleted:
@@ -411,17 +437,27 @@ class TaskTracker:
         *,
         account_id: str,
         user_id: str,
+        task_id: Optional[str] = None,
     ) -> Optional[TaskRecord]:
+        """Create an operation atomically, or return None while another is active.
+
+        An explicit task_id replays the same operation; a task with a different
+        type or resource raises ValueError. Owner validation belongs to create.
+        """
         try:
-            return await self.create(
+            task = await self.create(
                 task_type,
                 resource_id,
                 account_id=account_id,
                 user_id=user_id,
+                task_id=task_id,
                 reject_if_active=True,
             )
         except TaskAlreadyActive:
             return None
+        if task.task_type != task_type or task.resource_id != resource_id:
+            raise ValueError("Task ID belongs to another operation")
+        return task
 
     async def start(
         self,
@@ -432,42 +468,19 @@ class TaskTracker:
     ) -> None:
         await self._store.start_task(task_id, stage=stage, account_id=account_id, user_id=user_id)
 
-    async def update_stage(
+    async def patch_task(
         self,
         task_id: str,
-        stage: str,
-        account_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        *,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        await self._store.update_stage(
-            task_id, stage, meta=meta, account_id=account_id, user_id=user_id
-        )
-
-    async def update_task_auth(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
+        patch: TaskPatch,
         *,
         account_id: str,
         user_id: str,
-    ) -> None:
+    ) -> StoreOperationResult:
+        """Atomically apply permitted Task fields without changing task state."""
         self._validate_owner(account_id, user_id)
-        await self._store.update_auth(task_id, values, account_id=account_id, user_id=user_id)
-
-    async def record_feishu_response(
-        self,
-        task_id: str,
-        entry: str,
-        response_id: str,
-        account_id: str,
-        user_id: str,
-    ) -> None:
-        self._validate_owner(account_id, user_id)
-        await self._store.merge_meta(
+        return await self._store.patch_task(
             task_id,
-            {"feishu_responses": {entry: response_id}},
+            patch,
             account_id=account_id,
             user_id=user_id,
         )
@@ -701,6 +714,17 @@ class TaskTracker:
         task = await self._store.get_task(task_id, account_id=account_id, user_id=user_id)
         return self._public(task) if task is not None else None
 
+    async def get_with_events(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[TaskRecord]:
+        task = await self._store.get_task_with_events(
+            task_id, account_id=account_id, user_id=user_id
+        )
+        return self._public(task) if task is not None else None
+
     async def get_task_status(
         self, task_id: str, *, account_id: str, user_id: str
     ) -> Optional[TaskStatus]:
@@ -723,11 +747,29 @@ class TaskTracker:
         with _consume_wait_budget(task_id, timeout) as remaining:
             deadline = None if remaining is None else time.monotonic() + remaining
             while True:
-                task = await self.get(task_id, account_id=account_id, user_id=user_id)
-                if task is None:
-                    raise KeyError(f"Task not found: {task_id}")
-                if task.status in TERMINAL_TASK_STATUSES:
-                    return task
+                if account_id is not None and user_id is not None:
+                    status = await self.get_task_status(
+                        task_id,
+                        account_id=account_id,
+                        user_id=user_id,
+                    )
+                    if status is None:
+                        raise KeyError(f"Task not found: {task_id}")
+                    if status in TERMINAL_TASK_STATUSES:
+                        task = await self.get(
+                            task_id,
+                            account_id=account_id,
+                            user_id=user_id,
+                        )
+                        if task is None:
+                            raise KeyError(f"Task not found: {task_id}")
+                        return task
+                else:
+                    task = await self.get(task_id, account_id=account_id, user_id=user_id)
+                    if task is None:
+                        raise KeyError(f"Task not found: {task_id}")
+                    if task.status in TERMINAL_TASK_STATUSES:
+                        return task
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Task {task_id}")
@@ -830,7 +872,7 @@ class TaskTracker:
                 task_type=task_type,
                 status=status,
                 resource_id=resource_id,
-                limit=None,
+                limit=source_limit,
                 before=before,
                 include_internal=include_internal,
                 q=q,
@@ -868,7 +910,13 @@ class TaskTracker:
         account_id: str,
         user_id: str,
     ) -> WorkRegistration:
-        work = WorkRecord(work_id=work_id, task_id=task_id, queue_name=queue_name)
+        work = WorkRecord(
+            work_id=work_id,
+            task_id=task_id,
+            queue_name=queue_name,
+            account_id=account_id,
+            user_id=user_id,
+        )
 
         async def register() -> WorkRegistration:
             try:
@@ -901,7 +949,13 @@ class TaskTracker:
         account_id: str,
         user_id: str,
     ) -> None:
-        work = WorkRecord(work_id=work_id, task_id=task_id, queue_name=queue_name)
+        work = WorkRecord(
+            work_id=work_id,
+            task_id=task_id,
+            queue_name=queue_name,
+            account_id=account_id,
+            user_id=user_id,
+        )
         await self._store.reconcile_delivery(work, account_id=account_id, user_id=user_id)
 
     async def get_work_state(
@@ -1106,21 +1160,6 @@ class TaskTracker:
                     poll_interval if remaining is None else min(poll_interval, remaining)
                 )
 
-    async def mark_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> None:
-        await self._store.mark_enqueue_complete(
-            task_id,
-            work_id,
-            account_id=account_id,
-            user_id=user_id,
-        )
-
     async def is_enqueue_complete(
         self,
         task_id: str,
@@ -1129,12 +1168,8 @@ class TaskTracker:
         account_id: str,
         user_id: str,
     ) -> bool:
-        return await self._store.is_enqueue_complete(
-            task_id,
-            work_id,
-            account_id=account_id,
-            user_id=user_id,
-        )
+        auth = await self.get_task_auth(task_id, account_id=account_id, user_id=user_id)
+        return work_id in set(auth.get("enqueue_complete_work_ids") or ())
 
     async def build_queue_status(
         self,

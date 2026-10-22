@@ -99,7 +99,8 @@ const connect = {
           'Codex 会先尝试 WebSocket 连接，网关拒绝后它会自动改用 HTTP。',
         metadata:
           '遇到不认识的模型名，Codex 可能提示缺少模型元数据，这个提示不影响请求。',
-        login: 'ChatGPT 登录无法通过网关使用，请为上游配置服务商的 API Key。',
+        login:
+          'Codex 不能用 ChatGPT 账号登录网关。想用 ChatGPT 订阅，可以把 CLIProxyAPI 添加为上游（OpenAI Codex 团队认可这种用法）；否则请为上游配置服务商的 API Key。',
       },
     },
     chat: {
@@ -232,7 +233,8 @@ const connect = {
     description:
       '如果某段对话已经通过 OpenViking 插件获得记忆，网关会让出这段对话：不召回、不保存，也不提供 OpenViking 工具，避免重复补充记忆。其他对话不受影响。',
     detection:
-      '网关根据插件注入的记忆块或 OpenViking 工具识别插件。集成方也可以通过这个请求头主动声明。',
+      '网关根据插件注入消息的记忆块识别插件。集成方也可以通过这个请求头主动声明。',
+    mcp: '只接入 OpenViking MCP 工具不算插件：网关照常召回和保存记忆，只是不再提供自己的 OpenViking 工具。',
     restart:
       '这个状态会持续到对话结束。要重新使用网关的记忆，请在不启用插件的情况下开始一段新对话。',
   },

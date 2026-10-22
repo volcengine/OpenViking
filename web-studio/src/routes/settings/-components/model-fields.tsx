@@ -118,7 +118,7 @@ function JsonField({
             parsed !== null &&
             (typeof parsed !== 'object' || Array.isArray(parsed))
           )
-            throw new Error('Expected JSON object')
+            throw new Error(t('models.invalidJsonObject'))
           input.setCustomValidity('')
           onChange(parsed)
         } catch {

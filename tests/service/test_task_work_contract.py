@@ -3,7 +3,11 @@
 """Observable Task/Work lifecycle and persistence contracts."""
 
 import asyncio
+import json
+import os
+from pathlib import Path
 from unittest.mock import Mock, create_autospec
+from uuid import uuid4
 
 import pytest
 
@@ -57,31 +61,91 @@ async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker
 
 
 @pytest.mark.asyncio
-async def test_requeue_keeps_logical_work_until_completion(tracker):
-    assert await tracker.register_work("task", "work", "Semantic", **OWNER)
-    assert (
-        await tracker.register_work("task", "work", "Semantic", **OWNER)
-        is WorkRegistration.EXISTING
-    )
-    await tracker.complete("task", {"done": True}, **OWNER)
-    await tracker.start_work("task", "work", **OWNER)
-    await tracker.mark_work_requeued("task", "work", **OWNER)
-    assert (await tracker.get("task", **OWNER)).status is TaskStatus.RUNNING
+async def test_mysql_requeue_and_concurrent_completion_are_durable():
+    raw = os.environ.get("OV_TEST_MYSQL")
+    if not raw:
+        pytest.skip("Set OV_TEST_MYSQL to exercise the shared Task/Work contract")
+    sqlalchemy = pytest.importorskip("sqlalchemy.ext.asyncio")
+    pytest.importorskip("aiomysql")
+    from openviking.service import task_store_mysql
 
-    await tracker.start_work("task", "work", **OWNER)
-    await tracker.mark_work_done("task", "work", **OWNER)
-    completed = await tracker.wait("task", timeout=0, **OWNER)
-    assert completed.status is TaskStatus.COMPLETED
-    assert completed.result["queue_status"]["Semantic"] == {
-        "processed": 1,
-        "requeue_count": 1,
-        "error_count": 0,
-        "errors": [],
-    }
-    assert (
-        await tracker.register_work("task", "late", "Semantic", **OWNER)
-        is WorkRegistration.REJECTED
-    )
+    params = {**json.loads(raw), "table": f"ov_contract_{uuid4().hex[:12]}"}
+    first = task_store_mysql.MySQLTaskWorkStore(params=params)
+    second = task_store_mysql.MySQLTaskWorkStore(params=params)
+    admin = sqlalchemy.create_async_engine(first._url, **first._engine_options)
+    schema = Path(task_store_mysql.__file__).parent / "sql/task_store_init.sql"
+    writer, observer = TaskTracker(first), TaskTracker(second)
+    try:
+        async with admin.begin() as connection:
+            for statement in schema.read_text().replace("ov_tasks", params["table"]).split(";"):
+                if "CREATE TABLE" in statement:
+                    await connection.exec_driver_sql(statement)
+        await first.load()
+        await second.load()
+        uri = "viking://resources/" + "/".join(["directory" * 4] * 8)
+        candidates = await asyncio.gather(
+            writer.create_if_no_running("content_write", uri, **OWNER),
+            observer.create_if_no_running("content_write", uri, **OWNER),
+        )
+        assert sum(task is not None for task in candidates) == 1
+        task_id = next(task.task_id for task in candidates if task is not None)
+        assert await observer.get(task_id, account_id="other", user_id=OWNER["user_id"]) is None
+        assert await observer.get(task_id, account_id=OWNER["account_id"], user_id="other") is None
+
+        await writer.start(task_id, **OWNER)
+        await writer.register_work(task_id, "semantic", "Semantic", **OWNER)
+        await observer.register_work(task_id, "embedding", "Embedding", **OWNER)
+        assert (
+            await observer.register_work(task_id, "semantic", "Semantic", **OWNER)
+            is WorkRegistration.EXISTING
+        )
+        await writer.complete(task_id, {"done": True}, **OWNER)
+        await writer.start_work(task_id, "semantic", **OWNER)
+        await observer.mark_work_requeued(task_id, "semantic", **OWNER)
+        assert (await observer.get(task_id, **OWNER)).status is TaskStatus.RUNNING
+        await writer.start_work(task_id, "semantic", **OWNER)
+
+        # The last two Work items can finish on different worker event loops.
+        await asyncio.gather(
+            writer.mark_work_done(task_id, "semantic", **OWNER),
+            asyncio.to_thread(
+                lambda: asyncio.run(observer.mark_work_done(task_id, "embedding", **OWNER))
+            ),
+        )
+        completed = await observer.wait(task_id, timeout=0, **OWNER)
+        assert completed.status is TaskStatus.COMPLETED
+        assert completed.resource_id == uri
+        assert completed.result["queue_status"]["Semantic"] == {
+            "processed": 1,
+            "requeue_count": 1,
+            "error_count": 0,
+            "errors": [],
+        }
+        assert completed.result["queue_status"]["Embedding"]["processed"] == 1
+        await writer.mark_work_failed(task_id, "semantic", "late failure", **OWNER)
+        assert (
+            await observer.register_work(task_id, "late", "Semantic", **OWNER)
+            is WorkRegistration.REJECTED
+        )
+
+        await first.close()
+        await second.close()
+        await second.load()
+        restored = await observer.get_with_events(task_id, **OWNER)
+        assert restored.status is TaskStatus.COMPLETED
+        assert restored.result == completed.result
+        assert restored.execution_events["items"][-1]["status"] == "completed"
+        assert (
+            await observer.build_queue_status(task_id, **OWNER) == completed.result["queue_status"]
+        )
+        assert await observer.delete_tasks(**OWNER) == 1
+        assert await observer.get(task_id, **OWNER) is None
+    finally:
+        await first.close()
+        await second.close()
+        async with admin.begin() as connection:
+            await connection.run_sync(first._models.Base.metadata.drop_all)
+        await admin.dispose()
 
 
 @pytest.mark.asyncio

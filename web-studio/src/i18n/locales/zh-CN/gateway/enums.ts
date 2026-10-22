@@ -51,6 +51,7 @@ const enums = {
     recalled: '已补充记忆',
     empty: '没有找到相关内容',
     disabled: '召回已关闭或预算已用完',
+    budget: '剩余预算不足，未补充记忆',
     recall_timeout: '召回超时',
   },
   toolSkipReason: {

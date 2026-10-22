@@ -29,10 +29,12 @@ The memory logic itself is not here: recall, batching, the pending queue, creden
 
 ## Host notes
 
-- **Cursor** — six events, including the `preCompact` and `sessionEnd` no other host in this plugin has. Commits on Stop once `capturedSinceCommit` reaches the threshold, and unconditionally before a compaction. Sessions are `cu-`. See the [Cursor guide](../../docs/en/agent-integrations/12-cursor.md).
+- **Cursor** — seven events. `afterMCPExecution` appends OpenViking tool results to a local JSONL log; Stop uploads them with the text transcript. Text deduplication and the tool-upload position are separate. Only accepted messages advance capture progress, and the source records own retries. Commits when `capturedSinceCommit` reaches the threshold, or before compaction after capture completes. Sessions are `cu-`. See the [Cursor guide](../../docs/en/agent-integrations/12-cursor.md).
 - **TRAE / TRAE CN** — capture reads `prompt`, `text_content` and `last_assistant_message` off the Stop event rather than parsing a transcript. Every Stop that carries content commits. Sessions are `tr-` and `trcn-`. See the [TRAE guide](../../docs/en/agent-integrations/13-trae.md).
 - **ZCode** — the rollout file is the authoritative incremental transcript: stable host `turnId` values drive deduplication and let a later Stop recover missed turns, and hook stdin is only the fallback. ZCode supports neither `PreCompact` nor `SessionEnd`, so committing on every Stop stands in for both. Its output schema is strict, so a pass-through writes nothing at all. Sessions are `zc-`. [DESIGN.md](./DESIGN.md) records the verified extension surface.
 - **Kimi Code** — `wire.jsonl` is the authoritative transcript. UserPromptSubmit emits raw context text, while Stop, PreCompact and SessionEnd may detach; Interrupt remains synchronous under a two-second OpenViking request budget. The installer creates a self-contained native plugin without editing legacy `config.toml` or `mcp.json`. Sessions are `kc-`. [Host contract](./hosts/kimicode/DESIGN.md).
+
+Cursor tool capture follows the [Hooks contract](https://cursor.com/docs/hooks) and the MCP executor in [`@cursor/sdk` 1.0.38](https://registry.npmjs.org/@cursor/sdk/-/sdk-1.0.38.tgz), which supplies `tool_use_id` on `afterMCPExecution`. Older events without that native identity retain text capture only; the adapter does not invent call IDs or completion evidence.
 
 ## Diagnostics
 

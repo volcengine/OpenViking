@@ -112,7 +112,18 @@ i18n.language.startsWith('zh') ? '刷新' : 'Refresh'
 - 较长的中文在支持的页面宽度下不会遮挡数值或控件。
 - 解析器或本地化适配器会影响运行结果时，有对应的目标测试。
 
-当前配置的 `i18next/no-literal-string` ESLint 规则可以发现不少 JSX 字面量，但无法覆盖所有 TypeScript 工具函数、条件表达式、服务端响应和动态生成的标签。因此，Lint 只是检查项之一，不能证明功能已经完整本地化。
+国际化检查以错误级别运行，覆盖所有业务 TypeScript/TSX 和 `components/ui`。测试、生成代码及语言资源不参与硬编码检查。
+
+- `i18next/no-literal-string` 检查 JSX 文本以及标题、占位符、帮助文字和无障碍标签。
+- `studio-i18n/no-literal-message` 检查 `Error`、`OvClientError`、非取消型 `DOMException`、Toast、错误状态 setter，以及 JSX 中模板字符串的固定文案；也会追踪消息参数引用的本地 `const` 常量。
+- `studio-i18n/explicit-locale` 禁止显示日期和数字时省略 locale。组件可使用当前 `i18n.resolvedLanguage`，公共工具可使用 `#/i18n/format`。独立组件还应通过 `useTranslation()` 订阅语言变化。
+- 全量语言包测试检查键集合、空翻译和插值变量一致性；编辑器测试检查切换语言后文档、选区和撤销历史不丢失。
+
+`npm run build` 会先运行 Lint 和 `npm run test:i18n`，检查失败时构建终止。`npm run lint` 同样会执行上述规则。
+
+命令、文件名、技术标识符和开发者诊断信息确实需要保留原样时，应在对应行使用 `eslint-disable-next-line`，指明具体规则并用 `--` 写明原因；不要整文件禁用。`AbortError` 是取消控制流信号，可保留原值。
+
+静态检查无法判断任意服务端输出、跨模块数据流和第三方组件的全部显示文案。仍须审查动态标签和服务端枚举，并进行双语界面验收。原始诊断可保留，但面向用户的摘要必须本地化。
 
 ## 验证
 
@@ -122,6 +133,7 @@ i18n.language.startsWith('zh') ? '刷新' : 'Refresh'
 cd web-studio
 npm run format
 npm run lint
+npm run test:i18n
 npm test -- <relevant-test-files>
 ```
 

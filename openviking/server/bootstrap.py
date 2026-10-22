@@ -459,14 +459,12 @@ def _main(recovery):
     try:
         with _sigterm_runs_finally():
             idle = getattr(getattr(ov_config, "memory", None), "session_auto_commit", None)
+            compile_api = getattr(ov_config, "compile_api", None)
             expiry = getattr(ov_config, "expiry", None)
-            if (
-                idle is not None
-                and idle.enabled
-                and idle.idle_backend == "redis"
-                and expiry is not None
-                and expiry.publisher_separate_process
-            ):
+            uses_redis = (idle is not None and idle.enabled and idle.idle_backend == "redis") or (
+                compile_api is not None and compile_api.scheduler_enabled
+            )
+            if uses_redis and expiry is not None and expiry.publisher_separate_process:
                 if resolved_config_path is None:
                     raise RuntimeError(
                         "Cannot start expiry publisher without a resolved ov.conf path"

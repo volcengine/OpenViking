@@ -18,6 +18,7 @@ import orjson
 from .capture_store import Document
 from .client import VikingError
 from .config import MOUNT_PATH
+from .protocols import string_type
 from .state_store import get_state
 from .storage import digest
 from .tool_catalog import PREFIX, TOOL_OVERRIDES
@@ -57,7 +58,7 @@ def attachments(body, protocol):
         content = message.get("content", [])
         if isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") in {"file", "input_file"}:
+                if string_type(part) in {"file", "input_file"}:
                     output.append(part.get("file", part))
                 elif isinstance(part, dict) and part.get("type") == "document":
                     source = part.get("source", {})

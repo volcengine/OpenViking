@@ -1,5 +1,9 @@
+import { formatDateTime } from '#/i18n/format'
+import i18n from '#/i18n/core'
 import {
+  createContext,
   isValidElement,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -12,7 +16,7 @@ import { useQuery } from '@tanstack/react-query'
 import hljs from 'highlight.js/lib/core'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
-import rehypeSanitize from 'rehype-sanitize'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { X, Pencil, Save, XCircle, Loader2 } from 'lucide-react'
@@ -136,6 +140,15 @@ interface FilePreviewProps {
 }
 
 const vikingPrefix = 'viking://'
+const markdownSanitizeSchema = {
+  ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    src: [...(defaultSchema.protocols?.src ?? []), 'viking'],
+    href: [...(defaultSchema.protocols?.href ?? []), 'viking'],
+  },
+}
+const MarkdownLinkContext = createContext(false)
 const contentDownloadUrl: GetContentDownloadData['url'] =
   '/api/v1/content/download'
 
@@ -417,7 +430,9 @@ function MarkdownLink({
       target={isExternal ? '_blank' : undefined}
       rel={isExternal ? 'noreferrer noopener' : undefined}
     >
-      {children}
+      <MarkdownLinkContext.Provider value={true}>
+        {children}
+      </MarkdownLinkContext.Provider>
     </a>
   )
 }
@@ -449,11 +464,14 @@ function MarkdownImage({
   src,
   alt,
   fileUri,
+  onNavigate,
 }: {
   src?: string
   alt?: string
   fileUri: string
+  onNavigate?: (uri: string) => void
 }) {
+  const insideLink = useContext(MarkdownLinkContext)
   const target = useMemo(
     () => (src ? resolveMarkdownAssetTarget(String(src), fileUri) : null),
     [src, fileUri],
@@ -481,7 +499,7 @@ function MarkdownImage({
         if (!alive) return
         const blob = response.data as Blob
         if (blob.size === 0) {
-          throw new Error('empty blob')
+          throw new Error(i18n.t('studio:errors.emptyBlob'))
         }
         created = URL.createObjectURL(blob)
         setObjectUrl(created)
@@ -516,15 +534,29 @@ function MarkdownImage({
     }
     return null
   }
+  if (!resolvedSrc) return null
 
-  return (
+  const image = (
     <img
       src={resolvedSrc}
-      alt={alt || ''}
+      alt={
+        alt ||
+        (target?.kind === 'viking' && onNavigate && !insideLink
+          ? fileNameFromUri(target.value)
+          : '')
+      }
       loading="lazy"
       className="max-w-full rounded-md outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
     />
   )
+  if (target?.kind === 'viking' && onNavigate && !insideLink) {
+    return (
+      <MarkdownLink href={src} fileUri={fileUri} onNavigate={onNavigate}>
+        {image}
+      </MarkdownLink>
+    )
+  }
+  return image
 }
 
 function detectCodeLanguage(filename: string): string | null {
@@ -1008,7 +1040,7 @@ function formatJsonlTime(value: string): string {
   if (!value) return ''
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString([], {
+  return formatDateTime(date, {
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
@@ -1529,7 +1561,7 @@ export function FilePreview({
 
         const blob = response.data as Blob
         if (blob.size === 0) {
-          throw new Error('empty blob')
+          throw new Error(i18n.t('studio:errors.emptyBlob'))
         }
 
         const nextUrl = URL.createObjectURL(blob)
@@ -1623,6 +1655,14 @@ export function FilePreview({
   )
   const showHeader = !(hideDirectoryHeader && file.isDir)
   const previewFile = resolvedFile || file
+  const sizeLabel = formatSize(previewFile.sizeBytes ?? previewFile.size, {
+    fallback: '',
+  })
+  const modTimeLabel =
+    previewFile.modTime && previewFile.modTime !== '-'
+      ? previewFile.modTime
+      : ''
+  const fileMetadata = [sizeLabel, modTimeLabel].filter(Boolean).join(' · ')
   const showJsonPreview =
     !editing &&
     !previewLoading &&
@@ -1639,12 +1679,6 @@ export function FilePreview({
               <div className="truncate text-sm font-medium leading-5">
                 {file.name}
               </div>
-              {!file.isDir ? (
-                <div className="text-xs leading-5 text-muted-foreground">
-                  {formatSize(previewFile.sizeBytes ?? previewFile.size)} ·{' '}
-                  {previewFile.modTime || '-'}
-                </div>
-              ) : null}
             </div>
             {editing ? (
               <div className="flex items-center gap-1">
@@ -1928,7 +1962,9 @@ export function FilePreview({
                     src={imageSrc}
                     alt={file.name}
                     className="max-h-[70vh] max-w-full rounded-md object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
-                    onError={() => setImageError('direct img failed')}
+                    onError={() =>
+                      setImageError(t('studio:errors.imageLoadFailed'))
+                    }
                   />
                   {imageError ? (
                     <div className="text-xs text-muted-foreground">
@@ -1999,8 +2035,11 @@ export function FilePreview({
                 <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[rehypeRaw, rehypeSanitize]}
-                    urlTransform={(url) => url}
+                    rehypePlugins={[
+                      rehypeRaw,
+                      [rehypeSanitize, markdownSanitizeSchema],
+                    ]}
+                    urlTransform={transformDirectoryMarkdownUrl}
                     components={{
                       ...markdownComponents,
                       img: ({ src, alt }) => (
@@ -2008,6 +2047,7 @@ export function FilePreview({
                           src={src ? String(src) : undefined}
                           alt={alt}
                           fileUri={file.uri}
+                          onNavigate={onNavigate}
                         />
                       ),
                       a: ({ href, children }) => (
@@ -2081,6 +2121,11 @@ export function FilePreview({
           </div>
         </ScrollArea>
       )}
+      {!file.isDir && fileMetadata ? (
+        <footer className="shrink-0 border-t px-4 py-2 text-xs text-muted-foreground">
+          {fileMetadata}
+        </footer>
+      ) : null}
     </div>
   )
 }

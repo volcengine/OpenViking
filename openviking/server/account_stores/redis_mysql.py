@@ -724,6 +724,13 @@ class RedisMySQLAccountStore(AccountStore):
         )
         return value if value is None else UserSummary(value)
 
+    async def get_user_membership(
+        self, account_id: str, user_id: str
+    ) -> UserSummary | None:
+        # Bypass the read-through cache: the admin membership probe must reflect
+        # the latest persisted state, which MySQL indexes directly.
+        return await self._mysql.get_user_membership(account_id, user_id)
+
     async def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]:
         value = await self._read_through(
             account_id,
@@ -865,6 +872,8 @@ class RedisMySQLAccountStore(AccountStore):
             account_id,
             lambda: self._mysql.delete_group(account_id, group_id),
             lambda: (),
+            # Clear all member caches, including memberships added concurrently.
+            account_wide=True,
         )
 
     async def ensure_trusted_identities(self, identities: dict[str, set[str]]) -> dict[str, int]:

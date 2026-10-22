@@ -969,15 +969,9 @@ class FileStore(AccountStore):
             if query and query not in account_id.casefold():
                 continue
 
-            result.append(
-                {
-                    "account_id": account_id,
-                    "created_at": info.created_at,
-                    "user_count": len(info.users),
-                    "status": "deleting" if info.deletion else "active",
-                    **({"task_id": info.deletion["task_id"]} if info.deletion else {}),
-                }
-            )
+            # Reuse the single-account summary builder so the listed shape and
+            # the point-read stay one maintenance point.
+            result.append(self._account_summary(account_id, info))
         return _paginate(result, limit, page)
 
     def _get_users(
@@ -1133,9 +1127,7 @@ class FileStore(AccountStore):
         async with self._reload_lock:
             account = self._require_account(account_id)
             await self._load_account_groups_if_needed(account_id, account)
-            group = self._require_group(account_id, group_id)
-            if group.get("members"):
-                raise FailedPreconditionError("Group must be empty before deletion")
+            self._require_group(account_id, group_id)
             groups = copy.deepcopy(account.groups)
             del groups[group_id]
             await self._replace_groups(account_id, account, groups)
@@ -1455,14 +1447,22 @@ class FileStore(AccountStore):
 
     async def get_account(self, account_id: str) -> AccountSummary | None:
         await self._refresh_accounts_for_management_read()
-        return next(
-            (
-                account
-                for account in self._get_accounts()
-                if account["account_id"] == account_id
-            ),
-            None,
-        )
+        info = self._accounts.get(account_id)
+        if info is None:
+            return None
+        return self._account_summary(account_id, info)
+
+    def _account_summary(self, account_id: str, info: AccountInfo) -> AccountSummary:
+        """Credential-free metadata for one in-memory account (O(1))."""
+        summary: AccountSummary = {
+            "account_id": account_id,
+            "created_at": info.created_at,
+            "user_count": len(info.users),
+            "status": "deleting" if info.deletion else "active",
+        }
+        if info.deletion:
+            summary["task_id"] = info.deletion["task_id"]
+        return summary
 
     async def get_user(self, account_id: str, user_id: str) -> UserSummary | None:
         account = self._accounts.get(account_id)
@@ -1474,6 +1474,22 @@ class FileStore(AccountStore):
             if user
             else None
         )
+
+    async def get_user_membership(
+        self, account_id: str, user_id: str
+    ) -> UserSummary | None:
+        """Refresh-first point read, symmetric with ``get_account``.
+
+        The hot-path ``get_user`` reads in-memory state directly; this admin
+        probe first honors the persisted registry when the watcher is off, so a
+        user created or re-roled by a peer process is visible cross-instance
+        instead of returning a stale 404 or role. Mirrors
+        ``list_users_page(fresh=False)``: the refresh raises
+        ``NotFoundError(account)`` for an unknown account and that bubbles up as
+        a 404, matching the list endpoint.
+        """
+        await self._refresh_users_for_management_read(account_id)
+        return await self.get_user(account_id, user_id)
 
     @deprecated(
         "get_user_for_management is a FileStore compatibility path and will be removed.",

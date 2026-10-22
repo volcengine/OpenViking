@@ -10,9 +10,20 @@ import copy
 import inspect
 import json
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Protocol
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+)
 from uuid import uuid4
 
 from openviking.core.context import ContextLevel
@@ -23,6 +34,7 @@ from openviking.message.part import TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_work_index import bind_task_context
 from openviking.session import working_memory as wm
 from openviking.session.archive_store import (
     ArchiveStore,
@@ -47,6 +59,7 @@ from openviking.session.extraction_batch import (
     resolve_extraction_batch_limits,
 )
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
+from openviking.session.memory.memory_updater import MemoryUpdateError
 from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.retention import (
@@ -299,7 +312,7 @@ class SessionMeta:
     # Working-Memory v2: token accounting for sliding window + keep window.
     # pending_tokens is the cumulative estimated_tokens of messages that fall
     # OUTSIDE the recent-keep window and will be archived on the next commit.
-    # Maintained O(1) inside add_message(); rebuilt from messages on load.
+    # Rebuilt from the current message snapshot on load and append.
     pending_tokens: int = 0
     # keep_recent_count is the last value passed from the plugin through
     # POST /sessions/{id}/commit body. It is remembered so subsequent
@@ -504,26 +517,36 @@ class Session:
             policy = await self._memory_policy_provider()
         return MemoryPolicy.from_dict(policy)
 
-    async def load(self):
-        """Load session data from storage."""
-        if self._loaded:
-            return
+    async def load(self) -> None:
+        """Load session data once for readers of this instance."""
+        if not self._loaded:
+            await self._reload()
+            await self._rebuild_pending_tokens()
+            self._loaded = True
 
+    async def _reload(self) -> Optional[str]:
+        """Restore live state from storage and return the original JSONL for rewriting.
+
+        Mutations call this under the Session and live-file locks, regardless
+        of whether this instance was previously loaded by another request.
+        """
+        self._loaded = False
         try:
             content = await self._viking_fs.read_file(
                 f"{self._session_uri}/messages.jsonl", ctx=self.ctx
             )
-            self._messages = [
-                Message.from_dict(json.loads(line))
-                for line in content.strip().split("\n")
-                if line.strip()
-            ]
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
-            logger.debug(f"Session {self.session_id} not found, starting fresh")
+            content = None
+        self._messages = self._parse_live_messages(content or "")
+        await self._load_meta()
+        self._meta.message_count = len(self._messages)
+        return content
 
-        # Load .meta.json
+    async def _load_meta(self) -> bool:
+        """Restore persisted metadata, including supported pre-meta sessions."""
+        found = True
         try:
             meta_content = await self._viking_fs.read_file(
                 f"{self._session_uri}/.meta.json", ctx=self.ctx
@@ -534,6 +557,9 @@ class Session:
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
+            found = False
+            self._compression.compression_index = 0
+            self._stats.compression_count = 0
             # Old session without meta — derive from existing data
             try:
                 history_items = await self._viking_fs.ls(
@@ -553,10 +579,6 @@ class Session:
             self._meta.commit_count = self._compression.compression_index
             self._meta.total_message_count = None
 
-        # message_count mirrors the live message list, maintained by every write
-        # path. Recompute on load so a stale persisted value can't drift.
-        self._meta.message_count = len(self._messages)
-
         if not self._meta.created_by_account_id:
             self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
@@ -570,13 +592,65 @@ class Session:
             self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(
                 self._meta.auto_commit_policy
             ).to_dict()
-        # WM v2: always rebuild pending_tokens from current messages so the
-        # counter stays consistent across restarts and is also backfilled for
-        # legacy sessions whose .meta.json predates these fields. O(n) once,
-        # subsequent add_message() maintains it in O(1).
-        await self._rebuild_pending_tokens()
+        return found
 
-        self._loaded = True
+    async def _read_commit_meta(self) -> SessionMeta:
+        """Read a valid root metadata snapshot under the caller's Session lock.
+
+        Commit recovery and statistics must never replace unreadable metadata
+        with this instance's defaults or an earlier in-memory snapshot.
+        """
+
+        async def read() -> str:
+            return await self._viking_fs.read_file(f"{self._session_uri}/.meta.json", ctx=self.ctx)
+
+        def is_retryable(exc: Exception) -> bool:
+            if isinstance(exc, (TimeoutError, ConnectionError)):
+                return True
+            mapped = map_exception(exc)
+            return mapped is not None and mapped.code in {"UNAVAILABLE", "DEADLINE_EXCEEDED"}
+
+        content = await retry_async(
+            read,
+            max_retries=2,
+            base_delay=0.1,
+            max_delay=0.3,
+            jitter=False,
+            is_retryable=is_retryable,
+            logger=logger,
+            operation_name="session commit metadata read",
+        )
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("Session metadata must be an object")
+        # Preserve the normal loader's legacy coercions before validating the
+        # counters that recovery and statistics will persist.
+        meta = SessionMeta.from_dict(data)
+        for name in (
+            "message_count",
+            "total_message_count",
+            "commit_count",
+            "pending_tokens",
+            "keep_recent_count",
+            "keep_recent_turn_count",
+            "retained_message_token_budget",
+            "min_raw_tail_steps",
+        ):
+            value = getattr(meta, name)
+            if name == "total_message_count" and value is None:
+                continue
+            if type(value) is not int or value < 0:
+                raise ValueError(f"Invalid Session metadata counter: {name}")
+        for name in ("llm_token_usage", "embedding_token_usage", "memories_extracted"):
+            counters = getattr(meta, name)
+            if not isinstance(counters, dict) or any(
+                type(value) is not int or value < 0 for value in counters.values()
+            ):
+                raise ValueError(f"Invalid Session metadata counters: {name}")
+        for name in ("memory_policy", "auto_commit_policy"):
+            if getattr(meta, name) is not None and not isinstance(getattr(meta, name), dict):
+                raise ValueError(f"Invalid Session metadata policy: {name}")
+        return meta
 
     async def _rebuild_pending_tokens(self) -> None:
         """Recompute ``pending_tokens`` from the current message list.
@@ -657,6 +731,31 @@ class Session:
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
+    @asynccontextmanager
+    async def _state_lock(self, *filenames: str) -> AsyncIterator[Dict[str, Any]]:
+        """Serialize Session mutations, then protect their root-file snapshots.
+
+        A directory Exact lease is a Session mutex, not a lease for its children.
+        Acquire child locks with the same owner and keep archive writes independent.
+        """
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        agfs = self._viking_fs._async_agfs
+        session_lease = await agfs.pathlock_acquire_exact(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            file_lease = await agfs.pathlock_acquire_exact_batch(
+                [f"{session_path}/{name}" for name in filenames],
+                timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
+                owner_lease_ref=session_lease,
+            )
+            try:
+                yield file_lease
+            finally:
+                await agfs.pathlock_release(file_lease)
+        finally:
+            await agfs.pathlock_release(session_lease)
+
     async def _save_meta(self, lease_ref: Optional[Any] = None) -> None:
         """Persist .meta.json to storage using an optional held PathLock lease."""
         if not self._viking_fs:
@@ -678,20 +777,19 @@ class Session:
     ) -> None:
         """Update mutable session config without overwriting concurrent meta changes."""
         update_auto_commit_policy = update_auto_commit_policy or auto_commit_policy is not None
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
-        try:
-            try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
-                )
-                self._meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception as exc:
-                if not _is_storage_not_found(exc):
-                    raise
+        async with self._state_lock(".meta.json") as lease:
+            if not await self._load_meta():
+                # Legacy sessions have no persisted counters to preserve.
+                try:
+                    self._messages = await self._read_live_messages_strict()
+                except Exception as exc:
+                    if not _is_storage_not_found(exc):
+                        raise
+                    self._messages = []
+                self._meta.message_count = len(self._messages)
+                await self._rebuild_pending_tokens()
+            if event_search_tags is None and not update_auto_commit_policy:
+                return
             if event_search_tags is not None:
                 self._meta.event_search_tags = list(event_search_tags)
             if update_auto_commit_policy:
@@ -701,9 +799,7 @@ class Session:
                     existing = dict(self._meta.auto_commit_policy or {})
                     existing.update(auto_commit_policy)
                     self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(existing).to_dict()
-            await self._save_meta()
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
+            await self._save_meta(lease_ref=lease)
 
     async def update_event_search_tags(self, event_search_tags: List[str]) -> None:
         """Update event-memory default tags."""
@@ -734,72 +830,40 @@ class Session:
         be overwritten even though add_message already returned successfully.
         """
         if not messages:
+            if self._viking_fs:
+                await self.load()
             return
         if not self._viking_fs:
             await self._apply_appended_messages_to_state(messages)
             return
 
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
         snapshot: Optional[SessionExpirySnapshot] = None
         snapshot_error: Optional[Exception] = None
-        metadata_reload_error: Optional[Exception] = None
-        try:
-            live_messages_missing = False
-            try:
-                self._messages = await self._read_live_messages_strict()
-            except Exception as exc:
-                if not _is_storage_not_found(exc):
-                    raise
-                self._messages = []
-                live_messages_missing = True
-            in_memory_meta = self._meta
-            try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
-                )
-                self._meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception as exc:
-                # Legacy/malformed metadata must not prevent an otherwise safe
-                # append. Message correctness remains rooted in messages.jsonl.
-                self._meta = in_memory_meta
-                metadata_reload_error = exc
-
+        async with self._state_lock("messages.jsonl", ".meta.json") as lease:
+            content = await self._reload()
             await self._apply_appended_messages_to_state(messages)
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
-            if live_messages_missing:
-                await self._viking_fs.write_file(
-                    f"{self._session_uri}/messages.jsonl",
-                    batch_content,
-                    ctx=self.ctx,
-                )
-            else:
-                await self._viking_fs.append_file(
-                    f"{self._session_uri}/messages.jsonl",
-                    batch_content,
-                    ctx=self.ctx,
-                )
-            await self._save_meta()
+            # Preserve existing JSONL verbatim, as append_file did. Existing
+            # content is already stored bytes; only initial creation used the
+            # text-write privacy transformation.
+            persisted_content = (
+                batch_content if content is None else (content + batch_content).encode("utf-8")
+            )
+            await self._viking_fs.write_file(
+                f"{self._session_uri}/messages.jsonl",
+                persisted_content,
+                ctx=self.ctx,
+                lease_ref=lease,
+            )
+            await self._save_meta(lease_ref=lease)
+            self._loaded = True
             if self._expiry_reporter is not None:
                 try:
-                    # _save_meta() made this exact in-memory state authoritative
-                    # under the Session path lock, even when the preceding reload
-                    # failed. Reporting it prevents the previous due time from
-                    # firing early and repairs a missing expiry registration.
+                    # Report only the state persisted under the Session lock.
                     snapshot = self._build_expiry_snapshot_locked()
                 except Exception as exc:
                     snapshot_error = exc
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
         if self._expiry_reporter is not None:
-            if metadata_reload_error is not None:
-                logger.warning(
-                    "Session metadata reload failed before append; reporting repaired state",
-                    exc_info=metadata_reload_error,
-                )
             if snapshot is not None:
                 await self._expiry_reporter.report_after_append(snapshot)
             else:
@@ -830,16 +894,9 @@ class Session:
             msg_tokens = int(msg.estimated_tokens or 0)
             self._stats.total_tokens += msg_tokens
 
-            if self._meta.retention_mode != RETENTION_MODE_TURN_BUDGET:
-                keep = int(self._meta.keep_recent_count or 0)
-                if keep <= 0:
-                    self._meta.pending_tokens += msg_tokens
-                elif len(self._messages) > keep:
-                    pushed_out = self._messages[-(keep + 1)]
-                    self._meta.pending_tokens += int(pushed_out.estimated_tokens or 0)
-
-        if self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET:
-            await self._rebuild_pending_tokens()
+        # Rebuild once from the post-append snapshot. Persisted counters may be
+        # stale after a message write succeeded but its metadata write failed.
+        await self._rebuild_pending_tokens()
 
         self._meta.message_count = len(self._messages)
         if self._meta.total_message_count is not None:
@@ -1143,9 +1200,8 @@ class Session:
     async def _write_phase1_ready_marker(
         self,
         archive_uri: str,
-        lease_ref: Optional[Any] = None,
     ) -> None:
-        """Persist that Phase 1 is ready using an optional held PathLock lease."""
+        """Persist that Phase 1 is ready under the marker file's own lock."""
         phase1 = await self._read_phase1_meta(archive_uri)
         phase1.update(
             {
@@ -1153,7 +1209,7 @@ class Session:
                 "ready_at": get_current_timestamp(),
             }
         )
-        await self._merge_archive_meta(archive_uri, {"phase1": phase1}, lease_ref=lease_ref)
+        await self._merge_archive_meta(archive_uri, {"phase1": phase1})
 
     async def _archive_file_exists(self, archive_uri: str, file_name: str) -> bool:
         try:
@@ -1168,9 +1224,9 @@ class Session:
     async def _ensure_phase1_ready(self, archive_uri: str) -> bool:
         """Verify or recover a queued Phase 1 before Phase 2 consumes it.
 
-        New commits enqueue while holding the session lock and before rewriting
-        root messages. A consumer therefore acquires the same lock, then either
-        observes ``phase1.status=ready`` in archive metadata or
+        New commits persist the archive intent and rewrite root messages while
+        holding the Session lock. A consumer therefore acquires the same lock,
+        then either observes ``phase1.status=ready`` in archive metadata or
         deterministically reconciles a process crash from the persisted intent.
         """
         marker = await self._read_phase1_meta(archive_uri)
@@ -1249,13 +1305,14 @@ class Session:
             # Root is authoritative and proves the rewrite completed. Reconcile
             # metadata that may have been interrupted immediately afterwards.
             try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
+                self._meta = await self._read_commit_meta()
+            except Exception as exc:
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage="phase1_recovery",
+                    error=f"Cannot restore Phase 1 metadata: {exc}",
                 )
-                self._meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
-                pass
+                return False
             self._messages = live_messages
             self._remember_retention_policy(
                 keep_recent_count=max(0, int(marker.get("keep_recent_count", 0) or 0)),
@@ -1272,6 +1329,10 @@ class Session:
                 self._archives.archive_index_from_uri(archive_uri),
             )
             self._meta.last_commit_at = get_current_timestamp()
+            if isinstance(queue_message, dict) and queue_message.get("record_auto_commit_success"):
+                # Recovery must restore the Phase 1 throttle stamp even if
+                # the later Phase 2 statistics update is skipped.
+                self._meta.last_auto_commit_at = get_current_timestamp()
             await self._rebuild_pending_tokens()
             await self._save_meta()
             await self._write_phase1_ready_marker(archive_uri)
@@ -1325,9 +1386,10 @@ class Session:
 
         Phase 1 (Archive prep, path-lock protected): Split messages into
         archive/retain parts, persist a recoverable intent and archive raw,
-        enqueue Phase 2, then publish the retained root state with
-        ``phase1.status=ready``. Uses a distributed filesystem lock across
-        workers and processes.
+        then publish the retained root state with ``phase1.status=ready``.
+        Task registration and QueueFS publication happen after the Session
+        lock under a short archive publication lease. Uses a distributed
+        filesystem lock across workers and processes.
         Phase 2 (Memory extraction): Runs through the persistent QueueFS queue.
 
         Args:
@@ -1431,24 +1493,16 @@ class Session:
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
+        publication_lease: Optional[Any] = None
         try:
             self._messages = await self._read_live_messages_strict()
-            try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
-                )
-                self._meta = SessionMeta.from_dict(json.loads(meta_content))
-                if (
-                    memory_policy is None
-                    and self._meta.memory_policy is None
-                    and in_memory_default_memory_policy is not None
-                ):
-                    self._meta.memory_policy = in_memory_default_memory_policy
-            except Exception:
-                # The root JSONL remains authoritative for message correctness;
-                # legacy sessions may not have metadata yet.
-                pass
+            await self._load_meta()
+            if (
+                memory_policy is None
+                and self._meta.memory_policy is None
+                and in_memory_default_memory_policy is not None
+            ):
+                self._meta.memory_policy = in_memory_default_memory_policy
 
             effective_event_tags = _resolve_event_search_tags(
                 event_tags, self._meta.event_search_tags
@@ -1648,12 +1702,6 @@ class Session:
                         },
                     )
 
-                phase1_stage = "queue_enqueue"
-                await get_queue_manager().enqueue(
-                    QueueManager.SESSION_COMMIT,
-                    queue_msg.to_dict(),
-                )
-
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
                 await self._write_to_agfs_async(messages=self._messages)
@@ -1677,6 +1725,15 @@ class Session:
                     # never see a stale state.
                     self._meta.last_auto_commit_at = get_current_timestamp()
                 await self._save_meta()
+                # Keep a separate archive lease while Task/Work publication runs
+                # outside the Session lock. A later archive must not interpret
+                # this intentional registration window as an orphan.
+                phase1_stage = "publication_lease"
+                archive_path = self._viking_fs._uri_to_path(archive_uri, ctx=self.ctx)
+                publication_lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+                    archive_path,
+                    timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
+                )
                 await self._write_phase1_ready_marker(archive_uri)
                 if record_idle_commit_success:
                     previous_accepted_at = self._meta.last_idle_commit_accepted_at
@@ -1692,6 +1749,8 @@ class Session:
                             self.session_id,
                             exc_info=True,
                         )
+                if reset_context:
+                    await self._append_context_reset_archive()
             except Exception as e:
                 logger.error(f"[commit] Failed during {phase1_stage}: {e}")
                 # Whether the queue write failed or a queued Phase 1 stopped
@@ -1710,35 +1769,84 @@ class Session:
                     )
                 self._messages = original_messages
                 self._compression.compression_index -= 1
+                if publication_lease is not None:
+                    try:
+                        await self._viking_fs._async_agfs.pathlock_release(publication_lease)
+                    except Exception:
+                        logger.exception(
+                            "Failed to release archive publication lease: %s",
+                            archive_uri,
+                        )
+                    publication_lease = None
                 raise
-            if reset_context:
-                await self._append_context_reset_archive()
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
-        # Lock released; Phase 1 intent, queue item, retained root, metadata and
-        # ready metadata are all durable.
+        # Lock released; Phase 1 intent, retained root, metadata and ready
+        # metadata are durable before Task-store or QueueFS latency.
 
         self._compression.original_count += len(messages_to_archive)
         logger.info(f"Archived: {len(messages_to_archive)} messages → {archive_uri}/")
 
-        # Registration must not hold the session lock or roll back published Phase 1.
+        # Registration and enqueue must not hold the session lock or roll back
+        # published Phase 1. Task must exist before middleware registers Queue Work.
+        tracker = get_task_tracker()
         try:
-            await get_task_tracker().create(
-                "session_commit",
-                resource_id=self.session_id,
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
-                task_id=task_id,
-            )
-        except Exception as exc:
-            error = map_exception(exc) or InternalError(str(exc))
-            error.details.update(
-                task_id=task_id,
-                archive_uri=archive_uri,
-                archived=True,
-                stage="task_tracker_create",
-            )
-            raise error
+            try:
+                await tracker.create(
+                    "session_commit",
+                    resource_id=self.session_id,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                    task_id=task_id,
+                )
+            except Exception as exc:
+                error = map_exception(exc) or InternalError(str(exc))
+                error.details.update(
+                    task_id=task_id,
+                    archive_uri=archive_uri,
+                    archived=True,
+                    stage="task_tracker_create",
+                )
+                raise error
+
+            try:
+                with bind_task_context(
+                    task_id,
+                    self.ctx.account_id,
+                    self.ctx.user.user_id,
+                ):
+                    await get_queue_manager().enqueue(
+                        QueueManager.SESSION_COMMIT,
+                        queue_msg.to_dict(),
+                    )
+            except Exception as exc:
+                try:
+                    await tracker.fail(
+                        task_id,
+                        str(exc),
+                        account_id=self.ctx.account_id,
+                        user_id=self.ctx.user.user_id,
+                    )
+                except Exception:
+                    logger.exception("Failed to persist Task failure: %s", task_id)
+                error = map_exception(exc) or InternalError(str(exc))
+                error.details.update(
+                    task_id=task_id,
+                    archive_uri=archive_uri,
+                    archived=True,
+                    stage="queue_enqueue",
+                )
+                raise error
+        finally:
+            if publication_lease is not None:
+                try:
+                    await self._viking_fs._async_agfs.pathlock_release(publication_lease)
+                except Exception:
+                    logger.exception(
+                        "Failed to release archive publication lease: %s",
+                        archive_uri,
+                    )
+                publication_lease = None
 
         return {
             "session_id": self.session_id,
@@ -2227,7 +2335,10 @@ class Session:
                             max_retries=_MEMORY_EXTRACTION_MAX_RETRIES,
                             base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
                             max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
-                            is_retryable=is_retryable_api_error,
+                            is_retryable=lambda error: (
+                                not isinstance(error, MemoryUpdateError)
+                                and is_retryable_api_error(error)
+                            ),
                             logger=logger,
                             operation_name=operation_name,
                         )
@@ -2460,12 +2571,15 @@ class Session:
             # Phase 2 complete — update meta with telemetry and commit info
             snapshot = telemetry.finish("ok")
             _publish_telemetry_summary_best_effort(snapshot)
-            await self._merge_and_save_commit_meta(
+            updated_meta = await self._merge_and_save_commit_meta(
                 archive_index=archive_index,
                 memories_extracted=memories_extracted,
                 telemetry_snapshot=snapshot,
                 record_auto_commit_success=record_auto_commit_success,
             )
+            # Keep the response schema stable when cumulative statistics are
+            # unavailable. This zero snapshot is never persisted to the session.
+            usage_meta = updated_meta if updated_meta is not None else SessionMeta()
 
             result_payload = {
                 "session_id": self.session_id,
@@ -2488,13 +2602,13 @@ class Session:
                 "agent_evolution_enabled": agent_evolution_enabled,
                 "agent_memory_skip_reason": agent_memory_skip_reason,
                 "token_usage": {
-                    "llm": dict(self._meta.llm_token_usage),
-                    "embedding": dict(self._meta.embedding_token_usage),
+                    "llm": dict(usage_meta.llm_token_usage),
+                    "embedding": dict(usage_meta.embedding_token_usage),
                     "total": {
-                        "total_tokens": self._meta.llm_token_usage["total_tokens"]
-                        + self._meta.embedding_token_usage["total_tokens"],
-                        "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
-                        "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
+                        "total_tokens": usage_meta.llm_token_usage["total_tokens"]
+                        + usage_meta.embedding_token_usage["total_tokens"],
+                        "cached_tokens": usage_meta.llm_token_usage["cached_tokens"],
+                        "reasoning_tokens": usage_meta.llm_token_usage["reasoning_tokens"],
                     },
                 },
             }
@@ -2598,9 +2712,8 @@ class Session:
         blocked_by: str = "",
         skipped: bool = True,
         completed_memory_steps: Optional[Dict[str, List[str]]] = None,
-        lease_ref: Optional[Any] = None,
     ) -> None:
-        """Persist a terminal failure marker for the archive."""
+        """Persist a terminal failure marker under the marker file's own lock."""
         if not self._viking_fs:
             return
         payload = {
@@ -2616,7 +2729,6 @@ class Session:
             uri=f"{archive_uri}/.failed.json",
             content=json.dumps(payload, ensure_ascii=False),
             ctx=self.ctx,
-            lease_ref=lease_ref,
         )
 
     async def get_session_context(self, token_budget: int = 128_000) -> Dict[str, Any]:
@@ -2855,23 +2967,47 @@ class Session:
         if await tracker.has_work(str(task_id)):
             return False
 
-        error = "Session commit queue work is missing"
-        await self._write_failed_marker(
-            predecessor_uri,
-            stage="queue_missing",
-            error=error,
-        )
-        await tracker.fail(
-            str(task_id),
-            error,
-            account_id=self.ctx.account_id,
-            user_id=self.ctx.user.user_id,
-        )
-        logger.warning(
-            "Skipped orphaned Session archive without QueueFS work: %s",
-            predecessor_uri,
-        )
-        return True
+        # A ready archive can still be between Task creation and QueueFS
+        # publication. The producer holds this lease until that publication
+        # attempt has settled; defer rather than declaring an orphan.
+        predecessor_path = self._viking_fs._uri_to_path(predecessor_uri, ctx=self.ctx)
+        publication_lease = None
+        try:
+            publication_lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+                predecessor_path,
+                timeout_secs=0.0,
+            )
+        except Exception:
+            logger.debug(
+                "Predecessor archive is still being published; requeueing: %s",
+                predecessor_uri,
+                exc_info=True,
+            )
+            return False
+
+        try:
+            if await tracker.has_work(str(task_id)):
+                return False
+
+            error = "Session commit queue work is missing"
+            await self._write_failed_marker(
+                predecessor_uri,
+                stage="queue_missing",
+                error=error,
+            )
+            await tracker.fail(
+                str(task_id),
+                error,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            logger.warning(
+                "Skipped orphaned Session archive without QueueFS work: %s",
+                predecessor_uri,
+            )
+            return True
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(publication_lease)
 
     async def _prepare_phase2_archive_messages(
         self,
@@ -2901,22 +3037,23 @@ class Session:
         telemetry_snapshot: Any,
         *,
         record_auto_commit_success: bool = False,
-    ) -> None:
-        """Merge Phase 2 results without overwriting concurrent root updates."""
+    ) -> Optional[SessionMeta]:
+        """Return saved metadata, or None when its read fails and statistics are skipped."""
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
-            latest_meta = self._meta
             try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
+                latest_meta = await self._read_commit_meta()
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "Session %s extraction completed without updating statistics: %s",
+                    self.session_id,
+                    reason,
                 )
-                latest_meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
-                latest_meta = self._meta
+                return None
 
             if telemetry_snapshot:
                 llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
@@ -2939,28 +3076,15 @@ class Session:
                     latest_meta.memories_extracted.get("total", 0) + count
                 )
             latest_meta.last_commit_at = get_current_timestamp()
-            latest_meta.message_count = await self._read_live_message_count()
             if record_auto_commit_success:
                 # Mirror the Phase 1 success stamp so the persisted meta reflects
                 # a clean auto-commit even after Phase 2 reloads the latest meta.
                 latest_meta.last_auto_commit_at = get_current_timestamp()
             self._meta = latest_meta
             await self._save_meta()
+            return latest_meta
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
-
-    async def _read_live_message_count(self) -> int:
-        """Count current live session messages from persisted storage."""
-        if not self._viking_fs:
-            return len(self._messages)
-        try:
-            content = await self._viking_fs.read_file(
-                f"{self._session_uri}/messages.jsonl",
-                ctx=self.ctx,
-            )
-        except Exception:
-            return len(self._messages)
-        return len([line for line in content.strip().split("\n") if line.strip()])
 
     async def _read_live_messages_strict(self) -> List[Message]:
         """Read the authoritative root JSONL without silently dropping corrupt rows."""
@@ -2970,6 +3094,11 @@ class Session:
             f"{self._session_uri}/messages.jsonl",
             ctx=self.ctx,
         )
+        return self._parse_live_messages(content)
+
+    @staticmethod
+    def _parse_live_messages(content: str) -> List[Message]:
+        """Parse live JSONL without dropping corrupt rows or Unicode separators."""
         messages: List[Message] = []
         # Split on "\n" only, not str.splitlines(): the latter also treats
         # U+2028 / U+2029 / NEL (\x85) / \r / \v / \f as line boundaries, which

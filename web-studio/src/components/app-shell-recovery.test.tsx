@@ -20,9 +20,6 @@ vi.mock('#/hooks/use-mobile', () => ({ useIsMobile: () => false }))
 vi.mock('#/components/account-switcher', () => ({
   AccountSwitcher: () => null,
 }))
-vi.mock('#/components/current-user-menu', () => ({
-  CurrentUserMenu: () => null,
-}))
 vi.mock('#/components/generated-credential-dialog', () => ({
   GeneratedCredentialDialog: () => null,
 }))

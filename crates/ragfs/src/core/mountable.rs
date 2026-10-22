@@ -2155,6 +2155,8 @@ mod tests {
                 make_tree_entry("/c", "c", "c", true),
                 make_tree_entry("/B", "B", "B", true),
                 make_tree_entry("/.path.ovlock", ".path.ovlock", ".path.ovlock", false),
+                make_tree_entry("/.sync_log.json", ".sync_log.json", ".sync_log.json", false),
+                make_tree_entry("/.redirect.json", ".redirect.json", ".redirect.json", false),
             ],
         );
         mfs.register_plugin(plugin).await;
@@ -2169,6 +2171,17 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["B", "c", "A.txt", "b.txt"]);
+
+        // Upgrade leftovers remain available for migration, but not to business callers.
+        let internal_names: Vec<String> = mfs
+            .read_internal_dir("/sorted")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert!(internal_names.iter().any(|name| name == ".sync_log.json"));
+        assert!(internal_names.iter().any(|name| name == ".redirect.json"));
 
         let page: Vec<String> = mfs
             .read_dir(

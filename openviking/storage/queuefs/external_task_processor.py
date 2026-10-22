@@ -60,7 +60,7 @@ class ExternalTaskProcessor(DequeueHandlerBase):
                     replacement,
                 )
             except TaskWorkRejected:
-                # Cancellation only needs the current delivery to be ACKed.
+                await self._service.cancel_recovered(task_id, account_id, user_id)
                 return ProcessResult.cancelled()
             else:
                 return ProcessResult.requeued()

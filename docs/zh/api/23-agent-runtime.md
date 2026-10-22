@@ -110,6 +110,26 @@ task, err := client.Compile(
 
 :::
 
+### 目标配置与操作历史
+
+这些接口使用当前账号和认证上下文。`to` 为已注册目标的 `viking://` URI。读取或更新单个目标需要写权限；目标列表仅返回有访问权限的目标。
+
+| HTTP API | 说明与返回结果（`status: "ok"`） |
+|----------|--------------------------|
+| `GET /api/v1/compile/config?to={to}` | `result` 包含目标配置和运行状态 |
+| `POST /api/v1/compile/config/update` | 请求体必填 `to`，指定要更新配置的已注册编译产物目录；`result` 包含更新后的配置和运行状态 |
+| `GET /api/v1/compile/configs` | 可选查询参数 `limit`（1–100，默认 20）和 `cursor`；`result.targets` 按 `target_id` 升序返回本页可见目标摘要；将 `result.next_cursor` 原样作为下一页的 `cursor`，末页为 `null` |
+| `GET /api/v1/compile/operations?to={to}` | `result.operations` 按时间倒序返回操作记录；`result.next_cursor` 用于翻页 |
+| `GET /api/v1/compile/operations/{operation_id}/outputs?to={to}` | `result.outputs` 按 URI 排序返回产出文件及冻结版本引用；`result.next_cursor` 用于翻页 |
+
+更新请求体必填 `to`、`from`（非空来源 URI 数组）、`skill` 和 `auto_update`（布尔值）。`auto_update=true` 时必须提供有效的 `update_schedule`；`auto_update=false` 时可省略或传 `null`，已保存的规则会清空，返回值为 `null`。新目标不设置默认规则，关闭后重新开启需要提供规则。可选 `instruction` 省略时保留已保存的值，传 `null` 或空字符串时清空。更新配置不提交 Compile 任务。
+
+`update_schedule` 必填 `frequency`（`daily` 或 `weekly`）。可选 `hour`（0–23）和 `minute`（0–59）默认均为 0。每周计划还接受 `weekday`（1 为周一，7 为周日，默认 1）。计划使用 `Asia/Shanghai` 时区。
+
+定时自动更新需要显式配置 `compile_api.scheduler_enabled=true`（默认 `false`），并提供有效的 `expiry.service_name` 和 `expiry.redis` 配置。`compile_api.scheduler_backend` 仅接受 `redis`（默认值），配置 `local` 无效。调度关闭时开启 `auto_update` 会返回 `COMPILE_SCHEDULER_DISABLED`。手动增量编译和版本管理不依赖 Redis。
+
+两个历史接口均接受可选查询参数 `limit`（1–100，默认 20）和 `cursor`。翻页时原样传入返回的 `next_cursor`，其为 `null` 时表示最后一页。`operation_id` 长度为 1–128 个字符，以字母或数字开头，其余字符允许字母、数字、`:`、`.`、`_` 和 `-`。目标删除后仍可查询操作记录。目标、操作或产出清单不存在时返回 `404`。产出项的 `version_id` 或 `snapshot_id` 为 `null` 时，表示对应引用不可用。
+
 ### 检查 Compile 可用性
 
 ```http

@@ -19,6 +19,7 @@ from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.service.fs_service import FSService
+from openviking.service.task_domain import TaskPatch
 from openviking.service.task_tracker import TaskRecord, get_task_tracker
 from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.consolidation_context_provider import (
@@ -138,9 +139,9 @@ class MemoryCompileRunner:
                 }
             },
         )
-        await tracker.update_stage(
+        await tracker.patch_task(
             task.task_id,
-            "queued",
+            TaskPatch(stage="queued"),
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
         )

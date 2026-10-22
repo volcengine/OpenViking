@@ -16,6 +16,20 @@ const mocks = vi.hoisted(() => ({
   language: vi.fn(),
   theme: vi.fn(),
 }))
+vi.mock('./setup-identity-directory', () => ({
+  SetupIdentityDirectory: ({
+    onSelect,
+  }: {
+    onSelect: (identity: { accountId: string; userId: string }) => void
+  }) => (
+    <button
+      type="button"
+      onClick={() => onSelect({ accountId: 'team', userId: 'alice' })}
+    >
+      choose-directory-user
+    </button>
+  ),
+}))
 vi.mock('next-themes', () => ({
   useTheme: () => ({ theme: 'system', setTheme: mocks.theme }),
 }))
@@ -45,7 +59,7 @@ beforeEach(() => {
   localStorage.clear()
 })
 
-it('deduplicates identical saved connections and keeps the active profile', async () => {
+it('groups workspace choices by endpoint despite different identities and credentials, keeping the active profile', async () => {
   const connection = {
     serviceSelection: 'opensource',
     baseUrl: 'http://127.0.0.1:1933',
@@ -62,7 +76,12 @@ it('deduplicates identical saved connections and keeps the active profile', asyn
         {
           id: 'first',
           name: 'Default',
-          connection: { ...connection, userId: '' },
+          connection: {
+            ...connection,
+            baseUrl: connection.baseUrl + '/',
+            userId: 'alice',
+            apiKey: 'alice-key',
+          },
         },
         {
           id: 'second',
@@ -81,7 +100,7 @@ it('deduplicates identical saved connections and keeps the active profile', asyn
   const selector = screen.getByRole('combobox', {
     name: 'connectionChoice',
   })
-  expect(selector.textContent).toContain('Open source')
+  expect(selector.textContent).toContain('openSourceConnection · ')
   const user = userEvent.setup()
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
   fireEvent.click(screen.getByRole('button', { name: 'advanced' }))
@@ -91,12 +110,18 @@ it('deduplicates identical saved connections and keeps the active profile', asyn
   fireEvent.click(screen.getByRole('button', { name: 'back' }))
   await user.click(screen.getByRole('combobox', { name: 'connectionChoice' }))
   expect(await screen.findAllByRole('option')).toHaveLength(3)
-  expect(screen.getAllByRole('option', { name: 'Open source' })).toHaveLength(1)
+  expect(
+    screen.getAllByRole('option', {
+      name: 'openSourceConnection · 127.0.0.1:1933',
+    }),
+  ).toHaveLength(1)
   expect(screen.queryByRole('option', { name: 'Default' })).toBeNull()
-  await user.click(screen.getByRole('option', { name: 'Remote' }))
+  await user.click(
+    screen.getByRole('option', { name: 'openSourceConnection · remote.test' }),
+  )
   expect(
     screen.getByRole('combobox', { name: 'connectionChoice' }).textContent,
-  ).toContain('Remote')
+  ).toContain('openSourceConnection · remote.test')
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
   expect(screen.getAllByText('https://remote.test/ov').length).toBeGreaterThan(
     0,
@@ -134,14 +159,11 @@ it('shows the hosted server address on step one and requires a fresh API key eac
   )
   const first = render(<StudioSetup onComplete={vi.fn()} />)
   const endpoint = screen.getByLabelText<HTMLInputElement>('hostedEndpoint')
-  expect(endpoint.value).toBe('https://saved.hosted.test/ov')
+  expect(endpoint.textContent).toBe('https://saved.hosted.test/ov')
   expect(
     screen.queryByRole('combobox', { name: 'connectionChoice' }),
   ).toBeNull()
-  fireEvent.change(endpoint, {
-    target: { value: 'https://another.hosted.test/ov' },
-  })
-  expect(endpoint.value).toBe('https://another.hosted.test/ov')
+  expect(screen.queryByRole('textbox', { name: 'hostedEndpoint' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
   expect(
     screen.queryByRole('combobox', { name: 'connectionChoice' }),
@@ -184,7 +206,7 @@ it('reuses an existing hosted profile only after the user reenters its API key',
   )
   mocks.verify.mockImplementation(async (draft) => draft)
   render(<StudioSetup onComplete={vi.fn()} />)
-  expect(screen.getByLabelText<HTMLInputElement>('hostedEndpoint').value).toBe(
+  expect(screen.getByLabelText('hostedEndpoint').textContent).toBe(
     'https://saved.hosted.test/ov',
   )
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
@@ -225,7 +247,7 @@ it('accepts an older hosted profile without an API key after manual verification
   const done = vi.fn()
   mocks.verify.mockImplementation(async (draft) => draft)
   render(<StudioSetup onComplete={done} />)
-  expect(screen.getByLabelText<HTMLInputElement>('hostedEndpoint').value).toBe(
+  expect(screen.getByLabelText('hostedEndpoint').textContent).toBe(
     'https://saved.hosted.test/ov',
   )
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
@@ -274,7 +296,7 @@ it('selects the configured open-source address when switching from hosted', () =
   fireEvent.click(screen.getByLabelText('studio:providers.opensource'))
   expect(
     screen.getByRole('combobox', { name: 'connectionChoice' }).textContent,
-  ).toContain('Open source')
+  ).toContain('openSourceConnection · ')
   expect(
     screen.getAllByTitle('https://configured.example/ov').length,
   ).toBeGreaterThan(0)
@@ -306,7 +328,7 @@ it('offers the local development service when only a hosted link is saved', () =
   fireEvent.click(screen.getByLabelText('studio:providers.opensource'))
   expect(
     screen.getByRole('combobox', { name: 'connectionChoice' }).textContent,
-  ).toContain('Local OpenViking')
+  ).toContain('openSourceConnection · 127.0.0.1:1933')
   expect(screen.getAllByTitle('http://127.0.0.1:1933').length).toBeGreaterThan(
     0,
   )
@@ -428,72 +450,28 @@ it('keeps the user in setup on verification failure', async () => {
   )
   expect(done).not.toHaveBeenCalled()
 })
-it('edits the hosted endpoint and uses it for connection verification', async () => {
+it('displays the hosted endpoint without offering an editable address', async () => {
   render(<StudioSetup onComplete={vi.fn()} />)
   fireEvent.click(screen.getByLabelText('studio:providers.volcengine'))
-  expect(
-    screen.queryByRole('combobox', { name: 'connectionChoice' }),
-  ).toBeNull()
-  const endpoint = screen.getByRole<HTMLInputElement>('textbox', {
-    name: 'hostedEndpoint',
-  })
-  expect(endpoint.value).toBe(
-    'https://api.vikingdb.cn-beijing.volces.com/openviking',
-  )
-  fireEvent.change(endpoint, { target: { value: 'invalid-address' } })
-  expect(
-    screen.getByRole<HTMLButtonElement>('button', { name: 'next' }).disabled,
-  ).toBe(true)
-  fireEvent.change(endpoint, { target: { value: 'https://hosted.test/ov' } })
-  expect(endpoint.value).toBe('https://hosted.test/ov')
-  expect(
-    screen.getByRole<HTMLButtonElement>('button', { name: 'next' }).disabled,
-  ).toBe(false)
+  const endpoint = 'https://api.vikingdb.cn-beijing.volces.com/openviking'
+  expect(screen.getByText(endpoint)).toBeTruthy()
+  expect(screen.queryByRole('textbox', { name: 'hostedEndpoint' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
-  expect(
-    screen.queryByRole('combobox', { name: 'connectionChoice' }),
-  ).toBeNull()
-  expect(screen.queryByLabelText('hostedEndpoint')).toBeNull()
-  expect(screen.getByText('hostedKeyHelp')).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'verify' }))
-  expect(screen.getByRole('alert').textContent).toBe('keyRequired')
-  expect(document.activeElement).toBe(
-    screen.getByLabelText('settings:fields.userApiKey'),
-  )
-  expect(mocks.verify).not.toHaveBeenCalled()
+  expect(screen.queryByRole('radio')).toBeNull()
+  expect(screen.getByText('studio:providers.volcengine')).toBeTruthy()
+  expect(screen.getByText(endpoint)).toBeTruthy()
   fireEvent.change(screen.getByLabelText('settings:fields.userApiKey'), {
     target: { value: 'hosted-key' },
   })
   fireEvent.click(screen.getByRole('button', { name: 'verify' }))
   await waitFor(() =>
     expect(mocks.verify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: 'https://hosted.test/ov',
-        apiKey: 'hosted-key',
-      }),
+      expect.objectContaining({ baseUrl: endpoint, apiKey: 'hosted-key' }),
       expect.any(AbortSignal),
     ),
   )
 })
-it('clears the hosted API key when its service address changes', () => {
-  render(<StudioSetup onComplete={vi.fn()} />)
-  fireEvent.click(screen.getByLabelText('studio:providers.volcengine'))
-  fireEvent.click(screen.getByRole('button', { name: 'next' }))
-  fireEvent.change(screen.getByLabelText('settings:fields.userApiKey'), {
-    target: { value: 'old-service-secret' },
-  })
-  fireEvent.click(screen.getByRole('button', { name: 'back' }))
-  fireEvent.change(screen.getByLabelText('hostedEndpoint'), {
-    target: { value: 'https://another.hosted.test/ov' },
-  })
-  fireEvent.click(screen.getByRole('button', { name: 'next' }))
-  expect(
-    screen.getByLabelText<HTMLInputElement>('settings:fields.userApiKey').value,
-  ).toBe('')
-  fireEvent.click(screen.getByRole('button', { name: 'verify' }))
-  expect(screen.getByRole('alert').textContent).toBe('keyRequired')
-  expect(mocks.verify).not.toHaveBeenCalled()
-})
+
 it('keeps each workspace draft isolated when switching on the first step', () => {
   render(<StudioSetup onComplete={vi.fn()} />)
   const url = () =>
@@ -505,12 +483,9 @@ it('keeps each workspace draft isolated when switching on the first step', () =>
   fireEvent.change(key(), { target: { value: 'synthetic-oss' } })
   fireEvent.click(screen.getByRole('button', { name: 'back' }))
   fireEvent.click(screen.getByLabelText('studio:providers.volcengine'))
-  expect(screen.getByLabelText<HTMLInputElement>('hostedEndpoint').value).toBe(
+  expect(screen.getByLabelText('hostedEndpoint').textContent).toBe(
     'https://api.vikingdb.cn-beijing.volces.com/openviking',
   )
-  fireEvent.change(screen.getByLabelText('hostedEndpoint'), {
-    target: { value: 'https://cloud.test/ov' },
-  })
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
   expect(screen.queryByLabelText('hostedEndpoint')).toBeNull()
   expect(key().value).toBe('')
@@ -522,8 +497,8 @@ it('keeps each workspace draft isolated when switching on the first step', () =>
   expect(key().value).toBe('synthetic-oss')
   fireEvent.click(screen.getByRole('button', { name: 'back' }))
   fireEvent.click(screen.getByLabelText('studio:providers.volcengine'))
-  expect(screen.getByLabelText<HTMLInputElement>('hostedEndpoint').value).toBe(
-    'https://cloud.test/ov',
+  expect(screen.getByLabelText('hostedEndpoint').textContent).toBe(
+    'https://api.vikingdb.cn-beijing.volces.com/openviking',
   )
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
   expect(key().value).toBe('synthetic-cloud')
@@ -535,4 +510,73 @@ it('loads the logo from the deployment base path', () => {
   expect(container.querySelector('img')?.getAttribute('src')).toBe(
     '/studio/ov-logo.png',
   )
+})
+
+it('cancels an in-flight verification without replacing the saved workspace', async () => {
+  const onCancel = vi.fn()
+  const onComplete = vi.fn()
+  localStorage.setItem('ov_studio_setup', 'complete')
+  mocks.verify.mockImplementationOnce(() => new Promise(() => {}))
+  render(
+    <StudioSetup
+      onComplete={onComplete}
+      onCancel={onCancel}
+      canReturnToWorkspace
+    />,
+  )
+  fireEvent.change(screen.getByLabelText('settings:fields.baseUrl'), {
+    target: { value: 'https://other.test' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'next' }))
+  fireEvent.click(screen.getByRole('button', { name: 'verify' }))
+  await waitFor(() => expect(mocks.verify).toHaveBeenCalled())
+  const signal = mocks.verify.mock.calls[0][1] as AbortSignal
+  fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
+  expect(signal.aborted).toBe(true)
+  expect(onCancel).toHaveBeenCalledOnce()
+  expect(onComplete).not.toHaveBeenCalled()
+  expect(mocks.complete).not.toHaveBeenCalled()
+  expect(localStorage.getItem('ov_studio_setup')).toBe('complete')
+})
+
+it('offers an exit on first use without requiring a valid address', () => {
+  const onCancel = vi.fn()
+  render(<StudioSetup onComplete={vi.fn()} onCancel={onCancel} />)
+  fireEvent.click(screen.getByRole('button', { name: 'exit' }))
+  expect(onCancel).toHaveBeenCalledOnce()
+  expect(mocks.verify).not.toHaveBeenCalled()
+})
+
+it('opens the account/user picker only after Verify and rejects a mismatched user key', async () => {
+  mocks.verify.mockImplementationOnce(async (draft) => draft)
+  render(<StudioSetup onComplete={vi.fn()} />)
+  fireEvent.change(screen.getByLabelText('settings:fields.baseUrl'), {
+    target: { value: 'https://service.test' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'next' }))
+  fireEvent.change(screen.getByLabelText('settings:fields.rootApiKey'), {
+    target: { value: 'root-secret' },
+  })
+  expect(screen.queryByText('choose-directory-user')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'verify' }))
+  fireEvent.click(await screen.findByText('choose-directory-user'))
+  expect(
+    screen.getByLabelText<HTMLInputElement>('settings:fields.userApiKey').value,
+  ).toBe('')
+  expect(screen.queryByRole('button', { name: 'enter' })).toBeNull()
+  mocks.verify.mockImplementationOnce(async (draft) => ({
+    ...draft,
+    accountId: 'other',
+    userId: 'bob',
+  }))
+  fireEvent.change(screen.getByLabelText('settings:fields.userApiKey'), {
+    target: { value: 'wrong-user-key' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'verify' }))
+  await waitFor(() =>
+    expect(screen.getByRole('alert').textContent).toContain(
+      'directoryIdentityMismatch',
+    ),
+  )
+  expect(screen.queryByRole('button', { name: 'enter' })).toBeNull()
 })

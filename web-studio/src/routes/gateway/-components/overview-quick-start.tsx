@@ -30,6 +30,7 @@ import type { QuickPlan } from '../-lib/quick-start'
 import { servedModels } from '../-lib/upstream-schema'
 import { useGateway } from '../-lib/use-gateway'
 import { ManagementUnlockButton } from './access-notices'
+import { DocsLink } from './docs-link'
 import { issueProblem } from './keys-issue-dialog'
 import { Notice } from './notice'
 import { ImportResultNotice } from './upstreams-page'
@@ -158,7 +159,8 @@ export function OverviewQuickStart({
           {t('overview.quick.title')}
         </p>
         <p className="text-sm text-muted-foreground">
-          {t('overview.quick.description')}
+          {t('overview.quick.description')}{' '}
+          <DocsLink section="quickMode" variant="text" />
         </p>
       </div>
       <ul className="grid list-inside list-disc gap-0.5 text-sm text-muted-foreground">

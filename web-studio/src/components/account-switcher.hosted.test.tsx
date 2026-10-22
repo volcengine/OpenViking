@@ -204,25 +204,16 @@ it('keeps distinct keys and users selectable while deduplicating identical hoste
   await waitFor(() =>
     expect(screen.getByRole('button', { name: /study\/alice/ })).toBeTruthy(),
   )
-  expect(
-    screen
-      .getAllByRole('button')
-      .filter(
-        (button) =>
-          button.getAttribute('data-slot') !== 'popover-trigger' &&
-          button.querySelector('[role="img"][aria-label="provider.hosted"]'),
-      ),
-  ).toHaveLength(6)
-  const otherKey = screen.getByRole('button', { name: /Study copy/ })
+  expect(screen.getByTitle('Study copy')).toBeTruthy()
+  const otherKey = screen.getByTitle('Study copy')
   expect(otherKey).toBeTruthy()
-  expect(screen.queryByRole('button', { name: /Study identical/ })).toBeNull()
+  expect(screen.queryByTitle('Study identical')).toBeNull()
   const selected = screen
     .getAllByRole('button')
     .find((button) => button.hasAttribute('aria-current'))
   expect(selected?.getAttribute('aria-current')).toBe('true')
   expect(selected?.textContent).toContain('study/default')
-  expect(selected?.textContent).toContain('Study')
-  expect(screen.getByRole('button', { name: /Unconfigured/ })).toBeTruthy()
+  expect(screen.getByTitle('Unconfigured')).toBeTruthy()
   fireEvent.click(otherKey)
   expect(activateProfile).toHaveBeenCalledWith('study-copy')
 
@@ -232,7 +223,7 @@ it('keeps distinct keys and users selectable while deduplicating identical hoste
   client.clear()
 })
 
-it('lists saved open-source connections beside hosted connections without merging providers', async () => {
+it('previews a different service without switching, then activates the chosen identity', async () => {
   const client = new QueryClient()
   render(
     <QueryClientProvider client={client}>
@@ -240,32 +231,20 @@ it('lists saved open-source connections beside hosted connections without mergin
     </QueryClientProvider>,
   )
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
-
-  const openSource = await screen.findByRole('button', {
-    name: /Work memory/,
-  })
-  expect(openSource).toBeTruthy()
-  expect(screen.queryByText('Duplicate work memory')).toBeNull()
-  expect(
-    screen
-      .getByRole('button', { name: /Open-source shared URL/ })
-      .querySelector('[role="img"][aria-label="provider.opensource"]'),
-  ).toBeNull()
-  expect(
-    screen.getByRole('button', { name: /Development server/ }),
-  ).toBeTruthy()
-  expect(screen.getByRole('button', { name: /study\/alice/ })).toBeTruthy()
-
-  fireEvent.click(openSource)
+  fireEvent.click(screen.getByRole('button', { name: 'devbox.example:1933' }))
+  expect(activateProfile).not.toHaveBeenCalled()
+  expect(screen.queryByTitle('Duplicate work memory')).toBeNull()
+  expect(screen.queryByRole('button', { name: /study\/alice/ })).toBeNull()
+  fireEvent.click(screen.getByTitle('Work memory'))
   expect(activateProfile).toHaveBeenCalledWith('opensource-memory')
-
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
-  fireEvent.click(screen.getByRole('button', { name: /Development server/ }))
-  expect(activateProfile).toHaveBeenCalledWith('opensource-development')
+  fireEvent.click(screen.getByRole('button', { name: 'hosted.example' }))
+  fireEvent.click(screen.getByTitle('Open-source shared URL'))
+  expect(activateProfile).toHaveBeenCalledWith('opensource-shared-url')
   client.clear()
 })
 
-it('opens the same saved connection list from an open-source profile without admin rights', async () => {
+it('opens the current service and filters identities independently from services', async () => {
   activeState.provider = 'opensource'
   activeState.profileId = 'opensource-memory'
   const client = new QueryClient()
@@ -274,14 +253,19 @@ it('opens the same saved connection list from an open-source profile without adm
       <AccountSwitcher />
     </QueryClientProvider>,
   )
-
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
-  const selected = await screen.findByRole('button', { name: /Work memory/ })
-  expect(selected.getAttribute('aria-current')).toBe('true')
-  expect(screen.queryByText('Duplicate work memory')).toBeNull()
-  expect(screen.getByRole('button', { name: /study\/alice/ })).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: /study\/alice/ }))
-  expect(activateProfile).toHaveBeenCalledWith('study-alice')
+  expect(screen.getByTitle('Work memory').getAttribute('aria-current')).toBe(
+    'true',
+  )
+  fireEvent.change(screen.getByRole('textbox', { name: 'identitiesSearch' }), {
+    target: { value: 'not-a-user' },
+  })
+  expect(screen.queryByTitle('Work memory')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'provider.hosted' }))
+  expect(screen.getByTitle('Study Alice')).toBeTruthy()
+  expect(
+    screen.queryByRole('button', { name: 'serverAccountsTitle' }),
+  ).toBeNull()
   client.clear()
 })
 
@@ -295,10 +279,7 @@ it('distinguishes hosted connections with the same identity and profile name', a
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
 
   const sameNamePattern = (name: string) =>
-    name.includes('study/default') &&
-    name.includes('Study') &&
-    !name.includes('Study copy') &&
-    !name.includes('Study identical')
+    name.includes('study/default') && !name.includes('#study-co')
   const accessibleNames = new Set<string>()
   const sameNameOptions = screen.getAllByRole('button', {
     name: (name) => {
@@ -342,5 +323,23 @@ it('shows a single default for personal hosted connections', async () => {
   expect(hostedDefault.textContent).not.toContain('default/default')
   fireEvent.click(hostedDefault)
   expect(activateProfile).toHaveBeenCalledWith('default')
+  client.clear()
+})
+
+it('keeps the account tab discoverable when the active open-source identity lacks management access', () => {
+  activeState.provider = 'opensource'
+  const client = new QueryClient()
+  render(
+    <QueryClientProvider client={client}>
+      <AccountSwitcher />
+    </QueryClientProvider>,
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
+  expect(screen.getByRole('button', { name: 'identities' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'serverAccountsTitle' }))
+  expect(screen.getByText('accountsRootRequired')).toBeTruthy()
+  expect(
+    screen.queryByRole('textbox', { name: 'searchPlaceholder' }),
+  ).toBeNull()
   client.clear()
 })

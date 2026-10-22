@@ -2,6 +2,7 @@
 import { afterEach, expect, it } from 'vitest'
 import {
   readConnectionProfiles,
+  activateIdentityProfile,
   persistConnectionProfiles,
   updateActiveProfile,
   normalizeProfileConnection,
@@ -91,4 +92,21 @@ it('recovers a missing active ID and ignores malformed records without losing th
   expect(readConnectionProfiles(fallback).profiles[0].connection.apiKey).toBe(
     'legacy-key',
   )
+})
+
+it('preserves identities on one endpoint and reuses an exact saved identity', () => {
+  const initial = readConnectionProfiles(fallback)
+  const next = { ...fallback, userId: 'bob', apiKey: 'bob-key' }
+  const switched = activateIdentityProfile(initial, next)
+  expect(switched.profiles).toHaveLength(2)
+  expect(switched.profiles[0]).toEqual(initial.profiles[0])
+  expect(switched.activeId).not.toBe(initial.activeId)
+  const restored = activateIdentityProfile(switched, fallback)
+  expect(restored.activeId).toBe(initial.activeId)
+  expect(restored.profiles).toHaveLength(2)
+  const otherCredential = activateIdentityProfile(switched, {
+    ...next,
+    apiKey: 'other-key',
+  })
+  expect(otherCredential.profiles).toHaveLength(3)
 })

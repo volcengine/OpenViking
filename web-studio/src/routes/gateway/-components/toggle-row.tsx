@@ -1,4 +1,6 @@
+import { DocsLink } from './docs-link'
 import { useReadOnly } from './read-only'
+import type { DocsSection } from '../-lib/client-guides'
 import type * as React from 'react'
 
 import { Label } from '#/components/ui/label'
@@ -12,6 +14,8 @@ type ToggleRowProps = {
   onCheckedChange: (checked: boolean) => void
   /** Shown after the label, such as an "Experimental" mark. */
   badge?: React.ReactNode
+  /** Docs section linked after the description. */
+  docs?: DocsSection
   /** A dependent setting is invalid, so they stay visible while the switch is off. */
   invalid?: boolean
   /** Dependent settings, shown below the row while it is on. */
@@ -26,6 +30,7 @@ export function ToggleRow({
   checked,
   onCheckedChange,
   badge,
+  docs,
   invalid = false,
   children,
 }: ToggleRowProps) {
@@ -40,6 +45,12 @@ export function ToggleRow({
           </span>
           <p className="text-xs leading-5 text-muted-foreground">
             {description}
+            {docs ? (
+              <>
+                {' '}
+                <DocsLink section={docs} variant="text" />
+              </>
+            ) : null}
           </p>
         </div>
         <Switch

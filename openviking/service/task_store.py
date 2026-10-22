@@ -21,11 +21,10 @@ from openviking.pyagfs import AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.service.task_domain import (
     ACTIVE_TASK_STATUSES,
-    MAX_QUEUE_ERROR_DETAILS,
     TERMINAL_TASK_STATUSES,
     DeletedTask,
     DeleteExpiredResult,
-    QueueWorkSummary,
+    TaskPatch,
     TaskRecord,
     TaskRetentionPolicy,
     TaskStatus,
@@ -33,7 +32,8 @@ from openviking.service.task_domain import (
     WorkRecoveryMode,
     WorkState,
     WorkSummary,
-    first_work_error,
+    append_task_events,
+    finalize_task,
     processing_seconds,
     sanitize_error,
     summarize_works,
@@ -160,6 +160,14 @@ class TaskWorkStore(Protocol):
         user_id: Optional[str] = None,
     ) -> Optional[TaskRecord]: ...
 
+    async def get_task_with_events(
+        self,
+        task_id: str,
+        *,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[TaskRecord]: ...
+
     async def list(
         self,
         account_id: Optional[str] = None,
@@ -198,29 +206,10 @@ class TaskWorkStore(Protocol):
         user_id: Optional[str],
     ) -> StoreOperationResult: ...
 
-    async def update_stage(
+    async def patch_task(
         self,
         task_id: str,
-        stage: str,
-        *,
-        meta: Optional[Dict[str, Any]],
-        account_id: Optional[str],
-        user_id: Optional[str],
-    ) -> StoreOperationResult: ...
-
-    async def update_auth(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> StoreOperationResult: ...
-
-    async def merge_meta(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
+        patch: TaskPatch,
         *,
         account_id: str,
         user_id: str,
@@ -257,24 +246,6 @@ class TaskWorkStore(Protocol):
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult: ...
-
-    async def mark_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> StoreOperationResult: ...
-
-    async def is_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> bool: ...
 
     async def add_work(
         self, work: WorkRecord, *, account_id: str, user_id: str
@@ -441,7 +412,7 @@ class PersistentTaskStore(TaskWorkStore):
                 if existing is not None:
                     return self._copy_task(existing, self._work_sets.get(owner))
                 stored = deepcopy(task)
-                self._append_events(stored, None)
+                append_task_events(stored, None)
                 await self._write_task(stored)
                 with self._lock:
                     self._task_cache[owner] = stored
@@ -449,6 +420,24 @@ class PersistentTaskStore(TaskWorkStore):
                 return deepcopy(stored)
 
     async def get_task(
+        self,
+        task_id: str,
+        *,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[TaskRecord]:
+        task = await self._load_task(task_id, account_id, user_id)
+        if task is None:
+            return None
+        with self._lock:
+            owner = self._find_cached_owner(task_id, account_id, user_id)
+            if owner is None:
+                return None
+            task = self._copy_task(self._task_cache[owner], self._work_sets.get(owner))
+            task.execution_events = None
+            return task
+
+    async def get_task_with_events(
         self,
         task_id: str,
         *,
@@ -482,53 +471,20 @@ class PersistentTaskStore(TaskWorkStore):
 
         return await self._mutate_task(task_id, account_id, user_id, mutate)
 
-    async def update_stage(
+    async def patch_task(
         self,
         task_id: str,
-        stage: str,
-        *,
-        meta: Optional[Dict[str, Any]],
-        account_id: Optional[str],
-        user_id: Optional[str],
-    ) -> StoreOperationResult:
-        def mutate(task: TaskRecord, _work_set: _WorkSet) -> StoreOperationResult:
-            if task.status not in ACTIVE_TASK_STATUSES:
-                return _inactive_task_result(task, "Task stage cannot be updated")
-            task.stage = stage
-            if meta:
-                _deep_merge(task.meta, deepcopy(meta))
-            return StoreOperationResult.applied()
-
-        return await self._mutate_task(task_id, account_id, user_id, mutate)
-
-    async def update_auth(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
+        patch: TaskPatch,
         *,
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult:
         def mutate(task: TaskRecord, _work_set: _WorkSet) -> StoreOperationResult:
             if task.status not in ACTIVE_TASK_STATUSES:
-                return _inactive_task_result(task, "Task auth cannot be updated")
-            _deep_merge(task.auth, deepcopy(values))
-            return StoreOperationResult.applied()
-
-        return await self._mutate_task(task_id, account_id, user_id, mutate)
-
-    async def merge_meta(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> StoreOperationResult:
-        def mutate(task: TaskRecord, _work_set: _WorkSet) -> StoreOperationResult:
-            if task.status not in (TaskStatus.PENDING, TaskStatus.RUNNING):
-                return _inactive_task_result(task, "Task meta cannot be updated")
-            _deep_merge(task.meta, deepcopy(values))
+                return _inactive_task_result(task, "Task cannot be patched")
+            if patch.is_empty():
+                return StoreOperationResult.noop()
+            _apply_task_patch(task, patch)
             return StoreOperationResult.applied()
 
         return await self._mutate_task(task_id, account_id, user_id, mutate)
@@ -588,7 +544,7 @@ class PersistentTaskStore(TaskWorkStore):
             task.auth = (
                 {"enqueue_complete_work_ids": deepcopy(enqueue_markers)} if enqueue_markers else {}
             )
-            self._try_finalize(task, work_set)
+            finalize_task(task, work_set.works.values())
             return StoreOperationResult.applied()
 
         return await self._mutate_task(task_id, account_id, user_id, mutate)
@@ -619,44 +575,10 @@ class PersistentTaskStore(TaskWorkStore):
                     f"Task is already {task.status.value}",
                 )
             task.status = TaskStatus.CANCELLING
-            self._try_finalize(task, work_set)
+            finalize_task(task, work_set.works.values())
             return StoreOperationResult.applied()
 
         return await self._mutate_task(task_id, account_id, user_id, mutate)
-
-    async def mark_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> StoreOperationResult:
-        def mutate(task: TaskRecord, _work_set: _WorkSet) -> StoreOperationResult:
-            if task.status not in ACTIVE_TASK_STATUSES:
-                return StoreOperationResult.noop(
-                    StoreOperationCode.ALREADY_TERMINAL,
-                    f"Task is already {task.status.value}",
-                )
-            completed = set(task.auth.get("enqueue_complete_work_ids") or ())
-            if work_id in completed:
-                return StoreOperationResult.noop(StoreOperationCode.DUPLICATE)
-            completed.add(work_id)
-            task.auth["enqueue_complete_work_ids"] = sorted(completed)
-            return StoreOperationResult.applied()
-
-        return await self._mutate_task(task_id, account_id, user_id, mutate)
-
-    async def is_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> bool:
-        task = await self.get_task(task_id, account_id=account_id, user_id=user_id)
-        return bool(task and work_id in set(task.auth.get("enqueue_complete_work_ids") or ()))
 
     async def add_work(
         self, work: WorkRecord, *, account_id: str, user_id: str
@@ -1038,13 +960,15 @@ class PersistentTaskStore(TaskWorkStore):
                     except (ValueError, TypeError, KeyError):
                         continue
         with self._lock:
-            tasks = [
-                self._copy_task(task, self._work_sets.get(owner))
-                for owner, task in self._task_cache.items()
-                for account, user, _ in (owner,)
-                if (account_id is None or account == account_id)
-                and (user_id is None or user == user_id)
-            ]
+            tasks = []
+            for owner, task in self._task_cache.items():
+                account, user, _ = owner
+                if (account_id is None or account == account_id) and (
+                    user_id is None or user == user_id
+                ):
+                    copied = self._copy_task(task, self._work_sets.get(owner))
+                    copied.execution_events = None
+                    tasks.append(copied)
         tasks = [
             task
             for task in tasks
@@ -1097,6 +1021,7 @@ class PersistentTaskStore(TaskWorkStore):
                 cached = self._task_cache.get(owner)
                 if cached is not None:
                     record = self._copy_task(cached, self._work_sets.get(owner))
+            record.execution_events = None
             key = (record.created_at, record.task_id)
             if before is not None and key >= before:
                 continue
@@ -1371,7 +1296,7 @@ class PersistentTaskStore(TaskWorkStore):
                 if not mutation.is_applied:
                     return mutation
                 candidate.updated_at = TaskRecord.next_updated_at(candidate.updated_at)
-                self._append_events(candidate, previous)
+                append_task_events(candidate, previous)
                 snapshot = deepcopy(candidate)
             await self._write_task_and_publish(snapshot, owner, candidate)
             return mutation
@@ -1425,7 +1350,7 @@ class PersistentTaskStore(TaskWorkStore):
                         else:
                             works[work_id] = mutation.work
                     candidate_work_set = _WorkSet(works, open_count)
-                    finalized = self._try_finalize(candidate_task, candidate_work_set)
+                    finalized = finalize_task(candidate_task, candidate_work_set.works.values())
 
                 if finalized:
                     assert candidate_task is not None
@@ -1433,7 +1358,7 @@ class PersistentTaskStore(TaskWorkStore):
                     candidate_task.updated_at = TaskRecord.next_updated_at(
                         candidate_task.updated_at
                     )
-                    self._append_events(candidate_task, previous)
+                    append_task_events(candidate_task, previous)
                     snapshot = deepcopy(candidate_task)
                 else:
                     if mutation.changed:
@@ -1474,51 +1399,6 @@ class PersistentTaskStore(TaskWorkStore):
                 raise cancellation
         finally:
             del write_task, cancellation
-
-    def _try_finalize(self, task: TaskRecord, work_set: _WorkSet) -> bool:
-        if task.status not in ACTIVE_TASK_STATUSES or work_set.open_count:
-            return False
-        if task.status == TaskStatus.CANCELLING:
-            task.status = TaskStatus.CANCELLED
-        else:
-            work_error = first_work_error(work_set.works.values())
-            if work_error and task.error is None:
-                task.error = sanitize_error(work_error)
-            if task.error is not None:
-                task.status = TaskStatus.FAILED
-            elif task.result is not None:
-                task.status = TaskStatus.COMPLETED
-            else:
-                task.error = "Task operation interrupted before its result was persisted"
-                task.status = TaskStatus.FAILED
-        if isinstance(task.result, dict):
-            # QueueFS reconstructs only unacknowledged Work after restart. For this
-            # file backend, terminal Work history and its errors may therefore be
-            # absent from the final projection until Work itself becomes durable.
-            summary = summarize_works(work_set.works.values())
-            projected = {
-                queue_name: _queue_result(summary.queues.get(queue_name))
-                for queue_name in ("Semantic", "Embedding")
-            }
-            has_projected_work = any(
-                work.queue_name in projected for work in work_set.works.values()
-            )
-            if has_projected_work:
-                task.result["queue_status"] = projected
-            for queue_name, field_name in (
-                ("Semantic", "semantic_status"),
-                ("Embedding", "vector_status"),
-            ):
-                if task.result.get(field_name) == "queued":
-                    task.result[field_name] = (
-                        "failed"
-                        if projected.get(queue_name, {}).get("error_count", 0)
-                        else "complete"
-                    )
-        task.stage = task.status.value
-        task.auth = {}
-        task.processing_seconds = processing_seconds(work_set.works.values())
-        return True
 
     def _copy_task(self, task: TaskRecord, work_set: Optional[_WorkSet]) -> TaskRecord:
         copied = deepcopy(task)
@@ -1572,43 +1452,6 @@ class PersistentTaskStore(TaskWorkStore):
         with self._lock:
             self._task_cache.setdefault(owner, task)
             self._work_sets.setdefault(owner, _WorkSet({}))
-
-    @staticmethod
-    def _append_events(task: TaskRecord, previous: Optional[TaskRecord]) -> None:
-        from datetime import datetime, timezone
-
-        recorded_at = datetime.now(timezone.utc).isoformat()
-        if previous is None:
-            kinds = ["created"]
-        else:
-            kinds = []
-            if task.error is not None and previous.error is None:
-                kinds.append("error_recorded")
-            if task.status == TaskStatus.CANCELLED and previous.status != TaskStatus.CANCELLING:
-                task.execution_events = append_task_event(
-                    task.execution_events,
-                    kind="status_changed",
-                    status=TaskStatus.CANCELLING.value,
-                    stage=sanitize_error(previous.stage) if previous.stage else None,
-                    recorded_at=recorded_at,
-                )
-            if task.status != previous.status:
-                kinds.append("status_changed")
-            if task.stage != previous.stage and task.status not in TERMINAL_TASK_STATUSES:
-                kinds.append("stage_changed")
-
-        stage = previous.stage if previous and task.status in TERMINAL_TASK_STATUSES else task.stage
-        for kind in kinds:
-            task.execution_events = append_task_event(
-                task.execution_events,
-                kind=kind,
-                status=task.status.value,
-                stage=sanitize_error(stage) if stage else None,
-                error=sanitize_error(task.error)
-                if kind == "error_recorded" and task.error
-                else None,
-                recorded_at=recorded_at,
-            )
 
     async def _read(self, path: str) -> Any:
         return await run_to_completion(lambda: self._agfs.read(path))
@@ -1749,6 +1592,33 @@ def _deep_merge(target: Dict[str, Any], values: Dict[str, Any]) -> None:
             target[key] = value
 
 
+def _apply_task_patch(task: TaskRecord, patch: TaskPatch) -> None:
+    if "result" in patch.clear_fields:
+        task.result = None
+    elif patch.result is not None:
+        task.result = deepcopy(patch.result)
+
+    if "stage" in patch.clear_fields:
+        task.stage = None
+    elif patch.stage is not None:
+        task.stage = patch.stage
+
+    if "meta" in patch.clear_fields:
+        task.meta = {}
+    elif patch.meta is not None:
+        _deep_merge(task.meta, deepcopy(patch.meta))
+
+    if "auth" in patch.clear_fields:
+        task.auth = {}
+    elif patch.auth is not None:
+        _deep_merge(task.auth, deepcopy(patch.auth))
+
+    if patch.add_enqueue_complete_work_ids:
+        completed = set(task.auth.get("enqueue_complete_work_ids") or ())
+        completed.update(patch.add_enqueue_complete_work_ids)
+        task.auth["enqueue_complete_work_ids"] = sorted(completed)
+
+
 def _inactive_task_result(task: TaskRecord, message: str) -> StoreOperationResult:
     if task.status in TERMINAL_TASK_STATUSES:
         return StoreOperationResult.rejected(
@@ -1759,16 +1629,6 @@ def _inactive_task_result(task: TaskRecord, message: str) -> StoreOperationResul
         StoreOperationCode.INVALID_STATE,
         f"{message}: task is {task.status.value}",
     )
-
-
-def _queue_result(summary: Optional[QueueWorkSummary]) -> Dict[str, Any]:
-    summary = summary or QueueWorkSummary()
-    return {
-        "processed": summary.processed,
-        "requeue_count": summary.requeue_count,
-        "error_count": summary.error_count,
-        "errors": [{"message": error} for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]],
-    }
 
 
 def _task_to_payload(task: TaskRecord) -> Dict[str, Any]:

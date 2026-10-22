@@ -803,6 +803,19 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
         PrivacyCommands::Categories => {
             commands::privacy::categories(&client, ctx.output_format, ctx.compact).await
         }
+        PrivacyCommands::Tree {
+            category,
+            references,
+        } => {
+            commands::privacy::tree(
+                &client,
+                category.as_deref(),
+                references,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         PrivacyCommands::List { category } => {
             commands::privacy::list_targets(&client, &category, ctx.output_format, ctx.compact)
                 .await
@@ -1446,6 +1459,7 @@ pub async fn handle_write(
     tags: Vec<String>,
     tag_mode: String,
     acl: Option<Value>,
+    edit_source: String,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1469,6 +1483,7 @@ pub async fn handle_write(
         tags,
         &tag_mode,
         acl,
+        &edit_source,
         ctx.output_format,
         ctx.compact,
     )

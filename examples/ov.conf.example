@@ -186,7 +186,7 @@
     "vlm_volcengine_plan_example": {
         "_comment": "For VolcEngine subscription plans instead of pay-as-you-go: Agent Plan uses api_base https://ark.cn-beijing.volces.com/api/plan/v3, Coding Plan uses https://ark.cn-beijing.volces.com/api/coding/v3. On BytePlus, the ModelArk Coding Plan uses https://ark.ap-southeast.bytepluses.com/api/coding/v3 with model dola-seed-2.0-lite.",
         "provider": "volcengine",
-        "model": "doubao-seed-2.0-lite",
+        "model": "doubao-seed-2.1-lite",
         "api_key": "{your-api-key}",
         "api_base": "https://ark.cn-beijing.volces.com/api/plan/v3",
         "temperature": 0.0,

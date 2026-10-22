@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { isConfigFileObject } from '#/routes/settings/-lib/config-file-api'
 
 /** A gateway management key in the format `openviking-server init` generates. */
@@ -143,7 +144,7 @@ export function enableGatewayContent(
   managementKey?: string,
 ): string {
   if (!isConfigFileObject(content))
-    throw new Error('ov.conf must contain a JSON object')
+    throw new Error(i18n.t('studio:errors.invalidConfigObject'))
   const fields: Array<[string, string]> = [['enabled', 'true']]
   if (managementKey)
     fields.push(['management_key', JSON.stringify(managementKey)])
@@ -175,7 +176,8 @@ export function enableGatewayContent(
   let result = content
   for (const edit of edits.sort((left, right) => right.at - left.at))
     result = result.slice(0, edit.at) + edit.text + result.slice(edit.end)
-  if (!isConfigFileObject(result)) throw new Error('Could not update ov.conf')
+  if (!isConfigFileObject(result))
+    throw new Error(i18n.t('studio:errors.configUpdateFailed'))
   return result
 }
 

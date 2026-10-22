@@ -136,6 +136,9 @@ PrivacySanitizer 不根据字段名猜测敏感性。当前 active Privacy 中�
 # 首次写入或轮换 GitHub PAT；credential/github 是 target，pat 是 field
 ov privacy upsert credential github --field-pat 'github_pat_...'
 
+# 盘点当前目标和字段，不暴露值
+ov privacy tree --category credential --references
+
 # target 只有 pat 一个字段时可以省略 field
 ov privacy reference credential github
 ov privacy resolve credential github

@@ -30,6 +30,7 @@ import { gatewayErrorMessage } from '../-lib/localize'
 import type { Translate } from '../-lib/localize'
 import { useGateway } from '../-lib/use-gateway'
 import { servedModels, toUpstreamInput } from '../-lib/upstream-schema'
+import { DocsLink } from './docs-link'
 import { Notice } from './notice'
 import { ExplainedButton } from './explained-button'
 import { ToneBadge } from './status-badges'
@@ -311,7 +312,8 @@ export function UpstreamTest({
               {t('upstreams.test.dialog.title', { name: upstream.name })}
             </DialogTitle>
             <DialogDescription>
-              {t('upstreams.test.dialog.description')}
+              {t('upstreams.test.dialog.description')}{' '}
+              <DocsLink section="testUpstream" variant="text" />
             </DialogDescription>
           </DialogHeader>
           <form className="grid min-w-0 gap-5" onSubmit={submit}>

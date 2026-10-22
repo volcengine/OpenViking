@@ -189,9 +189,15 @@ class SchemaModelGenerator:
                     Field(None, description=desc),
                 )
 
-        # Create the model
+        replace_string_fields = [
+            field.name
+            for field in memory_type.fields
+            if field.merge_op == MergeOp.REPLACE and field.field_type == FieldType.STRING
+        ]
+
+        # New objects have no stored value on which to apply a string patch.
         @model_validator(mode="before")
-        def require_new_object_identity(cls, data):
+        def validate_new_object_fields(cls, data):
             del cls
             if not isinstance(data, dict):
                 return data
@@ -202,6 +208,17 @@ class SchemaModelGenerator:
             missing = [name for name in required_on_create if data.get(name) is None]
             if is_new and missing:
                 raise ValueError("new memory item requires fields: " + ", ".join(missing))
+            if is_new:
+                invalid = [
+                    name
+                    for name in replace_string_fields
+                    if data.get(name) is not None and not isinstance(data[name], str)
+                ]
+                if invalid:
+                    raise ValueError(
+                        "new memory item requires a complete string for replace fields: "
+                        + ", ".join(invalid)
+                    )
             return data
 
         json_schema_extra = None
@@ -221,7 +238,7 @@ class SchemaModelGenerator:
         model = create_model(
             model_name,
             __config__=ConfigDict(extra="ignore", json_schema_extra=json_schema_extra),
-            __validators__={"require_new_object_identity": require_new_object_identity},
+            __validators__={"validate_new_object_fields": validate_new_object_fields},
             **field_definitions,
         )
 

@@ -1,11 +1,6 @@
 import type * as React from 'react'
 import { Link, getRouteApi } from '@tanstack/react-router'
-import {
-  ExternalLinkIcon,
-  KeyRoundIcon,
-  MessagesSquareIcon,
-  PuzzleIcon,
-} from 'lucide-react'
+import { KeyRoundIcon, MessagesSquareIcon, PuzzleIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
@@ -19,11 +14,8 @@ import {
 import { useAppConnection } from '#/hooks/use-app-connection'
 
 import type { ConnectionInfo, Upstream } from '../-lib/api'
-import {
-  CLIENT_IDS,
-  SESSION_HEADERS,
-  gatewayDocsUrl,
-} from '../-lib/client-guides'
+import { CLIENT_DOCS, CLIENT_IDS, SESSION_HEADERS } from '../-lib/client-guides'
+import type { DocsSection } from '../-lib/client-guides'
 import { isLoopbackUrl } from '../-lib/format'
 import { authModeLabel } from '../-lib/localize'
 import { UPSTREAM_KEY_HEADER } from '../-lib/upstream-schema'
@@ -32,6 +24,7 @@ import { CodeBlock } from './code-block'
 import { ClientGuide } from './connect-client-guide'
 import { CodeText } from './connect-text'
 import { CopyButton } from './copy-button'
+import { DocsLink } from './docs-link'
 import { LoadingState } from './empty-state'
 import { Notice } from './notice'
 import { SectionHeader } from './section-header'
@@ -53,7 +46,7 @@ const PLUGIN_HEADER_EXAMPLE = 'X-OpenViking-Plugin: <plugin-name>'
  * `?protocol=` the protocol for clients set up per protocol).
  */
 export function ConnectPage() {
-  const { t, i18n } = useTranslation('gateway')
+  const { t } = useTranslation('gateway')
   const { client = CLIENT_IDS[0], protocol } = route.useSearch()
   const info = useConnectionInfo()
   const upstreams = useUpstreams()
@@ -63,21 +56,9 @@ export function ConnectPage() {
       <SectionHeader
         description={t('connect.description')}
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            nativeButton={false}
-            render={
-              <a
-                href={gatewayDocsUrl('guide', i18n.resolvedLanguage)}
-                target="_blank"
-                rel="noreferrer"
-              />
-            }
-          >
-            <ExternalLinkIcon />
+          <DocsLink section={CLIENT_DOCS[client]}>
             {t('connect.fullGuide')}
-          </Button>
+          </DocsLink>
         }
       />
       {info.data ? (
@@ -131,7 +112,13 @@ function AddressCard({ info }: { info: ConnectionInfo }) {
           />
         </dl>
         {warning ? (
-          <Notice tone="warning" title={t(`connect.address.${warning}.title`)}>
+          <Notice
+            tone="warning"
+            title={t(`connect.address.${warning}.title`)}
+            action={
+              <DocsLink section="publicAddress">{t('docs.learnMore')}</DocsLink>
+            }
+          >
             <p>
               <CodeText
                 text={t(
@@ -184,11 +171,14 @@ function ReferenceCard({
   icon,
   title,
   description,
+  docs,
   children,
 }: {
   icon: React.ReactNode
   title: string
   description: React.ReactNode
+  /** Docs section with the details, linked under the content. */
+  docs: DocsSection
   children: React.ReactNode
 }) {
   return (
@@ -206,6 +196,9 @@ function ReferenceCard({
       </CardHeader>
       <CardContent className="grid content-start gap-3 text-sm leading-6 text-muted-foreground">
         {children}
+        <p>
+          <DocsLink section={docs} variant="text" />
+        </p>
       </CardContent>
     </Card>
   )
@@ -218,6 +211,7 @@ function IdentityCard() {
       icon={<MessagesSquareIcon />}
       title={t('connect.identity.title')}
       description={t('connect.identity.description')}
+      docs="conversations"
     >
       <ol className="grid gap-1">
         {SESSION_HEADERS.map((header, index) => (
@@ -250,6 +244,7 @@ function PassthroughCard({ upstreams }: { upstreams?: Upstream[] }) {
       description={t('connect.passthrough.description', {
         mode: authModeLabel(t, 'passthrough'),
       })}
+      docs="providerKey"
     >
       <CodeBlock code={UPSTREAM_KEY_EXAMPLE} wrap />
       <p>{t('connect.passthrough.note')}</p>
@@ -273,9 +268,11 @@ function PluginCard() {
       icon={<PuzzleIcon />}
       title={t('connect.plugin.title')}
       description={t('connect.plugin.description')}
+      docs="pluginDetected"
     >
       <p>{t('connect.plugin.detection')}</p>
       <CodeBlock code={PLUGIN_HEADER_EXAMPLE} wrap />
+      <p>{t('connect.plugin.mcp')}</p>
       <p>{t('connect.plugin.restart')}</p>
     </ReferenceCard>
   )

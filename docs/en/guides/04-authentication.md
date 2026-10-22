@@ -226,7 +226,7 @@ Configure OIDC in `ov.conf`:
 
 | Option | Description |
 |--------|-------------|
-| `issuer` | OIDC provider issuer URL (required) |
+| `issuer` | OIDC provider issuer URL (required); must exactly match the token's `iss`, including any trailing `/` |
 | `client_id` | OIDC client ID (optional) |
 | `client_secret` | OIDC client secret (optional) |
 | `audience` | Audience to validate (optional) |

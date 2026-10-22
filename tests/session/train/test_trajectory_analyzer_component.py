@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
+from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.utils import generate_uri
 from openviking.session.train import (
@@ -22,6 +23,7 @@ from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
 )
+from openviking_cli.session.user_id import UserIdentifier
 
 
 def _patch_runtime_defaults(monkeypatch):
@@ -131,6 +133,8 @@ class FakeVikingFS:
         self.writes = []
 
     async def read_file(self, uri, ctx=None):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
         return self.files[uri]
 
     async def write_file(self, uri, content, ctx=None, lock_handle=None, lease_ref=None):
@@ -204,10 +208,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
 
     analyzer = TrajectoryRolloutAnalyzer(viking_fs=fs, vlm_resolver=FakeResolver())
     context = TrajectoryAnalyzerContext(
-        request_context=SimpleNamespace(
-            user=SimpleNamespace(account_id="default", user_id="u"),
-            account_id="default",
-        ),
+        request_context=RequestContext(user=UserIdentifier("default", "u"), role=Role.USER),
         source_archive_uri="viking://user/u/sessions/s1/history/archive_001",
     )
 
@@ -220,7 +221,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
                 ToolPart(
                     tool_id="read-1",
                     tool_name="read",
-                    tool_input={"uri": "viking://user/u/memories/experiences/exchange.md"},
+                    tool_input={"uris": "viking://~/memories/experiences/exchange.md"},
                     tool_output="experience body",
                     tool_status="completed",
                 )

@@ -76,10 +76,6 @@ class SemanticMsg:
     aggregate_directory: bool = True
     use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
-    # Hold a producer's lease until already-enqueued embedding work settles.
-    wait_for_embeddings_only: bool = False
-    # Hold a producer's lease until every other root in this request settles.
-    wait_for_request_completion: bool = False
     copy_source_uri: str = ""
     # Per-file md5 of final stored bytes, keyed by target URI. Supplied by the
     # local incremental apply so the tree executor's re-vectorization writes a fresh
@@ -118,8 +114,6 @@ class SemanticMsg:
         aggregate_directory: bool = True,
         use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
-        wait_for_embeddings_only: bool = False,
-        wait_for_request_completion: bool = False,
         copy_source_uri: str = "",
         file_md5s: Optional[Dict[str, str]] = None,
         artifact_ref: Optional[Dict[str, Any]] = None,
@@ -159,8 +153,6 @@ class SemanticMsg:
         self.aggregate_directory = bool(aggregate_directory)
         self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
-        self.wait_for_embeddings_only = bool(wait_for_embeddings_only)
-        self.wait_for_request_completion = bool(wait_for_request_completion)
         self.copy_source_uri = copy_source_uri
         self.file_md5s = dict(file_md5s or {})
         self.artifact_ref = dict(artifact_ref) if artifact_ref else None
@@ -250,8 +242,6 @@ class SemanticMsg:
             aggregate_directory=data.get("aggregate_directory", True),
             use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),
-            wait_for_embeddings_only=data.get("wait_for_embeddings_only", False),
-            wait_for_request_completion=data.get("wait_for_request_completion", False),
             copy_source_uri=data.get("copy_source_uri", ""),
             file_md5s=(data.get("file_md5s") if isinstance(data.get("file_md5s"), dict) else None),
             artifact_ref=(

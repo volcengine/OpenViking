@@ -1,4 +1,23 @@
 export default {
+  verifyDirectoryHint:
+    '可选。填写 Root 或 Admin Key 并验证连接后，可选择 Account 和 User；访问数据仍需对应的 User API Key。',
+  loadDirectory: '加载 Account 和 User',
+  directoryHint: '使用 Root 或 Admin API Key 浏览可选身份。',
+  directoryControlRequired:
+    '请输入有效的 Root 或 Admin API Key 后加载账号和用户。',
+  directoryLoadFailed: '加载身份失败，请检查管理密钥和服务地址后重试。',
+  directoryAccount: '选择 Account',
+  directoryUser: '选择 User',
+  directoryAdminHint:
+    'Admin Key 仅可选择所属 Account 中的用户。访问数据还需填写该用户的 API Key。',
+  directoryKeyHint:
+    '选择身份不会自动授予数据权限。请填写对应的 User API Key；留空则仅进入账号管理。',
+  directoryIdentityMismatch:
+    '此 User API Key 属于其他账号或用户，请输入所选身份对应的密钥。',
+
+  openSourceConnection: 'OpenSource',
+  cancel: '取消',
+  exit: '退出 Studio',
   connectionTitle: '连接你的工作区。',
   preferencesHint: '选择你熟悉的语言与外观。',
   connectionHint: '连接并验证你的 OpenViking 服务。',

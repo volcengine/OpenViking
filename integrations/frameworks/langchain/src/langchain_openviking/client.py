@@ -814,7 +814,9 @@ def extract_message_text(content: Any) -> str:
             if isinstance(block, str):
                 chunks.append(block)
             elif isinstance(block, dict):
-                if block.get("type") == "text" and isinstance(block.get("text"), str):
+                if block.get("type") in ("text", "input_text", "output_text") and isinstance(
+                    block.get("text"), str
+                ):
                     chunks.append(block["text"])
                 elif isinstance(block.get("content"), str):
                     chunks.append(block["content"])
@@ -824,15 +826,32 @@ def extract_message_text(content: Any) -> str:
     return str(content)
 
 
+def get_message_role(message: Any) -> str:
+    """Normalize conversation role aliases, preserving typed-message precedence."""
+
+    if isinstance(message, dict):
+        role = message.get("type") or message.get("role")
+    else:
+        role = getattr(message, "type", None) or getattr(message, "role", None)
+    if role in ("chat", "ChatMessageChunk"):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+    if role in ("human", "user", "HumanMessageChunk"):
+        return "user"
+    if role in ("system", "developer", "SystemMessageChunk"):
+        return "system"
+    if role in ("ai", "assistant", "AIMessageChunk"):
+        return "assistant"
+    return str(role or "")
+
+
 def get_latest_user_text(messages: Iterable[Any]) -> str:
     for message in reversed(list(messages)):
-        role = getattr(message, "type", None) or getattr(message, "role", None)
-        if isinstance(message, dict):
-            role = message.get("type") or message.get("role")
-            content = message.get("content")
-        else:
-            content = getattr(message, "content", "")
-        if role in {"human", "user"}:
+        if get_message_role(message) == "user":
+            content = (
+                message.get("content")
+                if isinstance(message, dict)
+                else getattr(message, "content", "")
+            )
             text = extract_message_text(content).strip()
             if text:
                 return text

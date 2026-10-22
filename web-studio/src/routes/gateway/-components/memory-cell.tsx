@@ -8,7 +8,7 @@ import { recallReasonLabel } from '../-lib/localize'
 import { EmptyValue } from './status-badges'
 
 /** Recall outcomes that are not failures. */
-const RECALL_OUTCOMES = new Set(['recalled', 'empty', 'disabled'])
+const RECALL_OUTCOMES = new Set(['recalled', 'empty', 'disabled', 'budget'])
 
 /** A recall that failed, as opposed to finding nothing or being off. */
 export function recallFailed(record: LogRecord): boolean {

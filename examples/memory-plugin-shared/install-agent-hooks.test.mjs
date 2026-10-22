@@ -361,6 +361,7 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes("OPENVIKING_INTEGRATION_ID='openviking-memory'")));
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes("OPENVIKING_HOOK_SOURCE='cursor'")));
     assert.equal(cursor.hooks.beforeReadFile.filter((entry) => entry.command.includes("uri-guard.mjs")).length, 1);
+    assert.equal(cursor.hooks.afterMCPExecution.filter((entry) => entry.command.includes("scripts/hook.mjs")).length, 1);
     assert.deepEqual(cursor.hooks.beforeShellExecution, [thirdPartyShellHook]);
     assert.equal(Boolean(cursor.hooks.postToolUse), false);
 

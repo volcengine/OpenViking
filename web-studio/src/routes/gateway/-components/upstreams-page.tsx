@@ -53,6 +53,7 @@ import {
   useKeys,
   useUpstreams,
 } from '../-lib/use-gateway'
+import { DocsLink } from './docs-link'
 import { EmptyState, ErrorState, LoadingState } from './empty-state'
 import { Notice } from './notice'
 import { SectionHeader } from './section-header'
@@ -265,6 +266,7 @@ export function UpstreamsPage() {
         description={t('upstreams.description')}
         actions={
           <>
+            <DocsLink section="upstreams" />
             <Button
               type="button"
               variant="outline"
@@ -332,9 +334,14 @@ export function ImportResultNotice({
     <Notice
       tone={confirm.length || skipped.length ? 'warning' : 'info'}
       action={
-        <Button type="button" size="sm" variant="outline" onClick={onDismiss}>
-          {t('upstreams.import.dismiss')}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {skipped.length ? (
+            <DocsLink section="importModels">{t('docs.learnMore')}</DocsLink>
+          ) : null}
+          <Button type="button" size="sm" variant="outline" onClick={onDismiss}>
+            {t('upstreams.import.dismiss')}
+          </Button>
+        </div>
       }
     >
       {saved ? (

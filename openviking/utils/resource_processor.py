@@ -11,7 +11,7 @@ import asyncio
 import inspect
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -33,6 +33,7 @@ from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.resource_rnfv import RequestIntent
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
@@ -791,6 +792,7 @@ class ResourceProcessor:
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
+        target_validator: Optional[Callable[[str, RequestContext], Awaitable[None]]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -802,6 +804,9 @@ class ResourceProcessor:
         3. Source commit moves temp content to the final path
         4. (Optional) Build vector index
         5. (Optional) Summarize
+
+        target_validator rejects the resolved destination before reservation or
+        source commit; its errors propagate after temporary artifact cleanup.
         """
         result = {
             "status": "success",
@@ -1023,11 +1028,14 @@ class ResourceProcessor:
                     if candidate_uri:
                         if resource_lock is not None:
                             root_uri = candidate_uri
+                            if target_validator is not None:
+                                await target_validator(root_uri, ctx)
                         else:
                             root_uri, resource_lock = await self.reserve_unique_candidate(
                                 candidate_uri=candidate_uri,
                                 ctx=ctx,
                                 root_is_file=root_is_file,
+                                target_validator=target_validator,
                             )
                             result["root_uri"] = root_uri
                             if root_uri != candidate_uri:
@@ -1036,6 +1044,8 @@ class ResourceProcessor:
                                     f"Tip: Use --to <path> to specify exact target."
                                 )
                     else:
+                        if target_validator is not None:
+                            await target_validator(root_uri, ctx)
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
                         if target_preexisting:
                             try:
@@ -1300,18 +1310,27 @@ class ResourceProcessor:
 
                 if should_summarize:
                     try:
-                        summary_result = await (await self._summarizer_for(ctx)).summarize(
-                            resource_uris=[root_uri],
-                            ctx=ctx,
-                            skip_vectorization=not build_index,
-                            lock=resource_lock,
-                            temp_uris=[temp_uri],
-                            is_code_repo=bool(prepared.get("is_code_repo")),
-                            ingest_options=ingest_options,
-                            semantic_source=semantic_source,
-                            generation_trigger="resource_ingest",
-                            semantic_plan=semantic_plan,
+                        summary_guard = (
+                            PathLockGuard(get_viking_fs()._async_agfs, resource_lock)
+                            if resource_lock is not None
+                            else None
                         )
+                        try:
+                            summary_result = await (await self._summarizer_for(ctx)).summarize(
+                                resource_uris=[root_uri],
+                                ctx=ctx,
+                                skip_vectorization=not build_index,
+                                lock=summary_guard,
+                                temp_uris=[temp_uri],
+                                is_code_repo=bool(prepared.get("is_code_repo")),
+                                ingest_options=ingest_options,
+                                semantic_source=semantic_source,
+                                generation_trigger="resource_ingest",
+                                semantic_plan=semantic_plan,
+                            )
+                        finally:
+                            if summary_guard is not None:
+                                resource_lock = summary_guard.lease
                         if semantic_plan is not None and summary_result.get("status") != "success":
                             raise RuntimeError(
                                 str(summary_result.get("message") or "semantic plan enqueue failed")
@@ -1321,7 +1340,14 @@ class ResourceProcessor:
                             and summary_result.get("status") == "success"
                             and summary_result.get("enqueued_count", 0) > 0
                         ):
-                            await get_viking_fs()._async_agfs.pathlock_handoff(resource_lock)
+                            if (
+                                not summary_result.get("lock_handed_off", False)
+                                and summary_guard is not None
+                            ):
+                                try:
+                                    await summary_guard.handoff()
+                                finally:
+                                    resource_lock = summary_guard.lease
                             resource_lock = None
                         if semantic_plan is not None and (
                             summary_result.get("status") == "success"
@@ -1820,8 +1846,9 @@ class ResourceProcessor:
         ctx: RequestContext,
         max_attempts: int = 100,
         root_is_file: bool = False,
+        target_validator: Optional[Callable[[str, RequestContext], Awaitable[None]]] = None,
     ) -> tuple[str, Dict[str, Any]]:
-        """Pick the first free candidate URI and reserve it with a type-aware lock."""
+        """Validate the first free candidate before reserving it with a type-aware lock."""
         from openviking.storage.errors import ResourceBusyError
 
         viking_fs = get_viking_fs()
@@ -1832,6 +1859,9 @@ class ResourceProcessor:
             root_uri = candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
             if await viking_fs.exists(root_uri, ctx=ctx):
                 continue
+
+            if target_validator is not None:
+                await target_validator(root_uri, ctx)
 
             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
             try:

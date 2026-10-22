@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { extractCaptureTurns } from "./cc-transcript.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -492,4 +493,22 @@ test("subagent capture sanitizes injected text before filtering and sending", as
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("api-request-blob lines are not captured as conversation turns", () => {
+  const question = { role: "user", content: [{ type: "text", text: "what does the cursor track?" }] };
+  const answer = { role: "assistant", content: [{ type: "text", text: "the number of captured turns" }] };
+  const blob = (message) => ({ type: "api-request-blob", sessionId: "s1", hash: "h", message });
+  const turns = extractCaptureTurns([
+    { type: "user", sessionId: "s1", message: question },
+    blob({ role: "system", content: "You are Claude Code." }),
+    blob(question),
+    { type: "assistant", sessionId: "s1", message: answer },
+    blob(answer),
+  ]);
+
+  assert.deepEqual(turns.map((turn) => [turn.role, turn.text]), [
+    ["user", "what does the cursor track?"],
+    ["assistant", "the number of captured turns"],
+  ]);
 });

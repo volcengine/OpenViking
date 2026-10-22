@@ -73,28 +73,6 @@ def test_semantic_msg_round_trips_deferred_aggregation_flag():
     assert SemanticMsg.from_json(msg.to_json()).aggregate_directory is False
 
 
-def test_semantic_msg_round_trips_request_completion_coordinator_flag():
-    msg = SemanticMsg(
-        uri="viking://resources/wide",
-        context_type="resource",
-        wait_for_request_completion=True,
-    )
-
-    assert SemanticMsg.from_json(msg.to_json()).wait_for_request_completion is True
-
-
-def test_semantic_msg_defaults_request_completion_coordinator_flag_for_legacy_payload():
-    msg = SemanticMsg.from_dict(
-        {
-            "uri": "viking://resources/wide",
-            "context_type": "resource",
-            "account_id": "default",
-        }
-    )
-
-    assert msg.wait_for_request_completion is False
-
-
 def test_semantic_msg_round_trips_hierarchical_aggregation_policy():
     msg = SemanticMsg(
         uri="viking://user/alice/memories",

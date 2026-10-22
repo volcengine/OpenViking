@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { prepareCompileHandoff } from '#/routes/compile/-lib/handoff'
 import { useQuery } from '@tanstack/react-query'
 import { fetchCompileSkills } from '#/routes/compile/-lib/api'
@@ -218,7 +219,10 @@ const SESSION_SUBCOMMANDS_BY_KEY = new Map(
 )
 
 type TerminalSuggestionGroup =
-  TerminalCommandGroup | 'history' | 'resource' | 'subcommand'
+  | TerminalCommandGroup
+  | 'history'
+  | 'resource'
+  | 'subcommand'
 
 type TerminalSuggestion = Omit<TerminalCommandView, 'group'> & {
   group: TerminalSuggestionGroup
@@ -334,7 +338,7 @@ function parseWaitTimeout(body: string): number | undefined {
   if (!trimmed) return undefined
   const match = trimmed.match(/^(?:--timeout\s+)?(\d+(?:\.\d+)?)$/)
   if (!match) {
-    throw new Error('Usage: /wait [--timeout seconds]')
+    throw new Error(i18n.t('studio:errors.waitUsage'))
   }
   return Number(match[1])
 }
@@ -390,7 +394,7 @@ function getNumberFlag(
   if (value === undefined || value === 'true') return undefined
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) {
-    throw new Error(`Invalid --${key}: ${value}`)
+    throw new Error(i18n.t('studio:errors.invalidFlag', { key, value }))
   }
   return parsed
 }

@@ -170,6 +170,13 @@ async def _initialize_runtime_state(
     await service.initialize()
     await service.apply_agent_evolution_config()
     await _initialize_auth_plugin(app, service, config)
+    manager = getattr(app.state, "api_key_manager", None)
+    compile_scheduler = getattr(service, "compile_scheduler", None)
+    if manager is not None and compile_scheduler is not None:
+        # Scheduled Compile re-verifies its saved key before every submission.
+        compile_scheduler.set_identity_resolver(
+            manager.resolve_identity, manager.get_user_group_ids
+        )
     from openviking.service.deletion import setup_deletion
 
     app.state.deletion_service = await setup_deletion(
@@ -415,12 +422,6 @@ def create_app(
 
             uninstall_executor_monitor()
         task_tracker.stop_cleanup_loop()
-        auth_plugin_state = getattr(app.state, "auth_plugin", None)
-        if auth_plugin_state is not None:
-            try:
-                await auth_plugin_state.shutdown()
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Auth plugin shutdown failed: %s", e)
         if oauth_gc_task is not None:
             oauth_gc_task.cancel()
             try:
@@ -433,14 +434,24 @@ def create_app(
                 await oauth_store_state.close()
             except Exception as e:  # noqa: BLE001
                 logger.warning("OAuth store close failed: %s", e)
+        service_closed = not owns_service
         if owns_service and service:
             try:
                 await service.close()
+                service_closed = True
                 logger.info("OpenVikingService closed")
             except asyncio.CancelledError as e:
                 logger.warning(f"OpenVikingService close cancelled during shutdown: {e}")
             except Exception as e:
                 logger.warning(f"OpenVikingService close failed during shutdown: {e}")
+        # Draining workers still check identity/deletion state through the
+        # auth plugin's account store. Retain it if service shutdown failed.
+        auth_plugin_state = getattr(app.state, "auth_plugin", None)
+        if service_closed and auth_plugin_state is not None:
+            try:
+                await auth_plugin_state.shutdown()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Auth plugin shutdown failed: %s", e)
         if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
             await usage_reporter.close()
 

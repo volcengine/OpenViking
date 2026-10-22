@@ -144,7 +144,11 @@ runHookStage({
   onSkip: (reason) => log("skip", { stage: "init", reason }),
 }, async (stage) => {
   cfg = stage.cfg;
-  const sessionId = stage.input.session_id || "unknown";
+  const sessionId = stage.sessionId;
+  if (!sessionId) {
+    log("skip", { stage: "init", reason: "no session_id" });
+    return;
+  }
   const transcriptPath = stage.input.transcript_path || null;
   const trigger = stage.input.trigger || "auto";
 

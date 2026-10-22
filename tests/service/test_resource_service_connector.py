@@ -109,7 +109,7 @@ def _task_tracker():
     return SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
         mark_cancelled=AsyncMock(),
@@ -2512,7 +2512,7 @@ async def test_monitor_connector_task_maps_terminal_status(
             on_success=on_success,
         )
 
-    assert tracker.update_stage.await_args.args[1] == expected_stage
+    assert tracker.patch_task.await_args.args[1].stage == expected_stage
     assert outcome["status"] == expected_status
     if expected_status == "completed":
         on_success.assert_awaited_once_with(None)

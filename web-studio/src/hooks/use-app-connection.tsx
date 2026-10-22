@@ -12,6 +12,7 @@ import { fetchAdminAccounts } from '#/lib/admin'
 import { isOvClientError, ovClient } from '#/lib/ov-client'
 import {
   readConnectionProfiles,
+  activateIdentityProfile,
   persistConnectionProfiles,
   updateActiveProfile,
   normalizeProfileConnection,
@@ -397,6 +398,7 @@ export function synchronizeResolvedDataIdentity(
   identity: ConnectionIdentity,
 ): ConnectionDraft | null {
   if (
+    (!connection.apiKey && Boolean(connection.adminApiKey)) ||
     (identity.role !== 'admin' && identity.role !== 'user') ||
     !identity.accountId ||
     !identity.userId ||
@@ -505,6 +507,7 @@ export function summarizeConnectionIdentity(
 export function useAppConnection(): AppConnectionContextValue {
   const context = React.useContext(AppConnectionContext)
   if (!context) {
+    // eslint-disable-next-line studio-i18n/no-literal-message -- Developer invariant; retain the diagnostic for debugging.
     throw new Error(
       'useAppConnection must be used within AppConnectionProvider.',
     )
@@ -826,12 +829,18 @@ export function AppConnectionProvider({
       }
     }
 
-    const commitConnection = (next: ConnectionDraft) => {
+    const commitConnection = (
+      next: ConnectionDraft,
+      preserveIdentity = false,
+    ) => {
       connectionGenerationRef.current += 1
       connectionRevisionRef.current += 1
       authPromptSuppressedUntilRef.current =
         Date.now() + AUTH_PROMPT_SUPPRESSION_MS
       const normalized = synchronizeConnectionRuntime(next, serverMode)
+      if (preserveIdentity) {
+        storeProfiles(activateIdentityProfile(profilesRef.current!, normalized))
+      }
       queryClient.clear()
       setConnection(normalized)
     }
@@ -957,10 +966,13 @@ export function AppConnectionProvider({
           })
         }
         assertCurrentConnection()
-        commitConnection({
-          ...requested,
-          ...resolvedIdentity,
-        })
+        commitConnection(
+          {
+            ...requested,
+            ...resolvedIdentity,
+          },
+          true,
+        )
       },
       switchManagementAccount: async (accountId) => {
         assertSourceConnection()
@@ -973,6 +985,7 @@ export function AppConnectionProvider({
             accountId,
             isGatewayHost,
           ),
+          true,
         )
       },
     }

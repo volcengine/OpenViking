@@ -158,6 +158,8 @@ OIDC Claims: {
 
 ### OIDC 完整配置
 
+`issuer` 必须与身份提供方签发的令牌中的 `iss` 完全一致，包括末尾的 `/`。
+
 ```json
 {
   "server": {

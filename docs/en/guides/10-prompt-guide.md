@@ -231,7 +231,7 @@ These YAML files define the structure of different memory types. They are not si
   - Effective stage: experience-memory persistence and update stage
   - Affects: reusable guidance distilled from task outcomes
   - Purpose: records durable execution experience and the memories it supersedes
-  - Key fields: `experience_name`, `content`, `supersedes`
+  - Key fields: `experience_name`, `content`, `supersedes` (optional; omit when not replacing another experience)
 
 - `identity`
   - Effective stage: agent identity memory persistence stage

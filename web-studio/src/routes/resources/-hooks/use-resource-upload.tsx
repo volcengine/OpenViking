@@ -196,6 +196,7 @@ function createRemoteTaskName(url: string): string {
 export function useResourceUpload(): ResourceUploadContextValue {
   const context = React.useContext(ResourceUploadContext)
   if (!context) {
+    // eslint-disable-next-line studio-i18n/no-literal-message -- Developer invariant; retain the diagnostic for debugging.
     throw new Error(
       'useResourceUpload must be used within ResourceUploadProvider.',
     )

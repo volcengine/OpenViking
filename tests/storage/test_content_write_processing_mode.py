@@ -8,40 +8,17 @@ import pytest
 
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_store import PersistentTaskStore
-from openviking.service.task_tracker import TaskTracker
-from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage import content_write as content_write_module
 from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.content_write import ContentWriteCoordinator
-from openviking.storage.context_update_plan import ContextUpdatePlan, FileRefreshIntent
-from openviking.storage.queuefs.queue_middleware import EnqueueReceipt
+from openviking.storage.context_update_plan import ContextUpdatePlan
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
-from openviking.telemetry.context import bind_telemetry
-from openviking.telemetry.operation import OperationTelemetry
 from openviking.utils.ingest_options import IngestOptions
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
-from tests.test_task_tracker import _FakeAgfs
-
-
-@pytest.fixture(autouse=True)
-def run_content_write_operations_inline(monkeypatch):
-    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
-    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
-
-    async def run_tracked_operation(_task_type, *, operation, **_kwargs):
-        with bind_task_context("test-task", "account-1", "user-1", enqueued_work=[]):
-            return await operation(), "test-task"
-
-    monkeypatch.setattr(
-        content_write_module,
-        "run_tracked_operation",
-        run_tracked_operation,
-    )
 
 
 class _FakePathLock:
@@ -49,17 +26,25 @@ class _FakePathLock:
 
     def __init__(self):
         self._lease = SimpleNamespace(id="lock-1")
+        self.exact_acquire_calls = []
+        self.tree_acquire_calls = []
         self.release_calls = []
+        self.to_handoff_calls = []
         self.handoff_calls = []
 
     async def pathlock_acquire_exact(self, lock_path):
-        del lock_path
+        self.exact_acquire_calls.append(lock_path)
         return self._lease
+
+    async def pathlock_acquire_tree(self, lock_path):
+        self.tree_acquire_calls.append(lock_path)
+        raise AssertionError("Skill content writes must not acquire a package tree lock")
 
     async def pathlock_release(self, lease):
         self.release_calls.append(lease.id)
 
     async def pathlock_to_handoff(self, lease):
+        self.to_handoff_calls.append(lease.id)
         return {
             "owner_id": lease.id,
             "covered_paths": [{"path": "/fake/file", "kind": "exact"}],
@@ -72,6 +57,7 @@ class _FakePathLock:
 class _FakeVikingFS:
     def __init__(self):
         self.write_file = AsyncMock()
+        self.write_file_bytes = AsyncMock()
         self.read_file = AsyncMock(return_value="previous")
         self._async_agfs = _FakePathLock()
 
@@ -163,220 +149,6 @@ async def test_old_abstract_lookup_uses_viking_fs_vector_store_when_not_injected
 
 
 @pytest.mark.asyncio
-async def test_write_builds_ingest_options_before_scheduling_resource_refresh(ctx):
-    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
-    coordinator._safe_stat = AsyncMock(return_value={"isDir": False})
-    coordinator._resolve_root_uri = AsyncMock(return_value="viking://resources")
-    coordinator._write_direct_with_refresh = AsyncMock(
-        return_value={"uri": "viking://resources/demo.md"}
-    )
-
-    await coordinator.write(
-        uri="viking://resources/demo.md",
-        content="updated",
-        ctx=ctx,
-        tags=["team=search"],
-        tag_mode="append",
-    )
-
-    ingest_options = coordinator._write_direct_with_refresh.await_args.kwargs["ingest_options"]
-    assert ingest_options.search_tags == ["team=search"]
-    assert ingest_options.search_tag_mode == "append"
-
-
-@pytest.mark.asyncio
-async def test_create_routes_as_replace_without_prelock_target_stat(ctx):
-    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
-    coordinator._safe_stat = AsyncMock(return_value={"not_found": True})
-    coordinator._resolve_root_uri = AsyncMock(return_value="viking://resources")
-    coordinator._write_direct_with_refresh = AsyncMock(
-        return_value={"uri": "viking://resources/new.md"}
-    )
-
-    await coordinator.write(
-        uri="viking://resources/new.md",
-        content="new content",
-        mode="create",
-        ctx=ctx,
-    )
-
-    kwargs = coordinator._write_direct_with_refresh.await_args.kwargs
-    assert kwargs["mode"] == "replace"
-    coordinator._safe_stat.assert_not_awaited()
-    coordinator._resolve_root_uri.assert_awaited_once_with(
-        "viking://resources/new.md",
-        ctx=ctx,
-        _allow_not_found=True,
-        anchor_to_parent=True,
-        validate_storage=False,
-    )
-
-
-@pytest.mark.asyncio
-async def test_direct_write_reads_target_once_after_lock_and_reuses_formal_state(monkeypatch, ctx):
-    fake_fs = _FakeVikingFS()
-    events = []
-    original_acquire = fake_fs._async_agfs.pathlock_acquire_exact
-
-    async def _acquire(path):
-        events.append("lock")
-        return await original_acquire(path)
-
-    async def _stat(*args, **kwargs):
-        del args, kwargs
-        events.append("stat")
-        return {"isDir": False}
-
-    fake_fs._async_agfs.pathlock_acquire_exact = _acquire
-    fake_fs.stat = _stat
-    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-    captured = {}
-
-    async def _snapshot(**kwargs):
-        captured["formal_snapshot"] = kwargs["formal_snapshot"]
-        captured["target_preexisting"] = kwargs["target_preexisting"]
-        captured["vector_inventory"] = kwargs.get("vector_inventory")
-        return SimpleNamespace()
-
-    async def _plan(**kwargs):
-        del kwargs
-        return None, ContextUpdatePlan("viking://resources/demo.md", "resource")
-
-    async def _commit(*args, **kwargs):
-        del args, kwargs
-        return SimpleNamespace(
-            semantic_requested=False, vector_requested=False, semantic_action=None
-        )
-
-    monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", _snapshot)
-    monkeypatch.setattr(content_write_module, "build_context_update_plan_from_snapshot", _plan)
-    monkeypatch.setattr(content_write_module, "commit_and_enqueue_plan", _commit)
-
-    await coordinator._write_direct_with_refresh(
-        uri="viking://resources/demo.md",
-        root_uri="viking://resources",
-        content="updated",
-        mode="replace",
-        response_mode="replace",
-        context_type="resource",
-        wait=False,
-        ctx=ctx,
-        telemetry_id="",
-        ingest_options=IngestOptions(),
-    )
-
-    assert events == ["lock", "stat"]
-    assert captured["target_preexisting"] is True
-    assert captured["formal_snapshot"] == (
-        {"": content_write_module.FormalEntry(is_dir=False)},
-        True,
-    )
-    assert captured["vector_inventory"] is None
-
-
-@pytest.mark.asyncio
-async def test_direct_write_hands_exact_lock_to_request_coordinator(monkeypatch, ctx):
-    uri = "viking://resources/demo.md"
-    fake_fs = _FakeVikingFS()
-    fake_fs.stat = AsyncMock(return_value={"isDir": False})
-    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-    plan = ContextUpdatePlan(
-        uri,
-        "resource",
-        file_refresh=FileRefreshIntent(uri, "new-md5"),
-    )
-    coordinator._prepare_inline_resource_plan = AsyncMock(
-        return_value=SimpleNamespace(
-            plan=plan,
-            store=None,
-            artifact_ref=None,
-            target=None,
-        )
-    )
-    monkeypatch.setattr(
-        content_write_module,
-        "commit_and_enqueue_plan",
-        AsyncMock(
-            return_value=SimpleNamespace(
-                semantic_requested=True,
-                vector_requested=True,
-                semantic_action=FreshnessAction.REFRESH_NOW.value,
-            )
-        ),
-    )
-    queue = SimpleNamespace(enqueue=AsyncMock(return_value=EnqueueReceipt("queued", "work-1")))
-    manager = SimpleNamespace(SEMANTIC="semantic", get_queue=lambda *args, **kwargs: queue)
-    monkeypatch.setattr(content_write_module, "get_queue_manager", lambda: manager)
-    telemetry = OperationTelemetry(operation="content.write", enabled=False)
-
-    with (
-        bind_telemetry(telemetry),
-        bind_task_context("test-task", "account-1", "user-1", enqueued_work=[]),
-    ):
-        result = await coordinator._write_direct_with_refresh(
-            uri=uri,
-            root_uri="viking://resources",
-            content="updated",
-            mode="replace",
-            response_mode="replace",
-            context_type="resource",
-            wait=False,
-            ctx=ctx,
-            telemetry_id=telemetry.telemetry_id,
-            ingest_options=IngestOptions(),
-        )
-
-    coordinator_msg = queue.enqueue.await_args.args[0]
-    assert coordinator_msg.wait_for_request_completion is True
-    assert coordinator_msg.lock_handoff["covered_paths"] == [
-        {"path": "/fake/file", "kind": "exact"}
-    ]
-    assert fake_fs._async_agfs.release_calls == []
-    assert fake_fs._async_agfs.handoff_calls == ["lock-1"]
-    assert result["semantic_status"] == "queued"
-    assert result["vector_status"] == "queued"
-
-
-@pytest.mark.asyncio
-async def test_direct_write_commits_final_bytes_when_rnfv_content_is_unchanged(monkeypatch, ctx):
-    """An explicit write owns F even when N already matches the indexed V md5."""
-    uri = "viking://resources/demo.md"
-    fake_fs = _FakeVikingFS()
-    fake_fs.stat = AsyncMock(return_value={"isDir": False})
-    fake_fs.write_file_bytes = AsyncMock()
-    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-
-    async def _snapshot(**kwargs):
-        del kwargs
-        return SimpleNamespace()
-
-    async def _plan(**kwargs):
-        del kwargs
-        # This is the plan RNFV produces when N.md5 == V.md5. The explicit
-        # write must still commit its bytes to F because V may lag F.
-        return None, ContextUpdatePlan(uri, "resource")
-
-    monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", _snapshot)
-    monkeypatch.setattr(content_write_module, "build_context_update_plan_from_snapshot", _plan)
-
-    await coordinator._write_direct_with_refresh(
-        uri=uri,
-        root_uri="viking://resources",
-        content="indexed content",
-        mode="replace",
-        response_mode="replace",
-        context_type="resource",
-        wait=False,
-        ctx=ctx,
-        telemetry_id="",
-        ingest_options=IngestOptions(),
-    )
-
-    fake_fs.write_file_bytes.assert_awaited_once()
-    assert fake_fs.write_file_bytes.await_args.args == (uri, b"indexed content")
-
-
-@pytest.mark.asyncio
 async def test_prepare_inline_resource_plan_reuses_locked_facts_and_preloaded_inventory(
     monkeypatch, ctx
 ):
@@ -423,51 +195,6 @@ async def test_prepare_inline_resource_plan_reuses_locked_facts_and_preloaded_in
     assert captured["vector_scope"] == "self"
     assert captured["formal_snapshot"] == ({"": content_write_module.FormalEntry(False)}, True)
     assert captured["vector_inventory"] == {"a-l2": {"id": "a-l2"}}
-
-
-@pytest.mark.asyncio
-async def test_missing_append_starts_from_empty_content(monkeypatch, ctx):
-    fake_fs = _FakeVikingFS()
-    fake_fs.stat = AsyncMock(side_effect=NotFoundError("viking://resources/new.md", "file"))
-    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-    captured = {}
-
-    async def _snapshot(**kwargs):
-        captured["bytes"] = kwargs["store"]._data
-        captured["vector_inventory"] = kwargs.get("vector_inventory")
-        return SimpleNamespace()
-
-    async def _plan(**kwargs):
-        del kwargs
-        return None, ContextUpdatePlan("viking://resources/new.md", "resource")
-
-    async def _commit(*args, **kwargs):
-        del args, kwargs
-        return SimpleNamespace(
-            semantic_requested=False, vector_requested=False, semantic_action=None
-        )
-
-    monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", _snapshot)
-    monkeypatch.setattr(content_write_module, "build_context_update_plan_from_snapshot", _plan)
-    monkeypatch.setattr(content_write_module, "commit_and_enqueue_plan", _commit)
-
-    result = await coordinator._write_direct_with_refresh(
-        uri="viking://resources/new.md",
-        root_uri="viking://resources",
-        content="first line",
-        mode="append",
-        response_mode="append",
-        context_type="resource",
-        wait=False,
-        ctx=ctx,
-        telemetry_id="",
-        ingest_options=IngestOptions(),
-    )
-
-    fake_fs.read_file.assert_not_awaited()
-    assert captured["bytes"] == b"first line"
-    assert captured["vector_inventory"] == {}
-    assert result["mode"] == "append"
 
 
 def test_write_result_keeps_content_updated_compatibility_field():

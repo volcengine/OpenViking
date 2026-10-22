@@ -361,7 +361,8 @@ What this means in practice:
 
 | Integration | What happens when a write fails |
 |---|---|
-| Claude Code, Cursor, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
+| Claude Code, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
+| Cursor | New captures are not queued. The text transcript and local tool records retain unsent content; progress advances only after server acknowledgement. Later capture in the same conversation retries it, and incomplete capture prevents a commit. `SessionStart` still replays legacy queued writes |
 | Codex, TraeCode CLI 2.0 | New captures are not queued. The transcript cursor moves only past messages the server accepted, so the next capture or start-up sweep resends the rest. `SessionStart` still replays queued entries |
 | OpenClaw | No queue. A failed turn is not sent again |
 | Hermes (bundled) | Uploads run in in-process threads and are not replayed from disk. Pending-commit markers under `$HERMES_HOME/openviking/pending_sessions/` let a later start commit sessions left by a dead run (POSIX only) |
@@ -580,10 +581,10 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Cursor
 
-[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration with 6 hooks (`sessionStart`, `beforeSubmitPrompt`, `beforeReadFile`, `stop`, `preCompact`, `sessionEnd`), an always-on rule, and 3 skills.
+[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration with 7 hooks (`sessionStart`, `beforeSubmitPrompt`, `beforeReadFile`, `afterMCPExecution`, `stop`, `preCompact`, `sessionEnd`), an always-on rule, and 3 skills.
 
 - The URI guard runs on `beforeReadFile` only, independent of the plugin switch. Shell commands are not checked, and an upgrade removes the `beforeShellExecution` entry older installs registered.
-- Capture is text-only, so `ov-experience-memory` can find and apply Experience but cannot link its reads back to the Experience used.
+- `afterMCPExecution` retains completed OpenViking tool calls, uploaded with the conversation at Stop. Successful Experience reads can link to trajectories produced by that commit; failed or unfinished calls and automatic injection do not count as successful reads.
 - `sessionEnd` fires only on window close, after Cursor has stopped running hook commands, so it does not commit in practice.
 - With the server unreachable, every turn waits out the 15-second recall timeout.
 

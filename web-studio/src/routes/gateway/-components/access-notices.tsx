@@ -1,10 +1,10 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '#/components/ui/button'
-import { gatewayDocsUrl } from '../-lib/client-guides'
 import { requestManagementUnlock } from '../-lib/management-key'
 import { useGateway } from '../-lib/use-gateway'
 import { CodeBlock } from './code-block'
+import { DocsLink } from './docs-link'
 import { Notice } from './notice'
 
 const GENERATE_KEY_COMMAND = 'openssl rand -base64 32'
@@ -24,7 +24,7 @@ export function ManagementUnlockButton() {
 }
 
 export function AccessNotices({ objectsTab }: { objectsTab: boolean }) {
-  const { t, i18n } = useTranslation('gateway')
+  const { t } = useTranslation('gateway')
   const { access, connection, readOnly } = useGateway()
   const dismissedKey = `gateway-public-warning:${connection.baseUrl}`
   const [dismissed, setDismissed] = React.useState(() => {
@@ -51,20 +51,7 @@ export function AccessNotices({ objectsTab }: { objectsTab: boolean }) {
           title={t('management.publicTitle')}
           action={
             <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                nativeButton={false}
-                render={
-                  <a
-                    href={gatewayDocsUrl('operations', i18n.resolvedLanguage)}
-                    target="_blank"
-                    rel="noreferrer"
-                  />
-                }
-              >
-                {t('unavailable.docs')}
-              </Button>
+              <DocsLink section="publicService">{t('docs.learnMore')}</DocsLink>
               <Button size="sm" variant="ghost" onClick={dismiss}>
                 {t('management.dismiss')}
               </Button>
@@ -84,7 +71,10 @@ export function AccessNotices({ objectsTab }: { objectsTab: boolean }) {
       {objectsTab && access?.managed ? (
         readOnly ? (
           <Notice tone="info" action={<ManagementUnlockButton />}>
-            <p>{t('management.readOnly')}</p>
+            <p>
+              {t('management.readOnly')}{' '}
+              <DocsLink section="studioAccess" variant="text" />
+            </p>
             {['admin', 'root'].includes(access.role) ? (
               <p>{t('management.adminReadOnly')}</p>
             ) : null}

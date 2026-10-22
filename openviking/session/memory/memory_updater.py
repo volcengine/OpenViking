@@ -9,6 +9,7 @@ to the storage system.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import re
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 from openviking.core.context import ContextLevel
 from openviking.message import Message
 from openviking.message.part import TextPart
+from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFSTimeoutError
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -48,6 +50,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
 from openviking.utils.ingest_options import IngestOptions
+from openviking.utils.model_retry import retry_async
 from openviking.utils.tags import merge_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import ConflictError, NotFoundError
@@ -219,6 +222,7 @@ class ExtractContext:
         *,
         split_long_text_messages: bool = True,
         source_archive_uri: str = "",
+        extraction_scope: str = "",
     ):
         if chunk_meta is None:
             if split_long_text_messages:
@@ -230,6 +234,7 @@ class ExtractContext:
             self.chunk_meta = chunk_meta
         self.page_id_map = PageIdMap()
         self.source_archive_uri = (source_archive_uri or "").rstrip("/")
+        self.extraction_scope = extraction_scope
 
     @classmethod
     def _build_extraction_messages(
@@ -409,15 +414,18 @@ class ExtractContext:
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
     def get_source_archive_suffix(self) -> str:
-        """Namespace filenames by their full source archive without exposing its path.
+        """Namespace filenames by archive and optional extraction input scope.
 
-        Keep legacy naming for callers outside session commits that have no archive.
-        The suffix is stable across retries, not a new random record identifier.
+        Preserve the existing suffix when no scope is supplied. Different scopes
+        can hold distinct analyses of the same archive, while retries stay stable.
         """
-        if not self.source_archive_uri:
+        if not self.source_archive_uri and not self.extraction_scope:
             return ""
-        digest = hashlib.sha256(self.source_archive_uri.encode("utf-8")).hexdigest()[:16]
-        return f"_{digest}"
+        digest = hashlib.sha256(self.source_archive_uri.encode("utf-8"))
+        if self.extraction_scope:
+            digest.update(b"\0")
+            digest.update(self.extraction_scope.encode("utf-8"))
+        return f"_{digest.hexdigest()[:16]}"
 
     def get_event_content(
         self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
@@ -754,6 +762,30 @@ class MemoryUpdateResult:
             f"Edited: {len(self.edited_uris)}, "
             f"Deleted: {len(self.deleted_uris)}, "
             f"Errors: {len(self.errors)}"
+        )
+
+
+class MemoryReadError(Exception):
+    """A fresh upsert read failed before this target could be written."""
+
+    def __init__(self, uri: str, cause: Exception):
+        super().__init__(f"Failed to refresh memory {uri}: {cause}")
+        self.retryable = isinstance(
+            cause,
+            (TimeoutError, ConnectionError, AGFSConnectionError, AGFSTimeoutError, AGFSIoError),
+        ) or (
+            isinstance(cause, OSError)
+            and cause.errno in {errno.EAGAIN, errno.EBUSY, errno.EINTR, errno.EIO}
+        )
+
+
+class MemoryUpdateError(Exception):
+    """Report apply failures without treating a partial write as safe to replay."""
+
+    def __init__(self, result: MemoryUpdateResult):
+        super().__init__(
+            f"Memory update failed ({result.summary()}): "
+            + "; ".join(f"{uri}: {error}" for uri, error in result.errors)
         )
 
 
@@ -1376,6 +1408,14 @@ class MemoryUpdater:
         """Apply upsert operation from a flat model."""
         viking_fs = self._get_viking_fs()
 
+        async def read_fresh_memory(uri: str):
+            try:
+                return await viking_fs.read_file(uri, ctx=ctx)
+            except (ConflictError, NotFoundError, FileNotFoundError):
+                raise
+            except Exception as exc:
+                raise MemoryReadError(uri, exc) from exc
+
         memory_type = resolved_op.memory_type
         schema = self._registry.get(memory_type)
         # Process each URI independently
@@ -1388,7 +1428,18 @@ class MemoryUpdater:
             # so consecutive patches to the same URI see each other's changes.
             old_content: Optional[MemoryFile] = None
             try:
-                content = await viking_fs.read_file(uri, ctx=ctx)
+                content = await retry_async(
+                    lambda uri=uri: read_fresh_memory(uri),
+                    max_retries=1,
+                    base_delay=0.1,
+                    max_delay=0.3,
+                    jitter=False,
+                    is_retryable=lambda error: (
+                        isinstance(error, MemoryReadError) and error.retryable
+                    ),
+                    logger=logger,
+                    operation_name=f"fresh memory read {uri}",
+                )
                 if is_uri_migration:
                     raise ConflictError(
                         f"Memory rename target already exists: {uri}",
@@ -1396,16 +1447,8 @@ class MemoryUpdater:
                     )
                 if content:
                     old_content = MemoryFileUtils.read(content, uri=uri)
-            except ConflictError:
-                raise
             except (NotFoundError, FileNotFoundError):
                 # File doesn't exist yet, that's okay
-                pass
-            except Exception:
-                if is_uri_migration:
-                    raise
-                # Preserve the legacy in-place update fallback to the prefetched
-                # snapshot when a fresh disk read is unavailable.
                 pass
             if is_uri_migration:
                 try:
@@ -1416,7 +1459,7 @@ class MemoryUpdater:
                         f"Memory rename source no longer exists: {source_content.uri}",
                         resource=source_content.uri,
                     ) from None
-            # Fall back to pre-fetched content if disk read failed
+            # Reuse the prefetched source only when no content was found.
             if old_content is None:
                 old_content = source_content
 

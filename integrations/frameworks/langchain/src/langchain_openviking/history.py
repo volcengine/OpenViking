@@ -269,21 +269,23 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
             )
 
 
-def context_parts_from_documents(documents: Sequence[Any]) -> list[dict[str, Any]]:
+def context_parts_from_documents(
+    documents: Sequence[Any], *, metadata_prefix: str = "openviking"
+) -> list[dict[str, Any]]:
     """Build OpenViking ContextPart dictionaries from LangChain Documents."""
 
     parts: list[dict[str, Any]] = []
     for doc in documents:
         metadata = getattr(doc, "metadata", {}) or {}
-        uri = metadata.get("openviking_uri") or metadata.get("source") or ""
+        uri = metadata.get(f"{metadata_prefix}_uri") or metadata.get("source") or ""
         if not uri:
             continue
         parts.append(
             {
                 "type": "context",
                 "uri": uri,
-                "context_type": metadata.get("openviking_context_type") or "resource",
-                "abstract": metadata.get("openviking_abstract")
+                "context_type": metadata.get(f"{metadata_prefix}_context_type") or "resource",
+                "abstract": metadata.get(f"{metadata_prefix}_abstract")
                 or getattr(doc, "page_content", "")[:500],
             }
         )

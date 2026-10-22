@@ -47,6 +47,7 @@ import {
   useUpstreams,
 } from '../-lib/use-gateway'
 import { ConfirmDialog } from './confirm-dialog'
+import { DocsLink } from './docs-link'
 import { EmptyState, ErrorState, LoadingState } from './empty-state'
 import { ExplainedButton } from './explained-button'
 import { KeysIssueDialog } from './keys-issue-dialog'
@@ -200,6 +201,7 @@ export function KeysPage() {
         description={t('keys.description')}
         actions={
           <>
+            <DocsLink section="keys" />
             <Button
               type="button"
               variant="outline"
