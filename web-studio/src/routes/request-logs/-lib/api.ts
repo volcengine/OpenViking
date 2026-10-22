@@ -1,10 +1,10 @@
 import { getConsoleAudit, getOvResult } from '#/lib/ov-client'
-import type {
-  ConsoleAuditQuery,
-  ConsoleAuditResult,
-} from '@ov-server/api/v1/console'
+import type { GetConsoleAuditData } from '#/gen/ov-client'
+import type { ConsoleAuditResult } from '@ov-server/api/v1/console'
 
 import type { AuditFilters } from '../-types/audit'
+
+type ConsoleAuditQuery = NonNullable<GetConsoleAuditData['query']>
 
 export function buildAuditQuery(
   filters: AuditFilters,
@@ -12,8 +12,8 @@ export function buildAuditQuery(
   pageSize: number,
 ): ConsoleAuditQuery {
   const query: ConsoleAuditQuery = {
-    page,
-    page_size: pageSize,
+    offset: (page - 1) * pageSize,
+    limit: pageSize,
   }
 
   const requestId = filters.requestId.trim()

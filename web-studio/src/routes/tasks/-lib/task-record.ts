@@ -31,10 +31,12 @@ export function normalizeTaskRecord(value: unknown): TaskRecord | undefined {
 }
 
 export function normalizeTasks(value: unknown): TaskRecord[] {
-  if (!Array.isArray(value)) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return []
   }
-  return value
+  const items = (value as { items?: unknown }).items
+  if (!Array.isArray(items)) return []
+  return items
     .map(normalizeTaskRecord)
     .filter((item): item is TaskRecord => Boolean(item))
 }

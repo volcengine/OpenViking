@@ -1,3 +1,5 @@
+import type { PaginatedResult } from '../../common'
+
 export type FsOutputFormat = 'agent' | 'original' | (string & {})
 
 export type FileStat = {
@@ -24,7 +26,7 @@ export type FileStat = {
   uri?: string
 }
 
-export type FSListResult = string[] | FileStat[]
+export type FSListResult = PaginatedResult<string | FileStat>
 
 export type FSTreeResult = FSListResult
 

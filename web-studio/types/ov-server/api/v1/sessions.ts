@@ -1,3 +1,5 @@
+import type { PaginatedResult } from '../../common'
+
 export type UserIdentifier = {
   account_id: string
   user_id: string
@@ -16,6 +18,8 @@ export type SessionListItem = {
   session_id: string
   uri: string
 }
+
+export type SessionListResult = PaginatedResult<SessionListItem>
 
 export type SessionDetail = {
   commit_count: number

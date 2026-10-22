@@ -20,7 +20,10 @@ beforeEach(() => {
   getContentReadMock.mockReset()
   getFsLsMock.mockReset()
   getFsLsMock.mockResolvedValue({
-    data: { status: 'ok', result: [] },
+    data: {
+      status: 'ok',
+      result: { items: [], offset: 0, limit: 50, has_more: false, total: null },
+    },
     headers: {},
     status: 200,
   })
@@ -62,12 +65,13 @@ describe('fetchDirectorySidecarContent', () => {
 })
 
 describe('fetchFsList', () => {
-  it('requests newest entries before the server applies node_limit', async () => {
+  it('requests newest entries with the unified limit', async () => {
     await fetchFsList('viking://session', { nodeLimit: 200 })
 
     expect(getFsLsMock).toHaveBeenCalledWith({
       query: expect.objectContaining({
-        node_limit: 200,
+        offset: 0,
+        limit: 200,
         sort_by: 'mtime',
         sort_order: 'desc',
       }),

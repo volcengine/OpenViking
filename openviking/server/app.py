@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.exceptions import ExceptionMiddleware
@@ -27,7 +28,12 @@ from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.gateway_host import ScopedRoute, create_embedded_gateway
 from openviking.server.identity import Role
-from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.models import (
+    ERROR_CODE_TO_HTTP_STATUS,
+    ErrorInfo,
+    ErrorResponse,
+    Response,
+)
 from openviking.server.profile_middleware import ProfileMiddleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
@@ -250,6 +256,67 @@ def _message_from_http_detail(detail: object) -> str:
     if detail:
         return str(detail)
     return "HTTP request failed"
+
+
+def _install_openapi_generator(app: FastAPI) -> None:
+    """Make generated validation responses match the runtime HTTP 400 contract."""
+
+    def custom_openapi() -> dict:
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        component_schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+        error_response_schema = ErrorResponse.model_json_schema(
+            ref_template="#/components/schemas/{model}"
+        )
+        for name, definition in error_response_schema.pop("$defs", {}).items():
+            component_schemas.setdefault(name, definition)
+        component_schemas.setdefault("ErrorResponse", error_response_schema)
+
+        validation_ref = "#/components/schemas/HTTPValidationError"
+        for path_item in schema.get("paths", {}).values():
+            for operation in path_item.values():
+                if not isinstance(operation, dict):
+                    continue
+                responses = operation.get("responses", {})
+                validation_response = responses.get("422")
+                validation_schema = (
+                    validation_response.get("content", {})
+                    .get("application/json", {})
+                    .get("schema", {})
+                    if isinstance(validation_response, dict)
+                    else {}
+                )
+                if validation_schema.get("$ref") != validation_ref:
+                    continue
+                responses.pop("422")
+                responses.setdefault(
+                    "400",
+                    {
+                        "description": "Invalid request parameters",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                            }
+                        },
+                    },
+                )
+
+        referenced = str(schema.get("paths", {}))
+        if validation_ref not in referenced:
+            component_schemas.pop("HTTPValidationError", None)
+            component_schemas.pop("ValidationError", None)
+
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = custom_openapi
 
 
 def create_app(
@@ -829,4 +896,5 @@ def create_app(
         # The gateway answers every method and its own WebSocket upgrades below this prefix.
         app.mount(GATEWAY_MOUNT_PATH, app.state.gateway_app)
 
+    _install_openapi_generator(app)
     return app

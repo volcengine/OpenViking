@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Response models and error codes for OpenViking HTTP Server."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Generic, Literal, Optional, TypeVar
 
 from pydantic import BaseModel
+
+ItemT = TypeVar("ItemT")
+PageT = TypeVar("PageT")
 
 
 class ErrorInfo(BaseModel):
@@ -25,10 +28,41 @@ class Response(BaseModel):
     profile: Optional[list[str]] = None
 
 
-class ListingResponse(Response):
-    """Filesystem listing response with pagination metadata."""
+class ErrorResponse(BaseModel):
+    """Standard error response."""
 
+    status: Literal["error"] = "error"
+    result: None = None
+    error: ErrorInfo
+
+
+class OffsetPage(BaseModel, Generic[ItemT]):
+    """Offset-based page payload."""
+
+    items: list[ItemT]
+    offset: int
+    limit: int
     has_more: bool
+    total: Optional[int]
+
+
+class CursorPage(BaseModel, Generic[ItemT]):
+    """Cursor-based page payload."""
+
+    items: list[ItemT]
+    limit: int
+    has_more: bool
+    next_cursor: Optional[str]
+
+
+class PageResponse(BaseModel, Generic[PageT]):
+    """Successful response containing a page payload."""
+
+    status: Literal["ok"] = "ok"
+    result: PageT
+    error: None = None
+    telemetry: Optional[Dict[str, Any]] = None
+    profile: Optional[list[str]] = None
 
 
 # Error code to HTTP status code mapping

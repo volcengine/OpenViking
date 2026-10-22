@@ -79,24 +79,23 @@ type AdminRegisterUserOptions struct {
 }
 
 // AdminListAccountsOptions controls AdminListAccountsWithOptions.
-// Name uses wildcard (* and ?) matching against account IDs. Results are in
-// creation order. Pagination is opt-in: set Limit to page the result; Page is
-// 1-based and only applies when Limit is set.
+// Name uses wildcard (* and ?) matching against account IDs.
 type AdminListAccountsOptions struct {
-	Name  string
-	Limit *int
-	Page  *int
+	Name   string
+	Query  string
+	Offset int
+	Limit  int
 }
 
 // AdminListUsersOptions controls AdminListUsersWithOptions.
-// Name uses wildcard (* and ?) matching against user IDs. Results are in
-// creation order. Pagination is opt-in: set Limit to page the result; Page is
-// 1-based and only applies when Limit is set.
+// Name uses wildcard (* and ?) matching against user IDs.
 type AdminListUsersOptions struct {
-	Limit *int
-	Name  string
-	Role  string
-	Page  *int
+	Offset             int
+	Limit              int
+	Name               string
+	Role               string
+	Query              string
+	IncludeCredentials *bool
 }
 
 // AdminRegenerateKeyOptions controls AdminRegenerateKeyWithOptions.
@@ -106,7 +105,8 @@ type AdminRegenerateKeyOptions struct {
 
 // ListSkillsOptions controls ListSkills.
 type ListSkillsOptions struct {
-	NodeLimit int
+	Offset    int
+	Limit     int
 	TargetURI any
 }
 
@@ -155,10 +155,32 @@ type ObserverStatusOptions struct {
 	Format string
 }
 
+type ListAuditLogsOptions struct {
+	Offset    int
+	Limit     int
+	RequestID string
+	Status    []string
+	APIType   []string
+}
+
+type AuditLogItem struct {
+	RequestID  string  `json:"request_id"`
+	AccountID  string  `json:"account_id"`
+	UserID     *string `json:"user_id"`
+	Method     string  `json:"method"`
+	Route      string  `json:"route"`
+	APIType    string  `json:"api_type"`
+	StatusCode int     `json:"status_code"`
+	DurationMS float64 `json:"duration_ms"`
+	CreatedAt  string  `json:"created_at"`
+}
+
 // ListWatchesOptions controls ListWatches.
 type ListWatchesOptions struct {
 	ActiveOnly bool
 	ToURI      string
+	Offset     int
+	Limit      int
 }
 
 // WatchRef identifies a watch task by task ID or target URI.
@@ -187,7 +209,6 @@ type ListOptions struct {
 	IncludeOverview *bool
 	OverviewLimit   int
 	ShowAllHidden   bool
-	NodeLimit       int
 	Offset          int
 	Limit           int
 	SortBy          string
@@ -197,11 +218,57 @@ type ListOptions struct {
 	IncludeTags     bool
 }
 
-// ListPage contains a page of directory entries and pagination metadata.
-type ListPage struct {
-	Result  []any
-	HasMore bool
+// OffsetPage contains an offset-based page.
+type OffsetPage[T any] struct {
+	Items        []T      `json:"items"`
+	Offset       int      `json:"offset"`
+	Limit        int      `json:"limit"`
+	HasMore      bool     `json:"has_more"`
+	Total        *int     `json:"total"`
+	RootURIs     []string `json:"root_uris,omitempty"`
+	AccountTotal int      `json:"account_total,omitempty"`
+	ManagerCount int      `json:"manager_count,omitempty"`
+	KeyCount     int      `json:"key_count,omitempty"`
+	SuccessRate  float64  `json:"success_rate,omitempty"`
 }
+
+// CursorPage contains a cursor-based page.
+type CursorPage[T any] struct {
+	Items      []T     `json:"items"`
+	Limit      int     `json:"limit"`
+	HasMore    bool    `json:"has_more"`
+	NextCursor *string `json:"next_cursor"`
+}
+
+type AccountListItem struct {
+	AccountID string `json:"account_id"`
+}
+
+type UserListItem struct {
+	UserID string `json:"user_id"`
+	Role   string `json:"role"`
+}
+
+type SessionListItem struct {
+	SessionID string `json:"session_id"`
+	URI       string `json:"uri"`
+	IsDir     bool   `json:"is_dir"`
+	ModTime   string `json:"mod_time"`
+}
+
+type SkillListItem struct {
+	Name    string `json:"name"`
+	URI     string `json:"uri"`
+	RootURI string `json:"root_uri"`
+}
+
+type WatchListItem struct {
+	TaskID   string `json:"task_id"`
+	Path     string `json:"path"`
+	IsActive bool   `json:"is_active"`
+}
+
+type FilesystemListItem map[string]any
 
 // TreeOptions controls Tree.
 type TreeOptions struct {
@@ -212,19 +279,12 @@ type TreeOptions struct {
 	OverviewLimit   int
 	ShowAllHidden   bool
 	DirectoriesOnly bool
-	NodeLimit       int
 	LevelLimit      *int
 	Offset          int
 	Limit           int
 	ExtraFields     []string
 	Tags            []string
 	IncludeTags     bool
-}
-
-// TreePage contains a page of tree nodes and pagination metadata.
-type TreePage struct {
-	Result  []map[string]any
-	HasMore bool
 }
 
 // RemoveOptions controls Remove.
@@ -388,6 +448,11 @@ type CreateSessionOptions struct {
 	Extra                  map[string]any
 }
 
+type ListSessionsOptions struct {
+	Offset int
+	Limit  int
+}
+
 // GetSessionOptions controls GetSession.
 type GetSessionOptions struct {
 	AutoCreate bool
@@ -453,6 +518,14 @@ type ExperienceTrajectoryOptions struct {
 	EndDate   string
 }
 
+type ExperienceTrajectoryItem struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	CreatedAt   any    `json:"created_at"`
+	UpdatedAt   any    `json:"updated_at"`
+}
+
 // ExperienceOutcomeOptions controls outcome date filters.
 type ExperienceOutcomeOptions struct {
 	StartDate string
@@ -483,10 +556,30 @@ type PreflightAssetOptions struct {
 
 // ListTasksOptions controls ListTasks.
 type ListTasksOptions struct {
-	TaskType   string
-	Status     string
-	ResourceID string
-	Limit      int
+	TaskType        string
+	Status          TaskStatus
+	ResourceID      string
+	Limit           int
+	Cursor          string
+	Query           string
+	IncludeInternal bool
+}
+
+type TaskStatus string
+
+const (
+	TaskStatusPending    TaskStatus = "pending"
+	TaskStatusRunning    TaskStatus = "running"
+	TaskStatusCancelling TaskStatus = "cancelling"
+	TaskStatusCompleted  TaskStatus = "completed"
+	TaskStatusFailed     TaskStatus = "failed"
+	TaskStatusCancelled  TaskStatus = "cancelled"
+)
+
+type TaskListItem struct {
+	TaskID   string     `json:"task_id"`
+	TaskType string     `json:"task_type"`
+	Status   TaskStatus `json:"status"`
 }
 
 // PackOptions controls ovpack export/backup.

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fetchTasks, MAX_TASKS } from './task-list'
+import { fetchTasks } from './task-list'
 
 const clientMocks = vi.hoisted(() => ({
   getTasks: vi.fn(),
@@ -17,35 +17,47 @@ beforeEach(() => {
 
 describe('task list requests', () => {
   it('uses the server limit without filtering older tasks locally', async () => {
-    clientMocks.getTasks.mockResolvedValue([
-      {
-        created_at: 2,
-        task_id: 'new-task',
-      },
-      {
-        created_at: 1,
-        task_id: 'old-task',
-      },
-    ])
-
-    await expect(fetchTasks('all', 'all')).resolves.toEqual([
-      expect.objectContaining({ task_id: 'new-task' }),
-      expect.objectContaining({ task_id: 'old-task' }),
-    ])
-    expect(clientMocks.getTasks).toHaveBeenCalledWith({
-      query: { limit: MAX_TASKS },
+    clientMocks.getTasks.mockResolvedValue({
+      items: [
+        {
+          created_at: 2,
+          task_id: 'new-task',
+        },
+        {
+          created_at: 1,
+          task_id: 'old-task',
+        },
+      ],
+      has_more: true,
+      next_cursor: 'next',
     })
-    expect(MAX_TASKS).toBe(200)
+
+    await expect(fetchTasks('all', 'all', undefined, 50)).resolves.toEqual({
+      items: [
+        expect.objectContaining({ task_id: 'new-task' }),
+        expect.objectContaining({ task_id: 'old-task' }),
+      ],
+      hasMore: true,
+      nextCursor: 'next',
+    })
+    expect(clientMocks.getTasks).toHaveBeenCalledWith({
+      query: { limit: 50 },
+    })
   })
 
   it('uses the generated client contract for task-type filters', async () => {
-    clientMocks.getTasks.mockResolvedValue([])
+    clientMocks.getTasks.mockResolvedValue({
+      items: [],
+      has_more: false,
+      next_cursor: null,
+    })
 
-    await fetchTasks('session_commit', 'all')
+    await fetchTasks('session_commit', 'all', 'cursor-1', 25)
 
     expect(clientMocks.getTasks).toHaveBeenCalledWith({
       query: {
-        limit: MAX_TASKS,
+        cursor: 'cursor-1',
+        limit: 25,
         task_type: 'session_commit',
       },
     })
@@ -59,29 +71,35 @@ describe('task list requests', () => {
       created_at: 1,
     }
     const records = [
-      ...Array.from({ length: MAX_TASKS }, (_, index) => ({
+      ...Array.from({ length: 200 }, (_, index) => ({
         task_id: `completed-${index}`,
         task_type: 'session_commit',
         status: 'completed',
-        created_at: MAX_TASKS + 1 - index,
+        created_at: 201 - index,
       })),
       failedTask,
     ]
-    clientMocks.getTasks.mockImplementation(({ query }) =>
-      records
+    clientMocks.getTasks.mockImplementation(({ query }) => ({
+      items: records
         .filter((task) => !query.status || task.status === query.status)
         .filter(
           (task) => !query.task_type || task.task_type === query.task_type,
         )
         .slice(0, query.limit),
-    )
+      has_more: false,
+      next_cursor: null,
+    }))
 
-    await expect(fetchTasks('session_commit', 'failed')).resolves.toEqual([
-      failedTask,
-    ])
+    await expect(
+      fetchTasks('session_commit', 'failed', undefined, 50),
+    ).resolves.toEqual({
+      items: [failedTask],
+      hasMore: false,
+      nextCursor: null,
+    })
     expect(clientMocks.getTasks).toHaveBeenCalledWith({
       query: {
-        limit: MAX_TASKS,
+        limit: 50,
         task_type: 'session_commit',
         status: 'failed',
       },
@@ -91,6 +109,8 @@ describe('task list requests', () => {
   it('propagates request failures to the query error state', async () => {
     clientMocks.getTasks.mockRejectedValue(new Error('request failed'))
 
-    await expect(fetchTasks('all', 'all')).rejects.toThrow('request failed')
+    await expect(fetchTasks('all', 'all', undefined, 50)).rejects.toThrow(
+      'request failed',
+    )
   })
 })

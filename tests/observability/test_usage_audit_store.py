@@ -422,7 +422,7 @@ async def test_sqlite_usage_audit_store_resets_incompatible_legacy_schema(tmp_pa
             tz=UTC,
         )
         assert any(row["hour"] == 1 and row["session_add_message"] == 1 for row in commits)
-        audit = await store.query_audit_logs(account_id="acct-1", page_size=10)
+        audit = await store.query_audit_logs(account_id="acct-1", limit=10)
         assert audit["total"] == 1
         assert audit["items"][0]["request_id"] == "req-message"
     finally:
@@ -477,7 +477,7 @@ async def test_sqlite_usage_audit_store_migrates_v4_without_losing_rows(tmp_path
             bucket="hour",
             tz=UTC,
         )
-        before = await store.query_audit_logs(account_id="acct-1", page_size=10)
+        before = await store.query_audit_logs(account_id="acct-1", limit=10)
 
         assert tokens["vlm_input"] == 11
         assert retrievals["find"] == 2
@@ -504,7 +504,7 @@ async def test_sqlite_usage_audit_store_migrates_v4_without_losing_rows(tmp_path
                 )
             ]
         )
-        after = await store.query_audit_logs(account_id="acct-1", page_size=10)
+        after = await store.query_audit_logs(account_id="acct-1", limit=10)
         inserted = next(item for item in after["items"] if item["request_id"] == "new-error")
         assert inserted["error_code"] == "NOT_FOUND"
         assert inserted["error_message"] == "Task was not found"
@@ -615,7 +615,7 @@ async def test_sqlite_usage_audit_store_trims_audit_per_account(tmp_path):
                 for idx in range(3)
             ]
         )
-        audit = await store.query_audit_logs(account_id="acct-1", page_size=10)
+        audit = await store.query_audit_logs(account_id="acct-1", limit=10)
         assert audit["total"] == 2
         assert [item["request_id"] for item in audit["items"]] == ["req-2", "req-1"]
     finally:
@@ -665,12 +665,12 @@ async def test_sqlite_usage_audit_store_success_filter_includes_3xx(tmp_path):
         success = await store.query_audit_logs(
             account_id="acct-1",
             statuses=["success"],
-            page_size=10,
+            limit=10,
         )
         explicit_2xx = await store.query_audit_logs(
             account_id="acct-1",
             statuses=["2xx"],
-            page_size=10,
+            limit=10,
         )
 
         assert success["total"] == 2

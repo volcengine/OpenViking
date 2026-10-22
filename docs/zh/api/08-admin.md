@@ -1095,8 +1095,8 @@ ov --sudo admin create-account acme-private --admin alice \
 1. 验证请求者具有 ROOT 权限
 2. 调用 API Key Manager 获取所有账户列表（按创建顺序排列）
 3. 应用可选的 `name` 过滤
-4. 应用可选的 `limit`/`page` 分页
-5. 返回包含账户 ID、创建时间和用户数量的列表
+4. 应用 `offset`/`limit` 分页
+5. 返回包含账户 ID、创建时间和用户数量的分页对象
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP 路由
@@ -1108,8 +1108,8 @@ ov --sudo admin create-account acme-private --admin alice \
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | name | str | 否 | null | 按账户 ID 过滤（通配符 `*` 和 `?` 匹配） |
-| limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
-| page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
+| offset | int | 否 | 0 | 跳过的匹配账户数 |
+| limit | int | 否 | 50 | 每页数量，范围 1～200 |
 | query | str | 否 | null | 对账户 ID 做不区分大小写的子串匹配 |
 
 结果按创建顺序返回。
@@ -1136,7 +1136,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts?query=acme" \
   -H "X-API-Key: <root-key>"
 
 # 分页（每页 50，取第 2 页）
-curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?offset=50&limit=50" \
   -H "X-API-Key: <root-key>"
 ```
 
@@ -1148,25 +1148,25 @@ import openviking_sdk as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-accounts = client.admin_list_accounts(name="*acme*", limit=50, page=1)
-for account in accounts:
+page = client.admin_list_accounts(name="*acme*", offset=0, limit=50)
+for account in page["items"]:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListAccounts({ name: "*acme*", limit: 50, page: 1 }));
+console.log(await client.adminListAccounts({ name: "*acme*", offset: 0, limit: 50 }));
 ```
 
 **Go SDK**
 
 ```go
-accounts, err := client.AdminListAccounts(ctx)
+page, err := client.AdminListAccounts(ctx)
 if err != nil {
     return err
 }
-fmt.Println(accounts)
+fmt.Println(page.Items)
 ```
 
 **CLI**
@@ -1179,7 +1179,7 @@ ov --sudo admin list-accounts
 ov --sudo admin list-accounts --name '*acme*'
 
 # 分页
-ov --sudo admin list-accounts --limit 50 --page 2
+ov --sudo admin list-accounts --offset 50 --limit 50
 ```
 
 **响应示例**
@@ -1440,8 +1440,8 @@ ov admin register-user acme bob-private --role user \
 1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
 2. 调用 API Key Manager 获取活跃用户列表（按创建顺序排列）
 3. 应用可选的过滤条件（name、role）
-4. 应用可选的 `limit`/`page` 分页
-5. 返回用户列表（trusted 模式下不包含 user_key）
+4. 应用 `offset`/`limit` 分页
+5. 返回用户分页对象和账户统计（trusted 模式下不包含 user_key）
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_users` - HTTP 路由
@@ -1458,10 +1458,9 @@ ov admin register-user acme bob-private --role user \
 | name | str | 否 | null | 按用户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 | role | str | 否 | null | 按角色过滤 |
 | query | str | 否 | null | 仅 HTTP，按用户 ID 做不区分大小写的字面包含匹配 |
-| include_summary | bool | 否 | false | 仅 HTTP，以对象返回分页用户和账号统计 |
 | include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；仅当服务端能读取完整 key 并用于服务端绑定时 `api_key_available` 才为 true，仅存哈希的凭据返回 false；默认保持现有按鉴权模式返回字段的行为。 |
-| limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
-| page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
+| offset | int | 否 | 0 | 跳过的匹配用户数 |
+| limit | int | 否 | 50 | 每页数量，范围 1～200 |
 
 **说明：**
 - 结果按创建顺序返回
@@ -1469,12 +1468,12 @@ ov admin register-user acme bob-private --role user \
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - 用户删除开始后，不再出现在该列表中
 
-**带统计的响应（HTTP）：** 设置 `include_summary=true` 后，`result` 返回对象：`users` 为当前页，`total` 为匹配人数，`account_total` 为账号总人数，`manager_count` 为 admin/root 人数，`key_count` 为具有可见密钥或前缀的用户数。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。默认仍返回用户数组，兼容现有调用。
+每次响应都包含 `items`（当前页）、`total`（匹配人数）、`account_total`（账号总人数）、`manager_count`（admin/root 人数）和 `key_count`（具有可见密钥或前缀的用户数）。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。
 
 `query` 对用户 ID 做去除首尾空格、不区分大小写的字面包含匹配，可与已有的 `name` 通配符、`role` 过滤组合。例如：
 
 ```text
-GET /api/v1/admin/accounts/acme/users?limit=20&page=1&query=alice&include_summary=true
+GET /api/v1/admin/accounts/acme/users?offset=0&limit=20&query=alice
 ```
 
 #### 3. 使用示例
@@ -1495,7 +1494,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?name=*ali*&r
   -H "X-API-Key: <root-or-admin-key>"
 
 # 分页（每页 50，取第 2 页）
-curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?limit=50&page=2" \
+curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?offset=50&limit=50" \
   -H "X-API-Key: <root-or-admin-key>"
 ```
 
@@ -1507,25 +1506,25 @@ import openviking_sdk as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-users = client.admin_list_users(account_id="acme", name="*ali*", limit=50, page=1)
-for user in users:
+page = client.admin_list_users(account_id="acme", name="*ali*", offset=0, limit=50)
+for user in page["items"]:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.adminListUsers("account-id", { name: "*ali*", limit: 50, page: 1 }));
+console.log(await client.adminListUsers("account-id", { name: "*ali*", offset: 0, limit: 50 }));
 ```
 
 **Go SDK**
 
 ```go
-users, err := client.AdminListUsers(ctx, "acme")
+page, err := client.AdminListUsers(ctx, "acme")
 if err != nil {
     return err
 }
-fmt.Println(users)
+fmt.Println(page.Items)
 ```
 
 **CLI**
@@ -1539,7 +1538,7 @@ ov --sudo admin list-users acme
 # 按通配符 name 过滤
 ov admin list-users acme --name '*ali*'
 # 分页
-ov admin list-users acme --limit 50 --page 2
+ov admin list-users acme --offset 50 --limit 50
 ```
 
 **响应示例**

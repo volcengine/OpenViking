@@ -4,6 +4,155 @@ export type ClientOptions = {
     baseURL: `${string}://${string}` | (string & {});
 };
 
+export type ErrorInfo = {
+    code: string;
+    message: string;
+    details?: Record<string, unknown> | null;
+};
+
+export type ErrorResponse = {
+    status: 'error';
+    result?: null;
+    error: ErrorInfo;
+};
+
+export type PageResponse<T> = {
+    status: 'ok';
+    result: T;
+    error?: null;
+    telemetry?: Record<string, unknown> | null;
+    profile?: Array<string> | null;
+};
+
+export type OffsetPage<T> = {
+    items: Array<T>;
+    offset: number;
+    limit: number;
+    has_more: boolean;
+    total?: number | null;
+};
+
+export type CursorPage<T> = {
+    items: Array<T>;
+    limit: number;
+    has_more: boolean;
+    next_cursor?: string | null;
+};
+
+export type AccountListItem = {
+    account_id: string;
+    created_at: string;
+    user_count: number;
+    status: string;
+    task_id?: string | null;
+};
+
+export type AccountPage = OffsetPage<AccountListItem>;
+
+export type UserListItem = {
+    user_id: string;
+    role: string;
+    api_key?: string | null;
+    key_prefix?: string | null;
+    api_key_available?: boolean | null;
+};
+
+export type UserPage = OffsetPage<UserListItem> & {
+    account_total: number;
+    manager_count: number;
+    key_count: number;
+};
+
+export type FilesystemItem = string | Record<string, unknown>;
+
+export type AuditLogItem = {
+    request_id: string;
+    account_id: string;
+    user_id?: string | null;
+    method: string;
+    route: string;
+    api_type: string;
+    status_code: number;
+    duration_ms: number;
+    error_code?: string | null;
+    error_message?: string | null;
+    error_details?: Record<string, unknown> | null;
+    created_at: string;
+};
+
+export type AuditPage = OffsetPage<AuditLogItem> & {
+    success_rate: number;
+};
+
+export type SessionListItem = {
+    session_id: string;
+    uri: string;
+    is_dir: boolean;
+    mod_time?: string | null;
+};
+
+export type TaskListItem = {
+    task_id: string;
+    task_type: string;
+    status: string;
+    created_at: number;
+    updated_at: number;
+    processing_seconds?: number | null;
+    resource_id?: string | null;
+    meta: Record<string, unknown>;
+    stage?: string | null;
+    result?: Record<string, unknown> | null;
+    error?: string | null;
+    created_at_iso: string;
+    updated_at_iso: string;
+};
+
+export type SkillListItem = {
+    type: string;
+    name: string;
+    uri: string;
+    root_uri: string;
+    skill_md_uri: string;
+    description: string;
+    tags: Array<string>;
+    allowed_tools: Array<string>;
+};
+
+export type SkillPage = OffsetPage<SkillListItem> & {
+    root_uris: Array<string>;
+};
+
+export type WatchTaskPublic = {
+    task_id: string;
+    path: string;
+    source_type?: string | null;
+    to_uri?: string | null;
+    parent_uri?: string | null;
+    reason: string;
+    instruction: string;
+    watch_interval: number;
+    build_index: boolean;
+    summarize: boolean;
+    processing_mode: string;
+    processor_kwargs: Record<string, unknown>;
+    created_at?: string | null;
+    last_execution_time?: string | null;
+    last_task_id?: string | null;
+    is_active?: boolean;
+};
+
+export type ExperienceTrajectoryItem = {
+    uri: string;
+    name?: string | null;
+    description?: string | null;
+    created_at?: unknown;
+    updated_at?: unknown;
+};
+
+export type ExperienceTrajectoryPage = OffsetPage<ExperienceTrajectoryItem> & {
+    experience_uri: string;
+};
+
 /**
  * ActivatePrivacyConfigVersionRequest
  */
@@ -928,15 +1077,32 @@ export type GetAdminAccountsData = {
         'X-OpenViking-User'?: string | null;
     };
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Name
+         */
+        name?: string | null;
+        /**
+         * Query
+         */
+        query?: string | null;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
     url: '/api/v1/admin/accounts';
 };
 
 export type GetAdminAccountsErrors = {
     /**
-     * Validation Error
+     * Bad Request
      */
-    422: HttpValidationError;
+    400: ErrorResponse;
 };
 
 export type GetAdminAccountsError = GetAdminAccountsErrors[keyof GetAdminAccountsErrors];
@@ -945,7 +1111,7 @@ export type GetAdminAccountsResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    200: PageResponse<AccountPage>;
 };
 
 export type PostAdminAccountsData = {
@@ -1067,6 +1233,14 @@ export type GetAdminAccountIdUsersData = {
     };
     query?: {
         /**
+         * Include Credentials
+         */
+        include_credentials?: boolean;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
          * Limit
          */
         limit?: number;
@@ -1078,15 +1252,19 @@ export type GetAdminAccountIdUsersData = {
          * Role
          */
         role?: string | null;
+        /**
+         * Query
+         */
+        query?: string | null;
     };
     url: '/api/v1/admin/accounts/{account_id}/users';
 };
 
 export type GetAdminAccountIdUsersErrors = {
     /**
-     * Validation Error
+     * Bad Request
      */
-    422: HttpValidationError;
+    400: ErrorResponse;
 };
 
 export type GetAdminAccountIdUsersError = GetAdminAccountIdUsersErrors[keyof GetAdminAccountIdUsersErrors];
@@ -1095,7 +1273,7 @@ export type GetAdminAccountIdUsersResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    200: PageResponse<UserPage>;
 };
 
 export type PostAdminAccountIdUsersData = {
@@ -1431,6 +1609,60 @@ export type PostSkillsResponses = {
     200: unknown;
 };
 
+export type GetSkillsData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Target Uri
+         */
+        target_uri?: string | null;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/v1/skills';
+};
+
+export type GetSkillsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorResponse;
+};
+
+export type GetSkillsError = GetSkillsErrors[keyof GetSkillsErrors];
+
+export type GetSkillsResponses = {
+    /**
+     * Successful Response
+     */
+    200: PageResponse<SkillPage>;
+};
+
 export type GetFsLsData = {
     body?: never;
     headers?: {
@@ -1484,27 +1716,39 @@ export type GetFsLsData = {
          */
         abs_limit?: number;
         /**
+         * Include Abstract
+         */
+        include_abstract?: boolean | null;
+        /**
+         * Include Overview
+         */
+        include_overview?: boolean | null;
+        /**
+         * Overview Limit
+         */
+        overview_limit?: number;
+        /**
          * Show All Hidden
          *
          * List all hidden files, like -a
          */
         show_all_hidden?: boolean;
         /**
-         * Node Limit
-         *
-         * Maximum number of nodes to list
-         */
-        node_limit?: number;
-        /**
          * Limit
          *
-         * Alias for node_limit
+         * Maximum number of visible entries to return
          */
-        limit?: number | null;
+        limit?: number;
+        /**
+         * Offset
+         *
+         * Number of visible entries to skip
+         */
+        offset?: number;
         /**
          * Sort By
          *
-         * Sort directory and file groups before applying node_limit
+         * Sort entries by name or modification time
          */
         sort_by?: 'name' | 'mtime' | null;
         /**
@@ -1513,15 +1757,27 @@ export type GetFsLsData = {
          * Sort direction
          */
         sort_order?: 'asc' | 'desc';
+        /**
+         * Extra Fields
+         */
+        extra_fields?: Array<string> | string | null;
+        /**
+         * Tags
+         */
+        tags?: Array<string> | string | null;
+        /**
+         * Include Tags
+         */
+        include_tags?: boolean;
     };
     url: '/api/v1/fs/ls';
 };
 
 export type GetFsLsErrors = {
     /**
-     * Validation Error
+     * Bad Request
      */
-    422: HttpValidationError;
+    400: ErrorResponse;
 };
 
 export type GetFsLsError = GetFsLsErrors[keyof GetFsLsErrors];
@@ -1530,7 +1786,7 @@ export type GetFsLsResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    200: PageResponse<OffsetPage<FilesystemItem>>;
 };
 
 export type GetFsTreeData = {
@@ -1574,38 +1830,66 @@ export type GetFsTreeData = {
          */
         abs_limit?: number;
         /**
+         * Include Abstract
+         */
+        include_abstract?: boolean | null;
+        /**
+         * Include Overview
+         */
+        include_overview?: boolean | null;
+        /**
+         * Overview Limit
+         */
+        overview_limit?: number;
+        /**
          * Show All Hidden
          *
          * List all hidden files, like -a
          */
         show_all_hidden?: boolean;
         /**
-         * Node Limit
-         *
-         * Maximum number of nodes to list
-         */
-        node_limit?: number;
-        /**
          * Limit
          *
-         * Alias for node_limit
+         * Maximum number of visible entries to return
          */
-        limit?: number | null;
+        limit?: number;
+        /**
+         * Offset
+         *
+         * Number of visible entries to skip
+         */
+        offset?: number;
+        /**
+         * Directories Only
+         */
+        directories_only?: boolean;
         /**
          * Level Limit
          *
          * Maximum depth level to traverse
          */
         level_limit?: number;
+        /**
+         * Extra Fields
+         */
+        extra_fields?: Array<string> | string | null;
+        /**
+         * Tags
+         */
+        tags?: Array<string> | string | null;
+        /**
+         * Include Tags
+         */
+        include_tags?: boolean;
     };
     url: '/api/v1/fs/tree';
 };
 
 export type GetFsTreeErrors = {
     /**
-     * Validation Error
+     * Bad Request
      */
-    422: HttpValidationError;
+    400: ErrorResponse;
 };
 
 export type GetFsTreeError = GetFsTreeErrors[keyof GetFsTreeErrors];
@@ -1614,7 +1898,7 @@ export type GetFsTreeResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    200: PageResponse<OffsetPage<FilesystemItem>>;
 };
 
 export type GetFsStatData = {
@@ -2286,13 +2570,13 @@ export type GetConsoleAuditData = {
     path?: never;
     query?: {
         /**
-         * Page
+         * Offset
          */
-        page?: number;
+        offset?: number;
         /**
-         * Page Size
+         * Limit
          */
-        page_size?: number;
+        limit?: number;
         /**
          * Request Id
          */
@@ -2311,9 +2595,9 @@ export type GetConsoleAuditData = {
 
 export type GetConsoleAuditErrors = {
     /**
-     * Validation Error
+     * Bad Request
      */
-    422: HttpValidationError;
+    400: ErrorResponse;
 };
 
 export type GetConsoleAuditError = GetConsoleAuditErrors[keyof GetConsoleAuditErrors];
@@ -2322,7 +2606,7 @@ export type GetConsoleAuditResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    200: PageResponse<AuditPage>;
 };
 
 export type PostSearchFindData = {
@@ -2875,15 +3159,24 @@ export type GetSessionsData = {
         'X-OpenViking-User'?: string | null;
     };
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
     url: '/api/v1/sessions';
 };
 
 export type GetSessionsErrors = {
     /**
-     * Validation Error
+     * Bad Request
      */
-    422: HttpValidationError;
+    400: ErrorResponse;
 };
 
 export type GetSessionsError = GetSessionsErrors[keyof GetSessionsErrors];
@@ -2892,7 +3185,7 @@ export type GetSessionsResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    200: PageResponse<OffsetPage<SessionListItem>>;
 };
 
 export type PostSessionsData = {
@@ -4047,20 +4340,36 @@ export type GetTasksData = {
          */
         resource_id?: string | null;
         /**
+         * Include Internal
+         *
+         * Include internal Connector child tasks
+         */
+        include_internal?: boolean;
+        /**
+         * Cursor
+         *
+         * Continuation token returned by the previous page
+         */
+        cursor?: string | null;
+        /**
          * Limit
          *
          * Max results
          */
         limit?: number;
+        /**
+         * Q
+         */
+        q?: string | null;
     };
     url: '/api/v1/tasks';
 };
 
 export type GetTasksErrors = {
     /**
-     * Validation Error
+     * Bad Request
      */
-    422: HttpValidationError;
+    400: ErrorResponse;
 };
 
 export type GetTasksError = GetTasksErrors[keyof GetTasksErrors];
@@ -4069,7 +4378,127 @@ export type GetTasksResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    200: PageResponse<CursorPage<TaskListItem>>;
+};
+
+export type GetWatchesData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Active Only
+         */
+        active_only?: boolean;
+        /**
+         * To Uri
+         */
+        to_uri?: string | null;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/v1/watches';
+};
+
+export type GetWatchesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorResponse;
+};
+
+export type GetWatchesError = GetWatchesErrors[keyof GetWatchesErrors];
+
+export type GetWatchesResponses = {
+    /**
+     * Successful Response
+     */
+    200: PageResponse<OffsetPage<WatchTaskPublic>>;
+};
+
+export type GetAgentEvolutionExperiencesTrajectoriesData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+    };
+    path?: never;
+    query: {
+        /**
+         * Experience Uri
+         */
+        experience_uri: string;
+        /**
+         * Start Date
+         */
+        start_date?: string | null;
+        /**
+         * End Date
+         */
+        end_date?: string | null;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/v1/agent-evolution/experiences/trajectories';
+};
+
+export type GetAgentEvolutionExperiencesTrajectoriesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorResponse;
+};
+
+export type GetAgentEvolutionExperiencesTrajectoriesError = GetAgentEvolutionExperiencesTrajectoriesErrors[keyof GetAgentEvolutionExperiencesTrajectoriesErrors];
+
+export type GetAgentEvolutionExperiencesTrajectoriesResponses = {
+    /**
+     * Successful Response
+     */
+    200: PageResponse<ExperienceTrajectoryPage>;
 };
 
 export type DeleteWebdavResourceByResourcePathData = {

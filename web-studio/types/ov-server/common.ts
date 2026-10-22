@@ -29,8 +29,16 @@ export type OvMaybeDisabled = {
 }
 
 export type PaginatedResult<TItem> = {
-  items?: TItem[]
-  page?: number
-  page_size?: number
-  total?: number
+  items: TItem[]
+  offset: number
+  limit: number
+  has_more: boolean
+  total: number | null
+}
+
+export type CursorPaginatedResult<TItem> = {
+  items: TItem[]
+  limit: number
+  has_more: boolean
+  next_cursor: string | null
 }

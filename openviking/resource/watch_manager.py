@@ -8,6 +8,7 @@ Provides task creation, update, deletion, query, and persistence storage.
 
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -33,6 +34,12 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _UNSET = object()
+
+
+@dataclass(frozen=True)
+class WatchListingPage:
+    items: list["WatchTask"]
+    total: int
 
 
 def _rewrite_uri_prefix(uri: str, old_prefix: str, new_prefix: str) -> str:
@@ -972,6 +979,32 @@ class WatchManager:
                     continue
                 tasks.append(task)
             return sorted(tasks, key=lambda task: task.created_at, reverse=True)
+
+    async def get_tasks_page(
+        self,
+        account_id: str,
+        user_id: str,
+        role: str,
+        *,
+        offset: int,
+        limit: int,
+        active_only: bool = False,
+        to_uri: str | None = None,
+    ) -> WatchListingPage:
+        """Return one stable page of accessible monitoring tasks."""
+        async with self._lock:
+            tasks = [
+                task
+                for task in self._tasks.values()
+                if self._check_permission(task, account_id, user_id, role)
+                and (not active_only or task.is_active)
+                and (to_uri is None or task.to_uri == to_uri)
+            ]
+            tasks.sort(key=lambda task: (task.created_at, task.task_id), reverse=True)
+            return WatchListingPage(
+                items=tasks[offset : offset + limit],
+                total=len(tasks),
+            )
 
     async def get_task_by_uri(
         self,

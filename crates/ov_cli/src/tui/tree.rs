@@ -22,7 +22,8 @@ impl FsEntry {
 }
 
 fn parse_ls_entries(result: serde_json::Value) -> Result<Vec<FsEntry>, String> {
-    let entries = result.get("result").unwrap_or(&result);
+    let page = result.get("result").unwrap_or(&result);
+    let entries = page.get("items").unwrap_or(page);
     serde_json::from_value(entries.clone()).map_err(|e| e.to_string())
 }
 
@@ -154,9 +155,8 @@ impl TreeState {
                 None,
                 4000,
                 false,
-                1000,
                 0,
-                None,
+                1000,
                 None,
                 None,
                 &[],

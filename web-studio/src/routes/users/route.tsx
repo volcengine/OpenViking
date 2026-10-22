@@ -656,7 +656,7 @@ export function UserManagementPanel() {
                               onValueChange={(role) => {
                                 if (
                                   role &&
-                                  isAdminUserRole(role) &&
+                                  role === 'admin' &&
                                   role !== user.role
                                 ) {
                                   setPendingRoleChange({

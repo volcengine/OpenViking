@@ -229,7 +229,6 @@ export interface ListOptions {
   includeOverview?: boolean;
   overviewLimit?: number;
   showAllHidden?: boolean;
-  nodeLimit?: number;
   offset?: number;
   limit?: number;
   sortBy?: "name" | "mtime";
@@ -247,7 +246,6 @@ export interface TreeOptions {
   overviewLimit?: number;
   showAllHidden?: boolean;
   directoriesOnly?: boolean;
-  nodeLimit?: number;
   levelLimit?: number;
   offset?: number;
   limit?: number;
@@ -255,15 +253,68 @@ export interface TreeOptions {
   tags?: string[];
   includeTags?: boolean;
 }
-/** Directory listing page with pagination metadata. */
-export interface ListPage {
-  result: unknown[];
-  hasMore: boolean;
+/** Offset-based list page. */
+export interface OffsetPage<T> {
+  items: T[];
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  total: number | null;
 }
-/** Directory tree page with pagination metadata. */
-export interface TreePage {
-  result: JsonObject[];
-  hasMore: boolean;
+/** Cursor-based list page. */
+export interface CursorPage<T> {
+  items: T[];
+  limit: number;
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export interface AccountListItem extends JsonObject {
+  account_id: string;
+}
+export interface UserListItem extends JsonObject {
+  user_id: string;
+  role: string;
+}
+export interface AuditLogItem extends JsonObject {
+  request_id: string;
+  account_id: string;
+  method: string;
+  route: string;
+  status_code: number;
+  created_at: string;
+}
+export interface SessionListItem extends JsonObject {
+  session_id: string;
+  uri: string;
+  is_dir: boolean;
+  mod_time: string;
+}
+export interface SkillListItem extends JsonObject {
+  name: string;
+  uri: string;
+  root_uri: string;
+}
+export interface WatchListItem extends JsonObject {
+  task_id: string;
+  path: string;
+  is_active: boolean;
+}
+export interface FilesystemListItem extends JsonObject {
+  name?: string;
+  uri?: string;
+}
+export interface ExperienceTrajectoryItem extends JsonObject {
+  uri?: string;
+  name?: string;
+  updated_at?: unknown;
+}
+export type TaskStatus =
+  "pending" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
+export interface TaskListItem extends JsonObject {
+  task_id: string;
+  task_type: string;
+  status: TaskStatus;
 }
 /** Session message payload. */
 export interface Message {
@@ -352,9 +403,12 @@ export interface PreflightAssetOptions {
 /** Background task filters. */
 export interface TaskListOptions {
   taskType?: string;
-  status?: string;
+  status?: TaskStatus;
   resourceId?: string;
   limit?: number;
+  cursor?: string;
+  q?: string;
+  includeInternal?: boolean;
 }
 /** Options for retrieving an installed skill. */
 export interface GetSkillOptions {
@@ -417,7 +471,6 @@ export interface APIErrorInfo {
 export interface ResponseEnvelope<T> {
   status?: string;
   result?: T;
-  has_more?: boolean;
   error?: APIErrorInfo;
   telemetry?: unknown;
   profile?: string[];

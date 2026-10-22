@@ -13,7 +13,7 @@ Watch API 管理资源的周期检查、暂停、恢复和手动触发。
 通过 `task_id` 定位任务，或通过 `to_uri` 查找唯一可访问的任务。多个 Connector Watch 可以共享目标；此时按 URI 操作会返回 `409 Conflict`，需要改用 `task_id`。同时提供两个参数时，它们必须指向同一任务，否则返回 `400`。
 
 **操作**：
-- **列出**（`GET /api/v1/watches`）— 返回 `{tasks, total}`；可传 `?active_only=true` 过滤；传 `?to_uri=...` 时降级为单任务查找
+- **列出**（`GET /api/v1/watches`）— 返回 `offset`/`limit` 分页对象；`active_only` 和 `to_uri` 是可选过滤条件
 - **查看**（`GET /api/v1/watches/{task_id}`）— 查看单个任务；可选 `?to_uri=` 做跨键一致性校验
 - **更新**（`PATCH /api/v1/watches/{task_id}` 或 `PATCH /api/v1/watches?to_uri=...`）— 部分更新 `watch_interval`、`is_active`、`reason`、`instruction`。`is_active` 与 `watch_interval` 独立：修改 `is_active` 可在不丢失配置周期的前提下暂停/恢复任务。
 - **删除**（`DELETE /api/v1/watches/{task_id}` 或 `DELETE /api/v1/watches?to_uri=...`）
@@ -28,6 +28,8 @@ Watch API 管理资源的周期检查、暂停、恢复和手动触发。
 #### 2. 接口和参数说明
 
 对每个单任务端点，路径中的 `{task_id}` 都可用查询参数 `?to_uri=` 替代。CLI 的 `<key>` 参数会自动分类：任何以 `viking://` 开头的值走 by-URI 路径，其他值视为 task_id（其它 scheme 如 `http://` 会在本地直接报错，避免静默 404）。
+
+列表接口接受 `offset`（默认 0）、`limit`（默认 50，最大 200）、`active_only` 和 `to_uri`。
 
 **`PATCH /watches` 请求体**（字段均可选，至少需提供一个）
 
@@ -68,7 +70,7 @@ curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/g
 以下使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时，每次调用都需加 `await`。
 
 ```python
-watches = client.list_watches(active_only=True)
+page = client.list_watches(active_only=True, offset=0, limit=50)
 client.update_watch(to_uri="viking://resources/guide.md", is_active=False)
 client.trigger_watch(to_uri="viking://resources/guide.md")
 client.delete_watch(to_uri="viking://resources/guide.md")
@@ -111,7 +113,7 @@ _, _, _, _ = watches, updated, triggered, deleted
 
 ```bash
 # 列出活跃监控任务（去掉 --active-only 可同时包含已暂停的任务）
-ov task watch ls --active-only
+ov task watch ls --active-only --offset 0 --limit 50
 
 # 查看单个监控任务（key 可以是 viking:// URI 或 task_id）
 ov task watch show viking://resources/guide.md
@@ -138,7 +140,7 @@ ov task watch rm viking://resources/guide.md
 {
   "status": "ok",
   "result": {
-    "tasks": [
+    "items": [
       {
         "task_id": "7f02e980-8df9-4f27-a570-4d8428cbed8a",
         "path": "https://example.com/guide.md",
@@ -163,6 +165,9 @@ ov task watch rm viking://resources/guide.md
         "original_role": "user"
       }
     ],
+    "offset": 0,
+    "limit": 50,
+    "has_more": false,
     "total": 1
   }
 }

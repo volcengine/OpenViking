@@ -96,7 +96,11 @@ describe('ResourceUploadProvider remote completion', () => {
     async (outcome) => {
       let resolveImport!: (result: { status: string; root_uri: string }) => void
       let rejectImport!: (error: Error) => void
-      apiMocks.getTasks.mockResolvedValue([])
+      apiMocks.getTasks.mockResolvedValue({
+        items: [],
+        has_more: false,
+        next_cursor: null,
+      })
       apiMocks.postResources.mockImplementation(
         () =>
           new Promise((resolve, reject) => {
@@ -147,16 +151,20 @@ describe('ResourceUploadProvider remote completion', () => {
 
   it('notifies after submission and again after the background task completes', async () => {
     let taskStatus = 'processing'
-    apiMocks.getTasks.mockImplementation(() => [
-      {
-        created_at: 1,
-        result: { root_uri: 'viking://resources/OpenViking' },
-        status: taskStatus,
-        task_id: 'resource-task',
-        task_type: 'add_resource',
-        updated_at: 1,
-      },
-    ])
+    apiMocks.getTasks.mockImplementation(() => ({
+      items: [
+        {
+          created_at: 1,
+          result: { root_uri: 'viking://resources/OpenViking' },
+          status: taskStatus,
+          task_id: 'resource-task',
+          task_type: 'add_resource',
+          updated_at: 1,
+        },
+      ],
+      has_more: false,
+      next_cursor: null,
+    }))
     apiMocks.postResources.mockResolvedValue({
       root_uri: 'viking://resources/OpenViking',
       status: 'success',
@@ -189,16 +197,20 @@ describe('ResourceUploadProvider remote completion', () => {
   })
 
   it('notifies when the background task fails', async () => {
-    apiMocks.getTasks.mockResolvedValue([
-      {
-        created_at: 1,
-        error: 'Processing failed',
-        status: 'failed',
-        task_id: 'resource-task',
-        task_type: 'add_resource',
-        updated_at: 2,
-      },
-    ])
+    apiMocks.getTasks.mockResolvedValue({
+      items: [
+        {
+          created_at: 1,
+          error: 'Processing failed',
+          status: 'failed',
+          task_id: 'resource-task',
+          task_type: 'add_resource',
+          updated_at: 2,
+        },
+      ],
+      has_more: false,
+      next_cursor: null,
+    })
     apiMocks.postResources.mockResolvedValue({
       root_uri: 'viking://resources/OpenViking',
       status: 'success',
@@ -225,15 +237,19 @@ describe('ResourceUploadProvider remote completion', () => {
     const previousLanguage = i18n.language
     try {
       await i18n.changeLanguage('en')
-      apiMocks.getTasks.mockResolvedValue([
-        {
-          created_at: 1,
-          status: 'failed',
-          task_id: 'resource-task',
-          task_type: 'add_resource',
-          updated_at: 2,
-        },
-      ])
+      apiMocks.getTasks.mockResolvedValue({
+        items: [
+          {
+            created_at: 1,
+            status: 'failed',
+            task_id: 'resource-task',
+            task_type: 'add_resource',
+            updated_at: 2,
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      })
 
       render(
         <ResourceUploadProvider>

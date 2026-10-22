@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import (
 from openviking.core.identifiers import MAX_IDENTIFIER_LENGTH
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
+    AccountsPage,
     AccountSummary,
     DeletionRecord,
     GroupSummary,
@@ -622,13 +623,57 @@ class MySQLAccountStore(AccountStore):
             rows = (await session.execute(statement)).all()
         return [self._account_summary(account, count) for account, count in rows]
 
+    async def list_accounts_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        name_filter: str | None = None,
+        query_filter: str | None = None,
+    ) -> AccountsPage:
+        predicates = [Account.service_name == self._service_name]
+        if name_filter:
+            predicates.append(Account.account_id.like(_like_pattern(name_filter), escape="="))
+        if query := (query_filter or "").strip():
+            predicates.append(
+                func.lower(Account.account_id).like(
+                    _substring_pattern(query.casefold()),
+                    escape="=",
+                )
+            )
+        statement = (
+            select(Account, func.count(User.user_pk))
+            .outerjoin(
+                User,
+                and_(
+                    User.service_name == Account.service_name,
+                    User.account_pk == Account.account_pk,
+                ),
+            )
+            .where(*predicates)
+            .group_by(Account.account_pk)
+            .order_by(Account.created_at, Account.account_id)
+            .limit(limit)
+            .offset(offset)
+        )
+        async with self._session_factory() as session:
+            await session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+            total = await session.scalar(
+                select(func.count()).select_from(Account).where(*predicates)
+            )
+            rows = (await session.execute(statement)).all()
+        return {
+            "items": [self._account_summary(account, count) for account, count in rows],
+            "total": total,
+        }
+
     async def list_users_page(
         self,
         account_id: str,
         limit: int | None = 100,
         name_filter: str | None = None,
         role_filter: str | None = None,
-        page: int = 1,
+        offset: int = 0,
         query_filter: str | None = None,
         fresh: bool = False,
     ) -> UsersPage:
@@ -677,7 +722,7 @@ class MySQLAccountStore(AccountStore):
             total = await session.scalar(select(func.count()).select_from(User).where(*filters))
             statement = select(User).where(*filters).order_by(User.created_at, User.user_pk)
             if limit is not None:
-                statement = statement.limit(limit).offset((max(1, page) - 1) * limit)
+                statement = statement.limit(limit).offset(offset)
             users = list((await session.scalars(statement)).all())
             credentials = {}
             if users:

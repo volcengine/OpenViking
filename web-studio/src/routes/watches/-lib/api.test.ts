@@ -58,7 +58,7 @@ describe('watch API normalization', () => {
 
   it('drops malformed tasks from list responses', () => {
     expect(
-      normalizeWatchList({ tasks: [watch, { task_id: 'invalid' }] }),
+      normalizeWatchList({ items: [watch, { task_id: 'invalid' }] }),
     ).toEqual([normalizeWatchTask(watch)])
   })
 })

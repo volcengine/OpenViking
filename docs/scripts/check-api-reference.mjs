@@ -75,6 +75,12 @@ function splitTopLevel(source) {
 
 const routes = new Map()
 const middlewareQueryParameters = new Set(['profile'])
+const dependencyQueryParameters = new Map([
+  ['audit_offset_pagination', [['offset', false], ['limit', false]]],
+  ['filesystem_offset_pagination', [['offset', false], ['limit', false]]],
+  ['large_offset_pagination', [['offset', false], ['limit', false]]],
+  ['offset_pagination', [['offset', false], ['limit', false]]],
+])
 // Studio management routes are internal UI APIs, not part of the public HTTP reference.
 const internalRouterFiles = new Set([
   'bot_studio.py',
@@ -141,6 +147,12 @@ for (const routerFile of routerFiles) {
     )
     const query = new Map()
     for (const parameter of splitTopLevel(signature)) {
+      for (const dependency of parameter.matchAll(/\bDepends\(\s*([A-Za-z_]\w*)\s*\)/g)) {
+        for (const [name, required] of dependencyQueryParameters.get(dependency[1]) ?? []) {
+          query.set(name, required)
+        }
+      }
+
       const queryMatch = parameter.match(/^([A-Za-z_]\w*)\s*:[\s\S]*?=\s*Query\(([\s\S]*)\)$/)
       if (queryMatch) {
         const alias = queryMatch[2].match(/\balias\s*=\s*["']([^"']+)["']/)?.[1]

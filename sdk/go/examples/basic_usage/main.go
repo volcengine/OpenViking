@@ -198,7 +198,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("   skills total=%v\n", skills["total"])
+	fmt.Printf("   skills on page=%d\n", len(skills.Items))
 
 	gotSkill, err := client.GetSkill(ctx, skillName, &openviking.GetSkillOptions{
 		IncludeContent: openviking.Bool(true),
@@ -315,7 +315,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("   recent session commit tasks=%d\n", len(tasks))
+	fmt.Printf("   recent session commit tasks=%d\n", len(tasks.Items))
 
 	memoryResults, err := client.Find(ctx, memoryMarker, &openviking.FindOptions{
 		TargetURI:   "viking://~/memories",

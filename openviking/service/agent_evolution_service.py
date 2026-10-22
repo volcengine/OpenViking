@@ -34,6 +34,13 @@ _TRAJECTORY_OUTPUT_FIELDS = [
 ]
 
 
+def _trajectory_sort_key(record: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(record.get("updated_at") or ""),
+        str(record.get("id") or record.get("uri") or ""),
+    )
+
+
 def _trajectory_created_at_range(
     start_date: Optional[str],
     end_date: Optional[str],
@@ -160,21 +167,31 @@ class AgentEvolutionService:
                 created_at_range=created_at_range,
             )
         )
-        records, total = await asyncio.gather(
-            vikingdb.filter(
-                filter=lineage_filter,
-                limit=limit,
-                offset=offset,
-                output_fields=_TRAJECTORY_OUTPUT_FIELDS,
-                order_by="updated_at",
-                order_desc=True,
-                ctx=ctx,
-            ),
-            vikingdb.count(filter=lineage_filter, ctx=ctx),
+        total = await vikingdb.count(filter=lineage_filter, ctx=ctx)
+        if total <= 0:
+            return {
+                "experience_uri": canonical_uri,
+                "items": [],
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": False,
+            }
+        records = await vikingdb.filter(
+            filter=lineage_filter,
+            limit=total,
+            offset=0,
+            output_fields=_TRAJECTORY_OUTPUT_FIELDS,
+            order_by="updated_at",
+            order_desc=True,
+            ctx=ctx,
         )
+        records.sort(key=_trajectory_sort_key, reverse=True)
+        page_records = records[offset : offset + limit]
+        has_more = offset + len(page_records) < total
         items = [
             {field: record.get(field) for field in _TRAJECTORY_OUTPUT_FIELDS if field in record}
-            for record in records
+            for record in page_records
         ]
         return {
             "experience_uri": canonical_uri,
@@ -182,7 +199,7 @@ class AgentEvolutionService:
             "total": total,
             "limit": limit,
             "offset": offset,
-            "has_more": offset + len(items) < total,
+            "has_more": has_more,
         }
 
     async def get_experience_outcome_distribution(

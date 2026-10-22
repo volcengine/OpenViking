@@ -81,7 +81,7 @@ class UsageAuditStore(Protocol):
         request_id: str | None = None,
         statuses: list[str] | None = None,
         api_types: list[str] | None = None,
-        page: int = 1,
-        page_size: int = 10,
+        offset: int = 0,
+        limit: int = 50,
     ) -> dict[str, Any]:
         """Query request audit rows with summary stats."""

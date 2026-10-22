@@ -31,19 +31,21 @@ func (c *Client) AddSkill(ctx context.Context, data any, opts *AddSkillOptions) 
 }
 
 // ListSkills lists installed agent skills.
-func (c *Client) ListSkills(ctx context.Context, opts *ListSkillsOptions) (map[string]any, error) {
-	nodeLimit := 1000
-	if opts != nil && opts.NodeLimit != 0 {
-		nodeLimit = opts.NodeLimit
-	}
+func (c *Client) ListSkills(ctx context.Context, opts *ListSkillsOptions) (*OffsetPage[SkillListItem], error) {
+	offset, limit := 0, 50
 	query := url.Values{}
-	queryInt(query, "node_limit", nodeLimit)
 	if opts != nil {
+		offset = opts.Offset
+		if opts.Limit > 0 {
+			limit = opts.Limit
+		}
 		setQueryAny(query, "target_uri", opts.TargetURI)
 	}
-	var result map[string]any
+	queryInt(query, "offset", offset)
+	queryInt(query, "limit", limit)
+	var result OffsetPage[SkillListItem]
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/skills", query, nil, &result)
-	return result, err
+	return &result, err
 }
 
 // FindSkills finds installed agent skills by semantic search.

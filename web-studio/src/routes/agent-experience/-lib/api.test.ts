@@ -24,8 +24,11 @@ const file = (name: string) => ({ name, uri: `${experiencesUri}/${name}` })
 describe('experience listing server pagination', () => {
   beforeEach(() => get.mockReset())
 
-  it('requests a page beyond the old 1000 limit with one lookahead entry', async () => {
-    get.mockResolvedValue([file('a.md'), file('b.md'), file('c.md')])
+  it('requests a page beyond the old 1000 limit', async () => {
+    get.mockResolvedValue({
+      items: [file('a.md'), file('b.md')],
+      has_more: true,
+    })
     const result = await fetchExperiences({
       experiencesUri,
       page: 502,
@@ -36,7 +39,7 @@ describe('experience listing server pagination', () => {
         url: '/api/v1/fs/ls',
         query: expect.objectContaining({
           offset: 1002,
-          limit: 3,
+          limit: 2,
           uri: experiencesUri,
         }),
       }),
@@ -47,8 +50,14 @@ describe('experience listing server pagination', () => {
   })
 
   it('does not skip lookahead records between pages', async () => {
-    get.mockResolvedValueOnce([file('a.md'), file('b.md'), file('c.md')])
-    get.mockResolvedValueOnce([file('c.md'), file('d.md')])
+    get.mockResolvedValueOnce({
+      items: [file('a.md'), file('b.md')],
+      has_more: true,
+    })
+    get.mockResolvedValueOnce({
+      items: [file('c.md'), file('d.md')],
+      has_more: false,
+    })
     await fetchExperiences({ experiencesUri, page: 1, pageSize: 2 })
     const last = await fetchExperiences({
       experiencesUri,
@@ -61,11 +70,10 @@ describe('experience listing server pagination', () => {
   })
 
   it('applies pagination to raw entries before filtering out directories', async () => {
-    get.mockResolvedValue([
-      { ...file('folder'), isDir: true },
-      file('a.md'),
-      file('b.md'),
-    ])
+    get.mockResolvedValue({
+      items: [{ ...file('folder'), isDir: true }, file('a.md')],
+      has_more: true,
+    })
     const result = await fetchExperiences({
       experiencesUri,
       page: 1,
@@ -76,7 +84,7 @@ describe('experience listing server pagination', () => {
   })
 
   it('allows an empty later page without inventing a total', async () => {
-    get.mockResolvedValue([])
+    get.mockResolvedValue({ items: [], has_more: false })
     const result = await fetchExperiences({
       experiencesUri,
       page: 3,

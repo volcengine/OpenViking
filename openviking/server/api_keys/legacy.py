@@ -20,6 +20,7 @@ from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAG
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
+    AccountsPage,
     AccountSummary,
     DeletionRecord,
     GroupSummary,
@@ -974,6 +975,23 @@ class FileStore(AccountStore):
             result.append(self._account_summary(account_id, info))
         return _paginate(result, limit, page)
 
+    def _get_accounts_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        name_filter: str | None = None,
+        query_filter: str | None = None,
+    ) -> AccountsPage:
+        items = self._get_accounts(
+            name_filter=name_filter,
+            query_filter=query_filter,
+        )
+        return {
+            "items": items[offset : offset + limit],
+            "total": len(items),
+        }
+
     def _get_users(
         self,
         account_id: str,
@@ -981,12 +999,12 @@ class FileStore(AccountStore):
         name_filter: str | None = None,
         role_filter: str | None = None,
         expose_key: bool = True,
-        page: int = 1,
+        offset: int = 0,
         query_filter: str | None = None,
     ) -> list:
         """List users in an account in creation (insertion) order.
 
-        Pagination is opt-in via ``limit``/``page`` (1-based); ``limit=None``
+        Pagination is opt-in via ``limit``/``offset``; ``limit=None``
         returns every matching user.
         """
         return self._get_users_page(
@@ -995,7 +1013,7 @@ class FileStore(AccountStore):
             name_filter=name_filter,
             role_filter=role_filter,
             expose_key=expose_key,
-            page=page,
+            offset=offset,
             query_filter=query_filter,
         )["users"]
 
@@ -1006,7 +1024,7 @@ class FileStore(AccountStore):
         name_filter: str | None = None,
         role_filter: str | None = None,
         expose_key: bool = True,
-        page: int = 1,
+        offset: int = 0,
         query_filter: str | None = None,
     ) -> dict:
         """Return one page, matching total, and unfiltered account statistics.
@@ -1020,7 +1038,7 @@ class FileStore(AccountStore):
 
         result = []
         total = account_total = manager_count = key_count = 0
-        start = (max(1, page) - 1) * limit if limit is not None else 0
+        start = offset if limit is not None else 0
         query = (query_filter or "").strip().casefold()
         for user_id, user_info in account.users.items():
             if user_info.get("deletion"):
@@ -1563,13 +1581,29 @@ class FileStore(AccountStore):
             query_filter=query_filter,
         )
 
+    async def list_accounts_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        name_filter: str | None = None,
+        query_filter: str | None = None,
+    ) -> AccountsPage:
+        await self._refresh_accounts_for_management_read()
+        return self._get_accounts_page(
+            offset=offset,
+            limit=limit,
+            name_filter=name_filter,
+            query_filter=query_filter,
+        )
+
     async def list_users_page(
         self,
         account_id: str,
         limit: int | None = 100,
         name_filter: str | None = None,
         role_filter: str | None = None,
-        page: int = 1,
+        offset: int = 0,
         query_filter: str | None = None,
         fresh: bool = False,
     ) -> UsersPage:
@@ -1585,7 +1619,7 @@ class FileStore(AccountStore):
             name_filter=name_filter,
             role_filter=role_filter,
             expose_key=True,
-            page=page,
+            offset=offset,
             query_filter=query_filter,
         )
 

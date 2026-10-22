@@ -320,11 +320,10 @@ List background tasks visible to the current caller, supporting filtering by typ
 | resource_id | str | No | None | Filter by task resource ID, for example a session ID |
 | include_internal | bool | No | false | Include internal child tasks created by Connector imports |
 | limit | int | No | 50 | Maximum records per response, 1–200 |
-| pagination | str | No | None | HTTP-only; `cursor` returns a paginated result object |
-| cursor | str | No | None | HTTP-only; continuation token from `next_cursor`, used with `pagination=cursor` |
-| q | str | No | None | HTTP-only, cursor mode; case-insensitive substring match on task ID and Compile request `skill`, `to`, and `from` |
+| cursor | str | No | None | Continuation token from the previous page's `next_cursor` |
+| q | str | No | None | Case-insensitive substring match on task ID and Compile request `skill`, `to`, and `from` |
 
-With `pagination=cursor`, `result` contains `items`, `has_more`, and `next_cursor` instead of an array. Pass `next_cursor` unchanged on the next request and keep the same filters and identity. Without cursor mode, `q` and `cursor` do not affect the result.
+`result` always contains `items`, `limit`, `has_more`, and `next_cursor`. Pass `next_cursor` unchanged on the next request and keep the same filters and identity.
 
 By default, only user-visible tasks are returned. Pass `include_internal=true` when diagnosing a Connector import to include its internal `add_resource` child tasks.
 
@@ -349,12 +348,12 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-tasks = client.list_tasks(
+page = client.list_tasks(
     task_type="session_commit",
     status="running",
     limit=20,
 )
-for task in tasks:
+for task in page["items"]:
     print(task["task_id"], task["status"])
 client.close()
 ```

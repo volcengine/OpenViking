@@ -27,7 +27,6 @@ import type {
   ResourceImportResult,
   TempUploadResult,
 } from '../-lib/resource-import-types'
-import type { TaskListResult } from '@ov-server/api/v1/tasks'
 
 export type ResourceUploadTaskStatus =
   | 'cancelled'
@@ -290,7 +289,7 @@ export function ResourceUploadProvider({
       }
 
       try {
-        const result = await getOvResult<TaskListResult>(
+        const result = await getOvResult<unknown>(
           getTasks({
             client: source.client,
             signal: controller.signal,

@@ -16,7 +16,7 @@ export type WatchTask = {
 }
 
 type WatchListResult = {
-  tasks?: unknown[]
+  items?: unknown[]
   total?: number
 }
 
@@ -70,7 +70,7 @@ export function normalizeWatchTask(value: unknown): WatchTask | null {
 
 export function normalizeWatchList(value: unknown): WatchTask[] {
   const result = asRecord(value) as WatchListResult | null
-  const tasks = Array.isArray(result?.tasks) ? result.tasks : []
+  const tasks = Array.isArray(result?.items) ? result.items : []
   return tasks.flatMap((task) => {
     const normalized = normalizeWatchTask(task)
     return normalized ? [normalized] : []
@@ -80,6 +80,7 @@ export function normalizeWatchList(value: unknown): WatchTask[] {
 export async function fetchWatches(): Promise<WatchTask[]> {
   const result = await getOvResult<unknown>(
     ovClient.client.get({
+      query: { offset: 0, limit: 200 },
       url: '/api/v1/watches',
     }),
   )

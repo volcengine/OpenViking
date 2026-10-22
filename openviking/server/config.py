@@ -75,6 +75,8 @@ def _rewrite_legacy_current_user_uri(uri: str, field_name: str) -> str:
 class AddTargetsConfig(BaseModel):
     """Add targets for resource and skill writes."""
 
+    model_config = {"extra": "forbid"}
+
     resource_uri: Optional[str] = None
     skill_uri: Optional[str] = None
 
@@ -133,11 +135,15 @@ class AddTargetsConfig(BaseModel):
 class DeprecatedUserAgentEvolutionConfig(BaseModel):
     """Parse-only compatibility for legacy per-user configuration files."""
 
+    model_config = {"extra": "forbid"}
+
     enabled: Optional[bool] = None
 
 
 class UserConfig(BaseModel):
     """User configuration values that can be defaulted or initialized."""
+
+    model_config = {"extra": "forbid"}
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
     memory_policy: Optional[Dict[str, Any]] = None

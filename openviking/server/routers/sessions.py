@@ -14,7 +14,8 @@ from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_session_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.models import OffsetPage, PageResponse, Response
+from openviking.server.pagination import OffsetPagination, offset_pagination
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
 from openviking.session.auto_commit_policy import validate_idle_timeout_input
@@ -29,12 +30,16 @@ logger = get_logger(__name__)
 class TextPartRequest(BaseModel):
     """Text part request model."""
 
+    model_config = {"extra": "forbid"}
+
     type: Literal["text"] = "text"
     text: str
 
 
 class ContextPartRequest(BaseModel):
     """Context part request model."""
+
+    model_config = {"extra": "forbid"}
 
     type: Literal["context"] = "context"
     uri: str = ""
@@ -44,6 +49,8 @@ class ContextPartRequest(BaseModel):
 
 class ToolPartRequest(BaseModel):
     """Tool part request model."""
+
+    model_config = {"extra": "forbid"}
 
     type: Literal["tool"] = "tool"
     tool_id: str = ""
@@ -141,6 +148,8 @@ class AddMessageRequest(BaseModel):
     If both are provided, `parts` takes precedence.
     """
 
+    model_config = {"extra": "forbid"}
+
     role: str
     peer_id: Optional[str] = None
     content: Optional[str] = None
@@ -168,6 +177,8 @@ class AddMessageRequest(BaseModel):
 class BatchAddMessageRequest(BaseModel):
     """Request model for adding multiple messages in a single request."""
 
+    model_config = {"extra": "forbid"}
+
     messages: List[AddMessageRequest] = Field(..., max_length=100)
     telemetry: TelemetryRequest = False
 
@@ -175,11 +186,20 @@ class BatchAddMessageRequest(BaseModel):
 class CreateSessionRequest(BaseModel):
     """Request model for creating a session."""
 
+    model_config = {"extra": "forbid"}
+
     session_id: Optional[str] = None
     memory_policy: Optional[Dict[str, Any]] = None
     auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     memory_extraction_config: Optional[MemoryExtractionConfigRequest] = None
     telemetry: TelemetryRequest = False
+
+
+class SessionListItem(BaseModel):
+    session_id: str
+    uri: str
+    is_dir: bool
+    mod_time: str
 
 
 def _event_tags_from_extraction_config(
@@ -342,14 +362,30 @@ async def create_session(
     return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
 
 
-@router.get("")
+@router.get(
+    "",
+    response_model=PageResponse[OffsetPage[SessionListItem]],
+)
 async def list_sessions(
+    pagination: OffsetPagination = Depends(offset_pagination),
     _ctx: RequestContext = Depends(get_session_request_context),
 ):
-    """List all sessions."""
+    """List sessions."""
     service = get_service()
-    result = await service.sessions.sessions(_ctx)
-    return Response(status="ok", result=result)
+    page = await service.sessions.sessions(
+        _ctx,
+        offset=pagination.offset,
+        limit=pagination.limit,
+    )
+    return PageResponse(
+        result=OffsetPage(
+            items=page.entries,
+            offset=pagination.offset,
+            limit=pagination.limit,
+            has_more=page.has_more,
+            total=None,
+        )
+    )
 
 
 @router.get("/{session_id}")
@@ -592,6 +628,8 @@ class CommitRequest(BaseModel):
     immediate context. Default 0 preserves the pre-v2 "archive everything"
     behavior.
     """
+
+    model_config = {"extra": "forbid"}
 
     enable_working_memory: Optional[StrictBool] = Field(
         default=None,

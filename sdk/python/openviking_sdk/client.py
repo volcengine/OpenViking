@@ -42,29 +42,39 @@ from .errors import (
 )
 from .message import MessagePart, normalize_part
 from .options import (
+    AccountListItem,
     AddMessageOptions,
     AddResourceOptions,
     AddSkillOptions,
+    AuditLogItem,
     BatchAddMessagesOptions,
     BatchWriteOptions,
     CommitSessionOptions,
     CompileOptions,
     CreateSessionOptions,
+    CursorPage,
     ExperienceOutcomeOptions,
+    ExperienceTrajectoryItem,
     ExperienceTrajectoryOptions,
+    FilesystemListItem,
     FindOptions,
-    ListPage,
     Message,
+    OffsetPage,
     PreflightAssetOptions,
     ReindexOptions,
     ResolveAssetsOptions,
     SearchContextOptions,
     SearchContextResult,
     SearchOptions,
+    SessionListItem,
     SetTagsOptions,
-    TreePage,
+    SkillListItem,
+    TaskListItem,
+    TaskStatus,
     UpdateSessionConfigOptions,
     UpdateSkillOptions,
+    UserListItem,
+    WatchListItem,
     WriteOptions,
 )
 from .uploads import zip_directory
@@ -821,10 +831,11 @@ class AsyncHTTPClient:
 
     async def list_skills(
         self,
-        node_limit: int = 1000,
+        offset: int = 0,
+        limit: int = 50,
         target_uri: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        params: Dict[str, Any] = {"node_limit": node_limit}
+    ) -> OffsetPage[SkillListItem]:
+        params: Dict[str, Any] = {"offset": offset, "limit": limit}
         if target_uri is not None:
             params["target_uri"] = target_uri
         response = await self._request("GET", "/api/v1/skills", params=params)
@@ -944,8 +955,14 @@ class AsyncHTTPClient:
         self,
         active_only: bool = False,
         to_uri: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        params: Dict[str, Any] = {"active_only": active_only}
+        offset: int = 0,
+        limit: int = 50,
+    ) -> OffsetPage[WatchListItem]:
+        params: Dict[str, Any] = {
+            "active_only": active_only,
+            "offset": offset,
+            "limit": limit,
+        }
         if to_uri is not None:
             params["to_uri"] = VikingURI.normalize(to_uri)
         response = await self._request("GET", "/api/v1/watches", params=params)
@@ -1049,14 +1066,13 @@ class AsyncHTTPClient:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
         offset: int = 0,
-        limit: Optional[int] = None,
+        limit: int = 50,
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
@@ -1068,7 +1084,6 @@ class AsyncHTTPClient:
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
-            node_limit=node_limit,
             sort_by=sort_by,
             sort_order=sort_order,
             extra_fields=extra_fields,
@@ -1080,7 +1095,7 @@ class AsyncHTTPClient:
             include_overview=include_overview,
             overview_limit=overview_limit,
         )
-        return page["result"]
+        return page["items"]
 
     async def ls_page(
         self,
@@ -1090,18 +1105,17 @@ class AsyncHTTPClient:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
         offset: int = 0,
-        limit: Optional[int] = None,
+        limit: int = 50,
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
-    ) -> ListPage:
+    ) -> OffsetPage[Union[str, FilesystemListItem]]:
         params: Dict[str, Any] = {
             "uri": VikingURI.normalize(uri),
             "simple": simple,
@@ -1109,8 +1123,8 @@ class AsyncHTTPClient:
             "output": output,
             "abs_limit": abs_limit,
             "show_all_hidden": show_all_hidden,
-            "node_limit": node_limit,
             "offset": offset,
+            "limit": limit,
             "overview_limit": overview_limit,
         }
         if include_abstract is not None:
@@ -1126,18 +1140,12 @@ class AsyncHTTPClient:
             params["tags"] = tags
         if include_tags:
             params["include_tags"] = True
-        if limit is not None:
-            params["limit"] = limit
         response = await self._request(
             "GET",
             "/api/v1/fs/ls",
             params=params,
         )
-        data = self._handle_response_data(response)
-        return {
-            "result": data.get("result") or [],
-            "has_more": bool(data.get("has_more", False)),
-        }
+        return self._handle_response(response)
 
     async def tree(
         self,
@@ -1145,13 +1153,12 @@ class AsyncHTTPClient:
         output: str = "original",
         abs_limit: int = 128,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
         level_limit: int = 3,
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
         offset: int = 0,
-        limit: Optional[int] = None,
+        limit: int = 50,
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
@@ -1162,7 +1169,6 @@ class AsyncHTTPClient:
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
-            node_limit=node_limit,
             level_limit=level_limit,
             extra_fields=extra_fields,
             tags=tags,
@@ -1174,7 +1180,7 @@ class AsyncHTTPClient:
             overview_limit=overview_limit,
             directories_only=directories_only,
         )
-        return page["result"]
+        return page["items"]
 
     async def tree_page(
         self,
@@ -1182,26 +1188,25 @@ class AsyncHTTPClient:
         output: str = "original",
         abs_limit: int = 128,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
         level_limit: int = 3,
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
         offset: int = 0,
-        limit: Optional[int] = None,
+        limit: int = 50,
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
         directories_only: bool = False,
-    ) -> TreePage:
+    ) -> OffsetPage[FilesystemListItem]:
         params: Dict[str, Any] = {
             "uri": VikingURI.normalize(uri),
             "output": output,
             "abs_limit": abs_limit,
             "show_all_hidden": show_all_hidden,
-            "node_limit": node_limit,
             "level_limit": level_limit,
             "offset": offset,
+            "limit": limit,
             "overview_limit": overview_limit,
         }
         if include_abstract is not None:
@@ -1216,18 +1221,12 @@ class AsyncHTTPClient:
             params["tags"] = tags
         if include_tags:
             params["include_tags"] = True
-        if limit is not None:
-            params["limit"] = limit
         response = await self._request(
             "GET",
             "/api/v1/fs/tree",
             params=params,
         )
-        data = self._handle_response_data(response)
-        return {
-            "result": data.get("result") or [],
-            "has_more": bool(data.get("has_more", False)),
-        }
+        return self._handle_response(response)
 
     async def stat(self, uri: str) -> Dict[str, Any]:
         response = await self._request(
@@ -1595,8 +1594,10 @@ class AsyncHTTPClient:
         response = await self._request("POST", "/api/v1/sessions", json=json_body)
         return self._handle_response_data(response).get("result", {})
 
-    async def list_sessions(self) -> List[Any]:
-        response = await self._request("GET", "/api/v1/sessions")
+    async def list_sessions(self, offset: int = 0, limit: int = 50) -> OffsetPage[SessionListItem]:
+        response = await self._request(
+            "GET", "/api/v1/sessions", params={"offset": offset, "limit": limit}
+        )
         return self._handle_response(response)
 
     async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
@@ -1674,10 +1675,13 @@ class AsyncHTTPClient:
     async def list_tasks(
         self,
         task_type: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Optional[TaskStatus] = None,
         resource_id: Optional[str] = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+        cursor: Optional[str] = None,
+        q: Optional[str] = None,
+        include_internal: bool = False,
+    ) -> CursorPage[TaskListItem]:
         params: Dict[str, Any] = {"limit": limit}
         if task_type is not None:
             params["task_type"] = task_type
@@ -1685,6 +1689,12 @@ class AsyncHTTPClient:
             params["status"] = status
         if resource_id is not None:
             params["resource_id"] = resource_id
+        if cursor is not None:
+            params["cursor"] = cursor
+        if q is not None:
+            params["q"] = q
+        if include_internal:
+            params["include_internal"] = True
         response = await self._request("GET", "/api/v1/tasks", params=params)
         return self._handle_response(response)
 
@@ -1910,6 +1920,24 @@ class AsyncHTTPClient:
         response = await self._request("GET", "/api/v1/observer/system", params=params)
         return self._handle_response(response)
 
+    async def list_audit_logs(
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        request_id: Optional[str] = None,
+        status: Optional[List[str]] = None,
+        api_type: Optional[List[str]] = None,
+    ) -> OffsetPage[AuditLogItem]:
+        params: Dict[str, Any] = {"offset": offset, "limit": limit}
+        if request_id is not None:
+            params["request_id"] = request_id
+        if status is not None:
+            params["status"] = status
+        if api_type is not None:
+            params["api_type"] = api_type
+        response = await self._request("GET", "/api/v1/console/audit", params=params)
+        return self._handle_response(response)
+
     async def admin_create_account(
         self,
         account_id: str,
@@ -1932,16 +1960,13 @@ class AsyncHTTPClient:
     async def admin_list_accounts(
         self,
         name: Optional[str] = None,
-        limit: Optional[int] = None,
-        page: int = 1,
+        offset: int = 0,
+        limit: int = 50,
         query: Optional[str] = None,
-    ) -> List[Any]:
-        params: Dict[str, Any] = {}
+    ) -> OffsetPage[AccountListItem]:
+        params: Dict[str, Any] = {"offset": offset, "limit": limit}
         if name is not None:
             params["name"] = name
-        if limit is not None:
-            params["limit"] = limit
-            params["page"] = page
         if query is not None:
             params["query"] = query
         response = await self._request("GET", "/api/v1/admin/accounts", params=params)
@@ -1982,16 +2007,18 @@ class AsyncHTTPClient:
     async def admin_list_users(
         self,
         account_id: str,
-        limit: Optional[int] = None,
+        offset: int = 0,
+        limit: int = 50,
         name: Optional[str] = None,
         role: Optional[str] = None,
-        page: int = 1,
         query: Optional[str] = None,
-    ) -> List[Any]:
-        params: Dict[str, Any] = {}
-        if limit is not None:
-            params["limit"] = limit
-            params["page"] = page
+        include_credentials: bool = True,
+    ) -> OffsetPage[UserListItem]:
+        params: Dict[str, Any] = {
+            "offset": offset,
+            "limit": limit,
+            "include_credentials": include_credentials,
+        }
         if name is not None:
             params["name"] = name
         if role is not None:
@@ -2116,7 +2143,7 @@ class AsyncHTTPClient:
         self,
         experience_uri: str,
         options: Optional[ExperienceTrajectoryOptions] = None,
-    ) -> Dict[str, Any]:
+    ) -> OffsetPage[ExperienceTrajectoryItem]:
         params: Dict[str, Any] = {"experience_uri": VikingURI.normalize(experience_uri)}
         params.update(dict(options or {}))
         response = await self._request(
@@ -2400,11 +2427,12 @@ class SyncHTTPClient:
 
     def list_skills(
         self,
-        node_limit: int = 1000,
+        offset: int = 0,
+        limit: int = 50,
         target_uri: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> OffsetPage[SkillListItem]:
         return run_async(
-            self._async_client.list_skills(node_limit=node_limit, target_uri=target_uri)
+            self._async_client.list_skills(offset=offset, limit=limit, target_uri=target_uri)
         )
 
     def find_skills(
@@ -2489,8 +2517,17 @@ class SyncHTTPClient:
         self,
         active_only: bool = False,
         to_uri: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        return run_async(self._async_client.list_watches(active_only=active_only, to_uri=to_uri))
+        offset: int = 0,
+        limit: int = 50,
+    ) -> OffsetPage[WatchListItem]:
+        return run_async(
+            self._async_client.list_watches(
+                active_only=active_only,
+                to_uri=to_uri,
+                offset=offset,
+                limit=limit,
+            )
+        )
 
     def get_watch(
         self,
@@ -2547,14 +2584,13 @@ class SyncHTTPClient:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
         offset: int = 0,
-        limit: Optional[int] = None,
+        limit: int = 50,
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
@@ -2566,7 +2602,6 @@ class SyncHTTPClient:
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
-            node_limit=node_limit,
             sort_by=sort_by,
             sort_order=sort_order,
             extra_fields=extra_fields,
@@ -2577,7 +2612,7 @@ class SyncHTTPClient:
             include_abstract=include_abstract,
             include_overview=include_overview,
             overview_limit=overview_limit,
-        )["result"]
+        )["items"]
 
     def ls_page(
         self,
@@ -2587,18 +2622,17 @@ class SyncHTTPClient:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
         offset: int = 0,
-        limit: Optional[int] = None,
+        limit: int = 50,
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
-    ) -> ListPage:
+    ) -> OffsetPage[Union[str, FilesystemListItem]]:
         return run_async(
             self._async_client.ls_page(
                 uri,
@@ -2607,7 +2641,6 @@ class SyncHTTPClient:
                 output=output,
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
-                node_limit=node_limit,
                 sort_by=sort_by,
                 sort_order=sort_order,
                 extra_fields=extra_fields,
@@ -2627,13 +2660,12 @@ class SyncHTTPClient:
         output: str = "original",
         abs_limit: int = 128,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
         level_limit: int = 3,
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
         offset: int = 0,
-        limit: Optional[int] = None,
+        limit: int = 50,
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
@@ -2644,7 +2676,6 @@ class SyncHTTPClient:
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
-            node_limit=node_limit,
             level_limit=level_limit,
             extra_fields=extra_fields,
             tags=tags,
@@ -2655,7 +2686,7 @@ class SyncHTTPClient:
             include_overview=include_overview,
             overview_limit=overview_limit,
             directories_only=directories_only,
-        )["result"]
+        )["items"]
 
     def tree_page(
         self,
@@ -2663,25 +2694,23 @@ class SyncHTTPClient:
         output: str = "original",
         abs_limit: int = 128,
         show_all_hidden: bool = False,
-        node_limit: int = 1000,
         level_limit: int = 3,
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
         offset: int = 0,
-        limit: Optional[int] = None,
+        limit: int = 50,
         include_abstract: Optional[bool] = None,
         include_overview: Optional[bool] = None,
         overview_limit: int = 4000,
         directories_only: bool = False,
-    ) -> TreePage:
+    ) -> OffsetPage[FilesystemListItem]:
         return run_async(
             self._async_client.tree_page(
                 uri,
                 output=output,
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
-                node_limit=node_limit,
                 level_limit=level_limit,
                 extra_fields=extra_fields,
                 tags=tags,
@@ -2897,8 +2926,8 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.create_session(session_id, options=options))
 
-    def list_sessions(self) -> List[Any]:
-        return run_async(self._async_client.list_sessions())
+    def list_sessions(self, offset: int = 0, limit: int = 50) -> OffsetPage[SessionListItem]:
+        return run_async(self._async_client.list_sessions(offset=offset, limit=limit))
 
     def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
@@ -2937,16 +2966,22 @@ class SyncHTTPClient:
     def list_tasks(
         self,
         task_type: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Optional[TaskStatus] = None,
         resource_id: Optional[str] = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+        cursor: Optional[str] = None,
+        q: Optional[str] = None,
+        include_internal: bool = False,
+    ) -> CursorPage[TaskListItem]:
         return run_async(
             self._async_client.list_tasks(
                 task_type=task_type,
                 status=status,
                 resource_id=resource_id,
                 limit=limit,
+                cursor=cursor,
+                q=q,
+                include_internal=include_internal,
             )
         )
 
@@ -3063,15 +3098,35 @@ class SyncHTTPClient:
             )
         )
 
+    def list_audit_logs(
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        request_id: Optional[str] = None,
+        status: Optional[List[str]] = None,
+        api_type: Optional[List[str]] = None,
+    ) -> OffsetPage[AuditLogItem]:
+        return run_async(
+            self._async_client.list_audit_logs(
+                offset=offset,
+                limit=limit,
+                request_id=request_id,
+                status=status,
+                api_type=api_type,
+            )
+        )
+
     def admin_list_accounts(
         self,
         name: Optional[str] = None,
-        limit: Optional[int] = None,
-        page: int = 1,
+        offset: int = 0,
+        limit: int = 50,
         query: Optional[str] = None,
-    ) -> List[Any]:
+    ) -> OffsetPage[AccountListItem]:
         return run_async(
-            self._async_client.admin_list_accounts(name=name, limit=limit, page=page, query=query)
+            self._async_client.admin_list_accounts(
+                name=name, offset=offset, limit=limit, query=query
+            )
         )
 
     def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
@@ -3101,15 +3156,22 @@ class SyncHTTPClient:
     def admin_list_users(
         self,
         account_id: str,
-        limit: Optional[int] = None,
+        offset: int = 0,
+        limit: int = 50,
         name: Optional[str] = None,
         role: Optional[str] = None,
-        page: int = 1,
         query: Optional[str] = None,
-    ) -> List[Any]:
+        include_credentials: bool = True,
+    ) -> OffsetPage[UserListItem]:
         return run_async(
             self._async_client.admin_list_users(
-                account_id, limit=limit, name=name, role=role, page=page, query=query
+                account_id,
+                offset=offset,
+                limit=limit,
+                name=name,
+                role=role,
+                query=query,
+                include_credentials=include_credentials,
             )
         )
 
@@ -3170,7 +3232,7 @@ class SyncHTTPClient:
         self,
         experience_uri: str,
         options: Optional[ExperienceTrajectoryOptions] = None,
-    ) -> Dict[str, Any]:
+    ) -> OffsetPage[ExperienceTrajectoryItem]:
         return run_async(self._async_client.list_experience_trajectories(experience_uri, options))
 
     def get_experience_outcomes(

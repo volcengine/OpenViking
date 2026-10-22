@@ -43,7 +43,13 @@ async def test_list_empty(client: httpx.AsyncClient):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["result"] == {"tasks": [], "total": 0}
+    assert body["result"] == {
+        "items": [],
+        "offset": 0,
+        "limit": 50,
+        "has_more": False,
+        "total": 0,
+    }
 
 
 async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypatch):
@@ -54,9 +60,9 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypa
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["total"] == 1
-    assert body["result"]["tasks"][0]["task_id"] == task.task_id
-    assert body["result"]["tasks"][0]["source_type"] == "url"
-    assert body["result"]["tasks"][0]["to_uri"] == task.to_uri
+    assert body["result"]["items"][0]["task_id"] == task.task_id
+    assert body["result"]["items"][0]["source_type"] == "url"
+    assert body["result"]["items"][0]["to_uri"] == task.to_uri
 
     # Get by ID
     resp = await client.get(f"/api/v1/watches/{task.task_id}")
@@ -67,7 +73,7 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypa
     resp = await client.get("/api/v1/watches", params={"to_uri": task.to_uri})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["result"]["task_id"] == task.task_id
+    assert body["result"]["items"][0]["task_id"] == task.task_id
 
     # PATCH watch_interval
     resp = await client.patch(
@@ -131,20 +137,28 @@ async def test_list_exposes_last_execution_result(client: httpx.AsyncClient, wat
     resp = await client.get("/api/v1/watches")
 
     assert resp.status_code == 200
-    result = resp.json()["result"]["tasks"][0]
+    result = resp.json()["result"]["items"][0]
     assert result["last_task_id"] == "connector-task-1"
     assert result["last_status"] == "failed"
     assert result["last_error"] == "pull failed"
 
 
-async def test_get_by_uri_returns_single_object(client: httpx.AsyncClient, watch_manager):
+async def test_to_uri_filters_list_without_single_object_semantics(
+    client: httpx.AsyncClient, watch_manager
+):
     task = await _seed(watch_manager, to_uri="viking://resources/test/uri-keyed")
     resp = await client.get("/api/v1/watches", params={"to_uri": task.to_uri})
     assert resp.status_code == 200
-    body = resp.json()
-    # When to_uri is given, result is single object (not the {tasks, total} envelope)
-    assert "task_id" in body["result"]
-    assert "tasks" not in body["result"]
+    result = resp.json()["result"]
+    assert [item["task_id"] for item in result["items"]] == [task.task_id]
+    assert result["total"] == 1
+
+    missing = await client.get(
+        "/api/v1/watches",
+        params={"to_uri": "viking://resources/test/missing"},
+    )
+    assert missing.status_code == 200
+    assert missing.json()["result"]["items"] == []
 
 
 async def test_active_only_filter(client: httpx.AsyncClient, watch_manager):
@@ -153,14 +167,47 @@ async def test_active_only_filter(client: httpx.AsyncClient, watch_manager):
     await watch_manager.update_task(paused.task_id, "default", "default", "root", is_active=False)
 
     resp = await client.get("/api/v1/watches", params={"active_only": "true"})
-    ids = {t["task_id"] for t in resp.json()["result"]["tasks"]}
+    ids = {t["task_id"] for t in resp.json()["result"]["items"]}
     assert active.task_id in ids
     assert paused.task_id not in ids
 
     resp = await client.get("/api/v1/watches", params={"active_only": "false"})
-    ids = {t["task_id"] for t in resp.json()["result"]["tasks"]}
+    ids = {t["task_id"] for t in resp.json()["result"]["items"]}
     assert active.task_id in ids
     assert paused.task_id in ids
+
+
+async def test_watch_pages_are_stable_and_to_uri_can_match_multiple(
+    client: httpx.AsyncClient, watch_manager
+):
+    shared_uri = "viking://resources/test/shared-watch-uri"
+    first = await _seed(watch_manager, to_uri=shared_uri, account="account-a")
+    second = await _seed(watch_manager, to_uri=shared_uri, account="account-b")
+    third = await _seed(
+        watch_manager,
+        to_uri="viking://resources/test/other-watch-uri",
+        account="account-c",
+    )
+
+    seen = []
+    for offset in range(3):
+        response = await client.get(
+            "/api/v1/watches",
+            params={"offset": offset, "limit": 1},
+        )
+        result = response.json()["result"]
+        assert result["total"] == 3
+        seen.extend(item["task_id"] for item in result["items"])
+        assert result["has_more"] is (offset < 2)
+    assert set(seen) == {first.task_id, second.task_id, third.task_id}
+
+    filtered = await client.get("/api/v1/watches", params={"to_uri": shared_uri})
+    result = filtered.json()["result"]
+    assert result["total"] == 2
+    assert {item["task_id"] for item in result["items"]} == {
+        first.task_id,
+        second.task_id,
+    }
 
 
 async def test_dual_key_matching_accepted(client: httpx.AsyncClient, watch_manager):
@@ -293,8 +340,8 @@ async def test_home_alias_to_uri_resolves_to_canonically_keyed_task(
             "/api/v1/watches", params={"to_uri": "viking://~/resources/home-alias"}
         )
         assert resp.status_code == 200
-        assert resp.json()["result"]["task_id"] == task.task_id
-        assert resp.json()["result"]["to_uri"] == canonical
+        assert resp.json()["result"]["items"][0]["task_id"] == task.task_id
+        assert resp.json()["result"]["items"][0]["to_uri"] == canonical
 
         resp = await client.delete(
             "/api/v1/watches", params={"to_uri": "viking://~/resources/home-alias"}

@@ -575,7 +575,7 @@ async def test_get_accounts_filter(manager: APIKeyManager):
 
 
 async def test_get_users_pagination_and_ordering(manager: APIKeyManager):
-    """list_users returns users in creation order and honors limit/page."""
+    """list_users returns users in creation order and honors limit/offset."""
     acct = _uid()
     await manager.create_account(acct, "alice")
     # Register out of alphabetical order; creation order is alice, dave, bob, carol.
@@ -588,15 +588,18 @@ async def test_get_users_pagination_and_ordering(manager: APIKeyManager):
     assert ids == ["alice", "dave", "bob", "carol"]
 
     # First page of 2 (creation order).
-    page1 = [u["user_id"] for u in await _list_users(manager, acct, limit=2, page=1)]
+    page1 = [u["user_id"] for u in await _list_users(manager, acct, limit=2, offset=0)]
     assert page1 == ["alice", "dave"]
 
     # Second page of 2 (creation order).
-    page2 = [u["user_id"] for u in await _list_users(manager, acct, limit=2, page=2)]
+    page2 = [u["user_id"] for u in await _list_users(manager, acct, limit=2, offset=2)]
     assert page2 == ["bob", "carol"]
 
     # Page past the end is empty.
-    assert await _list_users(manager, acct, limit=2, page=3) == []
+    assert await _list_users(manager, acct, limit=2, offset=4) == []
+
+    page = await manager.list_users_page(acct, limit=2, offset=2)
+    assert page["total"] == 4
 
 
 async def test_get_accounts_pagination_and_ordering(manager: APIKeyManager):

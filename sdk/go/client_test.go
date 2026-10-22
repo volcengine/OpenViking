@@ -244,8 +244,8 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/fs/ls":
 			if listCalls == 0 {
-				if got := r.URL.Query().Get("node_limit"); got != "200" {
-					t.Fatalf("node_limit = %q", got)
+				if r.URL.Query().Has("node_limit") {
+					t.Fatal("node_limit must not be sent")
 				}
 				if got := r.URL.Query().Get("offset"); got != "4" {
 					t.Fatalf("offset = %q", got)
@@ -322,11 +322,11 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 				if got := r.URL.Query().Get("level_limit"); got != "3" {
 					t.Fatalf("level_limit = %q, want 3", got)
 				}
-				if _, ok := r.URL.Query()["offset"]; ok {
-					t.Fatal("default tree request should omit offset")
+				if got := r.URL.Query().Get("offset"); got != "0" {
+					t.Fatalf("default offset = %q", got)
 				}
-				if _, ok := r.URL.Query()["limit"]; ok {
-					t.Fatal("default tree request should omit limit")
+				if got := r.URL.Query().Get("limit"); got != "50" {
+					t.Fatalf("default limit = %q", got)
 				}
 				if _, ok := r.URL.Query()["include_abstract"]; ok {
 					t.Fatal("default tree request should omit include_abstract")
@@ -344,7 +344,11 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
-			"status": "ok", "result": entries, "has_more": r.URL.Path == "/api/v1/fs/ls",
+			"status": "ok",
+			"result": map[string]any{
+				"items": entries, "offset": 0, "limit": 50,
+				"has_more": r.URL.Path == "/api/v1/fs/ls", "total": nil,
+			},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -352,7 +356,6 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 	defer closeServer()
 
 	listPage, err := client.ListPage(context.Background(), "viking://session", &ListOptions{
-		NodeLimit:       200,
 		Offset:          4,
 		Limit:           5,
 		SortBy:          "mtime",
@@ -367,15 +370,14 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !listPage.HasMore || !reflect.DeepEqual(listPage.Result, entries) {
+	if !listPage.HasMore || len(listPage.Items) != 1 || listPage.Items[0]["name"] != "docs" {
 		t.Fatalf("list page = %#v", listPage)
 	}
 	legacyList, err := client.List(context.Background(), "viking://session", nil)
-	if err != nil || !reflect.DeepEqual(legacyList, entries) {
+	if err != nil || len(legacyList) != 1 || legacyList[0]["name"] != "docs" {
 		t.Fatalf("list = %#v, err = %v", legacyList, err)
 	}
 	treePage, err := client.TreePage(context.Background(), "viking://resources/docs", &TreeOptions{
-		NodeLimit:       200,
 		LevelLimit:      Int(0),
 		Offset:          6,
 		Limit:           7,
@@ -389,11 +391,11 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if treePage.HasMore || !reflect.DeepEqual(treePage.Result, []map[string]any{{"name": "docs"}}) {
+	if treePage.HasMore || len(treePage.Items) != 1 || treePage.Items[0]["name"] != "docs" {
 		t.Fatalf("tree page = %#v", treePage)
 	}
 	legacyTree, err := client.Tree(context.Background(), "viking://resources/docs", nil)
-	if err != nil || !reflect.DeepEqual(legacyTree, treePage.Result) {
+	if err != nil || !reflect.DeepEqual(legacyTree, treePage.Items) {
 		t.Fatalf("tree = %#v, err = %v", legacyTree, err)
 	}
 }
@@ -923,7 +925,9 @@ func TestFilesystemTagProjectionOptionsAreSent(t *testing.T) {
 			writeOK(t, w, map[string]any{})
 			return
 		}
-		writeOK(t, w, []any{})
+		writeOK(t, w, map[string]any{
+			"items": []any{}, "offset": 0, "limit": 50, "has_more": false, "total": nil,
+		})
 	}))
 	defer closeServer()
 
@@ -1516,10 +1520,12 @@ func TestSkillManagementRequests(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/skills":
-			if got := r.URL.Query().Get("node_limit"); got != "77" {
-				t.Fatalf("node_limit = %q", got)
+			if r.URL.Query().Has("node_limit") || r.URL.Query().Get("limit") != "77" {
+				t.Fatalf("query = %s", r.URL.RawQuery)
 			}
-			writeOK(t, w, map[string]any{"total": 1})
+			writeOK(t, w, map[string]any{
+				"items": []any{}, "offset": 0, "limit": 77, "has_more": false, "total": nil,
+			})
 		case "POST /api/v1/skills/find":
 			body := readJSONBody(t, r)
 			if body["query"] != "browser automation" || body["limit"] != float64(3) {
@@ -1565,7 +1571,7 @@ func TestSkillManagementRequests(t *testing.T) {
 	}))
 	defer closeServer()
 
-	if _, err := client.ListSkills(context.Background(), &ListSkillsOptions{NodeLimit: 77}); err != nil {
+	if _, err := client.ListSkills(context.Background(), &ListSkillsOptions{Limit: 77}); err != nil {
 		t.Fatal(err)
 	}
 	threshold := 0.4
@@ -1722,7 +1728,7 @@ func TestSkillRequestsOmitTargetURIWhenUnset(t *testing.T) {
 	if _, err := client.UpdateSkill(ctx, "demo", map[string]any{"name": "demo"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.ListSkills(ctx, &ListSkillsOptions{NodeLimit: 5}); err != nil {
+	if _, err := client.ListSkills(ctx, &ListSkillsOptions{Limit: 5}); err != nil {
 		t.Fatal(err)
 	}
 	// Non-nil opts with a nil TargetURI: exercises GetSkill's opts != nil branch
@@ -1943,8 +1949,11 @@ func TestCompileAndListTasksRequests(t *testing.T) {
 				query.Get("limit") != "20" {
 				t.Fatalf("query = %s", r.URL.RawQuery)
 			}
-			writeOK(t, w, []map[string]any{
-				{"task_id": "task-1", "status": "running"},
+			writeOK(t, w, map[string]any{
+				"items": []map[string]any{
+					{"task_id": "task-1", "task_type": "session_commit", "status": "running"},
+				},
+				"limit": 20, "has_more": false, "next_cursor": nil,
 			})
 		default:
 			t.Fatalf("path = %s", r.URL.Path)
@@ -1978,7 +1987,7 @@ func TestCompileAndListTasksRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tasks) != 1 {
+	if len(tasks.Items) != 1 {
 		t.Fatalf("tasks = %#v", tasks)
 	}
 }

@@ -11,7 +11,9 @@ import {
 import { OpenVikingTransport, type TransportOptions } from "./transport.js";
 import type {
   AddResourceOptions,
+  AccountListItem,
   AclSpec,
+  AuditLogItem,
   BatchAddMessagesOptions,
   BatchWriteOperation,
   BatchWriteOptions,
@@ -19,6 +21,8 @@ import type {
   CommitSessionOptions,
   CompileOptions,
   CreateSessionOptions,
+  CursorPage,
+  ExperienceTrajectoryItem,
   ExperienceOutcomeOptions,
   ExperienceTrajectoryOptions,
   FindOptions,
@@ -27,7 +31,7 @@ import type {
   GitCommitOptions,
   GitRestoreOptions,
   JsonObject,
-  ListPage,
+  FilesystemListItem,
   ListOptions,
   GetSkillOptions,
   GrepOptions,
@@ -35,6 +39,7 @@ import type {
   ImportPackOptions,
   Message,
   ObserverFormat,
+  OffsetPage,
   PreflightAssetOptions,
   ReindexOptions,
   RequestOptions,
@@ -42,12 +47,16 @@ import type {
   SearchContextOptions,
   SearchContextResult,
   SearchOptions,
+  SessionListItem,
   SetTagsOptions,
+  SkillListItem,
+  TaskListItem,
   TaskListOptions,
   TreeOptions,
-  TreePage,
   UpdateSessionConfigOptions,
   UpdateWatchOptions,
+  UserListItem,
+  WatchListItem,
   WaitOptions,
   WriteOptions,
 } from "./types.js";
@@ -202,11 +211,12 @@ export class OpenVikingClient {
   }
   /** List installed skills. */
   listSkills(
-    options: { nodeLimit?: number; targetUri?: string } = {},
-  ): Promise<JsonObject> {
-    return this.request("GET", "/api/v1/skills", {
+    options: { offset?: number; limit?: number; targetUri?: string } = {},
+  ): Promise<OffsetPage<SkillListItem>> {
+    return this.request<OffsetPage<SkillListItem>>("GET", "/api/v1/skills", {
       query: {
-        node_limit: options.nodeLimit ?? 1000,
+        offset: options.offset ?? 0,
+        limit: options.limit ?? 50,
         target_uri: options.targetUri,
       },
     });
@@ -300,12 +310,19 @@ export class OpenVikingClient {
   }
   /** List resource watches. */
   listWatches(
-    options: { activeOnly?: boolean; toUri?: string } = {},
-  ): Promise<JsonObject> {
-    return this.request("GET", "/api/v1/watches", {
+    options: {
+      activeOnly?: boolean;
+      toUri?: string;
+      offset?: number;
+      limit?: number;
+    } = {},
+  ): Promise<OffsetPage<WatchListItem>> {
+    return this.request<OffsetPage<WatchListItem>>("GET", "/api/v1/watches", {
       query: {
         active_only: options.activeOnly ?? false,
         to_uri: options.toUri ? normalizeURI(options.toUri) : undefined,
+        offset: options.offset ?? 0,
+        limit: options.limit ?? 50,
       },
     });
   }
@@ -494,11 +511,14 @@ export class OpenVikingClient {
   }
   /** List directory contents. */
   async list(uri: string, options: ListOptions = {}): Promise<unknown[]> {
-    return (await this.listPage(uri, options)).result;
+    return (await this.listPage(uri, options)).items;
   }
   /** List directory contents with pagination metadata. */
-  async listPage(uri: string, options: ListOptions = {}): Promise<ListPage> {
-    const envelope = await this.transport.requestEnvelope<unknown[]>(
+  listPage(
+    uri: string,
+    options: ListOptions = {},
+  ): Promise<OffsetPage<string | FilesystemListItem>> {
+    return this.request<OffsetPage<string | FilesystemListItem>>(
       "GET",
       "/api/v1/fs/ls",
       {
@@ -512,9 +532,8 @@ export class OpenVikingClient {
           include_overview: options.includeOverview,
           overview_limit: options.overviewLimit ?? 4000,
           show_all_hidden: options.showAllHidden ?? false,
-          node_limit: options.nodeLimit ?? 1000,
-          offset: options.offset,
-          limit: options.limit,
+          offset: options.offset ?? 0,
+          limit: options.limit ?? 50,
           sort_by: options.sortBy,
           sort_order: options.sortOrder,
           extra_fields: options.extraFields,
@@ -523,18 +542,17 @@ export class OpenVikingClient {
         },
       },
     );
-    return {
-      result: envelope.result ?? [],
-      hasMore: envelope.has_more ?? false,
-    };
   }
   /** Return a directory tree. */
   async tree(uri: string, options: TreeOptions = {}): Promise<JsonObject[]> {
-    return (await this.treePage(uri, options)).result;
+    return (await this.treePage(uri, options)).items;
   }
   /** Return a directory tree with pagination metadata. */
-  async treePage(uri: string, options: TreeOptions = {}): Promise<TreePage> {
-    const envelope = await this.transport.requestEnvelope<JsonObject[]>(
+  treePage(
+    uri: string,
+    options: TreeOptions = {},
+  ): Promise<OffsetPage<FilesystemListItem>> {
+    return this.request<OffsetPage<FilesystemListItem>>(
       "GET",
       "/api/v1/fs/tree",
       {
@@ -547,20 +565,15 @@ export class OpenVikingClient {
           overview_limit: options.overviewLimit ?? 4000,
           show_all_hidden: options.showAllHidden ?? false,
           directories_only: options.directoriesOnly || undefined,
-          node_limit: options.nodeLimit ?? 1000,
           level_limit: options.levelLimit ?? 3,
-          offset: options.offset,
-          limit: options.limit,
+          offset: options.offset ?? 0,
+          limit: options.limit ?? 50,
           extra_fields: options.extraFields,
           tags: options.tags,
           include_tags: options.includeTags || undefined,
         },
       },
     );
-    return {
-      result: envelope.result ?? [],
-      hasMore: envelope.has_more ?? false,
-    };
   }
   /** Return URI metadata. */
   stat(uri: string): Promise<JsonObject> {
@@ -770,8 +783,16 @@ export class OpenVikingClient {
     });
   }
   /** List sessions visible to the caller. */
-  listSessions(): Promise<unknown[]> {
-    return this.request("GET", "/api/v1/sessions");
+  listSessions(
+    options: { offset?: number; limit?: number } = {},
+  ): Promise<OffsetPage<SessionListItem>> {
+    return this.request<OffsetPage<SessionListItem>>(
+      "GET",
+      "/api/v1/sessions",
+      {
+        query: { offset: options.offset ?? 0, limit: options.limit ?? 50 },
+      },
+    );
   }
   /** Get one session. */
   getSession(sessionId: string, autoCreate = false): Promise<JsonObject> {
@@ -1068,13 +1089,16 @@ export class OpenVikingClient {
     ) as Promise<JsonObject>;
   }
   /** List background tasks. */
-  listTasks(options: TaskListOptions = {}): Promise<unknown[]> {
-    return this.request("GET", "/api/v1/tasks", {
+  listTasks(options: TaskListOptions = {}): Promise<CursorPage<TaskListItem>> {
+    return this.request<CursorPage<TaskListItem>>("GET", "/api/v1/tasks", {
       query: {
         task_type: options.taskType,
         status: options.status,
         resource_id: options.resourceId,
         limit: options.limit,
+        cursor: options.cursor,
+        q: options.q,
+        include_internal: options.includeInternal || undefined,
       },
     });
   }
@@ -1124,6 +1148,30 @@ export class OpenVikingClient {
     return this.request("GET", "/api/v1/observer/models", {
       query: { format },
     });
+  }
+  /** Return one page of HTTP audit logs. */
+  listAuditLogs(
+    options: {
+      offset?: number;
+      limit?: number;
+      requestId?: string;
+      status?: string[];
+      apiType?: string[];
+    } = {},
+  ): Promise<OffsetPage<AuditLogItem> & { success_rate: number }> {
+    return this.request<OffsetPage<AuditLogItem> & { success_rate: number }>(
+      "GET",
+      "/api/v1/console/audit",
+      {
+        query: {
+          offset: options.offset ?? 0,
+          limit: options.limit ?? 50,
+          request_id: options.requestId,
+          status: options.status,
+          api_type: options.apiType,
+        },
+      },
+    );
   }
   /** Return whether the observer system reports healthy. */
   async isHealthy(): Promise<boolean> {
@@ -1232,15 +1280,25 @@ export class OpenVikingClient {
   }
   /** List tenant accounts, in creation order. `name` supports wildcard (* and ?) matching. */
   adminListAccounts(
-    options: { name?: string; limit?: number; page?: number } = {},
-  ): Promise<unknown[]> {
-    return this.request("GET", "/api/v1/admin/accounts", {
-      query: {
-        name: options.name,
-        limit: options.limit,
-        page: options.limit !== undefined ? (options.page ?? 1) : undefined,
+    options: {
+      name?: string;
+      query?: string;
+      offset?: number;
+      limit?: number;
+    } = {},
+  ): Promise<OffsetPage<AccountListItem>> {
+    return this.request<OffsetPage<AccountListItem>>(
+      "GET",
+      "/api/v1/admin/accounts",
+      {
+        query: {
+          name: options.name,
+          query: options.query,
+          offset: options.offset ?? 0,
+          limit: options.limit ?? 50,
+        },
       },
-    });
+    );
   }
   /** Delete a tenant account. */
   adminDeleteAccount(accountId: string): Promise<JsonObject> {
@@ -1278,20 +1336,24 @@ export class OpenVikingClient {
     accountId: string,
     options: {
       limit?: number;
+      offset?: number;
       name?: string;
       role?: string;
-      page?: number;
+      query?: string;
+      includeCredentials?: boolean;
     } = {},
-  ): Promise<unknown[]> {
-    return this.request(
+  ): Promise<OffsetPage<UserListItem>> {
+    return this.request<OffsetPage<UserListItem>>(
       "GET",
       `/api/v1/admin/accounts/${pathPart(accountId)}/users`,
       {
         query: {
           limit: options.limit,
+          offset: options.offset ?? 0,
           name: options.name,
           role: options.role,
-          page: options.limit !== undefined ? (options.page ?? 1) : undefined,
+          query: options.query,
+          include_credentials: options.includeCredentials ?? true,
         },
       },
     );
@@ -1372,8 +1434,8 @@ export class OpenVikingClient {
   listExperienceTrajectories(
     experienceUri: string,
     options: ExperienceTrajectoryOptions = {},
-  ): Promise<JsonObject> {
-    return this.request(
+  ): Promise<OffsetPage<ExperienceTrajectoryItem>> {
+    return this.request<OffsetPage<ExperienceTrajectoryItem>>(
       "GET",
       "/api/v1/agent-evolution/experiences/trajectories",
       {

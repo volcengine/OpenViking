@@ -60,7 +60,7 @@ export type KeyResult = {
 
 export type UpdateUserRoleInput = {
   accountId: string
-  role: AdminUserRole
+  role: 'admin'
   userId: string
 }
 
@@ -299,7 +299,8 @@ async function probeDataAccess(
     await client.get('/api/v1/fs/ls', {
       headers,
       params: {
-        node_limit: 1,
+        offset: 0,
+        limit: 1,
         output: 'agent',
         uri: input.dataRootUri ?? 'viking://',
       },
@@ -376,9 +377,11 @@ function normalizeKeyResult(value: unknown): KeyResult {
 export async function fetchAdminAccounts(
   connection: AdminConnection,
 ): Promise<AdminAccount[]> {
-  const result = await getOvResult<unknown[]>(
+  const client = createAdminClient(connection)
+  const result = await fetchAllOffsetPages((offset) =>
     getAdminAccounts({
-      client: createAdminClient(connection),
+      client,
+      query: { offset, limit: 200 },
     }),
   )
   return result
@@ -390,12 +393,12 @@ export async function fetchAdminUsers(
   connection: AdminConnection,
   accountId: string,
 ): Promise<AdminUser[]> {
-  const result = await getOvResult<unknown[]>(
+  const client = createAdminClient(connection)
+  const result = await fetchAllOffsetPages((offset) =>
     getAdminAccountIdUsers({
-      client: createAdminClient(connection),
-      path: {
-        account_id: accountId,
-      },
+      client,
+      path: { account_id: accountId },
+      query: { offset, limit: 200 },
     }),
   )
   return result
@@ -408,11 +411,12 @@ export async function fetchAdminUserDirectory(
   connection: AdminConnection,
   accountId: string,
 ): Promise<AdminUser[]> {
-  const result = await getOvResult<unknown[]>(
-    createAdminClient(connection).get({
+  const client = createAdminClient(connection)
+  const result = await fetchAllOffsetPages((offset) =>
+    client.get({
       url: '/api/v1/admin/accounts/{account_id}/users',
       path: { account_id: accountId },
-      query: { include_credentials: false },
+      query: { include_credentials: false, offset, limit: 200 },
     }),
   )
   return result
@@ -434,7 +438,7 @@ export async function fetchAdminUsersPage(
   options: { page: number; pageSize: number; search: string },
 ): Promise<AdminUserPage> {
   const result = await getOvResult<{
-    users: unknown[]
+    items: unknown[]
     total: number
     account_total: number
     manager_count: number
@@ -444,15 +448,14 @@ export async function fetchAdminUsersPage(
       url: '/api/v1/admin/accounts/{account_id}/users',
       path: { account_id: accountId },
       query: {
-        page: options.page,
+        offset: (options.page - 1) * options.pageSize,
         limit: options.pageSize,
         query: options.search.trim() || undefined,
-        include_summary: true,
       },
     }),
   )
   return {
-    users: result.users
+    users: result.items
       .map((item) => normalizeUser(accountId, item))
       .filter((item): item is AdminUser => Boolean(item)),
     total: result.total,
@@ -460,6 +463,25 @@ export async function fetchAdminUsersPage(
     managerCount: result.manager_count,
     keyCount: result.key_count,
   }
+}
+
+async function fetchAllOffsetPages(
+  fetchPage: (offset: number) => Promise<unknown>,
+): Promise<unknown[]> {
+  const items: unknown[] = []
+  let offset = 0
+  let hasMore = true
+  while (hasMore) {
+    const page = await getOvResult<{
+      items: unknown[]
+      has_more: boolean
+    }>(fetchPage(offset))
+    items.push(...page.items)
+    hasMore = page.has_more
+    if (hasMore && page.items.length === 0) break
+    offset += page.items.length
+  }
+  return items
 }
 
 export async function createAdminAccount(

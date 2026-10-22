@@ -9,14 +9,19 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers.tasks import TaskListItem
 from openviking.service.external_task_service import ExternalTaskService
-from openviking.service.task_domain import TaskPatch
+from openviking.service.task_domain import TaskPatch, TaskRecord
 from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
+
+
+def test_task_list_item_schema_matches_public_task_record():
+    assert set(TaskListItem.model_fields) == set(TaskRecord("task", "compile").to_dict())
 
 
 @pytest.mark.asyncio
@@ -142,7 +147,7 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
+async def test_http_contract_uses_cursor_pages_and_preserves_retries(monkeypatch):
     import httpx
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
@@ -199,11 +204,12 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         empty_page = await client.get(
-            "/api/v1/tasks", params={"pagination": "cursor", "task_type": "compile", "limit": 30}
+            "/api/v1/tasks", params={"task_type": "compile", "limit": 30}
         )
         assert empty_page.status_code == 200, empty_page.text
         assert empty_page.json()["result"] == {
             "items": [],
+            "limit": 30,
             "has_more": False,
             "next_cursor": None,
         }
@@ -220,11 +226,11 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
         assert auth["openviking_connection"]["request_id"] == "original-request-id"
         recovery = await client.get("/api/v1/compile/submissions/http-retry-key-123")
         assert recovery.json()["result"]["task_id"] == task_id
-        assert isinstance((await client.get("/api/v1/tasks")).json()["result"], list)
-        paged = await client.get(
-            "/api/v1/tasks", params={"pagination": "cursor", "task_type": "compile"}
-        )
+        assert isinstance((await client.get("/api/v1/tasks")).json()["result"]["items"], list)
+        paged = await client.get("/api/v1/tasks", params={"task_type": "compile"})
         assert paged.json()["result"]["items"][0]["task_id"] == task_id
+        legacy = await client.get("/api/v1/tasks", params={"pagination": "cursor"})
+        assert legacy.status_code == 400
         assert (await client.get("/api/v1/tasks", params={"limit": 0})).status_code == 422
         conflict = await client.post(
             "/api/v1/compile", json={**payload, "instruction": "changed"}, headers=headers
@@ -239,9 +245,7 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ROOT)
         store = PersistentTaskStore(agfs)
         tracker = TaskTracker(store)
-        root_page = await client.get(
-            "/api/v1/tasks", params={"pagination": "cursor", "task_type": "compile"}
-        )
+        root_page = await client.get("/api/v1/tasks", params={"task_type": "compile"})
         assert root_page.json()["result"]["items"][0]["task_id"] == task_id
         assert tracker.count() == 0
         detail = await client.get(f"/api/v1/tasks/{task_id}")
@@ -266,9 +270,7 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
         )
         assert rejected.status_code != 202
         ctx = RequestContext(user=UserIdentifier("acme", "bob"), role=Role.USER)
-        assert (await client.get("/api/v1/tasks", params={"pagination": "cursor"})).json()[
-            "result"
-        ]["items"] == []
+        assert (await client.get("/api/v1/tasks")).json()["result"]["items"] == []
 
 
 @pytest.mark.asyncio

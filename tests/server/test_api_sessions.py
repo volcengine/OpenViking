@@ -141,7 +141,7 @@ async def _call_add_message_route(
 
 async def test_create_session(client: httpx.AsyncClient):
     resp = await client.post("/api/v1/sessions", json={})
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "ok"
     assert "session_id" in body["result"]
@@ -154,7 +154,10 @@ async def test_list_sessions(client: httpx.AsyncClient):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert isinstance(body["result"], list)
+    assert len(body["result"]["items"]) == 1
+    assert body["result"]["offset"] == 0
+    assert body["result"]["limit"] == 50
+    assert body["result"]["total"] is None
 
 
 async def test_get_session(client: httpx.AsyncClient):
@@ -183,7 +186,7 @@ async def test_legacy_session_uri_alias_reads_current_user_session(client: httpx
         params={"uri": f"viking://session/{session_id}/messages.jsonl"},
     )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     assert "legacy alias message" in resp.json()["result"]
 
 
@@ -644,7 +647,7 @@ async def test_session_initialization_preserves_concurrent_message(
     assert meta["last_message_at"]
 
 
-async def test_add_message_ignores_extra_metadata_fields(client: httpx.AsyncClient):
+async def test_add_message_rejects_extra_metadata_fields(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -657,8 +660,7 @@ async def test_add_message_ignores_extra_metadata_fields(client: httpx.AsyncClie
             "auto_commit_policy": {"pending_token_threshold": 123},
         },
     )
-    assert resp.status_code == 200
-    assert resp.json()["result"]["message_count"] == 1
+    assert resp.status_code == 400
 
 
 async def test_create_session_defaults_auto_commit_policy_to_disabled(
@@ -1087,7 +1089,7 @@ async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, 
     assert isinstance(session.messages[0].parts[1], ImagePart)
 
 
-async def test_batch_add_message_ignores_removed_auto_commit_policy(client: httpx.AsyncClient):
+async def test_batch_add_message_rejects_removed_auto_commit_policy(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -1099,8 +1101,7 @@ async def test_batch_add_message_ignores_removed_auto_commit_policy(client: http
         },
     )
 
-    assert resp.status_code == 200
-    assert resp.json()["result"]["message_count"] == 1
+    assert resp.status_code == 400
 
 
 async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):
@@ -1187,7 +1188,7 @@ async def test_add_multiple_messages(client: httpx.AsyncClient):
 
 async def test_add_message_persistence_regression(client: httpx.AsyncClient, service):
     """Regression: message payload must persist as valid parts across loads."""
-    create_resp = await client.post("/api/v1/sessions", json={"user": "test"})
+    create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
     resp1 = await client.post(

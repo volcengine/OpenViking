@@ -552,16 +552,16 @@ enum Commands {
         /// Show all hidden files
         #[arg(short, long, help_heading = "Common options")]
         all: bool,
-        /// Maximum number of nodes to list
+        /// Maximum number of visible entries to return
         #[arg(
-            long = "node-limit",
+            long,
             short = 'n',
-            default_value = "256",
-            value_parser = clap::value_parser!(i32).range(0..),
+            default_value = "50",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n",
             help_heading = "Common options"
         )]
-        node_limit: i32,
+        limit: i32,
         /// Number of visible entries to skip
         #[arg(
             long,
@@ -571,14 +571,6 @@ enum Commands {
             help_heading = "Common options"
         )]
         offset: i32,
-        /// Maximum number of visible entries to return
-        #[arg(
-            long,
-            value_parser = clap::value_parser!(i32).range(1..),
-            value_name = "n",
-            help_heading = "Common options"
-        )]
-        limit: Option<i32>,
         /// Sort entries by name or modification time
         #[arg(long, value_parser = ["name", "mtime"], value_name = "field", help_heading = "Common options")]
         sort_by: Option<String>,
@@ -655,16 +647,16 @@ enum Commands {
         /// Only include directories
         #[arg(long = "directories-only", help_heading = "Common options")]
         directories_only: bool,
-        /// Maximum number of nodes to list
+        /// Maximum number of visible entries to return
         #[arg(
-            long = "node-limit",
+            long,
             short = 'n',
-            default_value = "256",
-            value_parser = clap::value_parser!(i32).range(0..),
+            default_value = "50",
+            value_parser = clap::value_parser!(i32).range(1..),
             value_name = "n",
             help_heading = "Common options"
         )]
-        node_limit: i32,
+        limit: i32,
         /// Number of visible entries to skip
         #[arg(
             long,
@@ -674,14 +666,6 @@ enum Commands {
             help_heading = "Common options"
         )]
         offset: i32,
-        /// Maximum number of visible entries to return
-        #[arg(
-            long,
-            value_parser = clap::value_parser!(i32).range(1..),
-            value_name = "n",
-            help_heading = "Common options"
-        )]
-        limit: Option<i32>,
         /// Maximum depth level to traverse (default: 3)
         #[arg(
             short = 'L',
@@ -1455,6 +1439,18 @@ enum TaskCommands {
         /// Filter by status (pending, running, cancelling, completed, failed, cancelled)
         #[arg(long, value_name = "status")]
         status: Option<String>,
+        /// Continuation token returned by the previous page
+        #[arg(long, value_name = "cursor")]
+        cursor: Option<String>,
+        /// Maximum number of tasks to return
+        #[arg(
+            short = 'n',
+            long,
+            default_value = "50",
+            value_parser = clap::value_parser!(u32).range(1..=200),
+            value_name = "n"
+        )]
+        limit: u32,
     },
     /// Watch task management (auto-refresh subscriptions)
     Watch {
@@ -1602,7 +1598,20 @@ enum SessionCommands {
         no_auto_commit: bool,
     },
     /// List sessions
-    List,
+    List {
+        /// Number of sessions to skip
+        #[arg(long, default_value = "0", value_name = "n")]
+        offset: u32,
+        /// Maximum number of sessions to return
+        #[arg(
+            short = 'n',
+            long,
+            default_value = "50",
+            value_parser = clap::value_parser!(u32).range(1..=200),
+            value_name = "n"
+        )]
+        limit: u32,
+    },
     /// Get session details
     Get {
         /// Session ID
@@ -1765,16 +1774,23 @@ enum SkillCommands {
     /// List installed agent skills
     #[command(alias = "ls")]
     List {
-        /// Maximum number of skills to list
+        /// Number of skills to skip
         #[arg(
-            short = 'n',
-            long = "node-limit",
-            alias = "limit",
-            default_value = "1000",
+            long,
+            default_value = "0",
             value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n"
         )]
-        node_limit: i32,
+        offset: i32,
+        /// Maximum number of skills to return
+        #[arg(
+            short = 'n',
+            long,
+            default_value = "50",
+            value_parser = clap::value_parser!(i32).range(1..=1000),
+            value_name = "n"
+        )]
+        limit: i32,
         /// Restrict listing to a specific skill root URI (defaults to merged user + agent)
         #[arg(short = 'p', long = "uri", value_name = "uri")]
         parent: Option<String>,
@@ -1887,6 +1903,18 @@ enum WatchCommands {
         /// Only show active (non-paused) tasks
         #[arg(long, default_value_t = false)]
         active_only: bool,
+        /// Number of watch tasks to skip
+        #[arg(long, default_value = "0", value_name = "n")]
+        offset: u32,
+        /// Maximum number of watch tasks to return
+        #[arg(
+            short = 'n',
+            long,
+            default_value = "50",
+            value_parser = clap::value_parser!(u32).range(1..=200),
+            value_name = "n"
+        )]
+        limit: u32,
     },
     /// Show details of a single watch task
     Show {
@@ -2107,12 +2135,17 @@ enum AdminCommands {
         /// Filter accounts by ID (supports wildcard * and ?)
         #[arg(long, value_name = "pattern")]
         name: Option<String>,
-        /// Page size; omit to list all accounts
-        #[arg(long, value_name = "n")]
-        limit: Option<u32>,
-        /// 1-based page number (requires --limit)
-        #[arg(long, default_value = "1", value_name = "n")]
-        page: u32,
+        /// Number of accounts to skip
+        #[arg(long, default_value = "0", value_name = "n")]
+        offset: u32,
+        /// Maximum number of accounts to return
+        #[arg(
+            long,
+            default_value = "50",
+            value_parser = clap::value_parser!(u32).range(1..=200),
+            value_name = "n"
+        )]
+        limit: u32,
     },
     /// Delete an account and all associated users (ROOT only)
     DeleteAccount {
@@ -2149,18 +2182,23 @@ enum AdminCommands {
         /// Account ID
         #[arg(value_name = "account-id")]
         account_id: String,
-        /// Page size; omit to list all users
-        #[arg(long, value_name = "n")]
-        limit: Option<u32>,
+        /// Number of users to skip
+        #[arg(long, default_value = "0", value_name = "n")]
+        offset: u32,
+        /// Maximum number of users to return
+        #[arg(
+            long,
+            default_value = "50",
+            value_parser = clap::value_parser!(u32).range(1..=200),
+            value_name = "n"
+        )]
+        limit: u32,
         /// Filter users by name (supports wildcard * and ?)
         #[arg(long, value_name = "pattern")]
         name: Option<String>,
         /// Filter users by role
         #[arg(long, value_name = "role")]
         role: Option<String>,
-        /// 1-based page number (requires --limit)
-        #[arg(long, default_value = "1", value_name = "n")]
-        page: u32,
     },
     /// Create an empty account-scoped group
     CreateGroup {
@@ -3464,11 +3502,16 @@ async fn main() {
             SkillCommands::Add(args) => {
                 handlers::handle_add_skill(args, legacy_upload_options, ctx).await
             }
-            SkillCommands::List { node_limit, parent } => {
+            SkillCommands::List {
+                offset,
+                limit,
+                parent,
+            } => {
                 let client = ctx.get_client();
                 commands::skills::list(
                     &client,
-                    node_limit,
+                    offset,
+                    limit,
                     ctx.output_format,
                     ctx.compact,
                     parent.as_deref(),
@@ -3597,12 +3640,19 @@ async fn main() {
                 let client = ctx.get_client();
                 commands::task::cancel(&client, &task_id, ctx.output_format, ctx.compact).await
             }
-            TaskCommands::List { task_type, status } => {
+            TaskCommands::List {
+                task_type,
+                status,
+                cursor,
+                limit,
+            } => {
                 let client = ctx.get_client();
                 commands::task::list(
                     &client,
                     task_type.as_deref(),
                     status.as_deref(),
+                    cursor.as_deref(),
+                    limit,
                     ctx.output_format,
                     ctx.compact,
                 )
@@ -3611,9 +3661,20 @@ async fn main() {
             TaskCommands::Watch { action } => {
                 let client = ctx.get_client();
                 match action {
-                    WatchCommands::Ls { active_only } => {
-                        commands::watch::ls(&client, active_only, ctx.output_format, ctx.compact)
-                            .await
+                    WatchCommands::Ls {
+                        active_only,
+                        offset,
+                        limit,
+                    } => {
+                        commands::watch::ls(
+                            &client,
+                            active_only,
+                            offset,
+                            limit,
+                            ctx.output_format,
+                            ctx.compact,
+                        )
+                        .await
                     }
                     WatchCommands::Show { key } => {
                         commands::watch::show(&client, &key, ctx.output_format, ctx.compact).await
@@ -3683,7 +3744,6 @@ async fn main() {
             include_overview,
             overview_limit,
             all,
-            node_limit,
             offset,
             limit,
             sort_by,
@@ -3700,7 +3760,6 @@ async fn main() {
                 include_overview,
                 overview_limit,
                 all,
-                node_limit,
                 offset,
                 limit,
                 sort_by,
@@ -3719,7 +3778,6 @@ async fn main() {
             overview_limit,
             all,
             directories_only,
-            node_limit,
             offset,
             limit,
             level_limit,
@@ -3735,7 +3793,6 @@ async fn main() {
                 overview_limit,
                 all,
                 directories_only,
-                node_limit,
                 offset,
                 limit,
                 level_limit,
@@ -4043,7 +4100,7 @@ mod tests {
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
-    use crate::{AdminCommands, handlers};
+    use crate::{AdminCommands, SessionCommands, TaskCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -4451,17 +4508,15 @@ mod tests {
                 limit,
                 sort_by,
                 sort_order,
-                node_limit,
                 include_abstract,
                 include_overview,
                 overview_limit,
                 ..
             } => {
                 assert_eq!(offset, 4);
-                assert_eq!(limit, Some(5));
+                assert_eq!(limit, 5);
                 assert_eq!(sort_by.as_deref(), Some("mtime"));
                 assert_eq!(sort_order.as_deref(), Some("desc"));
-                assert_eq!(node_limit, 256);
                 assert_eq!(include_abstract, Some(true));
                 assert_eq!(include_overview, Some(false));
                 assert_eq!(overview_limit, 512);
@@ -4472,7 +4527,6 @@ mod tests {
             Commands::Tree {
                 offset,
                 limit,
-                node_limit,
                 directories_only,
                 include_abstract,
                 include_overview,
@@ -4480,8 +4534,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(offset, 6);
-                assert_eq!(limit, Some(7));
-                assert_eq!(node_limit, 256);
+                assert_eq!(limit, 7);
                 assert!(directories_only);
                 assert_eq!(include_abstract, Some(true));
                 assert_eq!(include_overview, Some(false));
@@ -5054,8 +5107,8 @@ mod tests {
             .expect("skills list should parse");
         match list.command {
             Commands::Skills {
-                action: SkillCommands::List { node_limit, .. },
-            } => assert_eq!(node_limit, 25),
+                action: SkillCommands::List { limit, .. },
+            } => assert_eq!(limit, 25),
             _ => panic!("expected skills list"),
         }
 
@@ -5321,13 +5374,10 @@ mod tests {
     #[test]
     fn all_node_limit_options_accept_zero_and_reject_negative_values() {
         let command_prefixes = [
-            vec!["ov", "ls", "--node-limit"],
-            vec!["ov", "tree", "viking://resources", "--node-limit"],
             vec!["ov", "find", "query", "--node-limit"],
             vec!["ov", "search", "query", "--node-limit"],
             vec!["ov", "grep", "query", "--node-limit"],
             vec!["ov", "glob", "**/*", "--node-limit"],
-            vec!["ov", "skills", "list", "--node-limit"],
             vec!["ov", "skills", "find", "query", "--node-limit"],
         ];
 
@@ -5378,6 +5428,66 @@ mod tests {
             let mut zero_args = prefix;
             zero_args.push("0");
             assert!(Cli::try_parse_from(&zero_args).is_ok());
+        }
+    }
+
+    #[test]
+    fn paginated_list_commands_use_unified_flags_and_reject_legacy_flags() {
+        let ls = Cli::try_parse_from(["ov", "ls"]).expect("ls should parse");
+        assert!(matches!(
+            ls.command,
+            Commands::Ls {
+                offset: 0,
+                limit: 50,
+                ..
+            }
+        ));
+
+        let sessions =
+            Cli::try_parse_from(["ov", "session", "list", "--offset", "20", "--limit", "10"])
+                .expect("session list should parse");
+        assert!(matches!(
+            sessions.command,
+            Commands::Session {
+                action: SessionCommands::List {
+                    offset: 20,
+                    limit: 10
+                }
+            }
+        ));
+
+        let tasks = Cli::try_parse_from([
+            "ov",
+            "task",
+            "list",
+            "--cursor",
+            "next-token",
+            "--limit",
+            "25",
+        ])
+        .expect("task list should parse");
+        assert!(matches!(
+            tasks.command,
+            Commands::Task {
+                action: TaskCommands::List {
+                    cursor: Some(ref cursor),
+                    limit: 25,
+                    ..
+                }
+            } if cursor == "next-token"
+        ));
+
+        for args in [
+            vec!["ov", "ls", "--node-limit", "10"],
+            vec!["ov", "tree", "viking://resources", "--node-limit", "10"],
+            vec!["ov", "skills", "list", "--node-limit", "10"],
+            vec!["ov", "admin", "list-accounts", "--page", "2"],
+            vec!["ov", "admin", "list-users", "default", "--page", "2"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "{args:?} should reject removed pagination flags"
+            );
         }
     }
 

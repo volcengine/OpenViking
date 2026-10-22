@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Mapping, Optional, TypedDict, Union
+from typing import Any, Dict, Generic, List, Literal, Mapping, Optional, TypeVar, Union
+
+from typing_extensions import TypedDict
 
 ExtraFields = Mapping[str, Any]
 TargetURI = Union[str, List[str]]
@@ -123,14 +125,112 @@ class ReindexOptions(_ExtraOptions, total=False):
     tag_mode: Literal["replace", "append", "clear"]
 
 
-class ListPage(TypedDict):
-    result: List[Any]
-    has_more: bool
+PageItemT = TypeVar("PageItemT")
 
 
-class TreePage(TypedDict):
-    result: List[Dict[str, Any]]
+class OffsetPage(TypedDict, Generic[PageItemT]):
+    items: List[PageItemT]
+    offset: int
+    limit: int
     has_more: bool
+    total: Optional[int]
+
+
+class CursorPage(TypedDict, Generic[PageItemT]):
+    items: List[PageItemT]
+    limit: int
+    has_more: bool
+    next_cursor: Optional[str]
+
+
+class AccountListItem(TypedDict, total=False):
+    account_id: str
+    created_at: str
+    user_count: int
+    status: str
+    task_id: str
+
+
+class UserListItem(TypedDict, total=False):
+    user_id: str
+    role: str
+    api_key: str
+    key_prefix: str
+    api_key_available: bool
+
+
+class AuditLogItem(TypedDict, total=False):
+    request_id: str
+    account_id: str
+    user_id: Optional[str]
+    method: str
+    route: str
+    api_type: str
+    status_code: int
+    duration_ms: float
+    error_code: Optional[str]
+    error_message: Optional[str]
+    error_details: Optional[Dict[str, Any]]
+    created_at: str
+
+
+class SessionListItem(TypedDict):
+    session_id: str
+    uri: str
+    is_dir: bool
+    mod_time: str
+
+
+TaskStatus = Literal["pending", "running", "cancelling", "completed", "failed", "cancelled"]
+
+
+class TaskListItem(TypedDict, total=False):
+    task_id: str
+    task_type: str
+    status: TaskStatus
+    created_at: float
+    updated_at: float
+    processing_seconds: Optional[float]
+    resource_id: Optional[str]
+    meta: Dict[str, Any]
+    stage: Optional[str]
+    result: Optional[Dict[str, Any]]
+    error: Optional[str]
+    created_at_iso: str
+    updated_at_iso: str
+
+
+class SkillListItem(TypedDict, total=False):
+    type: str
+    name: str
+    uri: str
+    root_uri: str
+    skill_md_uri: str
+    description: str
+    tags: List[str]
+    allowed_tools: List[str]
+
+
+class WatchListItem(TypedDict, total=False):
+    task_id: str
+    path: str
+    to_uri: Optional[str]
+    created_at: Optional[str]
+    is_active: bool
+
+
+class FilesystemListItem(TypedDict, total=False):
+    name: str
+    uri: str
+    isDir: bool
+
+
+class ExperienceTrajectoryItem(TypedDict, total=False):
+    uri: str
+    name: str
+    description: str
+    created_at: Any
+    updated_at: Any
 
 
 class CreateSessionOptions(_ExtraOptions, total=False):

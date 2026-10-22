@@ -684,8 +684,8 @@ class SQLiteUsageAuditStore:
         request_id: str | None = None,
         statuses: list[str] | None = None,
         api_types: list[str] | None = None,
-        page: int = 1,
-        page_size: int = 10,
+        offset: int = 0,
+        limit: int = 50,
     ) -> dict[str, Any]:
         async with self._lock:
             return await asyncio.to_thread(
@@ -695,8 +695,8 @@ class SQLiteUsageAuditStore:
                 request_id,
                 statuses or [],
                 api_types or [],
-                int(page),
-                int(page_size),
+                int(offset),
+                int(limit),
             )
 
     def _query_audit_logs_sync(
@@ -706,8 +706,8 @@ class SQLiteUsageAuditStore:
         request_id: str | None,
         statuses: list[str],
         api_types: list[str],
-        page: int,
-        page_size: int,
+        offset: int,
+        limit: int,
     ) -> dict[str, Any]:
         assert self._conn is not None
         where = ["account_id = ?"]
@@ -740,7 +740,6 @@ class SQLiteUsageAuditStore:
         ).fetchone()
         total = int(summary["total"] or 0)
         success = int(summary["success"] or 0)
-        offset = max(page - 1, 0) * page_size
         rows = self._conn.execute(
             f"""
             SELECT request_id, account_id, user_id, method, route, api_type,
@@ -751,14 +750,16 @@ class SQLiteUsageAuditStore:
             ORDER BY created_at DESC, id DESC
             LIMIT ? OFFSET ?
             """,
-            [*params, page_size, offset],
+            [*params, limit, offset],
         ).fetchall()
+        items = [self._audit_item(row) for row in rows]
         return {
             "total": total,
             "success_rate": (success / total) if total else 0.0,
-            "page": page,
-            "page_size": page_size,
-            "items": [self._audit_item(row) for row in rows],
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + len(items) < total,
+            "items": items,
         }
 
     @staticmethod

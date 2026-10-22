@@ -87,7 +87,14 @@ class FakeConsoleService:
 
     async def audit_logs(self, **kwargs):
         self.audit_call = kwargs
-        return {"total": 0, "success_rate": 0.0, "page": 2, "page_size": 20, "items": []}
+        return {
+            "total": 0,
+            "success_rate": 0.0,
+            "offset": kwargs["offset"],
+            "limit": kwargs["limit"],
+            "has_more": False,
+            "items": [],
+        }
 
 
 class FakeRuntime:
@@ -113,8 +120,8 @@ async def test_console_router_splits_audit_filters():
         response = await client.get(
             "/api/v1/console/audit",
             params={
-                "page": "2",
-                "page_size": "20",
+                "offset": "20",
+                "limit": "20",
                 "status": ["success,error", "5xx"],
                 "api_type": "search.find,sessions",
             },
@@ -125,8 +132,8 @@ async def test_console_router_splits_audit_filters():
     assert service.audit_call["ctx"].account_id == "acct-1"
     assert service.audit_call["statuses"] == ["success", "error", "5xx"]
     assert service.audit_call["api_types"] == ["search.find", "sessions"]
-    assert service.audit_call["page"] == 2
-    assert service.audit_call["page_size"] == 20
+    assert service.audit_call["offset"] == 20
+    assert service.audit_call["limit"] == 20
 
 
 @pytest.mark.asyncio

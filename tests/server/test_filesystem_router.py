@@ -370,9 +370,11 @@ async def test_ls_user_container_lists_only_caller_space(app, client, service):
         app.dependency_overrides.pop(get_request_context, None)
 
     assert response.status_code == 200, response.text
-    names = {entry["name"] for entry in response.json()["result"]}
+    result = response.json()["result"]
+    names = {entry["name"] for entry in result["items"]}
     assert names == {"alice"}
-    assert response.json()["has_more"] is False
+    assert result["has_more"] is False
+    assert result["total"] is None
 
 
 @pytest.mark.asyncio
@@ -394,19 +396,19 @@ async def test_ls_and_tree_forward_pagination_to_filesystem_service(monkeypatch)
     )
 
     ls_response = await filesystem.ls(
+        request=SimpleNamespace(query_params={}),
+        pagination=filesystem.FilesystemOffsetPagination(offset=4, limit=9),
         uri="viking://resources",
         tags=["team=search", "env=prod"],
-        offset=4,
-        limit=9,
         include_abstract=False,
         include_overview=True,
         overview_limit=512,
         _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
     )
     tree_response = await filesystem.tree(
+        request=SimpleNamespace(query_params={}),
+        pagination=filesystem.FilesystemOffsetPagination(offset=3, limit=5),
         uri="viking://resources",
-        offset=3,
-        limit=5,
         _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
     )
 
@@ -418,7 +420,7 @@ async def test_ls_and_tree_forward_pagination_to_filesystem_service(monkeypatch)
     assert seen["ls"]["overview_limit"] == 512
     assert seen["tree"]["offset"] == 3
     assert seen["tree"]["node_limit"] == 5
-    assert ls_response.result == [{"name": "a.md"}]
-    assert ls_response.has_more is True
-    assert tree_response.result == [{"name": "b.md"}]
-    assert tree_response.has_more is False
+    assert ls_response.result.items == [{"name": "a.md"}]
+    assert ls_response.result.has_more is True
+    assert tree_response.result.items == [{"name": "b.md"}]
+    assert tree_response.result.has_more is False

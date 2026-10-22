@@ -184,9 +184,8 @@ pub async fn ls(
     include_overview: Option<bool>,
     overview_limit: i32,
     show_all_hidden: bool,
-    node_limit: i32,
     offset: i32,
-    limit: Option<i32>,
+    limit: i32,
     sort_by: Option<&str>,
     sort_order: Option<&str>,
     output_format: OutputFormat,
@@ -208,7 +207,6 @@ pub async fn ls(
             include_overview,
             overview_limit,
             show_all_hidden,
-            node_limit,
             offset,
             limit,
             sort_by,
@@ -232,10 +230,9 @@ pub async fn tree(
     overview_limit: i32,
     show_all_hidden: bool,
     directories_only: bool,
-    node_limit: i32,
     level_limit: i32,
     offset: i32,
-    limit: Option<i32>,
+    limit: i32,
     output_format: OutputFormat,
     compact: bool,
     simple: bool,
@@ -253,7 +250,6 @@ pub async fn tree(
             overview_limit,
             show_all_hidden,
             directories_only,
-            node_limit,
             level_limit,
             offset,
             limit,
@@ -506,6 +502,11 @@ fn extract_entries(value: &Value) -> Option<Vec<&Value>> {
         return None;
     }
     let obj = value.as_object()?;
+    if let Some(items) = obj.get("items").and_then(Value::as_array) {
+        if items.iter().all(Value::is_object) {
+            return Some(items.iter().collect());
+        }
+    }
     // glob shape: top-level {matches:[...], count:N} (unwrapped from the success envelope
     // as a result object, with no nested "result" key).
     if let Some(matches) = obj.get("matches") {
@@ -602,6 +603,11 @@ fn filesystem_entries(value: &Value) -> Option<(Vec<&Value>, Option<&Value>)> {
 
     let object = value.as_object()?;
     let profile = object.get("profile").filter(|profile| !profile.is_null());
+    if let Some(items) = object.get("items").and_then(Value::as_array) {
+        if items.iter().all(Value::is_object) {
+            return Some((items.iter().collect(), profile));
+        }
+    }
     // glob shape: top-level {matches:[...], count:N}
     if let Some(matches) = object.get("matches") {
         if let Some(arr) = matches.as_array() {

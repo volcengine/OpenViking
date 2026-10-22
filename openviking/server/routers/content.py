@@ -44,7 +44,7 @@ class WriteContentRequest(BaseModel):
 
     uri: str
     content: str
-    mode: str = "replace"
+    mode: Literal["replace", "append", "create"] = "replace"
     wait: bool = False
     telemetry: TelemetryRequest = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
@@ -98,6 +98,8 @@ class SetTagsRequest(BaseModel):
 
 
 class ReindexRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     uri: str
     mode: str = "vectors_only"
     force: bool = False

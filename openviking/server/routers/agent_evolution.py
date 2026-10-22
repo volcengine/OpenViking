@@ -2,30 +2,41 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Agent Evolution endpoints."""
 
+from typing import Annotated, Any
+
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
-from openviking.service.agent_evolution_service import (
-    DEFAULT_TRAJECTORY_PAGE_LIMIT,
-    MAX_TRAJECTORY_PAGE_LIMIT,
-)
+from openviking.server.models import ErrorResponse, OffsetPage, PageResponse, Response
+from openviking.server.pagination import LargeOffsetPagination, large_offset_pagination
 
 router = APIRouter(prefix="/api/v1/agent-evolution", tags=["agent-evolution"])
 
 
-@router.get("/experiences/trajectories")
+class ExperienceTrajectoryItem(BaseModel):
+    uri: str
+    name: str | None = None
+    description: str | None = None
+    created_at: Any | None = None
+    updated_at: Any | None = None
+
+
+class ExperienceTrajectoryPage(OffsetPage[ExperienceTrajectoryItem]):
+    experience_uri: str
+
+
+@router.get(
+    "/experiences/trajectories",
+    response_model=PageResponse[ExperienceTrajectoryPage],
+    responses={400: {"model": ErrorResponse}},
+)
 async def list_experience_trajectories(
+    pagination: Annotated[LargeOffsetPagination, Depends(large_offset_pagination)],
     experience_uri: str = Query(..., description="Experience file URI"),
-    limit: int = Query(
-        DEFAULT_TRAJECTORY_PAGE_LIMIT,
-        ge=1,
-        le=MAX_TRAJECTORY_PAGE_LIMIT,
-    ),
-    offset: int = Query(0, ge=0),
     start_date: str | None = Query(None, description="UTC start date, inclusive (YYYY-MM-DD)"),
     end_date: str | None = Query(None, description="UTC end date, inclusive (YYYY-MM-DD)"),
     _ctx: RequestContext = Depends(get_request_context),
@@ -36,12 +47,12 @@ async def list_experience_trajectories(
     result = await service.agent_evolution.list_trajectories_by_experience(
         experience_uri=experience_uri,
         ctx=_ctx,
-        limit=limit,
-        offset=offset,
+        limit=pagination.limit,
+        offset=pagination.offset,
         start_date=start_date,
         end_date=end_date,
     )
-    return Response(status="ok", result=result)
+    return PageResponse(result=ExperienceTrajectoryPage(**result))
 
 
 @router.get("/experiences/outcomes")

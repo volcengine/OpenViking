@@ -4,10 +4,13 @@
 import sys
 import types
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from starlette.responses import PlainTextResponse
+
+from openviking.service.fs_service import ListingPage
 
 
 @pytest.fixture(autouse=True)
@@ -54,21 +57,95 @@ async def test_skills_api_list_empty_collection(client):
     response = await client.get("/api/v1/skills")
     assert response.status_code == 200, response.text
     listed = response.json()["result"]
-    assert listed["skills"] == []
-    assert listed["total"] == 0
+    assert listed["items"] == []
+    assert listed["total"] is None
+    assert listed["has_more"] is False
 
 
-async def test_skills_api_list_honors_node_limit(client):
+async def test_skills_api_list_uses_offset_and_rejects_node_limit(client):
     await _add_skill(client, "limit-skill-a", "First skill")
     await _add_skill(client, "limit-skill-b", "Second skill")
 
-    limited = await client.get("/api/v1/skills", params={"node_limit": 1})
+    limited = await client.get("/api/v1/skills", params={"limit": 1})
     assert limited.status_code == 200, limited.text
-    assert limited.json()["result"]["total"] == 1
+    assert len(limited.json()["result"]["items"]) == 1
+    assert limited.json()["result"]["has_more"] is True
 
-    default = await client.get("/api/v1/skills", params={"node_limit": 0})
-    assert default.status_code == 200, default.text
-    assert default.json()["result"]["total"] == 2
+    second = await client.get("/api/v1/skills", params={"offset": 1, "limit": 1})
+    assert second.status_code == 200, second.text
+    assert len(second.json()["result"]["items"]) == 1
+    assert second.json()["result"]["has_more"] is False
+
+    legacy = await client.get("/api/v1/skills", params={"node_limit": 1})
+    assert legacy.status_code == 400
+
+
+async def test_skill_paging_filters_before_public_offset(monkeypatch):
+    from openviking.server.routers import skills as skills_router
+
+    invalid = [
+        {"name": f"invalid-{index:03}", "uri": f"viking://agent/skills/invalid-{index:03}", "isDir": True}
+        for index in range(200)
+    ]
+    valid = {
+        "name": "valid-skill",
+        "uri": "viking://agent/skills/valid-skill",
+        "isDir": True,
+        "abstract": "name: valid-skill\ndescription: valid",
+    }
+    offsets = []
+
+    async def ls(_root_uri, **kwargs):
+        offsets.append(kwargs["offset"])
+        if kwargs["offset"] == 0:
+            return ListingPage(entries=invalid, has_more=True)
+        return ListingPage(entries=[valid], has_more=False)
+
+    async def looks_like_skill(_service, _ctx, entry):
+        return entry["name"] == "valid-skill"
+
+    service = SimpleNamespace(fs=SimpleNamespace(ls=ls))
+    monkeypatch.setattr(skills_router, "_entry_looks_like_skill", looks_like_skill)
+    items, has_more = await skills_router._list_skills_page(
+        service,
+        object(),
+        ["viking://agent/skills"],
+        offset=0,
+        limit=1,
+    )
+
+    assert [item["name"] for item in items] == ["valid-skill"]
+    assert has_more is False
+    assert offsets == [0, 200]
+
+
+async def test_skill_paging_stops_when_backend_repeats_batch(monkeypatch):
+    from openviking.server.routers import skills as skills_router
+
+    entry = {
+        "name": "stable-skill",
+        "uri": "viking://agent/skills/stable-skill",
+        "isDir": True,
+        "abstract": "name: stable-skill\ndescription: stable",
+    }
+    ls = AsyncMock(return_value=ListingPage(entries=[entry], has_more=True))
+
+    async def looks_like_skill(_service, _ctx, _entry):
+        return True
+
+    service = SimpleNamespace(fs=SimpleNamespace(ls=ls))
+    monkeypatch.setattr(skills_router, "_entry_looks_like_skill", looks_like_skill)
+    items, has_more = await skills_router._list_skills_page(
+        service,
+        object(),
+        ["viking://agent/skills"],
+        offset=0,
+        limit=10,
+    )
+
+    assert [item["name"] for item in items] == ["stable-skill"]
+    assert has_more is False
+    assert ls.await_count == 2
 
 
 async def test_skills_api_list_show_find_and_delete(client):
@@ -84,8 +161,8 @@ async def test_skills_api_list_show_find_and_delete(client):
     list_response = await client.get("/api/v1/skills")
     assert list_response.status_code == 200, list_response.text
     listed = list_response.json()["result"]
-    assert listed["total"] >= 1
-    assert any(skill["name"] == "api-skill" for skill in listed["skills"])
+    assert listed["total"] is None
+    assert any(skill["name"] == "api-skill" for skill in listed["items"])
 
     show_response = await client.get(
         "/api/v1/skills/api-skill",
@@ -782,7 +859,7 @@ async def test_skill_package_indexes_nested_content_and_returns_actual_hit(
             assert hits[0]["allowed_tools"] == ["Read", "Bash"]
 
     listed = await client.get("/api/v1/skills")
-    assert [skill["name"] for skill in listed.json()["result"]["skills"]] == ["package-search"]
+    assert [skill["name"] for skill in listed.json()["result"]["items"]] == ["package-search"]
     deleted = await client.delete("/api/v1/skills/package-search")
     assert deleted.status_code == 200, deleted.text
     found = await client.post("/api/v1/skills/find", json={"query": "backup recovery"})

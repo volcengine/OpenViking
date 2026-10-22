@@ -14,7 +14,7 @@ from typing import Any, AsyncIterator, Dict, Optional
 import yaml
 from fastapi import APIRouter, Depends, Request
 from fastapi import Path as ApiPath
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
@@ -27,7 +27,12 @@ from openviking.retrieve.skill_results import skill_root_uri
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.models import OffsetPage, PageResponse, Response
+from openviking.server.pagination import (
+    LargeOffsetPagination,
+    large_offset_pagination,
+    reject_legacy_pagination_params,
+)
 from openviking.server.skill_package_update import (
     clear_skill_package_contents,
     transfer_skill_package,
@@ -58,6 +63,7 @@ _SKILL_INTEGRITY_MAX_ENTRIES = 512
 _SKILL_INTEGRITY_MAX_FILE_BYTES = 16 * 1024 * 1024
 _SKILL_INTEGRITY_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _SKILL_INTEGRITY_READ_CONCURRENCY = 8
+_SKILL_LIST_RAW_BATCH_SIZE = 200
 
 
 class UpdateSkillRequest(BaseModel):
@@ -87,7 +93,7 @@ class FindSkillsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
-    limit: int = 10
+    limit: int = Field(default=10, ge=1)
     score_threshold: Optional[float] = None
     level: Optional[list[int]] = None
     telemetry: TelemetryRequest = False
@@ -102,6 +108,21 @@ class ValidateSkillRequest(BaseModel):
     source_path: Optional[str] = None
     skill_dir_name: Optional[str] = None
     target_uri: Optional[str] = None
+
+
+class SkillListItem(BaseModel):
+    type: str
+    name: str
+    uri: str
+    root_uri: str
+    skill_md_uri: str
+    description: str
+    tags: list[str]
+    allowed_tools: list[str]
+
+
+class SkillPage(OffsetPage[SkillListItem]):
+    root_uris: list[str]
 
 
 def _agent_skills_root(ctx: RequestContext, target_uri: Optional[str] = None) -> str:
@@ -124,38 +145,74 @@ def _agent_skills_root(ctx: RequestContext, target_uri: Optional[str] = None) ->
     )
 
 
-async def _list_skills_from_root(
-    service, ctx: RequestContext, root_uri: str, node_limit: int = _DEFAULT_SKILL_LIST_LIMIT
-) -> list[Dict[str, Any]]:
-    """List skills from a specific root URI.
-
-    Filters out directory entries that do not look like a valid skill — i.e.
-    their abstract metadata does not yield a valid ``name`` (matching the same
-    rules ``add_skill`` enforces via ``validate_skill_name``).  If the abstract
-    is missing or unreadable we fall back to checking whether a SKILL.md file
-    exists under the entry; only then is the directory accepted.  This keeps
-    nested directories like ``<skill>/scripts`` out of the listing.
-    """
-    try:
-        page = await service.fs.ls(
-            root_uri,
-            ctx=ctx,
-            output="agent",
-            abs_limit=1024,
-            node_limit=node_limit,
-        )
-        entries = page.entries
-    except NotFoundError:
-        return []
-
+async def _list_skills_page(
+    service,
+    ctx: RequestContext,
+    root_uris: list[str],
+    *,
+    offset: int,
+    limit: int,
+) -> tuple[list[Dict[str, Any]], bool]:
+    """Page over valid skills after filtering raw directory entries."""
+    skipped = 0
+    target_count = limit + 1
     results: list[Dict[str, Any]] = []
-    for entry in entries:
-        if not (isinstance(entry, dict) and entry.get("isDir", False)):
-            continue
-        if not await _entry_looks_like_skill(service, ctx, entry):
-            continue
-        results.append(_skill_summary_from_entry(entry))
-    return results
+    for root_uri in root_uris:
+        raw_offset = 0
+        previous_signature: tuple[str, str, int] | None = None
+        while len(results) < target_count:
+            try:
+                page = await service.fs.ls(
+                    root_uri,
+                    ctx=ctx,
+                    output="agent",
+                    abs_limit=1024,
+                    node_limit=_SKILL_LIST_RAW_BATCH_SIZE,
+                    offset=raw_offset,
+                    sort_by="name",
+                    sort_order="asc",
+                )
+            except NotFoundError:
+                break
+
+            entries = page.entries
+            if not entries:
+                break
+            signature = (
+                str(entries[0].get("uri", "") if isinstance(entries[0], dict) else entries[0]),
+                str(
+                    entries[-1].get("uri", "")
+                    if isinstance(entries[-1], dict)
+                    else entries[-1]
+                ),
+                len(entries),
+            )
+            if signature == previous_signature:
+                logger.warning(
+                    "Stopping skill listing for %s: backend repeated a batch at offset %d",
+                    root_uri,
+                    raw_offset,
+                )
+                break
+            previous_signature = signature
+            raw_offset += len(entries)
+
+            for entry in entries:
+                if not (isinstance(entry, dict) and entry.get("isDir", False)):
+                    continue
+                if not await _entry_looks_like_skill(service, ctx, entry):
+                    continue
+                if skipped < offset:
+                    skipped += 1
+                    continue
+                results.append(_skill_summary_from_entry(entry))
+                if len(results) == target_count:
+                    return results[:limit], True
+
+            if not page.has_more:
+                break
+
+    return results, False
 
 
 async def _entry_looks_like_skill(service, ctx: RequestContext, entry: Dict[str, Any]) -> bool:
@@ -555,41 +612,43 @@ async def _restore_skill_privacy(
     )
 
 
-@router.get("")
+@router.get(
+    "",
+    response_model=PageResponse[SkillPage],
+)
 async def list_skills(
-    node_limit: int = _DEFAULT_SKILL_LIST_LIMIT,
+    request: Request,
     target_uri: Optional[str] = None,
+    pagination: LargeOffsetPagination = Depends(large_offset_pagination),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """List installed agent skills; ``node_limit`` caps each skill root (0 keeps the default)."""
+    """List installed agent skills."""
+    reject_legacy_pagination_params(request, {"node_limit": "limit"})
     service = get_service()
-    limit = node_limit if node_limit > 0 else _DEFAULT_SKILL_LIST_LIMIT
     if target_uri:
         resolved_uri = validate_request_viking_uri(
             resolve_path_variables(target_uri), _ctx, field_name="target_uri"
         )
-        skills = await _list_skills_from_root(service, _ctx, resolved_uri, limit)
-        return Response(
-            status="ok", result={"root_uri": resolved_uri, "skills": skills, "total": len(skills)}
-        )
+        root_uris = [resolved_uri]
     else:
-        user_skills = await _list_skills_from_root(
-            service, _ctx, f"{canonical_user_root(_ctx)}/skills", limit
+        root_uris = [f"{canonical_user_root(_ctx)}/skills", "viking://agent/skills"]
+    skills, has_more = await _list_skills_page(
+        service,
+        _ctx,
+        root_uris,
+        offset=pagination.offset,
+        limit=pagination.limit,
+    )
+    return PageResponse(
+        result=SkillPage(
+            items=skills,
+            offset=pagination.offset,
+            limit=pagination.limit,
+            has_more=has_more,
+            total=None,
+            root_uris=root_uris,
         )
-        agent_skills = await _list_skills_from_root(service, _ctx, "viking://agent/skills", limit)
-        # Intentionally concatenate without deduplication: when the same skill
-        # name exists in both the user-private and the account-shared agent
-        # scope, both entries should be visible so the caller can tell them
-        # apart by ``root_uri``.
-        merged_skills = [*user_skills, *agent_skills]
-        return Response(
-            status="ok",
-            result={
-                "root_uris": [f"{canonical_user_root(_ctx)}/skills", "viking://agent/skills"],
-                "skills": merged_skills,
-                "total": len(merged_skills),
-            },
-        )
+    )
 
 
 @router.post("/find")

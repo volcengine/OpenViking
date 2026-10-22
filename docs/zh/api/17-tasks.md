@@ -318,11 +318,10 @@ ov task cancel uuid-xxx
 | resource_id | str | 否 | None | 按资源 ID 过滤，例如会话 ID |
 | include_internal | bool | 否 | false | 是否包含 Connector 导入产生的内部子任务 |
 | limit | int | 否 | 50 | 每次最多返回的任务条数，范围 1～200 |
-| pagination | str | 否 | None | 仅 HTTP；传 `cursor` 后以分页对象返回 |
-| cursor | str | 否 | None | 仅 HTTP；上一页的 `next_cursor`，与 `pagination=cursor` 一起使用 |
-| q | str | 否 | None | 仅 HTTP cursor 模式；在 task ID 和 Compile 请求的 `skill`、`to`、`from` 中做不区分大小写的包含匹配 |
+| cursor | str | 否 | None | 上一页返回的 `next_cursor` |
+| q | str | 否 | None | 在 task ID 和 Compile 请求的 `skill`、`to`、`from` 中做不区分大小写的包含匹配 |
 
-使用 `pagination=cursor` 时，`result` 是包含 `items`、`has_more` 和 `next_cursor` 的对象，而不是数组。请求下一页时原样传入 `next_cursor`，并保持相同的过滤条件和身份。未使用 cursor 模式时，`q` 和 `cursor` 不影响结果。
+`result` 始终包含 `items`、`limit`、`has_more` 和 `next_cursor`。请求下一页时原样传入 `next_cursor`，并保持相同的过滤条件和身份。
 
 默认仅返回用户可见任务；排查 Connector 导入时可传 `include_internal=true` 查看其内部 `add_resource` 子任务。
 
@@ -347,12 +346,12 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-tasks = client.list_tasks(
+page = client.list_tasks(
     task_type="session_commit",
     status="running",
     limit=20,
 )
-for task in tasks:
+for task in page["items"]:
     print(task["task_id"], task["status"])
 client.close()
 ```

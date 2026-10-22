@@ -72,7 +72,7 @@ export function createResourceAclApi(
       getOvResult<FSListResult>(
         client.get({
           url: '/api/v1/fs/ls',
-          query: { uri, show_all_hidden: false },
+          query: { uri, show_all_hidden: false, offset: 0, limit: 1000 },
         }),
       ),
     change(uri: string, change: AclChange) {

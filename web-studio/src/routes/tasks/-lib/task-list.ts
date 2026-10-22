@@ -16,23 +16,36 @@ export type TaskTypeFilter =
   | 'snapshot_restore_reindex'
   | 'all'
 
-export const MAX_TASKS = 200
+export type TaskPage = {
+  items: TaskRecord[]
+  hasMore: boolean
+  nextCursor: string | null
+}
 
 export async function fetchTasks(
   taskType: TaskTypeFilter,
   status: TaskStatusFilter,
-): Promise<TaskRecord[]> {
+  cursor: string | undefined,
+  limit: number,
+): Promise<TaskPage> {
   const result = await getOvResult<unknown>(
     getTasks({
       query: {
-        limit: MAX_TASKS,
+        limit,
+        ...(cursor ? { cursor } : {}),
         ...(taskType === 'all' ? {} : { task_type: taskType }),
         ...(status === 'all' ? {} : { status }),
       },
     }),
   )
-  return normalizeTasks(result).sort(
+  const items = normalizeTasks(result).sort(
     (left, right) =>
       Number(right.created_at || 0) - Number(left.created_at || 0),
   )
+  const page = result as { has_more?: boolean; next_cursor?: string | null }
+  return {
+    items,
+    hasMore: page.has_more === true,
+    nextCursor: page.next_cursor ?? null,
+  }
 }

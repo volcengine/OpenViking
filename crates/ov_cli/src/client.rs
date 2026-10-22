@@ -556,9 +556,8 @@ impl HttpClient {
         include_overview: Option<bool>,
         overview_limit: i32,
         show_all_hidden: bool,
-        node_limit: i32,
         offset: i32,
-        limit: Option<i32>,
+        limit: i32,
         sort_by: Option<&str>,
         sort_order: Option<&str>,
         extra_fields: &[String],
@@ -573,19 +572,14 @@ impl HttpClient {
             ("abs_limit".to_string(), abs_limit.to_string()),
             ("overview_limit".to_string(), overview_limit.to_string()),
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
-            ("node_limit".to_string(), node_limit.to_string()),
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
         ];
         if let Some(value) = include_abstract {
             params.push(("include_abstract".to_string(), value.to_string()));
         }
         if let Some(value) = include_overview {
             params.push(("include_overview".to_string(), value.to_string()));
-        }
-        if offset != 0 {
-            params.push(("offset".to_string(), offset.to_string()));
-        }
-        if let Some(limit) = limit {
-            params.push(("limit".to_string(), limit.to_string()));
         }
         if let Some(sort_by) = sort_by {
             params.push(("sort_by".to_string(), sort_by.to_string()));
@@ -615,10 +609,9 @@ impl HttpClient {
         overview_limit: i32,
         show_all_hidden: bool,
         directories_only: bool,
-        node_limit: i32,
         level_limit: i32,
         offset: i32,
-        limit: Option<i32>,
+        limit: i32,
         extra_fields: &[String],
         tags: &[String],
         include_tags: bool,
@@ -628,9 +621,10 @@ impl HttpClient {
             ("output".to_string(), output.to_string()),
             ("abs_limit".to_string(), abs_limit.to_string()),
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
-            ("node_limit".to_string(), node_limit.to_string()),
             ("level_limit".to_string(), level_limit.to_string()),
             ("overview_limit".to_string(), overview_limit.to_string()),
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
         ];
         if let Some(value) = include_abstract {
             params.push(("include_abstract".to_string(), value.to_string()));
@@ -640,12 +634,6 @@ impl HttpClient {
         }
         if directories_only {
             params.push(("directories_only".to_string(), "true".to_string()));
-        }
-        if offset != 0 {
-            params.push(("offset".to_string(), offset.to_string()));
-        }
-        if let Some(limit) = limit {
-            params.push(("limit".to_string(), limit.to_string()));
         }
         for field in extra_fields {
             params.push(("extra_fields".to_string(), field.clone()));
@@ -1086,10 +1074,14 @@ impl HttpClient {
 
     pub async fn skills_list(
         &self,
-        node_limit: i32,
+        offset: i32,
+        limit: i32,
         target_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let mut params = vec![("node_limit".to_string(), node_limit.to_string())];
+        let mut params = vec![
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
         if let Some(target_uri) = target_uri {
             params.push(("target_uri".to_string(), target_uri.to_string()));
         }
@@ -1304,13 +1296,18 @@ impl HttpClient {
         &self,
         task_type: Option<&str>,
         status: Option<&str>,
+        cursor: Option<&str>,
+        limit: u32,
     ) -> Result<serde_json::Value> {
-        let mut params: Vec<(String, String)> = Vec::new();
+        let mut params = vec![("limit".to_string(), limit.to_string())];
         if let Some(t) = task_type {
             params.push(("task_type".to_string(), t.to_string()));
         }
         if let Some(s) = status {
             params.push(("status".to_string(), s.to_string()));
+        }
+        if let Some(cursor) = cursor {
+            params.push(("cursor".to_string(), cursor.to_string()));
         }
         self.get("/api/v1/tasks", &params).await
     }
@@ -1488,16 +1485,15 @@ impl HttpClient {
     pub async fn admin_list_accounts(
         &self,
         name: Option<String>,
-        limit: Option<u32>,
-        page: u32,
+        offset: u32,
+        limit: u32,
     ) -> Result<Value> {
-        let mut params = vec![];
+        let mut params = vec![
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
         if let Some(n) = name {
             params.push(("name".to_string(), n));
-        }
-        if let Some(l) = limit {
-            params.push(("limit".to_string(), l.to_string()));
-            params.push(("page".to_string(), page.to_string()));
         }
         self.get("/api/v1/admin/accounts", &params).await
     }
@@ -1549,17 +1545,16 @@ impl HttpClient {
     pub async fn admin_list_users(
         &self,
         account_id: &str,
-        limit: Option<u32>,
+        offset: u32,
+        limit: u32,
         name: Option<String>,
         role: Option<String>,
-        page: u32,
     ) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users", account_id);
-        let mut params = vec![];
-        if let Some(l) = limit {
-            params.push(("limit".to_string(), l.to_string()));
-            params.push(("page".to_string(), page.to_string()));
-        }
+        let mut params = vec![
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
         if let Some(n) = name {
             params.push(("name".to_string(), n));
         }
@@ -1881,8 +1876,16 @@ impl HttpClient {
 
     // ============ Watch Management (RFC #2104) ============
 
-    pub async fn list_watches(&self, active_only: bool) -> Result<serde_json::Value> {
-        let mut params = vec![];
+    pub async fn list_watches(
+        &self,
+        active_only: bool,
+        offset: u32,
+        limit: u32,
+    ) -> Result<serde_json::Value> {
+        let mut params = vec![
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
         if active_only {
             params.push(("active_only".to_string(), "true".to_string()));
         }
@@ -2464,9 +2467,8 @@ mod tests {
                 Some(true),
                 512,
                 false,
-                20,
                 4,
-                Some(5),
+                5,
                 Some("mtime"),
                 Some("desc"),
                 &[],
@@ -2478,7 +2480,7 @@ mod tests {
 
         let request = request_rx.await.expect("request should be captured");
         assert!(request.starts_with("GET /api/v1/fs/ls?"));
-        assert!(request.contains("node_limit=20"));
+        assert!(!request.contains("node_limit="));
         assert!(request.contains("offset=4"));
         assert!(request.contains("limit=5"));
         assert!(request.contains("sort_by=mtime"));
@@ -2502,9 +2504,8 @@ mod tests {
                 None,
                 4000,
                 false,
-                20,
                 0,
-                None,
+                50,
                 None,
                 None,
                 &[],
@@ -2516,11 +2517,11 @@ mod tests {
         let default_request = default_request_rx
             .await
             .expect("default request should be captured");
-        assert!(!default_request.contains("offset="));
+        assert!(default_request.contains("offset=0"));
+        assert!(default_request.contains("limit=50"));
         assert!(!default_request.contains("include_abstract="));
         assert!(!default_request.contains("include_overview="));
         assert!(default_request.contains("overview_limit=4000"));
-        assert!(!default_request.contains("&limit="));
         assert!(!default_request.contains("sort_by="));
         assert!(!default_request.contains("sort_order="));
     }
@@ -2671,10 +2672,9 @@ mod tests {
                 512,
                 false,
                 true,
-                20,
                 3,
                 4,
-                Some(5),
+                5,
                 &[],
                 &[],
                 false,
@@ -2684,7 +2684,7 @@ mod tests {
 
         let request = request_rx.await.expect("request should be captured");
         assert!(request.starts_with("GET /api/v1/fs/tree?"));
-        assert!(request.contains("node_limit=20"));
+        assert!(!request.contains("node_limit="));
         assert!(request.contains("offset=4"));
         assert!(request.contains("limit=5"));
         assert!(request.contains("include_abstract=false"));
@@ -2706,10 +2706,9 @@ mod tests {
                 4000,
                 false,
                 false,
-                20,
                 3,
                 0,
-                None,
+                50,
                 &[],
                 &[],
                 false,
@@ -2719,11 +2718,11 @@ mod tests {
         let default_request = default_request_rx
             .await
             .expect("default request should be captured");
-        assert!(!default_request.contains("offset="));
+        assert!(default_request.contains("offset=0"));
+        assert!(default_request.contains("limit=50"));
         assert!(!default_request.contains("include_abstract="));
         assert!(!default_request.contains("include_overview="));
         assert!(!default_request.contains("directories_only="));
-        assert!(!default_request.contains("&limit="));
     }
 
     #[tokio::test]

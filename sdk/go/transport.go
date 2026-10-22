@@ -17,7 +17,6 @@ import (
 type responseEnvelope struct {
 	Status    string          `json:"status"`
 	Result    json.RawMessage `json:"result,omitempty"`
-	HasMore   bool            `json:"has_more,omitempty"`
 	Error     *ErrorInfo      `json:"error,omitempty"`
 	Telemetry json.RawMessage `json:"telemetry,omitempty"`
 	Profile   []string        `json:"profile,omitempty"`

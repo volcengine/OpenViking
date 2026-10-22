@@ -27,16 +27,15 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 | include_overview | bool | 否 | 未设置 | 是否返回目录 L1 概览。未设置时不返回 |
 | overview_limit | int | 否 | 4000 | 返回的概览最大长度 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
-| node_limit | int | 否 | 1000 | 最大返回节点数 |
 | offset | int | 否 | 0 | 跳过的可见节点数 |
-| limit | int | 否 | None | `node_limit` 的别名 |
+| limit | int | 否 | 50 | 最大返回可见节点数 |
 | sort_by | str | 否 | None | 在分页前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
 | sort_order | str | 否 | `asc` | 排序方向：`asc` 或 `desc` |
 | extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
 | include_tags | bool | 否 | False | 不按标签过滤时，也返回 tags |
 | tags | string[] | 否 | 未设置 | 仅返回同时匹配全部 `k=v` 检索标签的条目 |
 
-`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
 
 **条目结构**
 
@@ -89,7 +88,7 @@ page = client.ls_page(
     include_abstract=True,
     include_overview=True,
 )
-for entry in page["result"]:
+for entry in page["items"]:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")
 print("是否还有更多节点：", page["has_more"])
@@ -103,8 +102,8 @@ const page = await client.listPage("viking://resources/docs/", {
   includeAbstract: true,
   includeOverview: true,
 });
-console.log(page.result);
-console.log("是否还有更多节点：", page.hasMore);
+console.log(page.items);
+console.log("是否还有更多节点：", page.has_more);
 ```
 
 **Go SDK**
@@ -120,13 +119,13 @@ page, err := client.ListPage(ctx, "viking://resources/", &openviking.ListOptions
 if err != nil {
     return err
 }
-for _, entry := range page.Result {
+for _, entry := range page.Items {
     fmt.Println(entry)
 }
 fmt.Println("是否还有更多节点：", page.HasMore)
 ```
 
-仅需要节点数组时可继续使用兼容接口：Python 使用 `ls`、TypeScript 使用 `list`、Go 使用 `List`。需要判断结果是否因 `limit` 或 `node_limit` 被截断时，分别使用 `ls_page`、`listPage`、`ListPage`。
+仅需要节点数组时可使用便捷接口：Python 使用 `ls`、TypeScript 使用 `list`、Go 使用 `List`。需要读取分页元数据时，分别使用 `ls_page`、`listPage`、`ListPage`。
 
 **HTTP API**
 
@@ -219,15 +218,14 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 | overview_limit | int | 否 | 4000 | 返回的概览最大长度 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | directories_only | bool | 否 | False | 仅返回目录节点 |
-| node_limit | int | 否 | 1000 | 最大返回节点数 |
 | offset | int | 否 | 0 | 跳过的可见节点数 |
-| limit | int | 否 | None | `node_limit` 的别名 |
+| limit | int | 否 | 50 | 最大返回可见节点数 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
 | extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
 | include_tags | bool | 否 | False | 不按标签过滤时，也返回 tags |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的节点 |
 
-目录过滤和 `tags` 均在 `offset`、`limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们。
+目录过滤和 `tags` 均在 `offset`、`limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们。
 
 
 **Python SDK (HTTP)**
@@ -242,7 +240,7 @@ page = client.tree_page(
     include_overview=True,
     directories_only=True,
 )
-for entry in page["result"]:
+for entry in page["items"]:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
 print("是否还有更多节点：", page["has_more"])
@@ -252,13 +250,13 @@ print("是否还有更多节点：", page["has_more"])
 
 ```typescript
 const page = await client.treePage("viking://resources/docs/", {
-  nodeLimit: 100,
+  limit: 100,
   tags: ["team=search", "env=prod"],
   includeAbstract: true,
   includeOverview: true,
 });
-console.log(page.result);
-console.log("是否还有更多节点：", page.hasMore);
+console.log(page.items);
+console.log("是否还有更多节点：", page.has_more);
 ```
 
 **Go SDK**
@@ -273,13 +271,13 @@ page, err := client.TreePage(ctx, "viking://resources/", &openviking.TreeOptions
 if err != nil {
     return err
 }
-for _, entry := range page.Result {
+for _, entry := range page.Items {
     fmt.Println(entry["rel_path"], entry["isDir"])
 }
 fmt.Println("是否还有更多节点：", page.HasMore)
 ```
 
-仅需要节点数组时可继续使用兼容接口：Python/TypeScript 使用 `tree`、Go 使用 `Tree`。需要判断结果是否因 `limit` 或 `node_limit` 被截断时，分别使用 `tree_page`、`treePage`、`TreePage`。
+仅需要节点数组时可使用便捷接口：Python/TypeScript 使用 `tree`、Go 使用 `Tree`。需要读取分页元数据时，分别使用 `tree_page`、`treePage`、`TreePage`。
 
 **HTTP API**
 

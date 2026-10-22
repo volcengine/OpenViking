@@ -55,7 +55,6 @@ export async function fetchCompileTasks(
       signal,
       query: {
         task_type: 'compile',
-        pagination: 'cursor',
         limit: 30,
         ...(status ? { status } : {}),
         ...(q ? { q } : {}),
@@ -122,14 +121,20 @@ export async function fetchCompileSkills(
   signal?: AbortSignal,
 ): Promise<CompileSkill[]> {
   const result = await getOvResult<{
-    skills: Array<{
+    items: Array<{
       name: string
       uri?: string
       root_uri?: string
       description?: string
     }>
-  }>(ovClient.client.get({ url: '/api/v1/skills', signal }))
-  return result.skills.flatMap((s) => {
+  }>(
+    ovClient.client.get({
+      url: '/api/v1/skills',
+      signal,
+      query: { offset: 0, limit: 1000 },
+    }),
+  )
+  return result.items.flatMap((s) => {
     const uri = s.uri || s.root_uri
     return uri ? [{ name: s.name, uri, description: s.description || '' }] : []
   })

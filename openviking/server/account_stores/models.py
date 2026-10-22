@@ -18,6 +18,11 @@ class AccountSummary(TypedDict, total=False):
     task_id: str
 
 
+class AccountsPage(TypedDict):
+    items: list[AccountSummary]
+    total: int
+
+
 class UserSummary(TypedDict, total=False):
     user_id: str
     role: str

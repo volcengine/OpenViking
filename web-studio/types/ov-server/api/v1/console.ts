@@ -93,8 +93,8 @@ export type ConsoleAuditResult = OvMaybeDisabled & PaginatedResult<ConsoleAuditL
 
 export type ConsoleAuditQuery = {
   api_type?: string[] | null
-  page?: number
-  page_size?: number
+  offset?: number
+  limit?: number
   request_id?: string | null
   status?: string[] | null
 }

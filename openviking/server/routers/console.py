@@ -4,13 +4,19 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel
 
 from openviking.server.auth import require_role
 from openviking.server.identity import RequestContext, Role
-from openviking.server.models import Response
+from openviking.server.models import ErrorResponse, OffsetPage, PageResponse, Response
+from openviking.server.pagination import (
+    AuditOffsetPagination,
+    audit_offset_pagination,
+    reject_legacy_pagination_params,
+)
 
 router = APIRouter(prefix="/api/v1/console", tags=["console"])
 
@@ -112,26 +118,61 @@ async def context_commits(
     return _ok_response(result)
 
 
-@router.get("/audit")
+class AuditLogItem(BaseModel):
+    request_id: str
+    account_id: str
+    user_id: str | None = None
+    method: str
+    route: str
+    api_type: str
+    status_code: int
+    duration_ms: float
+    error_code: str | None = None
+    error_message: str | None = None
+    error_details: dict[str, Any] | None = None
+    created_at: str
+
+
+class AuditPage(OffsetPage[AuditLogItem]):
+    success_rate: float
+
+
+@router.get(
+    "/audit",
+    response_model=PageResponse[AuditPage],
+    responses={400: {"model": ErrorResponse}},
+)
 async def audit_logs(
     request: Request,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
+    pagination: Annotated[AuditOffsetPagination, Depends(audit_offset_pagination)],
     request_id: Optional[str] = Query(None),
     status: Optional[list[str]] = Query(None),
     api_type: Optional[list[str]] = Query(None),
     _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Return filtered request audit logs."""
+    reject_legacy_pagination_params(
+        request,
+        {"page": "offset", "page_size": "limit"},
+    )
     service = _runtime_service(request)
     if service is None:
-        return _disabled_response()
+        return PageResponse(
+            result=AuditPage(
+                items=[],
+                offset=pagination.offset,
+                limit=pagination.limit,
+                has_more=False,
+                total=0,
+                success_rate=0.0,
+            )
+        )
     result = await service.audit_logs(
         ctx=_ctx,
         request_id=request_id,
         statuses=_split_multi(status),
         api_types=_split_multi(api_type),
-        page=page,
-        page_size=page_size,
+        offset=pagination.offset,
+        limit=pagination.limit,
     )
-    return _ok_response(result)
+    return PageResponse(result=AuditPage(**result))

@@ -54,10 +54,12 @@ fn validate_interval_minutes(minutes: f64) -> Result<()> {
 pub async fn ls(
     client: &HttpClient,
     active_only: bool,
+    offset: u32,
+    limit: u32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response = client.list_watches(active_only).await?;
+    let response = client.list_watches(active_only, offset, limit).await?;
     output_success(&response, output_format, compact);
     Ok(())
 }

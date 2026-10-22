@@ -59,10 +59,20 @@ fn create_session_body(
 
 pub async fn list_sessions(
     client: &HttpClient,
+    offset: u32,
+    limit: u32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response: serde_json::Value = client.get("/api/v1/sessions", &[]).await?;
+    let response: serde_json::Value = client
+        .get(
+            "/api/v1/sessions",
+            &[
+                ("offset".to_string(), offset.to_string()),
+                ("limit".to_string(), limit.to_string()),
+            ],
+        )
+        .await?;
     output_success(&response, output_format, compact);
     Ok(())
 }

@@ -10,20 +10,27 @@ import (
 	"net/url"
 )
 
-// ListWatches lists watch tasks, or returns one by target URI.
-func (c *Client) ListWatches(ctx context.Context, opts *ListWatchesOptions) (map[string]any, error) {
+// ListWatches lists watch tasks, optionally filtered by target URI.
+func (c *Client) ListWatches(ctx context.Context, opts *ListWatchesOptions) (*OffsetPage[WatchListItem], error) {
 	query := url.Values{}
 	activeOnly := false
+	offset, limit := 0, 50
 	if opts != nil {
 		activeOnly = opts.ActiveOnly
+		offset = opts.Offset
+		if opts.Limit > 0 {
+			limit = opts.Limit
+		}
 		if opts.ToURI != "" {
 			query.Set("to_uri", NormalizeURI(opts.ToURI))
 		}
 	}
 	queryBool(query, "active_only", activeOnly)
-	var result map[string]any
+	queryInt(query, "offset", offset)
+	queryInt(query, "limit", limit)
+	var result OffsetPage[WatchListItem]
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/watches", query, nil, &result)
-	return result, err
+	return &result, err
 }
 
 // GetWatch gets one watch task by task ID, optionally cross-checking the target URI.

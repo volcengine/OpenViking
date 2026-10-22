@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Filesystem endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query, Request
 from pydantic import BaseModel
 
 from openviking.core.namespace import context_type_for_uri
@@ -15,7 +15,12 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
-from openviking.server.models import ListingResponse, Response
+from openviking.server.models import ErrorResponse, OffsetPage, PageResponse, Response
+from openviking.server.pagination import (
+    FilesystemOffsetPagination,
+    filesystem_offset_pagination,
+    reject_legacy_pagination_params,
+)
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
 from openviking.storage.acl import AclSpec
@@ -66,8 +71,17 @@ async def _tags_attr(service: Any, uri: str, ctx: RequestContext, *, is_dir: boo
     return tags
 
 
-@router.get("/ls")
+FilesystemPageResponse = PageResponse[OffsetPage[str | dict[str, Any]]]
+
+
+@router.get(
+    "/ls",
+    response_model=FilesystemPageResponse,
+    responses={400: {"model": ErrorResponse}},
+)
 async def ls(
+    request: Request,
+    pagination: Annotated[FilesystemOffsetPagination, Depends(filesystem_offset_pagination)],
     uri: str = Query(..., description="Viking URI"),
     simple: bool = Query(False, description="Return only relative path list"),
     recursive: bool = Query(False, description="List all subdirectories recursively"),
@@ -79,12 +93,9 @@ async def ls(
     include_overview: Optional[bool] = Query(None, description="Include directory L1 overviews"),
     overview_limit: int = Query(4000, ge=1, description="Maximum overview length"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
-    node_limit: int = Query(1000, description="Maximum number of nodes to list"),
-    offset: int = Query(0, ge=0, description="Number of visible nodes to skip"),
-    limit: Optional[int] = Query(None, ge=1, description="Alias for node_limit"),
     sort_by: Optional[Literal["name", "mtime"]] = Query(
         None,
-        description="Sort directory and file groups before applying node_limit",
+        description="Sort directory and file groups before applying limit",
     ),
     sort_order: Literal["asc", "desc"] = Query("asc", description="Sort direction"),
     extra_fields: Optional[list[str]] = Query(
@@ -95,8 +106,8 @@ async def ls(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
+    reject_legacy_pagination_params(request, {"node_limit": "limit"})
     service = get_service()
-    actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
@@ -111,8 +122,8 @@ async def ls(
             include_overview=include_overview,
             overview_limit=overview_limit,
             show_all_hidden=show_all_hidden,
-            node_limit=actual_node_limit,
-            offset=offset,
+            node_limit=pagination.limit,
+            offset=pagination.offset,
             sort_by=sort_by,
             sort_order=sort_order,
             extra_fields=extra_fields,
@@ -126,11 +137,25 @@ async def ls(
         if mapped is not None:
             raise mapped from e
         raise
-    return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
+    return PageResponse(
+        result=OffsetPage(
+            items=page.entries,
+            offset=pagination.offset,
+            limit=pagination.limit,
+            has_more=page.has_more,
+            total=None,
+        )
+    )
 
 
-@router.get("/tree")
+@router.get(
+    "/tree",
+    response_model=FilesystemPageResponse,
+    responses={400: {"model": ErrorResponse}},
+)
 async def tree(
+    request: Request,
+    pagination: Annotated[FilesystemOffsetPagination, Depends(filesystem_offset_pagination)],
     uri: str = Query(..., description="Viking URI"),
     output: str = Query("agent", description="Output format: original or agent"),
     abs_limit: int = Query(256, description="Maximum returned abstract length"),
@@ -141,9 +166,6 @@ async def tree(
     overview_limit: int = Query(4000, ge=1, description="Maximum overview length"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     directories_only: bool = Query(False, description="Only include directory entries"),
-    node_limit: int = Query(1000, description="Maximum number of nodes to list"),
-    offset: int = Query(0, ge=0, description="Number of visible nodes to skip"),
-    limit: Optional[int] = Query(None, ge=1, description="Alias for node_limit"),
     level_limit: int = Query(3, description="Maximum depth level to traverse"),
     extra_fields: Optional[list[str]] = Query(
         None, description="Extra fields to include: locked, id, count"
@@ -153,8 +175,8 @@ async def tree(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
+    reject_legacy_pagination_params(request, {"node_limit": "limit"})
     service = get_service()
-    actual_node_limit = limit if limit is not None else node_limit
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
@@ -168,9 +190,9 @@ async def tree(
             overview_limit=overview_limit,
             show_all_hidden=show_all_hidden,
             directories_only=directories_only,
-            node_limit=actual_node_limit,
+            node_limit=pagination.limit,
             level_limit=level_limit,
-            offset=offset,
+            offset=pagination.offset,
             extra_fields=extra_fields,
             tags=tags,
             include_tags=include_tags,
@@ -182,7 +204,15 @@ async def tree(
         if mapped is not None:
             raise mapped from e
         raise
-    return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
+    return PageResponse(
+        result=OffsetPage(
+            items=page.entries,
+            offset=pagination.offset,
+            limit=pagination.limit,
+            has_more=page.has_more,
+            total=None,
+        )
+    )
 
 
 @router.get("/stat")
@@ -266,6 +296,8 @@ async def attrs_set_tags(
 class MkdirRequest(BaseModel):
     """Request model for mkdir."""
 
+    model_config = {"extra": "forbid"}
+
     uri: str
     description: Optional[str] = None
     acl: AclSpec | None = None
@@ -340,12 +372,16 @@ async def rm(
 class MvRequest(BaseModel):
     """Request model for mv."""
 
+    model_config = {"extra": "forbid"}
+
     from_uri: str
     to_uri: str
 
 
 class CpRequest(BaseModel):
     """Request model for cp."""
+
+    model_config = {"extra": "forbid"}
 
     from_uri: str
     to_uri: str

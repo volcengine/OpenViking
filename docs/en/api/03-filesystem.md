@@ -27,16 +27,15 @@ List directory contents.
 | include_overview | bool | No | Unset | Include directory L1 overviews. Unset means omitted |
 | overview_limit | int | No | 4000 | Maximum returned overview length |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
-| node_limit | int | No | 1000 | Maximum number of results |
 | offset | int | No | 0 | Number of visible results to skip |
-| limit | int | No | None | Alias for `node_limit` |
+| limit | int | No | 50 | Maximum number of visible results to return |
 | sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before pagination; directories remain first |
 | sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Return only entries matching every supplied `k=v` retrieval tag |
 
-`tags` uses AND semantics and is applied before `offset` and `limit`. L0/L1 content is attached only to the selected page of directory entries and does not consume `node_limit`. An explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+`tags` uses AND semantics and is applied before `offset` and `limit`. L0/L1 content is attached only to the selected page of directory entries and does not consume `limit`. An explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 **Entry Structure**
 
@@ -87,7 +86,7 @@ page = client.ls_page(
     include_abstract=True,
     include_overview=True,
 )
-for entry in page["result"]:
+for entry in page["items"]:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")
 print("has more nodes:", page["has_more"])
@@ -100,8 +99,8 @@ const page = await client.listPage("viking://resources/docs/", {
   includeAbstract: true,
   includeOverview: true,
 });
-console.log(page.result);
-console.log("has more nodes:", page.hasMore);
+console.log(page.items);
+console.log("has more nodes:", page.has_more);
 ```
 
 **Go SDK**
@@ -116,15 +115,15 @@ page, err := client.ListPage(ctx, "viking://resources/", &openviking.ListOptions
 if err != nil {
     return err
 }
-for _, entry := range page.Result {
+for _, entry := range page.Items {
     fmt.Println(entry)
 }
 fmt.Println("has more nodes:", page.HasMore)
 ```
 
-When only the entry array is needed, use the compatibility methods `ls` in
+When only the entry array is needed, use the convenience methods `ls` in
 Python, `list` in TypeScript, and `List` in Go. To detect whether `limit` or
-`node_limit` truncated the result, use `ls_page`, `listPage`, and `ListPage`,
+pagination truncated the result, use `ls_page`, `listPage`, and `ListPage`,
 respectively.
 
 **HTTP API**
@@ -196,15 +195,14 @@ Get directory tree structure.
 | overview_limit | int | No | 4000 | Maximum returned overview length |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | directories_only | bool | No | False | Return directory nodes only |
-| node_limit | int | No | 1000 | Maximum number of results |
 | offset | int | No | 0 | Number of visible results to skip |
-| limit | int | No | None | Alias for `node_limit` |
+| limit | int | No | 50 | Maximum number of visible results to return |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Retain only nodes matching every supplied `k=v` retrieval tag |
 
-Directory filtering and `tags` are applied before `offset` and `limit`. Abstracts and overviews are attached to the selected directory nodes and do not count toward `node_limit`. Explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+Directory filtering and `tags` are applied before `offset` and `limit`. Abstracts and overviews are attached to the selected directory nodes and do not count toward `limit`. Explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 
 **Python SDK (HTTP)**
@@ -218,7 +216,7 @@ page = client.tree_page(
     include_overview=True,
     directories_only=True,
 )
-for entry in page["result"]:
+for entry in page["items"]:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
 print("has more nodes:", page["has_more"])
@@ -228,12 +226,12 @@ print("has more nodes:", page["has_more"])
 
 ```typescript
 const page = await client.treePage("viking://resources/docs/", {
-  nodeLimit: 100,
+  limit: 100,
   includeAbstract: true,
   includeOverview: true,
 });
-console.log(page.result);
-console.log("has more nodes:", page.hasMore);
+console.log(page.items);
+console.log("has more nodes:", page.has_more);
 ```
 
 **Go SDK**
@@ -247,15 +245,15 @@ page, err := client.TreePage(ctx, "viking://resources/", &openviking.TreeOptions
 if err != nil {
     return err
 }
-for _, entry := range page.Result {
+for _, entry := range page.Items {
     fmt.Println(entry["rel_path"], entry["isDir"])
 }
 fmt.Println("has more nodes:", page.HasMore)
 ```
 
-When only the node array is needed, use the compatibility method `tree` in
+When only the node array is needed, use the convenience method `tree` in
 Python and TypeScript or `Tree` in Go. To detect whether `limit` or
-`node_limit` truncated the result, use `tree_page`, `treePage`, and `TreePage`,
+pagination truncated the result, use `tree_page`, `treePage`, and `TreePage`,
 respectively.
 
 **HTTP API**

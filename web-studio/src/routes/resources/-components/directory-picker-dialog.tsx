@@ -81,6 +81,8 @@ export function DirectoryPickerDialog({
           query: {
             uri: normalizedUri,
             show_all_hidden: false,
+            offset: 0,
+            limit: 1000,
           },
         }),
       )

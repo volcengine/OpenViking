@@ -23,9 +23,11 @@ describe('task record helpers', () => {
   })
 
   it('drops invalid list entries', () => {
-    expect(normalizeTasks([null, 'invalid', { task_id: 'task-1' }])).toEqual([
-      { task_id: 'task-1' },
-    ])
+    expect(
+      normalizeTasks({
+        items: [null, 'invalid', { task_id: 'task-1' }],
+      }),
+    ).toEqual([{ task_id: 'task-1' }])
   })
 
   it('only reports meaningful results', () => {

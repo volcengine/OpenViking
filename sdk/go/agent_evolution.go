@@ -14,7 +14,7 @@ func (c *Client) ListExperienceTrajectories(
 	ctx context.Context,
 	experienceURI string,
 	opts *ExperienceTrajectoryOptions,
-) (map[string]any, error) {
+) (*OffsetPage[ExperienceTrajectoryItem], error) {
 	query := url.Values{
 		"experience_uri": []string{NormalizeURI(experienceURI)},
 	}
@@ -28,7 +28,7 @@ func (c *Client) ListExperienceTrajectories(
 		setQueryString(query, "start_date", opts.StartDate)
 		setQueryString(query, "end_date", opts.EndDate)
 	}
-	var result map[string]any
+	var result OffsetPage[ExperienceTrajectoryItem]
 	err := c.doJSON(
 		ctx,
 		http.MethodGet,
@@ -37,7 +37,7 @@ func (c *Client) ListExperienceTrajectories(
 		nil,
 		&result,
 	)
-	return result, err
+	return &result, err
 }
 
 // GetExperienceOutcomes returns the outcome distribution for an Experience.

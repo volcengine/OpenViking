@@ -498,13 +498,13 @@ Python HTTP SDK 和 Go SDK 都暴露专用技能管理方法。Python 方法包�
 
 ### 列出技能
 
-`GET /api/v1/skills` 的查询参数为 `node_limit=1000` 和可选 `target_uri`。省略目标时合并私有与共享根，同名 Skill 都保留，以 `root_uri` 区分。当前服务端实际固定每个根的目录扫描 `node_limit=1000`，尚未把请求的 `node_limit` 传到扫描层，不应依赖它作为全局条数限制或分页参数。
+`GET /api/v1/skills` 使用 `offset` 和 `limit` 分页（默认 0 和 50，limit 最大 1000），另有可选的 `target_uri`。省略目标时合并私有与共享根，同名 Skill 都保留，以 `root_uri` 区分。
 
 **Python SDK**：
 
 ```python
-skills = client.list_skills(node_limit=1000)
-for skill in skills["skills"]:
+page = client.list_skills(offset=0, limit=1000)
+for skill in page["items"]:
     print(skill["name"])
 ```
 
@@ -528,7 +528,7 @@ fmt.Println(skills)
 **HTTP API**：
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
+curl -X GET "http://localhost:1933/api/v1/skills?offset=0&limit=1000" \
   -H "X-API-Key: your-key"
 ```
 

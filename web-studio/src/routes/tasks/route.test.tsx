@@ -118,14 +118,22 @@ beforeEach(() => {
   vi.clearAllMocks()
   records = runningTasks(12)
   clientMocks.getTasks.mockReset()
-  // Model the API contract: filtering precedes ordering and the result limit.
-  clientMocks.getTasks.mockImplementation(({ query }) =>
-    records
+  // Model cursor pagination after filtering and ordering.
+  clientMocks.getTasks.mockImplementation(({ query }) => {
+    const offset = query.cursor ? Number(query.cursor) : 0
+    const filtered = records
       .filter((task) => !query.status || task.status === query.status)
       .filter((task) => !query.task_type || task.task_type === query.task_type)
       .sort((left, right) => Number(right.created_at) - Number(left.created_at))
-      .slice(0, query.limit),
-  )
+    const items = filtered.slice(offset, offset + query.limit)
+    const nextOffset = offset + items.length
+    return {
+      items,
+      has_more: nextOffset < filtered.length,
+      next_cursor:
+        nextOffset < filtered.length ? String(nextOffset) : null,
+    }
+  })
 })
 
 afterEach(() => {
@@ -199,17 +207,17 @@ describe('task status presentation', () => {
     const user = await renderPage()
     await screen.findByRole('row', { name: 'View details for task task-26' })
     expectRunningRows(20)
-    expect(screen.getByText('25 / 0')).toBeDefined()
+    expect(screen.getByText('20 / 0')).toBeDefined()
 
     await user.click(
       screen.getByRole('button', { name: 'Latest per Resource' }),
     )
-    expect(screen.getByText('26 / 0')).toBeDefined()
+    expect(screen.getByText('20 / 0')).toBeDefined()
     expectRunningRows(20)
 
     await user.click(screen.getByRole('button', { name: 'Go to next page' }))
     expectRunningRows(6)
-    expect(screen.getByText('26 / 0')).toBeDefined()
+    expect(screen.getByText('6 / 0')).toBeDefined()
   })
   it('keeps separate compile runs and opens their dedicated detail page', async () => {
     records = ['cmp_one', 'cmp_two'].map((task_id) => ({

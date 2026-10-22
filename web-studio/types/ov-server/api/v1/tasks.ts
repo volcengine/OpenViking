@@ -1,3 +1,5 @@
+import type { CursorPaginatedResult } from '../../common'
+
 export type TaskStatus =
   | 'pending'
   | 'running'
@@ -18,4 +20,4 @@ export type TaskRecord = {
   error?: string | null
 }
 
-export type TaskListResult = TaskRecord[]
+export type TaskListResult = CursorPaginatedResult<TaskRecord>

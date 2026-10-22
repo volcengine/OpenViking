@@ -82,7 +82,8 @@ async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
 
     result = await service.sessions(ctx)
 
-    assert result == []
+    assert result.entries == []
+    assert result.has_more is False
     assert debug.call_count == 1
 
 
@@ -93,7 +94,12 @@ async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility
 
     async def _ls(uri, ctx, **kwargs):
         assert uri == "viking://user/alice/sessions"
-        assert kwargs == {"sort_by": "mtime", "sort_order": "desc"}
+        assert kwargs == {
+            "node_limit": 51,
+            "offset": 0,
+            "sort_by": "mtime",
+            "sort_order": "desc",
+        }
         return [
             {"name": "duplicate", "isDir": True, "modTime": "2026-07-13T01:00:00Z"},
             {"name": "new-session", "isDir": True, "modTime": "2026-07-13T02:00:00Z"},
@@ -108,7 +114,7 @@ async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility
 
     result = await service.sessions(ctx)
 
-    assert result == [
+    assert result.entries == [
         {
             "session_id": "duplicate",
             "uri": "viking://user/alice/sessions/duplicate",
@@ -128,6 +134,7 @@ async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility
             "mod_time": "2026-07-12T01:00:00Z",
         },
     ]
+    assert result.has_more is False
     service._viking_fs.ls.assert_awaited_once()
 
 

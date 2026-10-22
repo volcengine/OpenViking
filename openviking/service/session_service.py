@@ -7,7 +7,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 """
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -46,6 +46,12 @@ from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionCon
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class SessionListingPage:
+    entries: list[dict[str, Any]]
+    has_more: bool
 
 
 def _parse_utc_timestamp(value: str) -> datetime:
@@ -347,12 +353,14 @@ class SessionService:
             self._record_lifecycle_metric("get", "error")
             raise
 
-    async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
-        """Get all sessions for the current user.
-
-        Returns:
-            List of session info dicts
-        """
+    async def sessions(
+        self,
+        ctx: RequestContext,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> SessionListingPage:
+        """Get one page of sessions for the current user."""
         self._ensure_initialized()
         session_base_uri = canonical_session_uri(ctx)
         sessions_by_id: Dict[str, Dict[str, Any]] = {}
@@ -360,6 +368,8 @@ class SessionService:
         try:
             entries = await self._viking_fs.ls(
                 session_base_uri,
+                node_limit=limit + 1,
+                offset=offset,
                 sort_by="mtime",
                 sort_order="desc",
                 ctx=ctx,
@@ -377,7 +387,8 @@ class SessionService:
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
 
-        return list(sessions_by_id.values())
+        entries = list(sessions_by_id.values())
+        return SessionListingPage(entries=entries[:limit], has_more=len(entries) > limit)
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.

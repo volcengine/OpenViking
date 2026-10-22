@@ -57,7 +57,7 @@ import {
   getAverageTaskDurationSeconds,
   getTaskDate,
 } from '#/routes/tasks/-lib/task-time'
-import { fetchTasks, MAX_TASKS } from './-lib/task-list'
+import { fetchTasks } from './-lib/task-list'
 import { localizeSkippedCommit } from './-lib/localize-commit-result'
 import type { TaskStatusFilter, TaskTypeFilter } from './-lib/task-list'
 import { getTaskPipelineGroups } from './-lib/task-pipeline'
@@ -95,6 +95,9 @@ function TasksRoute() {
   const queryClient = useQueryClient()
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
+  const [pageCursors, setPageCursors] = React.useState<
+    Array<string | undefined>
+  >([undefined])
   const [taskType, setTaskType] = React.useState<TaskTypeFilter>('all')
   const [statusFilter, setStatusFilter] =
     React.useState<TaskStatusFilter>('all')
@@ -103,11 +106,20 @@ function TasksRoute() {
     null,
   )
   const tasksQuery = useQuery({
-    queryFn: () => fetchTasks(taskType, statusFilter),
-    queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
+    queryFn: () =>
+      fetchTasks(taskType, statusFilter, pageCursors[page - 1], pageSize),
+    queryKey: [
+      'tasks',
+      identityScopeKey,
+      taskType,
+      statusFilter,
+      page,
+      pageSize,
+      pageCursors[page - 1],
+    ],
     refetchInterval: 10_000,
   })
-  const rawTasks = tasksQuery.data ?? []
+  const rawTasks = tasksQuery.data?.items ?? []
   const allTasks = React.useMemo(() => {
     if (!dedupByResource) return rawTasks
     const map = new Map<string, TaskRecord>()
@@ -122,10 +134,8 @@ function TasksRoute() {
     }
     return Array.from(map.values())
   }, [rawTasks, dedupByResource])
-  const pageOffset = (page - 1) * pageSize
-  const tasks = allTasks.slice(pageOffset, pageOffset + pageSize)
-  const totalPages = Math.max(1, Math.ceil(allTasks.length / pageSize))
-  const hasNext = page < totalPages
+  const tasks = allTasks
+  const hasNext = tasksQuery.data?.hasMore === true
   const hasActiveFilters = taskType !== 'all' || statusFilter !== 'all'
 
   const retryMutation = useMutation({
@@ -202,10 +212,9 @@ function TasksRoute() {
   })
 
   React.useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages)
-    }
-  }, [page, totalPages])
+    setPage(1)
+    setPageCursors([undefined])
+  }, [identityScopeKey, pageSize, statusFilter, taskType])
 
   const formatTime = (task: TaskRecord) => {
     const date = getTaskDate(task)
@@ -894,7 +903,8 @@ function TasksRoute() {
                       <TableCell>
                         <span className="flex items-center gap-2">
                           <code className="min-w-0 truncate text-xs">
-                            {taskId || `#${pageOffset + index + 1}`}
+                            {taskId ||
+                              `#${(page - 1) * pageSize + index + 1}`}
                           </code>
                           {taskId ? (
                             <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -972,7 +982,7 @@ function TasksRoute() {
               <p className="text-xs text-muted-foreground">
                 {t('pagination.scope', {
                   count: allTasks.length,
-                  limit: MAX_TASKS,
+                  limit: pageSize,
                 })}
               </p>
             </div>
@@ -1000,7 +1010,15 @@ function TasksRoute() {
                     className={cn(!hasNext && 'pointer-events-none opacity-50')}
                     onClick={(event) => {
                       event.preventDefault()
-                      if (hasNext) setPage((current) => current + 1)
+                      const nextCursor = tasksQuery.data?.nextCursor
+                      if (hasNext && nextCursor) {
+                        setPageCursors((current) => {
+                          const next = [...current]
+                          next[page] = nextCursor
+                          return next
+                        })
+                        setPage((current) => current + 1)
+                      }
                     }}
                   />
                 </PaginationItem>

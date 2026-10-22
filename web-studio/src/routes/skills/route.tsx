@@ -52,7 +52,7 @@ type SkillItem = {
 }
 
 type SkillListResult = {
-  skills?: unknown[]
+  items?: unknown[]
 }
 
 type SkillFile = {
@@ -77,7 +77,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function normalizeSkills(value: unknown): SkillItem[] {
   const result = asRecord(value)
-  const skills = Array.isArray(result?.skills) ? result.skills : []
+  const skills = Array.isArray(result?.items) ? result.items : []
 
   return skills.flatMap((rawSkill) => {
     const skill = asRecord(rawSkill)
@@ -160,7 +160,8 @@ async function fetchSkills(): Promise<SkillItem[]> {
   const result = await getOvResult<SkillListResult>(
     ovClient.client.get({
       query: {
-        node_limit: 1000,
+        offset: 0,
+        limit: 1000,
       },
       url: '/api/v1/skills',
     }),

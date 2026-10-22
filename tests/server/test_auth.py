@@ -464,8 +464,12 @@ async def test_task_endpoints_are_user_scoped():
 
         alice_list = await alice_client.get("/api/v1/tasks")
         assert alice_list.status_code == 200
-        assert {task["task_id"] for task in alice_list.json()["result"]} == {alice_task.task_id}
-        assert all("execution_events" not in task for task in alice_list.json()["result"])
+        assert {task["task_id"] for task in alice_list.json()["result"]["items"]} == {
+            alice_task.task_id
+        }
+        assert all(
+            "execution_events" not in task for task in alice_list.json()["result"]["items"]
+        )
 
     async with httpx.AsyncClient(
         transport=bob_transport, base_url="http://testserver"
@@ -477,7 +481,9 @@ async def test_task_endpoints_are_user_scoped():
 
         bob_list = await bob_client.get("/api/v1/tasks")
         assert bob_list.status_code == 200
-        assert {task["task_id"] for task in bob_list.json()["result"]} == {bob_task.task_id}
+        assert {task["task_id"] for task in bob_list.json()["result"]["items"]} == {
+            bob_task.task_id
+        }
 
     set_task_tracker(None)
 

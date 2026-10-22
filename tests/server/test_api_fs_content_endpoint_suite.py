@@ -29,7 +29,7 @@ async def _first_child_uri(client: httpx.AsyncClient, uri: str) -> str:
         "/api/v1/fs/ls",
         params={"uri": uri, "simple": True, "recursive": True, "output": "original"},
     )
-    children = response.json().get("result", [])
+    children = response.json().get("result", {}).get("items", [])
     if children and isinstance(children[0], str):
         return children[0]
     return uri

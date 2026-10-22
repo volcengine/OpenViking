@@ -484,8 +484,15 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             )
             .await
         }
-        SessionCommands::List => {
-            commands::session::list_sessions(&client, ctx.output_format, ctx.compact).await
+        SessionCommands::List { offset, limit } => {
+            commands::session::list_sessions(
+                &client,
+                offset,
+                limit,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SessionCommands::Get { session_id } => {
             commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact)
@@ -612,9 +619,20 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
-        AdminCommands::ListAccounts { name, limit, page } => {
-            commands::admin::list_accounts(&client, name, limit, page, ctx.output_format, ctx.compact)
-                .await
+        AdminCommands::ListAccounts {
+            name,
+            offset,
+            limit,
+        } => {
+            commands::admin::list_accounts(
+                &client,
+                name,
+                offset,
+                limit,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         AdminCommands::DeleteAccount { account_id } => {
             commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
@@ -644,18 +662,18 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         }
         AdminCommands::ListUsers {
             account_id,
+            offset,
             limit,
             name,
             role,
-            page,
         } => {
             commands::admin::list_users(
                 &client,
                 &account_id,
+                offset,
                 limit,
                 name,
                 role,
-                page,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -1755,9 +1773,8 @@ pub async fn handle_ls(
     include_overview: Option<bool>,
     overview_limit: i32,
     show_all_hidden: bool,
-    node_limit: i32,
     offset: i32,
-    limit: Option<i32>,
+    limit: i32,
     sort_by: Option<String>,
     sort_order: Option<String>,
     fields: Option<Vec<String>>,
@@ -1767,7 +1784,7 @@ pub async fn handle_ls(
     let mut params = vec![
         uri.clone(),
         format!("-l {}", abs_limit),
-        format!("-n {}", node_limit),
+        format!("-n {}", limit),
     ];
     if simple {
         params.push("-s".to_string());
@@ -1789,9 +1806,6 @@ pub async fn handle_ls(
     }
     if offset != 0 {
         params.push(format!("--offset {}", offset));
-    }
-    if let Some(limit) = limit {
-        params.push(format!("--limit {}", limit));
     }
     if let Some(sort_by) = &sort_by {
         params.push(format!("--sort-by {}", sort_by));
@@ -1836,7 +1850,6 @@ pub async fn handle_ls(
         include_overview,
         overview_limit,
         show_all_hidden,
-        node_limit,
         offset,
         limit,
         sort_by.as_deref(),
@@ -1857,9 +1870,8 @@ pub async fn handle_tree(
     overview_limit: i32,
     show_all_hidden: bool,
     directories_only: bool,
-    node_limit: i32,
     offset: i32,
-    limit: Option<i32>,
+    limit: i32,
     level_limit: i32,
     simple: bool,
     fields: Option<Vec<String>>,
@@ -1869,7 +1881,7 @@ pub async fn handle_tree(
     let mut params = vec![
         uri.clone(),
         format!("-l {}", abs_limit),
-        format!("-n {}", node_limit),
+        format!("-n {}", limit),
         format!("-L {}", level_limit),
     ];
     if show_all_hidden {
@@ -1892,9 +1904,6 @@ pub async fn handle_tree(
     }
     if offset != 0 {
         params.push(format!("--offset {}", offset));
-    }
-    if let Some(limit) = limit {
-        params.push(format!("--limit {}", limit));
     }
     if !tags.is_empty() {
         params.push(format!("--tags {}", tags.join(",")));
@@ -1932,7 +1941,6 @@ pub async fn handle_tree(
         overview_limit,
         show_all_hidden,
         directories_only,
-        node_limit,
         level_limit,
         offset,
         limit,

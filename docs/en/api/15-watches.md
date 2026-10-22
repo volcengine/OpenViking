@@ -13,7 +13,7 @@ List, inspect, update, and trigger watch tasks created via [`add_resource`](02-r
 Locate a task by `task_id`, or use `to_uri` when exactly one accessible task matches. Multiple Connector Watches can share a target; URI lookup then returns `409 Conflict` and requires a `task_id`. If both keys are supplied, they must identify the same task or the request returns `400`.
 
 **Operations**:
-- **List** (`GET /api/v1/watches`) — returns `{tasks, total}`; pass `?active_only=true` to filter; pass `?to_uri=...` to collapse to a single-task lookup
+- **List** (`GET /api/v1/watches`) — returns an `offset`/`limit` page; `active_only` and `to_uri` are optional filters
 - **Show** (`GET /api/v1/watches/{task_id}`) — inspect one task; optional `?to_uri=` performs a cross-key sanity check
 - **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`. `is_active` is independent of `watch_interval`: change `is_active` to pause/resume without losing the configured cadence.
 - **Delete** (`DELETE /api/v1/watches/{task_id}` or `DELETE /api/v1/watches?to_uri=...`)
@@ -28,6 +28,8 @@ Locate a task by `task_id`, or use `to_uri` when exactly one accessible task mat
 #### 2. Interface and Parameter Description
 
 For every single-task endpoint the path `{task_id}` can be replaced with a `?to_uri=` query argument. The CLI `<key>` argument is auto-classified: any value starting with `viking://` routes to the by-URI path, anything else is treated as a task ID (other URI schemes such as `http://` are rejected locally to avoid silent 404s).
+
+The list endpoint accepts `offset` (default 0), `limit` (default 50, maximum 200), `active_only`, and `to_uri`.
 
 **`PATCH /watches` body** (all fields optional; at least one is required)
 
@@ -68,7 +70,7 @@ curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/g
 The following uses `SyncHTTPClient`; await each call with `AsyncHTTPClient`.
 
 ```python
-watches = client.list_watches(active_only=True)
+page = client.list_watches(active_only=True, offset=0, limit=50)
 client.update_watch(to_uri="viking://resources/guide.md", is_active=False)
 client.trigger_watch(to_uri="viking://resources/guide.md")
 client.delete_watch(to_uri="viking://resources/guide.md")
@@ -111,7 +113,7 @@ The following examples use the `ov task watch` subcommands:
 
 ```bash
 # List active watches (drop --active-only to include paused ones)
-ov task watch ls --active-only
+ov task watch ls --active-only --offset 0 --limit 50
 
 # Inspect a single watch (key may be either a viking:// URI or a task_id)
 ov task watch show viking://resources/guide.md
@@ -138,7 +140,7 @@ Listing tasks returns:
 {
   "status": "ok",
   "result": {
-    "tasks": [
+    "items": [
       {
         "task_id": "7f02e980-8df9-4f27-a570-4d8428cbed8a",
         "path": "https://example.com/guide.md",
@@ -163,6 +165,9 @@ Listing tasks returns:
         "original_role": "user"
       }
     ],
+    "offset": 0,
+    "limit": 50,
+    "has_more": false,
     "total": 1
   }
 }

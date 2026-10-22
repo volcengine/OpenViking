@@ -499,13 +499,13 @@ filesystem/content/retrieval methods still work for URI-level access.
 
 ### List Skills
 
-`GET /api/v1/skills` accepts query parameters `node_limit=1000` and optional `target_uri`. Without a target it merges private and shared roots, retaining same-name Skills distinguished by `root_uri`. The current server fixes directory scanning at `node_limit=1000` per root and does not forward the requested `node_limit` to that scan; do not rely on it as a global result limit or pagination parameter.
+`GET /api/v1/skills` uses `offset` and `limit` pagination (defaults: 0 and 50; maximum limit: 1000) plus optional `target_uri`. Without a target it merges private and shared roots, retaining same-name Skills distinguished by `root_uri`.
 
 **Python SDK**
 
 ```python
-skills = client.list_skills(node_limit=1000)
-for skill in skills["skills"]:
+page = client.list_skills(offset=0, limit=1000)
+for skill in page["items"]:
     print(skill["name"])
 ```
 
@@ -528,7 +528,7 @@ fmt.Println(skills)
 **HTTP API**
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
+curl -X GET "http://localhost:1933/api/v1/skills?offset=0&limit=1000" \
   -H "X-API-Key: your-key"
 ```
 

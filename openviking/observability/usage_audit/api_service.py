@@ -125,8 +125,8 @@ class UsageAuditQueryService:
         request_id: str | None,
         statuses: list[str],
         api_types: list[str],
-        page: int,
-        page_size: int,
+        offset: int,
+        limit: int,
     ) -> dict[str, Any]:
         """Return filtered request audit rows.
 
@@ -139,8 +139,8 @@ class UsageAuditQueryService:
             request_id=request_id,
             statuses=statuses,
             api_types=api_types,
-            page=max(int(page), 1),
-            page_size=min(max(int(page_size), 1), 100),
+            offset=max(int(offset), 0),
+            limit=min(max(int(limit), 1), 100),
         )
 
     @staticmethod

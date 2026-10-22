@@ -33,7 +33,8 @@ export function useResourceContextProbe() {
       const result = await getOvResult<FSListResult>(
         getFsLs({
           query: {
-            node_limit: 1,
+            offset: 0,
+            limit: 1,
             output: 'agent',
             recursive: true,
             show_all_hidden: false,

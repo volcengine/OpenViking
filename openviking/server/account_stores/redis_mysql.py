@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
+    AccountsPage,
     AccountSummary,
     DeletionRecord,
     GroupSummary,
@@ -801,6 +802,9 @@ class RedisMySQLAccountStore(AccountStore):
 
     async def list_accounts(self, **kwargs) -> list[AccountSummary]:
         return await self._mysql.list_accounts(**kwargs)
+
+    async def list_accounts_page(self, **kwargs) -> AccountsPage:
+        return await self._mysql.list_accounts_page(**kwargs)
 
     async def create_user(self, account_id: str, user_id: str, role: str) -> None:
         await self._mutate_account(

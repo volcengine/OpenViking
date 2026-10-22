@@ -32,28 +32,28 @@ func (c *Client) AdminCreateAccountWithOptions(ctx context.Context, accountID, a
 }
 
 // AdminListAccounts lists accounts.
-func (c *Client) AdminListAccounts(ctx context.Context) ([]any, error) {
+func (c *Client) AdminListAccounts(ctx context.Context) (*OffsetPage[AccountListItem], error) {
 	return c.AdminListAccountsWithOptions(ctx, nil)
 }
 
 // AdminListAccountsWithOptions lists accounts (in creation order), optionally
-// filtering by a wildcard name pattern and paging via Limit/Page.
-func (c *Client) AdminListAccountsWithOptions(ctx context.Context, opts *AdminListAccountsOptions) ([]any, error) {
+// filtering by a wildcard name pattern and offset.
+func (c *Client) AdminListAccountsWithOptions(ctx context.Context, opts *AdminListAccountsOptions) (*OffsetPage[AccountListItem], error) {
 	query := url.Values{}
+	offset, limit := 0, 50
 	if opts != nil {
 		setQueryString(query, "name", opts.Name)
-		if opts.Limit != nil {
-			queryInt(query, "limit", *opts.Limit)
-			page := 1
-			if opts.Page != nil {
-				page = *opts.Page
-			}
-			queryInt(query, "page", page)
+		setQueryString(query, "query", opts.Query)
+		offset = opts.Offset
+		if opts.Limit > 0 {
+			limit = opts.Limit
 		}
 	}
-	var result []any
+	queryInt(query, "offset", offset)
+	queryInt(query, "limit", limit)
+	var result OffsetPage[AccountListItem]
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts", query, nil, &result)
-	return result, err
+	return &result, err
 }
 
 // AdminDeleteAccount deletes an account and all associated users.
@@ -108,30 +108,34 @@ func (c *Client) AdminRegisterUserWithOptions(ctx context.Context, accountID, us
 }
 
 // AdminListUsers lists users in an account.
-func (c *Client) AdminListUsers(ctx context.Context, accountID string) ([]any, error) {
+func (c *Client) AdminListUsers(ctx context.Context, accountID string) (*OffsetPage[UserListItem], error) {
 	return c.AdminListUsersWithOptions(ctx, accountID, nil)
 }
 
 // AdminListUsersWithOptions lists users in an account (in creation order),
-// optionally filtering by a wildcard name pattern, role, and paging via
-// Limit/Page.
-func (c *Client) AdminListUsersWithOptions(ctx context.Context, accountID string, opts *AdminListUsersOptions) ([]any, error) {
+// optionally filtering by a wildcard name pattern, role, and offset.
+func (c *Client) AdminListUsersWithOptions(ctx context.Context, accountID string, opts *AdminListUsersOptions) (*OffsetPage[UserListItem], error) {
 	query := url.Values{}
+	offset, limit := 0, 50
+	includeCredentials := true
 	if opts != nil {
-		if opts.Limit != nil {
-			queryInt(query, "limit", *opts.Limit)
-			page := 1
-			if opts.Page != nil {
-				page = *opts.Page
-			}
-			queryInt(query, "page", page)
+		offset = opts.Offset
+		if opts.Limit > 0 {
+			limit = opts.Limit
 		}
 		setQueryString(query, "name", opts.Name)
 		setQueryString(query, "role", opts.Role)
+		setQueryString(query, "query", opts.Query)
+		if opts.IncludeCredentials != nil {
+			includeCredentials = *opts.IncludeCredentials
+		}
 	}
-	var result []any
+	queryInt(query, "offset", offset)
+	queryInt(query, "limit", limit)
+	queryBool(query, "include_credentials", includeCredentials)
+	var result OffsetPage[UserListItem]
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", query, nil, &result)
-	return result, err
+	return &result, err
 }
 
 // AdminRemoveUser removes a user from an account.

@@ -31,11 +31,23 @@ async def test_list_trajectories_by_experience_uses_exact_scalar_filter_and_pagi
     vikingdb.filter = AsyncMock(
         return_value=[
             {
+                "id": "c",
+                "uri": "viking://user/alice/memories/trajectories/exchange-3.md",
+                "name": "exchange-3.md",
+                "updated_at": "2026-08-03T12:00:00Z",
+            },
+            {
+                "id": "b",
                 "uri": "viking://user/alice/memories/trajectories/exchange-2.md",
                 "name": "exchange-2.md",
                 "updated_at": "2026-08-03T12:00:00Z",
                 "_score": 1,
-            }
+            },
+            {
+                "id": "a",
+                "uri": "viking://user/alice/memories/trajectories/exchange-1.md",
+                "updated_at": "2026-08-02T12:00:00Z",
+            },
         ]
     )
     vikingdb.count = AsyncMock(return_value=3)
@@ -75,11 +87,45 @@ async def test_list_trajectories_by_experience_uses_exact_scalar_filter_and_pagi
         ]
     )
     assert vikingdb.filter.await_args.kwargs["filter"] == expected_filter
-    assert vikingdb.filter.await_args.kwargs["limit"] == 1
-    assert vikingdb.filter.await_args.kwargs["offset"] == 1
+    assert vikingdb.filter.await_args.kwargs["limit"] == 3
+    assert vikingdb.filter.await_args.kwargs["offset"] == 0
     assert vikingdb.filter.await_args.kwargs["order_by"] == "updated_at"
     assert vikingdb.filter.await_args.kwargs["order_desc"] is True
     assert vikingdb.count.await_args.kwargs["filter"] == expected_filter
+
+
+@pytest.mark.asyncio
+async def test_list_trajectories_by_experience_paginates_equal_timestamps_globally():
+    experience_uri = "viking://user/alice/memories/experiences/exchange.md"
+    viking_fs = Mock()
+    viking_fs.stat = AsyncMock(return_value={"isDir": False})
+    records = [
+        {
+            "id": f"{index:03d}",
+            "uri": f"viking://user/alice/memories/trajectories/{index:03d}.md",
+            "updated_at": "2026-08-03T12:00:00Z",
+        }
+        for index in [*range(0, 100, 2), *range(1, 100, 2)]
+    ]
+    vikingdb = Mock()
+    vikingdb.filter = AsyncMock(return_value=records)
+    vikingdb.count = AsyncMock(return_value=100)
+    service = AgentEvolutionService(viking_fs=viking_fs, vikingdb=vikingdb)
+
+    result = await service.list_trajectories_by_experience(
+        experience_uri=experience_uri,
+        ctx=_ctx(),
+        limit=20,
+        offset=50,
+    )
+
+    assert [item["uri"] for item in result["items"]] == [
+        f"viking://user/alice/memories/trajectories/{index:03d}.md"
+        for index in range(49, 29, -1)
+    ]
+    assert result["has_more"] is True
+    assert vikingdb.filter.await_args.kwargs["limit"] == 100
+    assert vikingdb.filter.await_args.kwargs["offset"] == 0
 
 
 @pytest.mark.asyncio
@@ -99,8 +145,16 @@ async def test_list_trajectories_by_experience_filters_created_at_by_utc_date():
     viking_fs = Mock()
     viking_fs.stat = AsyncMock(return_value={"isDir": False})
     vikingdb = Mock()
-    vikingdb.filter = AsyncMock(return_value=[])
-    vikingdb.count = AsyncMock(return_value=0)
+    vikingdb.filter = AsyncMock(
+        return_value=[
+            {
+                "id": "a",
+                "uri": "viking://user/alice/memories/trajectories/exchange-1.md",
+                "created_at": "2026-08-03T12:00:00Z",
+            }
+        ]
+    )
+    vikingdb.count = AsyncMock(return_value=1)
     service = AgentEvolutionService(viking_fs=viking_fs, vikingdb=vikingdb)
 
     await service.list_trajectories_by_experience(
@@ -157,16 +211,16 @@ async def test_list_trajectories_by_experience_accepts_1000_and_paginates_all_re
     experience_uri = "viking://user/alice/memories/experiences/exchange.md"
     viking_fs = Mock()
     viking_fs.stat = AsyncMock(return_value={"isDir": False})
+    records = [
+        {
+            "id": f"{index:04d}",
+            "uri": f"viking://user/alice/memories/trajectories/{index}.md",
+            "updated_at": "2026-08-03T12:00:00Z",
+        }
+        for index in range(1000, -1, -1)
+    ]
     vikingdb = Mock()
-    vikingdb.filter = AsyncMock(
-        side_effect=[
-            [
-                {"uri": f"viking://user/alice/memories/trajectories/{index}.md"}
-                for index in range(1000)
-            ],
-            [{"uri": "viking://user/alice/memories/trajectories/1000.md"}],
-        ]
-    )
+    vikingdb.filter = AsyncMock(return_value=records)
     vikingdb.count = AsyncMock(side_effect=[1001, 1001])
     service = AgentEvolutionService(viking_fs=viking_fs, vikingdb=vikingdb)
 
@@ -184,9 +238,15 @@ async def test_list_trajectories_by_experience_accepts_1000_and_paginates_all_re
 
     assert len(first_page["items"]) == 1000
     assert first_page["has_more"] is True
-    assert second_page["items"] == [{"uri": "viking://user/alice/memories/trajectories/1000.md"}]
+    assert second_page["items"] == [
+        {
+            "uri": "viking://user/alice/memories/trajectories/0.md",
+            "updated_at": "2026-08-03T12:00:00Z",
+        }
+    ]
     assert second_page["has_more"] is False
-    assert [call.kwargs["offset"] for call in vikingdb.filter.await_args_list] == [0, 1000]
+    assert [call.kwargs["offset"] for call in vikingdb.filter.await_args_list] == [0, 0]
+    assert [call.kwargs["limit"] for call in vikingdb.filter.await_args_list] == [1001, 1001]
 
 
 @pytest.mark.asyncio

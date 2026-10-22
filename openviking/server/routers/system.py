@@ -203,6 +203,8 @@ async def system_status(
 class ConsistencyRequest(BaseModel):
     """Request model for filesystem/vector-index consistency checks."""
 
+    model_config = {"extra": "forbid"}
+
     uri: str
 
 

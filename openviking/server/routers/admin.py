@@ -23,7 +23,12 @@ from openviking.server.auth import (
 from openviking.server.config import UserConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
-from openviking.server.models import Response
+from openviking.server.models import OffsetPage, PageResponse, Response
+from openviking.server.pagination import (
+    OffsetPagination,
+    offset_pagination,
+    reject_legacy_pagination_params,
+)
 from openviking.server.user_config import (
     read_user_config,
     validate_add_targets,
@@ -64,6 +69,8 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
 class CreateAccountRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     account_id: str
     admin_user_id: str
     seed: str | None = None
@@ -74,18 +81,50 @@ class CreateAccountRequest(BaseModel):
 
 
 class RegisterUserRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     user_id: str
-    role: str = "user"
+    role: Literal["user", "admin"] = "user"
     seed: str | None = None
     user_config: UserConfig | None = None
 
 
 class SetRoleRequest(BaseModel):
-    role: str
+    model_config = {"extra": "forbid"}
+
+    role: Literal["admin"]
 
 
 class RegenerateKeyRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     seed: str | None = None
+
+
+class AccountListItem(BaseModel):
+    account_id: str
+    created_at: str
+    user_count: int
+    status: str
+    task_id: str | None = None
+
+
+class AccountPage(OffsetPage[AccountListItem]):
+    pass
+
+
+class UserListItem(BaseModel):
+    user_id: str
+    role: str
+    api_key: str | None = None
+    key_prefix: str | None = None
+    api_key_available: bool | None = None
+
+
+class UserPage(OffsetPage[UserListItem]):
+    account_total: int
+    manager_count: int
+    key_count: int
 
 
 class CreateGroupRequest(BaseModel):
@@ -95,10 +134,14 @@ class CreateGroupRequest(BaseModel):
 
 
 class MigrateLegacyDataRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     action: str = "migrate"
 
 
 class SetAgentEvolutionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     enabled: bool
 
 
@@ -140,6 +183,8 @@ class ConfigPatchRequest(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
     revision: str | None = None
     content: str | None = None
+
+    model_config = {"extra": "forbid"}
 
 
 _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
@@ -504,21 +549,36 @@ async def create_account(
     return Response(status="ok", result=result)
 
 
-@router.get("/accounts")
+@router.get(
+    "/accounts",
+    response_model=PageResponse[AccountPage],
+    response_model_exclude_none=True,
+)
 @require_auth_root
 async def list_accounts(
     request: Request,
     name: str | None = None,
-    limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
-    page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
     query: str | None = Query(None, description="Case-insensitive account id substring"),
+    pagination: OffsetPagination = Depends(offset_pagination),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """List accounts in creation order. `name` supports wildcard (* and ?) matching."""
-    accounts = await _get_api_key_manager(request).list_accounts(
-        name_filter=name, limit=limit, page=page, query_filter=query
+    reject_legacy_pagination_params(request, {"page": "offset"})
+    page = await _get_api_key_manager(request).list_accounts_page(
+        name_filter=name,
+        offset=pagination.offset,
+        limit=pagination.limit,
+        query_filter=query,
     )
-    return Response(status="ok", result=accounts)
+    return PageResponse(
+        result=AccountPage(
+            items=page["items"],
+            offset=pagination.offset,
+            limit=pagination.limit,
+            has_more=pagination.offset + len(page["items"]) < page["total"],
+            total=page["total"],
+        )
+    )
 
 
 @router.get("/accounts/{account_id}")
@@ -813,6 +873,8 @@ async def patch_account_configuration(
 
 
 class ModelConnectionTestRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     kind: Literal["vlm", "embedding"]
     config: dict[str, Any]
     fallback: dict[str, Any] = Field(default_factory=dict)
@@ -875,6 +937,8 @@ async def get_cluster_configuration(
 
 
 class RestartRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     revision: str = Field(min_length=1)
 
 
@@ -1005,35 +1069,39 @@ async def register_user(
     return Response(status="ok", result=result)
 
 
-@router.get("/accounts/{account_id}/users")
+@router.get(
+    "/accounts/{account_id}/users",
+    response_model=PageResponse[UserPage],
+    response_model_exclude_none=True,
+)
 @require_auth_root_or_admin
 async def list_users(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
-    limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
     include_credentials: bool = Query(
         True,
         description="Include credentials when permitted; false returns only credential availability",
     ),
     name: str | None = None,
     role: str | None = None,
-    page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
     query: str | None = Query(None, description="Case-insensitive username substring"),
-    include_summary: bool = Query(
-        False, description="Return users, matching total and account statistics"
-    ),
+    pagination: OffsetPagination = Depends(offset_pagination),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
+    reject_legacy_pagination_params(
+        request,
+        {"page": "offset", "include_summary": "standard page response"},
+    )
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
     users = await manager.list_users_page(
         account_id,
-        limit=limit,
+        limit=pagination.limit,
         name_filter=name,
         role_filter=role,
         expose_key=should_expose_user_key(request) or not include_credentials,
-        page=page,
+        offset=pagination.offset,
         query_filter=query,
     )
     if not include_credentials:
@@ -1047,7 +1115,18 @@ async def list_users(
             }
             for user in users["users"]
         ]
-    return Response(status="ok", result=users if include_summary else users["users"])
+    return PageResponse(
+        result=UserPage(
+            items=users["users"],
+            offset=pagination.offset,
+            limit=pagination.limit,
+            has_more=pagination.offset + len(users["users"]) < users["total"],
+            total=users["total"],
+            account_total=users["account_total"],
+            manager_count=users["manager_count"],
+            key_count=users["key_count"],
+        )
+    )
 
 
 @router.get("/accounts/{account_id}/users/{user_id}")

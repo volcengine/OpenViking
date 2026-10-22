@@ -637,15 +637,27 @@ describe("OpenVikingClient", () => {
 
   it("preserves listing options, pagination metadata, and legacy results", async () => {
     const entries = [{ name: "docs" }];
+    const defaultPage = {
+      items: entries,
+      offset: 0,
+      limit: 50,
+      has_more: false,
+      total: null,
+    };
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockImplementation(async () => ok(entries))
+      .mockImplementation(async () => ok(defaultPage))
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
             status: "ok",
-            result: entries,
-            has_more: true,
+            result: {
+              items: entries,
+              offset: 4,
+              limit: 5,
+              has_more: true,
+              total: null,
+            },
           }),
         ),
       );
@@ -655,7 +667,6 @@ describe("OpenVikingClient", () => {
     });
 
     const listPage = await client.listPage("viking://session", {
-      nodeLimit: 200,
       offset: 4,
       limit: 5,
       sortBy: "mtime",
@@ -665,7 +676,13 @@ describe("OpenVikingClient", () => {
       overviewLimit: 512,
       extraFields: ["locked", "id"],
     });
-    expect(listPage).toEqual({ result: entries, hasMore: true });
+    expect(listPage).toEqual({
+      items: entries,
+      offset: 4,
+      limit: 5,
+      has_more: true,
+      total: null,
+    });
     await expect(client.list("viking://session")).resolves.toEqual(entries);
     const treePage = await client.treePage("viking://resources/docs", {
       levelLimit: 2,
@@ -677,14 +694,14 @@ describe("OpenVikingClient", () => {
       overviewLimit: 512,
       extraFields: ["count"],
     });
-    expect(treePage).toEqual({ result: entries, hasMore: false });
+    expect(treePage).toEqual(defaultPage);
     await expect(
       client.tree("viking://resources/docs", { levelLimit: 0 }),
     ).resolves.toEqual(entries);
     await client.tree("viking://resources/docs");
 
     const listUrl = new URL(String(fetcher.mock.calls[0]![0]));
-    expect(listUrl.searchParams.get("node_limit")).toBe("200");
+    expect(listUrl.searchParams.has("node_limit")).toBe(false);
     expect(listUrl.searchParams.get("offset")).toBe("4");
     expect(listUrl.searchParams.get("limit")).toBe("5");
     expect(listUrl.searchParams.get("sort_by")).toBe("mtime");
@@ -717,10 +734,10 @@ describe("OpenVikingClient", () => {
     expect(treeUrls[2]!.searchParams.has("include_overview")).toBe(false);
     expect(treeUrls[2]!.searchParams.get("overview_limit")).toBe("4000");
     expect(treeUrls[0]!.searchParams.get("limit")).toBe("7");
-    expect(treeUrls[1]!.searchParams.has("offset")).toBe(false);
-    expect(treeUrls[1]!.searchParams.has("limit")).toBe(false);
-    expect(treeUrls[2]!.searchParams.has("offset")).toBe(false);
-    expect(treeUrls[2]!.searchParams.has("limit")).toBe(false);
+    expect(treeUrls[1]!.searchParams.get("offset")).toBe("0");
+    expect(treeUrls[1]!.searchParams.get("limit")).toBe("50");
+    expect(treeUrls[2]!.searchParams.get("offset")).toBe("0");
+    expect(treeUrls[2]!.searchParams.get("limit")).toBe("50");
   });
 
   it("sends addResource tags and tagMode to the server", async () => {

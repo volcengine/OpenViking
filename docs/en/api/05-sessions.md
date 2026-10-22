@@ -173,7 +173,7 @@ ov session new
 
 #### 1. API Implementation Introduction
 
-List all sessions for the current user. Returns session IDs and URI info for further operations.
+List sessions for the current user in descending modification-time order.
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:list_sessions()` - HTTP route
@@ -182,20 +182,21 @@ List all sessions for the current user. Returns session IDs and URI info for fur
 
 #### 2. Interface and Parameter Description
 
-**Parameters**
-
-None.
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| offset | int | No | 0 | Number of sessions to skip |
+| limit | int | No | 50 | Maximum sessions to return, 1–200 |
 
 #### 3. Usage Examples
 
 **HTTP API**
 
 ```http
-GET /api/v1/sessions
+GET /api/v1/sessions?offset=0&limit=50
 ```
 
 ```bash
-curl -X GET http://localhost:1933/api/v1/sessions \
+curl -X GET "http://localhost:1933/api/v1/sessions?offset=0&limit=50" \
   -H "X-API-Key: your-key"
 ```
 
@@ -207,8 +208,8 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-sessions = client.list_sessions()
-for s in sessions:
+page = client.list_sessions(offset=0, limit=50)
+for s in page["items"]:
     print(f"{s['session_id']} -> {s['uri']}")
 ```
 

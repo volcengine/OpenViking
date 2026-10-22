@@ -173,7 +173,7 @@ ov session new
 
 #### 1. API 实现介绍
 
-列出当前用户的所有会话。返回会话 ID 和 URI 信息，用于进一步操作会话。
+按修改时间倒序列出当前用户的会话。
 
 **代码入口**：
 - `openviking/server/routers/sessions.py:list_sessions()` - HTTP 路由
@@ -182,20 +182,21 @@ ov session new
 
 #### 2. 接口和参数说明
 
-**参数**
-
-无参数。
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| offset | int | 否 | 0 | 跳过的会话数 |
+| limit | int | 否 | 50 | 最大返回会话数，范围 1～200 |
 
 #### 3. 使用示例
 
 **HTTP API**
 
 ```http
-GET /api/v1/sessions
+GET /api/v1/sessions?offset=0&limit=50
 ```
 
 ```bash
-curl -X GET http://localhost:1933/api/v1/sessions \
+curl -X GET "http://localhost:1933/api/v1/sessions?offset=0&limit=50" \
   -H "X-API-Key: your-key"
 ```
 
@@ -207,8 +208,8 @@ from openviking_sdk import SyncHTTPClient
 client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-sessions = client.list_sessions()
-for s in sessions:
+page = client.list_sessions(offset=0, limit=50)
+for s in page["items"]:
     print(f"{s['session_id']} -> {s['uri']}")
 ```
 

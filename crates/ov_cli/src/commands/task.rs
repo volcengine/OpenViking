@@ -28,10 +28,12 @@ pub async fn list(
     client: &HttpClient,
     task_type: Option<&str>,
     status: Option<&str>,
+    cursor: Option<&str>,
+    limit: u32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.list_tasks(task_type, status).await?;
+    let result = client.list_tasks(task_type, status, cursor, limit).await?;
     output_success(&result, output_format, compact);
     Ok(())
 }

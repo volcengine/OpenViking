@@ -385,7 +385,7 @@ async def list_users(
     result = await manager.list_users_page(
         ctx.account_id,
         limit=limit,
-        page=page,
+        offset=(page - 1) * limit,
         query_filter=query,
         expose_key=include_credentials,
     )

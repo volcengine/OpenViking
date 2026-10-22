@@ -35,10 +35,24 @@ func (c *Client) CreateSession(ctx context.Context, opts *CreateSessionOptions) 
 }
 
 // ListSessions lists sessions.
-func (c *Client) ListSessions(ctx context.Context) ([]any, error) {
-	var result []any
-	err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions", nil, nil, &result)
-	return result, err
+func (c *Client) ListSessions(ctx context.Context, options ...*ListSessionsOptions) (*OffsetPage[SessionListItem], error) {
+	offset, limit := 0, 50
+	var opts *ListSessionsOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if opts != nil {
+		offset = opts.Offset
+		if opts.Limit > 0 {
+			limit = opts.Limit
+		}
+	}
+	query := url.Values{}
+	queryInt(query, "offset", offset)
+	queryInt(query, "limit", limit)
+	var result OffsetPage[SessionListItem]
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions", query, nil, &result)
+	return &result, err
 }
 
 // GetSession returns session details.
@@ -209,17 +223,24 @@ func (c *Client) CancelTask(
 }
 
 // ListTasks lists background tasks visible to the caller.
-func (c *Client) ListTasks(ctx context.Context, opts *ListTasksOptions) ([]any, error) {
+func (c *Client) ListTasks(ctx context.Context, opts *ListTasksOptions) (*CursorPage[TaskListItem], error) {
 	query := url.Values{}
+	limit := 50
 	if opts != nil {
 		setQueryString(query, "task_type", opts.TaskType)
-		setQueryString(query, "status", opts.Status)
+		setQueryString(query, "status", string(opts.Status))
 		setQueryString(query, "resource_id", opts.ResourceID)
 		if opts.Limit > 0 {
-			queryInt(query, "limit", opts.Limit)
+			limit = opts.Limit
+		}
+		setQueryString(query, "cursor", opts.Cursor)
+		setQueryString(query, "q", opts.Query)
+		if opts.IncludeInternal {
+			query.Set("include_internal", "true")
 		}
 	}
-	var result []any
+	queryInt(query, "limit", limit)
+	var result CursorPage[TaskListItem]
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/tasks", query, nil, &result)
-	return result, err
+	return &result, err
 }

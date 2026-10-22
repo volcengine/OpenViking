@@ -40,8 +40,19 @@ import type {
 // ---------------------------------------------------------------------------
 
 export async function fetchSessions(): Promise<SessionListItem[]> {
-  const result = await getOvResult<SessionListItem[]>(getSessions())
-  return Array.isArray(result) ? result : []
+  const sessions: SessionListItem[] = []
+  let offset = 0
+  let hasMore = true
+  while (hasMore) {
+    const page = await getOvResult<{
+      items: SessionListItem[]
+      has_more: boolean
+    }>(getSessions({ query: { offset, limit: 200 } }))
+    sessions.push(...page.items)
+    hasMore = page.has_more
+    offset += page.items.length
+  }
+  return sessions
 }
 
 export async function fetchSession(sessionId: string): Promise<SessionMeta> {

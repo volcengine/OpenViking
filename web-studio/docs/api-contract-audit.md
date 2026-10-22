@@ -101,7 +101,7 @@
 |---|---|---|
 | 技能列表 | 火山文档说 node_limit 虽被接收，底层仍每范围固定最多 1000；源端将 node_limit 传给底层。两端都可能有私有/共享同名技能 | 用 URI 而非 name 区分对象，不将 node_limit 当可靠分页 |
 | 目录分页 | 源端有 offset/has_more；官方云文档未保证这两个字段。先前实例接受 offset/limit，但未提供可靠 has_more | 页大小不代表读完全部；不能遇到缺少 has_more 就默认为全量 |
-| 任务列表 | 源端普通模式与云文档都为 Task[]；只有源端 pagination=cursor 模式才是 {items,has_more,next_cursor} | 当前普通任务页请求普通模式，能兼容数组；不能据此认为 Compile 游标模式兼容 |
+| 任务列表 | 服务端统一返回 `{items,limit,has_more,next_cursor}` | 普通任务页和 Compile 任务页都使用同一 cursor 分页契约 |
 | 高级检索 | 源端 HTTP 字段是 session_id；云 search 主表写 session，其他说明使用 session_id | 不把文档冲突说成已证实的线上差异；须有带真实会话的联调样本 |
 | 配置 | Session 配置、User 默认记忆策略、Account 模板、实例配置分别属于不同对象和授权面 | Session 配置公开不意味着 User Key 能编辑管理配置；现阶段云管理仍隐藏 |
 | 身份与服务识别 | Key 确认身份与判断部署类型是两件事；默认健康字段和版本号不是稳定 provider 标识 | 官方域名可自动识别；自定义域名保留选择。不开启任意跨用户 Header 切换 |

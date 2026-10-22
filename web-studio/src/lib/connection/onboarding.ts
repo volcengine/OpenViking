@@ -213,7 +213,8 @@ export async function verifyStudioSetup(
         url: '/api/v1/fs/ls',
         query: {
           uri: resolveConnectionDataRoot(connection, 'root'),
-          node_limit: 1,
+          offset: 0,
+          limit: 1,
           output: 'agent',
         },
         signal,

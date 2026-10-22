@@ -68,6 +68,30 @@ func (c *Client) GetStatus(ctx context.Context, options ...ObserverStatusOptions
 	return c.observerStatus(ctx, "/api/v1/observer/system", options...)
 }
 
+// ListAuditLogs returns one page of HTTP audit logs.
+func (c *Client) ListAuditLogs(ctx context.Context, opts *ListAuditLogsOptions) (*OffsetPage[AuditLogItem], error) {
+	offset, limit := 0, 50
+	query := url.Values{}
+	if opts != nil {
+		offset = opts.Offset
+		if opts.Limit > 0 {
+			limit = opts.Limit
+		}
+		setQueryString(query, "request_id", opts.RequestID)
+		if opts.Status != nil {
+			query["status"] = opts.Status
+		}
+		if opts.APIType != nil {
+			query["api_type"] = opts.APIType
+		}
+	}
+	queryInt(query, "offset", offset)
+	queryInt(query, "limit", limit)
+	var result OffsetPage[AuditLogItem]
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/console/audit", query, nil, &result)
+	return &result, err
+}
+
 func (c *Client) observerStatus(ctx context.Context, path string, options ...ObserverStatusOptions) (map[string]any, error) {
 	var query url.Values
 	if len(options) > 0 && options[0].Format != "" {

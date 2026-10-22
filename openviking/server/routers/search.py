@@ -347,6 +347,8 @@ class RecallRequest(BaseModel):
 class GrepRequest(BaseModel):
     """Request model for grep."""
 
+    model_config = {"extra": "forbid"}
+
     uri: str
     exclude_uri: Optional[str] = None
     pattern: str
@@ -361,6 +363,8 @@ class GrepRequest(BaseModel):
 
 class GlobRequest(BaseModel):
     """Request model for glob."""
+
+    model_config = {"extra": "forbid"}
 
     pattern: str
     uri: str = "viking://"

@@ -23,7 +23,14 @@ class FakeStore:
 
     async def query_audit_logs(self, **kwargs):
         self.audit_call = kwargs
-        return {"total": 0, "success_rate": 0.0, "page": 1, "page_size": 10, "items": []}
+        return {
+            "total": 0,
+            "success_rate": 0.0,
+            "offset": 0,
+            "limit": 10,
+            "has_more": False,
+            "items": [],
+        }
 
 
 class FakeInventory:
@@ -51,8 +58,8 @@ async def test_admin_metrics_and_audit_logs_are_account_wide():
         request_id=None,
         statuses=[],
         api_types=[],
-        page=1,
-        page_size=10,
+        offset=0,
+        limit=10,
     )
 
     assert store.token_series_call is not None
@@ -81,8 +88,8 @@ async def test_regular_user_metrics_and_audit_logs_use_current_identity():
         request_id=None,
         statuses=[],
         api_types=[],
-        page=1,
-        page_size=10,
+        offset=0,
+        limit=10,
     )
 
     assert store.token_series_call is not None

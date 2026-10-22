@@ -8,38 +8,38 @@ class TestTasksFilterPaging:
     def test_list_tasks_default(self, api_client):
         resp = api_client.list_tasks()
         assert resp.status_code == 200
-        tasks = resp.json().get("result", [])
+        tasks = resp.json()["result"]["items"]
         assert isinstance(tasks, list), "tasks should be list"
 
     def test_list_tasks_with_limit(self, api_client):
         resp = api_client.list_tasks(limit=3)
         assert resp.status_code == 200
-        tasks = resp.json().get("result", [])
+        tasks = resp.json()["result"]["items"]
         assert isinstance(tasks, list)
         assert len(tasks) <= 3, f"should return at most 3 tasks, got {len(tasks)}"
 
     def test_list_tasks_filter_completed(self, api_client):
         resp = api_client.list_tasks(status="completed")
         assert resp.status_code == 200
-        tasks = resp.json().get("result", [])
+        tasks = resp.json()["result"]["items"]
         assert isinstance(tasks, list)
 
     def test_list_tasks_filter_failed(self, api_client):
         resp = api_client.list_tasks(status="failed")
         assert resp.status_code == 200
-        tasks = resp.json().get("result", [])
+        tasks = resp.json()["result"]["items"]
         assert isinstance(tasks, list)
 
     def test_list_tasks_filter_by_type_commit(self, api_client):
         resp = api_client.list_tasks(task_type="commit")
         assert resp.status_code == 200
-        tasks = resp.json().get("result", [])
+        tasks = resp.json()["result"]["items"]
         assert isinstance(tasks, list)
 
     def test_list_tasks_filter_by_type_reindex(self, api_client):
         resp = api_client.list_tasks(task_type="reindex")
         assert resp.status_code == 200
-        tasks = resp.json().get("result", [])
+        tasks = resp.json()["result"]["items"]
         assert isinstance(tasks, list)
 
     def test_get_task_after_commit(self, api_client):

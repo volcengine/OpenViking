@@ -11,18 +11,18 @@ import (
 )
 
 // List lists directory contents.
-func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]any, error) {
+func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]FilesystemListItem, error) {
 	page, err := c.ListPage(ctx, uri, opts)
 	if err != nil {
 		return nil, err
 	}
-	return page.Result, nil
+	return page.Items, nil
 }
 
 // ListPage lists directory contents with pagination metadata.
-func (c *Client) ListPage(ctx context.Context, uri string, opts *ListOptions) (*ListPage, error) {
+func (c *Client) ListPage(ctx context.Context, uri string, opts *ListOptions) (*OffsetPage[FilesystemListItem], error) {
 	if opts == nil {
-		opts = &ListOptions{Output: "original", AbsLimit: 256, NodeLimit: 1000}
+		opts = &ListOptions{Output: "original", AbsLimit: 256, Limit: 50}
 	}
 	output := opts.Output
 	if output == "" {
@@ -36,9 +36,9 @@ func (c *Client) ListPage(ctx context.Context, uri string, opts *ListOptions) (*
 	if overviewLimit == 0 {
 		overviewLimit = 4000
 	}
-	nodeLimit := opts.NodeLimit
-	if nodeLimit == 0 {
-		nodeLimit = 1000
+	limit := opts.Limit
+	if limit == 0 {
+		limit = 50
 	}
 	query := url.Values{}
 	query.Set("uri", NormalizeURI(uri))
@@ -54,13 +54,8 @@ func (c *Client) ListPage(ctx context.Context, uri string, opts *ListOptions) (*
 	}
 	queryInt(query, "overview_limit", overviewLimit)
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
-	queryInt(query, "node_limit", nodeLimit)
-	if opts.Offset != 0 {
-		queryInt(query, "offset", opts.Offset)
-	}
-	if opts.Limit != 0 {
-		queryInt(query, "limit", opts.Limit)
-	}
+	queryInt(query, "offset", opts.Offset)
+	queryInt(query, "limit", limit)
 	if opts.Tags != nil {
 		query["tags"] = opts.Tags
 	}
@@ -76,27 +71,27 @@ func (c *Client) ListPage(ctx context.Context, uri string, opts *ListOptions) (*
 	if opts.ExtraFields != nil {
 		query["extra_fields"] = opts.ExtraFields
 	}
-	var result []any
-	env, err := c.doJSONEnvelope(ctx, http.MethodGet, "/api/v1/fs/ls", query, nil, &result)
+	var result OffsetPage[FilesystemListItem]
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/ls", query, nil, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &ListPage{Result: result, HasMore: env.HasMore}, nil
+	return &result, nil
 }
 
 // Tree returns a directory tree.
-func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map[string]any, error) {
+func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]FilesystemListItem, error) {
 	page, err := c.TreePage(ctx, uri, opts)
 	if err != nil {
 		return nil, err
 	}
-	return page.Result, nil
+	return page.Items, nil
 }
 
 // TreePage returns a directory tree with pagination metadata.
-func (c *Client) TreePage(ctx context.Context, uri string, opts *TreeOptions) (*TreePage, error) {
+func (c *Client) TreePage(ctx context.Context, uri string, opts *TreeOptions) (*OffsetPage[FilesystemListItem], error) {
 	if opts == nil {
-		opts = &TreeOptions{Output: "original", AbsLimit: 128, NodeLimit: 1000}
+		opts = &TreeOptions{Output: "original", AbsLimit: 128, Limit: 50}
 	}
 	output := opts.Output
 	if output == "" {
@@ -110,9 +105,9 @@ func (c *Client) TreePage(ctx context.Context, uri string, opts *TreeOptions) (*
 	if overviewLimit == 0 {
 		overviewLimit = 4000
 	}
-	nodeLimit := opts.NodeLimit
-	if nodeLimit == 0 {
-		nodeLimit = 1000
+	limit := opts.Limit
+	if limit == 0 {
+		limit = 50
 	}
 	levelLimit := 3
 	if opts.LevelLimit != nil {
@@ -133,14 +128,9 @@ func (c *Client) TreePage(ctx context.Context, uri string, opts *TreeOptions) (*
 	if opts.DirectoriesOnly {
 		query.Set("directories_only", "true")
 	}
-	queryInt(query, "node_limit", nodeLimit)
 	queryInt(query, "level_limit", levelLimit)
-	if opts.Offset != 0 {
-		queryInt(query, "offset", opts.Offset)
-	}
-	if opts.Limit != 0 {
-		queryInt(query, "limit", opts.Limit)
-	}
+	queryInt(query, "offset", opts.Offset)
+	queryInt(query, "limit", limit)
 	if opts.ExtraFields != nil {
 		query["extra_fields"] = opts.ExtraFields
 	}
@@ -150,12 +140,12 @@ func (c *Client) TreePage(ctx context.Context, uri string, opts *TreeOptions) (*
 	if opts.IncludeTags {
 		query.Set("include_tags", "true")
 	}
-	var result []map[string]any
-	env, err := c.doJSONEnvelope(ctx, http.MethodGet, "/api/v1/fs/tree", query, nil, &result)
+	var result OffsetPage[FilesystemListItem]
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/tree", query, nil, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &TreePage{Result: result, HasMore: env.HasMore}, nil
+	return &result, nil
 }
 
 // Stat returns metadata for a URI.

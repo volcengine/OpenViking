@@ -2,7 +2,7 @@ import type {
   ResourceUploadTask,
   ResourceUploadTaskStatus,
 } from '../-hooks/use-resource-upload'
-import type { TaskListResult, TaskRecord } from '@ov-server/api/v1/tasks'
+import type { TaskRecord } from '@ov-server/api/v1/tasks'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -17,8 +17,9 @@ function isTaskRecord(value: unknown): value is TaskRecord {
   )
 }
 
-export function normalizeTaskList(value: unknown): TaskListResult {
-  return Array.isArray(value) ? value.filter(isTaskRecord) : []
+export function normalizeTaskList(value: unknown): TaskRecord[] {
+  if (!isRecord(value) || !Array.isArray(value.items)) return []
+  return value.items.filter(isTaskRecord)
 }
 
 export function isUploadStatusActive(

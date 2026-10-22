@@ -426,7 +426,7 @@ async def test_async_http_client_write_forwards_clear_without_tags():
 async def test_async_http_client_filesystem_tags_are_omission_aware():
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._request = AsyncMock(return_value=object())
-    client._handle_response = lambda _response: []
+    client._handle_response = lambda _response: {"items": []}
 
     await client.ls("viking://resources")
     await client.tree("viking://resources", tags=["env=prod"])
@@ -497,7 +497,13 @@ def test_sync_http_client_reindex_forwards_to_async_client():
 def test_sync_http_client_forwards_tags_to_filesystem_methods():
     client = SyncHTTPClient(url="http://localhost:1933")
     entries = [{"name": "docs"}]
-    page = {"result": entries, "has_more": True}
+    page = {
+        "items": entries,
+        "offset": 0,
+        "limit": 50,
+        "has_more": True,
+        "total": None,
+    }
 
     with patch.object(client._async_client, "ls_page", return_value=page) as mock_ls:
         with patch.object(client._async_client, "tree_page", return_value=page) as mock_tree:
@@ -1564,7 +1570,17 @@ async def test_ls_and_tree_preserve_query_options_and_pagination():
     fake_http = SimpleNamespace(
         get=AsyncMock(
             return_value=httpx.Response(
-                200, json={"status": "ok", "result": entries, "has_more": True}
+                200,
+                json={
+                    "status": "ok",
+                    "result": {
+                        "items": entries,
+                        "offset": 5,
+                        "limit": 7,
+                        "has_more": True,
+                        "total": None,
+                    },
+                },
             )
         )
     )
@@ -1577,7 +1593,6 @@ async def test_ls_and_tree_preserve_query_options_and_pagination():
         output="agent",
         abs_limit=32,
         show_all_hidden=True,
-        node_limit=44,
         offset=5,
         limit=7,
         sort_by="mtime",
@@ -1586,8 +1601,21 @@ async def test_ls_and_tree_preserve_query_options_and_pagination():
         include_overview=True,
         overview_limit=512,
     )
-    assert page == {"result": entries, "has_more": True}
-    fake_http.get.return_value = httpx.Response(200, json={"status": "ok", "result": entries})
+    assert page["items"] == entries
+    assert page["has_more"] is True
+    fake_http.get.return_value = httpx.Response(
+        200,
+        json={
+            "status": "ok",
+            "result": {
+                "items": entries,
+                "offset": 4,
+                "limit": 6,
+                "has_more": False,
+                "total": None,
+            },
+        },
+    )
     page = await client.tree_page(
         "viking://resources/",
         level_limit=2,
@@ -1595,7 +1623,8 @@ async def test_ls_and_tree_preserve_query_options_and_pagination():
         limit=6,
         directories_only=True,
     )
-    assert page == {"result": entries, "has_more": False}
+    assert page["items"] == entries
+    assert page["has_more"] is False
     assert await client.tree("viking://resources/", level_limit=0) == entries
     assert await client.tree("viking://resources/") == entries
 
@@ -1612,7 +1641,6 @@ async def test_ls_and_tree_preserve_query_options_and_pagination():
             "include_overview": True,
             "overview_limit": 512,
             "show_all_hidden": True,
-            "node_limit": 44,
             "offset": 5,
             "limit": 7,
             "sort_by": "mtime",
@@ -1683,7 +1711,12 @@ async def test_watch_routes_support_uri_lookup_and_normalization():
 
     fake_http.get.assert_any_await(
         "/api/v1/watches",
-        params={"active_only": True, "to_uri": "viking://resources/demo"},
+        params={
+            "active_only": True,
+            "offset": 0,
+            "limit": 50,
+            "to_uri": "viking://resources/demo",
+        },
     )
     fake_http.get.assert_any_await(
         "/api/v1/watches/task-1",
@@ -1706,6 +1739,43 @@ async def test_watch_routes_support_uri_lookup_and_normalization():
     fake_http.post.assert_awaited_once_with(
         "/api/v1/watches/trigger",
         params={"to_uri": "viking://resources/demo"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_methods_use_unified_pagination_parameters():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {"items": []}
+
+    await client.admin_list_accounts(offset=2, limit=3)
+    await client.admin_list_users("account", offset=4, limit=5)
+    await client.list_sessions(offset=6, limit=7)
+    await client.list_skills(offset=8, limit=9)
+    await client.list_watches(offset=10, limit=11)
+    await client.list_tasks(status="running", limit=12, cursor="next", q="needle")
+    await client.list_audit_logs(offset=13, limit=14)
+
+    calls = client._request.await_args_list
+    assert calls[0].kwargs["params"] == {"offset": 2, "limit": 3}
+    assert calls[1].kwargs["params"]["offset"] == 4
+    assert calls[1].kwargs["params"]["limit"] == 5
+    assert calls[2].kwargs["params"] == {"offset": 6, "limit": 7}
+    assert calls[3].kwargs["params"] == {"offset": 8, "limit": 9}
+    assert calls[4].kwargs["params"]["offset"] == 10
+    assert calls[4].kwargs["params"]["limit"] == 11
+    assert calls[5].kwargs["params"] == {
+        "limit": 12,
+        "status": "running",
+        "cursor": "next",
+        "q": "needle",
+    }
+    assert calls[6].kwargs["params"] == {"offset": 13, "limit": 14}
+    assert all(
+        "page" not in call.kwargs["params"]
+        and "node_limit" not in call.kwargs["params"]
+        and "pagination" not in call.kwargs["params"]
+        for call in calls
     )
 
 

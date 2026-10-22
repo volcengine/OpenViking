@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing_extensions import deprecated
 
 from openviking.server.account_stores.models import (
+    AccountsPage,
     AccountSummary,
     DeletionRecord,
     GroupSummary,
@@ -55,6 +56,16 @@ class AccountStore(ABC):
         query_filter: str | None = None,
     ) -> list[AccountSummary]: ...
 
+    @abstractmethod
+    async def list_accounts_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        name_filter: str | None = None,
+        query_filter: str | None = None,
+    ) -> AccountsPage: ...
+
     # User
     @abstractmethod
     async def get_user(self, account_id: str, user_id: str) -> UserSummary | None: ...
@@ -100,7 +111,7 @@ class AccountStore(ABC):
         limit: int | None = 100,
         name_filter: str | None = None,
         role_filter: str | None = None,
-        page: int = 1,
+        offset: int = 0,
         query_filter: str | None = None,
         fresh: bool = False,
     ) -> UsersPage: ...

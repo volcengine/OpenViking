@@ -482,7 +482,7 @@ class CollectionAdapter(ABC):
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[list[str]] = None,
-        order_by: Optional[str] = None,
+        order_by: Optional[str | list[str]] = None,
         order_desc: bool = False,
         advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
@@ -531,9 +531,14 @@ class CollectionAdapter(ABC):
                 return_detail_info=decay_request is not None,
             )
         elif order_by:
+            order_fields = [order_by] if isinstance(order_by, str) else order_by
+            if not order_fields:
+                raise ValueError("order_by must contain at least one field")
+            if len(order_fields) > 1:
+                raise ValueError("compound order_by is not supported by scalar vector queries")
             result = coll.search_by_scalar(
                 index_name=self._index_name,
-                field=order_by,
+                field=order_fields[0],
                 order="desc" if order_desc else "asc",
                 limit=limit,
                 offset=offset,

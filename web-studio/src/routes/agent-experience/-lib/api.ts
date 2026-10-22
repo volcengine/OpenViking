@@ -17,7 +17,7 @@ import type {
   TrajectoryPage,
 } from './types'
 
-/** Fetch one page; the extra raw entry determines whether another page exists. */
+/** Fetch one page from the filesystem listing contract. */
 export async function fetchExperiences(options: {
   experiencesUri: string
   page: number
@@ -29,7 +29,7 @@ export async function fetchExperiences(options: {
     const result = await getOvResult<unknown>(
       ovClient.client.get({
         query: {
-          limit: pageSize + 1,
+          limit: pageSize,
           offset: (page - 1) * pageSize,
           output: 'original',
           sort_by: 'mtime',
@@ -40,11 +40,16 @@ export async function fetchExperiences(options: {
         url: '/api/v1/fs/ls',
       }),
     )
-    if (!Array.isArray(result))
+    if (
+      !result ||
+      typeof result !== 'object' ||
+      !Array.isArray((result as { items?: unknown }).items)
+    )
       throw new Error(i18n.t('studio:errors.invalidDirectoryResponse'))
+    const pageResult = result as { items: unknown[]; has_more?: boolean }
     return {
-      items: normalizeExperienceFiles(result.slice(0, pageSize)),
-      hasMore: result.length > pageSize,
+      items: normalizeExperienceFiles(pageResult.items),
+      hasMore: pageResult.has_more === true,
       page,
       pageSize,
     }

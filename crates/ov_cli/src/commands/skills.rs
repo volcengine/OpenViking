@@ -90,12 +90,13 @@ pub async fn add(
 
 pub async fn list(
     client: &HttpClient,
-    node_limit: i32,
+    offset: i32,
+    limit: i32,
     output_format: OutputFormat,
     compact: bool,
     parent: Option<&str>,
 ) -> Result<()> {
-    let result = client.skills_list(node_limit, parent).await?;
+    let result = client.skills_list(offset, limit, parent).await?;
     super::search::output_skills_list_results(&result, output_format, compact);
     Ok(())
 }
@@ -690,9 +691,9 @@ async fn resolve_installed_skill_names(
 }
 
 async fn list_installed_skills(client: &HttpClient) -> Result<Vec<InstalledSkillSummary>> {
-    let result = client.skills_list(10000, None).await?;
+    let result = client.skills_list(0, 1000, None).await?;
     let skills = result
-        .get("skills")
+        .get("items")
         .and_then(Value::as_array)
         .ok_or_else(|| Error::Parse("skills list response missing skills array".to_string()))?
         .iter()

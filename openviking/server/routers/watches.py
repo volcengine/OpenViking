@@ -9,7 +9,7 @@ query parameter ``?to_uri=``. Cross-key conflict returns 400.
 """
 
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -20,7 +20,8 @@ from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.models import OffsetPage, PageResponse, Response
+from openviking.server.pagination import OffsetPagination, offset_pagination
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -69,6 +70,31 @@ class UpdateWatchRequest(BaseModel):
                 "without losing the cadence)"
             )
         return value
+
+
+class WatchTaskPublic(BaseModel):
+    task_id: str
+    path: str
+    source_type: str | None
+    to_uri: str | None
+    parent_uri: str | None
+    reason: str
+    instruction: str
+    watch_interval: float
+    build_index: bool
+    summarize: bool
+    processing_mode: str
+    processor_kwargs: dict[str, Any]
+    created_at: str | None
+    last_execution_time: str | None
+    last_task_id: str | None
+    last_status: str | None
+    last_error: str | None
+    next_execution_time: str | None
+    is_active: bool
+    account_id: str
+    user_id: str
+    original_role: str
 
 
 def _wm() -> WatchManager:
@@ -144,30 +170,38 @@ def _translate_perm(exc: wm_mod.PermissionDeniedError, target: str) -> Permissio
     return PermissionDeniedError(str(exc) or "Permission denied", resource=target)
 
 
-@router.get("/watches")
+@router.get(
+    "/watches",
+    response_model=PageResponse[OffsetPage[WatchTaskPublic]],
+)
 async def list_or_get_watch(
     active_only: bool = Query(False, description="Only return tasks with is_active=true"),
-    to_uri: Optional[str] = Query(None, description="If set, return the single task with this URI"),
+    to_uri: Optional[str] = Query(None, description="Filter tasks by target URI"),
+    pagination: OffsetPagination = Depends(offset_pagination),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """List watch tasks, or look one up by ``to_uri``.
-
-    Without ``to_uri`` returns ``{tasks: [...], total: N}``. With ``to_uri``
-    returns the single matching task object (404 if missing). When both
-    ``to_uri`` and ``active_only=true`` are supplied, a paused task at that
-    URI still 404s — the active-only filter stays consistent in both modes.
-    """
+    """List watch tasks."""
     wm = _wm()
     account_id, user_id, role = _identity(_ctx)
     if to_uri:
         to_uri = validate_request_viking_uri(to_uri, _ctx, field_name="to_uri")
-        task = await wm.get_task_by_uri(to_uri, account_id, user_id, role)
-        if task is None or (active_only and not task.is_active):
-            raise NotFoundError(to_uri, "watch_task")
-        return Response(status="ok", result=task.to_dict())
-    tasks = await wm.get_all_tasks(account_id, user_id, role, active_only=active_only)
-    return Response(
-        status="ok", result={"tasks": [t.to_dict() for t in tasks], "total": len(tasks)}
+    page = await wm.get_tasks_page(
+        account_id,
+        user_id,
+        role,
+        offset=pagination.offset,
+        limit=pagination.limit,
+        active_only=active_only,
+        to_uri=to_uri,
+    )
+    return PageResponse(
+        result=OffsetPage(
+            items=[task.to_dict() for task in page.items],
+            offset=pagination.offset,
+            limit=pagination.limit,
+            has_more=pagination.offset + len(page.items) < page.total,
+            total=page.total,
+        )
     )
 
 

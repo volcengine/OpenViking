@@ -17,6 +17,7 @@ import pytest_asyncio
 import yaml
 from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from openviking.config.binding import manager_over_source
@@ -177,6 +178,23 @@ def _build_lightweight_admin_test_app() -> FastAPI:
                 status="error",
                 error=ErrorInfo(code=exc.code, message=exc.message, details=exc.details),
             ).model_dump(),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(
+        request: FastAPIRequest, exc: RequestValidationError
+    ):
+        del request
+        return JSONResponse(
+            status_code=400,
+            content=Response(
+                status="error",
+                error=ErrorInfo(
+                    code="INVALID_ARGUMENT",
+                    message="Invalid request parameters",
+                    details={"validation_errors": exc.errors()},
+                ),
+            ).model_dump(mode="json"),
         )
 
     manager = build_api_key_manager(root_key=ROOT_KEY, viking_fs=fake_service.viking_fs)
@@ -2151,10 +2169,14 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
     )
     resp = await admin_client.get("/api/v1/admin/accounts", headers=root_headers())
     assert resp.status_code == 200
-    accounts = resp.json()["result"]
+    page = resp.json()["result"]
+    accounts = page["items"]
     account_ids = {a["account_id"] for a in accounts}
     assert "default" in account_ids
     assert acct in account_ids
+    assert page["offset"] == 0
+    assert page["limit"] == 50
+    assert page["total"] >= 2
 
     # `query` is a case-insensitive substring match on the account id.
     fragment = acct[:5].upper()  # "ACME_", proving the match ignores case
@@ -2164,7 +2186,7 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
         headers=root_headers(),
     )
     assert resp.status_code == 200
-    queried_ids = {a["account_id"] for a in resp.json()["result"]}
+    queried_ids = {a["account_id"] for a in resp.json()["result"]["items"]}
     assert acct in queried_ids
     assert "default" not in queried_ids
 
@@ -2178,7 +2200,10 @@ async def test_list_users_for_default_account_without_users_file_returns_empty_l
     )
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["result"] == []
+    result = resp.json()["result"]
+    assert result["items"] == []
+    assert result["total"] == 0
+    assert result["has_more"] is False
 
 
 async def test_list_accounts_with_watcher_uses_memory(
@@ -2559,7 +2584,7 @@ async def test_root_cannot_register_root_role_user(
         json={"user_id": "mallory-root", "role": "root"},
         headers=root_headers(),
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 400
 
 
 async def test_admin_can_register_user_in_own_account(admin_client: httpx.AsyncClient):
@@ -2624,7 +2649,7 @@ async def test_admin_cannot_register_root_role_user(
         json={"user_id": "mallory-root", "role": "root"},
         headers={"X-API-Key": alice_key},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 400
 
 
 async def test_admin_cannot_mint_root_key_that_reaches_root_only_endpoint(
@@ -2644,7 +2669,7 @@ async def test_admin_cannot_mint_root_key_that_reaches_root_only_endpoint(
         json={"user_id": "mallory-root", "role": "root"},
         headers={"X-API-Key": alice_key},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 400
     result = resp.json().get("result") or {}
     assert "user_key" not in result
 
@@ -2697,7 +2722,7 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     )
     resp = await admin_client.get(f"/api/v1/admin/accounts/{acct}/users", headers=root_headers())
     assert resp.status_code == 200
-    users = resp.json()["result"]
+    users = resp.json()["result"]["items"]
     user_ids = {u["user_id"] for u in users}
     assert user_ids == {"alice", "bob"}
 
@@ -3005,7 +3030,7 @@ async def test_legacy_migration_preflight_failure_does_not_create_task(
         headers=root_headers(),
     )
     assert tasks_resp.status_code == 200
-    assert tasks_resp.json()["result"] == []
+    assert tasks_resp.json()["result"]["items"] == []
 
 
 async def test_legacy_migration_only_moves_sessions(
@@ -3179,7 +3204,9 @@ async def test_trusted_mode_root_can_create_account(
         headers=trusted_headers(account="platform", user="gateway-admin", include_api_key=True),
     )
     assert listed.status_code == 200
-    account = next(item for item in listed.json()["result"] if item["account_id"] == acct)
+    account = next(
+        item for item in listed.json()["result"]["items"] if item["account_id"] == acct
+    )
     assert set(account) == {"account_id", "created_at", "user_count", "status"}
     assert account["status"] == "active"
     assert account["user_count"] == 1
@@ -3222,7 +3249,9 @@ async def test_trusted_mode_admin_can_register_user_in_own_account(
         headers=trusted_headers(account=acct, user="alice", include_api_key=True),
     )
     assert users.status_code == 200
-    assert all(user["api_key_available"] is False for user in users.json()["result"])
+    assert all(
+        user["api_key_available"] is False for user in users.json()["result"]["items"]
+    )
 
     rotated = await trusted_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users/bob/key",
@@ -3258,7 +3287,7 @@ async def test_trusted_mode_admin_can_list_users_with_account_only_in_url(
         },
     )
     assert resp.status_code == 200
-    assert any(user["user_id"] == "alice" for user in resp.json()["result"])
+    assert any(user["user_id"] == "alice" for user in resp.json()["result"]["items"])
 
 
 async def test_trusted_mode_admin_can_list_users_without_account_or_user_headers(
@@ -3283,7 +3312,7 @@ async def test_trusted_mode_admin_can_list_users_without_account_or_user_headers
         headers={"X-API-Key": ROOT_KEY},
     )
     assert resp.status_code == 200
-    assert any(user["user_id"] == "alice" for user in resp.json()["result"])
+    assert any(user["user_id"] == "alice" for user in resp.json()["result"]["items"])
 
 
 async def test_trusted_mode_admin_cannot_register_user_in_other_account(
@@ -3371,7 +3400,7 @@ async def test_trusted_mode_requires_matching_api_key_for_admin_api(
     assert resp.status_code == 401
 
 
-async def test_user_page_summary_and_search_preserve_legacy_response(
+async def test_user_page_summary_and_search_use_offset_contract(
     lightweight_admin_client: httpx.AsyncClient,
     lightweight_admin_app: FastAPI,
 ):
@@ -3394,44 +3423,55 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
     url = f"/api/v1/admin/accounts/{acct}/users"
 
     response = await lightweight_admin_client.get(
-        url, params={"include_summary": True, "limit": 20, "page": 6}, headers=root_headers()
+        url, params={"limit": 20, "offset": 100}, headers=root_headers()
     )
     assert response.status_code == 200, response.text
     result = response.json()["result"]
-    assert len(result["users"]) == 13
-    assert result["users"][-1]["user_id"] == "user-112"
+    assert len(result["items"]) == 13
+    assert result["items"][-1]["user_id"] == "user-112"
     assert result["total"] == result["account_total"] == result["key_count"] == 113
     assert result["manager_count"] == 2
+    assert result["offset"] == 100
+    assert result["limit"] == 20
+    assert result["has_more"] is False
 
     response = await lightweight_admin_client.get(
         url,
-        params={"include_summary": True, "limit": 20, "query": " UsEr-112 "},
+        params={"limit": 20, "query": " UsEr-112 "},
         headers=root_headers(),
     )
     result = response.json()["result"]
     assert result["total"] == 1
-    assert result["users"][0]["user_id"] == "user-112"
+    assert result["items"][0]["user_id"] == "user-112"
     assert result["account_total"] == 113
     assert result["manager_count"] == 2
 
     response = await lightweight_admin_client.get(
         url,
-        params={"include_summary": True, "limit": 20, "query": "missing"},
+        params={"limit": 20, "query": "missing"},
         headers=root_headers(),
     )
     assert response.json()["result"]["total"] == 0
-    assert response.json()["result"]["users"] == []
+    assert response.json()["result"]["items"] == []
     assert response.json()["result"]["account_total"] == 113
 
     response = await lightweight_admin_client.get(url, headers=root_headers())
-    assert isinstance(response.json()["result"], list)
-    assert len(response.json()["result"]) == 113
+    assert len(response.json()["result"]["items"]) == 50
+    assert response.json()["result"]["has_more"] is True
     response = await lightweight_admin_client.get(
         url,
-        params={"limit": 1, "page": 2, "name": "user-*", "role": "user"},
+        params={"limit": 1, "offset": 1, "name": "user-*", "role": "user"},
         headers=root_headers(),
     )
-    assert response.json()["result"][0]["user_id"] == "user-2"
+    assert response.json()["result"]["items"][0]["user_id"] == "user-2"
+
+    for legacy_params in ({"page": 2}, {"include_summary": True}):
+        response = await lightweight_admin_client.get(
+            url,
+            params=legacy_params,
+            headers=root_headers(),
+        )
+        assert response.status_code == 400
 
     hidden = await manager.list_users_page(acct, expose_key=False, limit=1)
     assert hidden["key_count"] == 0
@@ -3491,13 +3531,13 @@ async def test_user_page_summary_respects_account_access(lightweight_admin_clien
     )
     admin_key = response.json()["result"]["user_key"]
     own = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users?include_summary=true&limit=20",
+        f"/api/v1/admin/accounts/{acct}/users?limit=20",
         headers={"X-API-Key": admin_key},
     )
     assert own.status_code == 200
     assert own.json()["result"]["account_total"] == 1
     denied = await lightweight_admin_client.get(
-        "/api/v1/admin/accounts/default/users?include_summary=true&limit=20",
+        "/api/v1/admin/accounts/default/users?limit=20",
         headers={"X-API-Key": admin_key},
     )
     assert denied.status_code == 403

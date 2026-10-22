@@ -30,7 +30,10 @@ describe('fetchAdminUsersPage', () => {
       data: {
         status: 'ok',
         result: {
-          users: [{ user_id: 'user-2833', role: 'admin' }],
+          items: [{ user_id: 'user-2833', role: 'admin' }],
+          offset: 20,
+          limit: 20,
+          has_more: false,
           total: 1,
           account_total: 2833,
           manager_count: 2,
@@ -46,7 +49,7 @@ describe('fetchAdminUsersPage', () => {
     expect(getMock).toHaveBeenCalledWith({
       url: '/api/v1/admin/accounts/{account_id}/users',
       path: { account_id: 'customer_agent_as' },
-      query: { page: 2, limit: 20, query: 'USER-2833', include_summary: true },
+      query: { offset: 20, limit: 20, query: 'USER-2833' },
     })
     expect(result).toMatchObject({
       total: 1,
@@ -79,14 +82,20 @@ it('requests selectable users without credentials', async () => {
     headers: {},
     data: {
       status: 'ok',
-      result: [{ user_id: 'alice', role: 'user', api_key_available: true }],
+      result: {
+        items: [{ user_id: 'alice', role: 'user', api_key_available: true }],
+        offset: 0,
+        limit: 200,
+        has_more: false,
+        total: 1,
+      },
     },
   })
   const users = await fetchAdminUserDirectory(connection, 'team')
   expect(getMock).toHaveBeenCalledWith({
     url: '/api/v1/admin/accounts/{account_id}/users',
     path: { account_id: 'team' },
-    query: { include_credentials: false },
+    query: { include_credentials: false, offset: 0, limit: 200 },
   })
   expect(users).toMatchObject([{ accountId: 'team', userId: 'alice' }])
   expect(users[0].apiKey).toBeUndefined()
