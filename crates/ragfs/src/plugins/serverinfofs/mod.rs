@@ -163,7 +163,7 @@ impl FileSystem for ServerInfoFileSystem {
         }
 
         if path == "/" {
-            return Err(Error::IsADirectory(path.to_string()));
+            return Err(Error::IsADirectory("/".to_string()));
         }
 
         let data = match path {
@@ -220,7 +220,7 @@ impl FileSystem for ServerInfoFileSystem {
         sort_order: Option<crate::core::SortOrder>,
     ) -> Result<Vec<FileInfo>> {
         if path != "/" {
-            return Err(Error::NotADirectory(path.to_string()));
+            return Err(Error::plugin(format!("not a directory: {}", path)));
         }
 
         let now = std::time::SystemTime::now();
