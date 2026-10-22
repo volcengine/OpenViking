@@ -67,6 +67,29 @@ async def test_reconciler_pages_active_accounts_with_bounded_concurrency():
 
 
 @pytest.mark.asyncio
+async def test_reconciler_skips_already_synced_account_without_ending_pagination():
+    lister = _FakeAccountLister(
+        [
+            {"account_id": "default", "status": "active"},
+            {"account_id": "a", "status": "active"},
+            {"account_id": "b", "status": "active"},
+        ]
+    )
+    synchronizer = _TrackingSynchronizer()
+    reconciler = SystemAssetReconciler(
+        synchronizer,
+        lister,
+        user_id="system-user",
+        skip_account_ids={"default"},
+        page_size=2,
+    )
+
+    assert await reconciler.sync_all() == 2
+    assert lister.calls == [(2, 1), (2, 2)]
+    assert set(synchronizer.accounts) == {"a", "b"}
+
+
+@pytest.mark.asyncio
 async def test_reconciler_reports_all_failures_in_page():
     lister = _FakeAccountLister(
         [

@@ -3,6 +3,7 @@
 """Reconcile packaged system assets across all active accounts."""
 
 import asyncio
+from collections.abc import Collection
 from typing import Protocol
 
 from openviking.server.account_stores.models import AccountSummary
@@ -24,6 +25,7 @@ class SystemAssetReconciler:
         account_lister: AccountLister,
         *,
         user_id: str,
+        skip_account_ids: Collection[str] | None = None,
         page_size: int = 100,
         max_concurrency: int = 4,
     ) -> None:
@@ -34,6 +36,7 @@ class SystemAssetReconciler:
         self._synchronizer = synchronizer
         self._account_lister = account_lister
         self._user_id = user_id
+        self._skip_account_ids = frozenset(skip_account_ids or ())
         self._page_size = page_size
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -46,7 +49,10 @@ class SystemAssetReconciler:
                 page=page,
             )
             active_accounts = [
-                account for account in accounts if account.get("status", "active") == "active"
+                account
+                for account in accounts
+                if account.get("status", "active") == "active"
+                and account.get("account_id") not in self._skip_account_ids
             ]
             results = await asyncio.gather(
                 *(self._sync_account(account) for account in active_accounts),

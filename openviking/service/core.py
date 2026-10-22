@@ -945,6 +945,7 @@ class OpenVikingService:
             self._system_asset_synchronizer,
             account_lister,
             user_id=self._config.default_user or self._user.user_id,
+            skip_account_ids={self._user.account_id},
         ).sync_all()
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
