@@ -40,6 +40,8 @@ def main():
     # 统计所有题目 (排除 category=5)
     correct = 0
     wrong = 0
+    failed = 0
+    ungraded = 0
     total_time = 0.0
     total_prompt_tokens = 0
     total_memory_prompt_tokens = 0
@@ -49,12 +51,14 @@ def main():
     valid_rows = 0
     total_iteration = 0
     by_category: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"CORRECT": 0, "WRONG": 0, "OTHER": 0}
+        lambda: {"CORRECT": 0, "WRONG": 0, "FAILED": 0, "UNGRADED": 0}
     )
 
     # 统计 is_valid=True 的题目 (排除 category=5)
     valid_only_correct = 0
     valid_only_wrong = 0
+    valid_only_failed = 0
+    valid_only_ungraded = 0
     valid_only_total_time = 0.0
     valid_only_total_prompt_tokens = 0
     valid_only_total_memory_prompt_tokens = 0
@@ -80,8 +84,14 @@ def main():
 
             # 统计结果
             result = row.get("result", "").strip().upper()
+            status = row.get("status", "").strip().lower()
             category_key = category_label(category)
-            if result == "CORRECT":
+            if status == "failed":
+                failed += 1
+                by_category[category_key]["FAILED"] += 1
+                if is_valid:
+                    valid_only_failed += 1
+            elif result == "CORRECT":
                 correct += 1
                 by_category[category_key]["CORRECT"] += 1
                 if is_valid:
@@ -92,7 +102,10 @@ def main():
                 if is_valid:
                     valid_only_wrong += 1
             else:
-                by_category[category_key]["OTHER"] += 1
+                ungraded += 1
+                by_category[category_key]["UNGRADED"] += 1
+                if is_valid:
+                    valid_only_ungraded += 1
 
             total_iteration += int(row.get("iteration", "0"))
             if is_valid:
@@ -135,13 +148,17 @@ def main():
                 valid_only_rows += 1
 
     total_graded = correct + wrong
-    accuracy = correct / total_graded if total_graded > 0 else 0.0
+    graded_accuracy = correct / total_graded if total_graded > 0 else 0.0
+    expected_accuracy = correct / valid_rows if valid_rows > 0 else 0.0
     avg_time = total_time / valid_rows if valid_rows > 0 else 0.0
 
     # is_valid=True 题目的统计 (排除 category=5)
     valid_only_total_graded = valid_only_correct + valid_only_wrong
-    valid_only_accuracy = (
+    valid_only_graded_accuracy = (
         valid_only_correct / valid_only_total_graded if valid_only_total_graded > 0 else 0.0
+    )
+    valid_only_expected_accuracy = (
+        valid_only_correct / valid_only_rows if valid_only_rows > 0 else 0.0
     )
     valid_only_avg_time = valid_only_total_time / valid_only_rows if valid_only_rows > 0 else 0.0
 
@@ -170,11 +187,14 @@ def main():
 
     output_lines = [
         "=== Judge Result Statistics (excluding category=5) ===",
-        f"Total rows: {valid_rows}",
+        f"Expected rows: {valid_rows}",
         f"Graded rows: {total_graded}",
+        f"Failed rows: {failed}",
+        f"Ungraded rows: {ungraded}",
         f"Correct: {correct}",
         f"Wrong: {wrong}",
-        f"Accuracy: {accuracy:.2%}",
+        f"Graded accuracy: {graded_accuracy:.2%}",
+        f"Accuracy (expected denominator): {expected_accuracy:.2%}",
         f"\nAverage time cost: {avg_time:.2f}s",
         f"\nAverage iteration: {total_iteration / valid_rows if valid_rows > 0 else 0.0:.2f}",
         "\nToken usage:",
@@ -190,19 +210,28 @@ def main():
         f"  Avg total tokens: {avg_total_tokens:.2f}",
         "",
         "By category:",
-        f"{'category':<28} {'correct':>8} {'wrong':>8} {'other':>8} {'graded':>8} {'total':>8} {'accuracy':>10}",
+        f"{'category':<28} {'correct':>8} {'wrong':>8} {'failed':>8} "
+        f"{'ungraded':>8} {'graded':>8} {'expected':>8} {'graded acc':>11} {'expected acc':>12}",
     ]
 
     for category in sorted(by_category):
         category_correct = by_category[category]["CORRECT"]
         category_wrong = by_category[category]["WRONG"]
-        category_other = by_category[category]["OTHER"]
+        category_failed = by_category[category]["FAILED"]
+        category_ungraded = by_category[category]["UNGRADED"]
         category_graded = category_correct + category_wrong
-        category_total = category_graded + category_other
-        category_accuracy = category_correct / category_graded if category_graded > 0 else 0.0
+        category_expected = category_graded + category_failed + category_ungraded
+        category_graded_accuracy = (
+            category_correct / category_graded if category_graded > 0 else 0.0
+        )
+        category_expected_accuracy = (
+            category_correct / category_expected if category_expected > 0 else 0.0
+        )
         output_lines.append(
-            f"{category:<28} {category_correct:>8} {category_wrong:>8} {category_other:>8} "
-            f"{category_graded:>8} {category_total:>8} {category_accuracy:>9.2%}"
+            f"{category:<28} {category_correct:>8} {category_wrong:>8} "
+            f"{category_failed:>8} {category_ungraded:>8} {category_graded:>8} "
+            f"{category_expected:>8} {category_graded_accuracy:>10.2%} "
+            f"{category_expected_accuracy:>11.2%}"
         )
 
     valid_only_matches_overall = (
@@ -210,6 +239,8 @@ def main():
         and valid_only_total_graded == total_graded
         and valid_only_correct == correct
         and valid_only_wrong == wrong
+        and valid_only_failed == failed
+        and valid_only_ungraded == ungraded
         and valid_only_total_time == total_time
         and valid_only_total_iteration == total_iteration
         and valid_only_total_prompt_tokens == total_prompt_tokens
@@ -223,11 +254,14 @@ def main():
             [
                 "",
                 "=== Valid Questions Only (is_valid=True, excluding category=5) ===",
-                f"Valid rows: {valid_only_rows}",
+                f"Valid expected rows: {valid_only_rows}",
                 f"Valid graded rows: {valid_only_total_graded}",
+                f"Valid failed rows: {valid_only_failed}",
+                f"Valid ungraded rows: {valid_only_ungraded}",
                 f"Valid correct: {valid_only_correct}",
                 f"Valid wrong: {valid_only_wrong}",
-                f"Valid accuracy: {valid_only_accuracy:.2%}",
+                f"Valid graded accuracy: {valid_only_graded_accuracy:.2%}",
+                (f"Valid accuracy (expected denominator): {valid_only_expected_accuracy:.2%}"),
                 f"\nAverage time cost: {valid_only_avg_time:.2f}s",
                 f"\nAverage iteration: {valid_only_total_iteration / valid_only_rows if valid_only_rows > 0 else 0.0:.2f}",
                 "\nToken usage:",

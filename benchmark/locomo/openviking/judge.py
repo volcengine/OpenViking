@@ -159,6 +159,8 @@ def get_ungraded_rows(rows: list[dict], force: bool = False) -> list[int]:
     for i, row in enumerate(rows):
         if str(row.get("category", "")).strip() == "5":
             continue
+        if str(row.get("status", "")).strip().lower() == "failed":
+            continue
         if force:
             row["result"] = ""
             row["reasoning"] = ""
@@ -302,10 +304,23 @@ async def main():
     tasks = [process_row(idx) for idx in ungraded]
     await asyncio.gather(*tasks)
 
-    correct = sum(1 for row in rows if row.get("result") == "CORRECT")
-    total_graded = sum(1 for row in rows if row.get("result"))
-    accuracy = correct / total_graded if total_graded > 0 else 0.0
-    print(f"\nGrading completed: {correct}/{total_graded} correct, accuracy: {accuracy:.2%}")
+    expected_rows = [row for row in rows if str(row.get("category", "")).strip() != "5"]
+    correct = sum(1 for row in expected_rows if row.get("result") == "CORRECT")
+    wrong = sum(1 for row in expected_rows if row.get("result") == "WRONG")
+    failed = sum(
+        1 for row in expected_rows if str(row.get("status", "")).strip().lower() == "failed"
+    )
+    total_graded = correct + wrong
+    ungraded = len(expected_rows) - total_graded - failed
+    graded_accuracy = correct / total_graded if total_graded > 0 else 0.0
+    expected_accuracy = correct / len(expected_rows) if expected_rows else 0.0
+    print(
+        "\nGrading completed: "
+        f"expected={len(expected_rows)}, graded={total_graded}, failed={failed}, "
+        f"ungraded={ungraded}, correct={correct}, wrong={wrong}, "
+        f"graded accuracy={graded_accuracy:.2%}, "
+        f"expected-denominator accuracy={expected_accuracy:.2%}"
+    )
     print(f"All results saved to {args.input}")
 
 
