@@ -190,6 +190,12 @@ class TestUriGeneration:
         ("name", "expected_filename"),
         [
             ("CON.md", "_CON~ov~ab20d2f97c036c47.md"),
+            ("COM¹.md", "_COM¹~ov~1bd325459af33b94.md"),
+            ("COM².md", "_COM²~ov~48620c26cdfc852d.md"),
+            ("COM³.md", "_COM³~ov~920361a6d41f1a59.md"),
+            ("LPT¹.md", "_LPT¹~ov~f6b139c2fa77383e.md"),
+            ("LPT².md", "_LPT²~ov~9ab4899ca6c7f2f8.md"),
+            ("LPT³.md", "_LPT³~ov~5c322eff1117b880.md"),
             ("bad:name.md", "bad_name~ov~a5895459cfd9b57c.md"),
         ],
     )
