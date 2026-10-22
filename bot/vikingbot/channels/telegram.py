@@ -212,17 +212,25 @@ class TelegramChannel(BaseChannel):
             # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.session_key.chat_id)
 
-            # First extract local image file paths
-            local_image_paths, content_no_paths = extract_image_paths(msg.content)
+            from io import BytesIO
 
-            # Send local images first
+            cleaned, send_images = await self._extract_send_images(msg.content)
+            local_image_paths, content_no_paths = extract_image_paths(cleaned)
+
+            for filename, image_bytes in send_images:
+                try:
+                    photo = BytesIO(image_bytes)
+                    photo.name = filename
+                    await self._app.bot.send_photo(chat_id=chat_id, photo=photo)
+                    logger.debug(f"Sent generated image to {chat_id}: {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to send generated image {filename}: {e}")
+
             if local_image_paths:
                 for img_path in local_image_paths:
                     try:
                         logger.debug(f"Processing local image file: {img_path}")
                         image_bytes = read_image_file(img_path)
-                        from io import BytesIO
-
                         await self._app.bot.send_photo(chat_id=chat_id, photo=BytesIO(image_bytes))
                         logger.debug(f"Sent local image to {chat_id}: {img_path}")
                     except Exception as e:
