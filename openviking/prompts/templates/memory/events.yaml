@@ -3,6 +3,7 @@ description: |
   # Guidelines
   - Each event must be atomic: capture exactly one real-world occurrence, decision, commitment, arrangement, proposal, progress update, or result.
   - Prefer precise, small events over comprehensive narratives. Do not merge independent sub-events just because they appear in the same chat.
+  - Keep the summary concise and focused on that one event. A single event may need several messages of ChatLog evidence to be understood correctly.
   - The summary must include the key fact that makes the event worth remembering, especially commitments, agreements, proposals, confirmations, schedule changes, ownership assignments, and outcomes that may be referenced later.
   - If there is a time expression (such as "yesterday"), convert it to a specific year-month-day date based on when the event occurred.
   - Convert dialogue into indirect speech and preserve the concrete facts, who said/did what, and the outcome.
@@ -19,6 +20,14 @@ description: |
   - It is allowed and encouraged to extract multiple events from one continuous block of messages when that block contains multiple independent decisions, commitments, plans, or results.
   - Do NOT name events after who was chatting. Name them after what specifically happened.
   - Avoid broad umbrella events such as "team arrangement", "project discussion", "weekend plan", or "meeting chat" when the conversation actually contains multiple smaller actionable sub-events.
+
+  # ChatLog Evidence
+  - Select ranges that preserve the complete evidence needed to understand this event, not only the sentence stating its main fact or outcome.
+  - A concise summary is not a coverage limit for ChatLog. Preserve concrete answers, descriptions, reasons, consequences, and meaningful evaluations or reactions about the same event even when the summary does not repeat those details. Skip content-free acknowledgements.
+  - Include necessary questions, time qualifiers, messages identifying who or what a pronoun refers to, reasons, confirmations, and corrections. Keep a question and its answer together when the question supplies the answer's subject or time frame.
+  - Follow the event through relevant follow-up replies and continuation fragments. Do not stop selecting evidence as soon as the summary is supported, or skip a concrete follow-up answer about the same event. These details can belong in the event's ChatLog without becoming separate events.
+  - Use non-contiguous ranges to skip unrelated topics. Select context by its relevance to this event, not by a fixed number of neighboring messages; do not include the whole conversation by default.
+  - Supporting context must not change the event's supported date, subject, participants, or status. Do not borrow these from surrounding events, treat a question as a confirmed fact, or turn a plan into a completed action. An explicit confirmation or correction about this event is evidence of its actual status.
 
   # Granularity Examples
   ## Bad Example
@@ -137,6 +146,7 @@ fields:
     type: string
     description: |
       Based on the content of the above fields, compile a description to outline the complete Fact content.
+      Keep it concise and limited to this one event; supporting ChatLog context must not introduce a different event's date, subject, participants, or status.
       Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
 
   - name: ranges
@@ -146,7 +156,21 @@ fields:
       - Range: "start-end" (e.g., "0-3" means messages 0 to 3)
       - Single index: "N" (e.g., "7" means only message 7)
       - Mixed: "0-3,7,15-20" (ranges and single indices combined)
+      Apply the ChatLog Evidence guidelines: include the event's facts and the context needed to interpret them, while skipping unrelated messages.
       For events, ranges MUST include at least one user-role message that states or supports the event.
       If an assistant message confirms, normalizes, or completes the event, include both the originating user message and the assistant message.
       Never output assistant-only ranges for events.
+      Example:
+      0 assistant: "What are your plans for July 2027?"
+      1 user: "Research part-time design courses."
+      2 assistant: "By the way, do you need a laptop recommendation?"
+      3 user: "For the courses, I'm only comparing options; I haven't enrolled."
+      Select "0-1,3": retain the question's time frame and the user's clarification, skip the laptop topic, and summarize planned course research in July 2027 rather than completed enrollment.
+      Example with a factual follow-up:
+      0 user: "I repaired the desk lamp today."
+      1 assistant: "What was wrong with it?"
+      2 user: "The switch was loose; replacing it fixed the flicker."
+      3 assistant: "Any travel plans for next week?"
+      4 user: "About the lamp: it no longer buzzes either, so reading is comfortable again."
+      Select "0-2,4": keep the repair, its cause, and the concrete follow-up outcome even if the concise summary only says the lamp was repaired. Skip the travel topic; do not create separate events just to retain these supporting details.
     merge_op: immutable
