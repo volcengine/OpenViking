@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 from openviking.core.context import ContextLevel
 from openviking.message import Message
-from openviking.message.part import TextPart
+from openviking.message.part import TextPart, ToolPart
 from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFSTimeoutError
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
@@ -428,12 +428,20 @@ class ExtractContext:
         return f"_{digest.hexdigest()[:16]}"
 
     def get_event_content(
-        self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
+        self,
+        ranges_str: str,
+        summary: str | None,
+        ratio_threshold: float = 0.2,
+        context_messages: int = 0,
     ) -> str:
         """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
+        if type(context_messages) is not int or not 0 <= context_messages <= 32:
+            raise ValueError("context_messages must be an integer between 0 and 32")
         if not ranges_str:
             return summary or ""
         msg_range = self.read_message_ranges(ranges_str)
+        if context_messages:
+            msg_range = self._expand_event_context(msg_range, context_messages)
         original = msg_range.pretty_print()
         if not summary or not summary.strip():
             return original or ""
@@ -442,6 +450,61 @@ class ExtractContext:
         if len(summary) / len(original) >= ratio_threshold:
             return original
         return summary
+
+    def _expand_event_context(self, selected: "MessageRange", count: int) -> "MessageRange":
+        """Expand ChatLog by whole source messages, without changing event ranges/dates."""
+        groups: List[List[Message]] = []
+        for message in self.messages:
+            meta = self.chunk_meta.get(id(message))
+            previous = groups[-1][-1] if groups else None
+            previous_meta = self.chunk_meta.get(id(previous)) if previous else None
+            if (
+                meta is not None
+                and previous_meta is not None
+                and meta.source_message_id == previous_meta.source_message_id
+                and meta.chunk_index == previous_meta.chunk_index + 1
+                and message.role == previous.role
+                and message.peer_id == previous.peer_id
+            ):
+                groups[-1].append(message)
+            else:
+                groups.append([message])
+
+        selected_ids = {id(message) for group in selected.elements for message in group}
+        anchors = {
+            i
+            for i, group in enumerate(groups)
+            if any(id(message) in selected_ids for message in group)
+        }
+        included = set(anchors)
+
+        def readable(group: List[Message], peer_id: str | None) -> bool:
+            return all(
+                message.role in ("user", "assistant")
+                and message.peer_id == peer_id
+                and not any(isinstance(part, ToolPart) for part in message.parts)
+                for message in group
+            )
+
+        for anchor in anchors:
+            peer_id = groups[anchor][0].peer_id
+            if not readable(groups[anchor], peer_id):
+                continue
+            for direction in (-1, 1):
+                for distance in range(1, count + 1):
+                    index = anchor + direction * distance
+                    if not 0 <= index < len(groups) or not readable(groups[index], peer_id):
+                        break
+                    included.add(index)
+
+        elements: List[List[Message]] = []
+        previous_index = -2
+        for index in sorted(included):
+            if index != previous_index + 1:
+                elements.append([])
+            elements[-1].extend(groups[index])
+            previous_index = index
+        return MessageRange(elements, chunk_meta=self.chunk_meta)
 
     def get_resource_event_content(self, ranges_str: str, summary: str) -> str:
         """Return a user-readable event body for add-resource derived events."""
