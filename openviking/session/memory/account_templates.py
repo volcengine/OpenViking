@@ -18,7 +18,7 @@ from openviking.core.namespace_policy import SYSTEM_MEMORY_CUSTOM_ROOT
 from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.session.memory.dataclass import MemoryTypeSchema
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry, get_default_registry
 from openviking.session.memory.utils.content_template import (
     CONTENT_TEMPLATE_FIELDS,
     ContentTemplateError,
@@ -79,6 +79,84 @@ def _validate_memory_type(memory_type: str) -> None:
 def account_memory_template_uri(memory_type: str) -> str:
     _validate_memory_type(memory_type)
     return f"{SYSTEM_MEMORY_CUSTOM_ROOT}/{memory_type}.yaml"
+
+
+def _managed_memory_type_for_uri(uri: str) -> str | None:
+    prefix = f"{SYSTEM_MEMORY_CUSTOM_ROOT}/"
+    if not uri.startswith(prefix):
+        return None
+    filename = uri.removeprefix(prefix)
+    if "/" in filename or not filename.endswith(".yaml"):
+        return None
+    memory_type = filename.removesuffix(".yaml")
+    return memory_type or None
+
+
+def validate_account_memory_template_write(
+    uri: str,
+    content: str | bytes,
+    mode: str,
+    *,
+    registry: MemoryTypeRegistry | None = None,
+) -> None:
+    """Enforce the managed template contract for generic content writes."""
+    memory_type = _managed_memory_type_for_uri(uri)
+    if memory_type is None:
+        return
+    registry = registry or get_default_registry()
+    schema = registry.get(memory_type)
+    if schema is None:
+        return
+    if memory_type not in EDITABLE_MEMORY_TEMPLATE_FIELDS:
+        raise InvalidArgumentError(f"Memory template is not editable: {memory_type}")
+    if mode == "append":
+        raise InvalidArgumentError("append is not supported for managed memory templates")
+
+    try:
+        raw = content.encode("utf-8") if isinstance(content, str) else content
+        if len(raw) > _MAX_CONFIG_BYTES:
+            raise ValueError("A memory template must not exceed 1 MiB")
+        data = yaml.safe_load(raw)
+        if not isinstance(data, dict):
+            raise ValueError("Expected a YAML mapping")
+        defaults = memory_template_data(schema)
+        complete = _complete_template(defaults, data, memory_type)
+        if complete != data:
+            raise ValueError("generic writes require the complete deployment template")
+    except DescriptionTemplateError as exc:
+        raise InvalidArgumentError(
+            str(exc),
+            details={"field": exc.field, "reason": exc.reason, "line": exc.line},
+        ) from exc
+    except ContentTemplateError as exc:
+        raise InvalidArgumentError(
+            str(exc),
+            details={"field": "content_template", "reason": exc.reason, "line": exc.line},
+        ) from exc
+    except (
+        UnicodeDecodeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        yaml.YAMLError,
+        TemplateSyntaxError,
+    ) as exc:
+        raise InvalidArgumentError(f"Invalid memory template: {exc}") from exc
+
+
+def validate_account_memory_template_transfer(
+    uri: str, *, registry: MemoryTypeRegistry | None = None
+) -> None:
+    """Reject cp/mv targets that would bypass a registered template contract."""
+    memory_type = _managed_memory_type_for_uri(uri)
+    if memory_type is None:
+        return
+    registry = registry or get_default_registry()
+    if registry.get(memory_type) is not None:
+        raise InvalidArgumentError(
+            f"Registered memory templates must be updated through write or the admin API: {uri}"
+        )
 
 
 def account_memory_template_path(account_id: str, memory_type: str) -> str:

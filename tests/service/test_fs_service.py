@@ -1624,6 +1624,23 @@ async def test_copy_to_system_uses_physical_file_strategy(request_context):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+async def test_transfer_to_registered_memory_template_is_rejected(request_context, operation):
+    source = "viking://resources/project/demo.yaml"
+    target = "viking://system/memory/memory_templates/custom/profile.yaml"
+    viking_fs = SimpleNamespace(cp=AsyncMock(), mv=AsyncMock())
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match="must be updated through write"):
+        if operation == "cp":
+            await service.cp(source, target, recursive=False, ctx=request_context)
+        else:
+            await service.mv(source, target, ctx=request_context)
+
+    getattr(viking_fs, operation).assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_move_to_system_deletes_source_vectors_without_target_index(
     monkeypatch,
     request_context,

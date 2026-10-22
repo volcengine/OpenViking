@@ -34,6 +34,9 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
+from openviking.session.memory.account_templates import (
+    validate_account_memory_template_transfer,
+)
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.abstract_overview import (
@@ -904,6 +907,7 @@ class FSService:
         to_uri = VikingFS._normalize_transfer_uri(to_uri)
         self._reject_storage_internal_target(to_uri)
         self._reject_file_only_semantic_sidecar_target(to_uri)
+        validate_account_memory_template_transfer(to_uri)
         return await self._finish_transfer_after_caller_cancel(
             self._cp_and_refresh(from_uri, to_uri, recursive=recursive, ctx=ctx),
             operation="copy",
@@ -1011,6 +1015,7 @@ class FSService:
         to_uri = VikingFS._normalize_transfer_uri(to_uri)
         self._reject_storage_internal_target(to_uri)
         self._reject_file_only_semantic_sidecar_target(to_uri)
+        validate_account_memory_template_transfer(to_uri)
         await self._finish_transfer_after_caller_cancel(
             self._mv_and_refresh(from_uri, to_uri, ctx=ctx),
             operation="move",
