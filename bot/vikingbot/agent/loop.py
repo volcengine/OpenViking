@@ -446,49 +446,76 @@ class AgentLoop:
 
         self._running = False
         self._mcp_servers = mcp_servers or {}
-        self._mcp_stack: AsyncExitStack | None = None
+        self._mcp_connections: dict[str, tuple[AsyncExitStack, set[str]]] = {}
+        self._mcp_failed_servers: set[str] = set()
+        self._mcp_lock = asyncio.Lock()
         self._mcp_connected = False
-        self._mcp_connecting = False
         self._ov_clients: dict[str, Any] = {}
         self._active_turn: _ActiveTurn | None = None
         self._queued_interrupt_counts: dict[SessionKey, int] = {}
         self._register_default_tools()
 
     async def _connect_mcp(self) -> None:
-        """Connect to configured MCP servers (one-time, lazy, retryable on failure).
+        """Connect missing MCP servers and replace connections that lost their transport.
 
         Ported from HKUDS/nanobot v0.1.5.
         """
-        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+        if not self._mcp_servers or (self._mcp_connected and not self._mcp_failed_servers):
             return
-        self._mcp_connecting = True
-        try:
+
+        async with self._mcp_lock:
             from vikingbot.agent.tools.mcp import connect_mcp_servers
 
-            self._mcp_stack = AsyncExitStack()
-            await self._mcp_stack.__aenter__()
-            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
-            self._mcp_connected = True
-        except Exception as e:
-            logger.error(f"Failed to connect MCP servers (will retry next message): {e}")
-            if self._mcp_stack:
+            failed = self._mcp_failed_servers.intersection(self._mcp_connections)
+            self._mcp_failed_servers.difference_update(failed)
+            for name in failed:
+                stack, tool_names = self._mcp_connections.pop(name)
+                for tool_name in tool_names:
+                    self.tools.unregister(tool_name)
                 try:
-                    await self._mcp_stack.aclose()
-                except Exception:
-                    pass
-                self._mcp_stack = None
-        finally:
-            self._mcp_connecting = False
+                    await stack.aclose()
+                except Exception as exc:
+                    logger.debug("MCP server '{}': failed to clean up: {}", name, exc)
+
+            pending = {
+                name: config
+                for name, config in self._mcp_servers.items()
+                if name not in self._mcp_connections
+            }
+            if pending:
+                try:
+                    connections = await connect_mcp_servers(
+                        pending,
+                        self.tools,
+                        on_transport_error=self._mark_mcp_transport_failed,
+                    )
+                except Exception as exc:
+                    logger.error("Failed to connect MCP servers (will retry next message): {}", exc)
+                else:
+                    self._mcp_connections.update(connections)
+            self._mcp_connected = len(self._mcp_connections) == len(self._mcp_servers)
+
+    def _mark_mcp_transport_failed(self, server_name: str) -> None:
+        """Schedule one connected server for cleanup and retry before a later message."""
+        if server_name in self._mcp_connections:
+            self._mcp_failed_servers.add(server_name)
+            self._mcp_connected = False
 
     async def close_mcp(self) -> None:
         """Close MCP server connections. Ported from HKUDS/nanobot v0.1.5."""
-        if self._mcp_stack:
-            try:
-                await self._mcp_stack.aclose()
-            except Exception:
-                pass  # MCP SDK cancel scope cleanup is noisy but harmless
-            self._mcp_stack = None
-        self._mcp_connected = False
+        async with self._mcp_lock:
+            connections = list(self._mcp_connections.items())
+            self._mcp_connections.clear()
+            self._mcp_failed_servers.clear()
+            self._mcp_connected = False
+            for name, (stack, tool_names) in reversed(connections):
+                for tool_name in tool_names:
+                    self.tools.unregister(tool_name)
+                try:
+                    await stack.aclose()
+                except Exception as exc:
+                    # MCP SDK cancel-scope cleanup can be noisy during shutdown.
+                    logger.debug("MCP server '{}': failed to close: {}", name, exc)
 
     async def _publish_auto_memory_context(
         self,
@@ -1231,6 +1258,7 @@ class AgentLoop:
 
                 # Process it
                 try:
+                    await self._connect_mcp()
                     queued_interrupts = self._queued_interrupt_counts.get(msg.session_key, 0)
                     if queued_interrupts > 0:
                         if queued_interrupts == 1:

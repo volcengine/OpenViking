@@ -5,11 +5,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from mcp.shared.exceptions import McpError
+from mcp.types import INVALID_PARAMS, ErrorData
 from vikingbot.agent import loop as loop_module
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import AgentLoop
-from vikingbot.agent.tools.base import MultimodalToolResult
+from vikingbot.agent.tools.base import MultimodalToolResult, ToolContext
+from vikingbot.agent.tools.mcp import MCPToolWrapper
 from vikingbot.agent.tools.registry import ToolExecutionResult
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
@@ -101,6 +105,118 @@ def make_loop(temp_dir, monkeypatch):
             )
 
     return create
+
+
+class _FakeMCPStack:
+    def __init__(self, name):
+        self.name = name
+        self.close_count = 0
+
+    async def aclose(self):
+        self.close_count += 1
+
+
+def _fake_mcp_connector(monkeypatch, availability):
+    attempts = []
+    connections = []
+    callbacks = {}
+
+    async def connect(servers, registry, on_transport_error=None):
+        attempts.append(tuple(servers))
+        result = {}
+        for name in servers:
+            if not availability[name]:
+                continue
+            stack = _FakeMCPStack(name)
+            tool_name = f"mcp_{name}_lookup"
+            registry.register(SimpleNamespace(name=tool_name))
+            result[name] = (stack, {tool_name})
+            connections.append(stack)
+            callbacks[name] = on_transport_error
+        return result
+
+    monkeypatch.setattr("vikingbot.agent.tools.mcp.connect_mcp_servers", connect)
+    return attempts, connections, callbacks
+
+
+async def test_mcp_retries_only_an_initially_unavailable_server(make_loop, monkeypatch):
+    availability = {"healthy": True, "flaky": False}
+    attempts, connections, _callbacks = _fake_mcp_connector(monkeypatch, availability)
+    loop = make_loop(mcp_servers={name: object() for name in availability})
+
+    await loop._connect_mcp()
+    assert loop.tools.has("mcp_healthy_lookup")
+    assert not loop.tools.has("mcp_flaky_lookup")
+
+    availability["flaky"] = True
+    await loop._connect_mcp()
+
+    assert loop.tools.has("mcp_healthy_lookup")
+    assert loop.tools.has("mcp_flaky_lookup")
+    assert attempts == [("healthy", "flaky"), ("flaky",)]
+    assert connections[0].name == "healthy" and connections[0].close_count == 0
+    await loop.close_mcp()
+
+
+async def test_mcp_transport_failure_reconnects_only_failed_server(make_loop, monkeypatch):
+    availability = {"healthy": True, "flaky": True}
+    attempts, connections, callbacks = _fake_mcp_connector(monkeypatch, availability)
+    loop = make_loop(mcp_servers={name: object() for name in availability})
+
+    await loop._connect_mcp()
+    healthy_stack, flaky_stack = connections
+    callbacks["flaky"]("flaky")
+    callbacks["flaky"]("flaky")
+    await loop._connect_mcp()
+
+    assert loop.tools.has("mcp_healthy_lookup")
+    assert loop.tools.has("mcp_flaky_lookup")
+    assert attempts == [("healthy", "flaky"), ("flaky",)]
+    assert healthy_stack.close_count == 0
+    assert flaky_stack.close_count == 1
+    await loop.close_mcp()
+
+
+@pytest.mark.parametrize(
+    "failure, expected_callback",
+    [
+        (ConnectionError("offline"), True),
+        (httpx.ReadTimeout("slow response"), False),
+        (ValueError("tool rejected input"), False),
+        pytest.param(
+            McpError(ErrorData(code=-32000, message="Connection closed")),
+            True,
+            id="mcp-connection-closed",
+        ),
+        pytest.param(
+            McpError(ErrorData(code=INVALID_PARAMS, message="bad arguments")),
+            False,
+            id="mcp-protocol-error",
+        ),
+    ],
+)
+async def test_mcp_tool_marks_only_transport_failures(failure, expected_callback):
+    class FailingSession:
+        async def call_tool(self, name, arguments):
+            del name, arguments
+            raise failure
+
+    failed_servers: list[str] = []
+    wrapper = MCPToolWrapper(
+        FailingSession(),
+        "remote",
+        SimpleNamespace(
+            name="lookup",
+            description="lookup",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        on_transport_error=failed_servers.append,
+    )
+
+    result = await wrapper.execute(ToolContext())
+
+    assert result == f"(MCP tool call failed: {type(failure).__name__})"
+    assert failed_servers == (["remote"] if expected_callback else [])
 
 
 def _image_call(call_id, label=None):
