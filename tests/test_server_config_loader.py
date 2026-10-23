@@ -59,6 +59,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
                     "workers": 2,
                     "executor_threads": 64,
                     "timeout_keep_alive": 120,
+                    "resources_root_acl_level": "read",
                     "auth_mode": "trusted",
                     "with_bot": True,
                     "bot_api_url": "http://localhost:19999",
@@ -77,6 +78,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.workers == 2
     assert config.executor_threads == 64
     assert config.timeout_keep_alive == 120
+    assert config.resources_root_acl_level == "read"
     assert config.auth_mode == "trusted"
     assert config.with_bot is True
     assert config.bot_api_url == "http://localhost:19999"
@@ -92,6 +94,15 @@ def test_load_server_config_defaults_timeout_keep_alive(tmp_path):
 
     assert config.timeout_keep_alive == 5
     assert config.executor_threads == 0
+    assert config.resources_root_acl_level == "manage"
+
+
+def test_load_server_config_rejects_invalid_resources_root_acl_level(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"server": {"resources_root_acl_level": "admin"}}))
+
+    with pytest.raises(ValueError, match=r"server\.resources_root_acl_level"):
+        load_server_config(str(config_path))
 
 
 def test_load_server_config_rejects_negative_default_executor_size(tmp_path):

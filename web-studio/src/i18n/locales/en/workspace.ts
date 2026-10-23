@@ -1049,7 +1049,7 @@ const workspace = {
       title: 'Access permissions',
       accountTitle: 'Resource access control · {{account}}',
       accountHint:
-        'Applies to shared resources in this Account. When disabled, ACL checks are skipped. When enabled, the shared root grants everyone management access. Descendants inherit by default and can restrict access separately.',
+        'Applies to shared resources in this Account. When disabled, ACL checks are skipped. When enabled, the shared root grants everyone the server-configured access level. Descendants inherit by default and can restrict access separately.',
       enableAction: 'Enable access control',
       disableAction: 'Disable access control',
       enabled: 'Enabled',
@@ -1057,7 +1057,7 @@ const workspace = {
       enableTitle: 'Enable resource access control?',
       disableTitle: 'Disable resource access control?',
       enableWarning:
-        'Enable ACL for Account {{account}}? The shared root always grants everyone management access; these permissions cannot be changed. New resources inherit parent permissions by default, with no extra grants for their creator. Existing ACLs take effect.',
+        'Enable ACL for Account {{account}}? The shared root grants everyone the access level configured by the server; this root permission cannot be changed here. New resources inherit parent permissions by default, with no extra grants for their creator. Existing ACLs take effect.',
       disableWarning:
         'Disable ACL for Account {{account}}? All configured resource ACLs stop being enforced. Resources follow the original sharing rules, which may expand access. Stored grants are retained.',
       saved: 'Permissions updated',

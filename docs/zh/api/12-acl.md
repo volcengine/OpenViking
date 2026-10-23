@@ -69,7 +69,7 @@ POST /api/v1/acl/revoke
 
 导入只把直接 ACL 设置到最终导入根节点，子节点继承；自动创建的中间父目录不接收该授权。相同内容重新导入也会更新显式传入的 ACL。
 
-账号 `acl.enabled` 默认 false，关闭时按原 namespace 规则访问，ACL 不参与鉴权；开启后共享根目录固定 `user:* = manage` 且不可修改。传入 ACL 不会自动开启账号开关，也不会自动切换 restricted。
+账号 `acl.enabled` 默认 false，关闭时按原 namespace 规则访问，ACL 不参与鉴权；开启后共享根目录按服务端 `resources_root_acl_level` 配置授予 `user:*`（默认 `manage`），且不能通过 ACL API 修改。传入 ACL 不会自动开启账号开关，也不会自动切换 restricted。
 
 ACL 仍保存在 context 索引内，允许短暂不一致，按现有异步任务和 wait 语义生效。独立修改 ACL 要求目标已有 context 记录；本次不增加无向量记录或空文件支持。
 

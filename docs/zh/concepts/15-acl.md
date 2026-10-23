@@ -13,7 +13,7 @@ viking://resources/...
 ```
 
 - `viking://resources/...` 的 account `ADMIN` 隐式拥有 `manage`。
-- `viking://resources` 的根 ACL 固定为 `user:* = manage`，不可修改；下级节点默认继承，直到 restricted 边界。
+- `viking://resources` 的根 ACL 固定授予 `user:*`，权限等级由 `server.resources_root_acl_level` 配置（默认 `manage`），不能通过 ACL API 修改；下级节点默认继承，直到 restricted 边界。
 - `viking://user/{user_id}/resources/...` 是个人私有区，不接受 ACL。需要分享时，将资源移动到有权写入的共享目录，并继承该目录的 ACL。
 
 隐式管理权不会写入 ACL 条目，也不能被 ACL 删除。它保证共享资源始终有人能够首次设置或恢复权限。
@@ -68,7 +68,7 @@ read user:carol on viking://resources/A/B/C/report.md
 账号级 `acl.enabled` 默认关闭。关闭时，共享资源继续使用原有 URI namespace
 可见性和写入规则，不执行 ACL 鉴权和过滤。索引仍按统一继承规则保存 ACL，开关不影响已存权限。
 
-开启后，根目录固定授予 `user:* = manage`，当前 account 内所有成员都可以管理
+开启后，根目录按 `resources_root_acl_level` 授予 `user:*`，当前 account 内所有成员都可以按该等级操作
 持续继承根权限的共享内容。未传 `acl` 时，新节点的直接授权为空，只继承父目录的有效权限，
 不会因为创建了内容而获得额外权限。`add-resource` 的根节点和内部节点遵循相同规则。
 已有且未设置 ACL 的共享内容按默认继承计算，不进行历史数据迁移；重新关闭后，
@@ -80,7 +80,7 @@ read user:carol on viking://resources/A/B/C/report.md
 - `inherit`：使用直接权限和父目录传下来的权限。
 - `restricted`：只使用直接权限，但仍保存并更新父目录传下来的权限。
 
-有 `manage` 权限的用户可以切换 `inherit` / `restricted`，不能直接设置 `none` 绕过父目录权限。退出 restricted 后恢复继承父目录权限；父链未被其他 restricted 截断时，全员恢复 `manage`。restricted 节点即使没有直接权限也不会变公开，其没有单独授权的后代同样不可访问；账号管理员仍有隐式管理权。
+有 `manage` 权限的用户可以切换 `inherit` / `restricted`，不能直接设置 `none` 绕过父目录权限。退出 restricted 后恢复继承父目录权限；父链未被其他 restricted 截断时，全员恢复配置的根权限等级。restricted 节点即使没有直接权限也不会变公开，其没有单独授权的后代同样不可访问；账号管理员仍有隐式管理权。
 
 ## 文件操作
 
@@ -97,7 +97,7 @@ read user:carol on viking://resources/A/B/C/report.md
 
 服务端会先 canonicalize URI，再在同一个鉴权入口中依次执行 account/owner/actor peer 等硬边界、开启时的有效 ACL 或关闭时的原有 namespace 规则，以及写入和删除的 namespace 防护。
 
-账号开启 `acl.enabled` 时，普通共享节点继承根目录的全员 `manage`，成员可据此
+账号开启 `acl.enabled` 时，普通共享节点继承根目录配置的全员权限；默认的 `manage` 等级允许成员
 修改节点 ACL。restricted 下的创建者只有父目录授予的权限，不会自动获得 `manage`。
 
 目录上的 ACL 授权会被所有后代继承。`list`、`tree` 和批量结果仍逐个检查有效 ACL，因为默认开放的目录下可能存在独立的 restricted 边界。
@@ -116,9 +116,10 @@ ACL 只保存在 context collection。每条 context 记录维护当前节点和
 acl_mode
 acl_direct_grants
 acl_inherited_grants
+acl_resources_root_level
 ```
 
-`acl_direct_grants` 是当前节点直接 ACL，`acl_inherited_grants` 是父节点当前有效 ACL，`acl_mode` 决定 inherited 是否参与当前节点的有效权限。每个 principal 只保存最高 level，编码为 `{mask}:{principal}`：`1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。不维护独立 ACL collection。
+`acl_direct_grants` 是当前节点直接 ACL，`acl_inherited_grants` 是物化时父节点的有效 ACL，`acl_mode` 决定 inherited 是否参与当前节点的有效权限。`acl_resources_root_level` 记录物化时使用的根权限等级；若它与当前服务端配置不同，鉴权会重新计算祖先链，而不会信任过期的继承授权。每个 principal 只保存最高 level，编码为 `{mask}:{principal}`：`1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。不维护独立 ACL collection。
 
 ACL 随索引更新，允许同一 URI 的不同索引记录短暂保留不同版本。读取采用索引返回的一份 ACL 快照，不合并不同版本的授权，也不因副本暂时不一致阻断处理。权限变更按索引更新进度生效，不保证强一致。
 
@@ -128,7 +129,7 @@ ACL 随索引更新，允许同一 URI 的不同索引记录短暂保留不同�
 
 账号开启 `acl.enabled` 时，共享区 context 写入会保留同 URI 已有 direct ACL；
 新节点的直接授权为空，从父节点生成 inherited ACL；没有受限边界时，继承字段
-包含 `7:user:*`。创建者身份不参与授权计算。重新向量化和普通覆盖写不会把受控记录
+包含配置的根授权。创建者身份不参与授权计算。重新向量化和普通覆盖写不会把受控记录
 恢复为默认可见，也不能通过普通 context 字段直接改 ACL。账号关闭该开关时，检索
 只使用原有 account 和 URI scope 过滤，不使用这些 ACL 字段。
 

@@ -13,7 +13,7 @@ viking://resources/...
 ```
 
 - An account `ADMIN` implicitly has `manage` on `viking://resources/...`.
-- `viking://resources` has a fixed, immutable `user:* = manage` ACL. Descendants inherit it until a restricted boundary.
+- `viking://resources` has an immutable `user:*` ACL whose level is configured by `server.resources_root_acl_level` (`manage` by default). Descendants inherit it until a restricted boundary.
 - `viking://user/{user_id}/resources/...` is private and does not accept ACLs. To share it, move the resource into a writable shared directory and inherit that directory's ACL.
 
 Implicit management is not stored as an ACL entry and cannot be removed by ACL changes. It ensures that shared resources always have an identity that can establish or recover permissions.
@@ -69,8 +69,8 @@ The account-level `acl.enabled` setting is disabled by default. While disabled,
 shared resources keep the existing URI namespace visibility and write rules.
 ACL is not enforced. Indexed content still stores ACL fields using the same inheritance rules; the switch only controls access checks and retrieval filtering.
 
-When enabled, the root grants `user:* = manage`, so all account members can
-manage shared content that continues to inherit from the root. Without `acl`, new nodes have
+When enabled, the root grants `user:*` the configured `resources_root_acl_level`, so all account members can
+use that level on shared content that continues to inherit from the root. Without `acl`, new nodes have
 empty direct ACLs and inherit their parent’s effective permissions. Creating
 content grants no additional permissions. Import roots and descendants follow
 the same rule. Existing shared content without ACL fields uses default
@@ -84,7 +84,7 @@ does not change its direct ACL unless explicitly supplied. See [ACL API](../api/
 - `inherit`: use direct grants and permissions inherited from the parent.
 - `restricted`: use direct grants only, while retaining and refreshing inherited grants.
 
-Users with `manage` can switch between `inherit` and `restricted`, but cannot set `none` to bypass the parent's ACL. Exiting restricted mode restores parent inheritance; all account members regain `manage` when no other restricted boundary interrupts the path to the root. A restricted node with no direct grants remains protected, as do descendants without separate grants; account administrators retain implicit management access.
+Users with `manage` can switch between `inherit` and `restricted`, but cannot set `none` to bypass the parent's ACL. Exiting restricted mode restores parent inheritance; all account members regain the configured root level when no other restricted boundary interrupts the path to the root. A restricted node with no direct grants remains protected, as do descendants without separate grants; account administrators retain implicit management access.
 
 ## File Operations
 
@@ -102,7 +102,7 @@ All filesystem APIs use the same permission mapping:
 The server canonicalizes the URI, then uses one authorization entry point for account/owner/actor-peer boundaries, effective ACLs when enabled or existing namespace rules when disabled, and write/delete namespace guards.
 
 When the account enables `acl.enabled`, ordinary shared nodes inherit the root’s
-`user:* = manage` grant, allowing members to manage their ACLs. Creating content
+configured `user:*` grant. With the default `manage` level, members can manage their ACLs. Creating content
 inside a restricted directory only inherits the parent’s permissions.
 
 An ACL grant on a directory is inherited by every descendant. `list`, `tree`, and other batch results still check every returned node because an open directory can contain independently restricted descendants.
@@ -121,9 +121,10 @@ ACL data exists only in the context collection. Each context record stores direc
 acl_mode
 acl_direct_grants
 acl_inherited_grants
+acl_resources_root_level
 ```
 
-`acl_direct_grants` is the ACL assigned to the current node. `acl_inherited_grants` stores the parent's current effective ACL. `acl_mode` controls whether inherited grants contribute to the current node's effective permissions. Each principal stores only its highest level as `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. There is no separate ACL collection.
+`acl_direct_grants` is the ACL assigned to the current node. `acl_inherited_grants` stores the parent's effective ACL at materialization time. `acl_mode` controls whether inherited grants contribute to the current node's effective permissions. `acl_resources_root_level` records which configured root level was used; when it differs from the running server configuration, authorization recomputes the ancestor chain instead of trusting stale inherited grants. Each principal stores only its highest level as `{mask}:{principal}`: `1` means `read`, `3` means `write`, and `7` means `manage`. There is no separate ACL collection.
 
 ACLs update with the index, so records for the same URI may temporarily hold different versions. Reads use one ACL snapshot returned by the index, without merging grants across versions or blocking on temporary disagreement. Permission changes take effect as index updates complete; strong consistency is not guaranteed.
 
@@ -133,7 +134,7 @@ A retrieval target URI is only a search scope; the caller does not need to read 
 
 When the account enables `acl.enabled`, shared-scope context writes preserve an
 existing direct ACL for the same URI. New nodes have empty direct ACLs and
-derive inherited ACL fields from their parent, including `7:user:*` when no
+derive inherited ACL fields from their parent, including the configured root grant when no
 restricted boundary intervenes. Creator identity does not affect authorization.
 Re-embedding and ordinary replacement writes cannot reset controlled records to
 default visibility or modify ACLs through regular context fields. When the

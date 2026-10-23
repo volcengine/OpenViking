@@ -298,6 +298,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
     "port": 1933,
     "workers": 1,
     "executor_threads": 0,
+    "resources_root_acl_level": "manage",
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -317,6 +318,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `workers` | integer | `1` | Worker process count |
 | `executor_threads` | non-negative integer | `0` | Maximum threads in each worker process's default asyncio executor; `0` uses Python's default sizing policy |
 | `timeout_keep_alive` | integer (seconds) | `5` | Idle HTTP keep-alive timeout; raise it above the upstream's idle-connection lifetime |
+| `resources_root_acl_level` | `read`, `write`, `manage` | `manage` | Implicit `user:*` grant on `viking://resources`; use `read` to prevent users from creating top-level resource trees when account ACL enforcement is enabled |
 | `auth_mode` | `dev`, `api_key`, `trusted` / `null` | `null` | Auth mode; null is inferred from `root_api_key` |
 | `root_api_key` | string / `null` | `null` | Root key; setting it defaults auth to `api_key` |
 | `cors_origins` | string[] | `["*"]` | Allowed origins |

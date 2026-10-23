@@ -59,7 +59,7 @@ Omitting ACL gives new nodes empty direct grants and inherited parent permission
 
 Imports apply direct ACL only to the final import root. Descendants inherit it; automatically created parent directories receive no direct grants. Re-importing unchanged content still applies an explicit ACL update.
 
-The account's `acl.enabled` defaults to false: namespace rules apply and ACL is ignored for access decisions. When enabled, the shared root permanently grants `user:* = manage`. Supplying ACL neither enables the account switch nor implicitly selects restricted mode.
+The account's `acl.enabled` defaults to false: namespace rules apply and ACL is ignored for access decisions. When enabled, the shared root grants `user:*` the server's configured `resources_root_acl_level` (`manage` by default). The root grant remains immutable through the ACL API. Supplying ACL neither enables the account switch nor implicitly selects restricted mode.
 
 ACL stays in the context index and follows existing asynchronous processing and wait semantics. Temporary inconsistency is accepted. Standalone ACL mutations require an existing context record. Vectorless records and empty-file support are outside this change.
 

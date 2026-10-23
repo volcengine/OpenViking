@@ -2847,7 +2847,7 @@ class VikingVectorIndexBackend:
             assert self.acl_manager is not None
             acl_target_uris = {uri for uri in replacement_target_uris if is_acl_uri(uri)}
             target_acl_fields = {
-                uri: effective.context_fields()
+                uri: self.acl_manager.materialized_context_fields(effective)
                 for uri, effective in (
                     await self.acl_manager.resolve_many(acl_target_uris, ctx)
                 ).items()

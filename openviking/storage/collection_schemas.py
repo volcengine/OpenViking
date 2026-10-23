@@ -22,7 +22,13 @@ from openviking.models.embedder.base import embed_compat
 from openviking.models.model_error import ModelErrorKind, model_error_kind
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
-from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
+from openviking.storage.acl import (
+    ACL_GRANT_FIELDS,
+    ACL_MODE_FIELD,
+    ACL_ROOT_LEVEL_FIELD,
+    AclLevel,
+    AclMode,
+)
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
@@ -131,6 +137,11 @@ class CollectionSchemas:
                     "FieldName": ACL_MODE_FIELD,
                     "FieldType": "string",
                     "DefaultValue": AclMode.NONE.value,
+                },
+                {
+                    "FieldName": ACL_ROOT_LEVEL_FIELD,
+                    "FieldType": "string",
+                    "DefaultValue": AclLevel.MANAGE.value,
                 },
                 *[
                     {
