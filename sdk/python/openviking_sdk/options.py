@@ -117,6 +117,26 @@ class CompileOptions(_ExtraOptions, total=False):
     args: Dict[str, Any]
 
 
+class RuleCompileSource(AddResourceOptions, total=False):
+    resource_uri: str
+    path: str
+    temp_file_id: str
+    to: str
+    parent: str
+    wait: bool
+    internal_task: bool
+    source_name: str
+    is_active: bool
+
+
+class RuleCompileOptions(_ExtraOptions, total=False):
+    sources: List[Union[str, RuleCompileSource]]
+
+
+class RuleSearchOptions(_ExtraOptions, total=False):
+    rule_probability_threshold: float
+
+
 class SetTagsOptions(_ExtraOptions, total=False):
     telemetry: Any
 

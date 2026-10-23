@@ -57,7 +57,8 @@ export const sections: DocSection[] = [
       g('Processing and memory', '处理与记忆', [
         p('concepts/06-extraction'),
         p('concepts/07-retrieval'),
-        p('concepts/08-session')
+        p('concepts/08-session'),
+        p('concepts/17-rule-scenarios')
       ]),
       g('Architecture and reliability', '架构与可靠性', [
         p('concepts/01-architecture'),

@@ -127,7 +127,7 @@ const rerank = {
   provider: 'jev',
   model: 'jev-latest',
   api_key: 'jev-secret',
-  api_base: 'https://api.typesafe.ai',
+  api_base: 'https://api.typesafe.ai/v1/systemone',
   mode: 'noul',
   threshold: 0.1,
   timeout: 30,

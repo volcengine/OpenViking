@@ -60,6 +60,7 @@ from .queue_worker_config import QueueWorkersConfig
 from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
+from .rules_config import RulesConfig
 from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
@@ -248,6 +249,11 @@ class OpenVikingConfig(BaseModel):
     )
 
     rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
+
+    rules: RulesConfig = Field(
+        default_factory=RulesConfig,
+        description="Rule compilation and applicability model configuration",
+    )
 
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,

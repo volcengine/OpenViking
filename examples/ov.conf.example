@@ -248,9 +248,18 @@
         "_comment": "For Jev through Vercel AI Gateway (TypeSafe-compatible endpoint):",
         "provider": "jev",
         "api_key": "{your-vercel-ai-gateway-api-key}",
-        "api_base": "https://ai-gateway.vercel.sh/typesafe",
+        "api_base": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
         "model": "typesafe-ai/jev",
         "threshold": 0.1,
+    },
+    "rules": {
+        "jev_rule_matcher": {
+            "provider": "typesafe",
+            "api_key": "{your-typesafe-api-key}",
+            "timeout": 30,
+            "log_payloads": false,
+        },
+        "scenario_irrelevance_threshold": 0.9,
     },
     "retrieval": {
         "recall_intent_timeout_s": 5.0,

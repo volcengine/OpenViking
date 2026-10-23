@@ -33,6 +33,7 @@ openviking-server --config /path/to/ov.conf
   "vlm": {},
   "query_planner": {},
   "rerank": {},
+  "rules": {},
   "retrieval": {},
   "storage": {},
   "server": {},
@@ -56,6 +57,7 @@ openviking-server --config /path/to/ov.conf
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
 | `query_planner` | object / `null` | `null` | 检索意图分析和召回改写使用的模型。未配置或为空时回退到 `vlm`；`auto` 模式的召回改写要求配置集群级 `query_planner`，或账户级 `query_planner` / `vlm` 覆盖项 |
 | `rerank` | object | disabled | 检索结果重排模型 |
+| `rules` | object | 空配置 | 规则编译和适用性判断使用的可选专用模型 |
 | `retrieval` | object | 见下表 | 检索排序和意图分析策略 |
 | `grep` | object | 内置默认值 | 文本搜索引擎配置 |
 | `glob` | object | 内置默认值 | 路径模式匹配引擎配置 |
@@ -147,6 +149,83 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 
 更换模型或 `dimension` 可能与已有向量集合不兼容，需要迁移或重建索引。
 
+### `rules`
+
+Compiled Rule 的可选模型与生命周期配置：
+
+```json
+{
+  "rules": {
+    "jev_rule_matcher": {
+      "provider": "typesafe",
+      "api_key": "${JEV_API_KEY}"
+    },
+    "compiler": {
+      "provider": "openai",
+      "model": "gpt-4o"
+    },
+    "compiler_context_window": 0
+  }
+}
+```
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+|---|---|---|---|
+| `jev_rule_matcher` | Jev Noul 配置 / `null` | `null` | Scenario 过滤和 Rule 适用性判断使用的 Jev Noul 模型 |
+| `compiler` | VLM 配置 / `null` | `null` | 专用 Rule Compiler |
+| `compiler_context_window` | `0` 或 integer `>= 2048` | `0` | Compiler 上下文窗口；`0` 表示自动探测并使用保守回退值 |
+| `scenario_irrelevance_threshold` | number，`0.5`-`1.0` | `0.9` | Scenario 无关概率达到该值时跳过 |
+| `archived_retention_days` | integer，`>= 1` | `30` | archived Rule 的物理删除保留天数 |
+| `archived_cleanup_interval_seconds` | integer，`>= 60` | `2592000` | archived Rule 清理周期 |
+| `archived_cleanup_enabled` | boolean | `true` | 是否定期清理 archived Rule |
+
+#### `rules.jev_rule_matcher`
+
+该配置用于 Scenario 过滤和 Rule 适用性的独立 Jev System One 判断，不用于检索结果重排。
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+|---|---|---|---|
+| `provider` | `typesafe`、`vercel`、`openrouter`、`custom` | `typesafe` | 选择 endpoint 和 model 默认值 |
+| `api_key` | string | 必填 | 所选 provider 的 API Key |
+| `api_base` | URL / `null` | provider 默认值 | 完整的 System One 请求 URL；显式配置的值会原样使用 |
+| `model` | string / `null` | provider 默认值 | 模型名或 Endpoint ID；`custom` 必填 |
+| `timeout` | number | `30` | HTTP 请求超时秒数 |
+| `extra_headers` | object / `null` | `null` | 附加 HTTP 请求头 |
+| `log_payloads` | boolean | `false` | 是否记录完整请求和响应；日志可能包含任务与 Rule 内容 |
+
+| Provider | 默认请求 URL | 默认 model | 说明 |
+|---|---|---|---|
+| `typesafe` | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | TypeSafe 直连 |
+| `vercel` | `https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | Vercel AI Gateway 的 TypeSafe 兼容 API |
+| `openrouter` | `https://openrouter.ai/api/v1/systemone` | `jev-latest` | OpenRouter System One API |
+| `custom` | 无 | 无 | 必须同时配置 `api_base` 和 `model` |
+
+`api_base` 和 `model` 可分别覆盖 provider 默认值。显式配置的 `api_base` 是完整
+POST URL，任何 provider（包括 `custom`）都不会修改它或追加后缀。
+`extra_headers` 会扩展 provider 请求头，也可以覆盖默认请求头。Rule 匹配固定使用
+独立 Noul 判断，因此不再包含 `mode`、`threshold` 或 `max_input_tokens` 配置。
+Scenario 过滤阈值由 `rules.scenario_irrelevance_threshold` 配置；
+Rule 适用性使用 Rule 搜索请求中的 `rule_probability_threshold`（默认 `0.65`）。
+
+Rule 状态为 `active`、`paused`、`archived`。`PAUSE` 暂停检索但不设置清理期限；
+`ARCHIVE` 从 `archived_at` 开始计算保留期；`RESTORE` 可恢复两种状态为 active，
+并清除归档时间。编译候选只包含 active 和 paused Rule。
+
+Rule 按 Scenario 直接存放在 `memories/rules/<scenario_id>/`：`abstract.md`
+保存场景元信息，`<atomic_id>.md` 保存规则。存储格式见
+[Rule Scenario](../concepts/17-rule-scenarios.md)。
+
+`jev_rule_matcher` 未配置、不可用、调用失败或返回无效结果时，Scenario 和 Rule 判断
+直接放行，不调用 VLM。Scenario 诊断记录 `decision=pass`；Rule 返回 `judge=pass`
+和 warning，以 `1.0` 作为通过阈值的放行分数，
+该值不是模型评估的适用概率。Agent 仍需根据具体事实核验适用条件和例外。
+规则编译从 `compiler` 回退到账户默认 VLM。原 `rule_matcher` 配置已移除，不再读取。
+
+Rule 的 `applies_when` 可以为空，默认空值；为空时表示任何情况都适用，除非
+`exception` 条件成立。没有适用条件和例外的候选 Rule 适用概率直接取 `1.0`。
+Compiler 会优先忠实提炼原文中的对象、操作、前提和场景，尽量生成非空且可判定的
+`applies_when`，不得编造条件或丢弃原文已有的限制。空条件不表示未知或不适用。
+
 ### `rerank`
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
@@ -160,7 +239,7 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
 
-`jev` 通过现有 `api_base` 和 `model` 字段同时支持 TypeSafe 直连（`https://api.typesafe.ai`，模型 `jev-latest`）和 Vercel AI Gateway 的 TypeSafe 兼容端点（`https://ai-gateway.vercel.sh/typesafe`，模型 `typesafe-ai/jev`），两者协议相同。默认 `noul` 模式独立评估每个候选；可选的 `choice` 模式横向比较所有候选并返回相对概率，使用时应将 `threshold` 设为 `0`。显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 和 `jev` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
+`jev` 通过现有 `api_base` 和 `model` 字段同时支持 TypeSafe 直连（`https://api.typesafe.ai/v1/systemone`，模型 `jev-latest`）和 Vercel AI Gateway 的 TypeSafe 兼容端点（`https://ai-gateway.vercel.sh/typesafe/v1/systemone`，模型 `typesafe-ai/jev`），两者协议相同。Rerank 的 `api_base` 可以是服务根地址或完整 System One URL；缺少 `/v1/systemone` 时会自动追加。默认 `noul` 模式独立评估每个候选；可选的 `choice` 模式横向比较所有候选并返回相对概率，使用时应将 `threshold` 设为 `0`。显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 和 `jev` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
 
 ## 检索配置
 
