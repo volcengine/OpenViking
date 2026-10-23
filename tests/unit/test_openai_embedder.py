@@ -4,6 +4,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openviking.models.embedder import OpenAIDenseEmbedder
 
 
@@ -277,3 +279,117 @@ class TestOpenAIDenseEmbedder:
 
         assert result.dense_vector is not None
         mock_telemetry.add_token_usage_by_source.assert_called_once_with("embedding", 8, 0)
+
+
+class TestExceedContextRetry:
+    """The token guard estimates from character counts, so a provider can still
+    reject an input as too long. When it reports the window it enforces, the
+    embedder must retry once inside that window instead of failing the write."""
+
+    @staticmethod
+    def _bad_request(n_ctx=None, key="n_ctx"):
+        import httpx
+        import openai
+
+        detail = {
+            "code": 400,
+            "message": "request (7208 tokens) exceeds the available context size",
+            "type": "exceed_context_size_error",
+        }
+        if n_ctx is not None:
+            detail[key] = n_ctx
+        body = {"error": detail}
+        request = httpx.Request("POST", "http://localhost:8080/v1/embeddings")
+        response = httpx.Response(400, json=body, request=request)
+        return openai.BadRequestError("bad request", response=response, body=body)
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_retries_once_with_provider_context_window(self, mock_openai_class):
+        import openai
+
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1536
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_response.usage = None
+
+        mock_client.embeddings.create.side_effect = [
+            self._bad_request(n_ctx=2560),
+            mock_response,
+        ]
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="bge-m3",
+            api_key="test-api-key",
+            api_base="http://localhost:8080/v1",
+        )
+        embedder.max_input_tokens = 2400
+
+        long_text = "viking://user/default/memories/entities/kanban_task\n" * 600
+        result = embedder.embed([long_text])
+
+        assert result.dense_vector is not None
+        assert mock_client.embeddings.create.call_count == 2
+        retried_input = mock_client.embeddings.create.call_args_list[1][1]["input"]
+        assert len(retried_input[0]) < len(long_text)
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_does_not_retry_without_context_size(self, mock_openai_class):
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_client.embeddings.create.side_effect = self._bad_request(n_ctx=None)
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="bge-m3",
+            api_key="test-api-key",
+            api_base="http://localhost:8080/v1",
+        )
+        embedder.max_input_tokens = 2400
+
+        with pytest.raises(RuntimeError, match="OpenAI API error"):
+            embedder.embed(["some text"])
+
+        assert mock_client.embeddings.create.call_count == 1
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_does_not_retry_when_window_leaves_text_unchanged(self, mock_openai_class):
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_client.embeddings.create.side_effect = self._bad_request(n_ctx=8192)
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="bge-m3",
+            api_key="test-api-key",
+            api_base="http://localhost:8080/v1",
+        )
+        embedder.max_input_tokens = 2400
+
+        with pytest.raises(RuntimeError, match="OpenAI API error"):
+            embedder.embed(["short text"])
+
+        assert mock_client.embeddings.create.call_count == 1
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_retry_failure_surfaces_the_second_error(self, mock_openai_class):
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_client.embeddings.create.side_effect = [
+            self._bad_request(n_ctx=2560),
+            self._bad_request(n_ctx=2560),
+        ]
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="bge-m3",
+            api_key="test-api-key",
+            api_base="http://localhost:8080/v1",
+        )
+        embedder.max_input_tokens = 2400
+
+        long_text = "viking://user/default/memories/entities/kanban_task\n" * 600
+        with pytest.raises(RuntimeError, match="OpenAI API error"):
+            embedder.embed([long_text])
+
+        assert mock_client.embeddings.create.call_count == 2
