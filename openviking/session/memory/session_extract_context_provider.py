@@ -46,7 +46,6 @@ logger = get_logger(__name__)
 
 _PREFETCH_SEARCH_QUERY_MAX_CHARS = 5000
 _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS = 1000
-_PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS = 500
 _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
 _RESOURCE_REASON_LANGUAGE_RE = re.compile(
     r"(?im)^\s*(?:User reason|用户说明|用户原因|用户理由)[:：]\s*(.+?)\s*$"
@@ -368,20 +367,21 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return normalized[: max_chars - 3].rstrip() + "..."
 
     def _build_prefetch_search_query(self) -> str:
-        """Build a compact semantic query from raw conversation messages.
+        """Build a compact semantic query from raw user messages.
 
         The LLM already receives the full conversation via pre_fetch_messages.
-        Search only needs topical recall signals, so use the raw message content
-        instead of the prompt-wrapped conversation.
+        Use user-authored recall signals so assistant replies do not redirect
+        retrieval of existing user memories.
         """
         if not isinstance(self.messages, list):
             return ""
 
-        primary_sections: List[str] = []
-        supporting_sections: List[str] = []
+        sections: List[str] = []
 
         for msg in self.messages:
             role = getattr(msg, "role", "")
+            if role != "user":
+                continue
             speaker = getattr(msg, "peer_id", "") or role
             parts = getattr(msg, "parts", [])
 
@@ -389,23 +389,16 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
             for part in parts:
                 if hasattr(part, "text") and part.text:
-                    limit = (
-                        _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS
-                        if role == "user"
-                        else _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS
+                    text_parts.append(
+                        self._truncate_prefetch_query_text(
+                            part.text, _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS
+                        )
                     )
-                    text_parts.append(self._truncate_prefetch_query_text(part.text, limit))
             if text_parts:
                 section = f"{speaker}: " + "\n".join(text_parts)
-                if role == "user":
-                    primary_sections.append(section)
-                else:
-                    supporting_sections.append(section)
+                sections.append(section)
 
-        query = "\n\n".join(primary_sections + supporting_sections)
-        if not query.strip():
-            query = self._assemble_conversation(self.messages)
-
+        query = "\n\n".join(sections)
         return self._truncate_prefetch_query_text(query, _PREFETCH_SEARCH_QUERY_MAX_CHARS)
 
     def create_tool_context(self, default_search_uris=[]):
