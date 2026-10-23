@@ -188,7 +188,7 @@ curl http://localhost:1933/api/v1/compile/submissions/studio-compile-001 \
 
 ### 查询任务
 
-普通用户只能查询自己创建的任务；任务不存在或属于其他用户时均返回 `404`。ROOT 查询使用独立的管理可见范围，且不能取消任务。
+普通用户只能查询自己创建的任务；任务不存在或属于其他用户时均返回 `404`。ROOT 查询使用独立的管理可见范围，且可以取消任意存在的任务。
 
 ```http
 GET /api/v1/tasks/{task_id}

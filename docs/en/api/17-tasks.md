@@ -228,7 +228,7 @@ Repeated cancellation of a task in `cancelling` or `cancelled` is idempotent.
 |-----------|------|----------|---------|-------------|
 | task_id | str | Yes | - | Background task ID to cancel |
 
-Only the current user who owns the task can cancel it. ROOT identities cannot cancel tasks.
+Only the current user who owns the task can cancel it. ROOT identities can cancel any task that exists; an unknown or expired task ID returns `404` for them.
 
 #### 3. Usage Examples
 
@@ -294,7 +294,6 @@ If the task has no remaining work, the response status can be `cancelled` immedi
 
 **Error Handling:**
 - `NOT_FOUND` (404): the task does not exist, has expired, or belongs to another user
-- `PERMISSION_DENIED` (403): a ROOT identity attempts to cancel a task
 - `FAILED_PRECONDITION` (412): the task type does not support cancellation, or the task is already `completed`/`failed`
 
 ---
