@@ -158,18 +158,39 @@ def _load_cases(
     return units
 
 
-def _split_content(content: str) -> list[str]:
+def _split_content(content: str, *, max_words: int = MAX_WORDS) -> list[str]:
+    if max_words < 1:
+        raise ValueError("message speaker prefix exceeds the word limit")
     words = list(_WORD.finditer(content))
     if not words:
         raise ValueError("message.content must be non-blank")
     parts = []
-    for first in range(0, len(words), MAX_WORDS):
-        last = min(first + MAX_WORDS, len(words)) - 1
+    for first in range(0, len(words), max_words):
+        last = min(first + max_words, len(words)) - 1
         parts.append(content[words[first].start() : words[last].end()])
     return parts
 
 
-def _message_chunks(raw_messages: Any, label: str) -> list[list[dict[str, Any]]]:
+def _locomo_named_content(content: str, speaker: str, other: str, label: str) -> str:
+    """Keep the original human speaker explicit in every LoCoMo Add turn."""
+    dialogue_id = re.match(r"^\[D\d+:\d+\]\s+([^:\n]+):\s+", content)
+    if dialogue_id:
+        if dialogue_id.group(1) != speaker:
+            raise ValueError(f"{label} names {dialogue_id.group(1)!r}, expected {speaker!r}")
+        return content
+    if content.startswith(f"{speaker}: "):
+        return content
+    if content.startswith(f"{other}: "):
+        raise ValueError(f"{label} names {other!r}, expected {speaker!r}")
+    return f"{speaker}: {content}"
+
+
+def _message_chunks(
+    raw_messages: Any,
+    label: str,
+    *,
+    locomo_speakers: dict[str, str] | None = None,
+) -> list[list[dict[str, Any]]]:
     if not isinstance(raw_messages, list) or not raw_messages:
         raise ValueError(f"{label}.messages must be a non-empty array")
 
@@ -181,12 +202,32 @@ def _message_chunks(raw_messages: Any, label: str) -> list[list[dict[str, Any]]]
         if role not in {"user", "assistant"}:
             raise ValueError(f"{label}.messages[{index}].role is invalid")
         content = _text(raw.get("content"), f"{label}.messages[{index}].content")
+        if locomo_speakers is not None:
+            other_role = "assistant" if role == "user" else "user"
+            content = _locomo_named_content(
+                content,
+                locomo_speakers[role],
+                locomo_speakers[other_role],
+                f"{label}.messages[{index}].content",
+            )
         timestamp = raw.get("timestamp")
         if timestamp is not None and (
             isinstance(timestamp, bool) or not isinstance(timestamp, int) or timestamp < 0
         ):
             raise ValueError(f"{label}.messages[{index}].timestamp is invalid")
-        for part in _split_content(content):
+        parts = _split_content(content)
+        if locomo_speakers is not None and len(parts) > 1:
+            # Repeat the validated source prefix, including any dialogue ID, in
+            # every fragment so splitting never loses the human speaker.
+            prefix_match = re.match(
+                rf"^(?:\[D\d+:\d+\]\s+)?{re.escape(locomo_speakers[role])}:\s+", content
+            )
+            assert prefix_match is not None
+            prefix = prefix_match.group(0)
+            body = content[prefix_match.end() :]
+            budget = MAX_WORDS - len(_WORD.findall(prefix))
+            parts = [prefix + part for part in _split_content(body, max_words=budget)]
+        for part in parts:
             message: dict[str, Any] = {"role": role, "content": part}
             if timestamp is not None:
                 message["timestamp"] = timestamp
@@ -230,6 +271,15 @@ def _prepare_unit(
         if user_id is None:
             user_id = f"aml-{_digest([namespace, unit, history_key, history_hash])[:32]}"
             histories[history_identity] = user_id
+            locomo_speakers = None
+            if unit == "locomo_refined":
+                extra = raw.get("extra")
+                if not isinstance(extra, dict):
+                    raise ValueError(f"{case_id}.extra must contain LoCoMo speaker names")
+                locomo_speakers = {
+                    "user": _text(extra.get("speaker_1_name"), f"{case_id}.speaker_1_name"),
+                    "assistant": _text(extra.get("speaker_2_name"), f"{case_id}.speaker_2_name"),
+                }
             for session_index, raw_session in enumerate(raw_histories):
                 if not isinstance(raw_session, dict):
                     raise ValueError(f"{case_id}.histories[{session_index}] must be an object")
@@ -240,7 +290,11 @@ def _prepare_unit(
                 session_id = "session-" + _digest([user_id, session_index, source_session_id])[:32]
                 operations = []
                 for chunk_index, messages in enumerate(
-                    _message_chunks(raw_session.get("messages"), source_session_id)
+                    _message_chunks(
+                        raw_session.get("messages"),
+                        source_session_id,
+                        locomo_speakers=locomo_speakers,
+                    )
                 ):
                     operations.append(
                         AddOperation(
