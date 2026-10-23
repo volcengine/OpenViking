@@ -144,6 +144,7 @@ _CONFIG_SCHEMA = [
     _cfg_field("account", "Advanced local identity override (leave blank for user API keys)"),
     _cfg_field("user", "Advanced local user override (leave blank for user API keys)"),
     _cfg_field("agent", "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.", default=_DEFAULT_AGENT),
+    _cfg_field("auto_recall", "Inject historical context automatically; capture and explicit tools remain available when disabled", type="boolean", default=True),
     _cfg_field("recall_scope", "Automatic recall: all peers (shared) or current sender (peer). Unset preserves existing behavior.",
                type="string", choices=["shared", "peer"], default=None),
     _cfg_field(
@@ -2105,6 +2106,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Session-start memory block (once per session) + query recall."""
+        cfg, env = self._profile_config_and_env()
+        if not self._setting("auto_recall", cfg, env=env):
+            return ""
         query_text = _derive_openviking_user_text(query).strip()
         if not self._ensure_client():
             return ""

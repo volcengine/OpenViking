@@ -23,6 +23,20 @@ OPENVIKING_ENDPOINT=http://127.0.0.1:1933
 The default profile uses `~/.hermes/.env`. A named profile uses
 `~/.hermes/profiles/<profile>/.env`. Start a new Hermes session after changing it.
 
+## Capture and explicit retrieval without automatic recall
+
+To keep conversation capture and explicit `viking_*` tools without injecting
+historical context automatically, run this in the profile you want to change:
+
+```bash
+hermes config set memory.openviking.auto_recall false
+```
+
+The profile-scoped environment override is `OPENVIKING_AUTO_RECALL=false`.
+This suppresses both session-start memory context and per-turn query recall
+before recall-related client or network I/O. Turn capture, memory commits,
+and explicit tools keep their existing behavior. The default is `true`.
+
 ## Quick Local model support
 
 Quick Local copies Hermes's language model settings into its own server config.
