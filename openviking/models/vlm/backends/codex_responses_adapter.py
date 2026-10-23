@@ -281,7 +281,7 @@ class CodexCompletionsAdapter:
             stream = client.responses.create(**response_kwargs, stream=True)
         try:
             for event in stream:
-                event_type = getattr(event, "type", "")
+                event_type = getattr(event, "type", "") or ""
                 if event_type == "response.output_item.done":
                     item = getattr(event, "item", None)
                     if item is not None:
