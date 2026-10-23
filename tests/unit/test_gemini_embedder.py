@@ -2,9 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """
 Tests for GeminiDenseEmbedder.
-Pattern: patch at module import path, use MagicMock, never make real API calls.
+Provider behavior uses mocks; SDK lifecycle tests use loopback HTTP only.
 """
 
+import asyncio
+import concurrent.futures
+import json
+import socket
+from contextlib import ExitStack
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Event, Thread
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,6 +30,254 @@ def _make_mock_result(values_list):
     result = MagicMock()
     result.embeddings = [_make_mock_embedding(v) for v in values_list]
     return result
+
+
+@pytest.fixture(params=["aiohttp", "httpx"])
+def sdk_lifecycle(request, monkeypatch):
+    from google import genai
+    from google.genai import types
+
+    from openviking.models.embedder import gemini_embedders
+
+    state = SimpleNamespace(
+        clients=[],
+        requests=[],
+        status=200,
+        failures=0,
+        block=False,
+        entered=Event(),
+        release=Event(),
+    )
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            self.connection.settimeout(10)
+            state.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            state.entered.set()
+            if state.block and not state.release.wait(timeout=10):
+                return
+            status = 500 if len(state.requests) <= state.failures else state.status
+            payload = (
+                {"embeddings": [{"values": [0.6, 0.8, 0.0]}]}
+                if status == 200
+                else {"error": {"code": status, "message": "Permission denied or service failure"}}
+            )
+            body = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Expected when the caller cancels a blocked request.
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = False
+    server_thread = Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True)
+    server_thread.start()
+    loops = [asyncio.new_event_loop(), asyncio.new_event_loop()]
+    loop_threads = [Thread(target=loop.run_forever, daemon=True) for loop in loops]
+    for thread in loop_threads:
+        thread.start()
+    state.loops = loops
+
+    connect = socket.socket.connect
+
+    def loopback_connect(sock, address):
+        assert address[0] in {"127.0.0.1", "::1"}, f"Non-loopback connection: {address}"
+        return connect(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", loopback_connect)
+    real_client = genai.Client
+
+    def client_factory(**kwargs):
+        options = types.HttpOptions.model_validate(kwargs.get("http_options") or {})
+        kwargs["http_options"] = options.model_copy(
+            update={
+                "base_url": f"http://127.0.0.1:{server.server_port}",
+                "client_args": {"trust_env": False},
+                "async_client_args": {"trust_env": False},
+            }
+        )
+        client = real_client(**kwargs)
+        # SDK internals are intentional here: exercise both real transports and
+        # inspect their release, which MagicMock-based provider tests cannot prove.
+        monkeypatch.setattr(client._api_client, "_use_aiohttp", lambda: request.param == "aiohttp")
+        record = SimpleNamespace(
+            client=client, transport=request.param, owner=None, closed_on=[], calls=[]
+        )
+        state.clients.append(record)
+        embed_content = client.aio.models.embed_content
+        aclose = client.aio.aclose
+
+        async def tracked_embed(**call_kwargs):
+            if record.owner is None:
+                record.owner = asyncio.get_running_loop()
+            record.calls.append(call_kwargs)
+            return await embed_content(**call_kwargs)
+
+        async def tracked_close():
+            record.closed_on.append(asyncio.get_running_loop())
+            await aclose()
+
+        monkeypatch.setattr(client.aio.models, "embed_content", tracked_embed)
+        monkeypatch.setattr(client.aio, "aclose", tracked_close)
+        return client
+
+    monkeypatch.setattr(gemini_embedders.genai, "Client", client_factory)
+
+    def close_client(record):
+        async def cleanup():
+            try:
+                await record.client.aio.aclose()
+            finally:
+                record.client.close()
+
+        asyncio.run_coroutine_threadsafe(cleanup(), record.owner or loops[0]).result(timeout=10)
+
+    try:
+        state.embedder = gemini_embedders.GeminiDenseEmbedder(
+            api_key="loopback-test-key",
+            dimension=3,
+            query_param="RETRIEVAL_QUERY",
+            config={"max_retries": 1},
+        )
+        yield state
+    finally:
+        state.release.set()
+        try:
+            # Also clean up broken implementations, on their original owner loops.
+            with ExitStack() as cleanup:
+                for record in state.clients:
+                    cleanup.callback(close_client, record)
+        finally:
+            for loop, thread in zip(loops, loop_threads, strict=True):
+                loop.call_soon_threadsafe(loop.stop)
+                thread.join(timeout=10)
+                loop.close()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=10)
+
+
+def _assert_sdk_closed(record):
+    api_client = record.client._api_client
+    assert api_client._httpx_client.is_closed
+    if record.owner is not None:
+        assert api_client._async_httpx_client.is_closed
+        session = api_client._aiohttp_session
+        if record.transport == "aiohttp":
+            assert session is not None and session.closed
+        else:
+            assert session is None
+        assert record.closed_on
+        assert all(loop is record.owner for loop in record.closed_on)
+    # The embedder's long-lived sync client never opens an async transport.
+
+
+def _model_usage(embedder):
+    usage = embedder.get_token_usage()["usage_by_model"].get(embedder.model_name)
+    return usage["total_usage"] if usage else {"call_count": 0, "prompt_tokens": 0}
+
+
+def _run_on(loop, coroutine):
+    return asyncio.run_coroutine_threadsafe(coroutine, loop).result(timeout=10)
+
+
+def test_real_sdk_embedding_from_two_live_loops(sdk_lifecycle):
+    state = sdk_lifecycle
+    embedder = state.embedder
+    before = _model_usage(embedder)
+    results = [
+        _run_on(state.loops[0], embedder.embed_async("document text")),
+        _run_on(state.loops[0], embedder.embed_query_async("query text")),
+        _run_on(state.loops[1], embedder.embed_async("another document")),
+    ]
+
+    assert all(result.dense_vector == pytest.approx([0.6, 0.8, 0.0]) for result in results)
+    calls = [call for record in state.clients for call in record.calls]
+    assert calls[1]["contents"] == "task: search result | query: query text"
+    assert calls[1]["config"].task_type is None
+    usage = _model_usage(embedder)
+    assert usage["call_count"] == before["call_count"] + 3
+    assert usage["prompt_tokens"] > before["prompt_tokens"]
+    embedder.close()
+    for record in state.clients:
+        _assert_sdk_closed(record)
+
+
+def test_real_sdk_close_releases_sync_and_async_transports(sdk_lifecycle):
+    state = sdk_lifecycle
+    assert state.embedder.embed("sync text").dense_vector == pytest.approx([0.6, 0.8, 0.0])
+    _run_on(state.loops[0], state.embedder.embed_async("async text"))
+
+    async def close_from_other_loop():
+        state.embedder.close()
+
+    _run_on(state.loops[1], close_from_other_loop())
+    for record in state.clients:
+        _assert_sdk_closed(record)
+
+
+def test_real_sdk_async_retry_keeps_usage_and_closes_client(sdk_lifecycle):
+    from openviking.models.embedder.retry_embedder import RetryEmbedder
+
+    state = sdk_lifecycle
+    state.failures = 1
+    before = _model_usage(state.embedder)
+    result = _run_on(state.loops[0], RetryEmbedder(state.embedder).embed_async("retry text"))
+
+    assert result.dense_vector == pytest.approx([0.6, 0.8, 0.0])
+    assert len(state.requests) == 2
+    assert _model_usage(state.embedder)["call_count"] == before["call_count"] + 1
+    state.embedder.close()
+    for record in state.clients:
+        _assert_sdk_closed(record)
+
+
+def test_real_sdk_cancellation_releases_request_client(sdk_lifecycle):
+    state = sdk_lifecycle
+    state.block = True
+    finished = Event()
+
+    async def embed_until_cancelled():
+        try:
+            await state.embedder.embed_async("cancelled text")
+        finally:
+            finished.set()
+
+    future = asyncio.run_coroutine_threadsafe(embed_until_cancelled(), state.loops[0])
+    try:
+        assert state.entered.wait(timeout=10)
+        assert future.cancel()
+        with pytest.raises(concurrent.futures.CancelledError):
+            future.result(timeout=10)
+        assert finished.wait(timeout=10)
+        state.embedder.close()
+        for record in state.clients:
+            _assert_sdk_closed(record)
+    finally:
+        future.cancel()
+        state.release.set()
+
+
+def test_real_sdk_async_error_preserves_reason_and_closes_client(sdk_lifecycle):
+    state = sdk_lifecycle
+    state.status = 403
+    with pytest.raises(ModelError, match="Permission denied") as raised:
+        _run_on(state.loops[0], state.embedder.embed_async("forbidden text"))
+
+    assert raised.value.kind is ModelErrorKind.PERMISSION_DENIED
+    assert raised.value.status_code == 403
+    state.embedder.close()
+    for record in state.clients:
+        _assert_sdk_closed(record)
 
 
 def test_input_token_limit_constant():
@@ -255,7 +511,9 @@ class TestGeminiErrorMessages:
 
         assert raised.value.kind is expected_kind
         assert raised.value.status_code == 429
-        assert raised.value.__cause__.__cause__ is error
+        cause = raised.value.__cause__
+        assert cause is not None
+        assert cause.__cause__ is error
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_error_message_includes_http_code(self, mock_client):
