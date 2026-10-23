@@ -30,11 +30,11 @@ from openviking.service.session_auto_commit import (
 )
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
-from openviking.session.archive_store import is_storage_not_found
+from openviking.session.archive_store import ArchiveStore, is_storage_not_found
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory_policy import MemoryPolicy
-from openviking.storage.viking_fs import VikingFS
+from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.utils.tags import normalize_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
@@ -388,6 +388,25 @@ class SessionService:
             logger.debug("Failed to list sessions", exc_info=True)
 
         return list(sessions_by_id.values())
+
+    async def summarize_archives(self, ctx: RequestContext) -> Dict[str, int]:
+        """Summarize existing archives in the current user's session namespace."""
+        viking_fs = self.viking_fs
+        counts = {"completed": 0, "failed": 0, "pending": 0}
+        session_root = canonical_session_uri(ctx)
+        try:
+            entries = await viking_fs.ls(session_root, node_limit=LS_ALL_NODES, ctx=ctx)
+        except Exception as exc:
+            if not is_storage_not_found(exc):
+                raise
+            entries = []
+        for entry in entries:
+            if not entry.get("isDir") or entry.get("name") in (".", ".."):
+                continue
+            archives = ArchiveStore(viking_fs, ctx, f"{session_root}/{entry['name']}")
+            for state, count in (await archives.summarize()).items():
+                counts[state] += count
+        return {"total": sum(counts.values()), **counts}
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.

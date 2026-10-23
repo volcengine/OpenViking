@@ -4,8 +4,109 @@
 """Tests for observer endpoints (/api/v1/observer/*)."""
 
 import asyncio
+from types import SimpleNamespace
 
 import httpx
+import pytest
+from fastapi import FastAPI
+
+from openviking.server.auth import get_request_context
+from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import observer
+from openviking.service.session_service import SessionService
+from openviking.storage.viking_fs import VikingFS
+from openviking_cli.session.user_id import UserIdentifier
+from tests.utils.mock_agfs import MockLocalAGFS
+
+
+@pytest.mark.parametrize(("session_count", "archive_count"), [(1, 1001), (1001, 1)])
+async def test_observer_session_archives_counts_persisted_markers(
+    tmp_path, monkeypatch, session_count, archive_count
+):
+    """Count all visible archives without task rows, across new service instances."""
+    agfs = MockLocalAGFS(root_path=tmp_path)
+    session_root = "/local/acme/user/alice/sessions"
+    for session_index in range(session_count):
+        for index in range(archive_count):
+            agfs.write(
+                f"{session_root}/s{session_index}/history/archive_{index:03d}/.failed.json", "{}"
+            )
+    history = f"{session_root}/s0/history"
+    agfs.write(f"{history}/archive_1001/.done", "{}")
+    agfs.write(f"{history}/archive_1001/.failed.json", "{}")
+    agfs.write(f"{history}/archive_1002/messages.jsonl", "")
+    agfs.write(f"{history}/unrelated/.failed.json", "{}")
+    agfs.write(f"{session_root}/without-history/messages.jsonl", "")
+    agfs.write("/local/acme/user/bob/sessions/s1/history/archive_000/.done", "{}")
+    agfs.write("/local/other/user/alice/sessions/s1/history/archive_000/.done", "{}")
+
+    app = FastAPI()
+    app.include_router(observer.router)
+    context = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    app.dependency_overrides[get_request_context] = lambda: context
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for _ in range(2):
+            service = SessionService(viking_fs=VikingFS(agfs=agfs))
+            monkeypatch.setattr(
+                observer, "get_service", lambda service=service: SimpleNamespace(sessions=service)
+            )
+            response = await client.get("/api/v1/observer/session-archives")
+            assert response.status_code == 200
+            assert response.json()["result"] == {
+                "total": 1003,
+                "completed": 1,
+                "failed": 1001,
+                "pending": 1,
+            }
+
+        context = RequestContext(user=UserIdentifier("acme", "bob"), role=Role.USER)
+        assert (await client.get("/api/v1/observer/session-archives")).json()["result"] == {
+            "total": 1,
+            "completed": 1,
+            "failed": 0,
+            "pending": 0,
+        }
+        context = RequestContext(user=UserIdentifier("other", "alice"), role=Role.ROOT)
+        assert (await client.get("/api/v1/observer/session-archives")).json()["result"] == {
+            "total": 1,
+            "completed": 1,
+            "failed": 0,
+            "pending": 0,
+        }
+        context = RequestContext(user=UserIdentifier("empty", "nobody"), role=Role.USER)
+        assert (await client.get("/api/v1/observer/session-archives")).json()["result"] == {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "pending": 0,
+        }
+
+
+async def test_observer_session_archives_does_not_hide_storage_errors(tmp_path, monkeypatch):
+    agfs = MockLocalAGFS(root_path=tmp_path)
+    marker_dir = "/local/acme/user/alice/sessions/s1/history/archive_000"
+    agfs.write(f"{marker_dir}/.failed.json", "{}")
+    original_ls = agfs.ls
+
+    def failing_ls(path, **kwargs):
+        if path == marker_dir:
+            raise PermissionError("archive unavailable")
+        return original_ls(path, **kwargs)
+
+    monkeypatch.setattr(agfs, "ls", failing_ls)
+    service = SessionService(viking_fs=VikingFS(agfs=agfs))
+    monkeypatch.setattr(observer, "get_service", lambda: SimpleNamespace(sessions=service))
+    app = FastAPI()
+    app.include_router(observer.router)
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("acme", "alice"),
+        role=Role.USER,
+    )
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/observer/session-archives")
+    assert response.status_code == 500
 
 
 async def test_observer_queue(client: httpx.AsyncClient):

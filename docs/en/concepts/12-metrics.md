@@ -320,6 +320,8 @@ whole scrape snapshot instead of publishing partial zero lag.
 | `openviking_task_cancelling` | Gauge | `task_type` | tasks being cancelled |
 | `openviking_task_cancelled` | Gauge | `task_type` | cancelled tasks |
 
+These Gauges are snapshots supplied by the configured task store, not lifetime counters or a count of archive markers. With file-based task storage, only tasks loaded into the current process's cache are counted. The current MySQL task store does not supply this snapshot, so task-type series can be absent. Neither a zero value nor an absent series establishes that there are no persisted failures. Use the [Task API](../api/17-tasks.md) to query retained tasks, and see [Observer diagnostics](../api/18-observer.md) for session commit failures.
+
 ### Cache
 
 | Metric Family | Type | Common Labels | Meaning |
