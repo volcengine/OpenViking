@@ -404,10 +404,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 changed_entries=1,
                 ctx=parent_ctx,
                 l0_body_changed=l0_body_changed,
-                # This helper handles automatic upward propagation only. Manual
-                # refresh/ingest bypasses the threshold for its requested root,
-                # not for every ancestor reached afterwards.
-                force_refresh=False,
+                # Deletion refreshes must also remove stale content from ancestors.
+                # Ordinary refresh/ingest still applies the freshness threshold.
+                force_refresh=msg.generation_trigger == "content_delete",
                 overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
                 refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
                 lock_timeout_secs=1.0,
@@ -444,7 +443,9 @@ class SemanticProcessor(DequeueHandlerBase):
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
             changes={"modified": [uri]},
-            generation_trigger="parent_refresh",
+            generation_trigger=(
+                "content_delete" if msg.generation_trigger == "content_delete" else "parent_refresh"
+            ),
             coalesce_key=build_semantic_coalesce_key(
                 context_type=msg.context_type,
                 uri=parent_uri,
