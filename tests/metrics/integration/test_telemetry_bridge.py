@@ -1,10 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import pytest
+
 from openviking.metrics.datasources.telemetry_bridge import TelemetryBridgeEventDataSource
 from openviking.metrics.global_api import init_metrics_from_server_config, shutdown_metrics
 from openviking.observability.events import try_publish_event
 from openviking.server.config import MetricsConfig, ObservabilityConfig, ServerConfig
+from openviking.telemetry.execution import run_with_telemetry
 
 
 def test_queue_duration_event_is_wired_to_metrics_registry(registry, render_prometheus):
@@ -136,6 +139,29 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
             'openviking_resource_wait_duration_seconds_count{account_id="__unknown__",operation="resource.process"} 1'
             in text
         )
+    finally:
+        shutdown_metrics(app=None)
+
+
+@pytest.mark.asyncio
+async def test_failed_operation_is_wired_to_metrics_registry(registry, render_prometheus):
+    init_metrics_from_server_config(
+        ServerConfig(observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))),
+        app=None,
+        registry=registry,
+    )
+
+    async def fail() -> None:
+        raise RuntimeError("injected failure")
+
+    try:
+        with pytest.raises(RuntimeError, match="injected failure"):
+            await run_with_telemetry(operation="search.search", telemetry=False, fn=fail)
+
+        text = render_prometheus(registry)
+        labels = 'account_id="__unknown__",operation="search.search",status="error"'
+        assert f"openviking_operation_requests_total{{{labels}}} 1" in text
+        assert f"openviking_operation_duration_seconds_count{{{labels}}} 1" in text
     finally:
         shutdown_metrics(app=None)
 
