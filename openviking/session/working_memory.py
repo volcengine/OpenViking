@@ -371,8 +371,8 @@ _WM_APPEND_ONLY_SECTIONS = frozenset(
     }
 )
 
-# Very loose path-like token regex used to detect file paths that existed
-# in prior Files & Context and MUST NOT silently disappear after UPDATE.
+# Very loose path-like token regex used to guard against lost file context
+# while allowing oversized Files & Context sections to consolidate.
 _WM_PATH_LIKE_RE = re.compile(
     r"(?:[\w./\\-]+\.(?:py|ts|tsx|js|jsx|md|yaml|yml|json|sh|ps1|cmd|bat|toml|ini|cfg|rs|go))"
     r"|(?:[a-zA-Z_][\w\-]*(?:/[a-zA-Z_][\w\-]*){1,})",
@@ -839,11 +839,13 @@ def wm_enforce_key_facts_consolidation(op: Any, old_content: str) -> Dict[str, A
 
 
 def wm_enforce_files_no_regression(op: Any, old_content: str) -> Dict[str, Any]:
-    """Guard: don't let a 'Files & Context' UPDATE drop file paths.
+    """Preserve file paths unless an oversized section is being consolidated.
 
     If the LLM returns UPDATE whose content is missing one or more file
     paths that existed in the old content, reject the UPDATE. If the LLM
     introduced any new paths, surface them as an APPEND; otherwise KEEP.
+    Above the section-size warning thresholds, allow a smaller replacement
+    retaining an existing path so the model can prune historical context.
     """
     if not isinstance(op, dict):
         return {"op": "KEEP"}
@@ -856,6 +858,17 @@ def wm_enforce_files_no_regression(op: Any, old_content: str) -> Dict[str, Any]:
     new_paths = set(_WM_PATH_LIKE_RE.findall(new_content))
     missing = {p for p in old_paths if p not in new_paths}
     if not missing:
+        return op
+
+    old_tokens = estimate_text_tokens(old_content or "")
+    oversized = (
+        len(wm_extract_bullet_items(old_content or "")) > _WM_SECTION_BULLET_THRESHOLD
+        or old_tokens > _WM_SECTION_TOKEN_THRESHOLD
+    )
+    if oversized and old_paths & new_paths and estimate_text_tokens(new_content) < old_tokens:
+        wm_debug(
+            f"guard: 'Files & Context' consolidation accepted; dropped {len(missing)} historical paths"
+        )
         return op
 
     added_paths = new_paths - old_paths

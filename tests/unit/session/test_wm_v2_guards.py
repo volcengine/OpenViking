@@ -186,6 +186,48 @@ class TestEnforceFilesNoRegression:
         result = wm.wm_enforce_files_no_regression(None, "old")
         assert result == {"op": "KEEP"}
 
+    @pytest.mark.parametrize("oversized_by", ["bullets", "tokens"])
+    def test_oversized_files_can_consolidate(self, oversized_by):
+        if oversized_by == "bullets":
+            old = "\n".join(f"- src/file_{i}.py: historical context" for i in range(26))
+        else:
+            old = "- src/main.py: " + "historical context " * 2000 + "\n- src/old.py"
+        op = {"op": "UPDATE", "content": "- src/main.py: active entrypoint"}
+        if oversized_by == "bullets":
+            op["content"] = "- src/file_25.py: active entrypoint"
+        assert wm.wm_enforce_files_no_regression(op, old) == op
+
+    @pytest.mark.parametrize("content", ["", "Nothing relevant", "- unrelated/new.py"])
+    def test_oversized_files_do_not_accept_empty_or_unrelated_replacement(self, content):
+        old = "\n".join(f"- src/file_{i}.py" for i in range(26))
+        result = wm.wm_enforce_files_no_regression({"op": "UPDATE", "content": content}, old)
+        assert result["op"] != "UPDATE"
+
+    def test_oversized_files_do_not_accept_growing_replacement(self):
+        old = "\n".join(f"- src/file_{i}.py" for i in range(26))
+        new = "- src/file_25.py: " + "more context " * 2000
+        result = wm.wm_enforce_files_no_regression({"op": "UPDATE", "content": new}, old)
+        assert result["op"] == "KEEP"
+
+    def test_files_at_bullet_threshold_still_preserve_paths(self):
+        old = "\n".join(f"- src/file_{i}.py" for i in range(25))
+        result = wm.wm_enforce_files_no_regression(
+            {"op": "UPDATE", "content": "- src/file_24.py: active entrypoint"}, old
+        )
+        assert result == {"op": "KEEP"}
+
+    def test_merge_persists_files_consolidation_and_keeps_other_sections(self):
+        old_files = "\n".join(f"- src/file_{i}.py: historical context" for i in range(26))
+        old = _make_wm(files_and_context=old_files, current_state="Investigating memory growth")
+        content = "- src/file_25.py: active entrypoint\n- src/new.py: current task"
+        merged = wm.merge_wm_sections(
+            old, {"Files & Context": {"op": "UPDATE", "content": content}}
+        )
+        sections = wm.parse_wm_sections(merged)
+        assert sections["## Files & Context"] == content
+        assert sections["## Current State"] == "Investigating memory growth"
+        assert len(merged) < len(old)
+
 
 # =======================================================================
 # _wm_enforce_title_stability
