@@ -1,11 +1,14 @@
 import i18n from '#/i18n/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import type { BotChatImage } from '@ov-server/bot/v1/chat'
+
 import type { ChatStatus, StreamToolCall } from './types/chat'
 import type {
   Message,
   MessagePart,
   ContextPart,
+  ImagePart,
   IterationPart,
   ReasoningPart,
   TextPart,
@@ -24,13 +27,37 @@ import { setSessionTitle } from './use-session-titles'
 import { createBrowserId } from '../browser-crypto'
 import { ovClient } from '#/lib/ov-client'
 
-function createUserMessage(content: string): Message {
+function createUserMessage(
+  content: string,
+  images?: BotChatImage[],
+): Message {
+  const parts: MessagePart[] = []
+  if (content) parts.push({ type: 'text', text: content } satisfies TextPart)
+  for (const image of images ?? []) {
+    parts.push({
+      type: 'image_url',
+      image_url: { ...image.image_url },
+    } satisfies ImagePart)
+  }
   return {
     id: createBrowserId('msg'),
     role: 'user',
-    parts: [{ type: 'text', text: content }],
+    parts,
     created_at: new Date().toISOString(),
   }
+}
+
+/**
+ * Persisted user payload: plain text stays a string (legacy shape), while
+ * messages carrying images are stored as parts so history can render them.
+ */
+function persistedUserPayload(
+  content: string,
+  images?: BotChatImage[],
+): { content?: string; parts?: Array<Record<string, unknown>> } {
+  if (!images?.length) return { content }
+  const parts = createUserMessage(content, images).parts
+  return { parts: serializeParts(parts) }
 }
 
 function toolCallKey(toolCall: StreamToolCall): string {
@@ -93,6 +120,8 @@ function waitForNextFrame(): Promise<void> {
 
 type SendOptions = {
   displayMessage?: string
+  /** Inline images attached to this turn (bot chat `images` field). */
+  images?: BotChatImage[]
 }
 
 type AbortOptions = {
@@ -358,8 +387,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     async (message: string, sendOptions?: SendOptions) => {
       const isFirstExchange = messagesRef.current.length === 0
       const displayMessage = sendOptions?.displayMessage ?? message
+      const images = sendOptions?.images
+      const persistedUser = persistedUserPayload(displayMessage, images)
 
-      const userMsg = createUserMessage(displayMessage)
+      const userMsg = createUserMessage(displayMessage, images)
       const connectionSnapshot = JSON.stringify([
         ovClient.getOptions(),
         ovClient.getConnection(),
@@ -455,7 +486,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         initialUserPersistenceQueued = true
         void queuePersistence(async () => {
           if (!isCurrent() || controller.signal.aborted) return
-          await addMessage(sessionId, 'user', displayMessage)
+          if (persistedUser.parts) {
+            await addMessage(sessionId, 'user', undefined, persistedUser.parts)
+          } else {
+            await addMessage(sessionId, 'user', persistedUser.content)
+          }
           persistedInitialUserMessage = true
         })
       }
@@ -649,21 +684,37 @@ export function useChat(options: UseChatOptions): UseChatReturn {
             streamStarted
           ) {
             if (!isCurrent() || controller.signal.aborted) return
-            await addMessage(sessionId, 'user', displayMessage)
+            if (persistedUser.parts) {
+              await addMessage(sessionId, 'user', undefined, persistedUser.parts)
+            } else {
+              await addMessage(sessionId, 'user', persistedUser.content)
+            }
             persistedInitialUserMessage = true
           }
           if (!isSameConnection()) return
           for (const completedMessage of timeline) {
             if (!isSameConnection()) return
             if (completedMessage.role === 'user') {
-              await addMessage(
-                sessionId,
-                'user',
-                completedMessage.parts
-                  .filter((part): part is TextPart => part.type === 'text')
-                  .map((part) => part.text)
-                  .join('\n'),
+              const hasImages = completedMessage.parts.some(
+                (part) => part.type === 'image_url',
               )
+              if (hasImages) {
+                await addMessage(
+                  sessionId,
+                  'user',
+                  undefined,
+                  serializeParts(completedMessage.parts),
+                )
+              } else {
+                await addMessage(
+                  sessionId,
+                  'user',
+                  completedMessage.parts
+                    .filter((part): part is TextPart => part.type === 'text')
+                    .map((part) => part.text)
+                    .join('\n'),
+                )
+              }
             } else if (!userOnly) {
               if (!isCurrent() || controller.signal.aborted) return
               await addMessage(
@@ -693,7 +744,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
       try {
         const response = await sendChatStream(
-          { message, session_id: sessionId },
+          {
+            message,
+            session_id: sessionId,
+            ...(images?.length ? { images } : {}),
+          },
           controller.signal,
         )
 
@@ -903,11 +958,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
         // Generate session title on first exchange
         if (isCurrent() && sessionId && isFirstExchange) {
-          // Immediate: use first user message as temp title
+          // Immediate: use first user message as temp title; image-only turns
+          // have no text to derive one from.
+          const titleSeed =
+            displayMessage.trim() ||
+            (images?.length ? i18n.t('sessions:chat.imageOnlyTitle') : '')
           setSessionTitle(
             identityScopeKey,
             sessionId,
-            displayMessage.slice(0, 20),
+            titleSeed.slice(0, 20),
           )
         }
       } catch (err) {

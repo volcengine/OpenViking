@@ -2,6 +2,8 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import type { BotChatImage } from '@ov-server/bot/v1/chat'
+
 import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { useChat } from '#/lib/sessions/use-chat'
@@ -68,8 +70,9 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const isStreaming = chat.status === 'streaming'
 
   const handleSend = useCallback(
-    async (message: string) => {
-      if (!canChat || !message.trim() || creating.current) return false
+    async (message: string, images?: BotChatImage[]) => {
+      if (!canChat || (!message.trim() && !images?.length) || creating.current)
+        return false
       if (!persisted.current) {
         creating.current = true
         setCreationError(undefined)
@@ -88,7 +91,9 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
           creating.current = false
         }
       }
-      const sending = chat.send(message)
+      const sending = images?.length
+        ? chat.send(message, { images })
+        : chat.send(message)
       if (chat.status === 'streaming') {
         await sending
       }

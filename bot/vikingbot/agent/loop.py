@@ -58,6 +58,10 @@ def _is_tool_result_success(result: Any) -> bool:
     return bool(text) and not text.startswith("Error:")
 
 
+def _inbound_media_kwargs(msg: InboundMessage) -> dict[str, Any]:
+    return {"media": list(msg.media)} if msg.media else {}
+
+
 def _compact_msg_chars(messages: list[dict]) -> int:
     return sum(len(json.dumps(m, ensure_ascii=False, default=str)) for m in messages)
 
@@ -1472,6 +1476,7 @@ class AgentLoop:
                     "user",
                     item.msg.content,
                     sender_id=item.msg.sender_id,
+                    **_inbound_media_kwargs(item.msg),
                 )
 
     def stop(self) -> None:
@@ -1483,7 +1488,12 @@ class AgentLoop:
         session_key = msg.session_key
         skip_heartbeat = session_key.type == "cli"
         session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
-        session.add_message("user", msg.content, sender_id=msg.sender_id)
+        session.add_message(
+            "user",
+            msg.content,
+            sender_id=msg.sender_id,
+            **_inbound_media_kwargs(msg),
+        )
         active = self._active_turn
         accepted_steers: list[_AcceptedSteer] = []
         if active is not None and active.session_key == session_key:
@@ -1497,6 +1507,7 @@ class AgentLoop:
                     "user",
                     steer_msg.content,
                     sender_id=steer_msg.sender_id,
+                    **_inbound_media_kwargs(steer_msg),
                 )
         await self.sessions.save(session)
         for steer in accepted_steers:
@@ -2649,13 +2660,23 @@ class AgentLoop:
             if self.config.mode == BotMode.DEBUG:
                 # In debug mode, only record message to session, no processing or reply
                 await self._evaluate_previous_response_outcome(session, msg)
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "user",
+                    msg.content,
+                    sender_id=msg.sender_id,
+                    **_inbound_media_kwargs(msg),
+                )
                 await self.sessions.save(session)
                 return None
 
             if not msg.need_reply:
                 await self._evaluate_previous_response_outcome(session, msg)
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "user",
+                    msg.content,
+                    sender_id=msg.sender_id,
+                    **_inbound_media_kwargs(msg),
+                )
                 await self.sessions.save(session)
                 return OutboundMessage(
                     session_key=msg.session_key,
@@ -2824,7 +2845,12 @@ class AgentLoop:
                         exp_uris=newly_recalled_exp_uris,
                         experience_reminder=True,
                     )
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message(
+                    "user",
+                    msg.content,
+                    sender_id=msg.sender_id,
+                    **_inbound_media_kwargs(msg),
+                )
                 self._append_active_turn_history(session, active_turn_history)
                 session.add_message(
                     "assistant",

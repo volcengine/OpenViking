@@ -520,6 +520,10 @@ IMPORTANT:
 
         if not images:
             return text
+        # Image-only turns must not append an empty text block: several providers
+        # reject empty content parts.
+        if not text:
+            return images
         return images + [{"type": "text", "text": text}]
 
     def add_tool_result(

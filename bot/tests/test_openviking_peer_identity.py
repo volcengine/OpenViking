@@ -33,6 +33,66 @@ def test_normalize_session_messages_maps_sender_to_peer_only_for_user_messages()
     assert "peer_id" not in normalized[1]
 
 
+def test_normalize_session_messages_keeps_user_images():
+    client = _client()
+    image = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,AAAA", "detail": "high"},
+    }
+
+    normalized = client._normalize_session_messages(
+        [
+            {
+                "role": "user",
+                "content": "what color is this",
+                "timestamp": "2026-07-14T10:00:00Z",
+                "media": [image],
+            }
+        ]
+    )
+
+    assert normalized == [
+        {
+            "role": "user",
+            "parts": [
+                image,
+                {"type": "text", "text": "what color is this"},
+            ],
+            "created_at": "2026-07-14T10:00:00Z",
+        }
+    ]
+
+
+def test_normalize_session_messages_keeps_image_only_turns():
+    client = _client()
+    image = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,AAAA"},
+    }
+
+    normalized = client._normalize_session_messages(
+        [{"role": "user", "content": "", "media": [image]}]
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0]["role"] == "user"
+    assert normalized[0]["parts"] == [image]
+
+
+def test_normalize_session_messages_inlines_local_user_images(tmp_path):
+    client = _client()
+    image_path = tmp_path / "photo.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    normalized = client._normalize_session_messages(
+        [{"role": "user", "content": "look", "media": [str(image_path)]}]
+    )
+
+    image_part = normalized[0]["parts"][0]
+    assert image_part["type"] == "image_url"
+    assert image_part["image_url"]["url"].startswith("data:image/png;base64,")
+
+
 def test_normalize_session_messages_skips_path_like_peer_ids():
     client = _client()
 
