@@ -402,6 +402,12 @@ class UnifiedResourceProcessor:
             parse_kwargs.pop("github_token", None)
             parse_kwargs.pop("tos_signature", None)
             parse_kwargs.pop("tos_access", None)
+            # Web feeds already apply these patterns to source URLs before mirroring.
+            if local_resource.source_type == SourceType.HTTP and local_resource.meta.get(
+                "feed_kind"
+            ):
+                parse_kwargs.pop("include", None)
+                parse_kwargs.pop("exclude", None)
             parse_kwargs["instruction"] = instruction
             parse_kwargs["_source_meta"] = local_resource.meta
             parse_kwargs["resolved_extension"] = kwargs.get(
