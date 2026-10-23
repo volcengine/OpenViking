@@ -225,6 +225,9 @@ const workspace = {
       docs: 'View integration guide',
       install: 'Install the experience Skill for your Agent',
       hint: 'Run this command in your terminal and select your Agent when prompted.',
+      fallbackHint:
+        'If cloning stalls, create an ov-experience-memory folder, save the linked file inside it as SKILL.md, then run the following command from the folder’s parent directory.',
+      openSkillFile: 'Open SKILL.md',
       copy: 'Copy install command',
       view: 'View command',
       copied: 'Install command copied',
