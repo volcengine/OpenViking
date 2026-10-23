@@ -14,6 +14,7 @@
  */
 
 import { join } from "node:path";
+import { healRetiredVersions } from "./cache-heal.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { getStateDir, deriveOvSessionId } from "./session-state.mjs";
@@ -26,6 +27,7 @@ import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 import { answerContext } from "./usage/display.mjs";
 import { parseRecall } from "./usage/sources.mjs";
 
+healRetiredVersions();
 let cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
 let effectivePeer = { peerId: "" };
