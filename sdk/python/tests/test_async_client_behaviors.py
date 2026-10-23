@@ -1519,6 +1519,39 @@ async def test_glob_omits_unset_tags_and_forwards_tag_options():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,uri,expected",
+    [
+        ("ls", "viking://resources/notes", "viking://resources/notes"),
+        ("ls", "resources/notes", "viking://resources/notes"),
+        ("ls", " resources/notes ", "viking://resources/notes"),
+        ("ls", " viking://resources/notes", "viking://resources/notes"),
+        ("ls", " viking://resources/notes ", "viking://resources/notes "),
+        ("ls", "viking://resources/notes ", "viking://resources/notes "),
+        ("ls", "viking://resources/team notes", "viking://resources/team notes"),
+        ("ls", "/", "viking://"),
+        ("ls", "viking://", "viking://"),
+        ("read", " viking://resources/notes ", "viking://resources/notes "),
+        ("read", "viking://resources/notes ", "viking://resources/notes "),
+    ],
+)
+async def test_resource_uri_normalization_preserves_canonical_suffix(method, uri, expected):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    result = [] if method == "ls" else "ordinary local control"
+    fake_http = SimpleNamespace(
+        get=AsyncMock(return_value=httpx.Response(200, json={"status": "ok", "result": result}))
+    )
+    client._http = fake_http
+
+    assert await getattr(client, method)(uri) == result
+
+    assert fake_http.get.await_count == 1
+    request = fake_http.get.await_args
+    assert request.args == ("/api/v1/fs/ls" if method == "ls" else "/api/v1/content/read",)
+    assert request.kwargs["params"]["uri"] == expected
+
+
+@pytest.mark.asyncio
 async def test_record_id_passthrough_is_limited_to_stat_and_read():
     record_id = "0123456789abcdef0123456789abcdef"
     client = AsyncHTTPClient(url="http://localhost:1933")

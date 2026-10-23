@@ -157,8 +157,9 @@ class VikingURI:
     def normalize(uri: str) -> str:
         if not uri:
             return uri
-        if uri.startswith("viking://"):
-            return uri
+        cleaned = uri.lstrip()
+        if cleaned.startswith("viking://"):
+            return cleaned
         if uri == "/":
             return "viking://"
         cleaned = uri.strip()
