@@ -486,3 +486,43 @@ def test_history_hint_lists_sessions_and_follows_the_frozen_read_tool():
     assert history_hint("alice", ["new"], tools, False) == ""
     assert history_hint("alice", [], tools, True) == ""
     assert history_hint("alice", ["new"], grep_off, True) == ""
+
+
+async def test_delivery_401_removes_key_pauses_and_resumes_on_new_request(
+    setup_kernel, credential, policy
+):
+    from openviking_gateway.client import VikingError
+
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply([answer("Completed before revocation")])
+    await make_due(store)
+    original_write, calls = viking.write, []
+
+    async def refused(*args):
+        calls.append(args)
+        raise VikingError("openviking_http_401", 401)
+
+    viking.write = refused
+    assert await worker.once()
+    assert len(calls) == 1
+    assert await worker.management.get("tenant", "keys", credential["id"]) is None
+    assert (await chat.state(first))["error"]["reason"] == "openviking_http_401"
+    await make_due(store)
+    assert await worker.once()
+    state = await chat.state(first)
+    assert state["error"]["reason"] == "gateway_key_revoked"
+    assert state["error"]["retry_at"] is None
+    for _ in range(3):
+        assert not await worker.once()
+    assert len(calls) == 1
+    await worker.management.save("tenant", "keys", credential["id"], credential)
+    viking.write = original_write
+    await chat.say("Resume with a valid key")
+    assert not (await chat.state(first))["error"]
+    await make_due(store)
+    assert await worker.once()
+    assert viking.writes and not (await chat.state(first))["pending"]
+    worker.management.close()

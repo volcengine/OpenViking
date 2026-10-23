@@ -29,6 +29,15 @@ description: 添加和配置 OpenViking 网关转发请求的模型服务地址�
 | 火山方舟 | 三种都有 | Chat Completions 和 Responses 为 `https://ark.cn-beijing.volces.com/api/v3`；Anthropic Messages 为 `https://ark.cn-beijing.volces.com/api/compatible` |
 | BytePlus 方舟（海外站） | 三种都有 | Chat Completions 和 Responses 为 `https://ark.ap-southeast.bytepluses.com/api/v3`；Anthropic Messages 为 `https://ark.ap-southeast.bytepluses.com/api/compatible` |
 
+## 部署默认上游 {#deployment-default-upstreams}
+
+运维可以在网关配置中设置 `default_upstreams`，供[直接使用 OpenViking API 密钥](09-gateway-keys.md#openviking-keys)的客户端使用，见[配置示例](13-configuration.md#gateway-fields)。
+
+- 仅在账号没有存储上游时生效。账号一旦存储任何上游，就整组替换部署默认值，即使存储的上游全部已停用。
+- 部署默认值不会复制到账号存储中，也不会在 Studio 中显示。签发的网关密钥继续使用它们选定的已存储上游。
+- 保持对象的 key（例如 `ark-chat`）稳定：它就是冻结到对话中、供后续轮次路由使用的上游 ID。
+- 托管凭证写成 `"api_key": "$ARK_API_KEY"`，Helm 部署通过 `extraEnv` 从 Secret 注入 `ARK_API_KEY`。网关加载文件时展开环境变量引用，不要把明文 API 密钥写进 ConfigMap。
+
 ## 添加上游 {#add-an-upstream}
 
 1. 在**上游**标签页点**添加上游**，打开**新建上游**编辑页。页面分为**接口**、**凭证**、**模型**和**路由**四部分。

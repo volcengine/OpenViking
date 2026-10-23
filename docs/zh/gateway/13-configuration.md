@@ -28,19 +28,85 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `host` | 独立 | `127.0.0.1` | | 监听地址 |
 | `port` | 独立 | `1935` | 1–65,535 | 监听端口 |
 | `workers` | 独立 | `1` | 1–64 | worker 进程数 |
+| `keep_alive_seconds` | 独立 | `75` | 大于 0 | 两次请求之间保留空闲 HTTP 连接的秒数；应大于负载均衡器的后端空闲超时 |
 | `public_url` | 两者 | 空 | HTTP(S) URL，不带 `/gateway` | 客户端访问的对外地址，`/gateway` 由网关自己加。为空时，嵌入网关沿用 Server 的对外地址；两者都没有时，接入指南使用请求来源地址，MCP 文件上传和下载也不可用（`mcp_file_links` 为 `direct` 时除外）。见[对外地址](../guides/22-gateway-operations.md#public-address) |
 | `mcp_file_links` | 两者 | `proxy` | `proxy`、`direct` | MCP 上传和下载工具返回的链接如何交给客户端。`proxy` 改写为 `public_url` 加 `/gateway/uploads` 或 `/gateway/downloads`，需要设置 `public_url`。`direct` 原样透传 OpenViking 的链接，需要 Server 的 `OPENVIKING_PUBLIC_BASE_URL`（或 `server.public_base_url`）是客户端能访问的地址 |
 | `storage_path` | 两者 | `~/.openviking/gateway` | | 本地存储目录 |
+| `storage` | 两者 | 两个后端均为 `sqlite` | 见[存储后端](#storage) | 分别选择后端，共用 Redis 连接配置 |
 | `encryption` | 独立 | 不设置（明文） | 字段同 `ov.conf` 的 `encryption` 段 | 加密本地保存的数据，见[加密](../guides/22-gateway-operations.md#encryption)；嵌入网关沿用 Server 的设置 |
+| `management_api` | 两者 | `true` | `true`、`false` | 注册网关管理路由；关闭时也移除独立网关的 OpenViking 管理代理和 Studio，模型路由和 `/health` 继续可用 |
 | `management_key` | 两者 | 空 | 至少 32 个字符 | 可选的[网关管理密钥](../guides/22-gateway-operations.md#gateway-management-key) |
+| `openviking_keys` | 两者 | `false` | `true`、`false` | 允许客户端用用户的 OpenViking API 密钥代替网关密钥，使用账号的默认上下文配置和全部已启用的上游，见[直接使用 OpenViking API 密钥](09-gateway-keys.md#openviking-keys) |
+| `tenancy` | 两者 | `account` | `account`、`key` | 按账号或按密钥隔离 OpenViking 密钥请求；`key` 要求 `management_api: false` |
+| `default_upstreams` | 两者 | `{}` | 稳定 ID 到[上游设置](#upstream-settings)的对象映射 | 账号没有存储上游时供 OpenViking 密钥使用，见[部署默认上游](07-upstreams.md#deployment-default-upstreams) |
+| `default_profile` | 两者 | 内置上下文配置默认值 | [上下文配置设置](#context-profile-settings) | 账号没有 ID 为 `default` 的配置时使用，也是嵌入式 dev 模式初始化写入的配置 |
 | `min_server_version` | 两者 | `0.4.16` | 版本号 | 独立网关要求的 OpenViking Server 最低版本 |
-| `session_ttl_days` | 两者 | `30` | 1 及以上 | 对话闲置多少天后过期 |
+| `session_ttl_days` | 两者 | `30` | 1 及以上 | 对话闲置多少天后过期；也决定缓存的 OpenViking 密钥及其用户记录的固定寿命 |
 | `response_ttl_seconds` | 两者 | `2592000`（30 天） | 60 及以上 | Responses 响应与上游的对应关系保留多少秒 |
-| `log_retention_days` | 两者 | `30` | 1 及以上 | 请求日志保留天数 |
+| `request_log_sink` | 两者 | `store` | `store`, `stdout` | 将请求和后台保存日志写入存储，或以每条一行 JSON 写到 stdout 并立即刷新；见[观测](../guides/22-gateway-operations.md#monitoring) |
+| `log_retention_days` | 两者 | `30` | 1 及以上 | 存储中的请求日志保留天数；stdout 的保留期限由日志采集系统管理 |
 | `max_body_bytes` | 两者 | `33554432`（32 MiB） | 1,024 及以上 | 请求和上传的大小上限，单位为字节 |
 | `upstream_timeout_seconds` | 两者 | `600` | 大于 0 | 服务商请求超时 |
 | `health_interval_seconds` | 两者 | `60` | 1 及以上 | 检查 OpenViking 状态的间隔秒数 |
+| `capture_concurrency` | 两者 | `1` | 1 及以上 | 每个进程并发投递的会话数；停机时停止新 claim，最多等待在途投递 100 秒 |
 | `client_rules` | 两者 | `{}`（只用内置规则） | 见[客户端规则](#client-rules) | 在网关内置的辅助请求和客户端插入消息识别规则上增删条目 |
+
+例如，独立网关的 `gateway.conf` 可以在尚未配置任何账号时路由 OpenViking 密钥：
+
+```json
+{
+  "openviking_url": "http://openviking:1933",
+  "openviking_keys": true,
+  "default_upstreams": {
+    "ark-chat": {
+      "name": "Ark Chat",
+      "protocol": "chat",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "$ARK_API_KEY",
+      "models": ["your-model-id"]
+    }
+  },
+  "default_profile": {"max_tokens": 2400}
+}
+```
+
+## 存储后端 {#storage}
+
+默认使用本地 SQLite，无需外部服务。`storage.kernel` 和 `storage.management` 分别选择 `sqlite` 或 `redis`；Redis 后端共用一个客户端及 `storage.redis` 连接配置。使用 Redis 时安装 `pip install "openviking[expiry]"`，官方镜像已经包含依赖。网关 CI 覆盖 Redis 单机和 Cluster；Sentinel 配置可以通过校验，但不在网关 CI 覆盖范围内。
+
+```json
+{
+  "storage": {
+    "kernel": "redis",
+    "management": "redis",
+    "key_prefix": "ovgw:",
+    "redis": {
+      "mode": "standalone",
+      "endpoints": ["rediss://redis.example.com:6379"],
+      "username": "gateway",
+      "password_env": "OPENVIKING_GATEWAY_REDIS_PASSWORD",
+      "pool_size": 32,
+      "command_timeout_ms": 5000
+    }
+  },
+  "session_ttl_days": 7
+}
+```
+
+`OPENVIKING_GATEWAY_STORAGE` 接受相同 `storage` 对象的 JSON。密码通过指定的环境变量注入，例如来自 Kubernetes Secret。`key_prefix` 默认为 `ovgw:`，不能包含 `{`、`}`、`*`、`?`、`[`、`]` 或 `\`；所有键都以该前缀加 `v1:` 开头。不同部署使用不同前缀。
+
+`storage.redis` 复用 OpenViking 的 `RedisCacheConfig`：`mode`、`endpoints`、`username`、`password_env`、旧式 `password`、`db`、`pool_size`、`connect_timeout_ms`、`command_timeout_ms`、`default_ttl_seconds`、`tls_insecure_skip_verify`，以及 Sentinel 字段 `master_name`、`sentinel_username`、`sentinel_password_env`、`sentinel_password`。为容纳较大的对话值，网关把命令超时默认值从 20 改为 5000 毫秒；`default_ttl_seconds` 不控制网关保留期限。URL 只包含协议、主机和端口，凭据和数据库使用专门字段。Cluster 使用 `mode: "cluster"`、多个种子地址和 `db: 0`。TLS 由 `rediss://` 协议决定；私有 CA 通过证书卷和指向证书的 `SSL_CERT_FILE` 配置（Helm 使用 `extraVolumes`、`extraVolumeMounts`）。
+
+为网关单独准备 Redis 实例，使用 `volatile-lru` 驱逐策略并启用 AOF；`redis.conf` 设置和监控项见 [Redis 内存策略](../guides/22-gateway-operations.md#redis-memory-policy)。
+
+替换密码和前缀后，运行以下命令创建 ACL 用户。Cluster 必须在**每个节点**分别执行，因为 ACL 不在节点之间同步：
+
+```bash
+redis-cli ACL SETUSER gateway reset on '>replace-with-secret' '~ovgw:*' \
+  +@read +@write +@scripting +@connection +@transaction +ping +time +scan +unlink
+```
+
+Cluster 还需授予 `'+cluster|slots' '+cluster|shards'`。Lua 脚本需要 `+time`；CI 会验证这些权限及前缀隔离。应用命令遇到连接错误不会自动重试，因为失败的写入可能已经到达 Redis。
 
 ## 环境变量 {#environment-variables}
 
@@ -55,7 +121,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 - 以 `tcp://` 或 `udp://` 开头的值会被忽略。这样，Kubernetes 为名为 `openviking-gateway` 的 Service 自动注入的变量（例如 `OPENVIKING_GATEWAY_PORT=tcp://…`）不会覆盖文件。
 - 文件中的值也可以写成 `"$VAR"`，从环境变量中取值。
 - `encryption` 块只能写在文件里。
-- `client_rules` 用 JSON 传整段配置：`OPENVIKING_GATEWAY_CLIENT_RULES='{"auxiliary_patterns":{"add":["You are the Acme title writer"]}}'`。
+- `client_rules`、`storage`、`default_upstreams` 和 `default_profile` 用 JSON 传整段配置，例如 `OPENVIKING_GATEWAY_CLIENT_RULES='{"auxiliary_patterns":{"add":["You are the Acme title writer"]}}'` 或 `OPENVIKING_GATEWAY_DEFAULT_PROFILE='{"max_tokens":2400}'`。
 - 容器通常不需要配置文件，用环境变量设置需要的字段即可。
 
 ## 校验 {#validation}
@@ -65,6 +131,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `openviking_url` 和 `public_url` | 必须是 HTTP(S)，不能含凭证、查询参数或 fragment |
 | 上游的 `base_url` | 规则不同，见[接口](07-upstreams.md#endpoint) |
 | `management_key` | 解析 `$VAR` 引用后至少 32 个字符；`$VAR` 没能解析时校验失败 |
+| `tenancy` | `key` 要求 `management_api: false`；`openviking_keys` 关闭时此字段不生效 |
 | `client_rules` | 新增的模式必须是合法的 Python 正则表达式；新增的标签名以英文字母开头，只能包含英文字母、数字、`_`、`.`、`:` 和 `-` |
 | 未知字段 | 校验失败 |
 | 已删除的字段 | 忽略，启动时打印警告：`encryption_key_env`，以及 `ov.conf` 中[迁移](../guides/22-gateway-operations.md#migration)列出的 v0.5 字段 |
@@ -103,7 +170,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 
 ## 上下文配置的设置 {#context-profile-settings}
 
-在 Studio 中：**上下文配置** → 打开一份配置。下面几张表按编辑器的分区排列，先写 Studio 中的名称，再写管理 API 中的名称（管理 API 把上下文配置称为 `policies`）。**名称**（`name`，默认 `Default`）是配置的显示名称；各分区的作用见[上下文配置](08-context-profiles.md#context-profiles)。
+在 Studio 中：**上下文配置** → 打开一份配置。下面几张表按编辑器的分区排列，先写 Studio 中的名称，再写管理 API 中的名称（管理 API 把上下文配置称为 `policies`）。**名称**（`name`，默认 `Default`）是配置的显示名称；各分区的作用见[上下文配置](08-context-profiles.md#context-profiles)。**允许客户端覆盖设置**（`client_overrides`，默认 `true`）允许客户端用 `X-OpenViking-Context` 请求头为新对话修改其余所有设置，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。
 
 ### 召回记忆 {#profile-recall}
 
@@ -123,7 +190,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 检索文本长度 | `query_max_chars` | `8000` | 3–32,000 | 取消息的多少个字符作为检索文本。 |
 | 按分类限量 | `quotas` | `{}`（关闭） | 键：`events`、`entities`、`preferences`、`experiences`、`resources`、`skills`；设置时至少一项大于 0（仅 Studio 校验） | 每个分类最多取的条数；只检索大于 0 的分类。 |
 
-管理 API 保存 `context_types` 和 `quotas` 时不做校验。`quotas` 里出现未知的键时，OpenViking 会拒绝检索请求，导致每次召回都失败。
+管理 API 保存 `context_types` 和 `quotas` 的键时不做校验。`quotas` 里出现未知的键时，OpenViking 会拒绝检索请求，导致每次召回都失败。
 
 ### 保存对话 {#profile-saving}
 

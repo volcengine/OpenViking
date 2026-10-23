@@ -12,6 +12,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .models import Policy, Upstream
+
 logger = logging.getLogger(__name__)
 
 ENVIRONMENT_PREFIX = "OPENVIKING_GATEWAY_"
@@ -71,6 +73,24 @@ class ClientRules(BaseModel):
         return value
 
 
+class StorageConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kernel: Literal["sqlite", "redis"] = "sqlite"
+    management: Literal["sqlite", "redis"] = "sqlite"
+    # Keep hash tags and SCAN patterns independent of the configured namespace.
+    key_prefix: str = Field(default="ovgw:", pattern=r"^[^{}*?\[\]\\]*$")
+    redis: dict = Field(default_factory=dict, repr=False, validate_default=True)
+
+    @field_validator("redis")
+    @classmethod
+    def validate_redis(cls, value: dict) -> dict:
+        from openviking_cli.utils.config.agfs_config import RedisCacheConfig
+
+        if unknown := set(value) - set(RedisCacheConfig.model_fields):
+            raise ValueError(f"unknown redis settings: {', '.join(sorted(unknown))}")
+        return RedisCacheConfig.model_validate({"command_timeout_ms": 5000, **value}).model_dump()
+
+
 class GatewayConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     # Settings an upgraded configuration may still carry; rejecting them would stop the host.
@@ -79,15 +99,31 @@ class GatewayConfig(BaseModel):
     public_url: str = ""
     mcp_file_links: Literal["proxy", "direct"] = "proxy"
     storage_path: str = "~/.openviking/gateway"
+    management_api: bool = True
+    storage: StorageConfig = Field(default_factory=StorageConfig)
     management_key: str = Field(default="", repr=False)
+    # Accept OpenViking API keys in place of gateway keys, with the account's defaults.
+    openviking_keys: bool = False
+    tenancy: Literal["account", "key"] = "account"
+    # Used where an account stores none: OpenViking keys and the "default" profile.
+    default_upstreams: dict[str, Upstream] = Field(default_factory=dict, repr=False)
+    default_profile: Policy = Field(default_factory=Policy)
     min_server_version: str = "0.4.16"
     session_ttl_days: int = Field(default=30, ge=1)
     response_ttl_seconds: int = Field(default=30 * 86400, ge=60)
+    request_log_sink: Literal["store", "stdout"] = "store"
     log_retention_days: int = Field(default=30, ge=1)
     max_body_bytes: int = Field(default=32 * 1024 * 1024, ge=1024)
     upstream_timeout_seconds: float = Field(default=600, gt=0)
     health_interval_seconds: float = Field(default=60, ge=1)
+    capture_concurrency: int = Field(default=1, ge=1)
     client_rules: ClientRules = Field(default_factory=ClientRules)
+
+    @model_validator(mode="after")
+    def validate_tenancy(self):
+        if self.tenancy == "key" and self.management_api:
+            raise ValueError("tenancy 'key' requires management_api: false")
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -109,10 +145,12 @@ class GatewayConfig(BaseModel):
                 value[field] = override
         return value
 
-    @field_validator("client_rules", mode="before")
+    @field_validator(
+        "client_rules", "storage", "default_upstreams", "default_profile", mode="before"
+    )
     @classmethod
-    def parse_client_rules(cls, value):
-        # OPENVIKING_GATEWAY_CLIENT_RULES carries the section as JSON.
+    def parse_json(cls, value):
+        # OPENVIKING_GATEWAY_<FIELD> carries these sections as JSON.
         return json.loads(value) if isinstance(value, str) else value
 
     @field_validator("public_url")
@@ -152,6 +190,7 @@ class StandaloneGatewayConfig(GatewayConfig):
     host: str = "127.0.0.1"
     port: int = Field(default=1935, ge=1, le=65535)
     workers: int = Field(default=1, ge=1, le=64)
+    keep_alive_seconds: float = Field(default=75, gt=0)
     # Same schema as ov.conf's top-level "encryption"; absent or disabled stores plaintext.
     encryption: dict | None = Field(default=None, repr=False)
 

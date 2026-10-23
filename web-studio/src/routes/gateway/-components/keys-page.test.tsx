@@ -39,7 +39,9 @@ vi.mock('../-lib/api', async (importOriginal) => ({
 vi.mock('sonner', () => ({ toast: toastMocks }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    // Plural counts are appended so assertions can check them.
+    t: (key: string, values?: { count?: number }) =>
+      values?.count === undefined ? key : `${key} ${values.count}`,
     i18n: { resolvedLanguage: 'en' },
   }),
 }))
@@ -125,6 +127,17 @@ const laptop: GatewayKey = {
   prefix: 'ovgw_Ab3dE9x',
   created_at: 1_700_000_000,
 }
+const direct: GatewayKey = {
+  ...laptop,
+  id: 'k3',
+  name: '',
+  source: 'openviking',
+  policy_id: '',
+  upstream_ids: [],
+  user_id: 'carol',
+  prefix: '7f3a9c1e',
+  created_at: 1_800_000_000,
+}
 const ci: GatewayKey = {
   ...laptop,
   id: 'k2',
@@ -199,6 +212,56 @@ describe('KeysPage', () => {
       screen.getByText('docs.link').closest('a')?.getAttribute('href'),
     ).toBe(gatewayDocsUrl('keys', 'en'))
   })
+
+  it('marks an OpenViking API key and shows the defaults it uses', async () => {
+    api.listKeys.mockResolvedValue([direct, laptop])
+    renderPage()
+
+    const rows = await screen.findAllByRole('row')
+    expect(within(rows[1]).getByText('keys.openviking.name')).toBeTruthy()
+    expect(within(rows[1]).getByText('7f3a9c1e…')).toBeTruthy()
+    // Profile and upstreams: the account's defaults, not a missing profile.
+    expect(
+      within(rows[1]).getAllByText('keys.openviking.defaults'),
+    ).toHaveLength(2)
+    expect(within(rows[1]).queryByText('keys.missing')).toBeNull()
+    expect(within(rows[1]).getByText('states.any')).toBeTruthy()
+    // Only OpenViking can revoke it.
+    expect(
+      within(rows[1]).queryByRole('button', { name: 'keys.actions.revokeKey' }),
+    ).toBeNull()
+    expect(
+      within(rows[2]).getByRole('button', { name: 'keys.actions.revokeKey' }),
+    ).toBeTruthy()
+  })
+
+  it.each([
+    [[direct], 0],
+    [[direct, { ...laptop, user_id: 'carol' }], 1],
+  ])(
+    'warns that deleting user data does not stop an OpenViking API key',
+    async (keys, revoked) => {
+      api.listKeys.mockResolvedValue(keys)
+      renderPage()
+
+      fireEvent.click(
+        (
+          await screen.findAllByRole('button', { name: 'keys.actions.more' })
+        )[0],
+      )
+      fireEvent.click(
+        await screen.findByRole('menuitem', {
+          name: 'keys.actions.deleteUserData',
+        }),
+      )
+      // Only gateway keys are counted as revoked.
+      expect(
+        screen.getByText(
+          `keys.deleteUser.description ${revoked} keys.deleteUser.directKey`,
+        ),
+      ).toBeTruthy()
+    },
+  )
 
   it('revokes a key after confirmation', async () => {
     api.revokeKey.mockResolvedValue({ deleted: true })

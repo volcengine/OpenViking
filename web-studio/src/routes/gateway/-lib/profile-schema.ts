@@ -48,6 +48,7 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   tool_result_bytes: 65536,
   tool_total_seconds: null,
   tool_total_tokens: null,
+  client_overrides: true,
 }
 
 type NumericField = {
@@ -101,14 +102,20 @@ export const QUOTA_LIMIT: NumberRule = {
   unit: 'entries',
 }
 
-/** Save body for `PUT policies/{id}`: known profile fields only. */
+/**
+ * Save body for `PUT policies/{id}`: known profile fields only. Fields a
+ * profile saved by an older gateway lacks take the gateway's defaults, as on
+ * the server (`null` is a real value, so no `??`).
+ */
 export function toProfileSettings(
   profile: Profile | ProfileSettings,
 ): ProfileSettings {
   return Object.fromEntries(
     Object.keys(PROFILE_DEFAULTS).map((field) => [
       field,
-      profile[field as keyof ProfileSettings],
+      field in profile
+        ? profile[field as keyof ProfileSettings]
+        : PROFILE_DEFAULTS[field as keyof ProfileSettings],
     ]),
   ) as ProfileSettings
 }

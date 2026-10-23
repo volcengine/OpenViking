@@ -10,35 +10,118 @@ their own routes and startup checks.
 import asyncio
 import contextlib
 import logging
+import sys
 import time
 from contextlib import asynccontextmanager
 
 import aiohttp
+import orjson
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .capture import CaptureWorker
+from .capture import DELIVERY_SECONDS, CaptureWorker
 from .client import VikingClient, VikingError
 from .config import PUBLIC_OPENVIKING_URLS, GatewayConfig, normalize_url
 from .kernel import MemoryKernel
-from .management import import_vlm_objects, register_management, request_credential
-from .models import Policy
+from .management import (
+    import_vlm_objects,
+    openviking_credential,
+    register_management,
+    request_credential,
+)
 from .protocols import configure_rules
-from .proxy import ProxyRequest, filtered_headers
-from .storage import ManagementStore, SQLiteKernelStore, delete_account_data, delete_user_data
+from .proxy import ProxyRequest, filtered_headers, resolve_binding
+from .storage import (
+    AsyncCodec,
+    CachedManagement,
+    SQLiteKernelStore,
+    SQLiteManagementStore,
+    delete_account_data,
+    delete_user_data,
+)
 
 logger = logging.getLogger(__name__)
 VIKING_DETAILS = {
     "openviking_unavailable": "OpenViking is unreachable.",
     "openviking_unreachable": "OpenViking is unreachable.",
     "openviking_http_401": "OpenViking rejected the API key.",
+    "openviking_http_402": "OpenViking service is not ordered for this API key.",
     "openviking_identity_missing": "OpenViking returned no identity for the API key.",
     "trusted_mode_unsupported": "OpenViking Gateway does not support trusted authentication.",
     "root_key_not_allowed": "A root API key cannot back a gateway key; use a user's API key.",
     "openviking_version_mismatch": "OpenViking Server is older than this gateway requires.",
 }
+CAPTURE_DRAIN_SECONDS = DELIVERY_SECONDS
+
+
+async def stdout_log(account, value, user_id=None):
+    """Write each request record as JSON and flush it to the process output."""
+    sys.stdout.buffer.write(
+        orjson.dumps({"time": time.time(), "account": account, "user_id": user_id, **value}) + b"\n"
+    )
+    sys.stdout.buffer.flush()
+
+
+async def refresh_health(app):
+    try:
+        app.state.health = await app.state.viking.health(require_identity=False)
+        app.state.viking.unavailable_reason = ""
+    except VikingError as error:
+        app.state.health = {"status": "degraded", "reason": error.reason}
+        app.state.viking.unavailable_reason = error.reason
+
+
+async def health_loop(app, interval, sleep=asyncio.sleep):
+    retry = 1
+    reached = False
+    while True:
+        try:
+            await refresh_health(app)
+            if app.state.health.get("status") == "degraded":
+                delay = retry
+                # An embedded host starts OV after this loop: poll every second until then.
+                if reached:
+                    retry = min(retry * 2, interval)
+            else:
+                delay = interval
+                retry, reached = 1, True
+            await sleep(delay)
+        except Exception:
+            logger.exception("OpenViking Gateway health check failed")
+            await sleep(1)
+
+
+def open_stores(config: GatewayConfig, encryptor):
+    """Construct storage ports and collect their resource cleanup."""
+    close = contextlib.AsyncExitStack()
+    settings = config.storage
+    if "redis" in (settings.kernel, settings.management):
+        try:
+            from . import redis_store
+        except ImportError:
+            raise RuntimeError("storage provider 'redis' requires openviking[expiry]") from None
+        handle = redis_store.connect(settings.redis)
+        close.push_async_callback(handle.close)
+        backend = redis_store.RedisBackend(
+            handle.client, settings.key_prefix, AsyncCodec(encryptor)
+        )
+    if settings.kernel == "redis":
+        store = redis_store.RedisKernelStore(backend, ttl=config.session_ttl_days * 86400)
+    else:
+        store = SQLiteKernelStore(config.directory / "kernel.sqlite3", encryptor)
+        # SQLite threads may still wait on this loop for the encryptor.
+        close.push_async_callback(asyncio.to_thread, store.close)
+    if settings.management == "redis":
+        management = redis_store.RedisManagementStore(
+            backend, log_ttl=config.log_retention_days * 86400
+        )
+    else:
+        management = SQLiteManagementStore(config.directory / "management.sqlite3", encryptor)
+        close.push_async_callback(asyncio.to_thread, management.close)
+    log = stdout_log if config.request_log_sink == "stdout" else None
+    return store, CachedManagement(management, log=log), close.aclose
 
 
 def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, encryptor=None):
@@ -52,8 +135,7 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
             "gateway.client_rules removes entries the packaged rules do not have: %s",
             "; ".join(unknown),
         )
-    store = SQLiteKernelStore(config.directory / "kernel.sqlite3", encryptor)
-    management = ManagementStore(config.directory / "management.sqlite3", encryptor)
+    store, management, close = open_stores(config, encryptor)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -69,19 +151,29 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 app.state.viking = VikingClient(http, openviking_url, config.min_server_version)
                 app.state.kernel = MemoryKernel(store, app.state.viking)
                 app.state.worker = CaptureWorker(store, management, app.state.viking)
-                # The first probe runs in maintenance: an embedded server is not listening yet.
+                # The first probe runs in the background: an embedded server is not listening yet.
                 app.state.health = {"status": "starting"}
-                task = asyncio.create_task(maintenance(app))
+                stopped = asyncio.Event()
+                maintenance = [
+                    asyncio.create_task(health_loop(app, config.health_interval_seconds)),
+                    asyncio.create_task(cleanup_loop()),
+                ]
+                captures = [
+                    asyncio.create_task(capture_loop(app, stopped))
+                    for _ in range(config.capture_concurrency)
+                ]
                 try:
                     yield
                 finally:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
+                    stopped.set()
+                    for task in maintenance:
+                        task.cancel()
+                    _, pending = await asyncio.wait(captures, timeout=CAPTURE_DRAIN_SECONDS)
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*maintenance, *captures, return_exceptions=True)
         finally:
-            # Storage threads may still wait on this loop for the encryptor.
-            await asyncio.to_thread(store.close)
-            await asyncio.to_thread(management.close)
+            await close()
 
     app = FastAPI(
         title="OpenViking Gateway",
@@ -95,46 +187,33 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
     app.state.vlm_source = vlm_source
     app.state.warnings = (
         ["public_openviking_without_management_key"]
-        if not config.management_key and normalize_url(openviking_url) in PUBLIC_OPENVIKING_URLS
+        if config.management_api
+        and not config.management_key
+        and normalize_url(openviking_url) in PUBLIC_OPENVIKING_URLS
         else []
     )
 
-    async def refresh_health(app):
-        try:
-            app.state.health = await app.state.viking.health(require_identity=False)
-            app.state.viking.unavailable_reason = ""
-        except VikingError as error:
-            app.state.health = {"status": "degraded", "reason": error.reason}
-            app.state.viking.unavailable_reason = error.reason
-
-    async def maintenance(app):
-        health_at = 0
-        cleanup_at = 0
-        retry = 1
-        reached = False
+    async def cleanup_loop():
         while True:
             try:
-                if time.monotonic() >= health_at:
-                    await refresh_health(app)
-                    if app.state.health.get("status") == "degraded":
-                        health_at = time.monotonic() + retry
-                        # An embedded host starts OV after this loop: poll every second until then.
-                        if reached:
-                            retry = min(retry * 2, config.health_interval_seconds)
-                    else:
-                        health_at = time.monotonic() + config.health_interval_seconds
-                        retry, reached = 1, True
-                if time.monotonic() >= cleanup_at:
-                    await store.expire(time.time() - config.session_ttl_days * 86400)
-                    await management.expire_logs(time.time() - config.log_retention_days * 86400)
-                    cleanup_at = time.monotonic() + 3600
-                if not await app.state.worker.once():
-                    await asyncio.sleep(1)
-            except asyncio.CancelledError:
-                raise
+                await store.expire(time.time() - config.session_ttl_days * 86400)
+                await management.expire_logs(time.time() - config.log_retention_days * 86400)
+                await asyncio.sleep(3600)
             except Exception:
-                logger.exception("OpenViking Gateway maintenance failed")
+                logger.exception("OpenViking Gateway cleanup failed")
                 await asyncio.sleep(1)
+
+    async def capture_loop(app, stopped):
+        while not stopped.is_set():
+            try:
+                if await app.state.worker.once():
+                    continue
+            except Exception:
+                logger.exception("OpenViking Gateway capture failed")
+            try:
+                await asyncio.wait_for(stopped.wait(), timeout=1)
+            except asyncio.TimeoutError:
+                pass
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_request, error):
@@ -175,8 +254,12 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
         key = request_credential(request)
         if key.startswith("sk-ant-oat"):
             raise HTTPException(403, "Claude subscription OAuth credentials are not supported")
-        credential = await management.authenticate(key)
-        invalid = "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated. Issue a new key in OpenViking Studio → Gateway → Keys."
+        if config.openviking_keys and key and not key.startswith("ovgw_"):
+            credential = await openviking_credential(app, key)
+            invalid = "OpenViking rejected this API key. It may have been regenerated; use the user's current OpenViking API key."
+        else:
+            credential = await management.authenticate(key)
+            invalid = "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated. Issue a new key in OpenViking Studio → Gateway → Keys."
         if not credential:
             raise HTTPException(401, invalid)
         if app.state.viking.unavailable_reason:
@@ -185,15 +268,18 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
         try:
             identity = await app.state.viking.identify(credential["openviking_key"])
         except VikingError as error:
-            if error.reason != "openviking_http_401":
-                # Unconfirmed is not revoked: like recall, the request degrades instead.
+            if error.status >= 500 or error.reason == "openviking_http_429":
+                # Only unavailable checks leave revocation unconfirmed.
                 return credential, "revocation_check_unavailable"
+            if error.reason != "openviking_http_401":
+                raise
             identity = None
         # Dev identities are always default/default, so they say nothing about this key.
         if identity is None or (
             identity.get("auth_mode") != "dev"
             and (
-                identity["account_id"] != credential["account"]
+                identity["account_id"]
+                != credential.get("openviking_account", credential["account"])
                 or identity["user_id"] != credential["user_id"]
             )
         ):
@@ -201,21 +287,22 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
             raise HTTPException(401, invalid)
         return credential, None
 
-    register_management(app)
+    if config.management_api:
+        register_management(app)
 
     @app.get("/api/compatible/v1/models")
     @app.get("/api/v3/models")
     @app.get("/v1/models")
     async def models(request: Request):
         credential, _ = await authenticate(request)
-        values = await management.list(credential["account"], "upstreams")
+        binding = await resolve_binding(management, config, credential)
         names = sorted(
             {
                 model
-                for u in values
-                if u["id"] in credential["upstream_ids"] and u.get("enabled", True)
+                for u in binding.upstreams
+                if u.get("enabled", True)
                 for model in [*u.get("models", []), *u.get("aliases", {})]
-                if not credential["models"] or model in credential["models"]
+                if not binding.models or model in binding.models
             }
         )
         return {
@@ -306,7 +393,9 @@ async def seed_defaults(app, account_id):
     if app.state.vlm_source and not await management.list(account_id, "upstreams"):
         await import_vlm_objects(app, account_id)
     if not await management.get(account_id, "policies", "default"):
-        await management.save(account_id, "policies", "default", Policy().model_dump())
+        await management.save(
+            account_id, "policies", "default", app.state.config.default_profile.model_dump()
+        )
 
 
 async def delete_data(app, account_id, user_id=None):

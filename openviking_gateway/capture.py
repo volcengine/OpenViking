@@ -30,6 +30,7 @@ from .tool_protocols import reply_chain
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
 RECOVERY_SECONDS = 300
+DELIVERY_SECONDS = 100  # below the 120 s claim lease
 MAX_PREVIOUS = 5
 SOURCE = "gateway:"
 
@@ -312,7 +313,7 @@ class CaptureWorker:
         if item is None:
             return False
         try:
-            async with async_timeout.timeout(100):
+            async with async_timeout.timeout(DELIVERY_SECONDS):
                 await self.deliver(item)
         except (BranchChanged, LeaseLost):
             pass
@@ -322,6 +323,10 @@ class CaptureWorker:
                 previous = old.value.get("error", {})
                 attempts = previous.get("attempts", 0) + 1
                 reason = getattr(error, "reason", "delivery_failed")
+                if reason == "openviking_http_401":
+                    await self.management.delete(
+                        old.value["account"], "keys", old.value["credential_id"]
+                    )
                 failure = {
                     "attempts": attempts,
                     "reason": reason,

@@ -6,6 +6,8 @@ description: Studio 中 OpenViking 网关页面的使用方法：各标签页、
 
 本页面向在 Studio 里使用网关页面的人，说明各标签页的用途、谁能修改什么，以及保存的修改何时生效。用你的 OpenViking API 密钥打开 Studio（[本地 dev 模式](02-quickstart.md#local-server-no-api-key)的服务无需密钥），在侧边栏选择 **OpenViking 网关**；独立部署的网关在自己的 `/studio/` 下提供 Studio。上游和上下文配置由同一 OpenViking 账号下的所有用户共享，网关密钥和请求日志则属于各个用户。
 
+设置 [`management_api: false`](13-configuration.md#gateway-fields) 后，网关管理 API 不再可用，独立网关也不再提供 Studio。嵌入部署中，OpenViking Server 仍提供自己的 Studio，但网关页面会因 `/gateway/admin/access` 返回 404 而报错。修改后需要重启宿主。
+
 ## Studio 标签页 {#studio-tabs}
 
 网关页面共有六个标签页，每行都链接到详细说明该标签页的文档。

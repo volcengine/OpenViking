@@ -18,7 +18,7 @@ description: 根据现象、Studio 标签或错误码，找到 OpenViking 网关
 | 请求日志中某条请求的状态码为 400 及以上 | 服务商拒绝了请求或调用失败。 | [上游返回错误](#the-upstream-returned-an-error) |
 | 某段对话没有召回，也没有保存 | 检测到 OpenViking 插件，网关把召回、保存和工具都让给了插件。 | 正常行为，避免同一份内容被补充、保存两次，见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)。 |
 | 请求不带记忆 | OpenViking 无法访问或超时、预算用完、没有相关内容等。 | [没有补充记忆](#no-memory-is-added) |
-| 保存显示**重试中**，之后变成**已暂停** | OpenViking 拒绝保存或无法访问；或者这段对话的网关密钥已被吊销（`gateway_key_revoked`），例如用户的 OpenViking 密钥被重新生成过。 | OpenViking 恢复后网关会自动恢复保存。密钥被吊销时，重新签发网关密钥，用户的下一个请求会恢复保存。见[OpenViking 中看不到对话](#conversations-do-not-appear-in-openviking)。 |
+| 保存显示**重试中**，之后变成**已暂停** | OpenViking 拒绝保存或无法访问；或者这段对话的网关密钥已被吊销（`gateway_key_revoked`），例如用户的 OpenViking 密钥被重新生成过。 | OpenViking 恢复后网关会自动恢复保存。原因为 `gateway_key_revoked` 时：签发的网关密钥需要重新签发，之后的下一个请求会恢复保存；直接使用的 OpenViking 密钥若记录过期、被驱逐或保存时收到 401，用户的下一个有效请求会恢复保存（account 租户模式；`tenancy: key` 下换用新密钥会开始新的对话）。见[OpenViking 中看不到对话](#conversations-do-not-appear-in-openviking)。 |
 | 上下文配置开启了工具，对话里却没有 | 还没有能用工具的请求，第一个能用的请求加载工具清单失败，客户端没有回传完整历史，或者客户端自己接了 OpenViking 工具。 | 在请求日志里查看原因，见[什么时候不提供工具](04-openviking-tools.md#when-tools-are-not-offered)。客户端接了 OpenViking MCP 服务器时出现**客户端已接入 OpenViking 工具**（`tool_name_collision`）是正常的；其他原因修正后开始新对话。 |
 | **首次调用缓存命中率**下降，或者概览提示缓存连续未命中 | 记忆无法原样放回、对话换了上游，或者客户端、中转服务改动了请求开头的内容。 | [首次调用缓存命中率下降](#the-first-call-cache-hit-rate-dropped) |
 | 长对话被服务商以过长为由拒绝 | 网关不知道模型的实际窗口，压缩得太晚。 | [长对话超出上下文长度](#long-conversations-hit-the-context-limit) |
@@ -79,6 +79,7 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 状态码和提示 | 原因和处理 |
 | --- | --- |
 | 401 "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated…" | 客户端没有发送网关密钥，发送了已吊销的密钥或服务商的 API Key，或者用户的 OpenViking API 密钥重新生成后，网关删除了这把密钥。检查客户端实际发送的密钥，必要时[重新签发](09-gateway-keys.md#issue-a-key)。 |
+| 402 `openviking_http_402` "OpenViking service is not ordered for this API key."，403 `openviking_http_403` "OpenViking request failed." | 网关检查密钥时，OpenViking 拒绝了这把 OpenViking 密钥（或网关密钥背后的 OpenViking 密钥），例如服务未下单；请求不会转发。请恢复服务订购或密钥权限。 |
 | 403 "Claude subscription OAuth credentials are not supported" | 客户端发送了 Claude 订阅令牌，例如 Claude Code 用订阅账号登录且没有设置 `ANTHROPIC_AUTH_TOKEN`；或者上游保存的就是订阅令牌。请改用 API Key。 |
 | 403 "Model is not allowed by this key" | 模型不在密钥[允许的模型](09-gateway-keys.md#allowed-models)范围内。签发一把允许这个模型的密钥。 |
 | 400 "Request model is missing"、415 "Compressed request bodies are not supported" | 只出现在限定了模型的密钥上：请求体必须写明模型，且不能经过压缩编码。 |
@@ -140,7 +141,7 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 | --- | --- | --- |
 | 缺少最新的一轮 | 保存晚一轮：下一条消息到达时，上一轮才会出现；最后一轮要等**最新回复等待时长**（默认 10 分钟）。 | 稍等，或者发送下一条消息。 |
 | **保存**列显示**已关闭** | 上下文配置不保存对话。 | 在上下文配置中打开保存；修改只对新对话生效（见[修改何时生效](06-manage-in-studio.md#when-changes-take-effect)）。 |
-| **重试中**或**已暂停** | 保存失败，展开的行会显示原因。 | 修复原因（例如让 OpenViking 恢复访问）后，网关会在 5 分钟内重试。原因为 `gateway_key_revoked` 时，重新签发网关密钥，下一个请求会恢复保存。对话一直暂停时，用**重新同步对话…**（见[重新同步对话](10-overview-and-requests.md#resync-a-conversation)）。 |
+| **重试中**或**已暂停** | 保存失败，展开的行会显示原因。 | 修复原因（例如让 OpenViking 恢复访问）后，网关会在 5 分钟内重试。原因为 `gateway_key_revoked` 时：签发的网关密钥需要重新签发，之后的下一个请求会恢复保存；OpenViking 密钥若记录过期、被驱逐或收到 401，下一个有效请求会恢复保存（account 租户模式；`tenancy: key` 下换用新密钥会开始新的对话）。对话一直暂停时，用**重新同步对话…**（见[重新同步对话](10-overview-and-requests.md#resync-a-conversation)）。 |
 | **检测到 OpenViking 插件**（`plugin_present`） | 检测到 OpenViking 插件的对话，网关不保存任何内容。 | 正常行为；同一个客户端在插件和网关之间二选一。 |
 | 会话里只有部分对话 | 以下情况下，网关会把当前历史写进新的 `gateway-…` 会话：客户端编辑、重新生成或压缩了历史（`history_changed`、`history_changed_during_delivery`），已在**最新回复等待时长**之后保存的一轮又继续了（`continued_after_idle`），或者有人用了**重新同步对话…**（`manual_reset`）。之前的轮次留在旧会话里。 | 到旧会话里找，见[保存状态](10-overview-and-requests.md#saving-status)。 |
 | 完全看不到 `gateway-…` 会话 | 你查看时用的 OpenViking 用户，不是网关密钥背后的那个用户。 | 换成那个用户查看。 |
@@ -210,6 +211,10 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 | 模型未返回回答（`hidden_reply_without_anchor`） | 模型在这次请求中使用了 OpenViking 工具，但没有返回可用于继续对话的内容。客户端仍收到了回复，但下一轮无法沿用这次工具调用的结果。 | 重试本次提问，或开始一段新对话。 |
 | 回复未保存（`capture_parse_failure`） | 流式回复无法解析，这条回复没有保存，客户端不受影响。 | 无需处理，仅供了解。 |
 | 密钥未校验（`revocation_check_unavailable`） | OpenViking 无法确认这把网关密钥，请求在没有检查是否已吊销的情况下照常处理。 | 检查 OpenViking 是否可达、运行是否正常。 |
+
+## Redis 不可用 {#redis-unavailable}
+
+启动在 Redis PING 处失败时，检查 `storage.redis.endpoints`、TLS 信任链和密码环境变量；官方镜像之外需要安装 `openviking[expiry]`。鉴权时返回纯文本 `Internal Server Error` 的 HTTP 500 也可能是 Redis 不可用，请查看 stderr。运行时 Redis 故障期间 `/health` 仍返回健康，不代表 Redis 连接正常。ACL 和超时配置见[存储后端](13-configuration.md#storage)，持久化配置见 [Redis 内存策略](../guides/22-gateway-operations.md#redis-memory-policy)。
 
 ## 下一步 {#next-steps}
 

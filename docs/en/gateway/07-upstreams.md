@@ -29,6 +29,15 @@ When you choose a provider in the editor, its default Base URL is filled in:
 | Volcano Engine Ark | All three | `https://ark.cn-beijing.volces.com/api/v3` for Chat Completions and Responses; `https://ark.cn-beijing.volces.com/api/compatible` for Anthropic Messages |
 | BytePlus ModelArk | All three | `https://ark.ap-southeast.bytepluses.com/api/v3` for Chat Completions and Responses; `https://ark.ap-southeast.bytepluses.com/api/compatible` for Anthropic Messages |
 
+## Deployment default upstreams {#deployment-default-upstreams}
+
+Operators can set `default_upstreams` in the gateway configuration for clients that [use OpenViking API keys directly](09-gateway-keys.md#openviking-keys); see the [configuration example](13-configuration.md#gateway-fields).
+
+- Defaults apply only when the account has no stored upstreams. Once it stores any upstream, its stored set replaces the defaults as a whole, even if every stored upstream is disabled.
+- Deployment defaults are not copied into account storage and do not appear in Studio. Issued gateway keys continue to use their selected, stored upstreams.
+- Keep the object keys, such as `ark-chat`, stable: each key is the upstream ID frozen into conversations and used to route later turns.
+- For managed credentials, write `"api_key": "$ARK_API_KEY"` and inject `ARK_API_KEY` from a Secret through `extraEnv` in Helm deployments. The gateway expands environment references when loading the file; keep plaintext API keys out of ConfigMaps.
+
 ## Add an upstream {#add-an-upstream}
 
 1. On the **Upstreams** tab, choose **Add upstream**. The **New upstream** editor opens with four sections: **Endpoint**, **Credentials**, **Models** and **Routing**.

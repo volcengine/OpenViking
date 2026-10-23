@@ -6,6 +6,8 @@ description: Find your way around the OpenViking Gateway pages in Studio, see wh
 
 This page is for anyone who uses the gateway pages in Studio: what each tab is for, who can change what, and when saved changes take effect. Open Studio with your OpenViking API key (a server in [local dev mode](02-quickstart.md#local-server-no-api-key) needs none) and choose **OpenViking Gateway** in the sidebar; a standalone gateway serves its own Studio at `/studio/`. Upstreams and context profiles are shared by everyone in an OpenViking account, while gateway keys and request logs belong to each user.
 
+With [`management_api: false`](13-configuration.md#gateway-fields), gateway administration is unavailable and the standalone gateway no longer serves Studio. In embedded deployments, OpenViking Server still serves its own Studio, but the gateway pages show an error because `/gateway/admin/access` returns 404. Restart the host after changing this setting.
+
 ## Studio tabs {#studio-tabs}
 
 The gateway pages have six tabs. Each row links the page that explains the tab in detail.

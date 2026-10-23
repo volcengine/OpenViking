@@ -11,8 +11,8 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from openviking.crypto.encryptor import MAGIC
 from openviking_gateway.storage import (
-    ManagementStore,
     SQLiteKernelStore,
+    SQLiteManagementStore,
     delete_account_data,
     delete_user_data,
     digest,
@@ -136,7 +136,7 @@ EXPECTED = {str(i): (r[3], 7 + (r[2] != r[3])) for i, r in enumerate(UPSTREAMS)}
 async def test_v5_migration_reencodes_every_table(v5_storage, encrypted):
     directory, _ = v5_storage
     encryptor = local_encryptor(directory / "master.key") if encrypted else None
-    management = ManagementStore(directory / "management.sqlite3", encryptor)
+    management = SQLiteManagementStore(directory / "management.sqlite3", encryptor)
     kernel = SQLiteKernelStore(directory / "kernel.sqlite3", encryptor)
     try:
         await management.initialize()
@@ -189,7 +189,7 @@ async def test_legacy_key_from_environment(v5_storage, monkeypatch):
 async def test_missing_legacy_key_refuses_startup(v5_storage, name):
     directory, _ = v5_storage
     (directory / "encryption.key").unlink()
-    store = (ManagementStore if name == "management.sqlite3" else SQLiteKernelStore)(
+    store = (SQLiteManagementStore if name == "management.sqlite3" else SQLiteKernelStore)(
         directory / name
     )
     try:
@@ -205,7 +205,7 @@ async def test_empty_v5_stores_need_no_legacy_key(tmp_path):
     for name, layout in (("management.sqlite3", V5_MANAGEMENT), ("kernel.sqlite3", V5_KERNEL)):
         with sqlite3.connect(tmp_path / name) as c:
             c.executescript(layout)
-    management = ManagementStore(tmp_path / "management.sqlite3")
+    management = SQLiteManagementStore(tmp_path / "management.sqlite3")
     kernel = SQLiteKernelStore(tmp_path / "kernel.sqlite3")
     try:
         await management.initialize()
@@ -221,7 +221,7 @@ async def test_failed_migration_rolls_back_schema_and_objects(v5_storage):
     path = directory / "management.sqlite3"
     with sqlite3.connect(path) as c:
         c.execute("UPDATE objects SET value=? WHERE id='8'", (b"corrupt",))
-    store = ManagementStore(path)
+    store = SQLiteManagementStore(path)
     try:
         with pytest.raises(InvalidToken):
             await store.initialize()
@@ -238,7 +238,7 @@ async def test_failed_migration_rolls_back_schema_and_objects(v5_storage):
 async def test_workers_can_migrate_same_v5_database(v5_storage):
     directory, _ = v5_storage
     encryptor = local_encryptor(directory / "master.key")
-    workers = [ManagementStore(directory / "management.sqlite3", encryptor) for _ in range(6)]
+    workers = [SQLiteManagementStore(directory / "management.sqlite3", encryptor) for _ in range(6)]
     try:
         await asyncio.gather(*(worker.initialize() for worker in workers))
         for worker in workers:
@@ -250,13 +250,13 @@ async def test_workers_can_migrate_same_v5_database(v5_storage):
 
 async def test_enabling_encryption_later_keeps_plaintext_readable(tmp_path):
     path = tmp_path / "management.sqlite3"
-    plain = ManagementStore(path)
+    plain = SQLiteManagementStore(path)
     try:
         await plain.initialize()
         await plain.save("a", "upstreams", "old", {"name": "old"})
     finally:
         plain.close()
-    encrypted = ManagementStore(path, local_encryptor(tmp_path / "master.key"))
+    encrypted = SQLiteManagementStore(path, local_encryptor(tmp_path / "master.key"))
     try:
         await encrypted.initialize()
         await encrypted.save("a", "upstreams", "new", {"name": "new"})
@@ -267,7 +267,7 @@ async def test_enabling_encryption_later_keeps_plaintext_readable(tmp_path):
         rows = dict(c.execute("SELECT id,value FROM objects"))
     assert rows["new"].startswith(MAGIC) and orjson.loads(rows["old"]) == {"name": "old"}
     # Disabling encryption again cannot silently read the encrypted rows.
-    plain = ManagementStore(path)
+    plain = SQLiteManagementStore(path)
     try:
         with pytest.raises(RuntimeError, match="encrypted"):
             await plain.list("a", "upstreams")
@@ -277,7 +277,7 @@ async def test_enabling_encryption_later_keeps_plaintext_readable(tmp_path):
 
 @pytest.mark.asyncio
 async def test_user_filtering_and_deletion_preserves_other_users(tmp_path):
-    management = ManagementStore(tmp_path / "management.sqlite3")
+    management = SQLiteManagementStore(tmp_path / "management.sqlite3")
     kernel = SQLiteKernelStore(tmp_path / "kernel.sqlite3")
     try:
         await management.initialize()

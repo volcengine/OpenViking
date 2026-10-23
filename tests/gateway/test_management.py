@@ -7,7 +7,7 @@ import httpx
 import pytest
 from aiohttp import web
 
-from openviking_gateway.app import create_app, seed_defaults
+from openviking_gateway.app import create_app, health_loop, seed_defaults
 from openviking_gateway.config import StandaloneGatewayConfig
 from openviking_gateway.standalone import check_openviking, create_standalone_app
 from openviking_gateway.storage import digest
@@ -221,17 +221,14 @@ async def test_revocation_removes_only_key_and_keeps_user_data(running_gateway):
     assert not await app.state.management.logs("tenant", user_id="alice")
 
 
-@pytest.mark.parametrize("failure", ["unreachable", "server_error", "identity_missing"])
+@pytest.mark.parametrize("failure", ["unreachable", "server_error"])
 async def test_unconfirmed_revocation_keeps_key_and_serves(running_gateway, failure):
     app, client, _, key, _, _ = running_gateway
     backend = app.state.test_backend
 
     async def handler(request):
         if request.path == "/health" and request.headers.get("X-API-Key") == "user-key":
-            if failure == "server_error":
-                return web.json_response({}, status=503)
-            # OV swallows account-store errors and answers without an identity.
-            return web.json_response({"status": "ok", "auth_mode": "api_key"})
+            return web.json_response({}, status=503)
 
     backend["handler"] = handler
     if failure == "unreachable":
@@ -764,13 +761,11 @@ async def test_connection_test_is_available_for_missing_key_and_blocked_plan(run
     assert not [path for path, _, _ in captured if path.endswith("/chat/completions")]
 
 
-@pytest.mark.parametrize("mode", ["unavailable", "trusted", "unknown"])
+@pytest.mark.parametrize("mode", ["trusted", "unknown"])
 async def test_public_standalone_requires_confirmed_api_key_auth(tmp_path, monkeypatch, mode):
     from openviking_gateway.client import VikingClient, VikingError
 
     async def health(self, *args, **kwargs):
-        if mode == "unavailable":
-            raise VikingError("openviking_unavailable")
         if mode == "trusted":
             raise VikingError("trusted_mode_unsupported", 403)
         return {"status": "ok"}
@@ -1002,42 +997,28 @@ async def test_keys_are_immutable_and_errors_explain_themselves(running_gateway)
     }
 
 
-async def test_degraded_probe_backs_off_until_success(tmp_path, monkeypatch):
-    import asyncio
-    import time
+async def test_degraded_probe_backs_off_until_success():
     from types import SimpleNamespace
 
-    from openviking_gateway import app as module
-    from openviking_gateway.client import VikingClient, VikingError
-    from openviking_gateway.config import GatewayConfig
+    from openviking_gateway.client import VikingError
 
-    clock, probes, results = [0.0], [], [False, False, True, False, False, False, False]
+    delays, results = [], [False, False, True, False, False, False, False]
 
-    def monotonic():
-        clock[0] += 0.125
-        return clock[0]
-
-    async def health(self, *args, **kwargs):
-        probes.append(clock[0])
-        if results and not results.pop(0):
+    async def health(**kwargs):
+        if not results.pop(0):
             raise VikingError("openviking_unavailable")
         return {"status": "ok"}
 
-    async def once():
-        await asyncio.sleep(0)
-        return True
+    async def sleep(delay):
+        delays.append(delay)
+        if not results:
+            raise asyncio.CancelledError
 
-    monkeypatch.setattr(VikingClient, "health", health)
-    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=monotonic, time=time.time))
-    config = GatewayConfig(storage_path=str(tmp_path), health_interval_seconds=4)
-    app = create_app(config, openviking_url="http://unused")
-    async with app.router.lifespan_context(app):
-        app.state.worker.once = once
-        while results:
-            await asyncio.sleep(0)
-    gaps = [round(b - a) for a, b in zip(probes, probes[1:], strict=False)]
+    app = SimpleNamespace(state=SimpleNamespace(viking=SimpleNamespace(health=health)))
+    with pytest.raises(asyncio.CancelledError):
+        await health_loop(app, 4, sleep)
     # Every second until OV first answers; later outages back off 1, 2, 4 capped at the interval.
-    assert gaps[:6] == [1, 1, 4, 1, 2, 4]
+    assert delays == [1, 1, 4, 1, 2, 4, 4]
 
 
 async def test_upstream_test_fills_url_key_and_reaches_exact_endpoints(running_gateway):

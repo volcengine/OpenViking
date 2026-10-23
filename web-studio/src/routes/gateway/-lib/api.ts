@@ -134,6 +134,8 @@ export type ProfileSettings = {
   tool_result_bytes: number
   tool_total_seconds: number | null
   tool_total_tokens: number | null
+  /** Clients may override the other settings with `X-OpenViking-Context`. */
+  client_overrides: boolean
 }
 
 export type Profile = ProfileSettings & { id: string; revision: number }
@@ -143,11 +145,17 @@ export type GatewayKey = {
   id: string
   revision: number
   name: string
+  /**
+   * An OpenViking API key used directly. It stores no binding, so name,
+   * policy_id, upstream_ids and models are empty; the gateway applies the
+   * account's defaults to each request.
+   */
+  source?: 'openviking'
   policy_id: string
   upstream_ids: string[]
   models: string[]
   user_id: string
-  /** First 12 characters of the secret, e.g. `ovgw_Ab3dE9x`. */
+  /** First characters of the secret: 12 of a gateway key (`ovgw_Ab3dE9x`), 8 of an OpenViking API key. */
   prefix: string
   /** Epoch seconds. */
   created_at: number
@@ -314,6 +322,8 @@ export type LogRecord = {
   cache_min_tokens?: number
   cache_eligible?: boolean
   duration_ms?: number
+  /** Profile fields the client set with `X-OpenViking-Context`; values are not logged. */
+  context_override?: string[]
 }
 
 /** Where clients reach the gateway. */
