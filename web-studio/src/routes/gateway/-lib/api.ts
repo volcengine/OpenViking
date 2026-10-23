@@ -134,6 +134,8 @@ export type ProfileSettings = {
   tool_result_bytes: number
   tool_total_seconds: number | null
   tool_total_tokens: number | null
+  /** Clients may override the other settings with `X-OpenViking-Context`. */
+  client_overrides: boolean
 }
 
 export type Profile = ProfileSettings & { id: string; revision: number }
@@ -314,6 +316,8 @@ export type LogRecord = {
   cache_min_tokens?: number
   cache_eligible?: boolean
   duration_ms?: number
+  /** Profile fields the client set with `X-OpenViking-Context`; values are not logged. */
+  context_override?: string[]
 }
 
 /** Where clients reach the gateway. */

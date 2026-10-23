@@ -103,7 +103,7 @@ In `gateway.conf`, `client_rules` sits at the root, without the `gateway` wrappe
 
 ## Context profile settings {#context-profile-settings}
 
-In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles).
+In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles). **Let clients override settings** (`client_overrides`, default `true`) lets clients change every other setting for a new conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides).
 
 ### Recall memory {#profile-recall}
 
@@ -123,7 +123,7 @@ Explained in [Recall memory](08-context-profiles.md#recall-memory).
 | Query length | `query_max_chars` | `8000` | 3–32,000 | Characters of the message used as the search query. |
 | Limit by category | `quotas` | `{}` (off) | Keys: `events`, `entities`, `preferences`, `experiences`, `resources`, `skills`; when set, at least one above 0 (checked by Studio only) | Most entries per category; only categories above 0 are searched. |
 
-The management API saves `context_types` and `quotas` without checking them. An unknown `quotas` key makes every recall fail, because OpenViking rejects it.
+The management API saves `context_types` and the `quotas` keys without checking them. An unknown `quotas` key makes every recall fail, because OpenViking rejects it.
 
 ### Save conversations {#profile-saving}
 

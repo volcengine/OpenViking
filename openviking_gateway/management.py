@@ -19,7 +19,14 @@ from pydantic import ValidationError
 from .capture import reset_capture
 from .client import VikingError
 from .config import MOUNT_PATH
-from .models import CaptureReset, KeyRequest, Policy, Upstream, UpstreamTestRequest
+from .models import (
+    CaptureReset,
+    KeyRequest,
+    Policy,
+    Upstream,
+    UpstreamTestRequest,
+    validation_detail,
+)
 from .overview import overview_summary
 from .protocols import text_content
 from .proxy import fill_key, upstream_headers, upstream_key, upstream_url
@@ -113,13 +120,7 @@ async def read_body(request, model, prepare=None):
         payload = await request.json()
         return model.model_validate(prepare(payload) if prepare else payload)
     except ValidationError as error:
-        fail(
-            422,
-            "invalid_configuration",
-            "; ".join(
-                item["msg"] for item in error.errors(include_input=False, include_context=False)
-            ),
-        )
+        fail(422, "invalid_configuration", validation_detail(error))
     except ValueError:
         fail(422, "invalid_configuration")
 

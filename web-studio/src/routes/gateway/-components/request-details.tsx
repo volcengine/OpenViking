@@ -506,6 +506,13 @@ export function RequestDetails({
             ) : null}
           </DetailItem>
         ) : null}
+        {record.context_override?.length ? (
+          <DetailItem label={t('requests.details.contextOverride')}>
+            <span className="font-mono text-xs">
+              {record.context_override.join(', ')}
+            </span>
+          </DetailItem>
+        ) : null}
       </dl>
       {degradation ? (
         <Callout
