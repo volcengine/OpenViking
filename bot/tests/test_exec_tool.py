@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Regression tests for agent command access and working directories."""
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -68,3 +69,44 @@ def test_compile_exec_requires_opt_in():
     assert BotCompileService._compile_capabilities(service).exec_enabled
     service.config.sandbox.backends.direct.allow_exec = False
     assert not BotCompileService._compile_capabilities(service).exec_enabled
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.name != "posix" or getattr(os, "geteuid", lambda: 0)() == 0,
+    reason="directory search permissions require a non-root POSIX user",
+)
+async def test_read_file_distinguishes_inaccessible_path_from_missing_path(tmp_path):
+    config = Config()
+    registry = ToolRegistry(config)
+    register_default_tools(registry, config)
+
+    workspace = tmp_path / "workspace"
+    locked = workspace / "locked"
+    locked.mkdir(parents=True)
+    (locked / "secret.txt").write_text("secret", encoding="utf-8")
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="read-test")
+    sandbox = DirectBackend(config.sandbox, session_key, workspace)
+    await sandbox.start()
+    locked.chmod(0)
+    try:
+        manager = _SandboxManager(sandbox)
+        denied = await registry.execute(
+            "read_file",
+            {"path": "locked/secret.txt"},
+            session_key=session_key,
+            sandbox_manager=manager,
+        )
+        missing = await registry.execute(
+            "read_file",
+            {"path": "missing.txt"},
+            session_key=session_key,
+            sandbox_manager=manager,
+        )
+    finally:
+        locked.chmod(0o700)
+        await sandbox.stop()
+
+    assert "Permission denied" in denied
+    assert "File not found" not in denied
+    assert "File not found" in missing
