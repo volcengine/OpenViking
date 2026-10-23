@@ -51,6 +51,19 @@ const LOADERS = {
     options: { manifestUrl: new URL("../pi-coding-agent-extension/package.json", import.meta.url), deriveEffectivePeer: true },
     owns: ["peerId"],
   },
+  omo: {
+    harness: "omo",
+    load: (cwd) => {
+      const previous = process.env.OMO_NATIVE;
+      process.env.OMO_NATIVE = "1";
+      try { return loadPi(cwd); } finally {
+        if (previous === undefined) delete process.env.OMO_NATIVE;
+        else process.env.OMO_NATIVE = previous;
+      }
+    },
+    options: { manifestUrl: new URL("../pi-coding-agent-extension/package.json", import.meta.url), deriveEffectivePeer: true },
+    owns: ["peerId"],
+  },
   cursor: { harness: "cursor", load: (cwd) => loadAgentHookConfig("cursor", cwd), options: { logFile: "cursor-hooks.log" }, owns: [] },
   trae: { harness: "trae", load: (cwd) => loadAgentHookConfig("trae", cwd), options: { logFile: "trae-hooks.log" }, owns: [] },
   trae_cn: { harness: "trae-cn", load: (cwd) => loadAgentHookConfig("trae-cn", cwd), options: { logFile: "trae-cn-hooks.log" }, owns: [] },

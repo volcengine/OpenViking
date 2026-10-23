@@ -5,6 +5,10 @@ import { buildPluginConfig } from "./shared/plugin-config.mjs";
 /** The version the User-Agent reports, read from the manifest the gate checks. */
 export const EXTENSION_VERSION = readManifestVersion(new URL("./package.json", import.meta.url));
 
+function currentHarness(): "omo" | "pi" {
+  return process.env.OMO_NATIVE === "1" ? "omo" : "pi";
+}
+
 export interface OVConfig {
   enabled: boolean;
   endpoint: string;
@@ -67,11 +71,15 @@ export interface OVConfig {
  * extension holding exactly the code defaults, so nothing could tell an
  * operator's choice from the factory setting. Every knob is declared in
  * `shared/config-schema.mjs` now and resolved from the same layers as every
- * other harness: env → the workspace file → `ovcli.conf`'s `plugin.pi` →
+ * other harness: env → the workspace file → `ovcli.conf`'s harness section →
  * `ovcli.conf`'s `plugin` → defaults.
  */
 export function loadConfig(cwd: string = process.cwd()): OVConfig {
-  const config = buildPluginConfig("pi", { cwd, version: EXTENSION_VERSION, deriveEffectivePeer: true });
+  const config = buildPluginConfig(currentHarness(), {
+    cwd,
+    version: EXTENSION_VERSION,
+    deriveEffectivePeer: true,
+  });
 
   return {
     ...config,

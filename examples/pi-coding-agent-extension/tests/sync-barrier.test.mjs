@@ -9,6 +9,7 @@ import { enqueue, listPending } from "../shared/pending-queue.mjs";
 
 function config(overrides = {}) {
   return {
+    harness: "pi",
     commitTokenThreshold: 20000,
     commitKeepRecentCount: 10,
     captureAssistantTurns: true,
@@ -18,6 +19,19 @@ function config(overrides = {}) {
     ...overrides,
   };
 }
+
+test("OMO sessions and logs use OMO identity", async () => {
+  await withPendingDir(async (dir) => {
+    const debugLogPath = join(dir, "omo-debug.log");
+    const sync = new SyncManager(client(), config({ harness: "omo", debugLogPath }));
+    await sync.ensureSession("session-1");
+    assert.equal(sync.sessionId, "omo-session-1");
+
+    await sync.commit();
+    const record = await readLastRecord(debugLogPath);
+    assert.equal(record.hook, "omo");
+  });
+});
 
 function client(overrides = {}) {
   return {

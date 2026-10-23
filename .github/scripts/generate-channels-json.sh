@@ -26,5 +26,5 @@ jq -n \
   | {schema: 1, harnesses: (
       {codex: {version: $version, git_url: $git_url}}
       + (["claude", "cursor", "trae", "trae-cn", "trae-cli", "zcode", "kimicode",
-          "opencode", "pi", "dsh"] | map({key: ., value: $archive}) | from_entries)
+          "opencode", "pi", "omo", "dsh"] | map({key: ., value: $archive}) | from_entries)
     )}' > "${OUT}"

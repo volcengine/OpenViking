@@ -271,6 +271,7 @@ export const HARNESS_KEYS = {
   opencode: "opencode",
   dsh: "dsh",
   pi: "pi",
+  omo: "omo",
   openclaw: "openclaw",
 };
 

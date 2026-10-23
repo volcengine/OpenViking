@@ -47,10 +47,12 @@ const MANAGED_ENV = [
   "OPENVIKING_DEBUG_LOG",
   "OV_DEBUG_LOG",
   "OPENVIKING_PENDING_DIR",
+  "OMO_NATIVE",
 ];
 
 async function startServer() {
   const initializes = [];
+  const clientNames = [];
   const gate = { health: null };
   const server = createServer((req, res) => {
     const chunks = [];
@@ -58,13 +60,16 @@ async function startServer() {
     req.on("end", async () => {
       const path = (req.url || "").split("?")[0];
       if (path === "/mcp") {
-        let method = null;
+        let message = null;
         try {
-          method = JSON.parse(Buffer.concat(chunks).toString("utf8"))?.method ?? null;
+          message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
         } catch {
           // A malformed body is still a post worth ignoring, not a crash.
         }
-        if (method === "initialize") initializes.push(Date.now());
+        if (message?.method === "initialize") {
+          initializes.push(Date.now());
+          clientNames.push(message.params?.clientInfo?.name);
+        }
         res.writeHead(403, { "content-type": "application/json" });
         res.end(JSON.stringify({ detail: "root key cannot reach /mcp" }));
         return;
@@ -81,6 +86,7 @@ async function startServer() {
   return {
     url: `http://127.0.0.1:${port}`,
     initializes,
+    clientNames,
     gate,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
@@ -120,7 +126,7 @@ function fakeCtx(notified = [], statuses = []) {
 }
 
 /** Boot one extension instance against a throwaway config and a fake server. */
-async function withExtension(t, fn) {
+async function withExtension(t, fn, { omo = false } = {}) {
   const server = await startServer();
   const dir = await mkdtemp(join(tmpdir(), "ov-pi-handshake-"));
   const saved = Object.fromEntries(MANAGED_ENV.map((name) => [name, process.env[name]]));
@@ -131,7 +137,12 @@ async function withExtension(t, fn) {
   process.env.OPENVIKING_CLI_CONFIG_FILE = join(dir, "ovcli.conf");
   process.env.OPENVIKING_CONFIG_FILE = join(dir, "ov.conf");
   process.env.OPENVIKING_PENDING_DIR = join(dir, "pending");
-  await writeFile(join(dir, "ovcli.conf"), JSON.stringify({ plugin: { pi: {} } }), "utf8");
+  if (omo) process.env.OMO_NATIVE = "1";
+  await writeFile(
+    join(dir, "ovcli.conf"),
+    JSON.stringify({ plugin: { [omo ? "omo" : "pi"]: {} } }),
+    "utf8",
+  );
 
   t.after(async () => {
     for (const [name, value] of Object.entries(saved)) {
@@ -170,6 +181,14 @@ async function withExtension(t, fn) {
     ),
   });
 }
+
+test("OMO identifies its MCP client independently from Pi", async (t) => {
+  await withExtension(t, async ({ server, turn, shutdown }) => {
+    await turn("hello");
+    assert.deepEqual(server.clientNames, ["openviking-omo"]);
+    await shutdown();
+  }, { omo: true });
+});
 
 test("the first turn attempts the handshake once, and the retry waits for the next one", async (t) => {
   await withExtension(t, async ({ server, turn, shutdown, notified }) => {

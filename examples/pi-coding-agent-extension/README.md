@@ -40,6 +40,8 @@ From a repository checkout, `bash examples/memory-plugin-shared/install.sh --har
 
 The installer installs the locked npm dependencies in a temporary directory before replacing the extension at `~/.pi/agent/extensions/openviking`, which is one of pi's auto-discovery roots, so pi loads it on the next `pi` invocation — no `packages` entry is needed. (Registering the same path with `pi install` would load it twice, so the installer avoids that and clears any stale entry left by older versions.)
 
+OMO uses the same compatible extension runtime. Install it with `--harness omo`; the extension is written only under `~/.omo/agent/extensions/openviking`, where OMO auto-discovers it. OMO's native `OMO_NATIVE=1` marker selects `plugin.omo`, the `omo` User-Agent and log attribution, and the `openviking-omo` MCP client identity without changing Pi behavior.
+
 For a manual copy, generate the shared runtime first, copy the extension, and install its dependencies:
 
 ```bash

@@ -13,7 +13,7 @@ import { isBypassed } from "../shared/session-model.mjs";
 // before it shared a loader.
 
 /**
- * Run `loadConfig()` with `body` as the extension's `plugin.pi` section of a
+ * Run `loadConfig()` with `body` as the extension's harness section of a
  * throwaway ovcli.conf. `cliConfig` adds the connection fields around it.
  */
 async function withPluginSection(body, fn, env = {}, cliConfig = null) {
@@ -33,6 +33,7 @@ async function withPluginSection(body, fn, env = {}, cliConfig = null) {
     OV_DEBUG_LOG: process.env.OV_DEBUG_LOG,
     OPENVIKING_BYPASS_SESSION: process.env.OPENVIKING_BYPASS_SESSION,
     OPENVIKING_BYPASS_SESSION_PATTERNS: process.env.OPENVIKING_BYPASS_SESSION_PATTERNS,
+    OMO_NATIVE: process.env.OMO_NATIVE,
   };
   process.env.OPENVIKING_CREDENTIAL_SOURCE = "env";
   process.env.OPENVIKING_URL = "http://127.0.0.1:1933";
@@ -48,6 +49,7 @@ async function withPluginSection(body, fn, env = {}, cliConfig = null) {
   delete process.env.OV_DEBUG_LOG;
   delete process.env.OPENVIKING_BYPASS_SESSION;
   delete process.env.OPENVIKING_BYPASS_SESSION_PATTERNS;
+  delete process.env.OMO_NATIVE;
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -56,7 +58,10 @@ async function withPluginSection(body, fn, env = {}, cliConfig = null) {
   try {
     await writeFile(
       join(dir, "ovcli.conf"),
-      JSON.stringify({ ...(cliConfig || {}), plugin: { pi: body } }),
+      JSON.stringify({
+        ...(cliConfig || {}),
+        plugin: { [process.env.OMO_NATIVE === "1" ? "omo" : "pi"]: body },
+      }),
       "utf8",
     );
     return await fn(loadConfig(), dir);
@@ -68,6 +73,14 @@ async function withPluginSection(body, fn, env = {}, cliConfig = null) {
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+test("loadConfig uses OMO identity and its own scoped settings under OMO", async () => {
+  await withPluginSection({ peerId: "omo-peer" }, (cfg) => {
+    assert.equal(cfg.harness, "omo");
+    assert.equal(cfg.userAgent, `openviking-memory-omo/${cfg.clientVersion}`);
+    assert.equal(cfg.peerId, "omo-peer");
+  }, { OMO_NATIVE: "1" });
+});
 
 test("loadConfig defaults takeover and archive injection off", async () => {
   await withPluginSection({}, (cfg) => {

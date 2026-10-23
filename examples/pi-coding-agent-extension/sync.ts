@@ -47,7 +47,7 @@ export class SyncManager {
   constructor(client: OVClient, config: OVConfig) {
     this.client = client;
     this.config = config;
-    this.logger = createLogger("pi", {
+    this.logger = createLogger(config.harness || "pi", {
       debug: Boolean(config.debugLogPath),
       debugLogPath: config.debugLogPath,
     });
@@ -80,7 +80,7 @@ export class SyncManager {
   async ensureSession(piSessionId: string): Promise<boolean> {
     if (this.ovSessionId) return true;
 
-    const id = deriveHarnessSessionId("pi-", piSessionId);
+    const id = deriveHarnessSessionId(`${this.config.harness || "pi"}-`, piSessionId);
     this.ovSessionId = id;
     return true;
   }

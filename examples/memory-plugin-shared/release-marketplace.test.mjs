@@ -222,7 +222,7 @@ test("a Claude-format wrapper sharing Claude Code's config keeps the URL marketp
   }
 });
 
-test("release marketplace archive supports ZCode and pi TOS installs", () => {
+test("release marketplace archive supports ZCode, pi, and OMO TOS installs", () => {
   const tmp = mkdtempSync(join(tmpdir(), "openviking-zcode-release-"));
   try {
     const stage = join(tmp, "memory-plugin-marketplace");
@@ -346,6 +346,20 @@ test("release marketplace archive supports ZCode and pi TOS installs", () => {
     assert.equal(imported.status, 0, imported.stdout + imported.stderr);
     assert.ok(existsSync(join(piRoot, "package-lock.json")));
     assert.equal(existsSync(join(piRoot, "shared", "mcp-proxy-core.mjs")), false);
+
+    const omoHome = join(tmp, "omo-home");
+    mkdirSync(omoHome);
+    writeFileSync(join(bin, "omo"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const omoInstalled = run("bash", [
+      installer, "--harness", "omo", "--dist", "tos", "--source", "archive",
+      "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    ], { env: { ...piEnv, HOME: omoHome, OPENVIKING_HOME: join(omoHome, ".openviking") } });
+    assert.equal(omoInstalled.status, 0, omoInstalled.stdout + omoInstalled.stderr);
+    const omoRoot = join(omoHome, ".omo", "agent", "extensions", "openviking");
+    assert.ok(existsSync(join(omoRoot, "index.ts")));
+    assert.equal(existsSync(join(omoHome, ".pi")), false);
+    const omoImported = run("node", ["--input-type=module", "-e", 'await import("./lib/mcp-bridge.mjs")'], { cwd: omoRoot });
+    assert.equal(omoImported.status, 0, omoImported.stdout + omoImported.stderr);
 
     // Both an npm failure and a false-success npm must leave the old install usable.
     writeFileSync(join(piRoot, "installed-before-upgrade"), "keep");
@@ -521,7 +535,7 @@ test("the docs download tree holds what the installer fetches, under the address
     const channels = JSON.parse(readFileSync(join(out, "releases", "latest", "channels.json"), "utf8"));
     assert.equal(channels.schema, 1);
     assert.deepEqual(Object.keys(channels.harnesses).sort(), [
-      "claude", "codex", "cursor", "dsh", "kimicode", "opencode", "pi", "trae", "trae-cli", "trae-cn", "zcode",
+      "claude", "codex", "cursor", "dsh", "kimicode", "omo", "opencode", "pi", "trae", "trae-cli", "trae-cn", "zcode",
     ]);
     assert.deepEqual(channels.harnesses.codex, {
       version,

@@ -58,7 +58,7 @@ export default async function (pi: ExtensionAPI) {
     // caches (#4137); it is per pi session and opened once the id is known.
     config.recallLedger ? new RecallLedger() : null,
   );
-  const logger = createLogger("pi", {
+  const logger = createLogger(config.harness, {
     debug: Boolean(config.debugLogPath),
     debugLogPath: config.debugLogPath,
   });
@@ -73,7 +73,7 @@ export default async function (pi: ExtensionAPI) {
       readConfig: () => buildBridgeProxyConfig(loadConfig(cwd)),
       // No "memory" in the name: every plugin identity is moving to plain
       // `openviking`, and a new identifier starts out on the new spelling.
-      clientInfo: { name: "openviking-pi", version: EXTENSION_VERSION },
+      clientInfo: { name: `openviking-${config.harness}`, version: EXTENSION_VERSION },
     })
     : null;
 

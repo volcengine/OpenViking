@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # OpenViking Memory Plugin shared installer for Claude Code, Codex, Cursor,
-# TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, pi and
+# TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, pi, OMO and
 # DeepSeek Harness (dsh).
 #
 # In short:
@@ -66,6 +66,7 @@
 #   kimicode   ~/.kimi-code/plugins
 #   opencode   ~/.config/opencode/plugins/openviking, openviking.js, opencode.json(c)
 #   pi         ~/.pi/agent/extensions/openviking
+#   omo        ~/.omo/agent/extensions/openviking
 #   dsh        dsh plugin add into the chosen profile
 #   cli        npm install -g @openviking/cli: ov in npm's global bin directory,
 #              or in ~/.local/bin when that needs sudo
@@ -224,7 +225,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh, cli.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, omo, dsh, cli.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
                      cli is the OpenViking CLI (ov), installed from npm. Without --harness: the detected ones and cli.
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
@@ -243,7 +244,7 @@ Options:
   --no-statusline    Skip the statusline prompt.
   --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode and Kimi Code integrations,
                      plus any legacy TraeCode CLI hook config. Claude Code, Codex, OpenCode,
-                     pi and dsh are removed with the commands the install prints at the end.
+                     pi, OMO and dsh are removed with the commands the install prints at the end.
   --yes, -y          Ask nothing: use defaults and install without asking for confirmation.
 
 Environment:
@@ -498,7 +499,7 @@ EOF
 }
 
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_OMO=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
@@ -507,6 +508,7 @@ refresh_available_harnesses() {
   { command -v trae-cli >/dev/null 2>&1 || command -v traecli >/dev/null 2>&1 || command -v traex >/dev/null 2>&1; } && HAVE_TRAE_CLI=1
   command -v opencode >/dev/null 2>&1 && HAVE_OPENCODE=1
   command -v pi >/dev/null 2>&1 && HAVE_PI=1
+  command -v omo >/dev/null 2>&1 && HAVE_OMO=1
   command -v dsh >/dev/null 2>&1 && HAVE_DSH=1
   { command -v zcode >/dev/null 2>&1 || [ -d "$HOME/.zcode" ]; } && HAVE_ZCODE=1
   { command -v kimi >/dev/null 2>&1 || [ -d "$HOME/.kimi-code" ]; } && HAVE_KIMICODE=1
@@ -634,7 +636,7 @@ NODE
 CLAUDE_BINS="$(normalize_bin_list "$CLAUDE_BINS_ARG" claude)"
 CODEX_BINS="$(normalize_bin_list "$CODEX_BINS_ARG" codex)"
 
-HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0
+HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_OMO=0; HAVE_ZCODE=0; HAVE_DSH=0
 refresh_available_harnesses
 
 TUI_CLAUDE_BINS="$CLAUDE_BINS"
@@ -645,6 +647,7 @@ SEL_CLAUDE_BINS=""
 SEL_CODEX_BINS=""
 SEL_OPENCODE=0
 SEL_PI=0
+SEL_OMO=0
 SEL_DSH=0
 SEL_CURSOR_APP=0
 SEL_TRAE=0
@@ -664,7 +667,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 9 ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 10 ))
 }
 
 tui_total_count() {
@@ -690,6 +693,8 @@ EOF
   if [ "$i" -eq "$idx" ]; then printf 'opencode|opencode'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'pi|pi'; return 0; fi
+  i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'omo|omo'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'dsh|dsh'; return 0; fi
   i=$((i + 1))
@@ -731,6 +736,7 @@ tui_bin_label() {
     codex:trae-cli|codex:traecli|codex:traex) printf 'TraeCode CLI 2.0' ;;
     opencode:*) printf 'OpenCode' ;;
     pi:*) printf 'pi' ;;
+    omo:*) printf 'oh-my-openagent (OMO)' ;;
     dsh:*) printf 'DeepSeek Harness' ;;
     cursor:*) printf 'Cursor' ;;
     trae:*) printf 'TRAE' ;;
@@ -753,6 +759,8 @@ tui_bin_selected() {
     [ "$SEL_OPENCODE" -eq 1 ]
   elif [ "$kind" = "pi" ]; then
     [ "$SEL_PI" -eq 1 ]
+  elif [ "$kind" = "omo" ]; then
+    [ "$SEL_OMO" -eq 1 ]
   elif [ "$kind" = "dsh" ]; then
     [ "$SEL_DSH" -eq 1 ]
   elif [ "$kind" = "cursor" ]; then
@@ -786,6 +794,7 @@ tui_set_all_bins() {
   SEL_CODEX_BINS="$TUI_CODEX_BINS"
   SEL_OPENCODE=1
   SEL_PI=1
+  SEL_OMO=1
   SEL_DSH=1
   SEL_CURSOR_APP=1
   SEL_TRAE=1
@@ -806,6 +815,9 @@ tui_toggle_bin() {
     return 0
   elif [ "$kind" = "pi" ]; then
     SEL_PI=$((1 - SEL_PI))
+    return 0
+  elif [ "$kind" = "omo" ]; then
+    SEL_OMO=$((1 - SEL_OMO))
     return 0
   elif [ "$kind" = "dsh" ]; then
     SEL_DSH=$((1 - SEL_DSH))
@@ -896,6 +908,7 @@ tui_reset_bin_selection() {
   SEL_CODEX_BINS=""
   SEL_OPENCODE=0
   SEL_PI=0
+  SEL_OMO=0
   SEL_DSH=0
   SEL_CURSOR_APP=0
   SEL_TRAE=0
@@ -923,6 +936,7 @@ $TUI_CODEX_BINS
 EOF
   if command -v opencode >/dev/null 2>&1; then SEL_OPENCODE=1; any=1; fi
   if command -v pi >/dev/null 2>&1; then SEL_PI=1; any=1; fi
+  if command -v omo >/dev/null 2>&1; then SEL_OMO=1; any=1; fi
   if command -v dsh >/dev/null 2>&1; then SEL_DSH=1; any=1; fi
   if [ "$HAVE_CURSOR" -eq 1 ]; then SEL_CURSOR_APP=1; any=1; fi
   if [ "$HAVE_TRAE" -eq 1 ]; then SEL_TRAE=1; any=1; fi
@@ -1015,7 +1029,7 @@ tui_add_compatible_cli() {
 
 tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
-    || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
+    || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_OMO" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
     || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
     || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
 }
@@ -1028,6 +1042,7 @@ tui_finish_selection() {
   [ -n "$(list_words "$CODEX_BINS")" ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}codex"
   [ "$SEL_OPENCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}opencode"
   [ "$SEL_PI" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}pi"
+  [ "$SEL_OMO" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}omo"
   [ "$SEL_DSH" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}dsh"
   [ "$SEL_CURSOR_APP" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cursor"
   [ "$SEL_TRAE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae"
@@ -1105,6 +1120,7 @@ select_harnesses() {
   [ "$HAVE_TRAE_CN" -eq 1 ] && detected="${detected:+$detected,}trae-cn"
   [ "$HAVE_OPENCODE" -eq 1 ] && detected="${detected:+$detected,}opencode"
   [ "$HAVE_PI" -eq 1 ] && detected="${detected:+$detected,}pi"
+  [ "$HAVE_OMO" -eq 1 ] && detected="${detected:+$detected,}omo"
   [ "$HAVE_DSH" -eq 1 ] && detected="${detected:+$detected,}dsh"
   [ "$HAVE_ZCODE" -eq 1 ] && detected="${detected:+$detected,}zcode"
   [ "$HAVE_KIMICODE" -eq 1 ] && detected="${detected:+$detected,}kimicode"
@@ -1257,7 +1273,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|dsh|cli) ;;
+      claude|codex|cursor|trae|trae-cn|opencode|pi|omo|zcode|kimicode|dsh|cli) ;;
       trae-cli) [ "$UNINSTALL" -eq 1 ] || bad=1 ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
@@ -1295,6 +1311,7 @@ EOF
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then ok=1; fi
   if contains_harness pi && command -v pi >/dev/null 2>&1; then ok=1; fi
+  if contains_harness omo && command -v omo >/dev/null 2>&1; then ok=1; fi
   if contains_harness dsh && command -v dsh >/dev/null 2>&1; then ok=1; fi
   if contains_harness cli; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
@@ -2750,7 +2767,7 @@ opencode_write_config() {
 }
 
 # ---------------------------------------------------------------------------
-# pi
+# pi-family extensions
 # ---------------------------------------------------------------------------
 
 # Whole-directory installs need generated dependencies before copying. Flat
@@ -2764,55 +2781,52 @@ sync_shared_runtime() {
   "$NODE_BIN" "$shared/sync.mjs" >/dev/null
 }
 
-install_pi() {
-  step_heading "$(t 'pi extension' 'pi 扩展')"
-  if ! command -v pi >/dev/null 2>&1; then
-    warn "$(t 'pi CLI not found; skipping pi extension install.' '未找到 pi 命令，跳过 pi 扩展安装。')"
+install_pi_family() { # install_pi_family <harness> <destination>
+  local harness="$1" dest="$2" plugin_dir tmp
+  step_heading "$harness $(t 'extension' '扩展')"
+  if ! command -v "$harness" >/dev/null 2>&1; then
+    warn "$harness $(t 'CLI not found; skipping extension install.' '命令未找到，跳过扩展安装。')"
     return 0
   fi
-  command -v npm >/dev/null 2>&1 || { err "pi: npm is required to install the MCP client"; return 1; }
+  command -v npm >/dev/null 2>&1 || { err "$harness: npm is required to install the MCP client"; return 1; }
   "$NODE_BIN" -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)' || {
-    err "pi: Node.js 22.19.0 or newer is required"
+    err "$harness: Node.js 22.19.0 or newer is required"
     return 1
   }
-  local plugin_dir dest tmp
   ensure_bundle
   plugin_dir="$(plugin_dir_on_disk pi-coding-agent-extension)" || {
-    warn "$(t 'pi extension sources not found; skipping.' '未找到 pi 扩展源码，跳过。')"
+    warn "$harness $(t 'extension sources not found; skipping.' '扩展源码未找到，跳过。')"
     return 0
   }
   sync_shared_runtime
   if [ ! -f "$plugin_dir/shared/credentials.mjs" ] \
     || [ ! -f "$plugin_dir/shared/ov-http.mjs" ] \
     || [ ! -f "$plugin_dir/shared/mcp-proxy-config.mjs" ]; then
-    warn "$(t 'pi extension shared runtime is missing; run node examples/memory-plugin-shared/sync.mjs and retry.' '未找到 pi 扩展的共享运行时；请先运行 node examples/memory-plugin-shared/sync.mjs 再重试。')"
+    warn "$harness $(t 'extension shared runtime is missing; run node examples/memory-plugin-shared/sync.mjs and retry.' '扩展共享运行时未找到；请先运行 node examples/memory-plugin-shared/sync.mjs 再重试。')"
     return 0
   fi
-  dest="$HOME/.pi/agent/extensions/openviking"
   tmp="$dest.tmp"
   rm -rf "$tmp"
   mkdir -p "$tmp"
   (cd "$plugin_dir" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$tmp" && tar -xf -)
   if ! (cd "$tmp" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
       && "$NODE_BIN" --input-type=module -e 'await import("./lib/mcp-bridge.mjs")'); then
-    err "pi: dependency installation failed; the existing extension was kept"
+    err "$harness: dependency installation failed; the existing extension was kept"
     rm -rf "$tmp"
     return 1
   fi
   rm -rf "$dest"
   mkdir -p "$(dirname "$dest")"
   mv "$tmp" "$dest"
-  # ~/.pi/agent/extensions/ is one of pi's auto-discovery roots, so copying the
-  # extension there is enough for pi to load it. Do NOT also `pi install` the
-  # same path: that adds a "packages" entry pointing at the directory while
-  # auto-discovery already found its index.ts, and pi dedupes on the canonical
-  # path — a directory and its index.ts don't match, so the extension loads
-  # twice (duplicate /viking command). Instead, purge any stale packages entry
-  # left by older installer versions; `pi remove` on a local path only edits
-  # settings and never deletes the copied files.
-  pi remove "$dest" >/dev/null 2>&1 || true
-  info "$(t 'pi extension installed (auto-discovered):' 'pi 扩展已安装（自动发现）：') $dest"
+  # Both hosts auto-discover index.ts below agent/extensions. Pi may also have
+  # a stale package registration from an older installer, which would load the
+  # same extension twice; removing that registration does not delete files.
+  if [ "$harness" = "pi" ]; then pi remove "$dest" >/dev/null 2>&1 || true; fi
+  info "$harness $(t 'extension installed (auto-discovered):' '扩展已安装（自动发现）：') $dest"
 }
+
+install_pi() { install_pi_family pi "$HOME/.pi/agent/extensions/openviking"; }
+install_omo() { install_pi_family omo "$HOME/.omo/agent/extensions/openviking"; }
 
 # ---------------------------------------------------------------------------
 # Validation
@@ -2851,6 +2865,29 @@ validate_hook_host() { # validate_hook_host <client>
     return 1
   fi
   info "$client: $(t 'hooks and MCP are configured' 'hooks 与 MCP 已配置')"
+}
+
+validate_pi_family() { # validate_pi_family <harness> <destination>
+  local harness="$1" dest="$2" ok=1
+  if [ -f "$dest/index.ts" ] || [ -f "$dest/index.js" ]; then
+    info "$harness: $PLUGIN_NAME $(t 'extension files present (auto-discovered)' '扩展文件已存在（自动发现）')"
+  else
+    warn "$harness: $PLUGIN_NAME $(t 'extension files not found' '未找到扩展文件')"
+    return 1
+  fi
+  if [ "$harness" = "pi" ] && pi list 2>/dev/null | grep -q 'extensions/openviking'; then
+    warn "pi: $PLUGIN_NAME $(t 'still registered as a package (duplicate load); run pi remove ~/.pi/agent/extensions/openviking' '仍作为 package 注册（会重复加载）；请运行 pi remove ~/.pi/agent/extensions/openviking')"
+    ok=0
+  fi
+  if [ -f "$dest/shared/recall-core.mjs" ]; then
+    "$NODE_BIN" --check "$dest/shared/recall-core.mjs" || ok=0
+  fi
+  (cd "$dest" && "$NODE_BIN" --input-type=module \
+    -e 'await import("./lib/mcp-bridge.mjs")') || ok=0
+  if [ -f "$dest/shared/mcp-proxy-config.mjs" ]; then
+    "$NODE_BIN" --check "$dest/shared/mcp-proxy-config.mjs" || ok=0
+  fi
+  [ "$ok" -eq 1 ]
 }
 
 validate_install() {
@@ -2953,28 +2990,10 @@ EOF
     fi
   fi
   if contains_harness pi; then
-    if [ -f "$HOME/.pi/agent/extensions/openviking/index.ts" ] || [ -f "$HOME/.pi/agent/extensions/openviking/index.js" ]; then
-      info "pi: $PLUGIN_NAME $(t 'extension files present (auto-discovered)' '扩展文件已存在（自动发现）')"
-    else
-      warn "pi: $PLUGIN_NAME $(t 'extension files not found' '未找到扩展文件')"
-      ok=0
-    fi
-    if command -v pi >/dev/null 2>&1; then
-      # The extension lives under pi's auto-discovery root, so it must NOT appear
-      # as a configured "packages" entry — a stale entry there loads it twice.
-      if pi list 2>/dev/null | grep -q 'extensions/openviking'; then
-        warn "pi: $PLUGIN_NAME $(t 'still registered as a package (duplicate load); run pi remove ~/.pi/agent/extensions/openviking' '仍作为 package 注册（会重复加载）；请运行 pi remove ~/.pi/agent/extensions/openviking')"
-        ok=0
-      fi
-    fi
-    if [ -f "$HOME/.pi/agent/extensions/openviking/shared/recall-core.mjs" ]; then
-      node --check "$HOME/.pi/agent/extensions/openviking/shared/recall-core.mjs" || ok=0
-    fi
-    (cd "$HOME/.pi/agent/extensions/openviking" && "$NODE_BIN" --input-type=module \
-      -e 'await import("./lib/mcp-bridge.mjs")') || ok=0
-    if [ -f "$HOME/.pi/agent/extensions/openviking/shared/mcp-proxy-config.mjs" ]; then
-      node --check "$HOME/.pi/agent/extensions/openviking/shared/mcp-proxy-config.mjs" || ok=0
-    fi
+    validate_pi_family pi "$HOME/.pi/agent/extensions/openviking" || ok=0
+  fi
+  if contains_harness omo; then
+    validate_pi_family omo "$HOME/.omo/agent/extensions/openviking" || ok=0
   fi
   if contains_harness dsh && command -v dsh >/dev/null 2>&1; then
     local dsh_profile="${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}"
@@ -3078,7 +3097,7 @@ count_steps() {
   STEP_TOTAL=3
   if contains_harness claude; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CLAUDE_BINS"))); fi
   if contains_harness codex; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CODEX_BINS"))); fi
-  for h in cursor trae trae-cn zcode kimicode opencode pi dsh cli; do
+  for h in cursor trae trae-cn zcode kimicode opencode pi omo dsh cli; do
     if contains_harness "$h"; then STEP_TOTAL=$((STEP_TOTAL + 1)); fi
   done
 }
@@ -3187,7 +3206,8 @@ $CODEX_BINS
 EOF
   fi
   if [ "$SOURCE_MODE" = "archive" ] && { contains_harness cursor || contains_harness trae || contains_harness trae-cn \
-    || contains_harness zcode || contains_harness kimicode || contains_harness opencode || contains_harness pi; }; then
+    || contains_harness zcode || contains_harness kimicode || contains_harness opencode || contains_harness pi \
+    || contains_harness omo; }; then
     plan_item "$bundle ($(t 'plugin bundle download' '下载插件包'))"
   fi
   if contains_harness cursor; then
@@ -3215,6 +3235,9 @@ EOF
   fi
   if contains_harness pi && command -v pi >/dev/null 2>&1; then
     plan_paths pi "$HOME/.pi/agent/extensions/openviking"
+  fi
+  if contains_harness omo && command -v omo >/dev/null 2>&1; then
+    plan_paths OMO "$HOME/.omo/agent/extensions/openviking"
   fi
   if contains_harness dsh && command -v dsh >/dev/null 2>&1; then
     plan_item "dsh plugin --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT} add $DSH_PACKAGE@latest"
@@ -3330,6 +3353,9 @@ EOF
   if contains_harness pi && command -v pi >/dev/null 2>&1; then
     next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" "" "rm -rf ~/.pi/agent/extensions/openviking"
   fi
+  if contains_harness omo && command -v omo >/dev/null 2>&1; then
+    next_steps OMO "$(t 'restart OMO' '重启 OMO')" "$rerun" "" "rm -rf ~/.omo/agent/extensions/openviking"
+  fi
   if contains_harness dsh && command -v dsh >/dev/null 2>&1; then
     next_steps "DeepSeek Harness" "$(t 'start a new dsh session' '新开一个 dsh 会话')" "$rerun" "" \
       "dsh plugin --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT} rm $DSH_PACKAGE"
@@ -3409,6 +3435,7 @@ if contains_harness zcode; then install_zcode; fi
 if contains_harness kimicode; then install_kimicode; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
+if contains_harness omo; then install_omo; fi
 if contains_harness dsh; then install_dsh; fi
 if contains_harness cli; then install_cli; fi
 validate_install
