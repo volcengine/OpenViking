@@ -176,6 +176,7 @@ const activity = {
         agent: 'Agent capabilities, tools, and experience',
         user: 'Personalized user memories',
         resources: 'External resources the Agent can reference',
+        system: 'Built-in system resources',
       },
     },
     agent: {

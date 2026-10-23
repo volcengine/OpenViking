@@ -1,4 +1,102 @@
 export default {
+  builtinSkills: 'Built-in',
+  installedSkills: 'My and shared skills',
+  specializedSkill: 'Specialized session input',
+  skillDescriptionUnavailable:
+    'No description is available. View the Skill definition for details.',
+  skillMetadataFailed: 'Unable to read the latest definition for this skill.',
+  skillContentEmpty: 'This Skill has no content yet.',
+  skillPreview: 'Skill details',
+  manageSkills: 'Manage my and shared skills',
+  skillGroupFailed:
+    'Could not load {{group}}. Other loaded skills are still available.',
+  suitableInputs: 'Suitable inputs',
+  expectedOutputs: 'Expected output',
+  usageLimits: 'Usage limits',
+  personalSpace: 'Personal space',
+  sharedSpace: 'Shared space',
+  otherLocation: 'Other location',
+  spaceRoot: 'Root folder',
+  openFilesystem: 'Open filesystem',
+  copyPath: 'Copy directory path',
+  copyFailed: 'Could not copy. Please try again.',
+  checkingTarget: 'Checking the destination…',
+  targetNew: 'This is a new folder. It will be created during execution.',
+  targetExists: 'This folder already exists. Its contents may be updated.',
+  targetNotDirectory:
+    'This location is a file. Choose a folder or use a different folder name.',
+  targetRootInvalid:
+    'Choose a destination folder inside a space, not a space root or system directory.',
+  sourceNotDirectory:
+    'Sources must be readable folders. Please select them again.',
+  submissionSummary:
+    'Use {{skill}} to compile {{count}} source folder(s) into “{{folder}}” in {{space}}.',
+  compileThisFolder: 'Compile this folder',
+  viewGenerated: 'View generated content',
+  outputHint: 'Open the destination to view generated or updated files.',
+  capability: {
+    checking: 'Checking submission requirements…',
+    failed: 'Could not check submission requirements. Please retry.',
+    notConfigured:
+      'Compile execution is not enabled. Ask an administrator to configure it.',
+    keyRequired:
+      'This connection needs an OpenViking API key to submit a compile task. Check connection settings.',
+    connection: 'Open connection settings',
+    adminGuide: 'Administrator setup guide',
+    technical:
+      'Administrators can configure an Agent Runtime (compile_api.base_url) or use the built-in VikingBot runtime. Credential requirements are determined by the server.',
+  },
+  builtin: {
+    'llm-wiki': {
+      name: 'Knowledge Wiki',
+      description:
+        'Organize multiple sources into knowledge pages with an index and citations.',
+      inputs: 'Documents, notes, meeting records, research materials, or code.',
+      outputs: 'Topic-based Markdown pages, an index, and source references.',
+      limits:
+        'Uses the selected sources only. Existing knowledge pages may be updated.',
+    },
+    'knowledge-distillation': {
+      name: 'Knowledge Distillation',
+      description:
+        'Extract shared findings, differences, trends, and conclusions across sources.',
+      inputs: 'Related source collections or materials to compare.',
+      outputs: 'Topic-organized conclusion pages supported by evidence.',
+      limits:
+        'Designed for synthesis, not per-document summaries. Specify your analytical question in Additional instructions.',
+    },
+    'daily-report': {
+      name: 'Daily Report',
+      description:
+        'Turn activity records into progress, outcomes, and next steps for specific dates.',
+      inputs: 'Dated work records, meeting notes, tasks, or conversation logs.',
+      outputs: 'One Markdown daily report per date, such as YYYY-MM-DD.md.',
+      limits:
+        'Specify the reporting date in Additional instructions. Studio sessions are not read automatically.',
+    },
+    'knowledge-graph': {
+      name: 'Knowledge Graph',
+      description:
+        'Extract entities and relationships while retaining their sources.',
+      inputs:
+        'Materials containing people, organizations, projects, events, or other entities.',
+      outputs:
+        'Entity documents under entities/ and a relations.jsonl relationship file.',
+      limits:
+        'Produces graph data files. An interactive graph viewer is not included.',
+    },
+    'ov-session-report': {
+      name: 'Session Q&A Weekly Report',
+      description:
+        'Generate a Q&A weekly report from specialized session JSONL data.',
+      inputs:
+        'Session JSONL matching the Skill format and the sessions_root parameter.',
+      outputs:
+        'One Markdown weekly report with metrics, topics, and issue analysis.',
+      limits:
+        'English output by default. Requires specialized input and parameters; Studio sessions are not read automatically.',
+    },
+  },
   errors: {
     generic: 'The request could not be completed.',
     invalidArgument: 'Check the request parameters and try again.',
@@ -70,13 +168,13 @@ export default {
   skillRequired: 'Choose a Skill.',
   sourcesRequired: 'Add at least one source directory.',
   targetRequired: 'Set an output directory.',
-  mySkills: 'My Skills',
-  sharedSkills: 'Shared Skills',
+  mySkills: 'My',
+  sharedSkills: 'Shared',
   otherSkills: 'Other paths',
 
   noMatchingSkills: 'No matching skills',
   skillLocationHint:
-    'Add a Skill on the Skills page first. Private and shared Skills are supported; the directory must contain SKILL.md.',
+    'Use a built-in capability, or choose one of your own or shared skills.',
   expiredSubmission:
     'The retry window has expired. Look up the last submission or check the task list before clearing the draft to start another task.',
   targetPlaceholder: 'viking://resources/wiki',
@@ -95,15 +193,15 @@ export default {
   retry: 'Retry',
   failedLoad: 'Could not load data',
   unconfigured: 'Compilation is unavailable for this connection or identity.',
-  skill: '1. Choose a Skill',
+  skill: 'Generation capability',
   skillSearch: 'Search Skills',
-  chooseSkill: 'Choose a Skill',
-  noSkills: 'No available Skills. Visit Skills to add one.',
-  preview: 'View current Skill',
+  chooseSkill: 'Choose what to generate',
+  noSkills: 'No skills are available on this server.',
+  preview: 'Preview Skill',
   sources: 'Source directories',
   browse: 'Browse directories',
-  sourceHint: 'One Viking directory URI per line. Files are not accepted.',
-  target: '3. Choose an output location',
+  sourceHint: 'Choose directories stored in Viking. You can add more than one.',
+  target: 'Output directory',
   targetHint:
     'Existing contents may be updated. A new target is created during execution.',
   instruction: 'Additional instructions',
@@ -117,9 +215,11 @@ export default {
   copied: 'Copied',
   cancel: 'Cancel',
   clear: 'Clear draft',
+  restoreDraft: 'Restore draft',
   draft:
     'Public fields are saved as a draft. Advanced parameters are not saved.',
-  required: 'Choose a Skill, at least one source directory and an output URI.',
+  required:
+    'Choose a capability, at least one source folder, and a destination.',
   invalidUri: 'Use full viking:// URIs for every path.',
   argsError: 'Advanced parameters must be a valid JSON object.',
   runningHint: 'You can leave this page. The task will continue.',
@@ -137,7 +237,7 @@ export default {
   result: 'Result',
   output: 'Open output directory',
   noResult: 'No structured result is available yet.',
-  raw: 'Raw result',
+  raw: 'Technical details (raw result)',
   stage: 'Current stage',
   updated: 'Last updated',
   stale: 'Updates are unavailable. Showing the last known state.',

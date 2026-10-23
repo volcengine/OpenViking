@@ -168,6 +168,7 @@ const activity = {
         agent: 'Agent 的能力、工具和经验',
         user: '用户个性化记忆',
         resources: 'Agent 可引用的外部资源',
+        system: '系统内置资源',
       },
     },
     agent: {

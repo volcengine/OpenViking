@@ -11,6 +11,7 @@ import {
   PanelRightCloseIcon,
   PanelRightOpenIcon,
   TerminalIcon,
+  WandSparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -642,6 +643,29 @@ function FilesystemWorkbench() {
             >
               <ClipboardIcon className="size-4" />
             </Button>
+            {canUseLocalTools &&
+              selectedIsDirectory &&
+              /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
+                selectedUri,
+              ) && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t('compile:compileThisFolder')}
+                  onClick={() =>
+                    void navigate({
+                      to: '/compile/new',
+                      search: { from: selectedUri },
+                    })
+                  }
+                >
+                  <WandSparkles className="size-4" />
+                  <span className="hidden sm:inline">
+                    {t('compile:compileThisFolder')}
+                  </span>
+                </Button>
+              )}
             {canManageSelectedUri ? (
               <Button
                 type="button"

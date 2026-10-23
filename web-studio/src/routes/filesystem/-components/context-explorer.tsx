@@ -125,11 +125,13 @@ const NAMESPACE_DESCRIPTION_KEYS: Partial<
     string,
     | 'explorer.namespaces.agent'
     | 'explorer.namespaces.resources'
+    | 'explorer.namespaces.system'
     | 'explorer.namespaces.user'
   >
 > = {
   agent: 'explorer.namespaces.agent',
   resources: 'explorer.namespaces.resources',
+  system: 'explorer.namespaces.system',
   user: 'explorer.namespaces.user',
 } as const
 
