@@ -18,6 +18,7 @@ from openviking_gateway.compaction import (
     MEDIA_TOKENS,
     UNFINISHED,
     estimate,
+    growth_retry_threshold,
     opening_block,
 )
 from openviking_gateway.protocols import text_content, usage_of
@@ -685,3 +686,120 @@ async def test_a_cut_that_moves_capture_to_a_new_session_names_it_first(
     )
     summary_block = cut.body["messages"][0]["content"].split("</openviking-context>")[0]
     assert summary_block.endswith("\n\n" + hint + "\n")
+
+
+async def test_irreducible_cut_does_not_rearm_after_growth(setup_kernel, credential, policy):
+    kernel, store, _, _ = setup_kernel
+    policy.update(context_window=2000, recall=False, capture=False)
+    messages = [
+        {"role": "system", "content": "rule " * 1900},
+        {"role": "user", "content": "How do I deploy?"},
+    ]
+    first = await prepare(kernel, "chat", messages, credential, policy, session="irreducible")
+    reply = {"role": "assistant", "content": "Blue."}
+    await answered(kernel, first, credential, reply, tokens=2400)
+    messages += [reply, {"role": "user", "content": "Next?"}]
+    summarize = Summarizer("chat")
+    ineffective = await prepare(
+        kernel,
+        "chat",
+        messages,
+        credential,
+        policy,
+        session="irreducible",
+        summarize=summarize,
+    )
+    state = await get_state(store.state, ineffective.scope, ineffective.session)
+    assert ineffective.metrics["compaction_failed"] in {
+        "still_over_threshold",
+        "minimum_context_over_threshold",
+    }
+    assert "growth_retryable" not in state.value["compaction"]
+    initial_summary_calls = len(summarize.requests)
+
+    large_reply = {"role": "assistant", "content": "new evidence " * 650}
+    await answered(kernel, ineffective, credential, large_reply, tokens=4000)
+    messages += [large_reply, {"role": "user", "content": "Continue now."}]
+    suppressed = await prepare(
+        kernel,
+        "chat",
+        messages,
+        credential,
+        policy,
+        session="irreducible",
+        summarize=summarize,
+    )
+    growth = suppressed.metrics["context_tokens"] - ineffective.context_tokens
+    assert growth >= growth_retry_threshold(suppressed.context_window)
+    assert len(summarize.requests) == initial_summary_calls
+    assert "compaction_rearmed_after_growth" not in suppressed.metrics
+
+
+async def test_material_growth_rearms_a_cut_that_stayed_over_threshold(
+    setup_kernel, credential, policy
+):
+    kernel, store, _, _ = setup_kernel
+    policy.update(context_window=2000, recall=False, capture=False)
+    messages = [
+        {"role": "system", "content": "fixed-rule " * 580},
+        {"role": "user", "content": "How do I deploy?"},
+    ]
+    first = await prepare(kernel, "chat", messages, credential, policy, session="growth")
+    first_reply = {"role": "assistant", "content": "Use the blue cluster."}
+    await answered(kernel, first, credential, first_reply, tokens=1900)
+    messages += [first_reply, {"role": "user", "content": "What next?"}]
+    requests = []
+
+    async def summarize(_prepared, body):
+        requests.append(body)
+        text = "long-summary " * 150 if len(requests) == 1 else "short-summary"
+        return summary_response("chat", text)
+
+    ineffective = await prepare(
+        kernel, "chat", messages, credential, policy, session="growth", summarize=summarize
+    )
+    assert ineffective.metrics["compaction_failed"] == "still_over_threshold"
+    assert ineffective.context_tokens >= 1800
+    state = await get_state(store.state, ineffective.scope, ineffective.session)
+    assert state.value["compaction"]["context_tokens"] == ineffective.context_tokens
+    assert state.value["compaction"]["growth_retryable"] is True
+
+    grown_reply = {"role": "assistant", "content": "new evidence " * 650}
+    await answered(kernel, ineffective, credential, grown_reply, tokens=2700)
+    messages += [grown_reply, {"role": "user", "content": "Continue now."}]
+    retried = await prepare(
+        kernel, "chat", messages, credential, policy, session="growth", summarize=summarize
+    )
+    assert len(requests) == 2
+    growth = retried.metrics["context_tokens"] - ineffective.context_tokens
+    assert retried.metrics["compaction_rearmed_after_growth"] == growth
+    assert growth >= growth_retry_threshold(retried.context_window)
+    assert retried.context_tokens < 1800
+    assert "compaction_failed" not in retried.metrics
+
+
+async def test_growth_does_not_bypass_summary_failure_backoff(setup_kernel, credential, policy):
+    kernel, _, _, _ = setup_kernel
+    policy.update(context_window=2000, recall=False, capture=False)
+    messages = [{"role": "user", "content": "How do I deploy?"}]
+    first = await prepare(kernel, "chat", messages, credential, policy, session="failure")
+    first_reply = {"role": "assistant", "content": "Use the blue cluster."}
+    await answered(kernel, first, credential, first_reply, tokens=1900)
+    messages += [first_reply, {"role": "user", "content": "What next?"}]
+    summarize = Summarizer("chat", SummaryError("summary_http_500"))
+    failed = await prepare(
+        kernel, "chat", messages, credential, policy, session="failure", summarize=summarize
+    )
+    assert failed.metrics["compaction_failed"] == "summary_http_500"
+
+    grown_reply = {"role": "assistant", "content": "new evidence " * 650}
+    await answered(kernel, failed, credential, grown_reply, tokens=2700)
+    messages += [grown_reply, {"role": "user", "content": "Continue now."}]
+    suppressed = await prepare(
+        kernel, "chat", messages, credential, policy, session="failure", summarize=summarize
+    )
+    assert len(summarize.requests) == 1
+    assert suppressed.metrics["context_tokens"] - failed.context_tokens >= growth_retry_threshold(
+        suppressed.context_window
+    )
+    assert "compaction_rearmed_after_growth" not in suppressed.metrics

@@ -18,6 +18,9 @@ from .tool_protocols import tool_protocol
 # Used when neither the upstream nor the policy gives the model's window.
 DEFAULT_WINDOW = 1_000_000
 BACKOFF_SECONDS = 60
+GROWTH_RETRY_RATIO = 0.05
+GROWTH_RETRY_MIN_TOKENS = 256
+GROWTH_RETRY_MAX_TOKENS = 4096
 # Inline base64 media costs the model far fewer tokens than its length suggests.
 MEDIA = re.compile(r"[A-Za-z0-9+/=]{1024,}")
 MEDIA_TOKENS = 1600
@@ -57,6 +60,14 @@ def estimate(value):
     """Tokens of a JSON value, counting each inline media blob like one image."""
     text, blobs = MEDIA.subn("", orjson.dumps(value).decode())
     return token_estimate(text) + blobs * MEDIA_TOKENS
+
+
+def growth_retry_threshold(context_window):
+    """Material growth that can make a new cut useful during failure backoff."""
+    return max(
+        GROWTH_RETRY_MIN_TOKENS,
+        min(GROWTH_RETRY_MAX_TOKENS, int(context_window * GROWTH_RETRY_RATIO)),
+    )
 
 
 def window_size(request, policy):
