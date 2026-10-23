@@ -136,6 +136,15 @@ class ContextBuilder:
                 "To cite an image URI without displaying it, use inline code.\n"
                 "Reading an image does not send it to the user."
             )
+            parts.append(
+                "## Feishu silence control\n\n"
+                "When you decide this message needs no reply (e.g. you are told not to "
+                "reply, or further replies would be meaningless back-and-forth), output "
+                "only the tag `<stop></stop>` and nothing else. The message is then not "
+                "sent to the chat.\n"
+                "A message may also contain a `<stop name=\"X\"></stop>` tag meaning only X "
+                "should stop; if the name is you, treat it as a request to stay silent."
+            )
 
         # Sandbox environment info
         if self.sandbox_manager:
