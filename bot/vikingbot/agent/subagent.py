@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import time as _time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -21,6 +22,75 @@ from vikingbot.utils.helpers import ensure_non_empty_assistant_content
 
 if TYPE_CHECKING:
     from vikingbot.config.schema import Config
+
+
+_MAX_SUBAGENT_ERROR_CHARS = 1500
+_MAX_SUBAGENT_ERROR_DEPTH = 8
+_ANSI_ESCAPE_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _clean_subagent_error_text(error: BaseException) -> str:
+    """Return one model-visible line without terminal escape or control bytes."""
+    try:
+        text = str(error)
+    except BaseException:
+        text = type(error).__name__
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    text = _CONTROL_CHAR_RE.sub("", text)
+    return " ".join(text.split()) or type(error).__name__
+
+
+def _bound_subagent_error_text(text: str, max_chars: int) -> str:
+    """Bound text while retaining both the summary prefix and diagnostic tail."""
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 1:
+        return "…"[:max_chars]
+    head_chars = (max_chars - 1) // 2
+    tail_chars = max_chars - head_chars - 1
+    return f"{text[:head_chars]}…{text[-tail_chars:]}"
+
+
+def _format_subagent_error(
+    error: BaseException, *, max_chars: int = _MAX_SUBAGENT_ERROR_CHARS
+) -> str:
+    """Format an exception chain without letting wrappers hide the root cause."""
+    if max_chars <= 0:
+        return ""
+    messages: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while (
+        current is not None
+        and id(current) not in seen
+        and len(messages) < _MAX_SUBAGENT_ERROR_DEPTH
+    ):
+        seen.add(id(current))
+        message = _clean_subagent_error_text(current)
+        if not messages or message != messages[-1]:
+            messages.append(message)
+        cause = current.__cause__
+        if cause is None and not current.__suppress_context__:
+            cause = current.__context__
+        current = cause if isinstance(cause, BaseException) else None
+
+    outer = messages[0]
+    if len(messages) == 1:
+        return _bound_subagent_error_text(outer, max_chars)
+
+    causes = " -> ".join(messages[1:])
+    rendered = f"{outer} (cause: {causes})"
+    if len(rendered) <= max_chars:
+        return rendered
+
+    if max_chars <= len(" (cause: …)"):
+        return _bound_subagent_error_text(outer, max_chars)
+    cause_budget = max(1, max_chars // 2)
+    bounded_cause = _bound_subagent_error_text(causes, cause_budget)
+    suffix = f" (cause: {bounded_cause})"
+    bounded_outer = _bound_subagent_error_text(outer, max(0, max_chars - len(suffix)))
+    return f"{bounded_outer}{suffix}"
 
 
 class SubagentManager:
@@ -149,7 +219,7 @@ class SubagentManager:
             result["status"] = "cancelled"
             raise
         except Exception as exc:
-            result.update(status="failed", error=str(exc)[:1500])
+            result.update(status="failed", error=_format_subagent_error(exc))
             logger.exception("Subagent [{}] failed", task_id)
         finally:
             self._active_tasks.discard(task_id)
@@ -330,7 +400,10 @@ class SubagentManager:
             )
 
         except Exception as e:
-            error_msg = f"Error: {str(e)}"
+            prefix = "Error: "
+            error_msg = prefix + _format_subagent_error(
+                e, max_chars=_MAX_SUBAGENT_ERROR_CHARS - len(prefix)
+            )
             logger.exception(f"Subagent [{task_id}] failed: {e}")
             await self._announce_result(
                 task_id,
