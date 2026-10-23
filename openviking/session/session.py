@@ -58,6 +58,7 @@ from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
     ExtractionMessageBatch,
     estimate_extraction_message_tokens,
+    long_term_extraction_batch_limits,
     plan_extraction_batches,
     resolve_extraction_batch_limits,
 )
@@ -2448,11 +2449,14 @@ class Session:
                                     event_search_tags=event_search_tags,
                                 )
 
-                            if extraction_batch_limits.enabled:
+                            long_term_limits = long_term_extraction_batch_limits(
+                                extraction_batch_limits, long_term_messages
+                            )
+                            if long_term_limits.enabled:
                                 extraction_tasks.append(
                                     self._extract_long_term_memories_with_batching(
                                         messages=long_term_messages,
-                                        limits=extraction_batch_limits,
+                                        limits=long_term_limits,
                                         archive_uri=archive_uri,
                                         extract_batch=_run_long_term_memory_extraction,
                                         record_batch=_run_recorded_memory_step,

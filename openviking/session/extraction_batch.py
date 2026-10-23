@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional
 
 from openviking.message import Message
-from openviking.session.auto_commit_policy import AutoCommitPolicy
+from openviking.session.auto_commit_policy import (
+    DEFAULT_PENDING_TOKEN_THRESHOLD,
+    AutoCommitPolicy,
+)
 from openviking.session.retention import UserTurn, build_turns
 
 
@@ -152,10 +155,25 @@ def plan_extraction_batches(
     return batches
 
 
+def long_term_extraction_batch_limits(
+    limits: ExtractionBatchLimits, messages: Iterable[Message]
+) -> ExtractionBatchLimits:
+    """Policy limits, or the default auto-commit token threshold for a large commit
+    without a policy (manual commits, imports), which would otherwise go to the
+    model in one call however long it is."""
+    messages = list(messages)
+    if limits.enabled or (
+        estimate_extraction_message_tokens(messages) <= DEFAULT_PENDING_TOKEN_THRESHOLD
+    ):
+        return limits
+    return ExtractionBatchLimits(max_message_tokens=DEFAULT_PENDING_TOKEN_THRESHOLD)
+
+
 __all__ = [
     "ExtractionBatchLimits",
     "ExtractionMessageBatch",
     "estimate_extraction_message_tokens",
+    "long_term_extraction_batch_limits",
     "plan_extraction_batches",
     "resolve_extraction_batch_limits",
 ]
