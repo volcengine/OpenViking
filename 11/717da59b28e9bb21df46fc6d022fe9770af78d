@@ -1,0 +1,16 @@
+openviking/service/compile_service.py
+  h_b34c679d17e2ac 446-455
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "11717da59b28e9bb21df46fc6d022fe9770af78d",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
