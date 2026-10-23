@@ -426,6 +426,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a session archive |
 | DELETE | `/api/v1/sessions/{session_id}` | Delete a session |
 | POST | `/api/v1/sessions/{session_id}/commit` | Archive a session and extract memory |
+| POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | Retry a failed or ownerless session archive |
 | POST | `/api/v1/sessions/{session_id}/messages` | Add one message |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | Add messages in a batch |
 | POST | `/api/v1/search/recall` | Deprecated: thin preset over the search endpoint with `mode="context"` |

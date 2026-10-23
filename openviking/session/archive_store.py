@@ -15,6 +15,7 @@ session state â€” only the filesystem handle, request context, and session URI â
 so it can be composed by ``Session`` and exercised in isolation.
 """
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -436,6 +437,19 @@ class ArchiveStore:
                 raise _ArchiveMessagesCorruptError("invalid message record") from exc
 
         return messages
+
+    async def messages_sha256(self, archive_uri: str) -> str:
+        """Return the archive-time SHA-256 of ``messages.jsonl``.
+
+        Archives written before the hash was persisted fall back to hashing the
+        current bytes.
+        """
+        phase1 = (await self.read_meta(archive_uri)).get("phase1")
+        persisted = phase1.get("messages_sha256") if isinstance(phase1, dict) else None
+        if isinstance(persisted, str) and persisted:
+            return persisted
+        raw = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self._ctx)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     async def read_meta(self, archive_uri: str) -> Dict[str, Any]:
         try:

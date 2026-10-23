@@ -803,11 +803,11 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 
 ### get_session_archive()
 
-正常完成的无 WM 归档仍返回 `messages` 原文，`abstract` 和 `overview` 为空字符串，读取时不会补生成摘要。pending、failed、不存在或损坏归档仍遵循原有错误契约。此接口主动展开单个归档，不改变 `/context` 的历史边界。
+`status` 为 `completed`、`failed` 或 `pending`。正常完成的无 WM 归档仍返回 `messages` 原文，`abstract` 和 `overview` 为空字符串，读取时不会补生成摘要。failed 和 pending 归档同样返回 `messages` 原文（存在失败标记时附带 `failure`），便于在 `retry_archive()` 前检查。`messages_sha256` 是服务端写入归档时为 `messages.jsonl` 记录的 SHA-256（旧归档按当前字节计算），可原样作为 `expected_messages_sha256` 传回。缺少必需 overview 的已完成归档、不存在或损坏归档仍遵循原有错误契约。此接口主动展开单个归档，不改变 `/context` 的历史边界。
 
 #### 1. API 实现介绍
 
-获取某次已完成归档的完整内容。该接口通常配合 `get_session_context()` 使用，当需要查看更早的归档详情时调用。
+获取某次归档的完整内容。该接口通常配合 `get_session_context()` 使用，当需要查看更早的归档详情时调用。
 
 **代码入口**：
 - `openviking/session/session.py:Session.get_session_archive()` - 核心实现
@@ -883,8 +883,10 @@ ov session get-session-archive a1b2c3d4 archive_002
   "status": "ok",
   "result": {
     "archive_id": "archive_002",
+    "status": "completed",
     "abstract": "用户讨论了部署流程和鉴权配置。",
     "overview": "# Session Summary\n\n**Overview**: 用户讨论了部署流程和鉴权配置。",
+    "messages_sha256": "3f9a...",
     "messages": [
       {
         "id": "msg_archive_1",
@@ -1508,6 +1510,62 @@ viking://user/{user_id}/sessions/{session_id}/
     │   └── .failed.json      # Phase 2 失败标记
     └── archive_002/
 ```
+
+### retry_archive()
+
+为单个归档重新排队 Phase 2：归档已失败，或 Phase 1 已就绪但没有排队或运行中的任务持有它。仅 HTTP。
+请求必须携带归档原始 `messages.jsonl` 字节的 SHA-256，归档变化后，此前的审计结果不能被重放。
+从 `get_session_archive()` 的 `messages_sha256` 读取并原样传回；服务端会重新计算哈希，并与写入归档时记录的值比对。
+
+重试是手动恢复工具，有两个已知取舍：
+
+- 不会重建后续归档的 Working Memory。`archive_003` 已完成后再重试 `archive_002`，不会重新生成
+  `archive_003` 的 overview，最新摘要仍可能缺少 `archive_002` 的上下文。
+- 长期记忆抽取会把较旧的消息与*当前*记忆状态合并，旧事实可能覆盖新事实。重试后请检查该归档的 `memory_diff.json`。
+
+以下情况服务端拒绝（`FAILED_PRECONDITION`）：已完成的归档；哈希不一致；未设置 `allow_cancelled_failure`
+的取消类失败；存在 `memory_diff.json` 但没有持久化长期记忆进度。QueueFS 或活跃 worker 仍持有该归档或会话时返回
+`skipped`。`completed_memory_steps` 中已记录的长期记忆步骤不会重复执行。
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `session_id` | string | 是 | - | 会话 ID |
+| `archive_id` | string | 是 | - | `archive_NNN` |
+| `expected_messages_sha256` | string | 是 | - | `get_session_archive()` 返回的 `messages_sha256` |
+| `allow_ownerless_ready` | boolean | 否 | `false` | 允许重试无持有者的 Phase 1 就绪归档 |
+| `allow_cancelled_failure` | boolean | 否 | `false` | 允许重试因取消而失败的归档 |
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/archives/{archive_id}/retry
+```
+
+```bash
+HASH=$(curl -s http://localhost:1933/api/v1/sessions/session-id/archives/archive_003 \
+  -H "X-API-Key: your-key" | jq -r .result.messages_sha256)
+curl -X POST http://localhost:1933/api/v1/sessions/session-id/archives/archive_003/retry \
+  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
+  -d "{\"expected_messages_sha256\": \"$HASH\"}"
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "accepted",
+    "task_id": "0b6c...",
+    "archive_uri": "viking://user/default/sessions/session-id/history/archive_003",
+    "previous_task_id": "9f1e...",
+    "recovery_kind": "failed",
+    "completed_memory_steps": {}
+  }
+}
+```
+
+用任务 API 跟踪 `task_id`。`status: "skipped"` 时 `reason` 为 `already_covered`、`archive_owned` 或 `session_busy`。
 
 ### memory_diff.json 数据结构
 

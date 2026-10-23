@@ -421,6 +421,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | 获取会话归档 |
 | DELETE | `/api/v1/sessions/{session_id}` | 删除会话 |
 | POST | `/api/v1/sessions/{session_id}/commit` | 归档会话并提取记忆 |
+| POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | 重试失败或无主的会话归档 |
 | POST | `/api/v1/sessions/{session_id}/messages` | 添加单条消息 |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | 批量添加消息 |
 | POST | `/api/v1/search/recall` | 已弃用：search 接口 `mode="context"` 之上的轻量预设 |
