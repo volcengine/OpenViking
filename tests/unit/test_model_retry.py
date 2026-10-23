@@ -394,6 +394,48 @@ def test_input_too_large_does_not_retry_or_trip_breaker(body, monkeypatch):
     breaker.check()
 
 
+@pytest.mark.parametrize(
+    ("message", "kind"),
+    [
+        (
+            "Missing credentials. Please pass an `api_key`, `workload_identity`, "
+            "`admin_api_key`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` "
+            "environment variable.",
+            ModelErrorKind.AUTHENTICATION_ERROR,
+        ),
+        ("Must provide one of the `base_url` or `azure_endpoint` arguments", ModelErrorKind.INVALID_REQUEST),
+    ],
+)
+def test_openai_client_configuration_error_does_not_retry(message, kind, monkeypatch):
+    attempts = {"count": 0}
+    monkeypatch.setattr("openviking.utils.model_retry.time.sleep", lambda _delay: None)
+
+    @model_error_boundary
+    def _call():
+        attempts["count"] += 1
+        raise openai.OpenAIError(message)
+
+    with pytest.raises(ModelError) as raised:
+        retry_sync(_call, max_retries=3, model_errors_only=True)
+    assert raised.value.kind is kind
+    assert attempts["count"] == 1
+
+
+def test_openai_runtime_base_error_is_still_retried(monkeypatch):
+    attempts = {"count": 0}
+    monkeypatch.setattr("openviking.utils.model_retry.time.sleep", lambda _delay: None)
+
+    @model_error_boundary
+    def _call():
+        attempts["count"] += 1
+        raise openai.OpenAIError("Token exchange failed with status 503")
+
+    with pytest.raises(ModelError) as raised:
+        retry_sync(_call, max_retries=2, model_errors_only=True)
+    assert raised.value.kind is ModelErrorKind.UNKNOWN
+    assert attempts["count"] == 3
+
+
 # --- numeric pattern word-boundary tests ---
 
 
