@@ -1,6 +1,7 @@
 import type { QueryConfigContext } from "../query-config.js";
 import {
   createSessionAgentResolver,
+  createSessionValueResolver,
   openClawSessionToOvStorageId,
   resolveOpenVikingActorPeerId,
   sanitizeOpenVikingPeerId,
@@ -37,9 +38,11 @@ export function createOpenVikingSessionRoutingRuntime(options: {
 }) {
   const peerRole = options.peerRole ?? "none";
   const sessionAgentResolver = createSessionAgentResolver(options.peerPrefix);
+  const sessionSenderResolver = createSessionValueResolver();
 
   const rememberSessionAgentId = (ctx: SessionAgentLookup) => {
     sessionAgentResolver.remember(ctx);
+    sessionSenderResolver.remember(ctx, ctx.senderId);
   };
 
   const resolveAgentId = (
@@ -91,6 +94,12 @@ export function createOpenVikingSessionRoutingRuntime(options: {
     rememberSessionAgentId(session);
 
     const agentId = resolveAgentId(session.sessionId, session.sessionKey, session.ovSessionId);
+    const contextSenderPeerId = sanitizeOpenVikingPeerId(
+      ctx?.requesterSenderId ?? ctx?.senderId,
+    );
+    const rememberedSenderPeerId = sanitizeOpenVikingPeerId(
+      sessionSenderResolver.resolve(session.sessionId, session.sessionKey, session.ovSessionId),
+    );
     return {
       sessionId: session.sessionId,
       sessionKey: session.sessionKey,
@@ -98,7 +107,8 @@ export function createOpenVikingSessionRoutingRuntime(options: {
       agentId,
       actorPeerId: resolveOpenVikingActorPeerId({
         peerRole,
-        senderPeerId: sanitizeOpenVikingPeerId(ctx?.requesterSenderId ?? ctx?.senderId),
+        senderPeerId:
+          contextSenderPeerId ?? rememberedSenderPeerId,
         assistantPeerId: agentId,
         warn: (message) => options.logger.warn(message),
       }),

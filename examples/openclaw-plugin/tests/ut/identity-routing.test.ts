@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createSessionAgentResolver,
+  createSessionValueResolver,
   openClawSessionRefToOvStorageId,
   openClawSessionToOvStorageId,
   resolveOpenVikingActorPeerId,
@@ -84,5 +85,20 @@ describe("identity routing registry", () => {
       resolved: "prefix_worker",
       branch: "session_resolved",
     });
+  });
+
+  it("remembers session values across aliases for later tool calls", () => {
+    const resolver = createSessionValueResolver();
+    resolver.remember(
+      { sessionId: "s1", sessionKey: "agent:worker:session123", ovSessionId: "ov-1" },
+      "ou_01:abc",
+    );
+
+    expect(resolver.resolve("s1")).toBe("ou_01:abc");
+    expect(resolver.resolve(undefined, "agent:worker:session123")).toBe("ou_01:abc");
+    expect(resolver.resolve(undefined, undefined, "ov-1")).toBe("ou_01:abc");
+
+    resolver.remember({ sessionId: "s2" }, "   ");
+    expect(resolver.resolve("s2")).toBeUndefined();
   });
 });
