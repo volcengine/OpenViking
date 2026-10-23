@@ -33,6 +33,7 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `storage_path` | Both | `~/.openviking/gateway` | | Local storage directory |
 | `encryption` | Standalone | not set (plain text) | Same fields as the `encryption` section of `ov.conf` | Encrypts stored data; see [Encryption](../guides/22-gateway-operations.md#encryption). Embedded gateways use the server's section |
 | `management_key` | Both | empty | At least 32 characters | Optional [gateway management key](../guides/22-gateway-operations.md#gateway-management-key) |
+| `openviking_keys` | Both | `false` | `true`, `false` | Lets clients use a user's OpenViking API key in place of a gateway key, with the account's default context profile and every enabled upstream; see [Use an OpenViking API key directly](09-gateway-keys.md#openviking-keys) |
 | `min_server_version` | Both | `0.4.16` | Version string | Lowest OpenViking Server version a standalone gateway accepts |
 | `session_ttl_days` | Both | `30` | 1 or more | Days of inactivity before a conversation expires |
 | `response_ttl_seconds` | Both | `2592000` (30 days) | 60 or more | Seconds to remember which upstream created a Responses response |
@@ -103,7 +104,7 @@ In `gateway.conf`, `client_rules` sits at the root, without the `gateway` wrappe
 
 ## Context profile settings {#context-profile-settings}
 
-In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles).
+In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles). **Let clients override settings** (`client_overrides`, default `true`) lets clients change every other setting for a new conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides).
 
 ### Recall memory {#profile-recall}
 
@@ -123,7 +124,7 @@ Explained in [Recall memory](08-context-profiles.md#recall-memory).
 | Query length | `query_max_chars` | `8000` | 3–32,000 | Characters of the message used as the search query. |
 | Limit by category | `quotas` | `{}` (off) | Keys: `events`, `entities`, `preferences`, `experiences`, `resources`, `skills`; when set, at least one above 0 (checked by Studio only) | Most entries per category; only categories above 0 are searched. |
 
-The management API saves `context_types` and `quotas` without checking them. An unknown `quotas` key makes every recall fail, because OpenViking rejects it.
+The management API saves `context_types` and the `quotas` keys without checking them. An unknown `quotas` key makes every recall fail, because OpenViking rejects it.
 
 ### Save conversations {#profile-saving}
 

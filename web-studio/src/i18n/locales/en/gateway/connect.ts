@@ -235,6 +235,15 @@ const connect = {
     upstreams: 'Upstreams that need it: {{names}}',
     none: 'None of your upstreams needs it right now.',
   },
+  context: {
+    title: 'Override profile settings',
+    description:
+      "A client can change its key's context profile for a new conversation by sending the profile fields to change as a JSON object in this header.",
+    tools:
+      '`{"disabled_tools":[]}` offers every OpenViking tool, including the ones that change data.',
+    scope:
+      'The settings a conversation starts with stay for the rest of it. Profiles with “Let clients override settings” turned off reject the header.',
+  },
   plugin: {
     title: 'Using an OpenViking plugin too?',
     description:
