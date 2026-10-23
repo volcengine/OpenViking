@@ -151,8 +151,8 @@ Session.add_messages_async
 
 1. **抽取结果来源**：通过固定的常见规则（不调用模型）识别敏感值，将结果作为隐私键值。
 2. **覆盖范围**：处理 TextPart 文本、ContextPart 摘要和 ToolPart 输入、输出。工具输入中，敏感字段对应的值整体保存和遮罩。
-3. **内容替换**：原文中新提取的敏感片段会替换为占位符：
-   - 以 Session ID 或其哈希映射值标识会话：<code>&#123;&#123;ov_privacy:session:&#123;session_id&#125;:&#123;field_name&#125;&#125;&#125;</code>。
+3. **内容替换**：原文中的敏感片段会替换为占位符：
+   - 当前 Session 的敏感值统一使用以下占位符，以 Session ID 或其哈希映射值标识会话：<code>&#123;&#123;ov_privacy:session:&#123;session_id&#125;:&#123;field_name&#125;&#125;&#125;</code>。
    - 若敏感片段与已登记的个人密钥（credential）匹配，则优先使用唯一匹配字段的占位符，例如 <code>&#123;&#123;ov_privacy:alice:viking://~/privacy/credential/github#/values/pat&#125;&#125;</code>。
 4. **写盘结果**：匹配成功的片段以占位符保存，未匹配内容保持原样。新提取的隐私值保存在当前 Session 的配置中。
 

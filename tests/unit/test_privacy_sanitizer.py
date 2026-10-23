@@ -247,7 +247,7 @@ async def test_prepared_matcher_returns_original_offsets_in_worker_thread():
 async def test_prepared_matcher_enforces_utf8_byte_limit_with_empty_catalog(text):
     find = await PrivacySanitizer(_PrivacyCatalog(), max_content_bytes=6).prepare_matcher(_ctx())
 
-    assert find(text) == ()
+    assert find(text) == []
     with pytest.raises(ResourceExhaustedError, match="size limit"):
         find(text + "a")
 

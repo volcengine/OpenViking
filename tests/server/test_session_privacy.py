@@ -155,11 +155,13 @@ async def test_basic_prose_does_not_register_words_for_later_messages(service, c
     ]
 
 
-async def test_markdown_restatement_reuses_references_without_new_versions(service, ctx):
-    session = await service.sessions.create(ctx, "markdown-restatement")
+@pytest.mark.parametrize("sid", ["markdown-restatement", "中文会话"])
+async def test_markdown_restatement_reuses_references_without_new_versions(service, ctx, sid):
+    session = await service.sessions.create(ctx, sid)
     user_text = "API_KEY=demo-api-secret\nAuthorization: Bearer demo-bearer-secret\nsk-abcdefghijklmnopqrstuv"
     await session.add_message_async("user", [TextPart(user_text)])
-    initial = await service.privacy_configs.get_current(ctx, "session", session.session_id)
+    target_key = session_privacy_target(sid)
+    initial = await service.privacy_configs.get_current(ctx, "session", target_key)
     wrappers = [
         "**{}**",
         "`{}`",
@@ -172,12 +174,20 @@ async def test_markdown_restatement_reuses_references_without_new_versions(servi
     assistant_text = "\n".join(
         wrapper.format(line) for wrapper in wrappers for line in user_text.splitlines()
     )
-    await session.add_message_async("assistant", [TextPart(assistant_text)])
-    current = await service.privacy_configs.get_current(ctx, "session", session.session_id)
+    await session.add_message_async(
+        "assistant",
+        [TextPart(assistant_text), ToolPart(tool_input={"api_key": "demo-api-secret"})],
+    )
+    current = await service.privacy_configs.get_current(ctx, "session", target_key)
     assert current.values == initial.values
-    assert await service.privacy_configs.list_versions(ctx, "session", session.session_id) == [1]
+    assert await service.privacy_configs.list_versions(ctx, "session", target_key) == [1]
     disk = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx)
     assert all(value not in disk for value in initial.values.values())
+    user, assistant = [json.loads(line)["parts"] for line in disk.splitlines()]
+    assert assistant[0]["text"] == "\n".join(
+        wrapper.format(line) for wrapper in wrappers for line in user[0]["text"].splitlines()
+    )
+    assert assistant[1]["tool_input"]["api_key"] == user[0]["text"].splitlines()[0].split("=", 1)[1]
     restored = await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx)
     assert [json.loads(line)["parts"][0]["text"] for line in restored.splitlines()] == [
         user_text,
@@ -248,7 +258,7 @@ async def test_batch_discovery_protects_all_payloads_without_mutating_inputs(ser
     current = await service.privacy_configs.get_current(ctx, "session", "traversal")
     assert credentials in current.values.values()
     reference = next(
-        build_privacy_field_reference(ctx.user.user_id, "session", "traversal", field)
+        build_session_placeholder("traversal", field)
         for field, value in current.values.items()
         if value == fresh
     )
@@ -278,9 +288,7 @@ async def test_batch_discovery_rejects_key_collision_before_message_write(
     fixed_id = "same0001"
     monkeypatch.setattr(session_extractor, "token_urlsafe", lambda _: fixed_id)
     session = await service.sessions.create(ctx, "collision")
-    reference = build_privacy_field_reference(
-        ctx.user.user_id, "session", session.session_id, fixed_id
-    )
+    reference = build_session_placeholder(session.session_id, fixed_id)
     part = ToolPart(
         tool_input={"alpha-987654": 1, reference: 2}, tool_output="password=alpha-987654"
     )
@@ -443,13 +451,21 @@ async def test_values_equal_to_json_keys_do_not_change_message_identity(service,
 
 async def test_repeated_explicit_references_restore_exact_types_without_new_fields(service, ctx):
     session = await service.sessions.create(ctx, "repeated")
-    values = {"short": "a", "number": 1234, "object": {"a": [False, None]}}
+    values = {
+        "short": "a",
+        "number": 1234,
+        "object": {"a": [False, None]},
+        "named-field": "existing-session-secret",
+    }
     await service.privacy_configs.upsert(ctx, "session", session.session_id, values)
     row = {
         key: build_privacy_field_reference(ctx.user.user_id, "session", session.session_id, field)
         for key, field in [("password", "short"), ("token", "number"), ("secret", "object")]
     }
-    await session.add_message_async("assistant", [ToolPart(tool_input={"rows": [row] * 1300})])
+    await session.add_message_async(
+        "assistant",
+        [ToolPart(tool_input={"rows": [row] * 1300}), TextPart("password=existing-session-secret")],
+    )
     current = await service.privacy_configs.get_current(ctx, "session", session.session_id)
     assert current.values == values
     restored = json.loads(await service.fs.read(session.uri + "/messages.jsonl", ctx=ctx))
@@ -457,6 +473,7 @@ async def test_repeated_explicit_references_restore_exact_types_without_new_fiel
         restored["parts"][0]["tool_input"]["rows"]
         == [{"password": "a", "token": 1234, "secret": {"a": [False, None]}}] * 1300
     )
+    assert restored["parts"][1]["text"] == "password=existing-session-secret"
 
 
 async def test_restore_leaves_foreign_missing_and_nested_references_unchanged(

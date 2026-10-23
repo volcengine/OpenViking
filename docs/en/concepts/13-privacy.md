@@ -151,8 +151,8 @@ Session.add_messages_async
 
 1. **Extraction source**: fixed rules identify sensitive values without model calls; the results are used as privacy key-value pairs.
 2. **Coverage**: TextPart text, ContextPart abstracts, and ToolPart input and output. Values under sensitive tool input keys are stored and masked as a whole.
-3. **Content replacement**: newly extracted sensitive spans in the original content are replaced with placeholders:
-   - Identify the Session by its ID or hash value: <code>&#123;&#123;ov_privacy:session:&#123;session_id&#125;:&#123;field_name&#125;&#125;&#125;</code>.
+3. **Content replacement**: sensitive spans in the original content are replaced with placeholders:
+   - Sensitive values belonging to the current Session use the same placeholder format, with the Session ID or its hash value: <code>&#123;&#123;ov_privacy:session:&#123;session_id&#125;:&#123;field_name&#125;&#125;&#125;</code>.
    - If a sensitive span matches registered personal credentials (`credential`), prefer the uniquely matching field's placeholder, for example <code>&#123;&#123;ov_privacy:alice:viking://~/privacy/credential/github#/values/pat&#125;&#125;</code>.
 4. **Persisted content**: matched spans are saved as placeholders; unmatched content remains unchanged. Newly extracted privacy values are saved in the current Session's config.
 

@@ -82,7 +82,7 @@ class PrivacySanitizer:
 
     async def prepare_matcher(
         self, ctx: RequestContext, *, prefer_credentials: bool = False
-    ) -> Callable[[str], tuple[PrivacyReplacement, ...]]:
+    ) -> Callable[[str], list[PrivacyReplacement]]:
         """Prepare a cached, bounded match query for a batch of original texts.
 
         The callable may run in a worker thread. It returns positions and existing
@@ -90,7 +90,7 @@ class PrivacySanitizer:
         """
         matcher = await self._matcher(ctx, prefer_credentials=prefer_credentials)
 
-        def find(content: str) -> tuple[PrivacyReplacement, ...]:
+        def find(content: str) -> list[PrivacyReplacement]:
             try:
                 replacements, ambiguous, exceeded = matcher.find_limited(
                     content, self._max_replacements, self._max_content_bytes
@@ -108,7 +108,7 @@ class PrivacySanitizer:
                 raise ResourceExhaustedError(
                     "Content exceeds the Privacy sanitizer replacement limit"
                 )
-            return tuple(PrivacyReplacement(*item) for item in replacements)
+            return [PrivacyReplacement(*item) for item in replacements]
 
         return find
 

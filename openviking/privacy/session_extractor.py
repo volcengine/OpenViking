@@ -11,6 +11,7 @@ from secrets import token_urlsafe
 from typing import Any, TypeVar
 
 from openviking.message.part import ContextPart, ImagePart, Part, TextPart, ToolPart
+from openviking.privacy.reference import parse_privacy_field_reference
 from openviking.privacy.rules import (
     MAX_MATCHES,
     MAX_TEXT_CHARS,
@@ -31,7 +32,7 @@ MAX_BATCH_CHARS = 16 * 1024 * 1024
 MAX_DEPTH = 32
 MAX_NODES = 100_000
 MAX_FIELD_ID_ATTEMPTS = 8
-_Matcher = Callable[[str], tuple[PrivacyReplacement, ...]]
+_Matcher = Callable[[str], list[PrivacyReplacement]]
 _Text = TypeVar("_Text", str, None)
 _HASHED_TARGET = re.compile(r"_[0-9a-f]{24}")
 
@@ -46,9 +47,7 @@ async def extract_and_store_session_privacy(
     """Extract on copies, persist discoveries, then protect remaining registered values."""
     target_key = session_privacy_target(session_id)
     labels = None if target_key == session_id else {"session_id": session_id}
-    matcher = (
-        await sanitizer.prepare_matcher(ctx, prefer_credentials=True) if sanitizer else _no_matches
-    )
+    matcher = await _prepare_session_matcher(sanitizer, ctx, target_key)
     for _ in range(MAX_FIELD_ID_ATTEMPTS):
         sanitized, added = await asyncio.to_thread(
             extract_session_privacy_values,
@@ -74,9 +73,7 @@ async def extract_and_store_session_privacy(
     else:
         raise ResourceExhaustedError("Could not allocate unique Session privacy field IDs")
     # Refresh the matcher to include newly saved values.
-    matcher = (
-        await sanitizer.prepare_matcher(ctx, prefer_credentials=True) if sanitizer else _no_matches
-    )
+    matcher = await _prepare_session_matcher(sanitizer, ctx, target_key)
     rewriter = _SessionReferenceRewriter(matcher)
     return await asyncio.to_thread(rewriter.transform_messages, sanitized)
 
@@ -88,7 +85,7 @@ def extract_session_privacy_values(
     match_registered: _Matcher | None = None,
 ) -> tuple[list[dict], dict[str, Any]]:
     """Return protected copies and discoveries without modifying caller-owned data."""
-    extraction = _SessionExtraction(target_key, match_registered or _no_matches)
+    extraction = _SessionExtraction(target_key, match_registered or (lambda _: []))
     return extraction.transform_messages(messages_spec), extraction.values
 
 
@@ -106,6 +103,34 @@ def session_privacy_target(session_id: str) -> str:
 
 def build_session_placeholder(target_key: str, key: str) -> str:
     return f"{{{{ov_privacy:session:{target_key}:{key}}}}}"
+
+
+async def _prepare_session_matcher(
+    sanitizer: PrivacySanitizer | None, ctx: RequestContext, target_key: str
+) -> _Matcher:
+    """Use Session placeholders for matching eight-character fields in this Session."""
+    if sanitizer is None:
+        return lambda _: []
+    matcher = await sanitizer.prepare_matcher(ctx, prefer_credentials=True)
+
+    def find(text: str) -> list[PrivacyReplacement]:
+        matches: list[PrivacyReplacement] = []
+        for match in matcher(text):
+            reference = parse_privacy_field_reference(match.reference)
+            if (
+                reference is not None
+                and reference.owner_user_id == ctx.user.user_id
+                and reference.category == "session"
+                and reference.target_key == target_key
+                and re.fullmatch(r"[A-Za-z0-9_-]{8}", reference.field)
+            ):
+                match = replace(
+                    match, reference=build_session_placeholder(target_key, reference.field)
+                )
+            matches.append(match)
+        return matches
+
+    return find
 
 
 @dataclass
@@ -308,7 +333,3 @@ def _replace_spans(text: str, replacements: Iterable[PrivacyReplacement]) -> str
         cursor = match.end
     chunks.append(text[cursor:])
     return "".join(chunks)
-
-
-def _no_matches(text: str) -> tuple[PrivacyReplacement, ...]:
-    return ()
