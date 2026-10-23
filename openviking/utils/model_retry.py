@@ -187,6 +187,11 @@ TRANSIENT_API_ERROR_PATTERNS = (
     "connectionerror",
     "connection refused",
     "connection reset",
+    # Node-based gateways can forward errno tokens instead of prose transport
+    # errors. These are equivalent transient connection failures.
+    "econnrefused",
+    "econnreset",
+    "etimedout",
 )
 
 RETRYABLE_RATE_LIMIT_MARKERS = (
@@ -208,17 +213,25 @@ _RATE_LIMIT_ERROR_CLASSES: tuple[type[BaseException], ...] = ()
 RATE_LIMIT_RETRY_BASE_DELAY_SECONDS = 5.0
 RATE_LIMIT_RETRY_MAX_DELAY_SECONDS = 120.0
 
-# Pre-compile regex for numeric status-code patterns to avoid substring false positives
-# (e.g. "413" matching inside request IDs like "d7c9130f344..." or "req-413-abcd").
+# Pre-compile regex for numeric status-code patterns to avoid matching unrelated
+# values (for example request IDs, token limits, or batch sizes).
 _NUMERIC_PATTERN_RE: dict[str, re.Pattern] = {}
+_HTTP_STATUS_SUFFIX = (
+    r"(?:status(?:\s+code)?|bad\s+request|unauthorized|forbidden|payload\s+too\s+large|"
+    r"too\s+many\s+requests|internal\s+server\s+error|bad\s+gateway|"
+    r"service\s+unavailable|gateway\s+timeout)"
+)
 
 
 def _get_numeric_pattern_re(pattern: str) -> re.Pattern:
     if pattern not in _NUMERIC_PATTERN_RE:
         escaped = re.escape(pattern)
         _NUMERIC_PATTERN_RE[pattern] = re.compile(
-            rf"(?:\b(?:error\s*code|status(?:\s*code)?|http(?:\s*status)?|code)"
-            rf"\s*[:=]?\s*{escaped}(?!\w)|(?<![\w-]){escaped}(?![\w-]))"
+            rf"(?:^\s*{escaped}(?![\w-])|"
+            rf"\b(?:api\s*error|error\s*code|status(?:\s*code)?|"
+            rf"http(?:\s*(?:status|error))?|code)"
+            rf"\s*[:=]?\s*\(?{escaped}\)?(?!\w)|"
+            rf"(?<![\w-]){escaped}(?![\w-])(?=\s+{_HTTP_STATUS_SUFFIX}\b))"
         )
     return _NUMERIC_PATTERN_RE[pattern]
 
@@ -227,7 +240,9 @@ def _pattern_matches(text_lower: str, text_compact: str, pattern: str) -> bool:
     """Check if pattern matches in text, using token-aware matching for numeric patterns.
 
     Numeric-only patterns (e.g. ``"413"``) must look like HTTP status codes, not
-    request ID fragments. Non-numeric patterns use plain substring matching as before.
+    request IDs or unrelated values. A status code is accepted at the start of the
+    message, after an explicit status label, or before ``status code``. Non-numeric
+    patterns use plain substring matching as before.
     """
     if pattern.isdigit():
         return bool(_get_numeric_pattern_re(pattern).search(text_lower)) or bool(
