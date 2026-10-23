@@ -77,7 +77,7 @@
 
 ### 服务端 MCP 工具
 
-所有基于 MCP 的集成都暴露同一组由服务端定义的工具，自己不维护工具目录。本地代理（pi 则是内置 MCP 客户端）读取 `~/.openviking/ovcli.conf`，连接服务端的 `/mcp`，原样转发 `tools/list` 的结果。服务端升级可以直接增加工具，不需要插件发版；客户端重新连接后即可看到。各工具的参数见 [MCP 工具与协议](../guides/06-mcp-integration.md#可用的-mcp-工具)。
+所有基于 MCP 的集成都暴露同一组由服务端定义的工具，自己不维护工具目录。本地代理（pi 则是内置 MCP 客户端）读取 `~/.openviking/ovcli.conf`，连接服务端的 `/mcp`，原样转发 `tools/list` 的结果。服务端升级可以直接增加工具，不需要插件发版；客户端重新连接后即可看到。各工具的参数见 [MCP 工具与协议](../guides/06-mcp-integration.md#available-mcp-tools)。
 
 | 分组 | 工具 |
 |---|---|

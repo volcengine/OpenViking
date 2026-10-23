@@ -116,7 +116,7 @@ claude mcp add --transport http openviking \
 - Token 模型（`ovat_` / `ovrt_` / `ovac_` 前缀）与撤销
 
 
-## 可用的 MCP 工具
+## 可用的 MCP 工具 {#available-mcp-tools}
 
 以下列出内置 MCP 工具。实际可用工具以所连接服务的 `tools/list` 响应为准：
 
