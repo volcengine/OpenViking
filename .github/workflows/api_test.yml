@@ -99,6 +99,12 @@ jobs:
           python -c "import setuptools; print(f'setuptools version: {setuptools.__version__}')"
 
       - name: Install dependencies using uv sync
+        env:
+          # Install the project without its native build; "Build C++ extensions"
+          # below builds the engine and ragfs once, in place.
+          OV_SKIP_CPP_BUILD: "1"
+          OV_SKIP_RAGFS_BUILD: "1"
+          OV_SKIP_OV_BUILD: "1"
         run: |
           echo "Installing dependencies using uv sync..."
           uv sync --frozen
