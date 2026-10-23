@@ -402,6 +402,8 @@ async def gather_candidates(
         if bucket == "skills":
             candidates = _dedupe_candidates(candidates)
         candidates.sort(key=_rank_key, reverse=True)
+        if bucket == "resources":
+            candidates = _drop_nested(candidates)
         return candidates
 
     async def gather_flat() -> List[Candidate]:
@@ -452,6 +454,7 @@ async def gather_candidates(
             candidates = [c for c in candidates if c.category != "skills"]
             candidates.extend(_dedupe_candidates(skills))
         candidates.sort(key=_rank_key, reverse=True)
+        candidates = _drop_nested(candidates)
         return candidates[: max(0, limit)]
 
     if quotas is None:
@@ -524,6 +527,40 @@ async def _fill_skill_abstracts(service: Any, candidates: List[Candidate]) -> Li
 def _rank_key(candidate: Candidate) -> Tuple[float, int]:
     origin_rank = {origin: index for index, origin in enumerate(ORIGIN_ORDER)}
     return (candidate.ranked_score, -origin_rank.get(candidate.origin, len(origin_rank)))
+
+
+def _drop_nested(ranked: Sequence[Candidate]) -> List[Candidate]:
+    """One resource tree, one slot, showing the most specific hit.
+
+    A single-file resource is a directory holding that file, and every level carries
+    its own vector, so one document otherwise fills several slots with the same text.
+    A hit above a kept hit is dropped; a hit inside a kept directory hit takes over its
+    slot (keeping the slot's rank), since a directory abstract only summarises what the
+    file or section says. Siblings keep their own slots, whatever the ranking order.
+    """
+    kept: List[Candidate] = []
+    for candidate in ranked:
+        uri = candidate.base_uri
+        slot = None
+        if candidate.category == "resources":
+            slot = next(
+                (
+                    i
+                    for i, other in enumerate(kept)
+                    if other.category == "resources"
+                    and (_is_under(uri, other.base_uri) or _is_under(other.base_uri, uri))
+                ),
+                None,
+            )
+        if slot is None:
+            kept.append(candidate)
+        elif (
+            kept[slot].is_directory
+            and uri != kept[slot].base_uri
+            and _is_under(uri, kept[slot].base_uri)
+        ):
+            kept[slot] = candidate
+    return kept
 
 
 def _dedupe_candidates(candidates: Sequence[Candidate]) -> List[Candidate]:
