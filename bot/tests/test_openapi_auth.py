@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
@@ -512,6 +512,113 @@ class TestOpenAPIAuth:
         stream_event = await pending.stream_queue.get()
         assert stream_event.event.value == "interrupt"
         assert await pending.stream_queue.get() is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("channel_type", ["cli", "bot_api"])
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.parametrize(
+        "terminal_event",
+        [
+            OutboundEventType.RESPONSE,
+            OutboundEventType.NO_REPLY,
+            OutboundEventType.INTERRUPT,
+        ],
+    )
+    async def test_detached_request_blocks_retry_until_its_turn_finishes(
+        self, message_bus, temp_workspace, channel_type, streaming, terminal_event
+    ):
+        channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
+        request = SimpleNamespace(
+            session_id="session-1",
+            _principal_scope="scope",
+            user_id="user",
+            message="first",
+            images=[],
+            disabled_tools=[],
+            openviking_connection=None,
+            need_reply=True,
+        )
+        storage_key = "scope:session-1"
+
+        if channel_type == "bot_api":
+            channel._bot_pending["default"] = {}
+            channel._bot_sessions["default"] = {}
+            pending_map = channel._bot_pending["default"]
+
+            async def start_request():
+                if streaming:
+                    return await channel._handle_bot_chat_stream("default", request)
+                return await channel._handle_bot_chat("default", request)
+
+        else:
+            pending_map = channel._pending
+
+            async def start_request():
+                if streaming:
+                    return await channel._handle_chat_stream(request)
+                return await channel._handle_chat(request)
+
+        if streaming:
+            response = await start_request()
+            first_task = asyncio.create_task(response.body_iterator.__anext__())
+        else:
+            first_task = asyncio.create_task(start_request())
+        first_message = await asyncio.wait_for(message_bus.consume_inbound(), timeout=1)
+        first_pending = pending_map[storage_key]
+        if not streaming:
+            await first_pending.add_event("content_delta", "stale delta")
+        first_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_task
+
+        assert first_pending.consumer_detached is True
+        assert first_pending.events == []
+        assert first_pending.stream_queue.empty()
+        with pytest.raises(HTTPException) as conflict:
+            await start_request()
+        assert conflict.value.status_code == 409
+
+        await channel.send(
+            OutboundMessage(
+                session_key=first_message.session_key,
+                content="stale delta",
+                event_type=OutboundEventType.CONTENT_DELTA,
+            )
+        )
+        assert first_pending.stream_queue.empty()
+
+        await channel.send(
+            OutboundMessage(
+                session_key=first_message.session_key,
+                content="first answer",
+                event_type=terminal_event,
+            )
+        )
+        assert storage_key not in pending_map
+
+        request.message = "second"
+        if streaming:
+            retry_response = await start_request()
+            retry_task = asyncio.create_task(retry_response.body_iterator.__anext__())
+        else:
+            retry_task = asyncio.create_task(start_request())
+        retry_message = await asyncio.wait_for(message_bus.consume_inbound(), timeout=1)
+        await channel.send(
+            OutboundMessage(
+                session_key=retry_message.session_key,
+                content="second answer",
+                event_type=OutboundEventType.RESPONSE,
+            )
+        )
+
+        retry_result = await asyncio.wait_for(retry_task, timeout=1)
+        if streaming:
+            assert "second answer" in retry_result
+            with pytest.raises(StopAsyncIteration):
+                await retry_response.body_iterator.__anext__()
+        else:
+            assert retry_result.message == "second answer"
+        assert storage_key not in pending_map
 
     def test_openapi_interrupt_route_targets_scoped_session(
         self, message_bus, temp_workspace, monkeypatch
