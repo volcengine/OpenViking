@@ -261,6 +261,7 @@ export type LogRecord = {
   /** Epoch seconds. */
   time: number
   request_id?: string
+  upstream_response_id?: string
   kind?: LogKind
   model?: string
   status?: number

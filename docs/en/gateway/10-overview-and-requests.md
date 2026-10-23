@@ -56,7 +56,7 @@ Only requests that reached a model provider are logged. Requests the gateway rej
 | **Issues** | Degraded requests, requests whose conversation saving is **Retrying** or **Paused**, and requests where the provider returned HTTP 400 or above (see [The upstream returned an error](12-troubleshooting.md#the-upstream-returned-an-error)) |
 | **Request type** | One of the [request types](#request-types) |
 
-Search matches the model, conversation ID, request ID, key name or prefix, and upstream name. The log stores only a hash of the conversation ID, so Studio hashes a pasted conversation ID in the browser before matching. This works only when Studio is opened over HTTPS or on localhost; over plain HTTP, searching by conversation ID finds nothing.
+Search matches the model, conversation ID, request ID, upstream response ID, key name or prefix, and upstream name. The log stores only a hash of the conversation ID, so Studio hashes a pasted conversation ID in the browser before matching. This works only when Studio is opened over HTTPS or on localhost; over plain HTTP, searching by conversation ID finds nothing.
 
 ### Columns {#columns}
 
@@ -83,7 +83,7 @@ The **Memory** column uses this notation:
 
 Expand a row to see:
 
-- the conversation ID, upstream, gateway key and duration
+- the gateway request ID, upstream response ID when provided, conversation ID, upstream, gateway key and duration
 - the token breakdown
 - the memory search result
 - context window use, and whether the history was compacted or the model started a new window

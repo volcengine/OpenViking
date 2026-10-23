@@ -59,6 +59,8 @@ const requests = {
     time: 'Time',
     requestId: 'Request ID',
     copyRequestId: 'Copy request ID',
+    upstreamResponseId: 'Upstream response ID',
+    copyUpstreamResponseId: 'Copy upstream response ID',
     conversation: 'Conversation',
     copyConversation: 'Copy conversation ID',
     anonymous:

@@ -280,6 +280,22 @@ export function RequestDetails({
             </span>
           </DetailItem>
         ) : null}
+        {record.upstream_response_id ? (
+          <DetailItem label={t('requests.details.upstreamResponseId')}>
+            <span className="flex min-w-0 items-center gap-1">
+              <span
+                className="truncate font-mono text-xs"
+                title={record.upstream_response_id}
+              >
+                {record.upstream_response_id}
+              </span>
+              <CopyButton
+                value={record.upstream_response_id}
+                label={t('requests.details.copyUpstreamResponseId')}
+              />
+            </span>
+          </DetailItem>
+        ) : null}
         {record.session ? (
           <DetailItem label={t('requests.details.conversation')}>
             <span className="flex min-w-0 items-center gap-1">

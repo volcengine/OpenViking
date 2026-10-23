@@ -56,6 +56,8 @@ const requests = {
     time: '时间',
     requestId: '请求 ID',
     copyRequestId: '复制请求 ID',
+    upstreamResponseId: '上游响应 ID',
+    copyUpstreamResponseId: '复制上游响应 ID',
     conversation: '对话',
     copyConversation: '复制对话 ID',
     anonymous: '客户端没有发送对话 ID，网关根据历史消息识别这段对话。',

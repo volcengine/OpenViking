@@ -84,7 +84,7 @@ function inSegment(record: LogRecord, segment: Segment): boolean {
   return record.kind === SEGMENT_KINDS[segment]
 }
 
-/** Text a search term is matched against: model, conversation, key, upstream. */
+/** Text a search term is matched against: model, conversation, ids, key, upstream. */
 function searchableText(
   record: LogRecord,
   upstreams?: Map<string, Upstream>,
@@ -98,6 +98,7 @@ function searchableText(
     record.model,
     record.session,
     record.request_id,
+    record.upstream_response_id,
     key?.name,
     key?.prefix,
     upstream?.name,

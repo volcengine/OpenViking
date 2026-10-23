@@ -32,7 +32,7 @@ Request logs hold metadata only, never content:
 
 | Recorded | Never recorded |
 | --- | --- |
-| Request type, model, status, upstream | Message text |
+| Request type, model, status, upstream, gateway request ID, and upstream response ID | Message text |
 | A hash of the conversation ID | Recalled memory |
 | Token counts, memory counts and timing | Tool arguments or results |
 | Saving status and issues | Any key |
