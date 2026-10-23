@@ -546,7 +546,7 @@ class Session:
             if not _is_storage_not_found(exc):
                 raise
             content = None
-        self._messages = self._parse_live_messages(content or "")
+        self._messages = await asyncio.to_thread(self._parse_live_messages, content or "")
         await self._load_meta()
         self._meta.message_count = len(self._messages)
         return content
@@ -3110,7 +3110,7 @@ class Session:
             f"{self._session_uri}/messages.jsonl",
             ctx=self.ctx,
         )
-        return self._parse_live_messages(content)
+        return await asyncio.to_thread(self._parse_live_messages, content)
 
     @staticmethod
     def _parse_live_messages(content: str) -> List[Message]:
