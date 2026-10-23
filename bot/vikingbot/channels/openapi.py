@@ -462,10 +462,12 @@ class OpenAPIChannel(BaseChannel):
         ):
             """List all sessions."""
             scope = await channel._resolve_request_principal(http_request, auth)
+            sessions_by_key = await asyncio.to_thread(channel._persisted_openapi_sessions, scope)
+            for key, value in channel._sessions.items():
+                if value.get("principal_scope") == scope:
+                    sessions_by_key.setdefault(key, value)
             sessions = []
-            for session_data in channel._sessions.values():
-                if session_data.get("principal_scope") != scope:
-                    continue
+            for session_data in sessions_by_key.values():
                 sessions.append(
                     SessionInfo(
                         id=session_data["session_id"],
@@ -496,6 +498,10 @@ class OpenAPIChannel(BaseChannel):
                 "message_count": 0,
                 "metadata": request.metadata or {},
             }
+            session = channel._session_manager.get_or_create(
+                channel._openapi_session_key(storage_key), skip_heartbeat=True
+            )
+            await channel._session_manager.save(session)
             return SessionCreateResponse(session_id=session_id, created_at=now)
 
         @router.get("/sessions/{session_id}", response_model=SessionDetailResponse)
@@ -507,18 +513,20 @@ class OpenAPIChannel(BaseChannel):
             """Get session details."""
             scope = await channel._resolve_request_principal(http_request, auth)
             storage_key = channel._scoped_session_id(scope, session_id)
-            if storage_key not in channel._sessions:
+            session_data = await asyncio.to_thread(channel._get_openapi_session, scope, session_id)
+            if session_data is None:
                 raise HTTPException(status_code=404, detail="Session not found")
 
-            session_data = channel._sessions[storage_key]
             info = SessionInfo(
                 id=session_id,
                 created_at=session_data.get("created_at", datetime.now()),
                 last_active=session_data.get("last_active", datetime.now()),
                 message_count=session_data.get("message_count", 0),
             )
-            # Get messages from session manager if available
-            messages = session_data.get("messages", [])
+            session = channel._session_manager.get_or_create(
+                channel._openapi_session_key(storage_key), skip_heartbeat=True
+            )
+            messages = session.messages
             return SessionDetailResponse(session=info, messages=messages)
 
         @router.delete("/sessions/{session_id}")
@@ -530,18 +538,15 @@ class OpenAPIChannel(BaseChannel):
             """Delete a session."""
             scope = await channel._resolve_request_principal(http_request, auth)
             storage_key = channel._scoped_session_id(scope, session_id)
-            if storage_key not in channel._sessions:
+            session_data = await asyncio.to_thread(channel._get_openapi_session, scope, session_id)
+            if session_data is None:
                 raise HTTPException(status_code=404, detail="Session not found")
 
             channel._ensure_no_pending(channel._pending, storage_key)
-            session_key = SessionKey(
-                type="cli",
-                channel_id=channel.config.channel_id(),
-                chat_id=storage_key,
-            )
+            session_key = channel._openapi_session_key(storage_key)
             channel._advance_session_generation(scope, session_id)
             channel._session_manager.delete(session_key)
-            del channel._sessions[storage_key]
+            channel._sessions.pop(storage_key, None)
             return {"deleted": True}
 
         @router.post("/sessions/{session_id}/interrupt")
@@ -933,8 +938,7 @@ class OpenAPIChannel(BaseChannel):
                     raise HTTPException(
                         status_code=401,
                         detail=(
-                            "OpenViking credentials did not resolve to a usable "
-                            "User/Admin identity"
+                            "OpenViking credentials did not resolve to a usable User/Admin identity"
                         ),
                     )
                 api_key_type = "user"
@@ -1272,6 +1276,70 @@ class OpenAPIChannel(BaseChannel):
                 f"Invalid OpenAPI session generation marker: {generation_path}"
             ) from exc
         return f"{base}:{generation}"
+
+    def _openapi_session_key(self, storage_key: str) -> SessionKey:
+        return SessionKey(
+            type="cli",
+            channel_id=self.config.channel_id(),
+            chat_id=storage_key,
+        )
+
+    def _public_session_id(self, principal_scope: str, storage_key: str) -> str | None:
+        prefix = f"{principal_scope}:"
+        if not storage_key.startswith(prefix):
+            return None
+        session_id = storage_key[len(prefix) :]
+        candidate, separator, generation = session_id.rpartition(":")
+        if separator and len(generation) == 32:
+            try:
+                uuid.UUID(generation)
+            except ValueError:
+                pass
+            else:
+                if self._scoped_session_id(principal_scope, candidate) == storage_key:
+                    return candidate
+        if self._scoped_session_id(principal_scope, session_id) == storage_key:
+            return session_id
+        return None
+
+    @staticmethod
+    def _session_datetime(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        try:
+            return datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return datetime.now()
+
+    def _persisted_openapi_sessions(self, principal_scope: str) -> dict[str, dict[str, Any]]:
+        sessions: dict[str, dict[str, Any]] = {}
+        for entry in self._session_manager.list_sessions():
+            key = entry.get("key")
+            if not isinstance(key, SessionKey) or key.type != "cli":
+                continue
+            if key.channel_id != self.config.channel_id():
+                continue
+            session_id = self._public_session_id(principal_scope, key.chat_id)
+            if session_id is None:
+                continue
+            durable = self._session_manager.get_or_create(key, skip_heartbeat=True)
+            message_count = sum(
+                message.get("role") == "user" and not message.get("experience_reminder")
+                for message in durable.messages
+            )
+            sessions[key.chat_id] = {
+                "session_id": session_id,
+                "principal_scope": principal_scope,
+                "created_at": self._session_datetime(entry.get("created_at")),
+                "last_active": self._session_datetime(entry.get("updated_at")),
+                "message_count": message_count,
+            }
+        return sessions
+
+    def _get_openapi_session(self, principal_scope: str, session_id: str) -> dict[str, Any] | None:
+        storage_key = self._scoped_session_id(principal_scope, session_id)
+        persisted = self._persisted_openapi_sessions(principal_scope).get(storage_key)
+        return persisted or self._sessions.get(storage_key)
 
     def _advance_session_generation(self, principal_scope: str, session_id: str) -> None:
         """Atomically rotate storage before deleting the current session history."""
