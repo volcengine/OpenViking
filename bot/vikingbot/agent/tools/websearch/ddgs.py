@@ -5,6 +5,7 @@ from typing import Any
 
 from .base import WebSearchBackend
 from .registry import register_backend
+from .url_safety import safe_public_result_url
 
 
 @register_backend
@@ -43,10 +44,17 @@ class DDGSBackend(WebSearchBackend):
                 return f"No results for: {query}"
 
             lines = [f"Results for: {query}\n"]
-            for i, item in enumerate(results[:n], 1):
-                lines.append(f"{i}. {item.get('title', '')}\n   {item.get('href', '')}")
+            result_number = 0
+            for item in results[:n]:
+                url = safe_public_result_url(item.get("href"))
+                if not url:
+                    continue
+                result_number += 1
+                lines.append(f"{result_number}. {item.get('title', '')}\n   {url}")
                 if body := item.get("body"):
                     lines.append(f"   {body}")
+            if result_number == 0:
+                return f"No results for: {query}"
             return "\n".join(lines)
         except Exception as e:
             return f"Error: {e}"
