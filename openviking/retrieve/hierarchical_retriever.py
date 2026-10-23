@@ -206,6 +206,18 @@ class HierarchicalRetriever:
         ):
             context_type = ContextType.RESOURCE.value
 
+        from openviking.ttl.wiring import get_ttl_adapter
+
+        adapter = get_ttl_adapter()
+        filter_hook = getattr(adapter, "event_filter", None)
+        if filter_hook is not None:
+            from openviking.storage.expr import And, RawDSL
+
+            ttl_filter = await filter_hook(ctx)
+            if ttl_filter is not None:
+                existing = RawDSL(scope_dsl) if isinstance(scope_dsl, dict) else scope_dsl
+                scope_dsl = And([existing, ttl_filter]) if existing is not None else ttl_filter
+
         search_limit = limit * self.RERANK_CANDIDATE_MULTIPLIER if use_rerank else limit
         with telemetry.measure("search.vector_retrieval"):
             if search_type == "keywords":

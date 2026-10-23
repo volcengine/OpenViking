@@ -50,9 +50,9 @@ class _AsyncAppendAGFS:
         self.events.append(("read", path, fs_ctx))
         return b"old"
 
-    async def write(self, path, data, fs_ctx=None):
+    async def write(self, path, data, fs_ctx=None, auto_pathlock=True):
         """Record writes with propagated fs_ctx."""
-        self.events.append(("write", path, data, fs_ctx))
+        self.events.append(("write", path, data, fs_ctx, auto_pathlock))
         return len(data)
 
 
@@ -195,6 +195,64 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     )
     assert fake.events[3][3]["lease_ref"] == "lease-1"
     assert fake.events[4] == ("release", {"lease_ref": "lease-1"})
+
+
+@pytest.mark.asyncio
+async def test_post_write_hook_observes_every_successful_file_write(monkeypatch):
+    """The default-off hook must cover raw, text, binary, and append writes."""
+    fake = _AsyncAppendAGFS()
+    fs = VikingFS(agfs=_FakeAGFS())
+    fs._async_agfs = fake  # type: ignore[assignment]
+    ctx = _default_ctx()
+
+    monkeypatch.setattr(fs, "_ensure_parent_dirs", AsyncMock())
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(
+        fs,
+        "_uri_to_path",
+        lambda uri, **_kwargs: f"/local/default/{uri.removeprefix('viking://')}",
+    )
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: ctx)
+
+    async def hook(uri, hook_ctx, written_at_ms):
+        fake.events.append(("hook", uri, hook_ctx, written_at_ms))
+
+    fs.set_post_write_hook(hook)
+    await fs.write("viking://raw.txt", "raw", ctx=ctx)
+    await fs.write_file("viking://text.txt", "text", ctx=ctx)
+    await fs.write_file_bytes("viking://binary.bin", b"binary", ctx=ctx)
+    await fs.append_file("viking://append.txt", "+new", ctx=ctx)
+
+    hooks = [event for event in fake.events if event[0] == "hook"]
+    assert [event[1] for event in hooks] == [
+        "viking://raw.txt",
+        "viking://text.txt",
+        "viking://binary.bin",
+        "viking://append.txt",
+    ]
+    assert all(event[2] is ctx for event in hooks)
+    assert all(isinstance(event[3], int) and event[3] > 0 for event in hooks)
+    release_index = fake.events.index(("release", {"lease_ref": "lease-1"}))
+    append_hook_index = fake.events.index(hooks[-1])
+    assert release_index < append_hook_index
+
+
+@pytest.mark.asyncio
+async def test_post_write_hook_failure_does_not_fail_committed_write(monkeypatch):
+    fake = _AsyncAppendAGFS()
+    fs = VikingFS(agfs=_FakeAGFS())
+    fs._async_agfs = fake  # type: ignore[assignment]
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/default/a.md")
+
+    async def fail_hook(_uri, _ctx, _written_at_ms):
+        raise RuntimeError("registration unavailable")
+
+    fs.set_post_write_hook(fail_hook)
+    result = await fs.write("viking://a.md", "new")
+
+    assert result == len(b"new")
+    assert any(event[0] == "write" for event in fake.events)
 
 
 class _AsyncBusyAppendAGFS:

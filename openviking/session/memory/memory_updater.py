@@ -1573,12 +1573,24 @@ class MemoryUpdater:
                 ),
                 extract_context=extract_context,
             )
-            await viking_fs.write_file(
-                uri,
-                new_full_content,
-                ctx=ctx,
-                lease_ref=lease_ref,
-            )
+            from contextlib import AsyncExitStack
+
+            from openviking.ttl.wiring import get_ttl_adapter
+
+            adapter = get_ttl_adapter()
+            async with AsyncExitStack() as guards:
+                if adapter is not None and hasattr(adapter, "source_guard"):
+                    await guards.enter_async_context(
+                        adapter.source_guard(
+                            getattr(extract_context, "source_archive_uri", ""), ctx, lease_ref
+                        )
+                    )
+                await viking_fs.write_file(
+                    uri,
+                    new_full_content,
+                    ctx=ctx,
+                    lease_ref=lease_ref,
+                )
 
     def _distribute_links_to_operations(self, operations: ResolvedOperations) -> None:
         """Distribute resolved_links to corresponding upsert operations by URI.
@@ -1904,6 +1916,11 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
+                    from openviking.ttl.wiring import get_ttl_adapter
+
+                    source_uri = getattr(extract_context, "source_archive_uri", "")
+                    if source_uri and get_ttl_adapter() is not None:
+                        embedding_msg.context_data["_write_source"] = source_uri
                     if getattr(ingest_options, "search_tags", None) is not None:
                         embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags)
                         embedding_msg.context_data["_upsert_options"] = {

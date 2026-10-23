@@ -680,7 +680,8 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             execute_started_at = time.perf_counter()
             if embedding_msg.queue_enqueued_at > 0:
                 queue_wait_ms = max((time.time() - embedding_msg.queue_enqueued_at) * 1000.0, 0.0)
-            inserted_data = embedding_msg.context_data
+            inserted_data = dict(embedding_msg.context_data)
+            write_source = inserted_data.pop("_write_source", "")
             logger.debug(
                 "Processing embedding message: %s action=%s",
                 self._embedding_delivery_log_context(embedding_msg),
@@ -922,11 +923,24 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             )
                         )
                     else:
-                        result = await self._vikingdb.upsert(
-                            inserted_data,
-                            ctx=ctx,
-                            options=upsert_options,
-                        )
+                        from contextlib import AsyncExitStack
+
+                        from openviking.ttl.wiring import get_ttl_adapter
+
+                        adapter = get_ttl_adapter()
+                        async with AsyncExitStack() as guards:
+                            if adapter is not None and hasattr(adapter, "write_guard"):
+                                await guards.enter_async_context(
+                                    adapter.source_guard(
+                                        write_source, ctx, task_id=embedding_msg.task_id
+                                    )
+                                )
+                                await guards.enter_async_context(
+                                    adapter.write_guard(uri, ctx, require_exists=True)
+                                )
+                            result = await self._vikingdb.upsert(
+                                inserted_data, ctx=ctx, options=upsert_options
+                            )
                     record_id = result
                     if record_id:
                         logger.debug(

@@ -2551,7 +2551,14 @@ class VikingVectorIndexBackend:
             And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
         )
 
-    async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
+    async def delete_uris(
+        self, ctx: RequestContext, uris: List[str], *, recursive: bool = False
+    ) -> None:
+        if recursive:
+            backend = await self._get_backend_for_context(ctx)
+            for uri in uris:
+                await backend.delete_by_filter(self._uri_transfer_filter(ctx, uri, recursive=True))
+            return
         for uri in uris:
             conds: List[FilterExpr] = [
                 Eq("account_id", ctx.account_id),

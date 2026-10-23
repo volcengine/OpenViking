@@ -141,6 +141,9 @@ class _FakeService:
         self.sessions = self
         self.runtime_config_manager = manager_over_source(MemoryConfigSource())
 
+    def configure_ttl(self, adapter):
+        self.ttl_adapter = adapter
+
     async def get_agent_evolution_enabled(self, account_id):
         del account_id
         return True
@@ -417,6 +420,116 @@ async def test_studio_file_configuration_permissions_revision_and_overrides(
     ).status_code == 400
     settings = await manager.get_settings(ConfigScope.account(account_id))
     assert settings["vlm"]["model"] == "override-model"
+
+
+async def test_unconfigured_redis_ttl_rejects_explicit_policy_after_auth(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    message = "Redis-backed TTL is not enabled in this deployment."
+    cluster_url = "/api/v1/admin/configuration"
+    denied = await lightweight_admin_client.patch(cluster_url, json={"settings": {"ttl": {}}})
+    assert denied.status_code == 401
+
+    cluster = await lightweight_admin_client.patch(
+        cluster_url,
+        headers=root_headers(),
+        json={"settings": {"ttl": {"global": {"days": 7}}}},
+    )
+    assert cluster.status_code == 501
+    assert cluster.json()["error"] == {
+        "code": "UNIMPLEMENTED",
+        "message": message,
+        "details": {},
+    }
+
+    account_id = _uid()
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        headers=root_headers(),
+        json={"account_id": account_id, "admin_user_id": "alice"},
+    )
+    assert created.status_code == 200, created.text
+    account = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{account_id}/configuration",
+        headers=root_headers(),
+        json={"settings": {"ttl": "disabled"}},
+    )
+    assert account.status_code == 501
+    assert account.json()["error"]["code"] == "UNIMPLEMENTED"
+    assert account.json()["error"]["message"] == message
+
+
+async def test_unconfigured_redis_ttl_rejects_file_policy_before_save(
+    lightweight_admin_client,
+    tmp_path,
+    monkeypatch,
+):
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    path = tmp_path / "ov.conf"
+    original = json.dumps({"server": {"port": 1933}})
+    path.write_text(original)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    response = await lightweight_admin_client.patch(
+        "/api/v1/admin/configuration",
+        params={"source": "file"},
+        headers=root_headers(),
+        json={
+            "revision": hashlib.sha256(original.encode()).hexdigest(),
+            "content": json.dumps({"ttl": {"global": {"days": 7}}}),
+        },
+    )
+
+    assert response.status_code == 501
+    assert response.json()["error"]["code"] == "UNIMPLEMENTED"
+    assert path.read_text() == original
+
+
+async def test_loaded_ttl_adapter_allows_ttl_configuration(
+    lightweight_admin_client,
+):
+    """An enabled Redis TTL implementation permits TTL config."""
+    from openviking.ttl import wiring
+
+    class _FakeTTLAdapter:
+        def supports_config(self) -> bool:
+            return True
+
+        async def patch_configuration(self, settings, account_id=None):
+            from openviking.server.dependencies import get_service
+
+            manager = get_service().runtime_config_manager
+            if account_id is None:
+                await manager.patch_cluster(settings)
+            else:
+                await manager.patch_account(account_id, settings)
+
+        async def on_post_write(self, uri, ctx, written_at_ms):  # noqa: ANN001
+            return None
+
+    wiring.set_ttl_adapter(_FakeTTLAdapter())
+    try:
+        account_id = _uid()
+        created = await lightweight_admin_client.post(
+            "/api/v1/admin/accounts",
+            headers=root_headers(),
+            json={"account_id": account_id, "admin_user_id": "alice"},
+        )
+        assert created.status_code == 200, created.text
+        account = await lightweight_admin_client.patch(
+            f"/api/v1/admin/accounts/{account_id}/configuration",
+            headers=root_headers(),
+            json={"settings": {"ttl": {"sessions": 30, "global": 45}}},
+        )
+        assert account.status_code == 200, account.text
+        cluster = await lightweight_admin_client.patch(
+            "/api/v1/admin/configuration",
+            headers=root_headers(),
+            json={"settings": {"ttl": {"global": 7}}},
+        )
+        assert cluster.status_code == 200, cluster.text
+    finally:
+        wiring.set_ttl_adapter(None)
 
 
 @pytest.mark.parametrize("cli_host", [None, "127.0.0.1"])
@@ -4067,3 +4180,119 @@ async def test_user_point_read_sees_peer_process_writes_without_a_list(
         assert rerole.json()["result"] == {"user_id": "bob", "role": "admin"}
     finally:
         await writer.close()
+
+
+async def test_ttl_internal_routes_absent_without_adapter(
+    lightweight_admin_app, lightweight_admin_client
+):
+    from openviking.server.app import _initialize_ttl_adapter
+
+    await _initialize_ttl_adapter(
+        lightweight_admin_app, lightweight_admin_app.state.fake_service, ServerConfig()
+    )
+    response = await lightweight_admin_client.post(
+        "/api/v1/admin/ttl/initial", json={}, headers=root_headers()
+    )
+    assert response.status_code == 404
+
+
+async def test_ttl_internal_bridge_auth_reset_and_configuration(
+    lightweight_admin_app, lightweight_admin_client, monkeypatch
+):
+    from openviking.server.app import _initialize_ttl_adapter
+    from openviking.ttl import wiring
+    from openviking.ttl.adapter import TTLBackfillRequest
+
+    monkeypatch.setattr(wiring, "_adapter", None)
+    adapter = Mock(
+        start=AsyncMock(),
+        register_initial_backfill=AsyncMock(),
+        read_initial=AsyncMock(return_value={"done": True, "pending": False}),
+    )
+    monkeypatch.setattr("openviking.ttl.wiring.build_ttl_adapter", lambda _: adapter)
+    service = lightweight_admin_app.state.fake_service
+    monkeypatch.setattr(service.viking_fs, "set_post_write_hook", Mock(), raising=False)
+    await _initialize_ttl_adapter(lightweight_admin_app, service, ServerConfig())
+    account_id = _uid()
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account_id, "admin_user_id": "admin"},
+        headers=root_headers(),
+    )
+    await service.runtime_config_manager.patch_account(account_id, {"ttl": {"sessions": 30}})
+    body = {
+        "resource_id": "resource",
+        "account_id": account_id,
+        "roots": ["viking://user/u/sessions"],
+        "reset": True,
+    }
+    denied = await lightweight_admin_client.post("/api/v1/admin/ttl/initial", json=body)
+    assert denied.status_code == 401
+    adapter.register_initial_backfill.assert_not_called()
+    for reset, intents in (
+        (True, None),
+        (False, None),
+        (True, {"viking://user/u/sessions": "saved-token"}),
+    ):
+        body["reset"] = reset
+        body["reset_intents"] = intents
+        response = await lightweight_admin_client.post(
+            "/api/v1/admin/ttl/initial", json=body, headers=root_headers()
+        )
+        assert response.status_code == 200, response.text
+        adapter.register_initial_backfill.assert_awaited_with(
+            TTLBackfillRequest(
+                "resource", account_id, ("viking://user/u/sessions",), reset, intents
+            )
+        )
+    response = await lightweight_admin_client.get(
+        "/api/v1/admin/ttl/configuration", params={"account_id": account_id}, headers=root_headers()
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["account"]["sessions"] == 30
+    state = await lightweight_admin_client.get(
+        "/api/v1/admin/ttl/initial", params={"account_id": account_id}, headers=root_headers()
+    )
+    assert state.status_code == 200 and state.json()["result"]["done"]
+    adapter.read_initial.assert_awaited_once_with(account_id)
+    denied = await lightweight_admin_client.get(
+        "/api/v1/admin/ttl/initial", params={"account_id": account_id}
+    )
+    assert denied.status_code == 401
+    assert "/api/v1/admin/ttl/initial" not in lightweight_admin_app.openapi()["paths"]
+
+
+@pytest.mark.parametrize(
+    "error_type,status",
+    [("InternalError", 500), ("UnavailableError", 503), ("DeadlineExceededError", 504)],
+)
+async def test_ttl_internal_preserves_error_contract(
+    lightweight_admin_app, lightweight_admin_client, monkeypatch, error_type, status
+):
+    from openviking.server.app import _initialize_ttl_adapter
+    from openviking.ttl import wiring
+    from openviking_cli import exceptions
+
+    monkeypatch.setattr(wiring, "_adapter", None)
+    error = getattr(exceptions, error_type)("fixture failure")
+    error.details["scope"] = "test"
+    adapter = Mock(start=AsyncMock(), register_initial_backfill=AsyncMock(side_effect=error))
+    monkeypatch.setattr("openviking.ttl.wiring.build_ttl_adapter", lambda _: adapter)
+    service = lightweight_admin_app.state.fake_service
+    monkeypatch.setattr(service.viking_fs, "set_post_write_hook", Mock(), raising=False)
+    await _initialize_ttl_adapter(lightweight_admin_app, service, ServerConfig())
+    account_id = _uid()
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account_id, "admin_user_id": "admin"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200
+    response = await lightweight_admin_client.post(
+        "/api/v1/admin/ttl/initial",
+        json={"resource_id": "resource", "account_id": account_id, "roots": [], "reset": True},
+        headers=root_headers(),
+    )
+    assert response.status_code == status, response.text
+    assert response.json()["error"]["details"]["scope"] == "test"
+    assert adapter.register_initial_backfill.await_count == 1

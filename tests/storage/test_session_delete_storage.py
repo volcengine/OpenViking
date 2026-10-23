@@ -195,7 +195,7 @@ async def test_default_rm_still_cleans_vector_records(storage, missing, uri):
     storage.fs._collect_uris.assert_awaited_once()
     storage.vector.count.assert_awaited_once()
     assert storage.vector.count.await_args.kwargs["ctx"] == storage.ctx
-    storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [child_uri, uri])
+    storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [uri], recursive=True)
     if missing:
         storage.agfs.rm.assert_not_awaited()
     else:
@@ -240,5 +240,5 @@ async def test_resource_rm_still_checks_descendant_manage_acl(storage, no_vector
         storage.vector.delete_uris.assert_not_awaited()
     else:
         storage.vector.count.assert_awaited_once()
-        storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [child_uri, RESOURCE_URI])
+        storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [RESOURCE_URI], recursive=True)
     storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)

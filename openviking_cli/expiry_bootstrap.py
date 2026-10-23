@@ -21,15 +21,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def load_expiry_config(path: Path):
+    from openviking.server.config import TTLAdapterConfig
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
     raw = json.loads(os.path.expandvars(path.expanduser().read_text(encoding="utf-8-sig")))
     config = OpenVikingConfig.from_dict(raw)
-    if not config.uses_redis_expiry():
+    ttl = TTLAdapterConfig.model_validate(raw.get("server", {}).get("ttl_adapter") or {})
+    if not (config.uses_redis_expiry() or ttl.writer_enabled):
         raise ValueError(
             "expiry publisher requires memory.session_auto_commit.idle_backend='redis' "
-            "or compile_api.scheduler_enabled=true (Redis)"
+            "or compile_api.scheduler_enabled=true or an enabled TTL writer (Redis)"
         )
+    config.expiry.validate_for_runtime()
     if not config.expiry.publisher_separate_process:
         raise ValueError("expiry publisher process is disabled by configuration")
     return config.expiry

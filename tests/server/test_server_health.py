@@ -6,7 +6,7 @@
 import asyncio
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -323,9 +323,9 @@ async def test_slow_init_does_not_block_health(monkeypatch):
         assert elapsed < 0.5
 
 
-async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
-    """System assets reconcile after auth loading and before deletion setup."""
-
+@pytest.mark.parametrize("ttl_enabled", [False, True])
+async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch, ttl_enabled):
+    """Install TTL guards before workers; preserve system-asset reconciliation."""
     events = []
 
     class MockService:
@@ -334,9 +334,13 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
             self.viking_fs = object()
             self._queue_manager = None
 
-        async def initialize(self):
+        async def initialize(self, **kwargs):
+            if ttl_enabled:
+                await kwargs["before_background_start"]()
+            else:
+                assert not kwargs
+            events.extend(["workers", "service"])
             self._initialized = True
-            events.append("service")
 
         async def apply_agent_evolution_config(self):
             events.append("agent-evolution")
@@ -346,12 +350,10 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
             events.append("system-assets")
             return 1
 
-    manager = object()
-
-    async def setup(**kwargs):
-        assert kwargs["manager"] is manager
-        events.append("deletion")
-
+    manager = SimpleNamespace(resolve_identity=Mock(), get_user_group_ids=Mock())
+    ttl_init = AsyncMock(side_effect=lambda *args: events.append("ttl"))
+    monkeypatch.setattr("openviking.server.app._initialize_ttl_adapter", ttl_init)
+    setup = AsyncMock(side_effect=lambda **kwargs: events.append("deletion"))
     monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
 
     async def initialize_plugin(app, service, config):
@@ -362,19 +364,25 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
 
     app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
     service = MockService()
-    config = ServerConfig(root_api_key="root-key-for-test")
-
+    service.compile_scheduler = SimpleNamespace(set_identity_resolver=Mock())
+    config = ServerConfig(
+        root_api_key="root-key-for-test",
+        ttl_adapter={"enabled": True} if ttl_enabled else None,
+    )
     await _initialize_runtime_state(app, service, config)
 
+    startup = (
+        ["auth", "ttl", "workers", "service", "agent-evolution"]
+        if ttl_enabled
+        else ["workers", "service", "agent-evolution", "auth", "ttl"]
+    )
+    assert events == startup + ["system-assets", "deletion"]
     assert service._initialized is True
-    assert app.state.api_key_manager is manager
-    assert events == [
-        "service",
-        "agent-evolution",
-        "auth",
-        "system-assets",
-        "deletion",
-    ]
+    assert setup.await_args.kwargs["manager"] is manager
+    ttl_init.assert_awaited_once_with(app, service, config)
+    service.compile_scheduler.set_identity_resolver.assert_called_once_with(
+        manager.resolve_identity, manager.get_user_group_ids
+    )
 
 
 async def test_initialize_runtime_state_skips_reconcile_without_account_manager(monkeypatch):
@@ -390,7 +398,6 @@ async def test_initialize_runtime_state_skips_reconcile_without_account_manager(
         app.state.api_key_manager = None
 
     monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
-
     app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
     await _initialize_runtime_state(app, service, ServerConfig())
 

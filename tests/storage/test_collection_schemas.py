@@ -843,8 +843,16 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
     collection_schemas.logger.setLevel(logging.WARNING)
     try:
         with caplog.at_level(logging.WARNING):
-            first_result = await handler.on_dequeue(_build_queue_payload())
-            second_result = await handler.on_dequeue(_build_queue_payload())
+            payload = _build_queue_payload()
+            message = EmbeddingMsg.from_dict(json.loads(payload["data"]))
+            source = "viking://user/u/sessions/s/history/archive_001"
+            message.context_data["_write_source"] = source
+            payload["data"] = json.dumps(message.to_dict())
+            first_result = await handler.on_dequeue(payload)
+            assert vikingdb.enqueued[-1].context_data["_write_source"] == source
+            retry = {"data": json.dumps(vikingdb.enqueued[-1].to_dict())}
+            second_result = await handler.on_dequeue(retry)
+            assert vikingdb.enqueued[-1].context_data["_write_source"] == source
     finally:
         collection_schemas.logger.removeHandler(caplog.handler)
 

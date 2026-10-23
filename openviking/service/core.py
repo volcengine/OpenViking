@@ -9,7 +9,7 @@ Main service class that composes all sub-services and manages infrastructure lif
 import asyncio
 import inspect
 import os
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
 from openviking.privacy.sanitizer import PrivacySanitizer
@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
     from openviking.scheduling.expiry.runtime import ExpiryRuntime
     from openviking.session.compressor_v3 import SessionCompressorV3
+    from openviking.ttl.adapter import TTLAdapter
 
 
 class OpenVikingService:
@@ -112,6 +113,7 @@ class OpenVikingService:
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._expiry_runtime: Optional["ExpiryRuntime"] = None
+        self._ttl_adapter: Optional["TTLAdapter"] = None
         self._compile_scheduler: Optional[CompileScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
@@ -449,7 +451,9 @@ class OpenVikingService:
         """Get the Compile task service."""
         return self._compile_service
 
-    async def initialize(self) -> None:
+    async def initialize(
+        self, *, before_background_start: Optional[Callable[[], Awaitable[None]]] = None
+    ) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
             logger.debug("Already initialized")
@@ -607,6 +611,9 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_service=self._session_service,
         )
+        # Install optional server write guards before any producer or consumer starts.
+        if before_background_start is not None:
+            await before_background_start()
         try:
             session_auto_commit_config = get_openviking_config().memory.session_auto_commit
         except Exception:
@@ -724,9 +731,11 @@ class OpenVikingService:
         await system_asset_synchronizer.sync(default_ctx)
 
         compile_expiry_enabled = self._compile_scheduler is not None
-        if session_expiry_enabled or compile_expiry_enabled:
+        ttl_expiry_enabled = self._ttl_adapter is not None and self._ttl_adapter.supports_config()
+        if session_expiry_enabled or compile_expiry_enabled or ttl_expiry_enabled:
             from openviking.scheduling.expiry.runtime import ExpiryRuntime, ExpiryRuntimeRoles
 
+            expiry_config.validate_for_runtime()
             self._expiry_runtime = ExpiryRuntime(
                 expiry_config,
                 roles=ExpiryRuntimeRoles(
@@ -743,8 +752,12 @@ class OpenVikingService:
                     )
                 if compile_expiry_enabled:
                     self._compile_scheduler.install_expiry(self._expiry_runtime.scheduler)
+                if ttl_expiry_enabled:
+                    self._ttl_adapter.install_expiry(self._expiry_runtime.scheduler)
                 await self._expiry_runtime.start_storage()
                 await self._expiry_runtime.start_roles()
+                if ttl_expiry_enabled:
+                    await self._ttl_adapter.start()
             except Exception:
                 await self._stop_expiry()
                 raise
@@ -779,8 +792,14 @@ class OpenVikingService:
         self._initialized = True
         logger.info("OpenVikingService initialized")
 
+    def configure_ttl(self, adapter: "TTLAdapter") -> None:
+        """Install optional TTL before background producers and expiry roles start."""
+        self._ttl_adapter = adapter
+
     async def _stop_expiry(self) -> None:
         """Stop expiry work before releasing dependencies used by callbacks."""
+        if self._ttl_adapter is not None:
+            await self._ttl_adapter.aclose()
         runtime = self._expiry_runtime
         if runtime is None:
             self._session_service.set_session_expiry_adapter(None)
@@ -808,7 +827,11 @@ class OpenVikingService:
             self._compile_scheduler = None
             logger.info("CompileScheduler stopped")
 
-        await self._stop_expiry()
+        if self._ttl_adapter is None:
+            await self._stop_expiry()
+        elif self._expiry_runtime is not None:
+            # Stop new callbacks, but keep reports available while writers drain.
+            await self._expiry_runtime.stop_roles(keep_reporting=True)
 
         if self._runtime_config_manager:
             await self._runtime_config_manager.stop_refresh_loop()
@@ -829,6 +852,19 @@ class OpenVikingService:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
             logger.info("Queue manager stopped")
+
+        # Draining writers still need the adapter's source and directory guards.
+        # Stop TTL consumers only after those writers settle, while their storage
+        # and vector clients remain available for in-flight recycling.
+        from openviking.ttl.wiring import get_ttl_adapter, set_ttl_adapter
+
+        ttl_adapter = get_ttl_adapter()
+        if ttl_adapter is not None:
+            await ttl_adapter.aclose()
+            set_ttl_adapter(None)
+        self._ttl_adapter = None
+        if self._expiry_runtime is not None:
+            await self._stop_expiry()
 
         # Queue workers and scheduled producers persist their final Task/Work
         # transitions while stopping, so keep their store open until they drain.

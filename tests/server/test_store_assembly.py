@@ -51,12 +51,15 @@ async def test_account_store_connection_configuration():
         await handle.close()
 
 
-async def test_expiry_cluster_disables_client_level_command_retries(monkeypatch):
+@pytest.mark.parametrize("tls", [False, True])
+@pytest.mark.parametrize("scheme", ["", "redis://", "rediss://"])
+async def test_expiry_cluster_disables_client_level_command_retries(monkeypatch, scheme, tls):
     cluster = pytest.importorskip("redis.asyncio.cluster")
+    connection = pytest.importorskip("redis.asyncio.connection")
     ping = AsyncMock(return_value=True)
     monkeypatch.setattr(cluster.RedisCluster, "ping", ping)
     store = RedisExpiryStore(
-        ExpiryRedisConfig(mode="cluster", endpoints=["127.0.0.1:6379"]),
+        ExpiryRedisConfig(mode="cluster", endpoints=[f"{scheme}127.0.0.1:6379"], tls=tls),
         ExpiryKeys("resource"),
         _InlineExecutor(),
         ExpiryMetrics(),
@@ -67,6 +70,9 @@ async def test_expiry_cluster_disables_client_level_command_retries(monkeypatch)
         assert store._client.retry._retries == 0
         assert other_cluster.retry._retries == 3
         assert store._client.retry is not other_cluster.retry
+        use_tls = scheme == "rediss://" or (not scheme and tls)
+        connection_class = connection.SSLConnection if use_tls else connection.Connection
+        assert store._client.connection_kwargs["connection_class"] is connection_class
     finally:
         await store.close()
         await other_cluster.aclose()

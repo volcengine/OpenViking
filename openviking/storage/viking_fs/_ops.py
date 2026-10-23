@@ -3,10 +3,13 @@
 """Core filesystem operations mixin for VikingFS."""
 
 import asyncio
+import inspect
 import math
+import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
+from functools import wraps
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
@@ -132,6 +135,25 @@ def _rel_path_sort_key(uri: str, root_uri: str) -> List[str]:
     return [part for part in rel_path.split("/") if part and part != "."]
 
 
+def _guard_write(method):
+    """Optional owner-supplied write boundary; absent on the default path."""
+    signature = inspect.signature(method)
+
+    @wraps(method)
+    async def guarded(self, *args, **kwargs):
+        guard = getattr(self, "_write_guard", None)
+        if guard is None:
+            return await method(self, *args, **kwargs)
+        bound = signature.bind(self, *args, **kwargs)
+        async with guard(
+            bound.arguments["uri"], bound.arguments.get("ctx"), bound.arguments.get("lease_ref")
+        ) as lease:
+            bound.arguments["lease_ref"] = lease
+            return await method(*bound.args, **bound.kwargs)
+
+    return guarded
+
+
 class _OpsMixin:
     """Core filesystem operations (read/write/mkdir/rm/mv/stat/glob/tree/ls/temp)."""
 
@@ -176,11 +198,13 @@ class _OpsMixin:
 
         return raw
 
+    @_guard_write
     async def write(
         self,
         uri: str,
         data: Union[bytes, str],
         ctx: Optional[RequestContext] = None,
+        lease_ref: Dict[str, Any] | None = None,
     ) -> str:
         """Write file"""
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
@@ -189,7 +213,35 @@ class _OpsMixin:
             data = data.encode("utf-8")
 
         # Encryption (when configured) happens inside the ragfs layer keyed by account_id.
-        return await self._async_agfs.write(path, data)
+        result = await self._async_agfs.write(
+            path, data, **({"fs_ctx": self._pathlock_fs_ctx(ctx, lease_ref)} if lease_ref else {})
+        )
+        await self._notify_post_write(uri, ctx)
+        return result
+
+    async def _notify_post_write(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext],
+        written_at_ms: Optional[int] = None,
+    ) -> None:
+        """Best-effort notification for optional product adapters.
+
+        The storage write is already committed when this runs, so observer
+        failures are logged and must not turn a successful write into an API
+        failure. A disabled hook returns before reading the clock or doing I/O.
+        """
+        hook = getattr(self, "_post_write_hook", None)
+        if hook is None:
+            return
+        if written_at_ms is None:
+            written_at_ms = time.time_ns() // 1_000_000
+        try:
+            result = hook(uri, ctx, written_at_ms)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.exception("[VikingFS] Post-write hook failed for %s", uri)
 
     async def mkdir(
         self,
@@ -287,7 +339,11 @@ class _OpsMixin:
             uris_to_delete.append(target_uri)
             real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            vector_store = self._get_vector_store()
+            if recursive and vector_store is not None:
+                await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
+            else:
+                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
             return {"estimated_deleted_count": estimated_count}
 
@@ -337,7 +393,11 @@ class _OpsMixin:
             if not no_vector:
                 real_ctx = self._ctx_or_default(ctx)
                 estimated_count = await _estimate_deleted_count(path, real_ctx)
-                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+                vector_store = self._get_vector_store()
+                if recursive and vector_store is not None:
+                    await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
+                else:
+                    await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             try:
                 result = await self._async_agfs.rm(
                     path,
@@ -2003,6 +2063,7 @@ class _OpsMixin:
 
     # ========== Other Preserved Methods ==========
 
+    @_guard_write
     async def write_file(
         self,
         uri: str,
@@ -2045,6 +2106,7 @@ class _OpsMixin:
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        await self._notify_post_write(uri, ctx)
 
     async def read_file(
         self,
@@ -2173,6 +2235,7 @@ class _OpsMixin:
                 raise NotFoundError(uri, "file") from exc
             raise
 
+    @_guard_write
     async def write_file_bytes(
         self,
         uri: str,
@@ -2197,7 +2260,9 @@ class _OpsMixin:
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        await self._notify_post_write(uri, ctx)
 
+    @_guard_write
     async def append_file(
         self,
         uri: str,
@@ -2210,6 +2275,7 @@ class _OpsMixin:
         path = self._uri_to_path(uri, ctx=ctx)
 
         owned_lease = None
+        written_at_ms: Optional[int] = None
         try:
             await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
             lease = lease_ref
@@ -2239,6 +2305,8 @@ class _OpsMixin:
                 final_content,
                 fs_ctx=fs_ctx,
             )
+            if getattr(self, "_post_write_hook", None) is not None:
+                written_at_ms = time.time_ns() // 1_000_000
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
@@ -2249,6 +2317,8 @@ class _OpsMixin:
         finally:
             if owned_lease is not None:
                 await self._async_agfs.pathlock_release(owned_lease)
+        if written_at_ms is not None:
+            await self._notify_post_write(uri, ctx, written_at_ms)
 
     async def ls(
         self,

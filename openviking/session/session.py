@@ -545,6 +545,13 @@ class Session:
         except Exception as exc:
             if not _is_storage_not_found(exc):
                 raise
+            from openviking.ttl.wiring import get_ttl_adapter
+
+            adapter = get_ttl_adapter()
+            if adapter is not None and await adapter.requires_existing_session(
+                self._session_uri, self.ctx
+            ):
+                raise
             content = None
         self._messages = self._parse_live_messages(content or "")
         await self._load_meta()
@@ -729,12 +736,22 @@ class Session:
             if await self.exists():
                 return
             await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
-            await self._viking_fs.write_file(
-                f"{self._session_uri}/messages.jsonl",
-                "",
-                ctx=self.ctx,
+            # The Session mutex does not cover its child files.
+            file_lease = await self._viking_fs._async_agfs.pathlock_acquire_exact_batch(
+                [f"{session_path}/messages.jsonl", f"{session_path}/.meta.json"],
+                timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
+                owner_lease_ref=lease,
             )
-            await self._save_meta()
+            try:
+                await self._viking_fs.write_file(
+                    f"{self._session_uri}/messages.jsonl",
+                    "",
+                    ctx=self.ctx,
+                    lease_ref=file_lease,
+                )
+                await self._save_meta(lease_ref=file_lease)
+            finally:
+                await self._viking_fs._async_agfs.pathlock_release(file_lease)
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
@@ -751,6 +768,22 @@ class Session:
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
+            from openviking.ttl.wiring import bind_write_owner, get_ttl_adapter
+
+            if not filenames:
+                # Phase 1 writes different child files, each with its own lock.
+                with bind_write_owner(self._viking_fs, self._session_uri, self.ctx, session_lease):
+                    yield session_lease
+                return
+
+            adapter = get_ttl_adapter()
+            if adapter is not None and await adapter.requires_existing_session(
+                self._session_uri, self.ctx
+            ):
+                # Commercial writes share this unit lock. Read live messages
+                # before leaf locks, whose sidecars could recreate a deleted root.
+                yield session_lease
+                return
             file_lease = await agfs.pathlock_acquire_exact_batch(
                 [f"{session_path}/{name}" for name in filenames],
                 timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
@@ -1252,11 +1285,7 @@ class Session:
         if await self._archives.file_exists(archive_uri, ".failed.json"):
             return False
 
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
-        try:
+        async with self._state_lock():
             marker = await self._read_phase1_meta(archive_uri)
             if marker.get("status") == "ready":
                 return True
@@ -1351,8 +1380,6 @@ class Session:
             await self._write_phase1_ready_marker(archive_uri)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
             return True
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     def commit(
         self,
@@ -1502,12 +1529,8 @@ class Session:
         # The exact lock on the Session directory is the mutex for root Session
         # state and archive-number allocation. Child files use their own exact
         # locks, so Phase 2 can keep writing an earlier archive concurrently.
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
         publication_lease: Optional[Any] = None
-        try:
+        async with self._state_lock():
             self._messages = await self._read_live_messages_strict()
             await self._load_meta()
             if (
@@ -1792,8 +1815,6 @@ class Session:
                         )
                     publication_lease = None
                 raise
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
         # Lock released; Phase 1 intent, retained root, metadata and ready
         # metadata are durable before Task-store or QueueFS latency.
 
@@ -3055,11 +3076,7 @@ class Session:
         record_auto_commit_success: bool = False,
     ) -> Optional[SessionMeta]:
         """Return saved metadata, or None when its read fails and statistics are skipped."""
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
-        try:
+        async with self._state_lock(".meta.json") as lease:
             try:
                 latest_meta = await self._read_commit_meta()
             except Exception as exc:
@@ -3097,10 +3114,22 @@ class Session:
                 # a clean auto-commit even after Phase 2 reloads the latest meta.
                 latest_meta.last_auto_commit_at = get_current_timestamp()
             self._meta = latest_meta
-            await self._save_meta()
+            from contextlib import AsyncExitStack
+
+            from openviking.ttl.wiring import get_ttl_adapter
+
+            adapter = get_ttl_adapter()
+            async with AsyncExitStack() as guards:
+                if adapter is not None:
+                    await guards.enter_async_context(
+                        adapter.source_guard(
+                            f"{self._session_uri}/history/archive_{archive_index:03d}",
+                            self.ctx,
+                            lease,
+                        )
+                    )
+                await self._save_meta(lease_ref=lease)
             return latest_meta
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _read_live_messages_strict(self) -> List[Message]:
         """Read the authoritative root JSONL without silently dropping corrupt rows."""

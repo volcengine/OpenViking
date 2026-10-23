@@ -1846,3 +1846,44 @@ async def test_transfer_does_not_inspect_unrelated_chunk_shaped_entry():
     )
     assert result.written == 1
     assert backend.records["old"]["uri"] == target + "#chunk-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recursive", [False, True])
+async def test_delete_uris_preserves_other_accounts_and_sibling_prefixes(recursive):
+    root = "viking://user/alice/sessions/expired"
+    records = [
+        _record("root", root),
+        _record("child", root + "/history/archive_001/event.md"),
+        _record("sibling", root + "-active/messages.jsonl"),
+        _record("other-root", root, account_id="other"),
+        _record("other-child", root + "/messages.jsonl", account_id="other"),
+    ]
+
+    async def delete_by_filter(expr):
+        records[:] = [record for record in records if not _matches_filter(expr, record)]
+
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend._get_backend_for_context = AsyncMock(
+        return_value=SimpleNamespace(delete_by_filter=delete_by_filter)
+    )
+    await backend.delete_uris(_ctx(), [root], recursive=recursive)
+
+    expected = {"sibling", "other-root", "other-child"}
+    if not recursive:
+        expected.add("child")
+    assert {record["id"] for record in records} == expected
+
+
+@pytest.mark.asyncio
+async def test_recursive_delete_uris_propagates_backend_failure():
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend._get_backend_for_context = AsyncMock(
+        return_value=SimpleNamespace(
+            delete_by_filter=AsyncMock(side_effect=OSError("vector delete failed"))
+        )
+    )
+    with pytest.raises(OSError, match="vector delete failed"):
+        await backend.delete_uris(
+            _ctx(), ["viking://user/alice/sessions/expired"], recursive=True
+        )
