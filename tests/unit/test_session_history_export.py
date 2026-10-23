@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -50,6 +51,9 @@ class Client:
 def test_exports_failed_raw_and_active_without_context_or_duplicate_anchor(exporter, tmp_path):
     client = Client()
     manifest = exporter.export_history(client, "source", tmp_path)
+    assert (
+        hashlib.sha256((tmp_path / "history.json").read_bytes()).hexdigest() == manifest["sha256"]
+    )
     content = json.loads((tmp_path / "history.json").read_text())
     assert content["messages"] == [client.old, client.tail]
     assert manifest["status"] == "exported_not_imported"
