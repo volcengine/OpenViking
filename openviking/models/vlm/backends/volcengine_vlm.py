@@ -95,9 +95,9 @@ class VolcEngineVLM(OpenAIVLM):
             usage = {}
             if hasattr(response, "usage") and response.usage:
                 usage = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
+                    "prompt_tokens": int(getattr(response.usage, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(response.usage, "completion_tokens", 0) or 0),
+                    "total_tokens": int(getattr(response.usage, "total_tokens", 0) or 0),
                     "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
                     "completion_tokens_details": getattr(
                         response.usage, "completion_tokens_details", None
