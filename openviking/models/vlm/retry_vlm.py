@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Retry decorator for ordinary VLM requests."""
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -41,6 +42,16 @@ class RetryVLM(VLMBase):
     def record_failed_call(self, *, duration_seconds: float, error: Exception) -> None:
         self.inner.record_failed_call(duration_seconds=duration_seconds, error=error)
 
+    async def _bounded(self, call):
+        # SDK/httpx timeouts bound each socket read, so a response that keeps trickling
+        # bytes never trips them; ``timeout`` must bound the whole attempt.
+        timeout = self.inner.timeout
+        try:
+            return await asyncio.wait_for(call, timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            # errors are classified by message; "timeout" keeps the attempt retryable
+            raise TimeoutError(f"VLM request timeout after {timeout}s") from exc
+
     def get_completion(
         self,
         prompt: str = "",
@@ -76,14 +87,16 @@ class RetryVLM(VLMBase):
         **kwargs: Any,
     ) -> Union[str, VLMResponse]:
         return await retry_async(
-            lambda: self.inner.get_completion_async(
-                prompt=prompt,
-                thinking=thinking,
-                tools=tools,
-                tool_choice=tool_choice,
-                messages=messages,
-                max_tokens=max_tokens,
-                **kwargs,
+            lambda: self._bounded(
+                self.inner.get_completion_async(
+                    prompt=prompt,
+                    thinking=thinking,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    **kwargs,
+                )
             ),
             max_retries=effective_max_retries(self.max_retries),
             logger=logger,
@@ -128,14 +141,16 @@ class RetryVLM(VLMBase):
         **kwargs: Any,
     ) -> Union[str, VLMResponse]:
         return await retry_async(
-            lambda: self.inner.get_vision_completion_async(
-                prompt=prompt,
-                images=images,
-                thinking=thinking,
-                tools=tools,
-                tool_choice=tool_choice,
-                messages=messages,
-                **kwargs,
+            lambda: self._bounded(
+                self.inner.get_vision_completion_async(
+                    prompt=prompt,
+                    images=images,
+                    thinking=thinking,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    messages=messages,
+                    **kwargs,
+                )
             ),
             max_retries=effective_max_retries(self.max_retries),
             logger=logger,
