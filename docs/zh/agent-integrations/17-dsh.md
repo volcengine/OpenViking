@@ -44,6 +44,8 @@ curl -fsSL https://openviking.ai/install | bash
 
 </details>
 
+安装完成后，在 DSH 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一条提示词接入 Agent](../getting-started/07-agent-onboarding.md)。
+
 ## 验证
 
 启动 `dsh --profile web` 打开一个会话，会话开头应该能看到一条 OpenViking 上下文注入，模型也应该具备 `mcp__openviking__*` 工具。问一句更早会话里聊过的事，确认召回生效。

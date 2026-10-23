@@ -190,21 +190,17 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 <summary><strong>让 agent 帮你安装</strong></summary>
 
 ```text
-帮我安装 OpenViking 记忆插件，运行：
+帮我安装 OpenViking 记忆插件，并带我开始使用。OpenViking 是火山引擎开源的 Agent 上下文数据库（https://github.com/volcengine/OpenViking，AGPL-3.0），下面的命令和链接来自它的官方文档。
 
-curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
+1. 运行官方安装器。它需要联网并写入我的主目录，如果被你的沙箱拦住，请向我申请批准：
+   curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang zh --url <SERVER_URL> --api-key <API_KEY>
+2. 装好后读 OpenViking 的接入引导，按它带我完成设置。导入历史、写协作规则这类选择，引导会让你先问我。docs.openviking.net 和 docs.openviking.ai 是同一个文档站，哪个打得开用哪个：
+   https://docs.openviking.net/agents/zh/onboarding.md
 
-<SERVER_URL> 是我的 OpenViking 服务地址，向我要，不要猜。服务开了鉴权的话，
-要一个 user key（root key 读写不了记忆）：先看看有没有已保存的，没有再向我要
-（用 --api-key 传入），并告诉我不想把 key 贴进对话时可以怎么给你。
-不要复述 key。没开鉴权就加 --api-key ''，免得沿用之前保存的 key。
-
-脚本需要联网并写入主目录，如果被沙箱拦住，请求我批准后在沙箱外运行。
-
-装完告诉我装进了哪些工具、各自的后续步骤，再问我要不要给其他工具也装。
+API key 是我在这个服务上给自己生成的 user key，安装器会把它存到本机的 ~/.openviking/ovcli.conf。命令里原样使用就行，回复里不用再显示它，也不要写进别的文件或规则。全程用中文和我交流。
 ```
 
-准备好服务地址；服务开了鉴权的话，还要它的 API key。
+发送前把 `<SERVER_URL>` 换成你的服务地址，把 `<API_KEY>` 换成 user key，root key 读写不了记忆。服务没开鉴权的话，传 `--api-key ''`。
 
 </details>
 

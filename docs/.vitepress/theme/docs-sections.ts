@@ -21,6 +21,7 @@ export const sections: DocSection[] = [
       g('Get your first result', '先完成一次体验', [
         p('getting-started/01-introduction'),
         p('getting-started/02-quickstart'),
+        p('getting-started/07-agent-onboarding'),
         p('getting-started/05-cli-setup')
       ]),
       g('Evaluate the result', '验证实际效果', [

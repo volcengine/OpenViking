@@ -191,25 +191,17 @@ Connect your coding agent to OpenViking for cross-session memory. The memory plu
 <summary><strong>Let your agent install it</strong></summary>
 
 ```text
-Install the OpenViking memory plugin for me by running:
+Install the OpenViking memory plugin and help me start using it. OpenViking is the open-source context database for AI agents from Volcengine (https://github.com/volcengine/OpenViking, AGPL-3.0); the command and link below are from its official docs.
 
-curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
+1. Run the official installer. It needs network access and writes to my home directory; if your sandbox blocks that, ask me for approval:
+   curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang en --url <SERVER_URL> --api-key <API_KEY>
+2. Once it's installed, read the OpenViking onboarding guide and use it to walk me through setup. The guide has you ask me before choices like importing history or adding a working rule. docs.openviking.ai and docs.openviking.net are the same docs site; use whichever loads:
+   https://docs.openviking.ai/agents/en/onboarding.md
 
-<SERVER_URL> is the address of my OpenViking server; ask me for it, don't guess.
-If the server has auth turned on, it needs a user key (a root key can't read or
-write memories): check whether one is already saved; if not, ask me for it and
-pass it with --api-key, and tell me how to hand it over if I'd rather not paste
-it into this chat. Never repeat the key back. If auth is off, add --api-key ''
-so an earlier saved key isn't reused.
-
-The script needs network access and writes to my home directory; if a sandbox
-blocks it, ask me to approve running it outside the sandbox.
-
-When it finishes, tell me which tools it installed into and the next steps for
-each, then ask whether I want it in any other tool.
+The API key is a user key I created for myself on that server; the installer stores it in ~/.openviking/ovcli.conf on this machine. Use it in the command as it is; there's no need to show it in your replies, and don't write it into any other file or rule. Talk to me in English.
 ```
 
-Have your server's address ready, plus its API key if it has auth turned on.
+Before you send it, replace `<SERVER_URL>` with your server's address and `<API_KEY>` with a user key; a root key can't read or write memories. If the server has auth turned off, use `--api-key ''`.
 
 </details>
 
