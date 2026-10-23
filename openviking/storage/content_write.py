@@ -28,6 +28,7 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
+from openviking.privacy.ambiguity import candidate_references, strict_ambiguity_enabled
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -276,15 +277,20 @@ class ContentWriteCoordinator:
             return content
         result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
         if result.ambiguous_references:
-            raise InvalidArgumentError(
-                "Content contains a Privacy value mapped to multiple fields; "
-                "remove the duplicate mapping or insert the intended reference explicitly",
-                details={
-                    "uri": uri,
-                    "candidate_references": [
-                        list(candidates) for candidates in result.ambiguous_references
-                    ],
-                },
+            candidates = candidate_references(result.ambiguous_references)
+            if strict_ambiguity_enabled():
+                raise InvalidArgumentError(
+                    "Content contains a Privacy value mapped to multiple fields; "
+                    "remove the duplicate mapping or insert the intended reference explicitly",
+                    details={"uri": uri, "candidate_references": candidates},
+                )
+            # The matcher already wrote the placeholder for this value, so the
+            # document is usable: keep it and surface the catalog problem here.
+            logger.warning(
+                "privacy: %d ambiguous value(s) left as placeholders for %s: %s",
+                len(candidates),
+                uri,
+                candidates[:3],
             )
         return result.content
 
