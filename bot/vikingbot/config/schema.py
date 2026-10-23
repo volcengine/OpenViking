@@ -616,6 +616,7 @@ class GatewayConfig(BaseModel):
 class WebSearchConfig(BaseModel):
     """Web search tool configuration."""
 
+    backend: str = "auto"  # auto, brave, ddgs, exa, keenable, tavily
     api_key: str = ""  # Brave Search API key
     tavily_api_key: str = ""  # Tavily Search API key
     max_results: int = 5
