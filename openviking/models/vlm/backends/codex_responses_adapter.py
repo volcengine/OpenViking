@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
@@ -237,8 +238,13 @@ class CodexCompletionsAdapter:
         self._model = model
         self._auth_retry_client_factory = auth_retry_client_factory
 
+    @staticmethod
+    def _close_quietly(resource: Any) -> None:
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
+
     def _create_response(self, **kwargs) -> Any:
-        client = self._client_factory()
         messages = kwargs.get("messages") or []
         model = kwargs.get("model") or self._model
         instructions_parts: List[str] = []
@@ -269,17 +275,23 @@ class CodexCompletionsAdapter:
         collected_text_deltas: List[str] = []
         has_function_calls = False
         completed_response = None
-        try:
-            stream = client.responses.create(**response_kwargs, stream=True)
-        except Exception as exc:
-            status_code = getattr(exc, "status_code", None)
-            if status_code is None:
-                status_code = getattr(getattr(exc, "response", None), "status_code", None)
-            if status_code != 401 or self._auth_retry_client_factory is None:
-                raise
-            client = self._auth_retry_client_factory()
-            stream = client.responses.create(**response_kwargs, stream=True)
-        try:
+        # Clients from ``_client_factory`` are per-request objects owned by this
+        # method, so every created client must be closed on all exit paths.
+        with contextlib.ExitStack() as stack:
+            client = self._client_factory()
+            stack.callback(self._close_quietly, client)
+            try:
+                stream = client.responses.create(**response_kwargs, stream=True)
+            except Exception as exc:
+                status_code = getattr(exc, "status_code", None)
+                if status_code is None:
+                    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                if status_code != 401 or self._auth_retry_client_factory is None:
+                    raise
+                client = self._auth_retry_client_factory()
+                stack.callback(self._close_quietly, client)
+                stream = client.responses.create(**response_kwargs, stream=True)
+            stack.callback(self._close_quietly, stream)
             for event in stream:
                 event_type = getattr(event, "type", "")
                 if event_type == "response.output_item.done":
@@ -297,10 +309,6 @@ class CodexCompletionsAdapter:
                     continue
                 if event_type == "response.completed":
                     completed_response = getattr(event, "response", None)
-        finally:
-            close = getattr(stream, "close", None)
-            if callable(close):
-                close()
         final_response = _build_final_response_from_stream_events(
             completed_response,
             collected_output_items,
