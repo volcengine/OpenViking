@@ -533,20 +533,14 @@ impl PathLockManager {
                                 any_ok = true;
                                 debug!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatically refreshed");
                             }
-                            Ok(false) => {
-                                if pending_handoff {
-                                    // A different process may have adopted and released this
-                                    // handoff. Its completed release makes the producer's
-                                    // local reference obsolete. Do not remove the provider
-                                    // token: another process may own it or have released it.
-                                    released_handoff_paths.push(lp.clone());
-                                } else {
-                                    warn!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatic refresh failed");
-                                }
+                            Ok(false) if pending_handoff => {
+                                // A different process may have adopted and released this
+                                // handoff. Its completed release makes the producer's
+                                // local reference obsolete. Do not remove the provider
+                                // token: another process may own it or have released it.
+                                released_handoff_paths.push(lp.clone());
                             }
-                            Err(error) => {
-                                warn!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, error = %error, "pathlock lease automatic refresh failed");
-                            }
+                            Ok(false) | Err(_) => {}
                         }
                     }
                     if any_ok {
