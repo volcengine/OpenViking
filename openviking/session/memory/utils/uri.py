@@ -197,7 +197,9 @@ def generate_uri(
         uri_template = dir_template or filename_template
     context = dict(fields)
     context["user_space"] = user_space
-    template_vars = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", uri_template))
+    # Jinja parser, not a regex: `{{ name|lower }}` must be checked too, or a missing field
+    # renders through DebugUndefined into a literal "{{ name }}" path segment.
+    template_vars = TemplateUtils.referenced_variables(uri_template) - {"extract_context"}
     for var in template_vars:
         if var not in context:
             raise ValueError(f"Missing template variable: {var}")
