@@ -145,7 +145,7 @@ VikingBot 支持三类多模态能力：
 
 - 渠道图片输入转换为模型视觉内容块；
 - `generate_image` 使用 `agents.gen_image_model` 完成文生图或支持模型上的图生图；
-- Telegram 音频可以通过 GroqTranscriptionProvider 转换为文本。
+- Telegram 语音消息可以通过 GroqTranscriptionProvider 转换为文本。
 
 生成图片可以通过消息回调直接交付到原渠道。模型是否理解图片取决于所选 Provider 和模型能力。
 
