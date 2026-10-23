@@ -1812,9 +1812,18 @@ class MarkdownParser(BaseParser):
         }
 
     def _estimate_token_count(self, content: str) -> int:
-        # CJK characters (Chinese, Japanese, Korean): ~0.7 token per char
-        # Other characters (including Latin, Arabic, Cyrillic, etc.): ~0.3 token per char
-        # This provides better coverage for multilingual documents
-        cjk_chars = len(re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", content))
+        # CJK characters (Chinese, Japanese, Korean): ~0.7 token per char.
+        # Cover the full CJK block set — unified ideographs, Extension A,
+        # compatibility ideographs, CJK punctuation, fullwidth forms, kana and
+        # Hangul — so punctuation and extension characters are not silently
+        # downgraded to the 0.3 "other" rate, which undercounted CJK-heavy
+        # documents by ~12%.
+        cjk_chars = len(
+            re.findall(
+                r"[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
+                r"\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]",
+                content,
+            )
+        )
         other_chars = len(re.findall(r"[^\s]", content)) - cjk_chars
         return int(cjk_chars * self.MAX_TOKENS_PER_CHAR + other_chars * 0.3)
