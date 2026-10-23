@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { MessagePart } from '#/lib/sessions/types/message'
@@ -21,6 +21,33 @@ describe('MessageList streaming indicator', () => {
 
     rerender(<MessageList messages={[]} />)
     expect(screen.queryByRole('status', { name: 'chat.generating' })).toBeNull()
+  })
+})
+
+describe('MessageList copy button', () => {
+  it('falls back to execCommand when the Clipboard API is unavailable', () => {
+    const execCommand = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', {
+      value: execCommand,
+      configurable: true,
+    })
+
+    render(
+      <MessageList
+        messages={[
+          {
+            id: 'message-1',
+            role: 'assistant',
+            parts: [{ type: 'text', text: 'Copy me' }],
+            created_at: new Date().toISOString(),
+          },
+        ]}
+      />,
+    )
+
+    fireEvent.click(screen.getByTitle('chat.copy'))
+
+    expect(execCommand).toHaveBeenCalledWith('copy')
   })
 })
 
