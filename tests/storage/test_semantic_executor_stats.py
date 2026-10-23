@@ -466,6 +466,72 @@ async def test_semantic_executor_shares_node_scheduler_across_roots(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_semantic_executor_staggered_roots_share_available_capacity(monkeypatch):
+    roots = ["viking://resources/first", "viking://resources/second"]
+    fake_fs = _FakeVikingFS({root: [{"name": "note.txt", "isDir": False}] for root in roots})
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    _patch_semantic_config(monkeypatch)
+    started = {f"{root}/note.txt": asyncio.Event() for root in roots}
+    release = asyncio.Event()
+
+    class BlockingProcessor(_FakeProcessor):
+        async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
+            started[file_path].set()
+            await release.wait()
+            return await super()._generate_single_file_summary(file_path, llm_sem, ctx)
+
+    processor = BlockingProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executors = [
+        SemanticTreeExecutor(processor, "resource", max_concurrent_llm=2, ctx=ctx) for _ in roots
+    ]
+    tasks = []
+    try:
+        for executor, root in zip(executors, roots, strict=True):
+            tasks.append(asyncio.create_task(executor.run(root)))
+            await asyncio.wait_for(started[f"{root}/note.txt"].wait(), timeout=1)
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=1)
+
+    assert sorted(processor.summarized_files) == sorted(started)
+    assert all(executor.get_stats().done_nodes == 2 for executor in executors)
+
+
+@pytest.mark.asyncio
+async def test_semantic_scheduler_uses_free_capacity_for_staggered_work():
+    scheduler = SemanticTreeScheduler(max_workers=2)
+    started = [asyncio.Event() for _ in range(3)]
+    release = asyncio.Event()
+
+    def make_work(index):
+        async def run():
+            started[index].set()
+            await release.wait()
+
+        return _ScheduledExecutor(run)
+
+    try:
+        scheduler.submit(make_work(0), SemanticTreeWork(kind="file", dir_uri="first"))
+        await asyncio.wait_for(started[0].wait(), timeout=1)
+        scheduler.submit(make_work(1), SemanticTreeWork(kind="file", dir_uri="second"))
+        await asyncio.wait_for(started[1].wait(), timeout=1)
+        scheduler.submit(make_work(2), SemanticTreeWork(kind="file", dir_uri="third"))
+        await asyncio.sleep(0)
+        assert not started[2].is_set()
+        assert len(scheduler._workers) == 2
+    finally:
+        release.set()
+        await asyncio.wait_for(scheduler._queue.join(), timeout=1)
+        await asyncio.sleep(scheduler._idle_timeout * 2)
+
+    assert started[2].is_set()
+    assert all(worker.done() for worker in scheduler._workers)
+
+
+@pytest.mark.asyncio
 async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
     embedding_queue = NamedQueue(
         None,
