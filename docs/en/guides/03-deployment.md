@@ -337,6 +337,26 @@ Initial bootstrap can be completed entirely within the browser:
 
 > **Security Note**: The service is publicly accessible by default. Keep `OPENVIKING_ROOT_API_KEY` confidential and consult the [public access guide](12-public-access.md) before production rollout.
 
+### Deploy on Pethost
+
+Deploy OpenViking from its one-click template on [Pethost](https://pethost.dev/templates/openviking/), a small cloud for personal projects.
+
+#### Provisioned Resources & Defaults
+
+- **Container Image**: Uses the official image `ghcr.io/volcengine/openviking`, pinned to a release, listening on port 1933 with an HTTPS address.
+- **Persistent Storage**: Mounts a volume at `/app/.openviking`, which holds `ov.conf` and the default workspace (`/app/.openviking/data`).
+- **Default Configuration**: OpenAI for embedding (`text-embedding-3-small`) and VLM (`gpt-4o-mini`). `OPENAI_API_KEY` is the only input during deployment. The admin key `OPENVIKING_ROOT_API_KEY` is generated and kept in the project's `.env`. Bot is off (`OPENVIKING_WITH_BOT=0`) and `OPENVIKING_PUBLIC_BASE_URL` is the project's address.
+
+#### Quick Start (Web Studio)
+
+1. **Set Admin Key**: Copy `OPENVIKING_ROOT_API_KEY` from the project's `.env`, open `https://<your-domain>/studio/settings`, and save it.
+2. **Create User**: Navigate to `https://<your-domain>/studio/users` to create your initial account and user.
+3. **Start Using**: Use the user API key for Web Studio, the `ov` CLI, and SDKs.
+
+#### Configuration Management
+
+`OPENVIKING_CONF_CONTENT` is written to `ov.conf` on the first startup only. The keys in it are `${OPENAI_API_KEY}` and `${OPENVIKING_ROOT_API_KEY}`, which the server expands at every start, so a key changed in `.env` takes effect after a restart. For other settings, edit `/app/.openviking/ov.conf` in the service's terminal and restart. The template's source is [on GitHub](https://github.com/pethost-dev/templates/tree/main/openviking).
+
 ### Multi-instance notes
 
 With an embedded vector backend (`local` or `cuvs`), OpenViking holds an exclusive OS file lock on `storage.workspace` by default. The `.openviking.lock` file remains on disk; its presence does not mean a server is running. The OS releases the lock when the server closes it or the process terminates. Do not manually delete a running server's lock file.
