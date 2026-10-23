@@ -292,11 +292,13 @@ class MemoryKernel:
             prepared.metrics.update(
                 context_tokens=prepared.context_tokens, context_window=prepared.context_window
             )
+            headroom = self.pending_injection_headroom(prepared, credential, policy)
             if (
                 summarize
                 and policy.compaction
                 and not disabled
-                and prepared.context_tokens >= policy.compaction_threshold * prepared.context_window
+                and prepared.context_tokens + headroom
+                >= policy.compaction_threshold * prepared.context_window
             ):
                 await self.compact(prepared, credential, policy, summarize)
         # Recall and window signals come after any new cut, so they describe the
@@ -319,6 +321,50 @@ class MemoryKernel:
         if isinstance(body.get("input"), str) and result.get("input") == sent:
             result["input"] = body["input"]
         return prepared
+
+    @staticmethod
+    def pending_injection_headroom(request, credential, policy):
+        """Upper bound for context added after this request's compaction decision.
+
+        Recall and the first session opening are intentionally built after a cut so
+        their window status describes the context the model receives. Reserve their
+        configured budgets when deciding whether that cut is needed.
+        """
+        if (
+            request.disabled
+            or request.kind != "user"
+            or request.anchor < 0
+            or (K.INJECTION, request.chain[request.anchor]) in request.records
+        ):
+            return 0
+        cut = active_cut(request)
+        existing = [
+            (index, request.records[K.INJECTION, anchor])
+            for index, anchor in enumerate(request.chain)
+            if (K.INJECTION, anchor) in request.records
+        ]
+        current = [value for index, value in existing if index > cut]
+        used = sum(value.get("tokens", 0) for value in current)
+        recall = (
+            max(0, min(policy.max_tokens, policy.session_max_tokens - used)) if policy.recall else 0
+        )
+        if existing:
+            opening = 0
+        else:
+            tools = request.root["tools"]
+            names = {tool["function"]["name"] for tool in tools}
+            profile = (
+                policy.profile_max_tokens if policy.profile or "openviking_read" in names else 0
+            )
+            hint = history_hint(
+                credential["user_id"], lineage(request.capture.value), tools, policy.capture
+            )
+            static = "\n\n".join(part for part in (gateway_note(policy, tools), hint) if part)
+            frame = token_estimate(block("gateway-session-start", "x")) - token_estimate("x")
+            opening = profile + token_estimate(static) + frame + 8 if profile or static else 0
+        # The experimental window status is outside the recall budget.
+        status = 128 if request.tools_active and policy.agent_windows else 0
+        return recall + opening + status
 
     async def session_root(self, records, scope, sid, body, upstream, policy, credential):
         root = records.get((K.ROOT, ""))
@@ -786,7 +832,7 @@ class MemoryKernel:
         return candidate.body
 
     async def measure(self, request):
-        """Estimate the context: the last reply's usage plus what the client added after it.
+        """Estimate the context: the last reply's usage plus what follows it.
 
         Usage counts only when its reply is still in this history after the latest
         cut, so usage from subagents, other branches or before a cut is ignored.
@@ -797,7 +843,10 @@ class MemoryKernel:
         index = chain.index(anchor) if anchor and anchor in chain else -1
         if index > active_cut(request):
             tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-            return tokens + await asyncio.to_thread(estimate, request.messages[index + 1 :])
+            field = tool_protocol(request.protocol).field
+            # The body suffix also includes gateway context replayed or injected after
+            # that reply. The provider's earlier usage cannot account for those bytes.
+            return tokens + await asyncio.to_thread(estimate, request.body[field][index + 1 :])
         return await asyncio.to_thread(estimate, self.assembled(request))
 
     async def compact(self, request, credential, policy, summarize):
