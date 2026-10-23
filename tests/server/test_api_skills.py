@@ -832,3 +832,35 @@ async def test_mcp_skill_import_and_vector_rebuild_preserve_l1_frontmatter(clien
     assert rebuilt.json()["result"]["failed_records"] == 0
     assert rebuilt.json()["result"]["rebuilt_records"] == 3
     await assert_indexed_body()
+
+async def test_skills_api_list_can_include_content_digest(client):
+    import hashlib
+
+    await _add_skill(client, "digest-skill", "Skill used to test listing digests")
+
+    plain = await client.get("/api/v1/skills")
+    assert plain.status_code == 200, plain.text
+    plain_skill = next(s for s in plain.json()["result"]["skills"] if s["name"] == "digest-skill")
+    assert "content_sha256" not in plain_skill  # opt-in only
+
+    listed = await client.get("/api/v1/skills", params={"include_digest": True})
+    assert listed.status_code == 200, listed.text
+    skill = next(s for s in listed.json()["result"]["skills"] if s["name"] == "digest-skill")
+
+    shown = await client.get("/api/v1/skills/digest-skill")
+    assert shown.status_code == 200, shown.text
+    stored = shown.json()["result"]
+    assert skill["content_sha256"] == stored["content_sha256"]
+    assert skill["content_sha256"] == hashlib.sha256(stored["content"].encode("utf-8")).hexdigest()
+
+    # the digest tracks content, which is the point of exposing it
+    edited = await client.post(
+        "/api/v1/skills", json={"data": _skill_md("digest-skill", "Changed description"), "wait": True}
+    )
+    assert edited.status_code == 200, edited.text
+    relisted = await client.get("/api/v1/skills", params={"include_digest": True})
+    changed = next(
+        s for s in relisted.json()["result"]["skills"] if s["name"] == "digest-skill"
+    )
+    assert changed["content_sha256"] != skill["content_sha256"]
+
