@@ -6,11 +6,11 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class RerankConfig(BaseModel):
-    """Configuration for rerank API. Supports VikingDB, Cohere, OpenAI-compatible, LiteLLM, and Jev (TypeSafe) providers."""
+    """Configuration for rerank API. Supports VikingDB, Cohere, OpenAI-compatible, LiteLLM, Jev (TypeSafe), and TEI providers."""
 
     provider: Optional[str] = Field(
         default=None,
-        description="Rerank provider: 'vikingdb', 'cohere', 'openai', 'litellm', or 'jev'. Auto-detected from config if omitted.",
+        description="Rerank provider: 'vikingdb', 'cohere', 'openai', 'litellm', 'jev', or 'tei'. Auto-detected from config if omitted.",
     )
 
     # VikingDB fields
@@ -24,11 +24,11 @@ class RerankConfig(BaseModel):
 
     # Shared provider fields
     api_key: Optional[str] = Field(
-        default=None, description="API key for Cohere, OpenAI-compatible, or Jev providers"
+        default=None, description="API key for Cohere, OpenAI-compatible, Jev, or optional TEI auth"
     )
     api_base: Optional[str] = Field(default=None, description="Custom endpoint URL")
     model: Optional[str] = Field(
-        default=None, description="Model name for OpenAI-compatible, LiteLLM, or Jev providers"
+        default=None, description="Model name for OpenAI-compatible, LiteLLM, Jev, or TEI providers"
     )
     mode: Optional[str] = Field(
         default="noul",
@@ -36,15 +36,21 @@ class RerankConfig(BaseModel):
     )
 
     extra_headers: Optional[Dict[str, str]] = Field(
-        default=None, description="Extra HTTP headers for OpenAI-compatible providers"
+        default=None, description="Extra HTTP headers for OpenAI-compatible or TEI providers"
     )
 
     timeout: float = Field(
         default=30.0,
         description=(
-            "HTTP request timeout in seconds for rerank calls. Increase for local "
-            "LLM servers with model cold-start latency."
+            "HTTP request timeout in seconds for rerank calls. "
+            "Increase for local LLM servers with model cold-start latency."
         ),
+    )
+
+    batch_size: int = Field(
+        default=32,
+        ge=1,
+        description="Maximum documents per TEI rerank request; other providers ignore this field.",
     )
 
     threshold: float = Field(
@@ -80,6 +86,8 @@ class RerankConfig(BaseModel):
             return "cohere"
         if self.ak and self.sk:
             return "vikingdb"
+        if self.api_base:
+            return "tei"
         return None
 
     @model_validator(mode="after")
@@ -99,10 +107,11 @@ class RerankConfig(BaseModel):
             "openai",
             "litellm",
             "jev",
+            "tei",
         ]:
             raise ValueError(
                 "Rerank provider must be one of "
-                "['vikingdb', 'cohere', 'openai', 'litellm', 'jev'], got "
+                "['vikingdb', 'cohere', 'openai', 'litellm', 'jev', 'tei'], got "
                 f"'{provider}'"
             )
         if provider == "openai":
@@ -120,6 +129,8 @@ class RerankConfig(BaseModel):
         if provider == "vikingdb":
             if not self.ak or not self.sk:
                 raise ValueError("VikingDB rerank provider requires 'ak' and 'sk'")
+        if provider == "tei" and not self.api_base:
+            raise ValueError("TEI rerank provider requires 'api_base'")
         return self
 
     def is_available(self) -> bool:
@@ -131,6 +142,8 @@ class RerankConfig(BaseModel):
             return self.api_key is not None and self.api_base is not None
         if p == "litellm":
             return self.model is not None
+        if p == "tei":
+            return self.api_base is not None
         if p == "vikingdb":
             return self.ak is not None and self.sk is not None
         return False
