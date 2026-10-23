@@ -50,7 +50,7 @@ ov --version
 
 Use `ov language zh-CN` instead if I write to you in Chinese. Most `ov` commands exit with code 2 in a non-interactive shell until a display language is saved.
 
-If `ov` is not found after the install, add `$(npm prefix -g)/bin` to `PATH`. Do not use `sudo npm`. If npm is not available, ASK me before you build from source with `cargo install --git https://github.com/volcengine/OpenViking ov_cli`.
+If `ov` is not found after the install, add `$(npm prefix -g)/bin` to `PATH` on macOS and Linux. On Windows, add the directory printed by `npm prefix -g` itself, without `/bin`. Do not use `sudo npm`. If npm is not available, ASK me before you build from source with `cargo install --git https://github.com/volcengine/OpenViking ov_cli`.
 
 Read the help for the commands you will use:
 
