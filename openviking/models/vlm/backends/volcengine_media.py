@@ -363,6 +363,7 @@ def _record_usage(
 ) -> None:
     try:
         usage = getattr(response, "usage", None)
+        vlm.record_token_usage_coverage(reported=usage is not None)
         input_details = getattr(usage, "input_tokens_details", None)
         output_details = getattr(usage, "output_tokens_details", None)
         vlm.update_token_usage(
