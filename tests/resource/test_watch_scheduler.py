@@ -1,6 +1,7 @@
 import asyncio
+import json
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -385,3 +386,52 @@ class TestWatchSchedulerResourceExistence:
         assert updated.last_task_id == "add-resource-task-1"
         assert updated.last_status == "failed"
         assert updated.last_error == "document import failed"
+
+
+class TestWatchSchedulerTimestampNormalization:
+    @pytest.mark.asyncio
+    async def test_persisted_aware_due_time_does_not_break_due_check(self):
+        """Offset-aware persisted due times must not crash the scheduler loop (#3268)."""
+        from openviking_cli.exceptions import NotFoundError
+
+        aware_past = (datetime.now(timezone.utc) - timedelta(minutes=10)).astimezone(
+            timezone(timedelta(hours=8))
+        )
+
+        class FakeVikingFS:
+            async def read_file(self, uri: str, ctx=None) -> str:
+                if uri == WatchManager.STORAGE_URI:
+                    return json.dumps(
+                        {
+                            "tasks": [
+                                {
+                                    "task_id": "aware-task",
+                                    "path": "/test/aware",
+                                    "to_uri": "viking://resources/aware",
+                                    "watch_interval": 60.0,
+                                    "created_at": (
+                                        datetime.now(timezone.utc) - timedelta(hours=1)
+                                    ).isoformat(),
+                                    "next_execution_time": aware_past.isoformat(),
+                                    "is_active": True,
+                                }
+                            ]
+                        }
+                    )
+                raise NotFoundError(uri, "resource")
+
+            async def write_file(self, uri: str, content: str, ctx=None) -> None:
+                return None
+
+            async def exists(self, uri: str, ctx=None) -> bool:
+                return False
+
+        manager = WatchManager(viking_fs=FakeVikingFS())
+        await manager.initialize()
+
+        due_tasks = await manager.get_due_tasks()
+
+        assert [task.task_id for task in due_tasks] == ["aware-task"]
+        next_time = await manager.get_next_execution_time()
+        assert next_time is not None
+        assert (next_time - datetime.now(timezone.utc)).total_seconds() < 0
