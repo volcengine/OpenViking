@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from vikingbot import __version__
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.registry import ToolRegistry
 
@@ -146,7 +147,7 @@ async def connect_mcp_servers(
     mcp_servers: dict, registry: ToolRegistry, stack: AsyncExitStack
 ) -> None:
     """Connect to configured MCP servers and register their tools."""
-    from mcp import ClientSession, StdioServerParameters
+    from mcp import ClientSession, StdioServerParameters, types
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
@@ -212,7 +213,16 @@ async def connect_mcp_servers(
                 logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
                 continue
 
-            session = await stack.enter_async_context(ClientSession(read, write))
+            session = await stack.enter_async_context(
+                ClientSession(
+                    read,
+                    write,
+                    client_info=types.Implementation(
+                        name="openviking-vikingbot",
+                        version=__version__,
+                    ),
+                )
+            )
             await session.initialize()
 
             tools = await session.list_tools()
