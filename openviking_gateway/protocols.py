@@ -68,6 +68,47 @@ configure_rules()
 
 # Vendors whose models expect their reasoning back in later turns.
 REASONING_VENDORS = {"deepseek", "ark", "byteplus"}
+REASONING_RECORD_SCHEMA = "openviking.reasoning.route.v1"
+
+
+def reasoning_route(body: dict, upstream: dict) -> dict[str, str]:
+    """Stable non-secret identity of the upstream route that produced reasoning."""
+    model = body.get("model")
+    model = model if isinstance(model, str) else ""
+    model = upstream.get("aliases", {}).get(model, model)
+    return {
+        "upstream_id": str(upstream.get("id") or ""),
+        "vendor": str(upstream.get("vendor") or ""),
+        "base_url": str(upstream.get("base_url") or "").rstrip("/"),
+        "model": model,
+    }
+
+
+def reasoning_record(value: dict, body: dict, upstream: dict) -> dict:
+    """Wrap newly captured reasoning with the route that may receive it again."""
+    return {
+        "schema": REASONING_RECORD_SCHEMA,
+        "route": reasoning_route(body, upstream),
+        "value": value,
+    }
+
+
+def reasoning_value(record: dict, body: dict, upstream: dict) -> dict | None:
+    """Return reasoning for this route; old unscoped records retain compatibility."""
+    if record.get("schema") != REASONING_RECORD_SCHEMA:
+        return record
+    route, value = record.get("route"), record.get("value")
+    if not isinstance(route, dict) or not isinstance(value, dict):
+        return None
+    return value if route == reasoning_route(body, upstream) else None
+
+
+def reasoning_record_mismatch(record: dict, body: dict, upstream: dict) -> bool:
+    """Whether a stamped record is malformed or belongs to another route."""
+    return (
+        record.get("schema") == REASONING_RECORD_SCHEMA
+        and reasoning_value(record, body, upstream) is None
+    )
 
 
 def clean_text(text: str) -> str:

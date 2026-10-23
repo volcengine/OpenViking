@@ -36,6 +36,10 @@ from .protocols import (
     is_user,
     plugin_present,
     prefix_chain,
+    reasoning_record,
+    reasoning_record_mismatch,
+    reasoning_route,
+    reasoning_value,
     replays_reasoning,
     session_id,
     strip_thinking,
@@ -400,10 +404,16 @@ class MemoryKernel:
         tools = request.root["tools"]
         request.metrics["tools_tokens"] = 0
         adapter = tool_protocol(request.protocol)
+        route_mismatches = MemoryKernel.reasoning_route_mismatches(request)
+        if route_mismatches:
+            request.metrics["reasoning_route_mismatches"] = route_mismatches
         if tools:
             # Assemble restores no reasoning here, and thinking resent as text stays text.
-            restores = not (
-                request.disabled or request.strip_replayed_thinking or request.thinking_as_text
+            restores = (
+                not (
+                    request.disabled or request.strip_replayed_thinking or request.thinking_as_text
+                )
+                and not route_mismatches
             )
             reason = tool_block_reason(
                 request.original, request.protocol, request.upstream, restores
@@ -435,6 +445,22 @@ class MemoryKernel:
                 or request.root["tool_skip_reason"]
                 or "tools_not_selected_at_session_start"
             )
+
+    @staticmethod
+    def reasoning_route_mismatches(request):
+        """Count visible reply anchors carrying reasoning from another stamped route."""
+        current = reasoning_route(request.body, request.upstream)
+        mismatches = set()
+        for anchor in request.body_chain:
+            if not anchor:
+                continue
+            value = request.records.get((K.REASONING, anchor))
+            hidden = request.records.get((K.HIDDEN, anchor))
+            if value and reasoning_record_mismatch(value, request.body, request.upstream):
+                mismatches.add(anchor)
+            if hidden and "reasoning_route" in hidden and hidden["reasoning_route"] != current:
+                mismatches.add(anchor)
+        return len(mismatches)
 
     @staticmethod
     def replay(request):
@@ -674,7 +700,11 @@ class MemoryKernel:
         for index, value in reasoning.items():
             if tail[index]:
                 await self.store.replay.put(
-                    request.scope, request.session, K.REASONING, tail[index], value
+                    request.scope,
+                    request.session,
+                    K.REASONING,
+                    tail[index],
+                    reasoning_record(value, request.body, request.upstream),
                 )
 
     async def completed(self, request, credential, response):
@@ -737,7 +767,11 @@ class MemoryKernel:
         messages = request.body[adapter.field]
         if request.tools_active:
             messages = replay_hidden(
-                messages, request.body_chain, request.records, request.protocol
+                messages,
+                request.body_chain,
+                request.records,
+                request.protocol,
+                reasoning_route(request.body, request.upstream),
             )
             if request.strip_replayed_thinking:
                 messages = strip_thinking(messages)
@@ -767,7 +801,8 @@ class MemoryKernel:
         for index, (message, anchor) in enumerate(
             zip(request.body[adapter.field], request.body_chain, strict=True)
         ):
-            value = request.records.get((K.REASONING, anchor)) if anchor else None
+            record = request.records.get((K.REASONING, anchor)) if anchor else None
+            value = reasoning_value(record, request.body, request.upstream) if record else None
             items = [message]
             if value and anchor not in request.thinking_as_text and index not in covered:
                 items = adapter.restore_reasoning(messages, message, value)
