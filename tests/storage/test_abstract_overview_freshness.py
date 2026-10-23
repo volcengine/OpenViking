@@ -4,9 +4,11 @@
 import asyncio
 
 import pytest
+import yaml
 
 from openviking.core.context import ContextLevel
 from openviking.storage.abstract_overview import (
+    body_for_preview,
     freshness_metadata,
     parse_abstract_overview,
     plan_abstract_overview_refresh,
@@ -175,3 +177,44 @@ async def test_pending_snapshot_reads_existing_sidecars_under_lock():
         await read_abstract_overview_pending_snapshot(viking_fs=fs, dir_uri=dir_uri, ctx=None) == 3
     )
     assert fs.lock_timeouts == [0.0]
+
+
+_PRIVACY_REFERENCE = "{{ov_privacy:alice:viking://~/privacy/skill/skill-a#/values/host}}"
+
+
+def test_legacy_preview_with_leading_reference_is_quoted_and_parses():
+    raw = (
+        f"name: securing-helm-chart-{_PRIVACY_REFERENCE}ments\n"
+        f"description: Secures Helm charts\n"
+        "tags:\n"
+        "- helm\n"
+        f"- {_PRIVACY_REFERENCE}ment\n"
+    )
+
+    # The raw text is flow-mapping syntax to YAML and cannot be parsed.
+    with pytest.raises(yaml.YAMLError):
+        yaml.safe_load(raw)
+
+    document = parse_abstract_overview(raw)
+    assert document.legacy is True
+
+    parsed = yaml.safe_load(body_for_preview(raw))
+    assert parsed["tags"][-1] == f"{_PRIVACY_REFERENCE}ment"
+    assert parsed["name"] == f"securing-helm-chart-{_PRIVACY_REFERENCE}ments"
+
+
+def test_legacy_preview_with_reference_mid_string_is_untouched():
+    raw = (
+        "name: backblaze\n"
+        f"description: 'uploads to {_PRIVACY_REFERENCE} every night'\n"
+        "tags:\n"
+        "- backup\n"
+    )
+
+    assert body_for_preview(raw) == raw
+    assert yaml.safe_load(body_for_preview(raw))["name"] == "backblaze"
+
+
+def test_legacy_preview_without_references_is_untouched():
+    raw = "name: plain\ntags:\n- a\n- b\n"
+    assert body_for_preview(raw) == raw
