@@ -71,6 +71,14 @@ test("a non-2xx response keeps the server's error and trace id", async () => {
   assert.equal(res.traceId, "trace-err");
 });
 
+test("a 429 honors only an explicit non-retryable server decision", () => {
+  const failure = { ok: false, status: 429, error: { details: {} } };
+
+  assert.equal(isRetryableFailure(failure), true);
+  assert.equal(isRetryableFailure({ ...failure, error: { details: { retryable: true } } }), true);
+  assert.equal(isRetryableFailure({ ...failure, error: { details: { retryable: false } } }), false);
+});
+
 test("an error envelope inside a 200 is still a failure", async () => {
   respond(200, { status: "error", error: { message: "nope" } });
   const res = await createOvHttp(CFG, { defaultTimeoutMs: 5000 })("/api/v1/sessions/s-1/commit");

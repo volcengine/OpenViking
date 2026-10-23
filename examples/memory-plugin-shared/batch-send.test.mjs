@@ -133,6 +133,34 @@ test("sendSessionMessages treats non-retryable failures as failed without enqueu
   });
 });
 
+test("sendSessionMessages does not queue a permanent quota 429", async () => {
+  await withPendingDir(async (dir) => {
+    const res = await sendSessionMessages(
+      async () => ({
+        ok: false,
+        status: 429,
+        error: {
+          code: "RESOURCE_EXHAUSTED",
+          message: "quota exhausted",
+          details: { retryable: false },
+        },
+      }),
+      "quota-session",
+      payloads(3),
+      { enqueueOnRetryable: true },
+    );
+
+    assert.equal(res.sent, 0);
+    assert.equal(res.queued, 0);
+    assert.equal(res.failed, 3);
+    assert.equal(res.retryable, false);
+    assert.equal(
+      (await readdir(dir).catch(() => [])).filter((name) => name.endsWith(".json")).length,
+      0,
+    );
+  });
+});
+
 test("sendSessionMessages queues only explicitly retryable conflicts", async () => {
   await withPendingDir(async () => {
     const retryable = await sendSessionMessages(
