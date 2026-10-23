@@ -200,6 +200,45 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("preserves legacy commit metadata when the optional count is omitted", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const telemetry = { trace_id: "trace-1" };
+
+    await client.commitSession("session-1", undefined, true, ["ordinary-tag"]);
+    await client.commitSession("session-2", undefined, false, []);
+    await client.commitSession("session-3", undefined, undefined, [
+      "ordinary-tag",
+    ]);
+    await client.commitSession("session-4", {
+      telemetry,
+      eventTags: ["ordinary-tag"],
+    });
+    await client.commitSession("session-5");
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      extraction_metadata: { event: { tags: ["ordinary-tag"] } },
+      telemetry: true,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      extraction_metadata: { event: { tags: [] } },
+      telemetry: false,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toEqual({
+      extraction_metadata: { event: { tags: ["ordinary-tag"] } },
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toEqual({
+      extraction_metadata: { event: { tags: ["ordinary-tag"] } },
+      telemetry,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[4]![1]?.body))).toEqual({});
+  });
+
   it("queries Agent Evolution trajectories and outcomes", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
