@@ -17,6 +17,7 @@ Instrumentation policy:
 from __future__ import annotations
 
 from openviking.metrics.core.base import ReadEnvelope
+from openviking_cli.utils import run_async
 
 from .base import EventMetricDataSource, ProbeMetricDataSource
 
@@ -125,7 +126,11 @@ class EncryptionProbeDataSource(ProbeMetricDataSource):
         def _read() -> tuple[bool, str]:
             cfg = self._config_provider()
             provider = str(getattr(getattr(cfg, "encryption", None), "provider", "") or "unknown")
-            bootstrap_encryption()
+            # ``bootstrap_encryption`` is an async coroutine that requires the full
+            # configuration mapping. Materializing it here is what actually verifies
+            # the encryption subsystem can be initialized (mirroring how the model
+            # provider / retrieval backend probes materialize their dependencies).
+            run_async(bootstrap_encryption(cfg.to_dict()))
             return True, provider
 
         default_provider = "unknown"

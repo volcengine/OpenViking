@@ -68,7 +68,10 @@ def test_encryption_probe_datasource_ok_and_provider(monkeypatch):
     class _Cfg:
         encryption = SimpleNamespace(provider="volcengine")
 
-    def _bootstrap():
+        def to_dict(self):
+            return {"encryption": {"provider": "volcengine"}}
+
+    async def _bootstrap(config):
         return None
 
     monkeypatch.setattr("openviking.crypto.config.bootstrap_encryption", _bootstrap)
@@ -84,7 +87,10 @@ def test_encryption_probe_datasource_returns_default_on_exception(monkeypatch):
     class _Cfg:
         encryption = SimpleNamespace(provider="volcengine")
 
-    def _boom():
+        def to_dict(self):
+            return {"encryption": {"provider": "volcengine"}}
+
+    async def _boom(config):
         raise RuntimeError("bootstrap failed")
 
     monkeypatch.setattr("openviking.crypto.config.bootstrap_encryption", _boom)
