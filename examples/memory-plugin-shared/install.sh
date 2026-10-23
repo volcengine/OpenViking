@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # OpenViking Memory Plugin shared installer for Claude Code, Codex, Cursor,
-# TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, pi and
-# DeepSeek Harness (dsh).
+# TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, CodeBuddy Code,
+# OpenCode, pi and DeepSeek Harness (dsh).
 #
 # In short:
 #   - Open source. This script and every OpenViking file it installs are
@@ -64,13 +64,15 @@
 #   trae       ~/.trae/hooks.json and TRAE's mcp.json (trae-cn: ~/.trae-cn, TRAE CN)
 #   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json
 #   kimicode   ~/.kimi-code/plugins
+#   codebuddy  a local marketplace registered with codebuddy, installed from ~/.codebuddy/plugins
 #   opencode   ~/.config/opencode/plugins/openviking, openviking.js, opencode.json(c)
 #   pi         ~/.pi/agent/extensions/openviking
 #   dsh        dsh plugin add into the chosen profile
 #   cli        npm install -g @openviking/cli: ov in npm's global bin directory,
 #              or in ~/.local/bin when that needs sudo
 # Cursor, TRAE, TRAE CN and ZCode run their hooks from
-# ~/.openviking/agent-integrations, where Kimi Code keeps its uninstall helper.
+# ~/.openviking/agent-integrations, where Kimi Code keeps its uninstall helper and
+# CodeBuddy Code its managed marketplace.
 # The plugin bundle is unpacked to ~/.openviking/memory-plugin-marketplace when
 # a harness installs from it.
 #
@@ -86,7 +88,7 @@
 # neither a published build nor part of a checkout downloads and runs the
 # published copy of this script.
 #
-# Uninstall: Cursor, TRAE, TRAE CN, ZCode and Kimi Code with
+# Uninstall: Cursor, TRAE, TRAE CN, ZCode, Kimi Code and CodeBuddy Code with
 #   curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness <list>
 # The other harnesses with the commands the install prints at the end, such as
 #   claude plugin uninstall openviking-memory@openviking && claude plugin marketplace remove openviking
@@ -224,7 +226,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh, cli.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, opencode, pi, dsh, cli.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
                      cli is the OpenViking CLI (ov), installed from npm. Without --harness: the detected ones and cli.
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
@@ -241,7 +243,7 @@ Options:
   --user ID          Optional OpenViking user.
   --statusline       Register the Claude Code statusline without asking.
   --no-statusline    Skip the statusline prompt.
-  --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode and Kimi Code integrations,
+  --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode, Kimi Code and CodeBuddy Code integrations,
                      plus any legacy TraeCode CLI hook config. Claude Code, Codex, OpenCode,
                      pi and dsh are removed with the commands the install prints at the end.
   --yes, -y          Ask nothing: use defaults and install without asking for confirmation.
@@ -498,7 +500,7 @@ EOF
 }
 
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_CODEBUDDY=0; HAVE_DSH=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
@@ -510,6 +512,7 @@ refresh_available_harnesses() {
   command -v dsh >/dev/null 2>&1 && HAVE_DSH=1
   { command -v zcode >/dev/null 2>&1 || [ -d "$HOME/.zcode" ]; } && HAVE_ZCODE=1
   { command -v kimi >/dev/null 2>&1 || [ -d "$HOME/.kimi-code" ]; } && HAVE_KIMICODE=1
+  { command -v codebuddy >/dev/null 2>&1 || [ -d "$HOME/.codebuddy" ]; } && HAVE_CODEBUDDY=1
   return 0
 }
 
@@ -650,6 +653,8 @@ SEL_CURSOR_APP=0
 SEL_TRAE=0
 SEL_TRAE_CN=0
 SEL_ZCODE=0
+SEL_KIMICODE=0
+SEL_CODEBUDDY=0
 SEL_CLI=0
 TUI_CURSOR=0; TUI_LINES=0
 
@@ -664,7 +669,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 9 ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 10 ))
 }
 
 tui_total_count() {
@@ -703,6 +708,8 @@ EOF
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'kimicode|kimi'; return 0; fi
   i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'codebuddy|codebuddy'; return 0; fi
+  i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'cli|ov'; return 0; fi
   printf 'add|'
 }
@@ -737,6 +744,7 @@ tui_bin_label() {
     trae-cn:*) printf 'TRAE CN' ;;
     zcode:*) printf 'ZCode' ;;
     kimicode:*) printf 'Kimi Code' ;;
+    codebuddy:*) printf 'CodeBuddy Code' ;;
     cli:*) printf 'CLI (ov)' ;;
     claude:*) printf '%s %s' "$bin" "$(t '(Claude-format)' '（Claude 格式）')" ;;
     codex:*) printf '%s %s' "$bin" "$(t '(Codex-format)' '（Codex 格式）')" ;;
@@ -763,6 +771,10 @@ tui_bin_selected() {
     [ "$SEL_TRAE_CN" -eq 1 ]
   elif [ "$kind" = "zcode" ]; then
     [ "$SEL_ZCODE" -eq 1 ]
+  elif [ "$kind" = "kimicode" ]; then
+    [ "$SEL_KIMICODE" -eq 1 ]
+  elif [ "$kind" = "codebuddy" ]; then
+    [ "$SEL_CODEBUDDY" -eq 1 ]
   elif [ "$kind" = "cli" ]; then
     [ "$SEL_CLI" -eq 1 ]
   else
@@ -777,6 +789,7 @@ tui_bin_detected() { # tui_bin_detected <kind> <bin>
     trae-cn) [ "$HAVE_TRAE_CN" -eq 1 ] ;;
     zcode) [ "$HAVE_ZCODE" -eq 1 ] ;;
     kimicode) [ "$HAVE_KIMICODE" -eq 1 ] ;;
+    codebuddy) [ "$HAVE_CODEBUDDY" -eq 1 ] ;;
     *) command -v "$2" >/dev/null 2>&1 ;;
   esac
 }
@@ -792,6 +805,7 @@ tui_set_all_bins() {
   SEL_TRAE_CN=1
   SEL_ZCODE=1
   SEL_KIMICODE=1
+  SEL_CODEBUDDY=1
   SEL_CLI=1
 }
 
@@ -818,6 +832,10 @@ tui_toggle_bin() {
     SEL_TRAE_CN=$((1 - SEL_TRAE_CN)); return 0
   elif [ "$kind" = "zcode" ]; then
     SEL_ZCODE=$((1 - SEL_ZCODE)); return 0
+  elif [ "$kind" = "kimicode" ]; then
+    SEL_KIMICODE=$((1 - SEL_KIMICODE)); return 0
+  elif [ "$kind" = "codebuddy" ]; then
+    SEL_CODEBUDDY=$((1 - SEL_CODEBUDDY)); return 0
   elif [ "$kind" = "cli" ]; then
     SEL_CLI=$((1 - SEL_CLI)); return 0
   else
@@ -902,6 +920,7 @@ tui_reset_bin_selection() {
   SEL_TRAE_CN=0
   SEL_ZCODE=0
   SEL_KIMICODE=0
+  SEL_CODEBUDDY=0
   SEL_CLI=$((1 - UNINSTALL))
   while IFS= read -r bin; do
     [ -n "$bin" ] || continue
@@ -929,6 +948,7 @@ EOF
   if [ "$HAVE_TRAE_CN" -eq 1 ]; then SEL_TRAE_CN=1; any=1; fi
   if [ "$HAVE_ZCODE" -eq 1 ]; then SEL_ZCODE=1; any=1; fi
   if [ "$HAVE_KIMICODE" -eq 1 ]; then SEL_KIMICODE=1; any=1; fi
+  if [ "$HAVE_CODEBUDDY" -eq 1 ]; then SEL_CODEBUDDY=1; any=1; fi
   if [ "$any" -ne 1 ]; then
     SEL_CLAUDE_BINS="$TUI_CLAUDE_BINS"
     SEL_CODEX_BINS="$TUI_CODEX_BINS"
@@ -1017,7 +1037,7 @@ tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
     || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
     || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
-    || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
+    || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CODEBUDDY" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
 }
 
 tui_finish_selection() {
@@ -1034,6 +1054,7 @@ tui_finish_selection() {
   [ "$SEL_TRAE_CN" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae-cn"
   [ "$SEL_ZCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}zcode"
   [ "$SEL_KIMICODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}kimicode"
+  [ "$SEL_CODEBUDDY" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}codebuddy"
   [ "$SEL_CLI" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cli"
   return 0
 }
@@ -1108,6 +1129,7 @@ select_harnesses() {
   [ "$HAVE_DSH" -eq 1 ] && detected="${detected:+$detected,}dsh"
   [ "$HAVE_ZCODE" -eq 1 ] && detected="${detected:+$detected,}zcode"
   [ "$HAVE_KIMICODE" -eq 1 ] && detected="${detected:+$detected,}kimicode"
+  [ "$HAVE_CODEBUDDY" -eq 1 ] && detected="${detected:+$detected,}codebuddy"
 
   if [ -n "$REQUESTED_HARNESSES" ]; then
     SELECTED_HARNESSES="$REQUESTED_HARNESSES"
@@ -1257,7 +1279,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|dsh|cli) ;;
+      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|codebuddy|dsh|cli) ;;
       trae-cli) [ "$UNINSTALL" -eq 1 ] || bad=1 ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
@@ -1299,7 +1321,7 @@ EOF
   if contains_harness cli; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode; then ok=1; fi
+  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy; then ok=1; fi
   if [ "$ok" -ne 1 ]; then
     err "$(t 'No selected compatible CLI command was found in PATH.' '未在 PATH 中找到任何已选择的兼容 CLI 命令。')"
     exit 2
@@ -1338,9 +1360,9 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
   elif [ "$TUI_MENU_CHOICE" -eq 1 ]; then
     info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
     info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
-    ask "$(t "API key ($hidden): " "API key（$hidden）: ")"
+    ask "$(t "API key ($hidden): " "API key（${hidden}）: ")"
   else
-    ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；$hidden）: ")"
+    ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；${hidden}）: ")"
   fi
   read_tty reply -s
   if [ "$reply" = "-" ]; then
@@ -2309,7 +2331,7 @@ install_codex() {
 # Cursor / TRAE lifecycle hooks
 # ---------------------------------------------------------------------------
 
-AGENT_HOOK_HOSTS="cursor trae zcode kimicode"
+AGENT_HOOK_HOSTS="cursor trae zcode kimicode codebuddy"
 
 copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destination]
   local host="$1" dest_name="$2" explicit_dest="${3:-}" source dest tmp other
@@ -2522,12 +2544,26 @@ NODE
     rm -rf "$OV_HOME/agent-integrations/kimicode"
     info "$(t 'Removed the native Kimi Code plugin.' '已移除 Kimi Code 原生插件。')"
   fi
+  if contains_harness codebuddy; then
+    # The host CLI resolves a plugin by name@marketplace, so the plugin leaves
+    # before the marketplace that served it.
+    if command -v codebuddy >/dev/null 2>&1; then
+      codebuddy plugin uninstall openviking-memory@openviking >/dev/null 2>&1 || true
+      codebuddy plugin marketplace remove openviking >/dev/null 2>&1 || true
+    fi
+    # The host CLI unregisters a plugin but keeps its cached copy, so the
+    # marketplace's cache directory goes too.
+    rm -rf "$HOME/.codebuddy/plugins/cache/openviking"
+    rm -rf "$OV_HOME/agent-integrations/codebuddy"
+    info "$(t 'Removed the CodeBuddy Code plugin and its local marketplace.' '已移除 CodeBuddy Code 插件及其本地 marketplace。')"
+  fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
     && [ ! -d "$OV_HOME/agent-integrations/zcode" ] \
-    && [ ! -d "$OV_HOME/agent-integrations/kimicode" ]; then
+    && [ ! -d "$OV_HOME/agent-integrations/kimicode" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/codebuddy" ]; then
     rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
   if contains_harness cli; then
@@ -2679,6 +2715,84 @@ install_kimicode() {
   info "$(t 'Kimi Code native plugin installed:' 'Kimi Code 原生插件已安装：') openviking-memory"
 }
 
+install_codebuddy() {
+  step_heading "$(t 'CodeBuddy Code CLI integration' 'CodeBuddy Code CLI 集成')"
+  local bundle root config marketplace version host_module
+  ensure_bundle
+  bundle="$OV_HOME/agent-integrations/codebuddy-bundle.$$"
+  rm -rf "$bundle"
+  mkdir -p "$bundle"
+  root="$(assemble_agent_integration codebuddy codebuddy "$bundle")" || { rm -rf "$bundle"; return 1; }
+  rm -rf "$root/tests"
+  rm -f "$root/README.md" "$root/README_CN.md" "$root/DESIGN.md" "$root/plugin.json"
+  # Keep this host's config directory aside before the adapters are pruned.
+  config="$bundle/codebuddy-config"
+  cp -R "$root/hosts/codebuddy" "$config" || { rm -rf "$bundle"; return 1; }
+  cp "$config/runtime-index.mjs" "$root/hosts/index.mjs" || { rm -rf "$bundle"; return 1; }
+  for host_module in "$root"/hosts/*.mjs; do
+    case "$(basename "$host_module")" in
+      index.mjs|incremental-turn-capture.mjs|codebuddy.mjs|codebuddy-turns.mjs) ;;
+      *) rm -f "$host_module" ;;
+    esac
+  done
+  # The plugin directory CodeBuddy copies into its cache has to carry the whole
+  # agent-hook layout: the adapters import `../../memory-plugin-shared/lib`,
+  # which only resolves when the shared runtime sits beside them under
+  # agent-integrations/ (the shape the Kimi Code bundle uses).
+  mkdir -p "$bundle/openviking-memory"
+  mv "$bundle/agent-integrations" "$bundle/openviking-memory/agent-integrations" || { rm -rf "$bundle"; return 1; }
+  root="$bundle/openviking-memory"
+  # Flatten the config directory into the layout CodeBuddy reads: the manifest
+  # under .codebuddy-plugin/, hooks under hooks/, MCP at the root.
+  mkdir -p "$root/.codebuddy-plugin" "$root/hooks"
+  cp "$config/plugin.json" "$root/.codebuddy-plugin/plugin.json" || { rm -rf "$bundle"; return 1; }
+  cp "$config/hooks.json" "$root/hooks/hooks.json" || { rm -rf "$bundle"; return 1; }
+  cp "$config/.mcp.json" "$root/.mcp.json" || { rm -rf "$bundle"; return 1; }
+  cp -R "$config/skills" "$root/skills" || { rm -rf "$bundle"; return 1; }
+  rm -rf "$config"
+  # A marketplace cannot reference a source outside itself, so the marketplace
+  # root is the plugin's parent directory (hosts/codebuddy/DESIGN.md §9).
+  # CodeBuddy resolves an installed plugin by the manifest version, so the
+  # marketplace entry pins the same one the plugin manifest reports.
+  marketplace="$bundle"
+  version="$("$NODE_BIN" -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version||""))' "$root/.codebuddy-plugin/plugin.json")"
+  "$NODE_BIN" - "$marketplace" "$version" <<'NODE' || { rm -rf "$bundle"; return 1; }
+const fs = require("node:fs");
+const path = require("node:path");
+const root = process.argv[2];
+const version = process.argv[3];
+fs.mkdirSync(path.join(root, ".codebuddy-plugin"), { recursive: true });
+fs.writeFileSync(path.join(root, ".codebuddy-plugin", "marketplace.json"), JSON.stringify({
+  name: "openviking",
+  description: "OpenViking plugins for the CodeBuddy Code CLI (managed by the OpenViking installer).",
+  owner: { name: "OpenViking" },
+  plugins: [{
+    name: "openviking-memory",
+    description: "Long-term semantic memory for CodeBuddy Code, powered by OpenViking.",
+    version,
+    source: "./openviking-memory",
+    category: "productivity",
+  }],
+}, null, 2) + "\n");
+NODE
+  # Swap the assembled marketplace into place, then register and install
+  # through the host CLI when it is on PATH.
+  rm -rf "$OV_HOME/agent-integrations/codebuddy"
+  mkdir -p "$OV_HOME/agent-integrations/codebuddy"
+  mv "$bundle" "$OV_HOME/agent-integrations/codebuddy/marketplace" || { rm -rf "$bundle"; return 1; }
+  marketplace="$OV_HOME/agent-integrations/codebuddy/marketplace"
+  if command -v codebuddy >/dev/null 2>&1; then
+    codebuddy plugin marketplace add "$marketplace" >/dev/null 2>&1 \
+      || warn "$(t 'Could not register the local marketplace with codebuddy.' '未能向 codebuddy 注册本地 marketplace。')"
+    if codebuddy plugin install openviking-memory@openviking -s user >/dev/null 2>&1; then
+      info "$(t 'CodeBuddy Code plugin installed:' 'CodeBuddy Code 插件已安装：') openviking-memory"
+    else
+      warn "$(t 'Marketplace registered; install the plugin with:' 'marketplace 已注册；用这条命令安装插件：') codebuddy plugin install openviking-memory@openviking"
+    fi
+  else
+    warn "$(t 'codebuddy CLI not found in PATH. Register the marketplace with' 'PATH 中未找到 codebuddy CLI。用这条命令注册 marketplace：') codebuddy plugin marketplace add $marketplace"
+  fi
+}
 install_trae_variant() { # install_trae_variant <trae|trae-cn>
   local client_id="$1" root hooks_path mcp_path
   step_heading "$(tui_bin_label "$client_id" "$client_id") $(t 'integration' '集成')"
@@ -2924,6 +3038,33 @@ EOF
       ok=0; agent_fatal=1
     fi
   fi
+  if contains_harness codebuddy; then
+    local cb_root="$OV_HOME/agent-integrations/codebuddy/marketplace/openviking-memory"
+    local cb_ai="$cb_root/agent-integrations/codebuddy"
+    if [ -f "$cb_root/.codebuddy-plugin/plugin.json" ] \
+      && [ -f "$cb_root/hooks/hooks.json" ] \
+      && [ -f "$cb_root/.mcp.json" ] \
+      && [ -f "$cb_ai/scripts/hook.mjs" ] \
+      && [ -f "$cb_ai/scripts/uri-guard.mjs" ] \
+      && [ -f "$cb_ai/servers/mcp-proxy.mjs" ] \
+      && [ -f "$cb_root/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ]; then
+      "$NODE_BIN" --check "$cb_ai/scripts/hook.mjs" || { ok=0; agent_fatal=1; }
+      if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 \
+        "$NODE_BIN" "$cb_ai/scripts/hook.mjs" session-start codebuddy >/dev/null; then
+        warn "codebuddy: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
+        ok=0; agent_fatal=1
+      fi
+      if command -v codebuddy >/dev/null 2>&1 \
+        && ! codebuddy plugin list 2>/dev/null | grep -q 'openviking-memory'; then
+        warn "codebuddy: $(t 'plugin is assembled but not installed through the host CLI' '插件已组装但未通过宿主 CLI 安装')"
+        ok=0; agent_fatal=1
+      fi
+      info "codebuddy: $(t 'plugin assembled (Hooks + MCP + skills)' '插件已组装（Hooks + MCP + skills）')"
+    else
+      warn "codebuddy: $(t 'plugin assembly is incomplete' '插件组装不完整')"
+      ok=0; agent_fatal=1
+    fi
+  fi
   if contains_harness opencode; then
     local ocfg="$HOME/.config/opencode/opencode.json"
     local ocfgc="$HOME/.config/opencode/opencode.jsonc"
@@ -3078,7 +3219,7 @@ count_steps() {
   STEP_TOTAL=3
   if contains_harness claude; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CLAUDE_BINS"))); fi
   if contains_harness codex; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CODEX_BINS"))); fi
-  for h in cursor trae trae-cn zcode kimicode opencode pi dsh cli; do
+  for h in cursor trae trae-cn zcode kimicode codebuddy opencode pi dsh cli; do
     if contains_harness "$h"; then STEP_TOTAL=$((STEP_TOTAL + 1)); fi
   done
 }
@@ -3187,7 +3328,7 @@ $CODEX_BINS
 EOF
   fi
   if [ "$SOURCE_MODE" = "archive" ] && { contains_harness cursor || contains_harness trae || contains_harness trae-cn \
-    || contains_harness zcode || contains_harness kimicode || contains_harness opencode || contains_harness pi; }; then
+    || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy || contains_harness opencode || contains_harness pi; }; then
     plan_item "$bundle ($(t 'plugin bundle download' '下载插件包'))"
   fi
   if contains_harness cursor; then
@@ -3209,6 +3350,9 @@ EOF
   fi
   if contains_harness kimicode; then
     plan_paths "Kimi Code" "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins" "$OV_HOME/agent-integrations/kimicode"
+  fi
+  if contains_harness codebuddy; then
+    plan_paths "CodeBuddy Code" "$HOME/.codebuddy/plugins" "$OV_HOME/agent-integrations/codebuddy"
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
     plan_paths OpenCode "$HOME/.config/opencode/plugins/openviking" "$HOME/.config/opencode/plugins/openviking.js" "$(opencode_config_file)"
@@ -3323,6 +3467,9 @@ EOF
   if contains_harness kimicode; then
     next_steps "Kimi Code" "$(t 'run /reload or start a new session' '运行 /reload 或新建会话')" "$rerun" "" "$uninstall kimicode"
   fi
+  if contains_harness codebuddy; then
+    next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "" "$uninstall codebuddy"
+  fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
     next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" "" \
       "$(t "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js, then remove mcp.openviking from $(short_path "$(opencode_config_file)")" "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js，再删除 $(short_path "$(opencode_config_file)") 中的 mcp.openviking")"
@@ -3407,6 +3554,7 @@ if contains_harness trae; then install_trae_variant trae; fi
 if contains_harness trae-cn; then install_trae_variant trae-cn; fi
 if contains_harness zcode; then install_zcode; fi
 if contains_harness kimicode; then install_kimicode; fi
+if contains_harness codebuddy; then install_codebuddy; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
 if contains_harness dsh; then install_dsh; fi
