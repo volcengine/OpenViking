@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import inspect
 import mimetypes
 import os
@@ -95,6 +96,16 @@ ERROR_CODE_TO_EXCEPTION = {
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 _SESSION_CONFIG_UNSET = object()
+
+
+def _skill_path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError as exc:
+        # Inline skill content can exceed filesystem filename limits.
+        if exc.errno == errno.ENAMETOOLONG:
+            return False
+        raise
 
 
 def _option_keys(options_type: Type[Any]) -> set[str]:
@@ -801,7 +812,7 @@ class AsyncHTTPClient:
         )
         if isinstance(data, str):
             path_obj = Path(data)
-            if path_obj.exists():
+            if _skill_path_exists(path_obj):
                 if path_obj.is_dir():
                     zip_path = self._zip_directory(data)
                     try:
@@ -911,7 +922,7 @@ class AsyncHTTPClient:
         )
         if isinstance(data, str):
             path_obj = Path(data)
-            if path_obj.exists():
+            if _skill_path_exists(path_obj):
                 if path_obj.is_dir():
                     zip_path = self._zip_directory(data)
                     try:
