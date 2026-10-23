@@ -54,7 +54,8 @@ openviking-server doctor
 }
 ```
 
-启动 Redis 和 OpenViking：
+启动 Redis 和 OpenViking。Valkey 7.2–9.1 也可使用相同的 `redis` Provider
+和 endpoint 格式；使用 Valkey 时，用 `valkey-server` 替代 `redis-server`：
 
 ```bash
 redis-server
@@ -76,7 +77,7 @@ openviking-server
 
 | Provider | 适用场景 | 备注 |
 |----------|----------|------|
-| `redis` | 默认交付、普通网络环境 | 内置于 RAGFS，支持 standalone、Cluster 和 Sentinel |
+| `redis` | 默认交付、普通网络环境 | 内置于 RAGFS，支持 standalone、Cluster 和 Sentinel，也兼容 Valkey 7.2–9.1 |
 | `dynamic` | YuanRong、Mooncake 或闭源缓存系统 | 通过版本化 C ABI 从外部动态库加载 |
 
 `MemoryMockProvider` 只用于单元测试和 smoke test，不是生产配置项。
@@ -86,7 +87,8 @@ openviking-server
 将 `storage.agfs.pathlock.provider` 设为 `cache`，即可通过共享 Redis
 CacheRuntime 协调多个 OpenViking 进程的路径锁。OpenViking 会从顶层
 `service_name` 生成 PathLock Redis namespace。独立部署应使用不同
-`service_name`。Cache PathLock 只支持内置 Redis Provider；分布式路径锁不会解除 CachedFileSystem 的单写者前提。
+`service_name`。Cache PathLock 只支持内置 Redis Provider；Valkey 7.2–9.1
+可通过同一 Provider 使用。分布式路径锁不会解除 CachedFileSystem 的单写者前提。
 
 Redis HASH key 按逻辑路径 scope 拆分：
 

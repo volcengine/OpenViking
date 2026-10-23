@@ -1830,6 +1830,7 @@ Notes:
   - Sessions without an explicit or deployment-default policy get the built-in policy below.
   - With `idle_backend="local"`, `SessionAutoCommitScheduler` starts a scan round immediately, then waits at least `check_interval_seconds` before the next round. Session `.meta.json` files are read serially at no more than `scan_rate_limit_files_per_second`.
   - With `idle_backend="redis"`, the server enables expiry reporting, publishing, and callback consumption together using the top-level `expiry` configuration.
+  - Valkey 7.2–9.1 is supported for this Redis-backed expiry flow with the same `expiry.redis` settings and `redis://` or `rediss://` endpoints.
 - Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, but still require the session to carry an `auto_commit_policy`.
 
 #### Distributed Expiry Configuration
@@ -2042,7 +2043,9 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 `redis_mysql` requires the `redis-mysql` extra and wraps the same MySQL
 parameters. Its `cache` block follows the top-level `cache` `provider/params`
 shape. The Python client currently supports `standalone`, `cluster`, and
-`sentinel` Redis deployments. It caches API-key bindings, users, per-user group
+`sentinel` Redis deployments. Valkey 7.2–9.1 is also supported through the same
+`cache.provider="redis"` configuration and `redis://` or `rediss://` endpoints.
+It caches API-key bindings, users, per-user group
 IDs, and deletion records for a fixed 60 seconds by default. Cache fills and account mutations
 share an account-scoped Redis lease; normal cache hits do not acquire that
 lease. Mutations commit to MySQL first, then invalidate affected cache entries.
