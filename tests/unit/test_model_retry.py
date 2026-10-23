@@ -284,6 +284,29 @@ def test_retry_sync_does_not_retry_quota_exceeded():
     assert attempts["count"] == 1
 
 
+def test_retry_sync_treats_bare_http_402_as_quota_exhausted(monkeypatch):
+    attempts = {"count": 0}
+    monkeypatch.setattr("openviking.utils.model_retry.time.sleep", lambda _delay: None)
+    sdk_error = openai.APIStatusError(
+        "payment required",
+        response=httpx.Response(402, request=httpx.Request("POST", "https://example.test")),
+        body={"error": {"code": "in_flight_budget_exhausted"}},
+    )
+
+    @model_error_boundary
+    def _call():
+        attempts["count"] += 1
+        raise sdk_error
+
+    with pytest.raises(ModelError) as raised:
+        retry_sync(_call, max_retries=5, model_errors_only=True)
+
+    assert raised.value.kind is ModelErrorKind.QUOTA_EXHAUSTED
+    assert raised.value.status_code == 402
+    assert raised.value.code == "in_flight_budget_exhausted"
+    assert attempts["count"] == 1
+
+
 @pytest.mark.asyncio
 async def test_retry_async_does_not_retry_quota_exceeded():
     """Quota-exceeded errors should NOT be retried (async)."""
