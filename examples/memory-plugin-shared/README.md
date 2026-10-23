@@ -138,24 +138,3 @@ These settings apply to automatic recall. Explicit MCP search calls retain the
 arguments supplied by the caller. Cloud compression requires a server that
 supports the context-search rewrite API; older-server fallback behavior remains
 specific to each integration.
-
-## Secret redaction rules
-
-`lib/redact.mjs` replaces credentials in captured payloads with
-`{{ov_redacted:<rule>:<tag>}}` before they are sent or queued. Its rules,
-`lib/secret-rules.mjs`, are generated from the gitleaks default configuration
-at a pinned release tag, used as gitleaks ships it, plus `OV_RULES` for
-OpenViking's own key formats; do not edit them by hand.
-
-```bash
-# Regenerate (downloads config/gitleaks.toml at the pinned tag, or pass --toml <path>)
-node examples/memory-plugin-shared/scripts/update-secret-rules.mjs
-# Verify the committed file matches the generator
-node examples/memory-plugin-shared/scripts/update-secret-rules.mjs --check
-```
-
-The generator converts each Go regex to JavaScript without changing what it
-matches; a rule it cannot convert simply, or one too slow for JavaScript's
-backtracking regex engine, is skipped and listed in the generated header.
-The only other judgement is the tier: `generic-api-key` is `strict`, every
-other rule `standard`. The generator is development-time only and never ships.

@@ -138,12 +138,6 @@
       "advanced": true,
       "help": "Maximum sanitized user text length allowed for auto-capture"
     },
-    "captureRedact": {
-      "label": "Capture Secret Redaction",
-      "placeholder": "standard",
-      "advanced": true,
-      "help": "Replace secrets in captured messages with {{ov_redacted:<rule>:<tag>}} before they are sent: standard (default), strict (adds the generic key=value rule) or off. Env: OPENVIKING_CAPTURE_REDACT"
-    },
     "autoRecall": {
       "label": "Auto-Recall",
       "help": "Inject relevant OpenViking memories into agent context"
@@ -374,14 +368,6 @@
       },
       "captureMaxLength": {
         "type": "number"
-      },
-      "captureRedact": {
-        "oneOf": [
-          { "type": "string" },
-          { "type": "boolean" }
-        ],
-        "default": "standard",
-        "description": "Secret redaction for captured session messages: off, standard (default) or strict. false means off; any other unknown value means standard (left to the plugin, so a newer tier name never fails the config). OPENVIKING_CAPTURE_REDACT outranks this."
       },
       "autoRecall": {
         "type": "boolean"

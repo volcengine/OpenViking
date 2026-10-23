@@ -1,5 +1,4 @@
 import { enqueue } from "./pending-queue.mjs";
-import { redactPayloads } from "./redact.mjs";
 import { isRetryableFailure } from "./retryable.mjs";
 
 export const BATCH_LIMIT = 100;
@@ -33,8 +32,6 @@ async function enqueueRemainder(sessionId, payloads, startIndex, result, retryab
   for (let i = startIndex; i < payloads.length; i++) {
     const queued = await enqueue("addMessage", sessionId, payloads[i], {
       createdAt: baseCreatedAt + (i - startIndex),
-      // sendSessionMessages redacted every payload under the caller's tier.
-      redacted: true,
     });
     if (!queued.ok) {
       // Stop at the first enqueue failure so queued entries stay a contiguous
@@ -77,24 +74,18 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
 /**
  * Send add-message payloads in server-sized batches with serial fallback.
  *
- * Every payload is secret-redacted (lib/redact.mjs) once, up front, under
- * `opts.redactTier`; the batch POST, the serial fallback and the pending queue
- * all carry that redacted copy, so no path out of here holds the plaintext.
- * The caller's payload objects are never mutated.
- *
  * @param {Function} fetchJSON - (path, init) => { ok, status, result?, error? }
  * @param {string} sessionId - OpenViking session id
  * @param {Array<object>} payloads - sanitized add-message request bodies
  * @param {object} opts
  * @param {boolean} opts.enqueueOnRetryable - enqueue unsent payloads after a retryable failure
  * @param {Function} opts.onSent - called with the number of messages durably sent after each success
- * @param {string} [opts.redactTier="standard"] - the caller's resolved `captureRedact`
  * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,retryable:boolean,usedBatch:boolean,lastError:any}>}
  */
 export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts = {}) {
   const result = makeResult();
-  if (!Array.isArray(payloads) || payloads.length === 0) return result;
-  const messages = redactPayloads(payloads, { tier: opts.redactTier });
+  const messages = Array.isArray(payloads) ? payloads : [];
+  if (messages.length === 0) return result;
 
   const encodedSid = encodeURIComponent(sessionId);
   for (let start = 0; start < messages.length; start += BATCH_LIMIT) {

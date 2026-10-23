@@ -109,7 +109,6 @@ memory 插件默认内置 OV-Usage。报告汇总自动召回和显式 OpenVikin
 | `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` | 已提交会话的转录游标保留时长（毫秒），过期后删除状态文件 |
 | `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，在 prompt 变成检索 query 前生效（[语法与示例](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#input-filters)） |
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，作用于每个被捕获的回合（同一套语法） |
-| `OPENVIKING_CAPTURE_REDACT` | `standard` | 回合发送或写入待重放队列前的密钥脱敏：`standard`、`strict`（另加通用 `key=value` 规则）或 `off`；只能在用户级配置（[详情](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#secret-redaction)） |
 | `OPENVIKING_DEBUG` | `false` | 是否将日志写入 `~/.openviking/logs/codex-hooks.log` |
 
 这些配置大多也可以写在 `ovcli.conf` 的 `plugin` 段下——见[插件配置](../configuration/02-client.md#插件配置)。两个过滤器建议使用 JSON 数组，避免环境变量中的逗号被当作分隔符。

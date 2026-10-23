@@ -65,9 +65,7 @@ export const kimicode = {
     const plan = buildIncrementalCapturePlan(transcript.turns, state, ctx.cfg);
     if (plan.toSend.length === 0) return null;
 
-    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId, {
-      redactTier: ctx.cfg.captureRedact,
-    });
+    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
     const next = applyIncrementalCaptureResult(state, plan, result, cleanKimicodeText);
     let capturedSinceCommit = Number(state.capturedSinceCommit || 0) + next.captured;
     if (shouldCommitKimicodeCapture(event, ctx.cfg, state.capturedSinceCommit, next.captured)) {

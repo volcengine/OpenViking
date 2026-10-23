@@ -186,7 +186,6 @@ integrations should configure category `quotas` when they need exact ceilings.
 | `captureAssistantTurns`  | `true`     | Include assistant turns (text + tool USE inputs)                         |
 | `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: `lib/capture-adapter.mjs` keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
-| `captureRedact`          | `standard` | Secret redaction before a payload is sent or queued: `standard` (gitleaks provider rules), `strict` (adds the generic `key=value` rule) or `off`. Secrets become `{{ov_redacted:<rule>:<tag>}}`. Env `OPENVIKING_CAPTURE_REDACT`; user-level only |
 | `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
 | `commitKeepRecentCount`  | `10`       | Not read: commits outside takeover archive every captured message (`keep_recent_count` 0); takeover sends the exact message count of the turns it keeps |
 

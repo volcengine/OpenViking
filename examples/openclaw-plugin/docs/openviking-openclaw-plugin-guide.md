@@ -722,7 +722,6 @@ openclaw config get plugins.slots.contextEngine
 | `autoCapture` | `true` | 是否每轮后写入 OpenViking session |
 | `captureMode` | `semantic` | `semantic` 全量候选；`keyword` 先过触发词 |
 | `captureMaxLength` | `24000` | 自动捕获文本最大长度 |
-| `captureRedact` | `standard` | 发送 session 消息前的密钥脱敏：`standard`、`strict`（另加通用 `key=value` 规则）或 `off`；环境变量 `OPENVIKING_CAPTURE_REDACT` 优先 |
 | `autoRecall` | `true` | 是否回复前自动召回 |
 | `autoRecallTimeoutMs` | `15000` | 服务端组装自动召回的总超时；为 session query expansion 和检索留出预算 |
 | `recallTargetTypes` | `["user","agent"]` | 自动召回和默认显式召回目标类型；可选 `resource`、`user`、`agent` |

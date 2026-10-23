@@ -299,7 +299,6 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 - **`keep_recent_count`** 决定提交后会话中保留多少条最近的消息。服务端默认 0，即全部归档。Claude Code、Codex、OpenCode、DSH、Cursor、TRAE、TRAE CN、ZCode 和 Hermes 发送 0；pi 在 takeover 模式下发送最近 3 个用户轮对应的确切消息数，其他情况发送 0；OpenClaw 在阈值提交时发送 10，在 reset、`memory_store` 和压缩时发送 0。
 - **服务端自动提交默认关闭**。`memory.session_auto_commit.enabled` 默认 `false`，关闭时空闲扫描器不会启动。新会话仍可以从 `server.user_config_defaults.auto_commit_policy` 获得策略，也可以通过 `POST /api/v1/sessions`、`PATCH /api/v1/sessions/{id}/config`、SDK，或 `ov session new --auto-commit-policy-json` 与 `ov session config set` 显式设置。策略的默认值是：待提交 token 150,000（严格大于）、100 条消息、86,400 秒空闲超时、`keep_recent_count` 0、无最小间隔。空闲超时还需要 `memory.session_auto_commit.enabled=true`。记忆插件不发送策略，所以没有上述设置时，只有客户端会提交。
 - **批量写入**。共享插件每次 `POST /messages/batch` 最多发送 100 条消息，与服务端上限一致；批量接口返回 404 或 405 时改为逐条发送。
-- **密钥在客户端脱敏**。消息发送或进入待重放队列之前，共享插件和 OpenClaw 会把 gitleaks 默认规则识别出的凭据替换为 <code v-pre>{{ov_redacted:&lt;rule&gt;:&lt;tag&gt;}}</code>，周围文本保持不变。`captureRedact` 可选 `standard`（默认）、`strict` 或 `off`；Hermes 和 pi-experimental-context-management 演示扩展不做脱敏。
 - **大块工具输出单独存放**。服务端把超过 20,000 字符的工具输出移到单独的记录中，留下 `tool_output_ref`。插件把自己的上限（`captureToolMaxChars`）提高到 1,000,000，只作为兜底。
 - **部分写入在后台运行**。Claude Code、Codex 和 ZCode 默认把 `Stop` 的写入交给一个分离的 worker（`OPENVIKING_WRITE_PATH_ASYNC`），宿主不用等待。worker 启动后，关闭终端不影响它，但网络错误或进程被终止仍可能打断它。开启这项设置时，`Stop` 不再输出 `appended N turn(s)` 提示。
 

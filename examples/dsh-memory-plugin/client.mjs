@@ -1,5 +1,4 @@
 import { createOvHttp } from "./shared/ov-http.mjs";
-import { redactPayload } from "./shared/redact.mjs";
 
 export class OpenVikingClient {
   constructor(config) {
@@ -34,20 +33,12 @@ export class OpenVikingClient {
     return response.ok ? response.result : null;
   }
 
-  /**
-   * POST one captured message. The payload is secret-redacted first under
-   * `options.redactTier` (default: this client's `captureRedact`), unless
-   * `options.redacted` says the caller already did it with its own tier.
-   */
-  async addMessage(sessionId, payload, actorPeerId, options = {}) {
-    const body = options.redacted === true
-      ? payload
-      : redactPayload(payload, { tier: options.redactTier ?? this.config.captureRedact });
+  async addMessage(sessionId, payload, actorPeerId) {
     return this.fetchJSON(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
       {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
       },
       { actorPeerId },
     );

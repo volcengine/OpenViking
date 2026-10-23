@@ -8,7 +8,6 @@ import {
   contextRequestTimeoutMs,
   normalizeContextEntry,
 } from "./shared/recall-core.mjs";
-import { redactPayload } from "./shared/redact.mjs";
 
 export type FindResultItem = {
   uri: string;
@@ -69,8 +68,6 @@ function userSessionUri(sessionId: string): string {
 
 export type OpenVikingClientOptions = {
   transport?: HttpTransport;
-  /** Secret-redaction tier for session messages (`captureRedact`); default "standard". */
-  captureRedact?: string;
   headers?: Record<string, string>;
   resourcePackager?: ResourcePackager;
   now?: () => number;
@@ -254,7 +251,6 @@ export class OpenVikingClient {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly resourcePackager: ResourcePackager;
-  private readonly captureRedact: string | undefined;
 
   constructor(
     private readonly baseUrl: string,
@@ -279,7 +275,6 @@ export class OpenVikingClient {
 	    this.now = options.now ?? Date.now;
 	    this.sleep = options.sleep ?? sleep;
     this.resourcePackager = options.resourcePackager ?? defaultResourcePackager;
-    this.captureRedact = options.captureRedact;
   }
 
   getDefaultAgentId(): string {
@@ -792,15 +787,11 @@ export class OpenVikingClient {
       },
       actorPeerId,
     );
-    // Secrets in the captured text (a `cat .env`, a token in a tool result)
-    // are replaced before the message leaves the machine; ids, roles and
-    // URIs are left as they are. The caller's parts are not mutated.
-    const redacted = redactPayload(body, { tier: this.captureRedact });
     await this.request<{ session_id: string }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
       {
         method: "POST",
-        body: JSON.stringify(redacted),
+        body: JSON.stringify(body),
       },
       undefined,
       actorPeerId,

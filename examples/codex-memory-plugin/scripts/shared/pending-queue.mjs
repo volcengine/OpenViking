@@ -11,12 +11,6 @@
  *
  * Each file contains: { type, sessionId, payload, createdAt, retries, dedupKey }
  *
- * An addMessage payload is secret-redacted (lib/redact.mjs) before it is
- * written, and again before it is replayed: the queue is plaintext on disk, and
- * an entry written by an older plugin, or by a caller that skipped redaction,
- * must not reach the server as it was. Redaction is idempotent, so replaying an
- * already-redacted entry sends the same bytes.
- *
  * Config (env vars):
  *   OPENVIKING_PENDING_DIR         pending queue directory
  *                                  (default: ~/.openviking/pending)
@@ -31,7 +25,6 @@ import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod, utime
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { redactPayload } from "./redact.mjs";
 import { isRetryableFailure } from "./retryable.mjs";
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -191,21 +184,8 @@ async function recoverStaleProcessing(dir) {
  * @param {object} payload - the data that failed to send
  * @param {object} options
  * @param {number} options.createdAt - optional queue timestamp override
- * @param {string} [options.redactTier] - the captureRedact tier an addMessage
- *   payload is redacted under before it is written (default "standard")
- * @param {boolean} [options.redacted] - the caller already redacted `payload`
- *   under its configured tier, so it is written as it is
  */
 export async function enqueue(type, sessionId, payload, options = {}) {
-  if (type === "addMessage" && options.redacted !== true) {
-    try {
-      payload = redactPayload(payload, { tier: options.redactTier });
-    } catch (err) {
-      // redactPayload fails closed on its own; this is the last line before
-      // plaintext would be written to disk, so refuse rather than write it.
-      return { ok: false, error: `redaction failed: ${err?.message || String(err)}` };
-    }
-  }
   const dir = getPendingDir();
   const now = Number.isFinite(options.createdAt) ? options.createdAt : Date.now();
   const dedupKey = makeDedupKey(type, sessionId, payload);
@@ -398,8 +378,6 @@ export async function cleanStale() {
  *   a background drainer can keep retrying a transient failure without
  *   burning the session-start retry budget. Exhausted and non-retryable
  *   entries are deleted exactly as in the default mode.
- * @param {string} [options.redactTier="standard"] - the captureRedact tier
- *   every replayed addMessage payload is redacted under before it is sent
  * @returns {{ replayed: number, failed: number, skipped: number, deferred: number }}
  */
 export async function replayPending(fetchJSON, log, options = {}) {
@@ -444,7 +422,7 @@ export async function replayPending(fetchJSON, log, options = {}) {
       if (entry.type === "addMessage") {
         res = await fetchJSON(`/api/v1/sessions/${encodedSid}/messages`, {
           method: "POST",
-          body: JSON.stringify(redactPayload(entry.payload, { tier: options.redactTier })),
+          body: JSON.stringify(entry.payload),
         });
       } else if (entry.type === "commitSession") {
         res = await fetchJSON(`/api/v1/sessions/${encodedSid}/commit`, {

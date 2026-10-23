@@ -101,9 +101,7 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;
     if (enqueueOnly) {
-      const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload, {
-        redactTier: cfg.captureRedact,
-      });
+      const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload);
       if (res.ok) queued++;
       else enqueueFailed++;
     } else {
@@ -113,7 +111,6 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   if (!enqueueOnly) {
     const res = await sendSessionMessages(fetchJSON, ovSessionId, payloads, {
       enqueueOnRetryable: true,
-      redactTier: cfg.captureRedact,
     });
     ok = res.sent;
     queued = res.queued;

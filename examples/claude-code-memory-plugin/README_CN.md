@@ -171,7 +171,6 @@ claude
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `20000`       | client-driven commit 的 pending-token 阈值                         |
 | `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`       | resume 时拉取 archive overview 的 token 预算                       |
 | `OPENVIKING_CAPTURE_FILTERS`           | `""`          | 逗号分隔的正则规则，作用于每个被捕获的回合 —— 见[输入过滤器](#输入过滤器) |
-| `OPENVIKING_CAPTURE_REDACT`            | `standard`    | 回合发送或写入待重放队列前的密钥脱敏：`off`、`standard`、`strict` —— 见[密钥脱敏](#密钥脱敏) |
 
 #### 会话启动注入
 
@@ -295,20 +294,6 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 - **过滤只管送出去的内容，管不到已经存下的。** 会话中途新增 `d`/`k` 规则还会让捕获游标计数的回合列表变短，这会被当成 transcript 被改写、从最后一个用户回合重放 —— 和切换 `OPENVIKING_CAPTURE_ASSISTANT_TURNS` 是同一个现象。
 - **替换会作用到工具调用，取舍判断不会。** 在写路径上，`s` 规则也会改写工具调用输入里的每个字符串值和工具结果的输出，所以脱敏规则同样能盖住出现在命令或命令输出里的密钥；`d`/`k` 规则只看回合的文本。
 - **坏规则只会被跳过，不会让 hook 挂掉。** `ov-memory-doctor` 会列出生效的规则，并对编译失败的那条给出确切的解析或 RegExp 报错。
-
-### 密钥脱敏
-
-被捕获的回合在发往 OpenViking 之前（服务器不可达时，在写入本地待重放队列之前），插件会先把其中的凭据替换掉：工具打印出来的 token、一次 `cat .env`、贴进提示词里的 key。检测规则是 [gitleaks](https://github.com/gitleaks/gitleaks) 原样发布的默认规则集，外加识别 OpenViking 自己 key 的规则，在本机运行。只替换密钥本身，所以 `API_KEY=sk-…` 存下来是 `API_KEY={{ov_redacted:<rule>:<tag>}}`；`<tag>` 是 HMAC 的前 8 位十六进制，密钥保存在 `~/.openviking/state/redact/`（或 `OPENVIKING_STATE_DIR`）下，因此同一个密钥得到同一个 tag，但离开本机无法用猜测值去核对 tag。
-
-`captureRedact` / `OPENVIKING_CAPTURE_REDACT` 选择档位：
-
-| 档位 | 脱敏范围 |
-|------|----------|
-| `standard`（默认） | gitleaks 所有针对具体服务的规则（GitHub、AWS、OpenAI、Anthropic、Slack、Stripe、私钥、JWT 等），外加 OpenViking 自己签发的 key（`ovgw_`、`ovgm_`、`ovat_`、`ovrt_`、`ovac_`）。少数在 JavaScript 正则引擎下过慢的 gitleaks 规则未启用，`lib/secret-rules.mjs` 里列出了它们 |
-| `strict` | 另加 gitleaks 的 `generic-api-key`：任何跟在 `password=`、`API_TOKEN:` 这类键名后面的高熵值。没有服务特征格式的 `.env` 值（`SECRET_KEY=…`、`DB_PASSWORD=…`）只有这一档能识别 |
-| `off` | 不脱敏（`false`、`0`、`no` 也表示关闭） |
-
-这是用户级配置：写在 `ovcli.conf` 的 `plugin` 段或环境变量里。仓库里的 `.openviking/config.json` 改不了它；不认识的档位名按 `standard` 处理。脱敏在 `captureFilters` 之后进行，覆盖消息里的每个文本字段，包括工具的输入和输出。扫描出错的字符串会整体替换成 `{{ov_redacted:scan-failed:<tag>}}`，单个字符串超过 1,000,000 个字符的部分、以及一次发送中累计扫描超过 2,000,000 个字符之后的内容，都替换成 `{{ov_redacted:scan-oversize:<tag>}}`，而不是不经扫描就发出去。
 
 ### 插件配置放在 `ovcli.conf`
 

@@ -115,7 +115,7 @@ function emitSessionStartOutput({ contexts = [], systemMessage = "" } = {}) {
  */
 async function replayPendingWrites() {
   try {
-    const result = await replayPending(fetchJSONRes, log, { redactTier: cfg.captureRedact });
+    const result = await replayPending(fetchJSONRes, log);
     if (result.replayed > 0 || result.failed > 0 || result.deferred > 0) {
       log("pending-replay", result);
     }

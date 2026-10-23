@@ -23,11 +23,6 @@
  *   harness     per-harness default, where one genuinely differs
  *   min/max     clamped, not rejected: a config file must not kill a hook
  *   values      the enum's members; anything else falls back to the default
- *   boolValues  enum only: the member a boolean-ish value (`true`/`yes`/`on`,
- *               `false`/`no`/`off`/`0`) stands for, so `false` can mean "off"
- *   unknownToDefault
- *               enum only: a value naming no member resolves to the default
- *               instead of leaving the lower layer's value standing
  *   env         OPENVIKING_* variable, the highest-priority layer
  *   aliases     older spellings, honoured forever; the doctor names them
  *   workspace   dotted key in `.openviking/config.json`
@@ -155,23 +150,6 @@ export const KNOBS = [
   // tool results, so it captures them by default.
   { name: "captureToolResults", type: "bool", default: false, harness: { dsh: true }, env: "OPENVIKING_CAPTURE_TOOL_RESULTS", capability: "capture" },
   { name: "captureFilters", type: "list", default: [], env: "OPENVIKING_CAPTURE_FILTERS", capability: "capture" },
-  // Secret redaction of every captured payload before it is sent or queued
-  // (lib/redact.mjs); the tiers are REDACT_TIERS there, in the same order.
-  // User-level only — deliberately no `workspace` key, so a repository's
-  // `.openviking/config.json` cannot switch redaction off for whoever opens it.
-  // `false` means off rather than "unparseable"; a tier this build does not
-  // know (a newer config read by an older plugin) means the default, never a
-  // weaker value left over from a lower layer.
-  {
-    name: "captureRedact",
-    type: "enum",
-    values: ["off", "standard", "strict"],
-    default: "standard",
-    boolValues: { true: "standard", false: "off" },
-    unknownToDefault: true,
-    env: "OPENVIKING_CAPTURE_REDACT",
-    capability: "capture",
-  },
   // 0 means "derive from timeoutMs": a write gets a longer budget than a read.
   { name: "captureTimeoutMs", type: "int", default: 0, min: 0, max: 600000, env: "OPENVIKING_CAPTURE_TIMEOUT_MS", capability: "capture" },
   { name: "commitTokenThreshold", type: "int", default: 20000, min: 1000, max: 1000000, env: "OPENVIKING_COMMIT_TOKEN_THRESHOLD", workspace: "capture.commit_token_threshold", capability: "capture" },
@@ -338,16 +316,8 @@ export function coerceKnobValue(knob, raw, fallback) {
       return knob.max === undefined ? floored : Math.min(knob.max, floored);
     }
     case "enum": {
-      const values = knob.values || [];
       const word = String(raw ?? "").trim();
-      if (values.includes(word)) return word;
-      if (knob.boolValues) {
-        const lower = word.toLowerCase();
-        if (values.includes(lower)) return lower;
-        if (raw === true || TRUE_WORDS.includes(lower)) return knob.boolValues.true;
-        if (raw === false || FALSE_WORDS.includes(lower)) return knob.boolValues.false;
-      }
-      return knob.unknownToDefault && word ? knobDefault(knob) : fallback;
+      return (knob.values || []).includes(word) ? word : fallback;
     }
     // A peer template may be one string or an ordered list of fallbacks, and
     // `String([a, b])` would quietly turn the list into one bogus template.

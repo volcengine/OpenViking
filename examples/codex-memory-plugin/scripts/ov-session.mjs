@@ -181,7 +181,6 @@ export async function catchUpTurns({
   });
 
   const r = await sendSessionMessages(fetchJSONRes, ovSessionId, payloads, {
-    redactTier: cfg?.captureRedact,
     // The transcript and persisted cursor own retries, including SessionStart
     // catch-up. Queueing the same tail would create a second retry owner.
     onSent: async (n) => {

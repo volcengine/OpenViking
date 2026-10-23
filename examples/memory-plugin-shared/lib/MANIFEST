@@ -15,9 +15,7 @@ plugin-config.mjs
 profile-inject.mjs
 recall-compress-core.mjs
 recall-core.mjs
-redact.mjs
 retryable.mjs
-secret-rules.mjs
 session-model.mjs
 uri-guard.mjs
 workspace-config.mjs

@@ -161,13 +161,6 @@ this out of experimental status has to add them:
   in `examples/memory-plugin-shared/sync.mjs`. Until then the copies here are
   frozen at the commit that added them and will drift as the shared modules
   change.
-- **Captured text is not redacted.** The shared plugins replace secrets with
-  `{{ov_redacted:<rule>:<tag>}}` before sending (`captureRedact`, in
-  `lib/redact.mjs` of the shared runtime); this extension's frozen copy
-  predates that, so `remember`, the handoff note and transcript sync send text
-  as it is, and `captureRedact` has no effect here. Promoting it means
-  vendoring `redact.mjs` and `secret-rules.mjs` with the sync above and passing
-  the tier to `sendSessionMessages` and the `client.ts` POST helpers.
 
 The root `.gitignore` ignores every `lib/` directory, so this extension carries
 its own `.gitignore` with `!lib/` instead of adding another exception there.

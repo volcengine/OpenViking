@@ -52,8 +52,6 @@ export interface OVConfig {
   captureMaxLength: number;
   captureToolMaxChars: number;
   captureAssistantTurns: boolean;
-  /** Secret-redaction tier for every captured payload (shared `captureRedact` knob). */
-  captureRedact?: "off" | "standard" | "strict";
   /** Kept as this extension's original spelling; projected onto the shared one. */
   bypassPatterns: string[];
   bypassSession: boolean;

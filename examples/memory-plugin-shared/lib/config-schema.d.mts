@@ -6,8 +6,6 @@ export interface Knob {
   min?: number;
   max?: number;
   values?: string[];
-  boolValues?: { true: string; false: string };
-  unknownToDefault?: boolean;
   env?: string;
   aliases?: string[];
   workspace?: string;

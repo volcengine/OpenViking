@@ -118,7 +118,7 @@ runHookStage({
   // disable injection but still expect failed writes from prior short-lived
   // coding sessions to be recovered when OpenViking is healthy again.
   try {
-    const replayResult = await replayPending(fetchJSON, log, { redactTier: cfg.captureRedact });
+    const replayResult = await replayPending(fetchJSON, log);
     if (replayResult.replayed > 0 || replayResult.failed > 0 || replayResult.deferred > 0) {
       log("pending-replay", replayResult);
     }

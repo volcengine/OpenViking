@@ -7,7 +7,6 @@ import {
   listPending,
   replayPending,
 } from "./shared/pending-queue.mjs";
-import { redactPayload } from "./shared/redact.mjs";
 import { isRetryableFailure } from "./shared/retryable.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 import {
@@ -151,13 +150,9 @@ export class OpenVikingRuntime {
   capture(session, event) {
     const state = this.stateFor(session);
     if (!isCaptureEnabled(state.config)) return;
-    const captured = captureEvent(event, state.config, state.toolNames);
-    if (!captured) return;
+    const payload = captureEvent(event, state.config, state.toolNames);
+    if (!payload) return;
     this.enqueueWrite(state, async () => {
-      // Redacted once, inside the write chain so a slow scan never blocks the
-      // host's event: the direct POST and the pending queue both carry this
-      // copy, never the plaintext.
-      const payload = redactPayload(captured, { tier: state.config.captureRedact });
       if (state.hasPendingWrites) {
         await this.enqueuePendingMessage(state, payload);
         return;
@@ -176,7 +171,6 @@ export class OpenVikingRuntime {
         state.ovSessionId,
         payload,
         state.config.peerId,
-        { redacted: true },
       );
       if (isRetryableFailure(response)) {
         await this.enqueuePendingMessage(state, payload);
@@ -271,10 +265,7 @@ export class OpenVikingRuntime {
   async enqueuePending(state, type, payload) {
     const createdAt = Math.max(Date.now(), state.pendingCreatedAt + 1);
     state.pendingCreatedAt = createdAt;
-    const result = await enqueue(type, state.ovSessionId, payload, {
-      createdAt,
-      redactTier: state.config.captureRedact,
-    });
+    const result = await enqueue(type, state.ovSessionId, payload, { createdAt });
     if (result.ok) {
       // Log the latch transition only: every message that follows while the
       // latch holds takes the cheap enqueue path, so this fires once per
@@ -343,7 +334,7 @@ export class OpenVikingRuntime {
     await replayPending(
       (path, init) => this.client.fetchJSON(path, init),
       (stage, data) => this.log(stage, data),
-      { redactTier: this.config.captureRedact, ...options },
+      options,
     );
   }
 

@@ -136,9 +136,7 @@ async function captureTranscript(ctx, state) {
     ...turn,
     ...(ctx.peerId ? { peer_id: ctx.peerId } : {}),
   }));
-  const result = await sendSessionMessages(ctx.fetchJSON, ctx.sessionId, payloads, {
-    redactTier: ctx.cfg.captureRedact,
-  });
+  const result = await sendSessionMessages(ctx.fetchJSON, ctx.sessionId, payloads);
   const captured = result.sent;
   const acknowledged = toSend.slice(0, captured);
   for (const item of acknowledged) {

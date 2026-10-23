@@ -69,8 +69,7 @@ async function sessionStart(ctx) {
     const now = Date.now();
     if (now - Number(state.lastSessionStartAt || 0) < 2000) return "";
     await writeHookState(clientId, ctx.nativeSessionId, { ...state, lastSessionStartAt: now });
-    await replayAgentPending(ctx.fetchJSON, log, { redactTier: ctx.cfg.captureRedact })
-      .catch((error) => logError("pending", error));
+    await replayAgentPending(ctx.fetchJSON, log).catch((error) => logError("pending", error));
     if ((host.profileStage || "session-start") !== "session-start") return "";
     const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
       logError("profile", error);

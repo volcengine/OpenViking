@@ -11,7 +11,6 @@ import { enqueue, replayPending } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./recall-core.mjs";
 import { buildPluginConfig } from "./plugin-config.mjs";
-import { redactPayload } from "./redact.mjs";
 import { isRetryableFailure } from "./retryable.mjs";
 import { deriveHarnessSessionId, isBypassed } from "./session-model.mjs";
 import { resolveEffectivePeerId } from "./workspace-peer.mjs";
@@ -183,14 +182,10 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd(), {
   return { fetchJSON, get effectivePeer() { return workspacePeer(); } };
 }
 
-/**
- * Park a write for the next hook to replay. Never throws: the caller is a hook.
- * An addMessage payload is redacted under `options.redactTier` on its way to
- * disk unless `options.redacted` says the caller already did it.
- */
-export async function enqueueAgentPending(type, sessionId, payload = {}, options = {}) {
+/** Park a write for the next hook to replay. Never throws: the caller is a hook. */
+export async function enqueueAgentPending(type, sessionId, payload = {}) {
   try {
-    return await enqueue(type, sessionId, payload, options);
+    return await enqueue(type, sessionId, payload);
   } catch {
     return { ok: false };
   }
@@ -201,7 +196,7 @@ export async function enqueueAgentPending(type, sessionId, payload = {}, options
  * stderr when no retry can help. `pendingQueued` / `pendingEnqueueFailed` are
  * what the capture hooks log and what decides whether a turn is lost.
  */
-async function notePendingWrite(type, sessionId, payload, result, enqueueOptions = {}) {
+async function notePendingWrite(type, sessionId, payload, result) {
   if (result.ok) return result;
   if (!isRetryableFailure(result)) {
     const detail = result.error?.message || result.error?.code || "";
@@ -211,38 +206,30 @@ async function notePendingWrite(type, sessionId, payload, result, enqueueOptions
     );
     return result;
   }
-  const pending = await enqueueAgentPending(type, sessionId, payload, enqueueOptions);
+  const pending = await enqueueAgentPending(type, sessionId, payload);
   if (pending.ok) result.pendingQueued = true;
   else result.pendingEnqueueFailed = true;
   return result;
 }
 
-/**
- * Add one message. The payload is secret-redacted under `redactTier` (the
- * caller's resolved `captureRedact`, default "standard") before the POST, and
- * the same redacted copy is what a retryable failure parks in the queue.
- */
-export async function addAgentMessage(fetchJSON, sessionId, payload, { redactTier } = {}) {
-  const body = redactPayload(payload, { tier: redactTier });
+export async function addAgentMessage(fetchJSON, sessionId, payload) {
   const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
-  return notePendingWrite("addMessage", sessionId, body, result, { redacted: true });
+  return notePendingWrite("addMessage", sessionId, payload, result);
 }
 
 /**
  * Session routes attribute a message by its body `peer_id` alone: the
  * actor-peer header scopes reads, not session writes. A payload that already
  * names its peer keeps it; an empty `peerId` (peer mode off) stamps nothing.
- * `redactTier` is the caller's resolved `captureRedact`; sendSessionMessages
- * redacts under it before anything is sent or queued.
  */
-export async function addAgentMessages(fetchJSON, sessionId, payloads, peerId = "", { redactTier } = {}) {
+export async function addAgentMessages(fetchJSON, sessionId, payloads, peerId = "") {
   const stamped = peerId
     ? payloads.map((payload) => (payload.peer_id ? payload : { ...payload, peer_id: peerId }))
     : payloads;
-  return sendSessionMessages(fetchJSON, sessionId, stamped, { enqueueOnRetryable: true, redactTier });
+  return sendSessionMessages(fetchJSON, sessionId, stamped, { enqueueOnRetryable: true });
 }
 
 export async function commitAgentSession(fetchJSON, sessionId, log = () => {}, payload = {}) {
@@ -278,9 +265,8 @@ export async function getAgentSessionContext(fetchJSON, sessionId, tokenBudget =
   return result.ok ? result.result : null;
 }
 
-/** Replay the pending queue; `options.redactTier` is the caller's `captureRedact`. */
-export async function replayAgentPending(fetchJSON, log = () => {}, options = {}) {
-  return replayPending(fetchJSON, log, options);
+export async function replayAgentPending(fetchJSON, log = () => {}) {
+  return replayPending(fetchJSON, log);
 }
 
 export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
