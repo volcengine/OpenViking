@@ -38,9 +38,9 @@ export function useSessionList() {
 /**
  * Session list ordered by recency (newest first).
  *
- * The list API requests recent sessions before applying its storage limit.
- * We keep a client-side sort for deterministic display and put sessions
- * without a timestamp at the bottom.
+ * The list API returns all sessions in storage-backed recency order. We keep
+ * a client-side sort for deterministic display and put sessions without a
+ * timestamp at the bottom.
  */
 export function useSessionListByRecency() {
   const { data: sessions, isLoading } = useSessionList()

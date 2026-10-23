@@ -49,6 +49,8 @@ from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 logger = get_logger(__name__)
 
+_SESSION_LIST_PAGE_SIZE = 1000
+
 
 def _parse_utc_timestamp(value: str) -> datetime:
     parsed = parse_iso_datetime(value)
@@ -368,24 +370,32 @@ class SessionService:
         sessions_by_id: Dict[str, Dict[str, Any]] = {}
 
         try:
-            entries = await self._viking_fs.ls(
-                session_base_uri,
-                sort_by="mtime",
-                sort_order="desc",
-                ctx=ctx,
-            )
-            for entry in entries:
-                name = entry.get("name", "")
-                if name in [".", ".."]:
-                    continue
-                sessions_by_id[name] = {
-                    "session_id": name,
-                    "uri": f"{session_base_uri}/{name}",
-                    "is_dir": entry.get("isDir", False),
-                    "mod_time": entry.get("modTime", ""),
-                }
+            offset = 0
+            while True:
+                entries = await self._viking_fs.ls(
+                    session_base_uri,
+                    node_limit=_SESSION_LIST_PAGE_SIZE,
+                    sort_by="mtime",
+                    sort_order="desc",
+                    ctx=ctx,
+                    offset=offset,
+                )
+                for entry in entries:
+                    name = entry.get("name", "")
+                    if name in [".", ".."]:
+                        continue
+                    sessions_by_id[name] = {
+                        "session_id": name,
+                        "uri": f"{session_base_uri}/{name}",
+                        "is_dir": entry.get("isDir", False),
+                        "mod_time": entry.get("modTime", ""),
+                    }
+                if len(entries) < _SESSION_LIST_PAGE_SIZE:
+                    break
+                offset += len(entries)
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
+            return []
 
         return list(sessions_by_id.values())
 
