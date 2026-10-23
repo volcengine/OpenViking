@@ -284,6 +284,58 @@ result = client.find(query="hello", limit=5)
 print(result)
 ```
 
+### MCP Servers and Live Context
+
+```python
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
+
+client.add_mcp(
+    name="weather",
+    url="https://mcp.example.com/api",
+    headers={"Authorization": "Bearer token"},
+)
+# Tool summaries and indexing continue in the background by default.
+# Pass wait=True when they must finish before this call returns.
+tools = client.find_mcp_tools("current weather", limit=5)
+mounted = client.mount_mcp_tool(
+    tool_uri="viking://agent/tools/weather/current.json",
+    node_uri="viking://resources/arranger/beijing-weather.md",
+    title="Beijing Weather",
+    description="Current weather for the Beijing region.",
+    timeout_seconds=60,
+    arguments={"city": "Beijing"},
+    tags=["project=weather", "kind=live-context"],
+    wait=True,
+)
+batch_result = client.batch_mount_mcp_tools(
+    [
+        {
+            "tool_uri": "viking://agent/tools/weather/current.json",
+            "node_uri": "viking://resources/arranger/shanghai-weather.md",
+            "title": "Shanghai Weather",
+            "arguments": {"city": "Shanghai"},
+        }
+    ],
+    wait=True,
+)
+client.batch_unmount_mcp_tools(
+    ["viking://resources/arranger/shanghai-weather.md"],
+    wait=True,
+)
+sync_result = client.sync_mcp("weather")
+print(sync_result["changes"])
+print(sync_result["affected_mounts"])
+```
+
+The async client exposes the same methods. MCP operations include `add_mcp`,
+`remove_mcp`, `list_mcps`, `get_mcp`, `validate_mcp`, `sync_mcp`,
+`get_mcp_status`, `find_mcp_tools`, `invoke_mcp_tool`, `mount_mcp_tool`,
+`batch_mount_mcp_tools`, `unmount_mcp_tool`, `batch_unmount_mcp_tools`, and
+`list_mcp_mounts`.
+
 ### Core Parameters and Options
 
 Frequently used fields are explicit parameters. For readability, prefer named

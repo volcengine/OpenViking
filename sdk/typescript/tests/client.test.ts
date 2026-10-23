@@ -935,6 +935,216 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("maps all MCP operations to the server contract", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () =>
+      ok({
+        name: "demo",
+        synced: true,
+        protocol_version: "2025-03-26",
+        tool_count: 1,
+        changes: {
+          added: [],
+          changed: [],
+          unchanged: ["current"],
+          removed: [],
+        },
+        affected_mounts: [],
+      }),
+    );
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.addMCP("demo", "https://mcp.example.com/api", {
+      Authorization: "Bearer secret",
+    });
+    await client.removeMCP("demo");
+    await client.listMCPs();
+    await client.findMCPTools("weather forecast", 5);
+    await client.validateMCP("demo", "https://mcp.example.com/api");
+    await client.getMCP("demo");
+    const synced = await client.syncMCP("demo");
+    await client.getMCPStatus("demo");
+    await client.invokeMCPTool("agent/tools/demo/current.json", {
+      city: "Beijing",
+    });
+    await client.mountMCPTool(
+      "agent/tools/demo/current.json",
+      "resources/demo/weather.md",
+      "Beijing Weather",
+      {
+        description: "Current weather in Beijing",
+        timeoutSeconds: 120,
+        arguments: { city: "Beijing" },
+        tags: ["project=demo", "kind=live-context"],
+        wait: true,
+      },
+    );
+    await client.batchMountMCPTools(
+      [
+        {
+          toolUri: "agent/tools/demo/current.json",
+          nodeUri: "resources/demo/batch.md",
+          title: "Batch Weather",
+          tags: ["project=demo"],
+        },
+      ],
+      { wait: true },
+    );
+    await client.unmountMCPTool("resources/demo/weather.md", { wait: true });
+    await client.batchUnmountMCPTools(["resources/demo/batch.md"], {
+      wait: true,
+    });
+    await client.listMCPMounts("demo", "current");
+
+    expect(synced.changes.unchanged).toEqual(["current"]);
+    expect(
+      fetcher.mock.calls.map(([url, init]) => [
+        init?.method,
+        new URL(String(url)).pathname,
+      ]),
+    ).toEqual([
+      ["POST", "/api/v1/mcps"],
+      ["DELETE", "/api/v1/mcps/demo"],
+      ["GET", "/api/v1/mcps"],
+      ["POST", "/api/v1/mcps/find"],
+      ["POST", "/api/v1/mcps/validate"],
+      ["GET", "/api/v1/mcps/demo"],
+      ["POST", "/api/v1/mcps/demo/sync"],
+      ["GET", "/api/v1/mcps/status"],
+      ["POST", "/api/v1/mcps/invoke"],
+      ["POST", "/api/v1/mcps/mount"],
+      ["POST", "/api/v1/mcps/batch-mount"],
+      ["DELETE", "/api/v1/mcps/mount"],
+      ["POST", "/api/v1/mcps/batch-unmount"],
+      ["GET", "/api/v1/mcps/mounts"],
+    ]);
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      name: "demo",
+      url: "https://mcp.example.com/api",
+      headers: { Authorization: "Bearer secret" },
+      wait: false,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toEqual({
+      query: "weather forecast",
+      limit: 5,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[4]![1]?.body))).toEqual({
+      name: "demo",
+      url: "https://mcp.example.com/api",
+      headers: {},
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[6]![1]?.body))).toEqual({
+      wait: false,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[8]![1]?.body))).toEqual({
+      uri: "viking://agent/tools/demo/current.json",
+      arguments: { city: "Beijing" },
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[9]![1]?.body))).toEqual({
+      tool_uri: "viking://agent/tools/demo/current.json",
+      node_uri: "viking://resources/demo/weather.md",
+      title: "Beijing Weather",
+      description: "Current weather in Beijing",
+      timeout_seconds: 120,
+      arguments: { city: "Beijing" },
+      tags: ["project=demo", "kind=live-context"],
+      wait: true,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[10]![1]?.body))).toEqual({
+      mounts: [
+        {
+          tool_uri: "viking://agent/tools/demo/current.json",
+          node_uri: "viking://resources/demo/batch.md",
+          title: "Batch Weather",
+          timeout_seconds: 60,
+          arguments: {},
+          tags: ["project=demo"],
+        },
+      ],
+      wait: true,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[12]![1]?.body))).toEqual({
+      node_uris: ["viking://resources/demo/batch.md"],
+      wait: true,
+    });
+    expect(
+      new URL(String(fetcher.mock.calls[7]![0])).searchParams.get("name"),
+    ).toBe("demo");
+    expect(
+      new URL(String(fetcher.mock.calls[11]![0])).searchParams.get("node_uri"),
+    ).toBe("viking://resources/demo/weather.md");
+    expect(
+      new URL(String(fetcher.mock.calls[11]![0])).searchParams.get("wait"),
+    ).toBe("true");
+    expect(
+      new URL(String(fetcher.mock.calls[13]![0])).searchParams.get("tool"),
+    ).toBe("current");
+  });
+
+  it("uses MCP invocation and mount defaults", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.invokeMCPTool("viking://agent/tools/demo/current.json");
+    await client.mountMCPTool(
+      "viking://agent/tools/demo/current.json",
+      "viking://resources/demo/weather.md",
+      "Weather",
+    );
+    await client.batchMountMCPTools([
+      {
+        toolUri: "viking://agent/tools/demo/current.json",
+        nodeUri: "viking://resources/demo/batch.md",
+        title: "Batch Weather",
+      },
+    ]);
+    await client.unmountMCPTool("viking://resources/demo/weather.md");
+    await client.batchUnmountMCPTools(["viking://resources/demo/batch.md"]);
+    await client.listMCPMounts("demo");
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      uri: "viking://agent/tools/demo/current.json",
+      arguments: {},
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      tool_uri: "viking://agent/tools/demo/current.json",
+      node_uri: "viking://resources/demo/weather.md",
+      title: "Weather",
+      timeout_seconds: 60,
+      arguments: {},
+      wait: false,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toEqual({
+      mounts: [
+        {
+          tool_uri: "viking://agent/tools/demo/current.json",
+          node_uri: "viking://resources/demo/batch.md",
+          title: "Batch Weather",
+          timeout_seconds: 60,
+          arguments: {},
+        },
+      ],
+      wait: false,
+    });
+    expect(
+      new URL(String(fetcher.mock.calls[3]![0])).searchParams.get("wait"),
+    ).toBe("false");
+    expect(JSON.parse(String(fetcher.mock.calls[4]![1]?.body))).toEqual({
+      node_uris: ["viking://resources/demo/batch.md"],
+      wait: false,
+    });
+    expect(
+      new URL(String(fetcher.mock.calls[5]![0])).searchParams.has("tool"),
+    ).toBe(false);
+  });
+
   it("uses public Compile and task routes with SDK-compatible options", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

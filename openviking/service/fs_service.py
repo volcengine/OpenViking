@@ -11,7 +11,7 @@ from collections.abc import Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -1460,6 +1460,15 @@ class FSService:
         """Validate write access without mutating the target."""
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+
+    async def can_read_many(
+        self,
+        uris: Sequence[str],
+        ctx: RequestContext,
+    ) -> Dict[str, bool]:
+        """Return caller-specific read visibility for each URI."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
 
     async def _read_content(self, uri: str, ctx: RequestContext) -> tuple[str, str]:
         """Resolve the URI and read stored content without Privacy restoration."""

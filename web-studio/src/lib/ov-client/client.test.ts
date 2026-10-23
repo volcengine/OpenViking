@@ -76,6 +76,17 @@ it('uses the documented hosted Bearer credential and returns to source headers a
 })
 
 describe('createOvClient API key selection', () => {
+  it('keeps direct Axios requests on the configured OpenViking server', async () => {
+    const { client, requests } = createRecordingClient()
+
+    await client.instance.get('/api/v1/mcps')
+    expect(requests[0].baseURL).toBe('http://openviking.test')
+
+    client.setOptions({ baseUrl: 'http://openviking-next.test' })
+    await client.instance.get('/api/v1/mcps')
+    expect(requests[1].baseURL).toBe('http://openviking-next.test')
+  })
+
   it('uses the data API key for dashboard metrics when both keys are configured', async () => {
     const { client, requests } = createRecordingClient()
     client.setConnection({

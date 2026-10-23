@@ -13,6 +13,7 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_OTHER,
 )
 from openviking.parse.parsers.media.utils import get_media_type
+from openviking.prompts import render_prompt
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
@@ -115,6 +116,99 @@ async def test_missing_skeleton_without_vlm_returns_empty_summary():
     result, config = await _generate(extraction, vlm_available=False)
     assert result["summary"] == ""
     config.vlm.get_completion_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_context_uses_dedicated_summary_prompt():
+    content = """---
+type: OpenViking Live Context
+title: Sum e and pi
+description: Calculate the sum of e and pi.
+x-openviking:
+  schema_version: v1
+  type: mcp
+  definition: viking://agent/tools/demo/get-sum.json
+  args:
+    a: 3.14
+    b: 2.718
+---
+"""
+    config = _config()
+    fs = MagicMock()
+    fs.read_file = AsyncMock(return_value=content)
+
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+            return_value=config,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=fs,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.render_prompt",
+            return_value="live context prompt",
+        ) as render,
+    ):
+        result = await SemanticProcessor(
+            vlm_resolver=_TestVLMResolver(config.vlm)
+        )._generate_text_summary(
+            "viking://resources/sum.md",
+            "sum.md",
+            asyncio.Semaphore(1),
+        )
+
+    assert result["summary"] == "LLM summary"
+    prompt_id, variables = render.call_args.args
+    assert prompt_id == "semantic.live_context_summary"
+    assert variables["title"] == "Sum e and pi"
+    assert variables["description"] == "Calculate the sum of e and pi."
+    assert variables["tool_uri"] == "viking://agent/tools/demo/get-sum.json"
+    assert variables["arguments"] == '{"a": 3.14, "b": 2.718}'
+
+
+def test_live_context_summary_prompt_preserves_agent_invocation_details():
+    prompt = render_prompt(
+        "semantic.live_context_summary",
+        {
+            "file_name": "sum.md",
+            "title": "Calculate e plus pi",
+            "description": "Adds two mounted constants.",
+            "tool_uri": "viking://agent/tools/demo/get-sum.json",
+            "arguments": '{"a": 3.14, "b": 2.718}',
+            "output_language": "en",
+        },
+    )
+
+    assert "viking://agent/tools/demo/get-sum.json" in prompt
+    assert '{"a": 3.14, "b": 2.718}' in prompt
+    assert "Calculate e plus pi" in prompt
+    assert "Adds two mounted constants." in prompt
+    assert "inputSchema" in prompt
+    assert "returns the latest result" in prompt
+    assert "must not invoke the MCP Tool again with the same arguments" in prompt
+    assert "only when the request requires different valid arguments" in prompt
+
+
+def test_directory_overview_prompt_preserves_live_context_invocation_guidance():
+    prompt = render_prompt(
+        "semantic.overview_generation",
+        {
+            "dir_name": "arrange",
+            "file_summaries": "- sum.md: live context summary",
+            "children_abstracts": "",
+            "output_language": "en",
+            "directory_coverage": "1 direct entry; all represented.",
+        },
+    )
+
+    assert "exact MCP Tool URI" in prompt
+    assert "mounted arguments" in prompt
+    assert "inputSchema" in prompt
+    assert "returns the latest result" in prompt
+    assert "must not invoke the Tool again with the same arguments" in prompt
+    assert "only when different valid arguments are required" in prompt
 
 
 def test_cuda_extensions_are_dispatched_as_code():

@@ -76,6 +76,50 @@ export interface WaitOptions {
   wait?: boolean;
   telemetry?: unknown;
 }
+/** Options for mounting an MCP tool as a live context node. */
+export interface MountMCPToolOptions {
+  description?: string;
+  timeoutSeconds?: number;
+  arguments?: JsonObject;
+  tags?: string[];
+  wait?: boolean;
+}
+/** One MCP-backed live context node in a batch mount request. */
+export interface MCPToolMount {
+  toolUri: string;
+  nodeUri: string;
+  title: string;
+  description?: string;
+  timeoutSeconds?: number;
+  arguments?: JsonObject;
+  tags?: string[];
+}
+/** One live context mount affected by an MCP catalog sync. */
+export interface MCPAffectedMount {
+  node_uri: string;
+  tool_uri: string;
+  tool: string;
+  status: "REVIEW" | "INVALID" | "REMOVED";
+  mounted_input_revision: string;
+  current_input_revision: string | null;
+  reason: string;
+}
+/** MCP tool-name changes reported by a catalog sync. */
+export interface MCPToolChanges {
+  added: string[];
+  changed: string[];
+  unchanged: string[];
+  removed: string[];
+}
+/** Result returned by syncMCP. */
+export interface MCPSyncResult {
+  name: string;
+  synced: boolean;
+  protocol_version: string;
+  tool_count: number;
+  changes: MCPToolChanges;
+  affected_mounts: MCPAffectedMount[];
+}
 /** Writable direct grants and inheritance mode. */
 export interface AclSpec {
   acl_mode?: "inherit" | "restricted";

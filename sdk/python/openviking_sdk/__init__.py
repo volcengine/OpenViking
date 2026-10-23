@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from .actor_peer import get_actor_peer_id, use_actor_peer
+from .arranger import AsyncContextArranger, ContextArranger
 from .client import AsyncHTTPClient, SyncHTTPClient
 from .errors import (
     AbortedError,
@@ -24,6 +25,7 @@ from .options import (
     ExperienceTrajectoryOptions,
     FindOptions,
     ListPage,
+    MCPToolMount,
     Message,
     PreflightAssetOptions,
     ReindexOptions,
@@ -43,6 +45,7 @@ __all__ = [
     "AddMessageOptions",
     "AddResourceOptions",
     "AddSkillOptions",
+    "AsyncContextArranger",
     "AsyncHTTPClient",
     "BatchAddMessagesOptions",
     "BatchWriteOptions",
@@ -50,6 +53,7 @@ __all__ = [
     "CompileOptions",
     "ConflictError",
     "ContextPart",
+    "ContextArranger",
     "CreateSessionOptions",
     "ExperienceOutcomeOptions",
     "ExperienceTrajectoryOptions",
@@ -57,6 +61,7 @@ __all__ = [
     "get_actor_peer_id",
     "ImagePart",
     "ListPage",
+    "MCPToolMount",
     "Message",
     "MessagePart",
     "OpenVikingError",

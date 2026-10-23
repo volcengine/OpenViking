@@ -14,7 +14,7 @@ const SEARCH_MAX_ABSTRACT_LINES: usize = 2;
 const SEARCH_MAX_URI_LINES: usize = 2;
 const SEARCH_INDENT: &str = "   ";
 const SEARCH_RESULT_COLLECTION_KEYS: &[&str] =
-    &["memories", "resources", "skills", "results", "items"];
+    &["memories", "resources", "skills", "tools", "results", "items"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchRenderMode {
@@ -22,6 +22,7 @@ enum SearchRenderMode {
     Search,
     SkillsList,
     SkillsFind,
+    McpFind,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -59,23 +60,31 @@ impl SearchRenderContext {
         }
     }
 
+    fn mcp_find(node_limit: i32) -> Self {
+        Self {
+            mode: SearchRenderMode::McpFind,
+            node_limit,
+        }
+    }
+
     fn hides_level_and_score(self) -> bool {
         matches!(
             self.mode,
-            SearchRenderMode::SkillsList | SearchRenderMode::SkillsFind
+            SearchRenderMode::SkillsList | SearchRenderMode::SkillsFind | SearchRenderMode::McpFind
         )
     }
 
     fn splits_name_and_description(self) -> bool {
         matches!(
             self.mode,
-            SearchRenderMode::SkillsList | SearchRenderMode::SkillsFind
+            SearchRenderMode::SkillsList | SearchRenderMode::SkillsFind | SearchRenderMode::McpFind
         )
     }
 
     fn item_noun(self) -> (&'static str, &'static str) {
         match self.mode {
             SearchRenderMode::SkillsList | SearchRenderMode::SkillsFind => ("skill", "skills"),
+            SearchRenderMode::McpFind => ("tool", "tools"),
             _ => ("result", "results"),
         }
     }
@@ -107,6 +116,22 @@ pub(super) fn output_skills_find_results(
     node_limit: i32,
 ) {
     let context = SearchRenderContext::skills_find(node_limit);
+    if let Some(rendered) =
+        render_search_output_for_table_with_context(result, output_format, Some(context))
+    {
+        println!("{rendered}");
+    } else {
+        output_success(result, output_format, compact);
+    }
+}
+
+pub(super) fn output_mcp_find_results(
+    result: &Value,
+    output_format: OutputFormat,
+    compact: bool,
+    node_limit: i32,
+) {
+    let context = SearchRenderContext::mcp_find(node_limit);
     if let Some(rendered) =
         render_search_output_for_table_with_context(result, output_format, Some(context))
     {
@@ -364,6 +389,9 @@ fn render_search_results_for_table_with_context(
             hide_level_and_score,
             split_name_description,
             context.is_some_and(|context| context.mode == SearchRenderMode::SkillsFind),
+            context
+                .is_some_and(|context| context.mode == SearchRenderMode::McpFind)
+                .then_some("tool"),
             &mut lines,
         );
     }
@@ -415,6 +443,11 @@ fn search_ranking_line(context: Option<SearchRenderContext>, pass_count: Option<
             "limit {} final {}",
             context.node_limit,
             pluralize(context.node_limit as u64, "skill", "skills")
+        ),
+        SearchRenderMode::McpFind => format!(
+            "limit {} final {}",
+            context.node_limit,
+            pluralize(context.node_limit as u64, "tool", "tools")
         ),
         SearchRenderMode::Search if pass_count.is_some_and(|count| count > 1) => {
             format!("limit {} per pass", context.node_limit)
@@ -495,11 +528,12 @@ fn render_search_result_card(
     hide_level_and_score: bool,
     split_name_and_description: bool,
     prefer_root_uri: bool,
+    kind_override: Option<&str>,
     lines: &mut Vec<String>,
 ) {
     let object = item.as_object();
     let mut metadata = vec![
-        theme::heading(search_result_kind(object))
+        theme::heading(kind_override.unwrap_or_else(|| search_result_kind(object)))
             .bold()
             .to_string(),
     ];
@@ -1459,6 +1493,33 @@ mod tests {
         let result = json!({"matches": []});
 
         assert!(render_grep_output_for_table(&result, OutputFormat::Json).is_none());
+    }
+
+    #[test]
+    fn mcp_find_renders_like_other_ranked_results() {
+        let result = json!({
+            "tools": [{
+                "uri": "viking://agent/tools/demo/echo.json",
+                "server": "demo",
+                "name": "echo",
+                "description": "Echoes back the input string",
+                "score": 1.0
+            }],
+            "total": 1
+        });
+
+        let rendered = strip_ansi(
+            &render_search_results_for_table_with_context(
+                &result,
+                Some(SearchRenderContext::mcp_find(10)),
+            )
+            .expect("MCP find output"),
+        );
+        assert!(rendered.starts_with("1 tool\nRanked by relevance · limit 10 final tools"));
+        assert!(rendered.contains("1. tool"));
+        assert!(rendered.contains("viking://agent/tools/demo/echo.json"));
+        assert!(rendered.contains("name: echo"));
+        assert!(rendered.contains("description: Echoes back the input string"));
     }
 
     fn strip_ansi(input: &str) -> String {

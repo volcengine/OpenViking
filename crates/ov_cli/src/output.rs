@@ -38,6 +38,64 @@ pub fn output_success<T: Serialize>(result: T, format: OutputFormat, compact: bo
     }
 }
 
+pub fn output_tool_result(response: &Value, format: OutputFormat, compact: bool) -> Option<bool> {
+    let result = tool_result_payload(response)?;
+    let is_error = result
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    if matches!(format, OutputFormat::Json) {
+        output_success(response, format, compact);
+        return Some(is_error);
+    }
+
+    if is_error {
+        let message = tool_result_text(result)
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| "MCP tool returned an error.".to_string());
+        eprintln!("{}", theme::error(message));
+        return Some(true);
+    }
+
+    if let Some(structured) = result
+        .get("structuredContent")
+        .filter(|value| !value.is_null())
+    {
+        output_success(structured, format, compact);
+    } else if let Some(text) = tool_result_text(result) {
+        println!("{text}");
+    } else {
+        output_success(result, format, compact);
+    }
+    Some(false)
+}
+
+fn tool_result_payload(response: &Value) -> Option<&Value> {
+    let result = response.get("result").unwrap_or(response);
+    let object = result.as_object()?;
+    if object.get("content").and_then(Value::as_array).is_some()
+        && (object.contains_key("isError") || object.contains_key("structuredContent"))
+    {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+fn tool_result_text(result: &Value) -> Option<String> {
+    let content = result.get("content")?.as_array()?;
+    let mut texts = Vec::with_capacity(content.len());
+    for item in content {
+        let item = item.as_object()?;
+        if item.get("type").and_then(Value::as_str) != Some("text") {
+            return None;
+        }
+        texts.push(item.get("text")?.as_str()?);
+    }
+    Some(texts.join("\n"))
+}
+
 fn compact_success_value<T: Serialize>(result: T) -> Value {
     let mut obj = match serde_json::to_value(result).unwrap_or(Value::Null) {
         Value::Object(obj) => obj,
@@ -1015,6 +1073,78 @@ mod tests {
     use super::*;
     use colored::Colorize;
     use serde_json::json;
+
+    #[test]
+    fn tool_result_payload_unwraps_api_response() {
+        let response = json!({
+            "status": "ok",
+            "result": {
+                "content": [
+                    {"type": "text", "text": "first"},
+                    {"type": "text", "text": "second"}
+                ],
+                "isError": false
+            }
+        });
+
+        let result = tool_result_payload(&response).expect("tool result");
+
+        assert_eq!(tool_result_text(result).as_deref(), Some("first\nsecond"));
+    }
+
+    #[test]
+    fn tool_result_payload_accepts_structured_content() {
+        let response = json!({
+            "result": {
+                "content": [{"type": "text", "text": "{\"sum\":31}"}],
+                "structuredContent": {"sum": 31},
+                "isError": false
+            }
+        });
+
+        let result = tool_result_payload(&response).expect("tool result");
+
+        assert_eq!(result["structuredContent"], json!({"sum": 31}));
+    }
+
+    #[test]
+    fn tool_result_text_rejects_mixed_content_blocks() {
+        let result = json!({
+            "content": [
+                {"type": "text", "text": "result"},
+                {"type": "image", "mimeType": "image/png", "data": "abc"}
+            ],
+            "isError": false
+        });
+
+        assert_eq!(tool_result_text(&result), None);
+    }
+
+    #[test]
+    fn tool_result_payload_does_not_match_regular_content_objects() {
+        let response = json!({
+            "result": {
+                "content": [{"name": "document"}]
+            }
+        });
+
+        assert!(tool_result_payload(&response).is_none());
+    }
+
+    #[test]
+    fn tool_result_output_reports_tool_errors() {
+        let response = json!({
+            "result": {
+                "content": [{"type": "text", "text": "invalid arguments"}],
+                "isError": true
+            }
+        });
+
+        assert_eq!(
+            output_tool_result(&response, OutputFormat::Table, true),
+            Some(true)
+        );
+    }
 
     #[test]
     fn test_object_formatting_with_alignment() {

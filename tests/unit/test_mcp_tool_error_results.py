@@ -3,6 +3,7 @@
 
 """MCP wire-result tests for tool execution failures."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -74,6 +75,131 @@ async def test_remote_resource_business_failure_sets_error_result(monkeypatch):
     assert type(direct_result) is str
     assert result["isError"] is True
     assert result["content"] == [{"type": "text", "text": direct_result}]
+
+
+async def test_invoke_mcp_tool_preserves_upstream_error_on_wire(monkeypatch):
+    invocation = {
+        "content": [{"type": "text", "text": "upstream failure"}],
+        "isError": True,
+    }
+    invoke = AsyncMock(return_value=invocation)
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(mcps=SimpleNamespace(invoke=invoke)),
+    )
+    arguments = {
+        "tool_uri": "viking://agent/tools/weather/current.json",
+        "arguments": {"city": "Atlantis"},
+    }
+
+    result = await _call_tool("invoke_mcp_tool", arguments)
+
+    assert result["isError"] is True
+    assert result["content"] == [{"type": "text", "text": "upstream failure"}]
+
+
+async def test_gateway_find_to_invoke_without_read(monkeypatch):
+    uri = "viking://agent/tools/demo/get-sum.json"
+    definition = {
+        "name": "get-sum",
+        "title": "Get Sum Tool",
+        "description": "Returns the sum of two numbers",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "a": {"type": "number", "description": "First number"},
+                "b": {"type": "number", "description": "Second number"},
+            },
+            "required": ["a", "b"],
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+        "execution": {"taskSupport": "forbidden"},
+    }
+    hit = {
+        "uri": uri,
+        "server": "demo",
+        "revision": "r1",
+        "score": 0.9,
+        "tool": definition,
+        "address": "http://127.0.0.1:3001/mcp",
+    }
+    find = AsyncMock(return_value={"tools": [hit], "total": 1})
+    invoke = AsyncMock(return_value={"content": [{"type": "text", "text": "5"}]})
+    read = AsyncMock(side_effect=AssertionError("Gateway must not require another read"))
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            mcps=SimpleNamespace(find=find, invoke=invoke),
+            fs=SimpleNamespace(read=read, read_visible=read),
+        ),
+    )
+
+    discovery = await _call_tool("find_mcp_tools", {"query": "Add two numbers"})
+    payload = discovery["structuredContent"]
+    assert discovery["isError"] is False
+    assert json.loads(discovery["content"][0]["text"]) == payload
+    candidate = payload["tools"][0]
+    assert candidate["tool"] == definition
+    assert "address" not in candidate
+    arguments = dict(zip(candidate["tool"]["inputSchema"]["required"], [2, 3], strict=True))
+    result = await _call_tool(
+        "invoke_mcp_tool",
+        {
+            "tool_uri": candidate["uri"],
+            "arguments": arguments,
+        },
+    )
+
+    assert result["isError"] is False
+    assert result["content"][-1] == {"type": "text", "text": "5"}
+    invoke.assert_awaited_once_with(uri, {"a": 2, "b": 3}, mcp_endpoint._get_ctx())
+    read.assert_not_awaited()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_gateway_discovery_empty_and_error_results(monkeypatch, fails):
+    find = AsyncMock(return_value={"tools": [], "total": 0})
+    if fails:
+        find.side_effect = InvalidArgumentError("Tool search query must not be empty")
+    monkeypatch.setattr(
+        mcp_endpoint, "get_service", lambda: SimpleNamespace(mcps=SimpleNamespace(find=find))
+    )
+    result = await _call_tool("find_mcp_tools", {"query": "" if fails else "unknown tool"})
+    assert result["isError"] is fails
+    if fails:
+        assert "must not be empty" in result["content"][0]["text"]
+    else:
+        assert result["structuredContent"] == {"tools": [], "total": 0}
+        assert json.loads(result["content"][0]["text"]) == result["structuredContent"]
+
+
+async def test_live_context_read_is_transparent_on_wire(monkeypatch):
+    descriptor = "---\ntype: OpenViking Live Context\n---\n"
+    invoke_live_context = AsyncMock(
+        return_value={
+            "content": [{"type": "text", "text": "5"}],
+            "structuredContent": {"value": 5},
+            "isError": False,
+        }
+    )
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(read_visible=AsyncMock(return_value=descriptor)),
+            mcps=SimpleNamespace(invoke_live_context=invoke_live_context),
+        ),
+    )
+
+    result = await _call_tool("read", {"uris": "viking://resources/sum.md"})
+
+    assert result["isError"] is False
+    assert result["content"] == [{"type": "text", "text": "5"}]
+    assert result["structuredContent"] == {"value": 5}
+    assert descriptor not in result["content"][0]["text"]
+    assert "Live result from" not in result["content"][0]["text"]
 
 
 async def test_skill_install_business_failure_sets_error_result(monkeypatch):
@@ -153,7 +279,10 @@ async def test_read_partial_failure_remains_a_success_result(monkeypatch):
     monkeypatch.setattr(
         mcp_endpoint,
         "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(read_visible=read_visible),
+            mcps=SimpleNamespace(invoke_live_context=AsyncMock(return_value=None)),
+        ),
     )
 
     arguments = {

@@ -20,7 +20,7 @@ const results = await client.search("部署文档", {
 });
 ```
 
-SDK 与 Python `openviking-sdk`、Go SDK 使用相同的 HTTP API、身份请求头、响应信封和错误码，覆盖资源与技能、文件系统与内容、资源关系、检索、会话、OVPack、快照、任务、Watch、Observer 状态和租户管理接口。
+SDK 与 Python `openviking-sdk`、Go SDK 使用相同的 HTTP API、身份请求头、响应信封和错误码，覆盖资源与技能、MCP Server 与实时上下文、文件系统与内容、资源关系、检索、会话、OVPack、快照、任务、Watch、Observer 状态和租户管理接口。
 
 Node.js 中存在的本地文件路径会自动上传，目录会先压缩后上传；其他字符串会作为 URL 或服务端路径发送。
 
@@ -61,6 +61,50 @@ await client.commitSession("s1", { keepRecentCount: 0, eventTags: [] });
 ```
 
 使用共享临时存储的部署可设置 `uploadMode: "shared"`；服务端也接受 `"local"`（默认值）。
+
+## MCP Server 与实时上下文
+
+```ts
+await client.addMCP("weather", "https://mcp.example.com/api", {
+  Authorization: "Bearer token",
+});
+// 工具摘要和索引默认在后台继续处理。
+// 需要等待完成时，将 { wait: true } 作为第四个参数传入。
+const tools = await client.findMCPTools("当前天气", 5);
+const mounted = await client.mountMCPTool(
+  "viking://agent/tools/weather/current.json",
+  "viking://resources/arranger/beijing-weather.md",
+  "北京天气",
+  {
+    description: "北京区域的实时天气。",
+    timeoutSeconds: 60,
+    arguments: { city: "Beijing" },
+    tags: ["project=weather", "kind=live-context"],
+    wait: true,
+  },
+);
+const batchMounted = await client.batchMountMCPTools(
+  [
+    {
+      toolUri: "viking://agent/tools/weather/current.json",
+      nodeUri: "viking://resources/arranger/shanghai-weather.md",
+      title: "上海天气",
+      arguments: { city: "Shanghai" },
+    },
+  ],
+  { wait: true },
+);
+await client.batchUnmountMCPTools(
+  ["viking://resources/arranger/shanghai-weather.md"],
+  { wait: true },
+);
+const syncResult = await client.syncMCP("weather");
+console.log(syncResult.changes, syncResult.affected_mounts);
+```
+
+客户端还提供 `removeMCP`、`listMCPs`、`validateMCP`、`getMCP`、
+`getMCPStatus`、`invokeMCPTool`、`batchMountMCPTools`、`unmountMCPTool`、
+`batchUnmountMCPTools` 和 `listMCPMounts`。
 
 OVPack 导出和备份与 Python、Go SDK 契约一致：内容会流式写入 Node.js 本地文件，并返回最终文件路径。
 

@@ -1417,6 +1417,83 @@ async def test_batch_write_api_create_overwrites_and_batch_continues(client_with
 
 
 @pytest.mark.asyncio
+async def test_batch_write_api_if_absent_creates_without_overwriting(client_with_resource):
+    client, root = client_with_resource
+    target = f"{root}/create-only.md"
+
+    created = await client.post(
+        "/api/v1/content/batch-write",
+        json={
+            "root_uri": root,
+            "wait": False,
+            "operations": [
+                {
+                    "uri": target,
+                    "content": "first",
+                    "mode": "create",
+                    "if_absent": True,
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["result"]["created"] == [target]
+
+    conflict = await client.post(
+        "/api/v1/content/batch-write",
+        json={
+            "root_uri": root,
+            "wait": False,
+            "operations": [
+                {
+                    "uri": target,
+                    "content": "second",
+                    "mode": "create",
+                    "if_absent": True,
+                }
+            ],
+        },
+    )
+    assert conflict.status_code == 409
+
+    body = await client.get("/api/v1/content/read", params={"uri": target, "raw": True})
+    assert body.status_code == 200
+    assert body.json()["result"] == "first"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    [
+        {
+            "content": "body",
+            "mode": "append",
+            "if_absent": True,
+        },
+        {
+            "content": "body",
+            "mode": "replace",
+            "if_absent": True,
+            "expected_sha256": "0" * 64,
+        },
+    ],
+)
+async def test_batch_write_api_rejects_incompatible_if_absent(
+    client_with_resource, operation
+):
+    client, root = client_with_resource
+    response = await client.post(
+        "/api/v1/content/batch-write",
+        json={
+            "root_uri": root,
+            "wait": False,
+            "operations": [{"uri": f"{root}/invalid-create.md", **operation}],
+        },
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_batch_write_api_missing_append_creates_file(client_with_resource):
     client, root = client_with_resource
     target = f"{root}/compile-created-by-append.md"

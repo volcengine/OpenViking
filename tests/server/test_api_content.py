@@ -266,6 +266,45 @@ async def test_read_memory_uses_visible_projection_and_raw_bypasses_it(monkeypat
     assert calls[-1] == (4, 1)
 
 
+async def test_read_live_context_invokes_mcp_for_full_visible_read(monkeypatch):
+    ctx = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
+    uri = "viking://user/test_user/resources/arrange/sum.md"
+    content = """---
+type: OpenViking Live Context
+x-openviking:
+  type: mcp
+  definition: viking://agent/tools/demo/get-sum.json
+  args:
+    a: 3.14
+    b: 2.718
+---
+"""
+    live_result = "5.858"
+    fs = SimpleNamespace(
+        read=AsyncMock(return_value=content),
+        read_visible=AsyncMock(return_value=content),
+    )
+    mcps = SimpleNamespace(read_live_context=AsyncMock(return_value=live_result))
+    monkeypatch.setattr(
+        content_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=fs, mcps=mcps),
+    )
+
+    response = await content_router.read(uri=uri, offset=0, limit=-1, raw=False, _ctx=ctx)
+
+    assert response.result == live_result
+    mcps.read_live_context.assert_awaited_once_with(content, ctx)
+
+    raw_response = await content_router.read(uri=uri, offset=0, limit=-1, raw=True, _ctx=ctx)
+    assert raw_response.result == content
+    mcps.read_live_context.assert_awaited_once()
+
+    paged_response = await content_router.read(uri=uri, offset=1, limit=2, raw=False, _ctx=ctx)
+    assert paged_response.result == content
+    mcps.read_live_context.assert_awaited_once()
+
+
 async def test_read_directory_uri_returns_invalid_argument(client_with_resource):
     client, uri = client_with_resource
 

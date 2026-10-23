@@ -150,6 +150,31 @@ type DeleteSkillOptions struct {
 	TargetURI any
 }
 
+// MountMCPToolOptions controls a live context mount backed by an MCP tool.
+type MountMCPToolOptions struct {
+	Description    *string
+	TimeoutSeconds int
+	Arguments      map[string]any
+	Tags           []string
+	Wait           bool
+}
+
+// WaitOptions controls whether an asynchronous operation waits for processing.
+type WaitOptions struct {
+	Wait bool
+}
+
+// MCPToolMount describes one live context mount in a batch request.
+type MCPToolMount struct {
+	ToolURI        string
+	NodeURI        string
+	Title          string
+	Description    *string
+	TimeoutSeconds int
+	Arguments      map[string]any
+	Tags           []string
+}
+
 // ObserverStatusOptions controls observer status formatting.
 type ObserverStatusOptions struct {
 	Format string

@@ -3,6 +3,8 @@
 OpenViking Server includes an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) endpoint. Clients supporting Streamable HTTP can connect directly. Clients supporting only stdio can use the proxy in the [Agent Plugins package](../agent-integrations/15-agent-plugins.md).
 
 > **Quick setup?** See [MCP Clients](../agent-integrations/06-mcp-clients.md) for client configuration snippets and platform-specific notes. This page covers the full tool reference and advanced configuration.
+>
+> **Connecting an external MCP server?** See [Live context integration and arrangement](24-live-context-arrangement.md) for `ov mcps`, the Tool Catalog, live nodes, Studio Arranger, and Context as Code.
 
 ## Prerequisites
 
@@ -128,6 +130,8 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
+| `find_mcp_tools` | Semantically discover registered upstream MCP tools for an intent. Returns ranked candidates with `uri`, `score`, and the complete MCP `tool` definition, including `inputSchema` and annotations. Use the returned `uri` directly as `invoke_mcp_tool.tool_uri`; no additional `read` is required | `query`, `limit` (default 10) |
+| `invoke_mcp_tool` | Execute a tool selected by `find_mcp_tools`. OpenViking resolves the upstream server and credentials, and transparently preserves its `content`, `structuredContent`, and `isError` result. The upstream tool may have external side effects, and calls are not retried | `tool_uri`, `arguments` (optional; must conform to the discovered `tool.inputSchema`) |
 | `find` | Fast semantic retrieval without session context. `context_type="skill"` on its own switches to package-level skill retrieval: one hit per skill package, its URI pointing at that package's `SKILL.md` and its summary taken from the skill itself, even when an auxiliary file inside the package is what matched. Without `target_uri` it searches both your own skills and the account-shared `viking://agent/skills`. Mixing `skill` with another context type keeps the generic retrieval path | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional), `read_content` (optional — inline each hit's content), `events_time_decay_protection` (optional) |
 | `search` | Deep semantic retrieval; `mode="context"` assembles injection-ready context and replaces the former `recall` tool. `list` mode also returns one hit per skill package, its URI pointing at `SKILL.md` and its summary taken from the package itself, but `limit` applies before that merge, so a package matching in several files takes several slots and fewer than `limit` results come back | `query`, `mode` (`list` or `context`), `target_uri` (list mode only), `session_id` (optional), `limit`, `min_score`, `level` (list mode), `context_type` (optional), `events_time_decay_protection` (optional in both modes), plus context-mode `quotas`, `purpose`, `max_tokens`, `detail` or `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, scalar `other_peer_penalty` or `other_peer_penalties` by category, and `rewrite` (`off` or `auto`) |
 | `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block; use `download` for the original bytes | `uris` (single string or array), `offset`, `limit` (text lines) |

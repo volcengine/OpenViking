@@ -849,6 +849,18 @@ class VikingClient:
             "target_uri": target_uri,
         }
 
+    async def find_mcp_tools(self, query: str, limit: int = 10) -> Dict[str, Any]:
+        """Discover OpenViking-managed MCP tools with complete definitions."""
+        return await self.client.find_mcp_tools(query, limit=limit)
+
+    async def invoke_mcp_tool(
+        self,
+        tool_uri: str,
+        arguments: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Invoke an OpenViking-managed MCP tool using the current identity."""
+        return await self.client.invoke_mcp_tool(tool_uri, arguments=arguments)
+
     async def search_user_memory(self, query: str, user_id: str) -> list[Any]:
         effective_user_id = self._effective_user_id(user_id)
         uri_user_memory = self._memory_target_uri(effective_user_id)

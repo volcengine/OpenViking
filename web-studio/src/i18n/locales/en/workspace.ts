@@ -35,6 +35,7 @@ const workspace = {
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
+      arranger: { title: 'Arrange' },
       compile: { title: 'Compile' },
       home: {
         title: 'Home',

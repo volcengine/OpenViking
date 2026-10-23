@@ -49,7 +49,18 @@ OpenAPI 的 `disabled_tools` 可以按请求隐藏工具；渠道的 `ov_tools_e
 
 ## MCP 扩展
 
-`bot.tools.mcp_servers` 可以连接外部 MCP Server，支持 `stdio`、`sse` 和 `streamableHttp`。远端工具会包装为普通 VikingBot Tool，并以 `mcp_<server>_<tool>` 名称注册。
+VikingBot 区分三个 MCP 概念：
+
+| 概念 | 归属与用途 | VikingBot 可见的工具 |
+|------|------------|----------------------|
+| **OpenViking MCP Interface** | OpenViking 对外提供给 MCP Client 的公共接口 | VikingBot 通过自身的 `openviking_*` 绑定访问所连接的服务，不属于 Bot 直连 MCP |
+| **OpenViking-registered MCP Servers** | 注册在 OpenViking 中，用于工具发现、代理调用和 Live Context 挂载的外部服务 | `openviking_find_mcp_tools` 和 `openviking_invoke_mcp_tool`；已编排节点通过 OpenViking 内容工具读取 |
+| **VikingBot-connected MCP Servers** | Bot 通过 `bot.tools.mcp_servers` 直接连接的外部服务 | 名为 `mcp_<server>_<tool>` 的普通工具 |
+
+两个外部服务注册表彼此独立。在 OpenViking 中注册 Server 不会生成 Bot 直连工具；在
+VikingBot 中配置 Server 也不会将其加入 OpenViking 工具目录或使其可用于 Live Context 挂载。
+
+`bot.tools.mcp_servers` 可以连接 VikingBot-connected MCP Servers，支持 `stdio`、`sse` 和 `streamableHttp`。远端工具会包装为普通 VikingBot Tool，并以 `mcp_<server>_<tool>` 名称注册。
 
 每个 MCP Server 可以配置：
 
@@ -59,6 +70,22 @@ OpenAPI 的 `disabled_tools` 可以按请求隐藏工具；渠道的 `ov_tools_e
 - `tool_timeout` 单次调用超时。
 
 MCP 参数 Schema 会先做兼容转换，再交给模型和 ToolRegistry。
+
+当 VikingBot 连接的 OpenViking Server 存在 OpenViking-registered MCP Servers 时，还会提供两个固定的
+OpenViking 工具：
+
+- `openviking_find_mcp_tools`：按意图动态发现工具并返回完整 `inputSchema` 和 annotations；
+- `openviking_invoke_mcp_tool`：使用发现结果中的 URI，通过 OpenViking 代理执行工具。
+
+这条链路不要求在 `bot.tools.mcp_servers` 中重复配置上游 MCP，也不会把发现到的工具动态
+注册到 VikingBot。OpenViking 负责上游连接、凭证和参数校验，VikingBot 只保留两个稳定的
+元工具。Agent 会优先搜索并读取已经编排好的 Live Context 节点；没有合适节点时才进行动态
+工具发现。`readonly` 模式只提供发现工具，不提供调用工具；Studio 托管群聊默认同时禁用
+这两个工具。
+
+如果同一个上游同时配置在两个注册表中，Agent 必须选择一条链路，避免重复调用。不能把
+Bot 直连工具名 `mcp_<server>_<tool>` 传给 `openviking_invoke_mcp_tool`；后者只接受
+OpenViking 发现结果返回的 `viking://agent/tools/...` URI。
 
 ## 子 Agent
 
