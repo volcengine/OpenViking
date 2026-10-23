@@ -56,11 +56,10 @@ def build_app(client: InMemoryOpenVikingClient | None = None):
                 return new_request
 
         def handler(request):
-            context = (
-                extract_message_text(request.system_message.content)
-                if request.system_message
-                else ""
-            )
+            model_messages = list(request.messages)
+            if request.system_message is not None:
+                model_messages.insert(0, request.system_message)
+            context = "\n".join(extract_message_text(message.content) for message in model_messages)
             if "azure" in context.lower():
                 return AIMessage(content="OpenViking middleware context says azure.")
             return AIMessage(content="OpenViking middleware context was missing.")
