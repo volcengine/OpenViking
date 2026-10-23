@@ -102,6 +102,7 @@ class SkillLoader:
     @classmethod
     def _split_frontmatter(cls, content: str) -> Tuple[Optional[str], str]:
         """Split frontmatter and body."""
+        content = content.removeprefix("\ufeff")
         match = cls.FRONTMATTER_PATTERN.match(content)
         if match:
             return match.group(1), match.group(2)
