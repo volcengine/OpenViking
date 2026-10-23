@@ -197,6 +197,8 @@ def init_viking_fs(
     agfs: Any,
     query_embedder: Optional[Any] = None,
     rerank_config: Optional["RerankConfig"] = None,
+    rerank_profiles: Optional[Dict[str, "RerankConfig"]] = None,
+    rerank_routing: Optional[Dict[str, str]] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
     acl_manager: Optional["AclManager"] = None,
     retrieval_config: Optional["RetrievalConfig"] = None,
@@ -215,6 +217,8 @@ def init_viking_fs(
         agfs: Pre-initialized AGFS client (HTTP or Binding)
         query_embedder: Embedder instance
         rerank_config: Rerank configuration
+        rerank_profiles: Optional named rerank profiles
+        rerank_routing: Optional routing rules
         retrieval_config: Retrieval behavior configuration
         grep_config: Grep engine configuration
         glob_config: Glob engine configuration
@@ -230,6 +234,8 @@ def init_viking_fs(
         agfs=agfs,
         query_embedder=query_embedder,
         rerank_config=rerank_config,
+        rerank_profiles=rerank_profiles,
+        rerank_routing=rerank_routing,
         vector_store=vector_store,
         acl_manager=acl_manager,
         retrieval_config=retrieval_config,
