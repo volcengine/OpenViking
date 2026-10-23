@@ -107,6 +107,7 @@ class SemanticTreeScheduler:
         self._max_workers = max(1, max_workers)
         self._queue: asyncio.Queue[ScheduledTreeWork] = asyncio.Queue()
         self._workers: Set[asyncio.Task] = set()
+        self._active_workers = 0
 
     def configure(self, max_workers: int) -> None:
         self._max_workers = max(1, max_workers)
@@ -118,7 +119,7 @@ class SemanticTreeScheduler:
 
     def _ensure_workers(self) -> None:
         self._workers = {task for task in self._workers if not task.done()}
-        target = min(self._max_workers, self._queue.qsize())
+        target = min(self._max_workers, self._active_workers + self._queue.qsize())
         while len(self._workers) < target:
             task = asyncio.create_task(self._worker())
             task.add_done_callback(self._workers.discard)
@@ -136,6 +137,8 @@ class SemanticTreeScheduler:
                     return
                 continue
 
+            self._active_workers += 1
+            self._ensure_workers()
             item.executor._start_scheduled_work()
             try:
                 if not item.executor.closed:
@@ -145,6 +148,7 @@ class SemanticTreeScheduler:
             except Exception as exc:
                 item.executor.fail(exc)
             finally:
+                self._active_workers -= 1
                 item.executor._finish_scheduled_work()
                 self._queue.task_done()
 
