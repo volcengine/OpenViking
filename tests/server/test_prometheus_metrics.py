@@ -4,6 +4,7 @@
 """Tests for the Prometheus metrics endpoint and exposition output."""
 
 import json
+import re
 from types import SimpleNamespace
 
 import httpx
@@ -58,14 +59,20 @@ class TestPrometheusExposition:
 
         exporter = PrometheusExporter(registry=registry)
         text = exporter.render()
+        schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
 
         assert 'openviking_retrieval_requests_total{context_type="memory"} 2' in text
-        assert 'openviking_retrieval_latency_seconds_count{context_type="memory"} 1' in text
         assert (
-            'openviking_retrieval_latency_seconds_bucket{context_type="memory",le="0.05"} 1' in text
+            f'openviking_retrieval_latency_seconds_count{{bucket_schema="{schema}",context_type="memory"}} 1'
+            in text
         )
         assert (
-            'openviking_retrieval_latency_seconds_bucket{context_type="memory",le="+Inf"} 1' in text
+            f'openviking_retrieval_latency_seconds_bucket{{bucket_schema="{schema}",context_type="memory",le="0.05"}} 1'
+            in text
+        )
+        assert (
+            f'openviking_retrieval_latency_seconds_bucket{{bucket_schema="{schema}",context_type="memory",le="+Inf"}} 1'
+            in text
         )
         assert 'openviking_cache_hits_total{level="L0"} 2' in text
         assert 'openviking_cache_misses_total{level="L1"} 1' in text
@@ -109,9 +116,10 @@ class TestRetrievalStatsMetricsIntegration:
                 'openviking_retrieval_results_total{account_id="__unknown__",context_type="memory"} 3'
                 in text
             )
-            assert (
-                'openviking_retrieval_latency_seconds_count{account_id="__unknown__",context_type="memory"} 1'
-                in text
+            assert re.search(
+                r'openviking_retrieval_latency_seconds_count\{account_id="__unknown__",'
+                r'bucket_schema="[0-9a-f]{16}",context_type="memory"\} 1',
+                text,
             )
         finally:
             shutdown_metrics(app=None)

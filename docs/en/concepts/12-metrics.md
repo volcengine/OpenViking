@@ -139,6 +139,36 @@ Notes:
 
 The tables list representative metrics defined by the collectors. A series appears only when its feature is enabled, the relevant event occurs, and collection succeeds. An absent series does not necessarily mean zero.
 
+### Duration distributions and percentiles
+
+Python and queue duration metrics share buckets covering seconds, minutes, hours, and days.
+Above one week, boundaries grow exponentially through the native `u64` nanosecond range
+(approximately 584 years). RAGFS retains short-I/O precision starting at 0.1 milliseconds
+and covers the same long tail. Existing boundaries and the `+Inf` bucket remain available.
+These boundaries are not operation timeouts: dashboards must not filter slow requests with
+`< 10`, a fixed axis maximum, or another duration threshold.
+
+Prometheus `_bucket`, `_count`, `_sum` series and OTLP histograms carry `bucket_schema`,
+derived from their actual boundaries; collectors cannot set it themselves.
+**Keep `bucket_schema` when aggregating percentiles**
+so rolling upgrades cannot mix incompatible bucket layouts. Older series without this label
+form a separate group; their lost overflow distribution cannot be reconstructed.
+
+```promql
+histogram_quantile(0.99,
+  sum by (le, bucket_schema, operation) (
+    rate(openviking_operation_duration_seconds_bucket[5m])
+  )
+)
+```
+
+Use `0.95` for P95. Compute the mean from `rate(_sum) / rate(_count)` with the same
+`operation, bucket_schema` grouping, showing it only when the count is positive.
+No completed observations must remain a gap, not zero latency. Percentiles are still
+bucket-interpolated estimates, particularly with low traffic or coarse buckets.
+Each Python histogram label set now exports 47 Prometheus series; RAGFS exports 49.
+Account for the extra buckets in scrape and storage capacity planning.
+
 ### Requests and Operations
 
 | Metric Family | Type | Common Labels | Meaning |
@@ -255,6 +285,7 @@ Notes:
 | `openviking_lock_stale_leases_released_total` | Counter | none | stale leases released |
 | `openviking_lock_descendant_scans_total` | Counter | none | completed descendant scans |
 | `openviking_lock_descendant_scan_duration_seconds_total` | Counter | none | cumulative descendant scan duration |
+| `openviking_lock_descendant_scan_duration_seconds` | Histogram | `bucket_schema` | completed descendant scan duration distribution, supporting mean, P95, and P99 |
 
 The queue duration `outcome` label is one of `success`, `failed`, `requeued`, `cancelled`, or `exception`. `failed` means the handler returned a settled failure that can be acknowledged, while `exception` means processing raised and the current message is left unacknowledged.
 
@@ -302,7 +333,10 @@ seconds, for example `123 ns = 0.000000123 seconds`.
 These metrics have no `mount` or `account_id` label. Cache and multi-backend
 families are absent when those capabilities are not enabled. `status` is
 `success` or `error`; `exists=false` is successful and `replace` uses `rename`.
-Histogram buckets cover all outcomes, with finite bounds from 0.0001 to 10 seconds.
+Histogram buckets cover all outcomes, retain short-I/O bounds starting at 0.0001 seconds,
+and extend through the full `u64` nanosecond range.
+Histograms are emitted only after an operation has observations, avoiding empty long-tail
+buckets for every plugin/operation pair; existing operation counters remain available.
 Python `get_stats()` retains its microsecond fields.
 
 The protocol family always contains both closed-label series. One unreadable

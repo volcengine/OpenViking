@@ -139,6 +139,31 @@ scrape_configs:
 
 下面列出 Collector 定义的代表性指标。某个指标是否出现，取决于功能是否启用、是否发生对应事件，以及 Collector 是否采集成功；未出现不能直接解释为数值为零。
 
+### 耗时分布与分位数
+
+Python 耗时指标和队列耗时共用分桶，覆盖秒、分钟、小时和天；一周以上采用倍增间隔，
+直到原生 `u64` 纳秒计时范围（约 584 年）。RAGFS 保留 0.1 毫秒起的短耗时分辨率，
+也覆盖同样的长尾范围。原有桶边界和 `+Inf` 桶保留。这里的桶边界不是任务超时，
+看板不应通过 `< 10`、固定纵轴上限或其他阈值过滤慢请求。
+
+Prometheus 的 `_bucket`、`_count`、`_sum` 和 OTLP Histogram 都带有 `bucket_schema`，
+该标签由实际桶边界计算，采集器不能自行设置。**聚合分位数时必须保留 `bucket_schema`**，避免滚动升级时把
+新旧分桶混算。没有该标签的旧数据会形成独立的一组；其已经合并到最后一桶的细节无法恢复。
+
+```promql
+histogram_quantile(0.99,
+  sum by (le, bucket_schema, operation) (
+    rate(openviking_operation_duration_seconds_bucket[5m])
+  )
+)
+```
+
+P95 将 `0.99` 改为 `0.95`。平均耗时使用同一组 `operation, bucket_schema` 的
+`rate(_sum) / rate(_count)`，仅在次数大于零时显示；没有完成记录时不能用零耗时代替。
+分位数仍是桶内插值估算，低流量或粗粒度桶内的结果不等于精确的单次请求耗时。
+扩展后每组 Python 直方图输出 47 条 Prometheus 时序，RAGFS 输出 49 条；
+应将新增桶的采集和存储成本计入容量规划。
+
 ### 请求与操作
 
 | 指标族 | 类型 | 常见标签 | 含义 |
@@ -256,6 +281,7 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 | `openviking_lock_stale_leases_released_total` | Counter | 无 | 已释放的过期租约数 |
 | `openviking_lock_descendant_scans_total` | Counter | 无 | 已完成的后代锁扫描次数 |
 | `openviking_lock_descendant_scan_duration_seconds_total` | Counter | 无 | 后代锁扫描累计耗时 |
+| `openviking_lock_descendant_scan_duration_seconds` | Histogram | `bucket_schema` | 已完成后代锁扫描的耗时分布，可计算平均、P95 和 P99 |
 
 队列耗时指标中的 `outcome` 可取 `success`、`failed`、`requeued`、`cancelled`、`exception`。其中 `failed` 表示 handler 返回了可确认的失败结果，`exception` 表示处理过程抛出异常，当前消息不会 ACK。
 
@@ -301,7 +327,8 @@ RAGFS 通过一次原生 `metrics()` 调用读取文件系统、Cache、multi-ba
 这些指标不带 `mount` 和 `account_id` 标签。未启用 Cache 或 multi-backend
 时，不生成对应指标族。`status` 为 `success` 或 `error`。
 `exists=false` 计为成功；`replace` 使用 `rename` 操作标签。
-Histogram 包含全部操作结果，有限桶边界范围为 0.0001 至 10 秒。
+Histogram 包含全部操作结果，保留 0.0001 秒起的短耗时边界，并覆盖完整的 `u64` 纳秒范围。
+尚未发生的操作不导出空直方图，避免为每个插件和操作持续发布无样本的长尾桶；原有操作计数器保留。
 Python `get_stats()` 保留原有微秒字段。
 
 protocol 指标始终包含闭集中的两条 series。任何 protocol、account 或 segment

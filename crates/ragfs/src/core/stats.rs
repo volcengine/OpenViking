@@ -92,10 +92,54 @@ impl FsOperation {
     }
 }
 
-/// Inclusive upper bounds for operation duration buckets, in nanoseconds.
-pub const DURATION_BUCKET_BOUNDS_NS: [u64; 11] = [
-    100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000,
-    100_000_000, 500_000_000, 1_000_000_000, 5_000_000_000, 10_000_000_000,
+/// Inclusive duration bounds, retaining short-I/O precision and covering u64 nanoseconds.
+pub const DURATION_BUCKET_BOUNDS_NS: &[u64] = &[
+    100_000,
+    500_000,
+    1_000_000,
+    5_000_000,
+    10_000_000,
+    50_000_000,
+    100_000_000,
+    500_000_000,
+    1_000_000_000,
+    5_000_000_000,
+    10_000_000_000,
+    20_000_000_000,
+    30_000_000_000,
+    60_000_000_000,
+    120_000_000_000,
+    180_000_000_000,
+    300_000_000_000,
+    600_000_000_000,
+    900_000_000_000,
+    1_800_000_000_000,
+    3_600_000_000_000,
+    7_200_000_000_000,
+    14_400_000_000_000,
+    21_600_000_000_000,
+    43_200_000_000_000,
+    86_400_000_000_000,
+    172_800_000_000_000,
+    259_200_000_000_000,
+    345_600_000_000_000,
+    432_000_000_000_000,
+    604_800_000_000_000,
+    1_209_600_000_000_000,
+    2_419_200_000_000_000,
+    4_838_400_000_000_000,
+    9_676_800_000_000_000,
+    19_353_600_000_000_000,
+    38_707_200_000_000_000,
+    77_414_400_000_000_000,
+    154_828_800_000_000_000,
+    309_657_600_000_000_000,
+    619_315_200_000_000_000,
+    1_238_630_400_000_000_000,
+    2_477_260_800_000_000_000,
+    4_954_521_600_000_000_000,
+    9_909_043_200_000_000_000,
+    u64::MAX,
 ];
 
 /// Statistics for a single operation type
@@ -114,7 +158,7 @@ pub struct OperationStats {
     /// Maximum time spent (nanoseconds).
     pub max_time_ns: u64,
     /// Noncumulative duration counts; the last bucket holds overflow samples.
-    pub duration_bucket_counts: [u64; 12],
+    pub duration_bucket_counts: Vec<u64>,
 }
 
 impl Default for OperationStats {
@@ -127,7 +171,7 @@ impl Default for OperationStats {
             total_time_ns: 0,
             min_time_ns: u64::MAX,
             max_time_ns: 0,
-            duration_bucket_counts: [0; 12],
+            duration_bucket_counts: vec![0; DURATION_BUCKET_BOUNDS_NS.len() + 1],
         }
     }
 }

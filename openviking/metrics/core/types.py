@@ -16,7 +16,9 @@ All labels are normalized into a sorted tuple of (key, value) pairs to provide:
 
 from __future__ import annotations
 
+import hashlib
 import re
+import struct
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -32,6 +34,11 @@ FORBIDDEN_LABEL_KEYS: set[str] = {
     "path",
     "url",
 }
+
+
+def histogram_schema(bounds: tuple[float, ...]) -> str:
+    """Identify the actual bucket layout so rolling upgrades cannot mix layouts."""
+    return hashlib.sha256(struct.pack(f"!{len(bounds)}d", *bounds)).hexdigest()[:16]
 
 
 def normalize_labels(labels: Mapping[str, str] | None) -> tuple[tuple[str, str], ...]:

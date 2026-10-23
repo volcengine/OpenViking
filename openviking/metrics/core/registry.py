@@ -28,7 +28,42 @@ from typing import Mapping, Sequence
 
 from .types import normalize_labels
 
-DEFAULT_LATENCY_BUCKETS: tuple[float, ...] = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+# Keep existing boundaries, including the former queue-specific boundaries.
+# Background operations can take days. Beyond a week, use exponential spacing
+# through the full u64 nanosecond range used by native duration measurements.
+DEFAULT_LATENCY_BUCKETS: tuple[float, ...] = (
+    0.01,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    60.0,
+    120.0,
+    180.0,
+    300.0,
+    600.0,
+    900.0,
+    1800.0,
+    3600.0,
+    7200.0,
+    14400.0,
+    21600.0,
+    43200.0,
+    86400.0,
+    172800.0,
+    259200.0,
+    345600.0,
+    432000.0,
+    604800.0,
+    *(604800.0 * 2**power for power in range(1, 15)),
+    (2**64 - 1) / 1_000_000_000,
+)
 
 
 def _canonicalize_label_names(label_names: Sequence[str]) -> tuple[str, ...]:
@@ -305,6 +340,8 @@ class MetricRegistry:
             A lightweight `_Histogram` wrapper bound to the requested family.
         """
         ln = _canonicalize_label_names(label_names)
+        if "bucket_schema" in ln:
+            raise ValueError("bucket_schema is reserved for the histogram's actual bucket layout")
         b = tuple(float(x) for x in buckets)
         with self._lock:
             if name in self._counters or name in self._gauges:

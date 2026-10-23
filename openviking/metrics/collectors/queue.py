@@ -12,26 +12,6 @@ from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
 
 from .base import CollectorConfig, EventMetricCollector, StateMetricCollector
 
-QUEUE_DURATION_BUCKETS: tuple[float, ...] = (
-    0.01,
-    0.05,
-    0.1,
-    0.25,
-    0.5,
-    1.0,
-    2.5,
-    5.0,
-    10.0,
-    30.0,
-    60.0,
-    120.0,
-    300.0,
-    600.0,
-    1800.0,
-    3600.0,
-    21600.0,
-    86400.0,
-)
 _QUEUE_OUTCOMES = frozenset({"success", "failed", "requeued", "cancelled", "exception"})
 
 
@@ -69,7 +49,6 @@ class QueueDurationCollector(EventMetricCollector):
             process_duration,
             labels=labels,
             label_names=("queue", "outcome"),
-            buckets=QUEUE_DURATION_BUCKETS,
         )
 
         raw_end_to_end = payload.get("end_to_end_duration_seconds")
@@ -86,7 +65,6 @@ class QueueDurationCollector(EventMetricCollector):
             end_to_end_duration,
             labels=labels,
             label_names=("queue", "outcome"),
-            buckets=QUEUE_DURATION_BUCKETS,
         )
 
 

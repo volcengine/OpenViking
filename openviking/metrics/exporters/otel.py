@@ -23,6 +23,7 @@ from typing import Any, Iterable, Optional, Tuple
 import requests
 
 from openviking.metrics.core.base import MetricExporter
+from openviking.metrics.core.types import histogram_schema
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -498,17 +499,9 @@ class OTelMetricExporter(MetricExporter):
         )
 
         if not series_list and not label_names:
-            point = HistogramDataPoint(
-                start_time_unix_nano=self._start_time_ns,
-                time_unix_nano=now_ns,
-                count=0,
-                sum=0.0,
-            )
-            point.bucket_counts.extend((0,) * (len(bucket_bounds) + 1))
-            point.explicit_bounds.extend(bucket_bounds)
-            histogram_metric.data_points.append(point)
-            return histogram_metric
+            series_list = [((), (0,) * (len(bucket_bounds) + 1), 0, 0.0, self._start_time_ns)]
 
+        schema = ("bucket_schema", histogram_schema(bucket_bounds))
         for labels, bucket_counts, count, value_sum, start_time_ns in series_list:
             point = HistogramDataPoint(
                 start_time_unix_nano=start_time_ns,
@@ -516,7 +509,7 @@ class OTelMetricExporter(MetricExporter):
                 count=int(count),
                 sum=float(value_sum),
             )
-            point.attributes.extend(self._build_attributes(labels))
+            point.attributes.extend(self._build_attributes((*labels, schema)))
             point.bucket_counts.extend(int(v) for v in bucket_counts)
             point.explicit_bounds.extend(float(v) for v in bucket_bounds)
             histogram_metric.data_points.append(point)

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import re
 
 import pytest
 
@@ -16,8 +17,11 @@ def test_exporter_outputs_help_type_and_empty_metrics(registry, render_prometheu
     assert "# TYPE openviking_empty_counter_total counter" in text
     assert "openviking_empty_counter_total 0" in text
     assert "# TYPE openviking_empty_histogram_seconds histogram" in text
-    assert "openviking_empty_histogram_seconds_count 0" in text
-    assert 'openviking_empty_histogram_seconds_bucket{le="+Inf"} 0' in text
+    schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
+    assert f'openviking_empty_histogram_seconds_count{{bucket_schema="{schema}"}} 0' in text
+    assert (
+        f'openviking_empty_histogram_seconds_bucket{{bucket_schema="{schema}",le="+Inf"}} 0' in text
+    )
 
 
 @pytest.mark.asyncio

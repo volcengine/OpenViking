@@ -69,21 +69,22 @@ def test_queue_duration_collector_records_processing_and_end_to_end_histograms(
         {
             "queue": "Semantic",
             "outcome": "success",
-            "process_duration_seconds": 2.5,
-            "end_to_end_duration_seconds": 8.0,
+            "process_duration_seconds": 60.0,
+            "end_to_end_duration_seconds": 404261.58497,
         },
         registry,
     )
 
     text = render_prometheus(registry)
-    labels = 'outcome="success",queue="Semantic"'
+    schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
+    labels = f'bucket_schema="{schema}",outcome="success",queue="Semantic"'
     assert f"openviking_queue_process_duration_seconds_count{{{labels}}} 1" in text
-    assert f"openviking_queue_process_duration_seconds_sum{{{labels}}} 2.5" in text
+    assert f"openviking_queue_process_duration_seconds_sum{{{labels}}} 60.0" in text
     assert f"openviking_queue_end_to_end_duration_seconds_count{{{labels}}} 1" in text
-    assert f"openviking_queue_end_to_end_duration_seconds_sum{{{labels}}} 8.0" in text
+    assert f"openviking_queue_end_to_end_duration_seconds_sum{{{labels}}} 404261.58497" in text
     assert (
-        "openviking_queue_end_to_end_duration_seconds_bucket{"
-        'le="86400.0",outcome="success",queue="Semantic"} 1' in text
+        f'openviking_queue_end_to_end_duration_seconds_bucket{{bucket_schema="{schema}",'
+        'le="432000.0",outcome="success",queue="Semantic"} 1' in text
     )
 
 
@@ -121,9 +122,10 @@ def test_queue_duration_collector_allows_processing_only_and_ignores_bad_payload
     )
 
     text = render_prometheus(registry)
-    assert (
-        "openviking_queue_process_duration_seconds_count{"
-        'outcome="requeued",queue="Embedding"} 1' in text
+    assert re.search(
+        r'openviking_queue_process_duration_seconds_count\{bucket_schema="[0-9a-f]{16}",'
+        r'outcome="requeued",queue="Embedding"\} 1',
+        text,
     )
     assert "openviking_queue_end_to_end_duration_seconds" not in text
     assert 'outcome="unknown"' not in text
@@ -422,8 +424,10 @@ def test_embedding_collector_records_success_volume_and_latency(registry, render
         'openviking_embedding_requests_total{account_id="__unknown__",status="ok"} 1' in text
         or 'openviking_embedding_requests_total{account_id="__unknown__",status="ok"} 1.0' in text
     )
-    assert (
-        'openviking_embedding_latency_seconds_count{account_id="__unknown__",status="ok"} 1' in text
+    assert re.search(
+        r'openviking_embedding_latency_seconds_count\{account_id="__unknown__",'
+        r'bucket_schema="[0-9a-f]{16}",status="ok"\} 1',
+        text,
     )
 
 

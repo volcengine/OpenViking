@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import re
 from pathlib import Path
 
 import pytest
 
 from openviking.metrics.core.base import MetricCollector
-from openviking.metrics.core.registry import MetricRegistry
+from openviking.metrics.core.registry import DEFAULT_LATENCY_BUCKETS, MetricRegistry
 from openviking.metrics.exporters.otel import OTelMetricExporter
 
 
@@ -35,6 +36,8 @@ def test_registry_label_keys_must_match_definition():
         c.inc(labels={"a": "1"})
     with pytest.raises(ValueError):
         c.inc(labels={"a": "1", "b": "2", "c": "3"})
+    with pytest.raises(ValueError, match="bucket_schema is reserved"):
+        registry.histogram("latency", label_names=("bucket_schema",))
 
 
 def test_registry_canonicalizes_label_name_order_for_same_family(render_prometheus):
@@ -66,12 +69,32 @@ def test_counter_only_increases():
 
 
 def test_histogram_boundary_bucket(registry, render_prometheus):
-    h = registry.histogram("openviking_latency_seconds", buckets=(0.05, 0.1))
-    h.observe(0.05)
+    durations = (0.05, 20.0, 60.0, 60.001, 120.0, 3600.0, 404261.58497)
+    h = registry.histogram("openviking_latency_seconds")
+    for duration in durations:
+        h.observe(duration)
     text = render_prometheus(registry)
-    assert 'openviking_latency_seconds_bucket{le="0.05"} 1' in text
-    assert 'openviking_latency_seconds_bucket{le="0.1"} 1' in text
-    assert 'openviking_latency_seconds_bucket{le="+Inf"} 1' in text
+    schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
+    assert DEFAULT_LATENCY_BUCKETS[-1] >= max(durations)
+    for bound in DEFAULT_LATENCY_BUCKETS:
+        count = sum(value <= bound for value in durations)
+        assert (
+            f'openviking_latency_seconds_bucket{{bucket_schema="{schema}",le="{bound}"}} {count}'
+            in text
+        )
+    assert f'openviking_latency_seconds_count{{bucket_schema="{schema}"}} 7' in text
+    request = OTelMetricExporter(registry=registry, enabled=False)._build_export_request()
+    point = request.resource_metrics[0].scope_metrics[0].metrics[0].histogram.data_points[0]
+    assert tuple(point.explicit_bounds) == DEFAULT_LATENCY_BUCKETS
+    assert point.count == sum(point.bucket_counts) == len(durations)
+    assert point.bucket_counts[-1] == 0
+    assert point.sum == pytest.approx(sum(durations))
+    assert {a.key: a.value.string_value for a in point.attributes} == {"bucket_schema": schema}
+
+    legacy = MetricRegistry()
+    legacy.histogram("openviking_latency_seconds", buckets=(0.05, 0.1, 10.0)).observe(60.0)
+    legacy_schema = re.search(r'bucket_schema="([0-9a-f]{16})"', render_prometheus(legacy)).group(1)
+    assert legacy_schema != schema
 
 
 def test_collectors_do_not_embed_openviking_metric_name_literals():
@@ -203,7 +226,7 @@ def test_registry_deletion_hides_empty_families_but_keeps_contract(render_promet
     text = render_prometheus(registry)
     assert "removed_" not in text
     assert "untouched_total 0" in text and "untouched_gauge 0" in text
-    assert "untouched_histogram_count 0" in text
+    assert re.search(r'untouched_histogram_count\{bucket_schema="[0-9a-f]{16}"\} 0', text)
     exporter = OTelMetricExporter(registry=registry, enabled=False)
     request = exporter._build_export_request()
     metrics = {m.name: m for m in request.resource_metrics[0].scope_metrics[0].metrics}
@@ -226,7 +249,7 @@ def test_registry_deletion_hides_empty_families_but_keeps_contract(render_promet
     text = render_prometheus(registry)
     assert "removed_total 2" in text
     assert "removed_gauge 2.0" in text
-    assert "removed_histogram_count 1" in text
+    assert re.search(r'removed_histogram_count\{bucket_schema="[0-9a-f]{16}"\} 1', text)
     request = exporter._build_export_request()
     metrics = {m.name: m for m in request.resource_metrics[0].scope_metrics[0].metrics}
     assert metrics["removed_total"].sum.data_points[0].as_int == 2
@@ -250,7 +273,10 @@ def test_registry_partial_deletion_keeps_active_series(kind, render_prometheus):
     text = render_prometheus(registry)
     assert 'plugin="removed"' not in text
     sample = "active_count" if kind == "histogram" else "active"
-    assert f'{sample}{{plugin="kept"}} 1' in text
+    label_pattern = 'plugin="kept"'
+    if kind == "histogram":
+        label_pattern = 'bucket_schema="[0-9a-f]{16}",' + label_pattern
+    assert re.search(rf"{sample}\{{{label_pattern}\}} 1", text)
     delete("active", match_labels={"plugin": "kept"})
     assert "active" not in render_prometheus(registry)
     with pytest.raises(ValueError):
@@ -259,7 +285,7 @@ def test_registry_partial_deletion_keeps_active_series(kind, render_prometheus):
         handle.set((0, 0), 0, 0, labels={"plugin": "kept"})
     else:
         handle.set(0, labels={"plugin": "kept"})
-    assert f'{sample}{{plugin="kept"}} 0' in render_prometheus(registry)
+    assert re.search(rf"{sample}\{{{label_pattern}\}} 0", render_prometheus(registry))
 
 
 def test_registry_handles_validate_absolute_values(render_prometheus):
@@ -274,7 +300,9 @@ def test_registry_handles_validate_absolute_values(render_prometheus):
         assert dict(registry.iter_counters())["calls_total"] == [((), 1)]
     histogram = registry.histogram("latency", buckets=[1])
     histogram.set([1, 0], 1, 1)
-    assert "latency_sum 1.0" in render_prometheus(registry)
+    assert re.search(
+        r'latency_sum\{bucket_schema="[0-9a-f]{16}"\} 1.0', render_prometheus(registry)
+    )
     before = list(registry.iter_histograms())
     for counts, count, value_sum in (
         ((1,), 1, 1),

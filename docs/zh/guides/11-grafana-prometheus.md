@@ -333,7 +333,7 @@ sum by (route, status) (rate(openviking_http_requests_total[5m]))
 P95 延迟：
 
 ```promql
-histogram_quantile(0.95, sum by (le, route) (rate(openviking_http_request_duration_seconds_bucket[5m])))
+histogram_quantile(0.95, sum by (le, route, bucket_schema) (rate(openviking_http_request_duration_seconds_bucket[5m])))
 ```
 
 队列积压：

@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from openviking.metrics.core.base import MetricExporter
-from openviking.metrics.core.types import render_labels
+from openviking.metrics.core.types import histogram_schema, render_labels
 
 
 class PrometheusExporter(MetricExporter):
@@ -88,12 +88,12 @@ class PrometheusExporter(MetricExporter):
             self._add_help_and_type(lines, name, "histogram")
             series_list = list(series_iter)
             if not series_list and not label_names:
-                self._render_empty_histogram(lines, name, bucket_bounds)
-            else:
-                for labels, bucket_counts, count, value_sum in series_list:
-                    self._render_histogram_series(
-                        lines, name, bucket_bounds, labels, bucket_counts, count, value_sum
-                    )
+                series_list = [((), (0,) * (len(bucket_bounds) + 1), 0, 0.0)]
+            schema = ("bucket_schema", histogram_schema(bucket_bounds))
+            for labels, bucket_counts, count, value_sum in series_list:
+                self._render_histogram_series(
+                    lines, name, bucket_bounds, (*labels, schema), bucket_counts, count, value_sum
+                )
 
         # Process dropped series
         for metric_name, dropped in self._registry.iter_dropped_series():
@@ -133,18 +133,6 @@ class PrometheusExporter(MetricExporter):
             lines.append(f"{name} 0")
         for labels, value in gauge:
             lines.append(f"{name}{render_labels(labels)} {value}")
-
-    def _render_empty_histogram(
-        self, lines: list[str], name: str, bucket_bounds: tuple[float, ...]
-    ) -> None:
-        """Render an unlabeled histogram family with zero samples across every bucket."""
-        zero_counts = (0,) * (len(bucket_bounds) + 1)
-        cumulative = 0
-        for bound, c in _iter_histogram_buckets(bucket_bounds, zero_counts):
-            cumulative += c
-            lines.append(f"{name}_bucket{render_labels((('le', bound),))} {cumulative}")
-        lines.append(f"{name}_count 0")
-        lines.append(f"{name}_sum 0")
 
     def _render_histogram_series(
         self,

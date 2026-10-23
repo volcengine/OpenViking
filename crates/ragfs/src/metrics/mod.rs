@@ -68,6 +68,9 @@ pub(crate) fn operation_metrics(plugin: &str, stats: &FilesystemStats) -> Vec<Ra
                 1.0,
             ));
         }
+        if stats.count == 0 {
+            continue;
+        }
         metrics.push(RagfsMetric {
             name: "ragfs_operation_duration_seconds".into(),
             labels: [
@@ -149,6 +152,19 @@ pub(crate) fn lock_metrics(stats: LockMetrics) -> Vec<RagfsMetric> {
     metrics.push(RagfsMetric::counter(
         "lock_descendant_scan_duration_seconds_total", &[], stats.descendant_scan_duration_ns, 1e-9,
     ));
+    if stats.descendant_scan_count > 0 {
+        metrics.push(RagfsMetric {
+            name: "lock_descendant_scan_duration_seconds".into(),
+            labels: BTreeMap::new(),
+            value: RagfsMetricValue::Histogram {
+                bucket_bounds: DURATION_BUCKET_BOUNDS_NS.to_vec(),
+                bucket_counts: stats.descendant_scan_duration_bucket_counts,
+                count: stats.descendant_scan_count as u64,
+                sum: stats.descendant_scan_duration_ns,
+                scale: 1e-9,
+            },
+        });
+    }
     metrics
 }
 
