@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Queue consumer for restart-safe Session Phase 2 work."""
 
+import asyncio
 import json
+import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.observability.context import (
@@ -10,6 +12,7 @@ from openviking.observability.context import (
     reset_root_observability_context,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import TaskStatus
 from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import bind_task_context_from_message
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -17,9 +20,23 @@ from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from openviking.telemetry.span_models import create_root_span_attributes
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from openviking.service.session_service import SessionService
+
+logger = get_logger(__name__)
+_DEFAULT_STALLED_COMMIT_TIMEOUT_SECONDS = 1800.0
+
+
+def _session_commit_stall_timeout_seconds() -> float:
+    try:
+        from openviking_cli.utils.config import get_openviking_config
+
+        value = get_openviking_config().queue_workers.session_commit
+        return max(0.0, float(value.stalled_predecessor_timeout_seconds))
+    except Exception:
+        return _DEFAULT_STALLED_COMMIT_TIMEOUT_SECONDS
 
 
 class SessionCommitProcessor(DequeueHandlerBase):
@@ -75,7 +92,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                 )
                 return True
-            processed = await session.resume_queued_commit(msg)
+            processed = await self._resume_with_stall_watchdog(session, msg, ctx)
             if not processed:
                 from openviking.storage.queuefs import QueueManager, get_queue_manager
 
@@ -86,6 +103,72 @@ class SessionCommitProcessor(DequeueHandlerBase):
             return processed
         finally:
             reset_root_observability_context(root_context_token)
+
+    async def _resume_with_stall_watchdog(
+        self,
+        session: Any,
+        msg: SessionCommitMsg,
+        ctx: RequestContext,
+    ) -> bool:
+        timeout = _session_commit_stall_timeout_seconds()
+        if timeout <= 0:
+            return await session.resume_queued_commit(msg)
+
+        monitor = asyncio.create_task(self._watch_stalled_commit(msg, ctx, timeout))
+        try:
+            return await session.resume_queued_commit(msg)
+        finally:
+            monitor.cancel()
+            await asyncio.gather(monitor, return_exceptions=True)
+
+    async def _watch_stalled_commit(
+        self,
+        msg: SessionCommitMsg,
+        ctx: RequestContext,
+        timeout: float,
+    ) -> None:
+        tracker = get_task_tracker()
+        poll_interval = min(max(timeout / 10, 0.01), 30.0)
+        while True:
+            await asyncio.sleep(poll_interval)
+            task = await tracker.get(
+                msg.task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+            if task is None or task.status not in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                return
+
+            last_progress = tracker.last_progress_at(
+                msg.task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+            last_progress = max(task.updated_at, last_progress or task.updated_at)
+            idle_seconds = time.time() - last_progress
+            if idle_seconds < timeout:
+                continue
+
+            error = f"Session commit made no progress for {idle_seconds:.0f}s"
+            logger.error(
+                "Cancelling stalled session commit task=%s session=%s archive=%s idle=%.1fs "
+                "timeout=%.1fs: %s",
+                msg.task_id,
+                msg.session_id,
+                msg.archive_uri,
+                idle_seconds,
+                timeout,
+                error,
+            )
+            try:
+                await tracker.cancel(
+                    msg.task_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+            except ValueError as exc:
+                logger.warning("Could not cancel stalled session commit %s: %s", msg.task_id, exc)
+            return
 
     async def _finalize_cancelled(self, msg: SessionCommitMsg, ctx: RequestContext) -> None:
         session = self._session_service.session(

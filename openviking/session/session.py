@@ -2284,6 +2284,11 @@ class Session:
                             if isinstance(generated, _ArchiveSummaryResult)
                             else _ArchiveSummaryResult(overview=str(generated or ""))
                         )
+                        tracker.report_progress(
+                            task_id,
+                            account_id=self.ctx.account_id,
+                            user_id=self.ctx.user.user_id,
+                        )
                         checkpoint_records = self._checkpoints.build_records(
                             checkpoint_requests,
                             summary_result.checkpoint_summaries,
@@ -2363,6 +2368,11 @@ class Session:
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
                         result = await _run_retryable_phase2_step(operation_name, fn)
+                        tracker.report_progress(
+                            task_id,
+                            account_id=self.ctx.account_id,
+                            user_id=self.ctx.user.user_id,
+                        )
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
                         )
@@ -2559,6 +2569,16 @@ class Session:
                                     exc,
                                 )
 
+                async def _report_progress_while_waiting() -> None:
+                    while True:
+                        await asyncio.sleep(60.0)
+                        tracker.report_progress(
+                            task_id,
+                            account_id=self.ctx.account_id,
+                            user_id=self.ctx.user.user_id,
+                        )
+
+                keepalive = asyncio.create_task(_report_progress_while_waiting())
                 try:
                     task_context = get_task_context()
                     await tracker.wait_for_task_work(
@@ -2578,6 +2598,9 @@ class Session:
                         telemetry.telemetry_id,
                         _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
                     )
+                finally:
+                    keepalive.cancel()
+                    await asyncio.gather(keepalive, return_exceptions=True)
             finally:
                 unregister_telemetry(telemetry.telemetry_id)
 
