@@ -1097,7 +1097,9 @@ All size, timeout, and polling values must be greater than zero.
 ### rerank
 
 Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere,
-OpenAI-compatible APIs, LiteLLM, and Jev.
+OpenAI-compatible APIs, LiteLLM, and Jev. Identical rerank requests are served from a
+process-wide LRU result cache (1024 entries, 24-hour TTL); cache hits skip the provider
+call and therefore emit no rerank token-usage or call metrics.
 
 **Volcengine (VikingDB):**
 
