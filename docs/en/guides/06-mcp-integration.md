@@ -124,6 +124,8 @@ Enable `oauth.enabled` on the server and configure HTTPS as described in the OAu
 
 The built-in MCP tools are listed below. Use the connected server's `tools/list` response to determine which tools are available:
 
+<div v-pre>
+
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `find` | Fast semantic retrieval without session context. `context_type="skill"` on its own switches to package-level skill retrieval: one hit per skill package, its URI pointing at that package's `SKILL.md` and its summary taken from the skill itself, even when an auxiliary file inside the package is what matched. Without `target_uri` it searches both your own skills and the account-shared `viking://agent/skills`. Mixing `skill` with another context type keeps the generic retrieval path | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional), `read_content` (optional — inline each hit's content), `events_time_decay_protection` (optional) |
@@ -144,12 +146,14 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory). Deleting a skill directory this way leaves the skill's privacy configuration behind; remove a skill with `ov skills remove` or `DELETE /api/v1/skills/{name}` | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
 | `privacy_tree` | Check which credentials are saved; return active field metadata and references without values | `category` (optional) |
-| `privacy_resolve` | Turn a complete <code>&#123;&#123;ov_privacy:...&#125;&#125;</code> placeholder into one current field's actual value for immediate use | `reference` |
+| `privacy_resolve` | Turn a complete <code v-pre>{{ov_privacy:...}}</code> placeholder into one current field's actual value for immediate use | `reference` |
 | `privacy_upsert` | Save user-supplied credential fields with an atomic merge; return metadata and references without values | `category`, `target_key`, `values` |
 | `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true requires ADMIN/ROOT) |
 | `list_groups` | List group IDs in the caller's account without membership | None |
 | `get_acl` | Read direct, inherited and effective ACL; requires resource manage or account ADMIN | `uri` |
 | `set_acl` | Update a shared resource ACL; authorize against the permissions before the change | `uri`, `acl` |
+
+</div>
 
 To address your own workspace from an MCP tool, use the home alias `viking://~`. It
 expands to `viking://user/<current-user>` on every control plane (REST API, `ov` CLI,

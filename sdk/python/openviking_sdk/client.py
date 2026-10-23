@@ -2312,6 +2312,22 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
+    async def git_diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs under directories; a null base means an empty tree."""
+        params: Dict[str, Any] = {"paths": paths, "to": to_ref, "offset": offset, "limit": limit}
+        if from_ref is not None:
+            params["from"] = from_ref
+        response = await self._request("GET", "/api/v1/snapshot/diff-paths", params=params)
+        return self._handle_response(response)
+
     async def git_get_ignore(self) -> str:
         """Return the account ``.ovgitignore`` content (empty string if absent)."""
         response = await self._request("GET", "/api/v1/snapshot/ignore")
@@ -3307,6 +3323,20 @@ class AsyncHTTPSnapshotNamespace:
             to_ref=to_ref,
         )
 
+    async def diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs between snapshots under the supplied directories."""
+        return await self._client.git_diff_paths(
+            paths, from_ref=from_ref, to_ref=to_ref, offset=offset, limit=limit
+        )
+
     async def get_gitignore(self) -> str:
         return await self._client.git_get_ignore()
 
@@ -3394,6 +3424,22 @@ class SyncHTTPSnapshotNamespace:
     ) -> Dict[str, Any]:
         """Compare one file between two snapshot refs."""
         return run_async(self._ns().diff(path, from_ref=from_ref, to_ref=to_ref))
+
+    def diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs between snapshots under the supplied directories."""
+        return run_async(
+            self._ns().diff_paths(
+                paths, from_ref=from_ref, to_ref=to_ref, offset=offset, limit=limit
+            )
+        )
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

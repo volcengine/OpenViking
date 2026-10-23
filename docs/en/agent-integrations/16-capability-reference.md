@@ -549,7 +549,7 @@ Settings that apply only to some integrations:
 | Hermes (bundled) | No | None | None | Yes; `hermes memory status` lists environment overrides |
 | ov CLI | No | The CLI itself | None | `ov config` |
 
-Claude Code, Codex, Cursor, TRAE, ZCode, Kimi Code, DSH, and pi also install a **URI guard**: a file tool whose path is a `viking://` URI is denied with a hint to use the OpenViking tools, and a shell command that contains one runs with a notice attached. Which tools are checked differs by host and is listed in [Notes by integration](#notes-by-integration).
+Claude Code, Cursor, TRAE, ZCode, Kimi Code, DSH, and pi also install a **URI guard**: a file tool whose path is a `viking://` URI is denied with a hint to use the OpenViking tools, and a shell command that contains one runs with a notice attached. Which tools are checked differs by host and is listed in [Notes by integration](#notes-by-integration).
 
 <a id="_4-harness-profile-cards"></a>
 
@@ -571,11 +571,11 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Codex and TraeCode CLI 2.0
 
-[Codex Memory Plugin](./04-codex.md), [TRAE Memory Integration](./13-trae.md). A marketplace plugin with 6 hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse:Bash`, `Stop`, `SessionEnd`, `PreCompact`), an MCP proxy, and the same 4 skills as Claude Code.
+[Codex Memory Plugin](./04-codex.md), [TRAE Memory Integration](./13-trae.md). A marketplace plugin with 6 hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, `PreCompact`, `PostToolUse`), an MCP proxy, and the same 4 skills as Claude Code.
 
 - `SessionEnd` fires only on a clean exit and only on Codex 0.145 and later. Signals, crashes, older builds, and `codex app-server` deferral fall to the start-up sweep, which uses a 30-minute idle timeout.
 - `Stop` and `SessionEnd` write in a detached worker. A per-session lock orders the `Stop` worker, `PreCompact`, the `SessionEnd` worker, and the sweep.
-- Codex edits files with `apply_patch`, which has no path argument, so the URI guard on Bash only adds notices and never denies.
+- There is no URI guard. Codex writes a `PreToolUse` notice into the history between a tool call and its output, and Responses servers that check the history as chat messages, such as Volcengine Ark, reject that order with HTTP 400.
 - Codex keeps a trust record per hook. After an upgrade that adds hooks, approve the new ones in `/hooks`.
 - TraeCode CLI 2.0 (binary `traecli`, config `~/.trae/traecli.toml`) is a Codex-family CLI and installs this same plugin. Only version 2.0 is supported; the earlier standalone plugin for 1.0 has been removed, and `--harness trae-cli --uninstall` still removes a copy an old install left behind. A build without `SessionEnd` ignores that hook.
 

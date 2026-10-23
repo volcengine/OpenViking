@@ -27,16 +27,16 @@ class CompileLimits(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    # Estimated complete input tokens, including tools and repair/read history, before planning.
-    direct_input_tokens: int = Field(default=110_000, ge=1)
     # Soft request budget for prompt, input JSON, emit schema and estimated output space.
     # Larger indivisible records may exceed it; this is not the model's token limit.
     merge_input_chars: int = Field(default=60_000, ge=1)
     # Source text plus repeated context per range/read batch, independent of request packing.
     source_batch_chars: int = Field(default=40_000, ge=1)
     agent_iterations: int = 120
-    # Per-child model/tool rounds, including draft checks and submission; parent budget is separate.
+    # Per-transform model/tool rounds, including draft checks and submission; parent budget is separate.
     subagent_iterations: int = Field(default=70, ge=1)
+    # Final delivery review has a task-wide model/tool-round budget, including submission.
+    final_review_iterations: int = Field(default=300, ge=1)
     # Per-task Map workers, also used for Resource source subagents.
     source_concurrency: int = Field(default=6, ge=1)
     # Per-task Shuffle routing workers and embedding batches.
@@ -84,8 +84,15 @@ class SanitizedCompileRequest(BaseModel):
     skill: str
     # Inclusive source modification cutoff in UTC; None compiles all source files.
     last_compile_time: datetime | None = None
+    # Kernel change plan for incremental Compile; supersedes last_compile_time.
+    changes: dict[str, Any] | None = None
     # Rebuild resource index.md files from actual Markdown paths; preserve knowledge bodies.
     wiki_links: bool = Field(default=False, strict=True)
+
+
+def has_directory_plan(changes: dict[str, Any] | None) -> bool:
+    """Identify directory-based task inputs; request normalization validates their contents."""
+    return isinstance(changes, dict) and "diff_dirs" in changes and "full_dirs" in changes
 
 
 class WikiPageDraft(BaseModel):

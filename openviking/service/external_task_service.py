@@ -20,6 +20,7 @@ from openviking.service.task_tracker_concurrency import (
     run_to_completion,
 )
 from openviking.service.task_work_index import bind_task_context
+from openviking.storage.errors import ResourceBusyError
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils.logger import get_logger
@@ -157,7 +158,10 @@ class ExternalTaskService:
         connection: Mapping[str, Any],
         ctx: RequestContext,
         idempotency_key: str | None = None,
+        submission_payload: Mapping[str, Any] | None = None,
     ) -> TaskRecord:
+        """``submission_payload`` (default ``payload``) is what idempotent retries must match."""
+
         async def create_task():
             return await self._create(
                 task_type,
@@ -167,6 +171,7 @@ class ExternalTaskService:
                 connection=connection,
                 ctx=ctx,
                 idempotency_key=idempotency_key,
+                submission_payload=submission_payload,
             )
 
         if not idempotency_key:
@@ -189,10 +194,13 @@ class ExternalTaskService:
         connection: Mapping[str, Any],
         ctx: RequestContext,
         idempotency_key: str | None = None,
+        submission_payload: Mapping[str, Any] | None = None,
     ) -> TaskRecord:
         provider = self._provider(task_type)
         tracker = get_task_tracker()
-        request_hash = submission_request_hash(payload, private_payload)
+        request_hash = submission_request_hash(
+            payload if submission_payload is None else submission_payload, private_payload
+        )
         token = uuid4().hex
         task_id = (
             submission_task_id(ctx, task_type, provider.task_id_prefix, idempotency_key)
@@ -341,6 +349,17 @@ class ExternalTaskService:
                 self._owners.setdefault(key, set()).add(task_id)
             self._executing.add(task_id)
             claimed = True
+            on_start = getattr(provider, "on_start", None)
+            if on_start is not None:
+                started = await on_start(task)
+                if started == "busy":
+                    self._release(task)
+                    return False
+                if isinstance(started, ExternalTaskSnapshot):
+                    await self._apply_snapshot(
+                        started, task_id=task_id, account_id=account_id, user_id=user_id
+                    )
+                    return True
             await self._execute_task(task, provider, payload, account_id, user_id)
             return True
         except asyncio.CancelledError:
@@ -441,7 +460,12 @@ class ExternalTaskService:
             )
         auth = await self._task_auth(task_id, account_id, user_id)
         if task.stage in {None, "queued"} and not auth.get("external_task_id"):
-            self._release(task)
+            await self._apply_snapshot(
+                ExternalTaskSnapshot(status="cancelled"),
+                task_id=task_id,
+                account_id=account_id,
+                user_id=user_id,
+            )
             return
         await self._cancel_external(
             self._provider(task.task_type),
@@ -499,6 +523,19 @@ class ExternalTaskService:
                 f"Unknown external task status: {snapshot.status}",
                 transient=False,
             )
+        if task is not None:
+            on_finish = getattr(self._providers.get(task.task_type), "on_finish", None)
+            if on_finish is not None:
+
+                async def finish():
+                    """Keep lock retries inside cancellation-protected provider finalization."""
+                    while True:
+                        try:
+                            return await on_finish(task, snapshot)
+                        except ResourceBusyError:
+                            await asyncio.sleep(self._providers[task.task_type].poll_interval_seconds)
+
+                snapshot = await run_to_completion(finish)
 
         async def finalize() -> None:
             if snapshot.status == "failed":

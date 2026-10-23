@@ -170,6 +170,16 @@ async def _initialize_runtime_state(
     await service.initialize()
     await service.apply_agent_evolution_config()
     await _initialize_auth_plugin(app, service, config)
+    manager = getattr(app.state, "api_key_manager", None)
+    if manager is not None:
+        account_count = await service.reconcile_system_assets(manager)
+        logger.info("Reconciled system assets for %d active accounts", account_count)
+    compile_scheduler = getattr(service, "compile_scheduler", None)
+    if manager is not None and compile_scheduler is not None:
+        # Scheduled Compile re-verifies its saved key before every submission.
+        compile_scheduler.set_identity_resolver(
+            manager.resolve_identity, manager.get_user_group_ids
+        )
     from openviking.service.deletion import setup_deletion
 
     app.state.deletion_service = await setup_deletion(

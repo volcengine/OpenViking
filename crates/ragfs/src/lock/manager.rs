@@ -1548,9 +1548,32 @@ impl PathLockManager {
             let released_kind = entry.lock_kinds.get(&lock_path).copied();
             let remaining_kind = owner_registry.strongest_kind_excluding(lease_ref, &lock_path);
 
-            let result = if ref_count == 1 {
-                Self::remove_owned_token_with(provider, &lock_path, &owner.owner_id).await
-            } else if released_kind == Some(PathLockKind::Tree)
+            if ref_count == 1 {
+                if owner_registry
+                    .entries
+                    .get(lease_ref)
+                    .is_some_and(|entry| entry.lease.lock_paths.iter().all(|p| p == &lock_path))
+                {
+                    lease_registry.unpublish(lease_ref, &owner)?;
+                }
+                owner_registry.remove_path(lease_ref, &lock_path);
+                match Self::remove_owned_token_with(provider, &lock_path, &owner.owner_id).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if first_error.is_none() {
+                            first_error = Some(Self::release_changed_error(&lock_path));
+                        }
+                    }
+                    Err(release_error) => {
+                        if first_error.is_none() {
+                            first_error = Some(release_error);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let result = if released_kind == Some(PathLockKind::Tree)
                 && remaining_kind == Some(PathLockKind::Exact)
             {
                 Self::downgrade_token_to_exact_with(provider, &lock_path, &owner.owner_id)

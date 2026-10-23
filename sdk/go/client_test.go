@@ -952,7 +952,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/content/batch-write":
 			body := readJSONBody(t, r)
-			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" {
+			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != true {
 				t.Fatalf("body = %#v", body)
 			}
 			operations, ok := body["operations"].([]any)
@@ -994,7 +994,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			TagMode: "append",
 			ACL:     &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
 		},
-	}, &BatchWriteOptions{ProcessingMode: "vectors_only", Extra: map[string]any{"future_flag": 0}}); err != nil {
+	}, &BatchWriteOptions{ProcessingMode: "vectors_only", DeferProcessing: true, Extra: map[string]any{"future_flag": 0}}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := client.DownloadBytes(context.Background(), "resources/project/a.txt")

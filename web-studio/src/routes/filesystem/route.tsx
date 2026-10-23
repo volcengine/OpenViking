@@ -6,6 +6,8 @@ import {
   ArrowLeftIcon,
   BotIcon,
   ClipboardIcon,
+  HistoryIcon,
+  PackageIcon,
   PanelRightCloseIcon,
   PanelRightOpenIcon,
   TerminalIcon,
@@ -52,6 +54,8 @@ import {
   FilesystemResizeHandle,
 } from './-components/context-explorer'
 import { TerminalPanel } from './-components/terminal-panel'
+import { DataManagementDialog } from './-components/data-management-dialog'
+import { SnapshotComparisonDialog } from './-components/snapshot-comparison-dialog'
 import {
   ROOT_URI,
   FILESYSTEM_LEFT_WIDTH,
@@ -143,6 +147,9 @@ function FilesystemWorkbench() {
   )
   const [findPaletteOpen, setFindPaletteOpen] = useState(false)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
+  const [dataManagementMode, setDataManagementMode] = useState<
+    'history' | 'transfer' | 'compare' | null
+  >(null)
   const [openingUri, setOpeningUri] = useState<string | null>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
   const [leftWidth, setLeftWidth] = useState(() =>
@@ -200,7 +207,7 @@ function FilesystemWorkbench() {
     refreshTasks,
     tasks,
   } = useResourceUpload()
-  const { invalidateList } = useInvalidateVikingFs()
+  const { invalidateAll, invalidateList } = useInvalidateVikingFs()
 
   const syncSearch = useCallback(
     (next: {
@@ -448,6 +455,15 @@ function FilesystemWorkbench() {
   }, [])
 
   const selectedUri = selectedFile?.uri ?? currentUri
+  const selectedIsDirectory = selectedFile?.isDir ?? true
+  const transferUri = selectedIsDirectory
+    ? selectedUri
+    : normalizeDirUri(parentUri(selectedUri))
+  useEffect(() => {
+    setDataManagementMode(null)
+  }, [selectedUri])
+  const canManageSelectedUri = selectedUri !== ROOT_URI
+  const canTransferSelectedUri = transferUri.startsWith('viking://resources/')
   const displayUri =
     selectedUri === ROOT_URI ? selectedUri : selectedUri.replace(/\/$/, '')
   const entries = visibleContextEntries(listQuery.data?.entries ?? [])
@@ -620,6 +636,33 @@ function FilesystemWorkbench() {
             >
               <ClipboardIcon className="size-4" />
             </Button>
+            {canManageSelectedUri ? (
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                title={t('dataManagement:historyTitle')}
+                aria-label={t('dataManagement:historyTitle')}
+                onClick={() => setDataManagementMode('history')}
+              >
+                <HistoryIcon className="size-4" />
+              </Button>
+            ) : null}
+            {canTransferSelectedUri ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                title={t('dataManagement:transferTitle')}
+                aria-label={t('dataManagement:transferTitle')}
+                onClick={() => setDataManagementMode('transfer')}
+              >
+                <PackageIcon className="size-4" />
+                <span className="hidden sm:inline">
+                  {t('dataManagement:transferShortLabel')}
+                </span>
+              </Button>
+            ) : null}
             {canUseLocalTools ? (
               <div className="flex shrink-0 items-center gap-1 lg:hidden">
                 <Button
@@ -745,6 +788,23 @@ function FilesystemWorkbench() {
             tasks={tasks}
           />
         </>
+      ) : null}
+      {dataManagementMode === 'compare' ? (
+        <SnapshotComparisonDialog
+          key={`${identityScopeKey}:${selectedUri}:compare`}
+          onClose={() => setDataManagementMode(null)}
+          uri={selectedUri}
+        />
+      ) : dataManagementMode ? (
+        <DataManagementDialog
+          key={`${identityScopeKey}:${dataManagementMode === 'transfer' ? transferUri : selectedUri}:${dataManagementMode}`}
+          mode={dataManagementMode}
+          onClose={() => setDataManagementMode(null)}
+          onCompare={() => setDataManagementMode('compare')}
+          onChanged={() => void invalidateAll()}
+          uri={dataManagementMode === 'transfer' ? transferUri : selectedUri}
+          isDirectory={dataManagementMode === 'transfer' || selectedIsDirectory}
+        />
       ) : null}
       <FindPalette
         open={findPaletteOpen}

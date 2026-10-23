@@ -227,8 +227,8 @@ class FileDraft(StrictModel):
         description="When editing a historical_files entry, copy its base_hash. Omit for new files.",
     )
     inputs: list[str] = Field(
-        min_length=1,
-        description="Unique supplied input IDs actually used by this file; multiple inputs may support "
+        default_factory=list,
+        description="Nonempty list of unique supplied input IDs supporting this file; multiple inputs may support "
         "one file, and one input may support multiple files.",
     )
 

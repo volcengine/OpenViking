@@ -5,9 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import yaml
 
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
+from openviking.session.memory.account_templates import memory_template_data
+from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage import content_write as content_write_module
 from openviking.storage.abstract_overview import (
@@ -27,6 +30,7 @@ class _FakePathLock:
     def __init__(self):
         self._lease = SimpleNamespace(id="lock-1")
         self.exact_acquire_calls = []
+        self.exact_batch_acquire_calls = []
         self.tree_acquire_calls = []
         self.release_calls = []
         self.to_handoff_calls = []
@@ -39,6 +43,10 @@ class _FakePathLock:
     async def pathlock_acquire_tree(self, lock_path):
         self.tree_acquire_calls.append(lock_path)
         raise AssertionError("Skill content writes must not acquire a package tree lock")
+
+    async def pathlock_acquire_exact_batch(self, lock_paths):
+        self.exact_batch_acquire_calls.append(lock_paths)
+        return self._lease
 
     async def pathlock_release(self, lease):
         self.release_calls.append(lease.id)
@@ -57,6 +65,7 @@ class _FakePathLock:
 class _FakeVikingFS:
     def __init__(self):
         self.write_file = AsyncMock()
+        self.write_file_bytes = AsyncMock()
         self.read_file = AsyncMock(return_value="previous")
         self._async_agfs = _FakePathLock()
 
@@ -239,6 +248,76 @@ async def test_missing_generated_sidecar_is_rejected_after_exact_lock(monkeypatc
 
     assert events == ["lock"]
     coordinator._classify_locked_write_target.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_managed_template_is_validated_before_single_write(ctx):
+    fake_fs = _FakeVikingFS()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+    coordinator._write_file_only = AsyncMock()
+
+    with pytest.raises(InvalidArgumentError, match="complete deployment template"):
+        await coordinator._write(
+            uri="viking://system/memory/memory_templates/custom/profile.yaml",
+            content="memory_type: profile\ndescription: Partial\n",
+            mode="replace",
+            ctx=ctx,
+        )
+
+    coordinator._write_file_only.assert_not_awaited()
+    assert fake_fs._async_agfs.exact_acquire_calls == []
+
+
+@pytest.mark.asyncio
+async def test_managed_template_single_write_replaces_server_timestamp(ctx):
+    fake_fs = _FakeVikingFS()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+    coordinator._write_file_only = AsyncMock(return_value={"semantic_status": "skipped"})
+    data = memory_template_data(get_default_registry().get("profile"))
+    data["description"] += "\nAccount instructions."
+    data["_updated_at"] = "forged"
+
+    await coordinator._write(
+        uri="viking://system/memory/memory_templates/custom/profile.yaml",
+        content=yaml.safe_dump(data),
+        mode="replace",
+        ctx=ctx,
+    )
+
+    normalized = yaml.safe_load(coordinator._write_file_only.await_args.kwargs["content"])
+    assert normalized.pop("_updated_at") != "forged"
+    assert normalized == {key: value for key, value in data.items() if key != "_updated_at"}
+
+
+@pytest.mark.asyncio
+async def test_managed_template_batch_is_preflighted_before_any_lock(ctx):
+    fake_fs = _FakeVikingFS()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+    root = "viking://system/memory/memory_templates/custom"
+    coordinator._validate_batch_root = AsyncMock()
+    coordinator._normalize_batch_operations = AsyncMock(
+        return_value=[
+            {
+                "uri": f"{root}/profile.yaml",
+                "content": "memory_type: profile\ndescription: Partial\n",
+                "mode": "replace",
+                "expected_sha256": None,
+                "ingest_options": IngestOptions(),
+            },
+            {
+                "uri": f"{root}/customer-defined.yaml",
+                "content": "arbitrary",
+                "mode": "replace",
+                "expected_sha256": None,
+                "ingest_options": IngestOptions(),
+            },
+        ]
+    )
+
+    with pytest.raises(InvalidArgumentError, match="complete deployment template"):
+        await coordinator._batch_write(root_uri=root, operations=[{}], ctx=ctx)
+
+    assert fake_fs._async_agfs.exact_batch_acquire_calls == []
 
 
 def test_new_memory_file_renders_from_replace_mode_and_explicit_new_file_state():

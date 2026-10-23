@@ -840,6 +840,14 @@ enum Commands {
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
         #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
         acl: Option<serde_json::Value>,
+        /// Who made the edit, recorded in Compile output versions
+        #[arg(
+            long = "edit-source",
+            default_value = "agent",
+            value_parser = ["manual", "agent", "compile"],
+            help_heading = "Advanced options"
+        )]
+        edit_source: String,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -1526,6 +1534,22 @@ pub(crate) enum SnapshotCmd {
         /// Newer commit oid, branch, or tag
         #[arg(long = "to")]
         to_ref: String,
+    },
+    /// List changed source files under directories between two snapshots
+    DiffPaths {
+        /// Directory URIs (comma-separated)
+        #[arg(long, value_delimiter = ',', required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// Older commit oid, branch, or tag; omit to compare an empty tree
+        #[arg(long = "from")]
+        from_ref: Option<String>,
+        /// Newer commit oid, branch, or tag
+        #[arg(long = "to")]
+        to_ref: String,
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=1000))]
+        limit: u32,
     },
     /// Get the account .ovgitignore content
     IgnoreGet,
@@ -3870,6 +3894,7 @@ async fn main() {
             tags,
             tag_mode,
             acl,
+            edit_source,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -3888,6 +3913,7 @@ async fn main() {
                 tags,
                 tag_mode,
                 acl,
+                edit_source,
                 ctx,
             )
             .await
@@ -5027,11 +5053,14 @@ mod tests {
             "content",
             "--tag-mode",
             "clear",
+            "--edit-source",
+            "compile",
         ])
-        .expect("write clear mode should parse");
+        .expect("write clear mode with Compile source should parse");
         assert!(matches!(
             write.command,
-            Commands::Write { tag_mode, tags, .. } if tag_mode == "clear" && tags.is_empty()
+            Commands::Write { tag_mode, tags, edit_source, .. }
+                if tag_mode == "clear" && tags.is_empty() && edit_source == "compile"
         ));
 
         let reindex = Cli::try_parse_from([

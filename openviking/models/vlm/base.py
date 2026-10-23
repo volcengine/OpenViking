@@ -204,7 +204,8 @@ class VLMBase(ABC):
             f"VLM provider {self.provider!r} does not support audio/video inputs"
         )
 
-    def _clean_response(self, content: str) -> str:
+    @staticmethod
+    def _clean_response(content: str) -> str:
         """Strip reasoning tags (e.g. ``<think>...</think>``) from model output."""
         return _THINK_TAG_RE.sub("", content).strip()
 

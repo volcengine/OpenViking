@@ -8,11 +8,13 @@ import resources from './en/resources'
 import activity from './en/activity'
 import memoryTemplates from './en/memory-templates'
 import gateway from './en/gateway'
+import dataManagement from './en/data-management'
 
 const en = {
   studio,
   onboarding,
   gateway,
+  dataManagement,
   compile,
   vikingbot,
   ...workspace,

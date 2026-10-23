@@ -14,7 +14,6 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Session-start profile injection** on `startup`, `clear`, and `resume`: load `profile.md` plus abstract-annotated indexes of `preferences/` and `entities/` through the shared CJK-aware profile builder, followed by an `<available-skills>` catalog of your own and account-shared OpenViking skills.
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
 - **OV-Usage source summaries** after each answer: show sources made available through automatic recall and explicit OpenViking lookups, with optional source URI and query details.
-- **`viking://` notice on `PreToolUse` (`Bash`)**: a shell command that carries a `viking://` URI still runs, and the model is told that the URI is an OpenViking virtual path and which MCP tool reads it.
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. When `pending_tokens` reaches `OPENVIKING_COMMIT_TOKEN_THRESHOLD`, commit and archive every captured message.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionEnd`** (Codex ≥ 0.145): when a thread shuts down gracefully, catch up any turns `Stop` never sent and commit the OV session, so the extractor runs on the whole conversation the moment you leave.
@@ -380,14 +379,6 @@ Client-side knobs can also live in `~/.openviking/ovcli.conf` under
 layers; resolution order is env vars → the workspace layers → `plugin.codex` →
 `plugin` → the legacy `codex` block in `ov.conf` → defaults.
 
-### viking:// URI notice (PreToolUse on Bash)
-
-`viking://` URIs are OpenViking virtual paths, so `cat viking://…` or `ls viking://…` cannot open them. `uri-guard.mjs` runs before every `Bash` call. When the command contains a `viking://` URI, it returns `hookSpecificOutput.additionalContext` without a `permissionDecision`: the command runs unchanged, and the model is told which OpenViking MCP tool reads the URI and to ignore the notice when the URI is intentional data (an `ov` CLI argument, an HTTP payload, a search pattern). A command without a `viking://` URI gets no output.
-
-Nothing is denied: Codex edits files through `apply_patch`, whose input is a patch body rather than a path (Codex's `Edit` / `Write` matchers are aliases for it), so there is no path argument to guard.
-
-> **Upgrading to 0.9.1**: `PreToolUse` is a newly registered hook event. Run `/hooks` in Codex after updating and approve it; until then shell commands run without the notice.
-
 ### Stop (turn end → `add_message`, threshold commit)
 
 `auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append. Tool calls and results become dedicated `tool` parts and `tool_output` is reported verbatim — the server externalizes anything larger than `tool_output_externalization.threshold_chars` (default `20000`) and leaves a synopsis stub plus `tool_output_ref`, so the original stays readable via `/api/v1/sessions/{id}/tool-results`. `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default `1000000`) is only a guard against pathological payloads. Configured `captureFilters` rules run last, just before the payload is sent — see [Input filters](#input-filters).
@@ -424,7 +415,6 @@ Codex's hook output schema differs from Claude Code's. Notably:
 |------|------------------------|--------------------------------------|
 | `SessionStart`   | `source` (`startup`/`resume`/`clear`), `session_id`, `cwd` | `hookSpecificOutput.additionalContext`; may also include `systemMessage` when an orphaned session was committed |
 | `UserPromptSubmit` | `prompt`, `session_id`                     | `hookSpecificOutput.additionalContext` |
-| `PreToolUse` (`Bash`) | `tool_name`, `tool_input.command`       | `hookSpecificOutput.additionalContext` with no `permissionDecision`, so the command still runs; no output when the command has no `viking://` URI |
 | `Stop`           | `last_assistant_message`, `transcript_path`, `session_id` | `systemMessage` (only) |
 | `PreCompact`     | `trigger` (`manual`/`auto`), `transcript_path`, `session_id` | `systemMessage` (only) |
 | `SessionEnd`     | `session_id`, `transcript_path`, `cwd`, `reason` (constant `other`) | none — Codex ignores the output; the script prints `{}` for symmetry |
@@ -484,7 +474,7 @@ codex-memory-plugin/
 ├── .codex-plugin/
 │   └── plugin.json              # Plugin manifest (hooks + mcp wiring)
 ├── hooks/
-│   └── hooks.json               # SessionStart + UserPromptSubmit + PreToolUse + Stop
+│   └── hooks.json               # SessionStart + UserPromptSubmit + Stop
 │                                  + SessionEnd + PreCompact (uses Codex's native
 │                                  ${PLUGIN_ROOT} token; no rendering needed on modern Codex)
 ├── skills/
@@ -505,7 +495,6 @@ codex-memory-plugin/
 │   ├── session-start-commit.mjs # SessionStart hook (profile + fallback sweep + resume archive)
 │   ├── session-end.mjs          # SessionEnd hook (mark + detached catch-up + commit)
 │   ├── pre-compact-capture.mjs  # PreCompact hook
-│   ├── uri-guard.mjs            # PreToolUse hook (viking:// notice on Bash)
 │   └── *.test.mjs               # node --test suites (session-end, pre-compact, ...)
 ├── servers/
 │   └── mcp-proxy.mjs            # stdio -> OpenViking /mcp bridge

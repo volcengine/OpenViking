@@ -60,15 +60,13 @@ export function getLastDaysRange(
   startDate: string
 } {
   const tz = timeZone ?? getViewerTimezone()
-  const now = new Date()
-  // Walk back `days - 1` UTC midnights from now and convert each instant in
-  // the viewer's tz; using millisecond arithmetic keeps the math safe across
-  // DST transitions because we never inspect a local hour.
-  const dayMs = 24 * 60 * 60 * 1000
-  const earlier = new Date(now.getTime() - (days - 1) * dayMs)
+  const endDate = formatDateInTimezone(new Date(), tz)
+  // Use UTC only for calendar arithmetic on the viewer's date, not elapsed time.
+  const earlier = new Date(`${endDate}T00:00:00Z`)
+  earlier.setUTCDate(earlier.getUTCDate() - (days - 1))
   return {
-    endDate: formatDateInTimezone(now, tz),
-    startDate: formatDateInTimezone(earlier, tz),
+    endDate,
+    startDate: earlier.toISOString().slice(0, 10),
   }
 }
 

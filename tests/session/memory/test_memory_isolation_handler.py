@@ -92,6 +92,20 @@ class TestGetReadScope:
 
         assert handler._message_target_id(message) is None
 
+    def test_writable_message_target_requires_a_resolvable_owner_message(self):
+        ctx = create_ctx()
+        assistant_only = MemoryIsolationHandler(
+            ctx,
+            create_mock_extract_context([create_message("assistant")]),
+        )
+        with_user_message = MemoryIsolationHandler(
+            ctx,
+            create_mock_extract_context([create_message("user")]),
+        )
+
+        assert not assistant_only.has_writable_message_target()
+        assert with_user_message.has_writable_message_target()
+
     def test_deduplicate_users(self):
         """Test that duplicate users are deduplicated."""
         ctx = create_ctx()

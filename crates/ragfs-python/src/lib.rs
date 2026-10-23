@@ -1803,6 +1803,30 @@ impl RAGFSBindingClient {
         })
     }
 
+    /// List changed files under directories between two commits.
+    #[pyo3(signature = (**kwargs))]
+    fn git_diff_paths(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Vec<(String, String)>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let empty = PyDict::new(py);
+        let kw = kwargs.unwrap_or(&empty);
+        let req = git::parse_diff_paths_request(kw)?;
+        let resp = py_detach_blocking(py, move || {
+            self.rt
+                .block_on(svc.diff_paths(&req.account, req.base.as_deref(), &req.head, &req.paths))
+        })
+        .map_err(|e| git::map_git_error(py, e))?;
+        Ok(resp
+            .into_iter()
+            .map(|(path, change)| (path, change.to_string()))
+            .collect())
+    }
+
     /// Walk snapshot history, optionally filtered to commits touching paths.
     #[pyo3(signature = (**kwargs))]
     fn git_log(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Py<PyAny>> {

@@ -144,7 +144,7 @@ const directory: VikingFsEntry = {
 
 function renderPreview(
   entry: VikingFsEntry,
-  onNavigate: (uri: string) => void,
+  onNavigate?: (uri: string) => void,
   directoryOverview?: string,
   directoryAbstract?: string,
 ) {
@@ -180,9 +180,38 @@ describe('FilePreview Markdown rendering', () => {
   beforeEach(() => {
     cleanup()
     previewMocks.renderMermaid.mockClear()
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:internal-image'),
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    })
   })
   afterEach(() => {
     previewState.override = null
+  })
+
+  it('shows available file metadata at the bottom and omits missing values', () => {
+    const { container, rerender } = renderPreview(file, vi.fn())
+    expect(container.querySelector('footer')?.textContent).toBe(
+      '24 B · 2026-08-04 12:00',
+    )
+    expect(
+      container.querySelector('footer')?.previousElementSibling,
+    ).toBeTruthy()
+
+    rerender(
+      <FilePreview
+        file={{ ...file, size: '', sizeBytes: null, modTime: '' }}
+        onClose={vi.fn()}
+        onNavigate={vi.fn()}
+        showCloseButton={false}
+      />,
+    )
+    expect(container.querySelector('footer')).toBeNull()
+    expect(container.textContent).not.toContain('- · -')
   })
 
   it('opens internal Markdown links in the resource preview', () => {
@@ -197,6 +226,79 @@ describe('FilePreview Markdown rendering', () => {
     expect(onNavigate).toHaveBeenCalledOnce()
     expect(onNavigate).toHaveBeenCalledWith('viking://resources/wiki/target.md')
     expect(previewMocks.renderMermaid).not.toHaveBeenCalled()
+  })
+
+  it('renders explicit and relative internal images through authenticated downloads', async () => {
+    previewState.override = {
+      content: [
+        '![Explicit](viking://resources/wiki/photo.jpg)',
+        '![Relative](./photo.jpg)',
+        '[Open image](viking://resources/wiki/photo.jpg)',
+      ].join('\n\n'),
+      fileType: 'markdown',
+    }
+    vi.mocked(getContentDownload).mockResolvedValue({
+      data: new Blob(['image'], { type: 'image/jpeg' }),
+    } as never)
+    const onNavigate = vi.fn()
+    renderPreview(file, onNavigate)
+
+    await screen.findByRole('img', { name: 'Explicit' })
+    await screen.findByRole('img', { name: 'Relative' })
+    expect(getContentDownload).toHaveBeenCalledWith({
+      query: { uri: 'viking://resources/wiki/photo.jpg' },
+      responseType: 'blob',
+      throwOnError: true,
+    })
+    expect(
+      screen.getAllByRole('link', { name: /Explicit|Relative/ }),
+    ).toHaveLength(2)
+    fireEvent.click(screen.getByRole('link', { name: 'Relative' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Open image' }))
+    expect(onNavigate).toHaveBeenCalledTimes(2)
+    expect(onNavigate).toHaveBeenCalledWith('viking://resources/wiki/photo.jpg')
+  })
+
+  it('keeps a linked image on its enclosing destination without nested links', async () => {
+    previewState.override = {
+      content: '[![Linked image](./photo.jpg)](./target.md)',
+      fileType: 'markdown',
+    }
+    vi.mocked(getContentDownload).mockResolvedValue({
+      data: new Blob(['image'], { type: 'image/jpeg' }),
+    } as never)
+    const onNavigate = vi.fn()
+    const { container } = renderPreview(file, onNavigate)
+    await screen.findByRole('img', { name: 'Linked image' })
+
+    const link = screen.getByRole('link', { name: 'Linked image' })
+    expect(link.getAttribute('href')).toBe('viking://resources/wiki/target.md')
+    expect(container.querySelector('a a')).toBeNull()
+    fireEvent.click(link)
+    expect(onNavigate).toHaveBeenCalledOnce()
+    expect(onNavigate).toHaveBeenCalledWith('viking://resources/wiki/target.md')
+  })
+
+  it('leaves images display-only without navigation and strips unsafe markup', async () => {
+    previewState.override = {
+      content: [
+        '![Display only](./photo.jpg)',
+        '[Unsafe](javascript:alert(1))',
+        '<img src="javascript:alert(1)" onerror="alert(1)" />',
+      ].join('\n\n'),
+      fileType: 'markdown',
+    }
+    vi.mocked(getContentDownload).mockResolvedValue({
+      data: new Blob(['image'], { type: 'image/jpeg' }),
+    } as never)
+    const { container } = renderPreview(file)
+    await screen.findByRole('img', { name: 'Display only' })
+
+    expect(screen.queryByRole('link', { name: 'Display only' })).toBeNull()
+    expect(container.querySelector('[onerror]')).toBeNull()
+    expect(
+      container.querySelector('[href^="javascript:"], [src^="javascript:"]'),
+    ).toBeNull()
   })
 
   it('opens viking links from a directory overview', () => {

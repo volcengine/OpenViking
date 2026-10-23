@@ -18,7 +18,7 @@ OpenViking's current prompts fall into two main groups:
    - Stored under `openviking/prompts/templates/<category>/*.yaml`
    - Used to instruct the model to perform tasks such as image understanding, document summarization, memory extraction, and retrieval intent analysis
 2. Memory schema templates
-   - Stored under `openviking/prompts/templates/memory/*.yaml`
+   - Stored under `openviking/system_assets/memory/memory_templates/builtin/*.yaml`
    - Used to define the fields, filename templates, content templates, and directory rules for a memory type
 
 From a usage perspective, these templates mainly serve the following processing stages:
@@ -231,7 +231,7 @@ These YAML files define the structure of different memory types. They are not si
   - Effective stage: experience-memory persistence and update stage
   - Affects: reusable guidance distilled from task outcomes
   - Purpose: records durable execution experience and the memories it supersedes
-  - Key fields: `experience_name`, `content`, `supersedes`
+  - Key fields: `experience_name`, `content`, `supersedes` (optional; omit when not replacing another experience)
 
 - `identity`
   - Effective stage: agent identity memory persistence stage

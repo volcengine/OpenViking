@@ -17,7 +17,7 @@
  * fire — SubagentStart/Stop are the only two events we see for subagents.
  */
 
-import { writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
@@ -67,6 +67,13 @@ runHookStage({
   // own OV session distinct from the parent.
   const ovSessionId = deriveOvSessionId(sessionId, `subagent:${subagentId}`);
 
+  // A resumed subagent keeps its agent_id; keep the capture cursor so its next
+  // stop does not resend turns an earlier stop already pushed.
+  let capturedTurnCount;
+  try {
+    capturedTurnCount = JSON.parse(await readFile(stateFile(subagentId), "utf-8")).capturedTurnCount;
+  } catch { /* no earlier state */ }
+
   try {
     await mkdir(STATE_DIR, { recursive: true });
     await writeFile(
@@ -79,6 +86,7 @@ runHookStage({
         peerId: effectivePeer.peerId,
         peerSource: effectivePeer.source,
         startedAt: Date.now(),
+        capturedTurnCount,
       }),
     );
   } catch (err) {

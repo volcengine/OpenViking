@@ -25,11 +25,10 @@ def load_expiry_config(path: Path):
 
     raw = json.loads(os.path.expandvars(path.expanduser().read_text(encoding="utf-8-sig")))
     config = OpenVikingConfig.from_dict(raw)
-    idle = config.memory.session_auto_commit
-    if not idle.enabled or idle.idle_backend != "redis":
+    if not config.uses_redis_expiry():
         raise ValueError(
-            "expiry publisher requires memory.session_auto_commit.enabled=true "
-            "and idle_backend='redis'"
+            "expiry publisher requires memory.session_auto_commit.idle_backend='redis' "
+            "or compile_api.scheduler_enabled=true (Redis)"
         )
     if not config.expiry.publisher_separate_process:
         raise ValueError("expiry publisher process is disabled by configuration")

@@ -287,3 +287,31 @@ async def test_project_credentials_use_account_identity_and_validate_reference(m
         fetch.return_value = {"access_token": "token", "account": account}
         with pytest.raises(InternalError, match="user key"):
             await auth.project_auth_config(args, ctx)
+
+
+@pytest.mark.asyncio
+async def test_confluence_credentials_use_bearer_token_and_validate_reference(monkeypatch):
+    ctx = SimpleNamespace(user=SimpleNamespace(user_id="alice"), api_key="caller-key")
+    reference = {**REFERENCE, "platform": "confluence"}
+    fetch = Mock(return_value={"access_token": " token ", "expires_at": 4102444800})
+    monkeypatch.setattr(ConnectorClient, "get_oauth_access_token", fetch)
+    args = {auth.OAUTH_REF_ARG: reference}
+
+    assert await auth.confluence_auth_config(args, ctx) == {"access_token": "token"}
+
+    fetch.assert_called_once_with(auth.external_auth_url(), "caller-key", reference)
+    assert args == {auth.OAUTH_REF_ARG: reference}
+    with pytest.raises(InvalidArgumentError):
+        auth.validate_oauth_ref(reference, "alice")
+    for invalid in (None, REFERENCE, {**reference, "ov_user_id": "bob"}):
+        with pytest.raises(InvalidArgumentError):
+            await auth.confluence_auth_config({auth.OAUTH_REF_ARG: invalid}, ctx)
+    for extra in (
+        {"auth_config": {"api_token": "token"}},
+        {"access_token": "token"},
+        {"api_token": "token"},
+        {"email": "user@example.com"},
+    ):
+        with pytest.raises(InvalidArgumentError):
+            await auth.confluence_auth_config({**args, **extra}, ctx)
+    assert fetch.call_count == 1

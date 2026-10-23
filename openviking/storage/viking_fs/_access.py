@@ -17,6 +17,7 @@ from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
 )
+from openviking.core.namespace_policy import is_system_custom_asset_uri, is_system_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
@@ -167,6 +168,23 @@ class _AccessMixin:
         digest = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()
         return f"{mount_prefix}{temp_root}/{digest}.encrypt"
 
+    @staticmethod
+    def _system_permission_allows(
+        uri: str,
+        ctx: RequestContext,
+        action: AclAction,
+    ) -> bool:
+        """Apply the fixed role and path policy for the account system namespace."""
+        if ctx.role == Role.ROOT:
+            return True
+        if action is AclAction.READ:
+            return True
+        return (
+            ctx.role == Role.ADMIN
+            and action in {AclAction.WRITE, AclAction.MANAGE}
+            and is_system_custom_asset_uri(uri)
+        )
+
     async def _can_access_many(
         self,
         uris: Sequence[str],
@@ -187,13 +205,22 @@ class _AccessMixin:
             else:
                 valid.append(uri)
 
+        remaining: List[str] = []
+        for uri in valid:
+            if is_system_uri(uri):
+                result[uri] = self._system_permission_allows(uri, real_ctx, action)
+            else:
+                remaining.append(uri)
+        if not remaining:
+            return result
+
         acl_manager = self.acl_manager
         if acl_manager is None or not await acl_manager.is_enabled(real_ctx.account_id):
-            result.update({uri: self._is_accessible(uri, real_ctx) for uri in valid})
+            result.update({uri: self._is_accessible(uri, real_ctx) for uri in remaining})
             return result
 
         pending: List[str] = []
-        for uri in valid:
+        for uri in remaining:
             if is_watch_task_control_uri(uri):
                 result[uri] = self._is_accessible(uri, real_ctx)
                 continue

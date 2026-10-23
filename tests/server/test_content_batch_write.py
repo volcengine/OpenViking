@@ -44,6 +44,11 @@ class _PathLockClient:
         self.held = True
         return {"lease_ref": "lock-1"}
 
+    async def pathlock_acquire_exact(self, path):
+        self.paths = [path]
+        self.held = True
+        return {"lease_ref": "lock-1"}
+
     async def pathlock_to_handoff(self, lease):
         assert lease == {"lease_ref": "lock-1"}
         assert self.held is True
@@ -123,6 +128,157 @@ class _VFS:
         self.writes.append(uri)
 
 
+@pytest.mark.asyncio
+async def test_system_write_is_file_only_without_queue_work(
+    _coordinator_queue_for_unit_tests,
+):
+    root = "viking://system/memory/memory_templates/custom/demo"
+    uri = f"{root}/template.md"
+    vfs = _VFS(root)
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
+
+    result = await coordinator.write(
+        uri=uri,
+        content="template",
+        ctx=ctx,
+        wait=False,
+    )
+
+    assert vfs.files[uri] == "template"
+    assert vfs._async_agfs.releases == 1
+    assert vfs._async_agfs.handoffs == 0
+    assert result["root_uri"] == root
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+    assert result["queue_status"] is None
+    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_awaited_once()
+    _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_system_batch_write_is_file_only_without_queue_work(
+    _coordinator_queue_for_unit_tests,
+):
+    root = "viking://system/memory/memory_templates/custom/demo"
+    first = f"{root}/first.md"
+    second = f"{root}/second.md"
+    vfs = _VFS(root, {first: "old"})
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {"uri": first, "content": "new"},
+            {"uri": second, "content": "created"},
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+
+    assert result["updated"] == [first]
+    assert result["created"] == [second]
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+    assert result["queue_status"] is None
+    assert vfs._async_agfs.releases == 1
+    assert vfs._async_agfs.handoffs == 0
+    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_awaited_once()
+    _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_system_builtin_batch_write_accepts_binary_assets(
+    _coordinator_queue_for_unit_tests,
+):
+    root = "viking://system/compile/example-skills"
+    uri = f"{root}/demo/assets/icon.bin"
+    content = b"\x89PNG\r\n\x1a\nasset"
+    vfs = _VFS(root)
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": uri,
+                "content_base64": base64.b64encode(content).decode("ascii"),
+                "mode": "replace",
+            }
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+
+    assert result["created"] == [uri]
+    assert vfs.files[uri] == content
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_awaited_once()
+    _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_skill_namespace_batch_write_remains_rejected():
+    root = "viking://user/default/skills"
+    coordinator = ContentWriteCoordinator(_VFS(root))
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    with pytest.raises(
+        InvalidArgumentError,
+        match="batch-write root must be a resource or memory directory",
+    ):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[
+                {
+                    "uri": f"{root}/demo/SKILL.md",
+                    "content": "skill",
+                    "mode": "replace",
+                }
+            ],
+            ctx=ctx,
+        )
+
+
+@pytest.mark.asyncio
+async def test_system_write_rejects_indexed_metadata():
+    root = "viking://system/memory/memory_templates/custom/demo"
+    uri = f"{root}/template.md"
+    coordinator = ContentWriteCoordinator(_VFS(root))
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
+
+    with pytest.raises(InvalidArgumentError, match="tags are not supported"):
+        await coordinator.write(
+            uri=uri,
+            content="template",
+            tags=["kind=template"],
+            ctx=ctx,
+        )
+
+
+@pytest.mark.asyncio
+async def test_system_set_tags_rejects_capability_before_write_access():
+    uri = "viking://system/memory/memory_templates/custom/demo/template.md"
+    ensure_access = AsyncMock(side_effect=AssertionError("write access must not be checked"))
+    coordinator = ContentWriteCoordinator(SimpleNamespace(_ensure_access=ensure_access))
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    with pytest.raises(InvalidArgumentError, match="tags are not supported"):
+        await coordinator.set_tags(
+            uri=uri,
+            tags=["kind=template"],
+            ctx=ctx,
+        )
+
+    ensure_access.assert_not_awaited()
+
+
 @pytest.fixture(autouse=True)
 def _coordinator_queue_for_unit_tests(monkeypatch, request):
     if "service" in request.fixturenames:
@@ -156,6 +312,57 @@ def _last_content_write_payload(queue_fixture):
 
 def _last_content_write_refresh(queue_fixture):
     return _last_content_write_payload(queue_fixture)["refresh"]
+
+
+@pytest.mark.asyncio
+async def test_batch_coalesces_compile_target_updates(service, monkeypatch):
+    """A batch saves its managed target's content-update time once."""
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    root = "viking://resources/batch-metadata"
+    store = service.compile.lifecycle.store
+    await service.viking_fs.write_file(f"{root}/seed.md", "seed", ctx=ctx)
+    await store.register(ctx.account_id, root)
+    update_time = AsyncMock(wraps=store.mark_content_updated)
+    monkeypatch.setattr(store, "mark_content_updated", update_time)
+    ops = [{"uri": f"{root}/{i}.md", "content": "changed"} for i in range(100)]
+    await service.fs.batch_write(root_uri=root, operations=ops, ctx=ctx, defer_processing=True)
+    update_time.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_deferred_batch_versions_content_before_dispatch_without_refresh(
+    _coordinator_queue_for_unit_tests,
+):
+    """Compile publication records bytes under its lease without scheduling index work."""
+    root = "viking://resources/wiki"
+    uri = f"{root}/page.md"
+    vfs = _VFS(root)
+
+    async def commit(uris, *, lease_ref, write):
+        assert uris == [uri] and lease_ref == {"lease_ref": "lock-1"}
+        assert vfs._async_agfs.held
+        return await write()
+
+    commit_content = AsyncMock(side_effect=commit)
+    commit_batch = AsyncMock()
+    coordinator = ContentWriteCoordinator(
+        vfs, commit_content=commit_content, commit_batch=commit_batch
+    )
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[{"uri": uri, "content": "x", "mode": "upsert"}],
+        ctx=ctx,
+        wait=False,
+        defer_processing=True,
+    )
+
+    commit_content.assert_awaited_once()
+    commit_batch.assert_awaited_once_with(lease_ref={"lease_ref": "lock-1"})
+    assert vfs.writes == [uri]
+    assert result["semantic_status"] == result["vector_status"] == "deferred"
+    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
+    assert vfs._async_agfs.releases == 1 and vfs._async_agfs.handoffs == 0
 
 
 @pytest.mark.asyncio
@@ -365,10 +572,7 @@ async def test_batch_resource_files_compile_independent_rnfv_plans(
     assert direct_actions == []
     assert refresh_calls == []
     refresh = _last_content_write_refresh(_coordinator_queue_for_unit_tests)
-    plans = [
-        ContextUpdatePlan.from_dict(item["plan"])
-        for item in refresh["resource_plans"]
-    ]
+    plans = [ContextUpdatePlan.from_dict(item["plan"]) for item in refresh["resource_plans"]]
     assert {plan.file_refresh.file_uri for plan in plans if plan.file_refresh is not None} == {
         first,
         second,
