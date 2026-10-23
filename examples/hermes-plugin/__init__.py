@@ -210,6 +210,13 @@ _INVALID_SETTING_WARNINGS: Set[tuple[str, str]] = set()
 _INVALID_SETTING_WARNINGS_LOCK = threading.Lock()
 
 
+def _is_hermes_kanban_worker() -> bool:
+    """Hermes launches kanban workers as CLI sessions but marks their process."""
+    return bool(os.environ.get("HERMES_KANBAN_TASK", "").strip()) or (
+        os.environ.get("HERMES_SESSION_SOURCE", "").strip().lower() == "kanban"
+    )
+
+
 def _gateway_peer_id(platform: str, sender: Any) -> str:
     """Namespace transport IDs and encode path-like IDs without merging distinct senders."""
     platform, sender = str(platform or "").strip().lower(), str(sender or "").strip()
@@ -1632,8 +1639,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._runtime_status_callback = None
         self._runtime_warning_callback = None
         self._shutting_down = False  # finalizers stop issuing network writes
-        # Non-primary contexts (cron/subagent/flush) skip OpenViking writes; resolved in
-        # initialize() from the host's agent_context.
+        # Non-primary contexts and kanban workers skip OpenViking writes; resolved in
+        # initialize() from the host context and process markers.
         self._agent_context = "primary"
         self._writes_enabled = True
 
@@ -1897,11 +1904,14 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._user_id = _gateway_peer_id(self._gateway_platform, self._gateway_user_id_alt or self._gateway_user_id)
         self._turn_peer.set(None)
         self._agent_context = str(kwargs.get("agent_context") or "primary")
-        self._writes_enabled = self._agent_context not in _NON_PRIMARY_AGENT_CONTEXTS
+        kanban_worker = _is_hermes_kanban_worker()
+        self._writes_enabled = (
+            self._agent_context not in _NON_PRIMARY_AGENT_CONTEXTS and not kanban_worker
+        )
         if not self._writes_enabled:
             logger.debug(
-                "OpenViking writes disabled for %s context (session %s)",
-                self._agent_context,
+                "OpenViking writes disabled for %s (session %s)",
+                "kanban worker" if kanban_worker else f"{self._agent_context} context",
                 session_id,
             )
         self._acquire_run_lock()
