@@ -6,6 +6,9 @@ The application controls when memory extraction is requested.
 
 ## Install and try
 
+The distribution is named `openviking-ms-agent-framework` and imports as
+`openviking_agent_framework`. PyPI publication is pending.
+
 Requires Python 3.10+, MAF core 1.20–1.x, OpenViking SDK 0.1.13–0.1.x, and a
 running OpenViking 0.4.23+ server. Install from an OpenViking checkout:
 

@@ -3,7 +3,7 @@ requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openviking-agent-framework"
+name = "openviking-ms-agent-framework"
 version = "0.1.0"
 description = "OpenViking context provider for Microsoft Agent Framework"
 readme = "README.md"
