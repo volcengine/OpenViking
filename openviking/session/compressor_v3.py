@@ -980,10 +980,6 @@ class SessionCompressorV3:
 
             # --- Experience streaming trainer ---
             exp_root_uri = _experience_root_uri(ctx)
-            exp_policy_set = await ExperienceSetLoader(viking_fs=viking_fs).load(
-                exp_root_uri,
-                ctx=ctx,
-            )
             optimizer_context = PatchMergePolicyOptimizerContext(request_context=ctx)
             gradient_context = ExperienceGradientContext(
                 request_context=ctx,
@@ -1001,7 +997,9 @@ class SessionCompressorV3:
                     policy_root_uri=exp_root_uri,
                     request_context=ctx,
                 ),
-                policy_set=exp_policy_set,
+                policy_set=lambda: ExperienceSetLoader(viking_fs=viking_fs).load(
+                    exp_root_uri, ctx=ctx
+                ),
                 rollout_analyzer=self.rollout_analyzer,
                 gradient_estimator=ExperienceGradientEstimator(
                     viking_fs=viking_fs,

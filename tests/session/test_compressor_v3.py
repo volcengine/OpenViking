@@ -662,12 +662,7 @@ async def test_train_from_extracted_cases_submits_streaming_rollout(monkeypatch)
 @pytest.mark.asyncio
 async def test_train_from_extracted_cases_skips_experience_updates_when_not_allowed(monkeypatch):
     analyzed = []
-
-    class FakeTrainer:
-        policy_set = ExperienceSet(
-            root_uri="viking://user/u/memories/experiences",
-            policies=[],
-        )
+    fs = SimpleNamespace(ls=AsyncMock(return_value=[]))
 
     class FakeAnalyzer:
         async def analyze(self, rollout, context):
@@ -695,11 +690,11 @@ async def test_train_from_extracted_cases_skips_experience_updates_when_not_allo
     estimate = AsyncMock(side_effect=AssertionError("experience estimation must be skipped"))
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_viking_fs",
-        lambda: SimpleNamespace(ls=AsyncMock(return_value=[])),
+        lambda: fs,
     )
     monkeypatch.setattr(
-        "openviking.session.compressor_v3.get_streaming_policy_trainer",
-        AsyncMock(return_value=FakeTrainer()),
+        "openviking.session.train.components.policy_trainer._streaming_policy_trainer_registry",
+        {},
     )
     monkeypatch.setattr(
         "openviking.session.train.components.gradient_estimator.ExperienceGradientEstimator.estimate",
@@ -707,16 +702,18 @@ async def test_train_from_extracted_cases_skips_experience_updates_when_not_allo
     )
 
     compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=FakeAnalyzer())
-    result = await compressor.train_from_extracted_cases(
-        cases=[_training_case()],
-        messages=_messages(),
-        ctx=_ctx(),
-        session_id="s1",
-        allowed_memory_types={"trajectories"},
-    )
+    for session_id in ("s1", "s2"):
+        result = await compressor.train_from_extracted_cases(
+            cases=[_training_case()],
+            messages=_messages(),
+            ctx=_ctx(),
+            session_id=session_id,
+            allowed_memory_types={"trajectories"},
+        )
+        assert result["submitted"] == 1
 
-    assert len(analyzed) == 1
-    assert result["submitted"] == 1
+    assert len(analyzed) == 2
+    assert fs.ls.await_count == 1
     estimate.assert_not_awaited()
 
 
