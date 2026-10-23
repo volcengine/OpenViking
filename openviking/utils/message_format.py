@@ -103,7 +103,7 @@ def format_messages(messages: List[Dict[str, Any]]) -> str:
                     try:
                         args_json = json.loads(args_str)
                         output.append(json.dumps(args_json, indent=2, ensure_ascii=False))
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError):
                         output.append(args_str)
                 else:
                     output.append(f"\n[{role} tool_calls]")
