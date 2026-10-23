@@ -13,6 +13,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -42,6 +43,25 @@ _auth_lock_holder = threading.local()
 
 class CodexAuthError(RuntimeError):
     pass
+
+
+def _retry_after_hint(response: httpx.Response) -> str:
+    """Return safe, actionable timing text for a valid Retry-After header."""
+    value = response.headers.get("Retry-After", "").strip()
+    if not value:
+        return ""
+    if value.isascii() and value.isdigit():
+        seconds = int(value)
+        unit = "second" if seconds == 1 else "seconds"
+        return f" Retry after {seconds} {unit}."
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    if retry_at is None or retry_at.tzinfo is None:
+        return ""
+    retry_at = retry_at.astimezone(timezone.utc)
+    return f" Retry after {retry_at:%Y-%m-%d %H:%M:%S} UTC."
 
 
 def _resolve_base_url() -> str:
@@ -418,6 +438,7 @@ def login_codex_with_device_code(
     if response.status_code != 200:
         raise CodexAuthError(
             f"Codex device login request failed with status {response.status_code}."
+            f"{_retry_after_hint(response)}"
         )
     payload = response.json()
     user_code = str(payload.get("user_code", "") or "").strip()

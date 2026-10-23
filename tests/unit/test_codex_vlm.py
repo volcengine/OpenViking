@@ -437,6 +437,58 @@ def test_codex_auth_native_login_defaults_to_openviking_owner(tmp_path, monkeypa
     assert "imported_from" not in persisted
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        (
+            {"Retry-After": "37"},
+            "Codex device login request failed with status 429. Retry after 37 seconds.",
+        ),
+        (
+            {"retry-after": "1"},
+            "Codex device login request failed with status 429. Retry after 1 second.",
+        ),
+        (
+            {"Retry-After": "Wed, 21 Oct 2030 07:28:00 GMT"},
+            "Codex device login request failed with status 429. "
+            "Retry after 2030-10-21 07:28:00 UTC.",
+        ),
+        ({}, "Codex device login request failed with status 429."),
+        (
+            {"Retry-After": "later"},
+            "Codex device login request failed with status 429.",
+        ),
+    ],
+)
+def test_codex_device_login_reports_valid_retry_after(headers, expected, monkeypatch):
+    response = SimpleNamespace(
+        status_code=429,
+        headers=codex_auth.httpx.Headers(headers),
+    )
+
+    class _FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, *_args, **_kwargs):
+            return response
+
+    monkeypatch.setattr(codex_auth.httpx, "Client", _FakeClient)
+    monkeypatch.setenv("OPENVIKING_CODEX_OAUTH_ISSUER", "https://auth.example.test")
+    monkeypatch.setenv("OPENVIKING_CODEX_OAUTH_CLIENT_ID", "test-client")
+
+    with pytest.raises(codex_auth.CodexAuthError) as exc_info:
+        codex_auth.login_codex_with_device_code()
+
+    assert str(exc_info.value) == expected
+
+
 def test_codex_auth_atomic_write_replaces_file_in_place(tmp_path):
     auth_path = tmp_path / "codex_auth.json"
     auth_path.write_text('{"old": true}\n', encoding="utf-8")
