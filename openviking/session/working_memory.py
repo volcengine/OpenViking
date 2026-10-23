@@ -953,6 +953,34 @@ def wm_enforce_open_issues_resolved(op: Any, old_content: str) -> Dict[str, Any]
     return {"op": "UPDATE", "content": merged}
 
 
+def wm_normalize_bare_op(op: Any) -> Any:
+    """Coerce a loosely shaped section value into a structured op.
+
+    Some tool-call backends flatten the per-section oneOf schema, and the model
+    then answers ``"Current State": "KEEP"``, ``"Current State": "<markdown>"``
+    or ``"Current State": {"content": "<markdown>"}`` instead of a complete op
+    object. A bare keyword carries no payload, so it means KEEP; any other
+    non-empty string, or an object with string ``content`` and no ``op``, is
+    the model's replacement body and becomes UPDATE; an object with ``items``
+    and no ``op`` becomes APPEND. The result still passes through the
+    per-section guards below.
+    """
+    if isinstance(op, dict) and not op.get("op"):
+        if isinstance(op.get("content"), str):
+            return {"op": "UPDATE", "content": op["content"]}
+        if isinstance(op.get("items"), list):
+            return {"op": "APPEND", "items": op["items"]}
+        return op
+    if not isinstance(op, str):
+        return op
+    text = op.strip()
+    if not text:
+        return None
+    if text.upper() in ("KEEP", "UPDATE", "APPEND"):
+        return {"op": "KEEP"}
+    return {"op": "UPDATE", "content": text}
+
+
 def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
     """Merge LLM per-section ops into a new Working Memory document.
 
@@ -991,7 +1019,7 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
     parts: List[str] = ["# Working Memory", ""]
     for header in WM_SEVEN_SECTIONS:
         full_header = f"## {header}"
-        op = (ops or {}).get(header)
+        op = wm_normalize_bare_op((ops or {}).get(header))
         old_content = old_sections.get(full_header, "").rstrip()
 
         if (
