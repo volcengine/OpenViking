@@ -27,6 +27,21 @@ use provider::CacheProvider;
 pub(crate) use script::{ScriptDefinition, ScriptRegistry, ScriptValue};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Convert provider default TTL seconds into runtime TTL semantics.
+fn duration_from_default_ttl_seconds(seconds: u64) -> Option<Duration> {
+    if seconds == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(seconds))
+    }
+}
+
+/// Return the default runtime TTL from the built-in Redis config defaults.
+fn default_provider_ttl() -> Option<Duration> {
+    duration_from_default_ttl_seconds(RedisProviderConfig::default().default_ttl_seconds)
+}
 
 /// Request for one named provider-side atomic program.
 #[derive(Debug, Clone)]
@@ -51,33 +66,41 @@ pub struct CacheRuntime {
     provider: Arc<dyn CacheProvider>,
     scripts: Arc<ScriptRegistry>,
     executor: Arc<RuntimeExecutor>,
+    default_ttl: Option<Duration>,
     closed: AtomicBool,
 }
 
 impl CacheRuntime {
     #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn from_provider(provider: Arc<dyn CacheProvider>) -> Arc<Self> {
-        Self::from_provider_with_scripts(provider, Arc::new(ScriptRegistry::default()))
+        Self::from_provider_with_scripts(
+            provider,
+            Arc::new(ScriptRegistry::default()),
+            default_provider_ttl(),
+        )
     }
 
     fn from_provider_with_scripts(
         provider: Arc<dyn CacheProvider>,
         scripts: Arc<ScriptRegistry>,
+        default_ttl: Option<Duration>,
     ) -> Arc<Self> {
         let executor =
             Arc::new(RuntimeExecutor::new().expect("CacheRuntime executor must initialize"));
-        Self::from_provider_with_parts(provider, scripts, executor)
+        Self::from_provider_with_parts(provider, scripts, executor, default_ttl)
     }
 
     fn from_provider_with_parts(
         provider: Arc<dyn CacheProvider>,
         scripts: Arc<ScriptRegistry>,
         executor: Arc<RuntimeExecutor>,
+        default_ttl: Option<Duration>,
     ) -> Arc<Self> {
         Arc::new(Self {
             provider,
             scripts,
             executor,
+            default_ttl,
             closed: AtomicBool::new(false),
         })
     }
@@ -94,13 +117,24 @@ impl CacheRuntime {
         Self::from_provider(provider)
     }
 
+    /// Build a test Runtime with an explicit default TTL.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn memory_with_provider_and_default_ttl(
+        provider: Arc<MemoryMockProvider>,
+        default_ttl: Option<Duration>,
+    ) -> Arc<Self> {
+        Self::from_provider_with_scripts(provider, Arc::new(ScriptRegistry::default()), default_ttl)
+    }
+
     /// Connect the built-in Redis provider and create one Runtime.
     pub async fn redis(config: RedisProviderConfig) -> CacheResult<Arc<Self>> {
+        let default_ttl = duration_from_default_ttl_seconds(config.default_ttl_seconds);
         let scripts = Arc::new(ScriptRegistry::default());
         let provider = redis::RedisProvider::connect(config, Arc::clone(&scripts)).await?;
         Ok(Self::from_provider_with_scripts(
             Arc::new(provider),
             scripts,
+            default_ttl,
         ))
     }
 
@@ -109,6 +143,7 @@ impl CacheRuntime {
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(CacheError::InvalidExecutionContext);
         }
+        let default_ttl = duration_from_default_ttl_seconds(config.default_ttl_seconds);
         let executor = Arc::new(RuntimeExecutor::new()?);
         let scripts = Arc::new(ScriptRegistry::default());
         let provider_scripts = Arc::clone(&scripts);
@@ -117,7 +152,12 @@ impl CacheRuntime {
                 .await
                 .map(|provider| Arc::new(provider) as Arc<dyn CacheProvider>)
         })?;
-        Ok(Self::from_provider_with_parts(provider, scripts, executor))
+        Ok(Self::from_provider_with_parts(
+            provider,
+            scripts,
+            executor,
+            default_ttl,
+        ))
     }
 
     /// Load one provider through the versioned dynamic C ABI.
@@ -127,7 +167,13 @@ impl CacheRuntime {
         Ok(Self::from_provider_with_scripts(
             Arc::new(provider),
             scripts,
+            default_provider_ttl(),
         ))
+    }
+
+    /// Return the default TTL used by consumers that store provider keys directly.
+    pub fn default_ttl(&self) -> Option<Duration> {
+        self.default_ttl
     }
 
     pub(crate) fn require_operations(&self, operations: &[CacheOperation]) -> CacheResult<()> {
@@ -161,6 +207,12 @@ impl CacheRuntime {
         self.provider.del(keys).await
     }
 
+    /// Asynchronously unlink multiple keys and return the number removed.
+    pub async fn unlink(&self, keys: &[String]) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.provider.unlink(keys).await
+    }
+
     /// Read multiple keys while preserving input order.
     pub async fn mget(&self, keys: &[String]) -> CacheResult<Vec<Option<Bytes>>> {
         self.ensure_open()?;
@@ -184,6 +236,12 @@ impl CacheRuntime {
         self.provider.incr_by(key, delta).await
     }
 
+    /// Set an expiration on one provider key.
+    pub async fn expire(&self, key: &str, duration: Duration) -> CacheResult<bool> {
+        self.ensure_open()?;
+        self.provider.expire(key, duration).await
+    }
+
     /// Decrement one integer value by one.
     pub async fn decr(&self, key: &str) -> CacheResult<i64> {
         self.incr_by(key, -1).await
@@ -195,6 +253,18 @@ impl CacheRuntime {
             CacheError::InvalidArgument("decrement delta is too large".to_string())
         })?;
         self.incr_by(key, increment).await
+    }
+
+    /// Read one hash field.
+    pub async fn hget(&self, key: &str, field: &str) -> CacheResult<Option<Bytes>> {
+        self.ensure_open()?;
+        self.provider.hget(key, field).await
+    }
+
+    /// Store one hash field and return the number of newly added fields.
+    pub async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.provider.hset(key, field, value).await
     }
 
     /// Check whether a set contains one member.
@@ -213,6 +283,41 @@ impl CacheRuntime {
     pub async fn scard(&self, key: &str) -> CacheResult<u64> {
         self.ensure_open()?;
         self.provider.scard(key).await
+    }
+
+    /// Add or update one sorted-set member.
+    pub async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.provider.zadd(key, score, member).await
+    }
+
+    /// Return sorted-set members matching one Redis glob pattern.
+    pub async fn zscan_match(
+        &self,
+        key: &str,
+        pattern: &str,
+        count: u32,
+    ) -> CacheResult<Vec<String>> {
+        self.ensure_open()?;
+        self.provider.zscan_match(key, pattern, count).await
+    }
+
+    /// Return sorted-set members within one score range.
+    pub async fn zrangebyscore(
+        &self,
+        key: &str,
+        min: f64,
+        max: f64,
+        limit: u32,
+    ) -> CacheResult<Vec<String>> {
+        self.ensure_open()?;
+        self.provider.zrangebyscore(key, min, max, limit).await
+    }
+
+    /// Remove sorted-set members and return the number removed.
+    pub async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {
+        self.ensure_open()?;
+        self.provider.zrem(key, members).await
     }
 
     /// Push values to the head of one list.
@@ -353,6 +458,14 @@ impl SyncCacheRuntimeFacade {
         self.executor.run(async move { runtime.del(&keys).await })
     }
 
+    /// Asynchronously unlink multiple keys and return the number removed.
+    pub fn unlink(&self, keys: &[String]) -> CacheResult<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let keys = keys.to_vec();
+        self.executor
+            .run(async move { runtime.unlink(&keys).await })
+    }
+
     /// Read multiple keys while preserving input order.
     pub fn mget(&self, keys: &[String]) -> CacheResult<Vec<Option<Bytes>>> {
         let runtime = Arc::clone(&self.runtime);
@@ -380,6 +493,14 @@ impl SyncCacheRuntimeFacade {
             .run(async move { runtime.incr_by(&key, delta).await })
     }
 
+    /// Set an expiration on one provider key.
+    pub fn expire(&self, key: &str, duration: Duration) -> CacheResult<bool> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        self.executor
+            .run(async move { runtime.expire(&key, duration).await })
+    }
+
     /// Decrement one integer value by one.
     pub fn decr(&self, key: &str) -> CacheResult<i64> {
         self.incr_by(key, -1)
@@ -391,6 +512,24 @@ impl SyncCacheRuntimeFacade {
             CacheError::InvalidArgument("decrement delta is too large".to_string())
         })?;
         self.incr_by(key, increment)
+    }
+
+    /// Read one hash field.
+    pub fn hget(&self, key: &str, field: &str) -> CacheResult<Option<Bytes>> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        let field = field.to_string();
+        self.executor
+            .run(async move { runtime.hget(&key, &field).await })
+    }
+
+    /// Store one hash field and return the number of newly added fields.
+    pub fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        let field = field.to_string();
+        self.executor
+            .run(async move { runtime.hset(&key, &field, value).await })
     }
 
     /// Check whether a set contains one member.
@@ -415,6 +554,33 @@ impl SyncCacheRuntimeFacade {
         let runtime = Arc::clone(&self.runtime);
         let key = key.to_string();
         self.executor.run(async move { runtime.scard(&key).await })
+    }
+
+    /// Add or update one sorted-set member.
+    pub fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        let member = member.to_string();
+        self.executor
+            .run(async move { runtime.zadd(&key, score, &member).await })
+    }
+
+    /// Return sorted-set members matching one Redis glob pattern.
+    pub fn zscan_match(&self, key: &str, pattern: &str, count: u32) -> CacheResult<Vec<String>> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        let pattern = pattern.to_string();
+        self.executor
+            .run(async move { runtime.zscan_match(&key, &pattern, count).await })
+    }
+
+    /// Remove sorted-set members and return the number removed.
+    pub fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        let members = members.to_vec();
+        self.executor
+            .run(async move { runtime.zrem(&key, &members).await })
     }
 
     /// Push values to the head of one list.
@@ -529,3 +695,7 @@ impl SyncCacheRuntimeFacade {
         self.executor.run(async move { runtime.close().await })
     }
 }
+
+#[cfg(test)]
+#[path = "tests/test_runtime.rs"]
+mod tests;

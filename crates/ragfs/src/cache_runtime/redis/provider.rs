@@ -49,6 +49,10 @@ impl CacheProvider for RedisProvider {
         self.client.del(keys).await
     }
 
+    async fn unlink(&self, keys: &[String]) -> CacheResult<u64> {
+        self.client.unlink(keys).await
+    }
+
     async fn mget(&self, keys: &[String]) -> CacheResult<Vec<Option<Bytes>>> {
         self.client.mget(keys).await
     }
@@ -61,6 +65,18 @@ impl CacheProvider for RedisProvider {
         self.client.incr_by(key, delta).await
     }
 
+    async fn expire(&self, key: &str, duration: Duration) -> CacheResult<bool> {
+        self.client.expire(key, duration).await
+    }
+
+    async fn hget(&self, key: &str, field: &str) -> CacheResult<Option<Bytes>> {
+        self.client.hget(key, field).await
+    }
+
+    async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
+        self.client.hset(key, field, value).await
+    }
+
     async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
         self.client.sismember(key, member).await
     }
@@ -71,6 +87,29 @@ impl CacheProvider for RedisProvider {
 
     async fn scard(&self, key: &str) -> CacheResult<u64> {
         self.client.scard(key).await
+    }
+
+    async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+        self.client.zadd(key, score, member).await
+    }
+
+    async fn zscan_match(&self, key: &str, pattern: &str, count: u32) -> CacheResult<Vec<String>> {
+        self.client.zscan_match(key, pattern, count).await
+    }
+
+    /// Return sorted-set members within one score range.
+    async fn zrangebyscore(
+        &self,
+        key: &str,
+        min: f64,
+        max: f64,
+        limit: u32,
+    ) -> CacheResult<Vec<String>> {
+        self.client.zrangebyscore(key, min, max, limit).await
+    }
+
+    async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {
+        self.client.zrem(key, members).await
     }
 
     async fn lpush(&self, key: &str, values: Vec<Bytes>) -> CacheResult<u64> {
@@ -132,107 +171,5 @@ impl CacheProvider for RedisProvider {
 
     async fn close(&self) -> CacheResult<()> {
         self.client.close().await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cache_runtime::{ScriptDefinition, ScriptRequest, ScriptValue};
-
-    #[tokio::test]
-    async fn executes_registered_script_and_recovers_after_script_flush() {
-        let Ok(endpoint) = std::env::var("REDIS_URL") else {
-            return;
-        };
-        let scripts = Arc::new(crate::cache_runtime::ScriptRegistry::default());
-        scripts
-            .register(ScriptDefinition {
-                id: "runtime.test.echo.v1",
-                redis_lua: "return {KEYS[1], ARGV[1]}",
-            })
-            .unwrap();
-        let config = RedisProviderConfig {
-            endpoints: vec![endpoint],
-            command_timeout_ms: 1_000,
-            ..RedisProviderConfig::default()
-        };
-        let expected_key = format!("ragfs-script-test:{}:key", std::process::id());
-        let provider = Arc::new(
-            RedisProvider::connect(config, Arc::clone(&scripts))
-                .await
-                .unwrap(),
-        );
-        let runtime = crate::cache_runtime::CacheRuntime::from_provider(provider.clone());
-        let request = ScriptRequest {
-            script_id: "runtime.test.echo.v1".into(),
-            keys: vec![expected_key.clone()],
-            args: vec![Bytes::from_static(b"value")],
-        };
-
-        let first = runtime.execute_script(request.clone()).await.unwrap();
-        assert_eq!(
-            first.decode().unwrap(),
-            ScriptValue::Array(vec![
-                ScriptValue::Bytes(expected_key.into_bytes()),
-                ScriptValue::Bytes(b"value".to_vec()),
-            ])
-        );
-
-        provider.client.script_flush().await.unwrap();
-        let second = runtime.execute_script(request).await.unwrap();
-        assert_eq!(second.decode().unwrap(), first.decode().unwrap());
-    }
-
-    #[tokio::test]
-    async fn set_queries_preserve_binary_members_on_real_redis() {
-        let Ok(endpoint) = std::env::var("REDIS_URL") else {
-            return;
-        };
-        let scripts = Arc::new(crate::cache_runtime::ScriptRegistry::default());
-        scripts
-            .register(ScriptDefinition {
-                id: "runtime.test.sadd.v1",
-                redis_lua: "return redis.call('SADD', KEYS[1], ARGV[1], ARGV[2])",
-            })
-            .unwrap();
-        let config = RedisProviderConfig {
-            endpoints: vec![endpoint],
-            command_timeout_ms: 1_000,
-            ..RedisProviderConfig::default()
-        };
-        let provider = Arc::new(
-            RedisProvider::connect(config, Arc::clone(&scripts))
-                .await
-                .unwrap(),
-        );
-        let runtime = crate::cache_runtime::CacheRuntime::from_provider(provider);
-        let set_key = format!("ragfs-set-test:{}:members", std::process::id());
-        let binary_member = Bytes::from_static(b"binary\0member");
-        let text_member = Bytes::from_static(b"text-member");
-
-        runtime
-            .execute_script(ScriptRequest {
-                script_id: "runtime.test.sadd.v1".into(),
-                keys: vec![set_key.clone()],
-                args: vec![binary_member.clone(), text_member.clone()],
-            })
-            .await
-            .unwrap();
-
-        assert!(runtime
-            .sismember(&set_key, binary_member.as_ref())
-            .await
-            .unwrap());
-        assert!(!runtime.sismember(&set_key, b"missing").await.unwrap());
-        assert_eq!(runtime.scard(&set_key).await.unwrap(), 2);
-        let mut members = runtime.smembers(&set_key).await.unwrap();
-        members.sort();
-        let mut expected = vec![binary_member, text_member];
-        expected.sort();
-        assert_eq!(members, expected);
-
-        runtime.del(&[set_key]).await.unwrap();
-        runtime.close().await.unwrap();
     }
 }

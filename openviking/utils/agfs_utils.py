@@ -66,20 +66,19 @@ class RagfsBindingConfig:
         if self.cache is not None and uses_runtime:
             cache_config = _build_provider_cache_config(
                 self.cache,
-                cachefs,
                 cachefs_backend == "cache",
                 uses_runtime,
                 self.service_name,
             )
         elif self.cache is not None:
-            cache_config = _disabled_cache_config(cachefs, self.service_name)
+            cache_config = _disabled_cache_config(self.service_name)
         else:
             if uses_runtime:
                 raise ValueError(
                     "top-level cache config is required when CacheFS, QueueFS, cache-backed PathLock, "
                     "or cache-backed multi-write uses the shared Runtime"
                 )
-            cache_config = _disabled_cache_config(cachefs, self.service_name)
+            cache_config = _disabled_cache_config(self.service_name)
         binding_config: Dict[str, Any] = {
             "service_name": self.service_name,
             "cache": cache_config,
@@ -102,25 +101,18 @@ class RagfsBindingConfig:
         return binding_config
 
 
-def _disabled_cache_config(
-    cachefs_model: Any, service_name: str = DEFAULT_SERVICE_NAME
-) -> Dict[str, Any]:
+def _disabled_cache_config(service_name: str = DEFAULT_SERVICE_NAME) -> Dict[str, Any]:
     """Build the disabled cache config shape; service_name is carried at binding top level."""
     normalize_service_name(service_name)
-    traversal_mode = getattr(cachefs_model, "traversal_mode", "backend")
     return {
         "enabled": False,
         "runtime_enabled": False,
         "provider": "redis",
-        "max_file_size_bytes": getattr(cachefs_model, "max_file_size_bytes", 1024 * 1024),
-        "traversal_mode": getattr(traversal_mode, "value", traversal_mode),
-        "bypass_prefixes": list(getattr(cachefs_model, "bypass_prefixes", [])),
     }
 
 
 def _build_provider_cache_config(
     provider_config: Any,
-    cachefs_model: Any,
     cachefs_enabled: bool,
     runtime_enabled: bool,
     service_name: str,
@@ -128,14 +120,12 @@ def _build_provider_cache_config(
     """Build a provider-backed cache config that shares the top-level service name."""
     provider = provider_config.provider.strip()
     params = dict(provider_config.params)
-    cache_config = _disabled_cache_config(cachefs_model, service_name)
-    cache_config.update(
-        {
-            "enabled": cachefs_enabled,
-            "runtime_enabled": runtime_enabled,
-            "provider": provider,
-        }
-    )
+    cache_config = _disabled_cache_config(service_name)
+    cache_config.update({
+        "enabled": cachefs_enabled,
+        "runtime_enabled": runtime_enabled,
+        "provider": provider,
+    })
     if provider == "redis":
         from openviking_cli.utils.config.agfs_config import RedisCacheConfig
 

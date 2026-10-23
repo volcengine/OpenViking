@@ -283,15 +283,12 @@ seconds, for example `123 ns = 0.000000123 seconds`.
 |---------------|------|---------------|---------|
 | `openviking_ragfs_operation_results_total` | Counter | `plugin, operation, status` | successful and failed operations |
 | `openviking_ragfs_operation_duration_seconds` | Histogram | `plugin, operation` | operation duration distribution |
-| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | file/directory cache hits and misses |
+| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | query cache hits and misses; `kind="query"` |
 | `openviking_ragfs_cache_backend_fallbacks_total` | Counter | none | backend loads after cache misses |
-| `openviking_ragfs_cache_operations_total` | Counter | `operation` | cache put/delete attempts |
+| `openviking_ragfs_cache_operations_total` | Counter | `operation` | cache get/put/delete attempts |
 | `openviking_ragfs_cache_invalidations_total` | Counter | none | completed invalidations |
-| `openviking_ragfs_cache_errors_total` | Counter | none | cache errors hidden by bypass mode |
-| `openviking_ragfs_cache_policy_bypasses_total` | Counter | none | reads bypassing cache |
-| `openviking_ragfs_cache_bytes_total` | Counter | `source` | bytes from backend/cache |
+| `openviking_ragfs_cache_errors_total` | Counter | none | provider or cache-data errors |
 | `openviking_ragfs_cache_operation_duration_seconds_total` | Counter | `operation` | cumulative get/put/delete duration |
-| `openviking_ragfs_cache_inflight_events_total` | Counter | `event` | leader/follower/backend_saved counts |
 | `openviking_ragfs_multiwrite_background_tasks` | Gauge | none | active flush runtime, `0` or `1` per mount |
 | `openviking_ragfs_multiwrite_pending_events` | Gauge | none | submitted events that are queued, executing, or awaiting retry |
 | `openviking_ragfs_multiwrite_errors_total` | Counter | `worker` | final failures for `flush`, `checkpoint`, `catch_up`, or `gc` |

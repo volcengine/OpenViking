@@ -1,6 +1,6 @@
 # RAGFS 缓存
 
-RAGFS 缓存是 OpenViking 的可选读缓存层，用于加速文件全量读取和目录读取。它只作为加速层，不作为事实数据源；数据仍以 backend filesystem 为准。
+RAGFS 缓存是 OpenViking 的可选查询结果缓存层，用于加速 `stat`、`read_dir`、`tree_directory`、`glob_directory` 和 `grep`。它只作为加速层，不作为事实数据源；数据仍以 backend filesystem 为准。
 
 CachedFileSystem 适用前提：
 
@@ -33,7 +33,7 @@ openviking-server doctor
       "pool_size": 32,
       "connect_timeout_ms": 1000,
       "command_timeout_ms": 1000,
-      "default_ttl_seconds": 3600
+      "default_ttl_seconds": 300
     }
   },
   "storage": {
@@ -41,9 +41,7 @@ openviking-server doctor
     "agfs": {
       "backend": "local",
       "cachefs": {
-        "backend": "cache",
-        "max_file_size_bytes": 1048576,
-        "bypass_prefixes": ["/queue", "/tmp"]
+        "backend": "cache"
       },
       "pathlock": {
         "provider": "cache",
@@ -149,9 +147,6 @@ Cache PathLock 和 cache-backed 多写 metadata 提供 Redis namespace。
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `backend` | str | `"local"` | `local` 沿用原逻辑；`cache` 启用 CachedFileSystem |
-| `max_file_size_bytes` | int | `1048576` | 允许进入缓存的最大完整文件大小 |
-| `traversal_mode` | str | `"backend"` | 递归 API 使用 backend 遍历或 `cached_traversal` |
-| `bypass_prefixes` | list[str] | `[]` | 强制绕过缓存的路径前缀 |
 
 `storage.agfs.pathlock` 控制 PathLock 存储：
 
@@ -171,7 +166,7 @@ Redis 配置：
 | `pool_size` | `32` | 命令并发数 |
 | `connect_timeout_ms` | `1000` | 连接超时 |
 | `command_timeout_ms` | `20` | 命令超时 |
-| `default_ttl_seconds` | `3600` | 默认 TTL；`0` 表示不设置 TTL |
+| `default_ttl_seconds` | `300` | CacheFS query bucket 使用的 runtime 默认 TTL；`0` 表示不设置 TTL |
 | `tls_insecure_skip_verify` | `false` | 跳过 `rediss://` 证书校验，仅用于受控测试环境 |
 
 所有 Redis 读命令均发送到主节点，避免 QueueFS 读取到延迟的队列状态。需要传输加密时使用 Redis TLS，CacheRuntime 不额外增加应用层数据加密格式。
@@ -197,7 +192,7 @@ DynamicProvider 配置：
 
 RAGFS 将 Provider 访问和各业务消费者分开：
 
-- `CachedFileSystem`：实现文件系统语义，包括 cache hit/miss、backend 回源、回填、失效、generation 校验和指标。
+- `CachedFileSystem`：实现文件系统语义，包括 cache hit/miss、backend 回源、回填、失效、request 校验和指标。
 - `CacheRuntime`：向业务层提供统一基础操作，启动时绑定内置 RedisProvider 或外部 DynamicProvider。
 - `QueueFS` 和 `RedisPathLockProvider`：复用共享 CacheRuntime 存储队列和分布式锁。RedisPathLockProvider 要求使用内置 RedisProvider。
 
@@ -219,65 +214,77 @@ RedisPathLockProvider 依赖 Redis Lua，因此只使用 RedisProvider。文件�
 
 ## 缓存对象
 
-RAGFS 主要缓存三类对象。
+RAGFS 缓存只读查询结果。不再存储旧的路径对象缓存。
 
-### 文件缓存
+### Query Bucket
 
-文件 key 使用稳定命名空间和路径 hash：
-
-```text
-<service_name>:ov:cache:v1:file:<hash(path)>
-```
-
-文件 value 是 `CacheEnvelope`，包含文件内容、对象类型、路径和 generation 快照。全量读取命中后，RAGFS 会先校验 envelope 和 generation，再返回内容。
-
-默认策略会优先缓存 `.abstract.md` 和 `.overview.md` 这类摘要文件；超过 `max_file_size_bytes` 的文件不会进入缓存。非全量 range read 也会绕过缓存。
-
-### 目录缓存
-
-目录 key：
+每个路径和操作对应一个 HASH bucket：
 
 ```text
-<service_name>:ov:cache:v1:dir:<hash(path)>
+<service_name>:ov:cache:v1:<path_key>:<op>
 ```
 
-目录缓存保存 backend 原始 `read_dir` entries，而不是权限过滤后的最终结果。权限、角色和 agent context 仍在 OpenViking 上层实时处理。
+HASH field 是 `xxh3_128(canonical_request_json)`。value 是 `QueryCacheEnvelope`，包含：
 
-这样同一份目录缓存可以服务 `ls`、`tree`、`glob`、`grep` 的文件收集阶段，以及删除或移动前的路径收集。
+- `request`
+- `payload`
 
-### 子树 Generation
+RAGFS 返回缓存前会比较已存 `request` 和当前请求。这样可以防止 hash 碰撞或请求编码变化导致误读。
 
-子树 generation key：
+支持的操作：
+
+- `stat`
+- `read_dir`
+- `tree_directory`
+- `glob_directory`
+- `grep`
+
+### Query Index
+
+所有活跃 bucket 会注册到一个 ZSET：
 
 ```text
-<service_name>:ov:cache:v1:subtree:<hash(scope)>
+<service_name>:ov:cacheidx:v1
 ```
 
-`remove_all` 和目录 `rename` 可能让 Provider 中残留子孙 key。RAGFS 通过 bump subtree generation，让旧 envelope 的 generation 快照失效，后续真实读取会回源并重建缓存。
+ZSET member 是 bucket key。score 是 `expire_at_ms`。写入发生时，RAGFS 通过这个 index 找到受影响 bucket，不扫描全部 Redis key。
 
 ## 一致性与失效
 
-单写者场景下，RAGFS 不需要分布式写锁。关键是按文件系统语义维护三类失效：
+单写者场景下，RAGFS 不需要分布式写锁。每次写入后，RAGFS 物理删除受影响的 query bucket。
 
-- 文件变更：删除或更新 `file_key(path)`，删除 `dir_key(parent)`。
-- 目录变更：删除目录自身和父目录的 `dir_key`。
-- 子树变更：对递归删除和目录 rename bump `subtree` generation。
+普通路径变更会在内存中构造受影响 bucket：
+
+- 精确路径 bucket：`stat`、`read_dir`、`tree_directory`、`glob_directory`、`grep`
+- 父目录 bucket：`read_dir(parent)`
+- 祖先递归 bucket：`tree_directory`、`glob_directory`、`grep`
+
+然后对 bucket key 发送一次批量 `UNLINK`，对 index 发送一次批量 `ZREM`。
+
+对递归路径操作，如 `remove_all`、`rename`、`replace`，RAGFS 还会扫描 query index：
+
+```text
+ZSCAN <service_name>:ov:cacheidx:v1 MATCH '<service_name>:ov:cache:v1:<path_key>/*:*' COUNT 1000
+```
+
+命中的后代 bucket 会进入同一批量 `UNLINK` 和 `ZREM`。不保留 generation 兜底逻辑。
 
 典型写入顺序：
 
 ```text
-获取进程内操作锁
--> 执行 backend 变更
--> 更新或删除相关 cache key
--> 必要时 bump subtree generation
+执行 backend 变更
+-> 投递异步失效任务
 -> 返回结果
+后台任务 -> ZSCAN 获取后代 bucket
+后台任务 -> 构造精确路径和祖先 bucket
+后台任务 -> UNLINK bucket key 并 ZREM index member
 ```
 
-如果 Provider 失败，RAGFS 会以 backend 为准，并让受影响路径进入短期 bypass，避免继续读取可能陈旧的缓存。
+如果 Provider 失败，RAGFS 会以当前请求的 backend 结果为准，记录缓存错误，并且不缓存这次结果。
 
 ## 请求合并
 
-当多个请求同时读取同一个未缓存的小文件或目录时，`CachedFileSystem` 会用进程内 inflight 表合并请求：
+当多个请求同时读取同一个未缓存查询时，`CachedFileSystem` 会用进程内 inflight 表合并请求：
 
 ```text
 第一个 miss 请求成为 leader，负责回源和回填。
@@ -287,43 +294,33 @@ RAGFS 主要缓存三类对象。
 
 这只减少同一 OpenViking 进程内的重复 backend 访问，不改变 Provider 的一致性边界。
 
-## 缓存策略
+## 缓存范围
 
-RAGFS 会自动绕过不适合缓存的路径：
-
-- 锁文件：`.path.ovlock`、`*.lock`、`*.lck`
-- 控制文件：`enqueue`、`dequeue`、`peek`、`ack`
-- 瞬时状态：`heartbeat`、`lease`、`cursor`、`offset`、`pid`
-- 用户通过 `bypass_prefixes` 指定的路径前缀
-
-权限敏感目录建议加入 `bypass_prefixes`。如果目录原始 entries 本身就依赖调用者权限，不应缓存该目录。
+CacheFS 只缓存 `stat`、`read_dir`、`tree_directory`、`glob_directory` 和 `grep` 的查询结果。缓存键由路径、操作类型和查询参数生成。写操作成功后会主动删除受影响的查询 bucket。`.path.ovlock`、`.exact.ovlock.*` 等 PathLock 内部文件不会进入查询缓存；直接查询这些文件时绕过 CacheFS。
 
 ## 故障与观测
 
 缓存层不能影响文件系统正确性：
 
 - `get` 失败：回源 backend。
-- `put` 失败：记录错误，路径进入 bypass。
-- `delete` 失败：记录错误，路径或 scope 进入 bypass。
+- `put` 失败：记录错误，保留 backend 结果。
+- `delete` 失败：记录错误，TTL 兜底。
 - Provider 不可用：不返回旧缓存，以 backend 结果为准。
 
 建议重点观察：
 
-- cache hit / miss / bypass
-- stale generation
+- query hit / miss
 - provider get / put / delete 延迟
 - cache set / delete 失败
-- inflight leader / follower / backend saved
-- backend fallback 字节数
+- backend fallback 次数
 
 ## 推荐使用顺序
 
 1. 关闭缓存验证 backend 基线行为。
 2. 用内置 `redis` 验证真实远程缓存收益。
 3. 对高性能或闭源缓存系统使用独立发布的 DynamicProvider `.so`。
-4. 先缓存摘要文件和 raw `read_dir`，再扩展到更多普通小文件。
-5. 将锁、控制面和权限敏感路径加入 `bypass_prefixes`。
+4. 缓存 `stat`、`read_dir`、`tree_directory`、`glob_directory` 和 `grep` 查询结果。
 
-RAGFS 缓存负责按文件系统语义失效，Provider 负责决定缓存对象放在哪里。backend 仍是事实来源，缓存命中必须先通过 envelope 和 generation 校验才会返回。
+RAGFS 缓存负责按文件系统语义失效，Provider 负责决定缓存对象放在哪里。backend 仍是事实来源，缓存命中必须先通过 request 校验才会返回。
 
 启用后，将重复读取和文件更新后的失效行为与基线比较。确认返回内容保持最新，再判断命中率提升是否带来收益。

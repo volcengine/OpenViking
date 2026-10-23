@@ -30,7 +30,7 @@ class _FakeConfig:
             backend="local",
             cachefs=SimpleNamespace(backend="local"),
             pathlock=SimpleNamespace(
-                model_dump=lambda mode: {
+                model_dump=lambda mode, exclude_none=False: {
                     "provider": "filesystem",
                     "lock_timeout_secs": 0.0,
                     "lock_expire_secs": 30.0,
@@ -79,14 +79,11 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
     assert isinstance(ragfs_config, RagfsBindingConfig)
     assert ragfs_config.agfs is service._config.storage.agfs
     assert ragfs_config.to_binding_dict() == {
+        "service_name": "openviking-server",
         "cache": {
             "enabled": False,
             "runtime_enabled": False,
             "provider": "redis",
-            "namespace": "openviking",
-            "max_file_size_bytes": 1024 * 1024,
-            "traversal_mode": "backend",
-            "bypass_prefixes": [],
         },
         "pathlock": {
             "provider": "filesystem",
