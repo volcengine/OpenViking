@@ -352,6 +352,25 @@ def test_output_contract_preserves_core_add_only_and_upsert_capabilities(output_
         assert "DELETE blocks" not in rules
 
 
+@pytest.mark.parametrize("output_format", ["python", "json"])
+@pytest.mark.parametrize("operation_mode", ["add_only", "upsert"])
+def test_output_reference_rules_keep_extraction_handles_out_of_memory_text(
+    output_format, operation_mode
+):
+    context = _context(
+        [_preference_schema(operation_mode=operation_mode)],
+        available_tools=(),
+    )
+
+    rules = create_extraction_output_protocol(output_format).render_reference_rules(context)
+
+    assert rules.count("## Extraction-only Reference Rules") == 1
+    assert "JSON `page_id` values" in rules
+    assert "Python object variable names" in rules
+    assert "Never write or cite them inside natural-language memory fields" in rules
+    assert "Preserve real identifiers" in rules
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("language", ["en", "zh-CN"])
 async def test_default_python_extract_loop_passes_language_to_field_descriptions(language):

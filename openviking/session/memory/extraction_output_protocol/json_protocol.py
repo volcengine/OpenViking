@@ -53,13 +53,26 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
     def render_reference_rules(self, context: ExtractionOutputContext) -> str:
         link_rules = prompts.JSON_LINK_RULES if context.link_enabled else ""
         if context.add_only:
-            return "".join((prompts.JSON_ADD_ONLY_REFERENCE_RULES, link_rules))
+            return "".join(
+                (
+                    prompts.EXTRACTION_REFERENCE_RULES,
+                    prompts.JSON_ADD_ONLY_REFERENCE_RULES,
+                    link_rules,
+                )
+            )
         removal_rule = (
             prompts.JSON_PATCH_REMOVAL_RULE
             if context.supports_string_patch
             else prompts.JSON_FULL_REMOVAL_RULE
         )
-        return "".join((prompts.JSON_UPSERT_REFERENCE_RULES, removal_rule, link_rules))
+        return "".join(
+            (
+                prompts.EXTRACTION_REFERENCE_RULES,
+                prompts.JSON_UPSERT_REFERENCE_RULES,
+                removal_rule,
+                link_rules,
+            )
+        )
 
     def parse(
         self, content: str, context: ExtractionOutputContext
