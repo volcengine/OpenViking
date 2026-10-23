@@ -11,7 +11,7 @@ blocks (text / tool_use / tool_result). cwd + gitBranch are per record.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 from openviking.ingest.models import NormalizedMessage, SessionRef
 from openviking.ingest.registry import register_source
@@ -38,6 +38,30 @@ class ClaudeCodeSource(JsonlLogSource):
 
     def default_paths(self) -> List[Path]:
         return [Path.home() / ".claude" / "projects"]
+
+    def discover_sessions(self) -> Iterable[SessionRef]:
+        """Select one authoritative transcript when project paths split a session.
+
+        Claude Code can leave the same session UUID under both real-path and
+        symlink-derived project directories. Yielding both files makes them share one
+        byte-offset cursor; their different inodes then look like alternating rotations
+        and both files are replayed on every poll. Claude transcripts are append-only, so
+        the most recently modified file is authoritative. Size and path make ties stable.
+        """
+        selected: Dict[str, tuple[tuple[int, int, str], SessionRef]] = {}
+        for ref in super().discover_sessions():
+            path = Path(ref.locator)
+            try:
+                stat = path.stat()
+                freshness = (stat.st_mtime_ns, stat.st_size, ref.locator)
+            except OSError:
+                freshness = (-1, -1, ref.locator)
+            current = selected.get(ref.native_session_id)
+            if current is None or freshness > current[0]:
+                selected[ref.native_session_id] = (freshness, ref)
+
+        for session_id in sorted(selected):
+            yield selected[session_id][1]
 
     def parse_line(self, obj: Dict[str, Any], ref: SessionRef) -> List[NormalizedMessage]:
         if obj.get("type") not in ("user", "assistant"):
