@@ -49,6 +49,7 @@ export type RemoteSourceOptionState = {
     authMode: GitAuthMode
     refMode: GitRefMode
     refValue: string
+    subdir: string
     supportsHttpAuth: boolean
     token: string
     username: string
@@ -83,6 +84,7 @@ const GIT_STRATEGY: RemoteSourceStrategy = {
       ...(state.git.refValue.trim()
         ? { [state.git.refMode]: state.git.refValue.trim() }
         : {}),
+      ...(state.git.subdir.trim() ? { subdir: state.git.subdir.trim() } : {}),
       ...(state.git.authMode === 'token' && state.git.supportsHttpAuth
         ? {
             auth_config: {

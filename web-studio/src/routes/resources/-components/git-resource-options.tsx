@@ -13,6 +13,7 @@ export type GitResourceOptionsValue = {
   authMode: GitAuthMode
   refMode: GitRefMode
   refValue: string
+  subdir: string
   token: string
   username: string
 }
@@ -79,6 +80,20 @@ export function GitResourceOptions({
             }
           />
         </div>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor="add-resource-git-subdir">{t('git.subdir')}</Label>
+        <Input
+          id="add-resource-git-subdir"
+          value={value.subdir}
+          disabled={disabled}
+          onChange={(event) =>
+            onChange({ ...value, subdir: event.target.value })
+          }
+          placeholder={t('git.subdir.placeholder')}
+        />
+        <p className="text-xs text-muted-foreground">{t('git.subdir.hint')}</p>
       </div>
 
       <div className="space-y-3 border-t border-border/50 pt-3">

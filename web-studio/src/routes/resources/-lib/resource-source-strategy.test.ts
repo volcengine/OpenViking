@@ -16,6 +16,7 @@ const DEFAULT_STATE: RemoteSourceOptionState = {
     authMode: 'public',
     refMode: 'branch',
     refValue: '',
+    subdir: '',
     supportsHttpAuth: false,
     token: '',
     username: 'oauth2',
@@ -104,6 +105,24 @@ describe('remote resource source strategy', () => {
       },
       exclude: '/archive,/private',
       include: '/docs,/zh/',
+    })
+  })
+
+  it('builds an optional Git subdirectory', () => {
+    const state: RemoteSourceOptionState = {
+      ...DEFAULT_STATE,
+      git: {
+        ...DEFAULT_STATE.git,
+        refValue: 'master',
+        subdir: ' docs ',
+      },
+    }
+
+    expect(buildRemoteSourceRequestOptions('git', state)).toEqual({
+      args: {
+        branch: 'master',
+        subdir: 'docs',
+      },
     })
   })
 

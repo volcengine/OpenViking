@@ -130,6 +130,7 @@ class GitAccessor(DataAccessor):
             # Fetch content (Clone or Extract)
             repo_name = "repository"
             local_dir = Path(temp_local_dir)
+            meta = {}
 
             if source_str.startswith("git@"):
                 # git@ SSH URL
@@ -221,10 +222,24 @@ class GitAccessor(DataAccessor):
             else:
                 raise ValueError(f"Unsupported source for GitAccessor: {source}")
 
+            # Optional repository subdirectory: make it the parse root so the
+            # account target receives the folder contents directly.
+            subdir = kwargs.get("subdir")
+            if subdir:
+                relative = PurePosixPath(str(subdir))
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError("subdir must be a relative path inside the repository")
+                root = Path(temp_local_dir).resolve()
+                candidate = (root / relative).resolve()
+                if root not in candidate.parents or not candidate.is_dir():
+                    raise ValueError(f"subdir does not exist in repository: {subdir}")
+                local_dir = candidate
+                meta["repo_subdir"] = str(relative)
+
             # Build metadata
             # repo_name is in "org/repo" format (e.g. "volcengine/OpenViking")
             # This is extracted via parse_code_hosting_url() from the original URL
-            meta = {"repo_name": repo_name, "_cleanup_path": temp_local_dir}
+            meta = {**meta, "repo_name": repo_name, "_cleanup_path": temp_local_dir}
             if branch:
                 meta["repo_ref"] = branch
             if commit:

@@ -70,6 +70,7 @@ const DEFAULT_GIT_OPTIONS: GitResourceOptionsValue = {
   authMode: 'public',
   refMode: 'branch',
   refValue: '',
+  subdir: '',
   token: '',
   username: 'oauth2',
 }

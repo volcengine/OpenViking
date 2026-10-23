@@ -33,6 +33,7 @@ const BASE_FORM_STATE: ResourceImportFormState = {
       authMode: 'public',
       refMode: 'branch',
       refValue: '',
+      subdir: '',
       supportsHttpAuth: true,
       token: '',
       username: 'oauth2',
@@ -122,6 +123,26 @@ describe('resource import request builders', () => {
     expect(body.args).toEqual({
       branch: 'main',
       parse_mode: 'no_split',
+    })
+  })
+
+  it('forwards a Git subdirectory in args', () => {
+    const body = buildResourceImportCommonBody({
+      ...BASE_FORM_STATE,
+      remoteResourceKind: 'git',
+      sourceOptionState: {
+        ...BASE_FORM_STATE.sourceOptionState,
+        git: {
+          ...BASE_FORM_STATE.sourceOptionState.git,
+          refValue: 'master',
+          subdir: 'docs',
+        },
+      },
+    })
+
+    expect(body.args).toEqual({
+      branch: 'master',
+      subdir: 'docs',
     })
   })
 
