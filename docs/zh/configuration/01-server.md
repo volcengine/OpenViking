@@ -147,6 +147,23 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 
 更换模型或 `dimension` 可能与已有向量集合不兼容，需要迁移或重建索引。
 
+#### 从不兼容的向量集合恢复
+
+非空集合与当前 Embedding 模型不兼容时，OpenViking 会拒绝启动。可按以下步骤重建，同时保留旧集合：
+
+1. 保持 `storage.workspace` 和 `storage.agfs` 不变。
+2. 配置新的 Embedding 模型，并将 `storage.vectordb.name` 改为一个未使用的集合名。
+3. 重启 OpenViking。支持控制面操作的后端会在启动时创建空集合。仅使用数据面凭证的后端需要预先创建集合和 schema。
+4. 使用现有文件树重建可恢复的向量：
+
+   ```bash
+   ov --sudo reindex viking:// --mode vectors_only
+   ```
+
+5. 检查 reindex 结果中的 `failed_records`、`unsupported_records` 和 `warnings`。验证完成前保留旧集合，以便恢复旧的 Embedding 配置和集合名。
+
+这是离线恢复流程，不是原子蓝绿迁移。根路径 reindex 不处理 Session 命名空间。没有可恢复摘要的非文本资源可能会标记为 unsupported。支持的范围和限制见[内容 reindex](../api/12-content.md#reindex)。
+
 ### `rerank`
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
@@ -210,6 +227,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
+| `vectordb.name` | 非空 string | `"context"` | 向量集合名；非破坏性重建 Embedding 时使用新名称 |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |

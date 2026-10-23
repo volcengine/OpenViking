@@ -763,8 +763,42 @@ async def test_init_context_collection_rejects_mismatched_nonempty_collection(mo
         lambda: config,
     )
 
-    with pytest.raises(EmbeddingRebuildRequiredError, match="embedding dimension"):
+    with pytest.raises(EmbeddingRebuildRequiredError, match="embedding dimension") as exc_info:
         await init_context_collection(_FakeStorage())
+
+    message = str(exc_info.value)
+    assert "`storage.vectordb.name`" in message
+    assert "`ov --sudo reindex viking:// --mode vectors_only`" in message
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_reports_recovery_for_physical_dimension_mismatch(
+    monkeypatch,
+):
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {"Fields": [{"FieldName": "vector", "Dim": 1024}]}
+
+        async def count(self):  # pragma: no cover - mismatch must fail first
+            raise AssertionError("physical dimension mismatch must fail before count")
+
+    config = _DummyConfig(_DummyEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    with pytest.raises(EmbeddingRebuildRequiredError) as exc_info:
+        await init_context_collection(_FakeStorage())
+
+    message = str(exc_info.value)
+    assert "Existing collection dimension 1024 differs from 2" in message
+    assert "`storage.vectordb.name`" in message
+    assert "`ov --sudo reindex viking:// --mode vectors_only`" in message
 
 
 def test_build_embedding_metadata_hashes_resolved_local_model_path(tmp_path):

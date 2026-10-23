@@ -147,6 +147,23 @@ API-based `embedding`, `vlm`, `query_planner`, and `rerank` configurations reuse
 
 Changing the model or `dimension` can make existing vector collections incompatible and may require migration or reindexing.
 
+#### Recover from an incompatible vector collection
+
+OpenViking refuses to start when a non-empty collection is incompatible with the configured embedding model. To rebuild without deleting the old collection:
+
+1. Keep `storage.workspace` and `storage.agfs` unchanged.
+2. Configure the new embedding model and set `storage.vectordb.name` to a new, unused collection name.
+3. Restart OpenViking. Supported control-plane backends create the empty collection during startup. Pre-create the collection and schema when the backend uses data-plane-only credentials.
+4. Rebuild recoverable vectors from the existing file tree:
+
+   ```bash
+   ov --sudo reindex viking:// --mode vectors_only
+   ```
+
+5. Check the reindex result, including `failed_records`, `unsupported_records`, and `warnings`. Keep the old collection until validation is complete so you can restore the previous embedding configuration and collection name.
+
+This is an offline recovery procedure, not an atomic blue-green migration. Root reindex excludes session namespaces. Non-text resources without a recoverable summary can be reported as unsupported. See [Content reindex](../api/12-content.md#reindex) for supported scopes and limitations.
+
 ### `rerank`
 
 | Field | Type / values | Default | Purpose |
@@ -210,6 +227,7 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
+| `vectordb.name` | non-empty string | `"context"` | Vector collection name; use a new name for a non-destructive embedding rebuild |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
 | `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |

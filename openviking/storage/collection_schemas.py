@@ -55,6 +55,12 @@ logger = get_logger(__name__)
 EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
 
 _EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity")
+_EMBEDDING_REBUILD_GUIDANCE = (
+    "To recover without modifying the incompatible collection, set "
+    "`storage.vectordb.name` to a new collection, restart OpenViking, then run "
+    "`ov --sudo reindex viking:// --mode vectors_only`. Keep the old collection "
+    "until reindex completes so the configuration can be rolled back."
+)
 
 
 @dataclass
@@ -340,7 +346,8 @@ async def init_context_collection(storage) -> bool:
     )
     if actual_dimension is not None and actual_dimension != vector_dim:
         raise EmbeddingRebuildRequiredError(
-            f"Existing collection dimension {actual_dimension} differs from {vector_dim}"
+            f"Existing collection dimension {actual_dimension} differs from {vector_dim}. "
+            f"{_EMBEDDING_REBUILD_GUIDANCE}"
         )
 
     expected_fields = {field.get("FieldName") for field in schema["Fields"]}
@@ -460,14 +467,16 @@ async def init_context_collection(storage) -> bool:
         raise EmbeddingRebuildRequiredError(
             "Existing collection embedding dimension "
             f"({existing_dimension}) does not match current configuration "
-            f"({current_dimension}). Vectors are incompatible; rebuild is required."
+            f"({current_dimension}). Vectors are incompatible; rebuild is required. "
+            f"{_EMBEDDING_REBUILD_GUIDANCE}"
         )
 
     raise EmbeddingRebuildRequiredError(
         "Existing collection embedding metadata does not match current configuration. "
         "Rebuild is required before using the current embedding model, or set "
         "embedding.allow_metadata_override=true to keep existing vectors when "
-        "only provider/model changed (dimension must remain the same)."
+        "only provider/model changed (dimension must remain the same). "
+        f"{_EMBEDDING_REBUILD_GUIDANCE}"
     )
 
 
