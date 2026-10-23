@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { extractCaptureTurns, parseTranscript } from "./cc-transcript.mjs";
+import { CAPTURE_CURSOR_VERSION, extractCaptureTurns, mapLegacyCaptureCursor, parseTranscript } from "./cc-transcript.mjs";
 import {
   commitSession,
   deriveOvSessionId,
@@ -185,7 +185,9 @@ async function main() {
 
     const messages = parseTranscript(transcript);
     const turns = extractCaptureTurns(messages, cfg);
-    const capturedTurnCount = state?.capturedTurnCount || 0;
+    const previousCount = state?.capturedTurnCount || 0;
+    const capturedTurnCount = state?.captureCursorVersion === CAPTURE_CURSOR_VERSION
+      ? previousCount : mapLegacyCaptureCursor(messages, cfg, previousCount);
     const newTurns = turns.slice(capturedTurnCount);
     log("transcript_parse", {
       subagentId,
@@ -225,7 +227,7 @@ async function main() {
       return;
     }
 
-    await saveState(subagentId, { ...state, ovSessionId, capturedTurnCount: turns.length });
+    await saveState(subagentId, { ...state, ovSessionId, capturedTurnCount: turns.length, captureCursorVersion: CAPTURE_CURSOR_VERSION });
   });
 }
 

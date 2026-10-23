@@ -70,8 +70,9 @@ runHookStage({
   // A resumed subagent keeps its agent_id; keep the capture cursor so its next
   // stop does not resend turns an earlier stop already pushed.
   let capturedTurnCount;
+  let captureCursorVersion;
   try {
-    capturedTurnCount = JSON.parse(await readFile(stateFile(subagentId), "utf-8")).capturedTurnCount;
+    ({ capturedTurnCount, captureCursorVersion } = JSON.parse(await readFile(stateFile(subagentId), "utf-8")));
   } catch { /* no earlier state */ }
 
   try {
@@ -87,6 +88,7 @@ runHookStage({
         peerSource: effectivePeer.source,
         startedAt: Date.now(),
         capturedTurnCount,
+        captureCursorVersion,
       }),
     );
   } catch (err) {

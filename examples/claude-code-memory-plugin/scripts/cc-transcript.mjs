@@ -88,8 +88,17 @@ function normalizeBlock(block, cfg) {
   };
 }
 
-function normalizeMessage(message, cfg) {
+function normalizeMessage(message, cfg, includeQueued) {
   if (!message || typeof message !== "object") return null;
+  const attachment = message.attachment;
+  if (includeQueued && message.type === "attachment" && attachment?.type === "queued_command") {
+    // SDK input omits the interactive humanTurn/origin fields. Explicit agent
+    // notifications are not human input; capture the raw prompt, never rendered UI.
+    if (attachment.commandMode !== "prompt" || typeof attachment.prompt !== "string"
+      || attachment.humanTurn === false
+      || (attachment.origin?.kind && attachment.origin.kind !== "human")) return null;
+    return { role: "user", content: attachment.prompt };
+  }
   let role = message.role;
   let content;
   if (message.content !== undefined) {
@@ -127,6 +136,33 @@ function textFromParts(parts) {
   return chunks.join("\n\n").trim();
 }
 
+function extractCaptureEntries(messages, cfg, includeQueued) {
+  const payloads = (messages || []).map((message) => normalizeMessage(message, cfg, includeQueued));
+  const toolNameById = collectToolNamesByIdFromEntries(payloads.filter(Boolean));
+  const entries = [];
+  const userIds = new Set();
+  const queuedIds = new Set();
+  for (const [index, payload] of payloads.entries()) {
+    const role = payload && normalizeCaptureRole(payload.role);
+    if (!role) continue;
+    // Output was already capped by normalizeBlock; do not cap it again here.
+    const parts = extractPartsFromPayload(payload, { toolMaxChars: Infinity, toolNameById });
+    if (parts.length === 0) continue;
+    const message = messages[index];
+    const queued = includeQueued && message.type === "attachment";
+    const ids = queued ? [message.attachment.source_uuid, message.attachment.delivery_id]
+      .filter((id) => typeof id === "string" && id.length > 0) : [];
+    // Keep the first representation in source order. A later normal user row
+    // can name the same queued event; equal text with different IDs stays distinct.
+    if (queued && ids.some((id) => userIds.has(id) || queuedIds.has(id))) continue;
+    if (!queued && role === "user" && queuedIds.has(message.uuid)) continue;
+    if (queued) ids.forEach((id) => queuedIds.add(id));
+    else if (role === "user" && message.uuid) userIds.add(message.uuid);
+    entries.push({ index, turn: { role, text: textFromParts(parts), parts } });
+  }
+  return entries;
+}
+
 /**
  * Every user/assistant turn in the transcript, in order.
  *
@@ -134,17 +170,17 @@ function textFromParts(parts) {
  * a caller can treat the position of a turn as a durable cursor.
  */
 export function extractCaptureTurns(messages, cfg = {}) {
-  const payloads = (messages || []).map((message) => normalizeMessage(message, cfg));
-  const toolNameById = collectToolNamesByIdFromEntries(payloads.filter(Boolean));
-  const turns = [];
-  for (const payload of payloads) {
-    const role = payload && normalizeCaptureRole(payload.role);
-    if (!role) continue;
-    // Output was capped in normalizeBlock; capping it again here would eat the
-    // "[truncated, N more chars]" note that cap just appended.
-    const parts = extractPartsFromPayload(payload, { toolMaxChars: Infinity, toolNameById });
-    if (parts.length === 0) continue;
-    turns.push({ role, text: textFromParts(parts), parts });
-  }
-  return turns;
+  return extractCaptureEntries(messages, cfg, true).map((entry) => entry.turn);
+}
+
+export const CAPTURE_CURSOR_VERSION = 2;
+
+/** Map an old turn-count boundary without replaying already captured legacy turns. */
+export function mapLegacyCaptureCursor(messages, cfg, count) {
+  if (!Number.isSafeInteger(count) || count < 0) throw new Error("Invalid capture cursor");
+  if (count === 0) return 0;
+  const legacy = extractCaptureEntries(messages, cfg, false);
+  if (count > legacy.length) throw new Error("Capture cursor exceeds legacy transcript");
+  const boundary = legacy[count - 1].index;
+  return extractCaptureEntries(messages, cfg, true).filter((entry) => entry.index <= boundary).length;
 }

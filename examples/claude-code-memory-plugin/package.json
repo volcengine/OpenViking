@@ -1,6 +1,6 @@
 {
   "name": "claude-code-openviking-memory",
-  "version": "0.7.17",
+  "version": "0.7.18",
   "description": "OpenViking memory plugin for Claude Code — semantic long-term memory",
   "type": "module",
   "scripts": {
