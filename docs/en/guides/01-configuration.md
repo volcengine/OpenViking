@@ -1154,7 +1154,7 @@ TypeSafe direct access; the adapter does not special-case Vercel:
   "rerank": {
     "provider": "jev",
     "api_key": "your-vercel-ai-gateway-api-key",
-    "api_base": "https://ai-gateway.vercel.sh/typesafe",
+    "api_base": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
     "model": "typesafe-ai/jev",
     "threshold": 0.1
   }
@@ -1196,7 +1196,7 @@ using Choice through MCP.
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
 | `api_key` | str | API key (for `openai`, `cohere`, or `jev` providers) |
-| `api_base` | str | Endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai`, Vercel uses `https://ai-gateway.vercel.sh/typesafe`) |
+| `api_base` | str | Complete endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai/v1/systemone`, Vercel uses `https://ai-gateway.vercel.sh/typesafe/v1/systemone`; custom Jev URLs are used unchanged) |
 | `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
 | `mode` | `"noul"`, `"choice"`, or `null` | Jev rerank mode. `null` and omission use `"noul"` |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |

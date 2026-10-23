@@ -534,6 +534,14 @@ class VikingClient:
         )
         return result
 
+    async def rule_search(
+        self,
+        task_context: str,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Search compiled Rules applicable to the current task context."""
+        return await self.client.rule_search(task_context, options=options)
+
     async def compile_embeddings(
         self, texts: List[str], *, target_uri: str, expected_model: str | None = None
     ) -> Dict[str, Any]:

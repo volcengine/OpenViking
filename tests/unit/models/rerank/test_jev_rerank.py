@@ -64,7 +64,7 @@ class TestJevRerankClient:
 
         client = JevRerankClient(
             api_key="vercel-key",
-            api_base="https://ai-gateway.vercel.sh/typesafe",
+            api_base="https://ai-gateway.vercel.sh/typesafe/v1/systemone",
             model_name="typesafe-ai/jev",
             mode=MODE_NOUL,
         )
@@ -75,6 +75,23 @@ class TestJevRerankClient:
         assert call.kwargs["json"]["model"] == "typesafe-ai/jev"
         assert call.kwargs["json"]["questions"]["relevance_0"]["type"] == "noul"
         assert "headers" not in call.kwargs
+
+    @patch("openviking.models.rerank.jev_rerank.httpx.Client")
+    def test_custom_api_base_appends_systemone_path(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        mock_client.post.return_value = _mock_response(_systemone_payload([0.8]))
+
+        client = JevRerankClient(
+            api_key="custom-key",
+            api_base="https://gateway.example.com/custom-jev",
+        )
+        assert client.rerank_batch("query", ["document"]) == [0.8]
+
+        mock_client.post.assert_called_once_with(
+            "https://gateway.example.com/custom-jev/v1/systemone",
+            json=mock_client.post.call_args.kwargs["json"],
+        )
 
     @patch("openviking.models.rerank.jev_rerank.logger.warning")
     @patch("openviking.models.rerank.jev_rerank.httpx.Client")
@@ -296,11 +313,17 @@ class TestJevRerankConfig:
         assert config.mode == "listwise"
 
     def test_jev_auto_detected_from_api_base(self):
-        config = RerankConfig(api_key="key", api_base="https://api.typesafe.ai")
+        config = RerankConfig(
+            api_key="key",
+            api_base="https://api.typesafe.ai/v1/systemone",
+        )
         assert config._effective_provider() == "jev"
 
     def test_jev_auto_detected_from_vercel_typesafe_base(self):
-        config = RerankConfig(api_key="key", api_base="https://ai-gateway.vercel.sh/typesafe")
+        config = RerankConfig(
+            api_key="key",
+            api_base="https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+        )
         assert config._effective_provider() == "jev"
 
     def test_plain_vercel_base_is_not_jev(self):
