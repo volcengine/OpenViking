@@ -4,6 +4,7 @@
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
+import { createAuthProof, isValidChallenge, tokenMatches } from './auth.js';
 import { WhatsAppClient, InboundMessage } from './whatsapp.js';
 
 interface SendCommand {
@@ -22,13 +23,13 @@ export class BridgeServer {
   private wa: WhatsAppClient | null = null;
   private clients: Set<WebSocket> = new Set();
 
-  constructor(private port: number, private authDir: string, private token?: string) {}
+  constructor(private port: number, private authDir: string, private token: string) {}
 
   async start(): Promise<void> {
     // Bind to localhost only — never expose to external network
     this.wss = new WebSocketServer({ host: '127.0.0.1', port: this.port });
     console.log(`🌉 Bridge server listening on ws://127.0.0.1:${this.port}`);
-    if (this.token) console.log('🔒 Token authentication enabled');
+    console.log('🔒 Token authentication enabled');
 
     // Initialize WhatsApp client
     this.wa = new WhatsAppClient({
@@ -40,31 +41,56 @@ export class BridgeServer {
 
     // Handle WebSocket connections
     this.wss.on('connection', (ws) => {
-      if (this.token) {
-        // Require auth handshake as first message
-        const timeout = setTimeout(() => ws.close(4001, 'Auth timeout'), 5000);
-        ws.once('message', (data) => {
-          clearTimeout(timeout);
-          try {
-            const msg = JSON.parse(data.toString());
-            if (msg.type === 'auth' && msg.token === this.token) {
-              console.log('🔗 Python client authenticated');
-              this.setupClient(ws);
-            } else {
-              ws.close(4003, 'Invalid token');
-            }
-          } catch {
-            ws.close(4003, 'Invalid auth message');
-          }
-        });
-      } else {
-        console.log('🔗 Python client connected');
-        this.setupClient(ws);
-      }
+      this.authenticateClient(ws);
     });
 
     // Connect to WhatsApp
     await this.wa.connect();
+  }
+
+  private authenticateClient(ws: WebSocket): void {
+    const timeout = setTimeout(() => ws.close(4001, 'Auth timeout'), 5000);
+    const reject = (reason: string) => {
+      clearTimeout(timeout);
+      ws.close(4003, reason);
+    };
+    ws.once('message', (challengeData) => {
+      try {
+        const challengeMessage = JSON.parse(challengeData.toString());
+        if (
+          challengeMessage.type !== 'auth_challenge' ||
+          !isValidChallenge(challengeMessage.challenge)
+        ) {
+          reject('Invalid auth challenge');
+          return;
+        }
+        ws.send(
+          JSON.stringify({
+            type: 'auth_proof',
+            proof: createAuthProof(this.token, challengeMessage.challenge),
+          }),
+        );
+      } catch {
+        reject('Invalid auth challenge');
+        return;
+      }
+
+      ws.once('message', (authData) => {
+        clearTimeout(timeout);
+        try {
+          const authMessage = JSON.parse(authData.toString());
+          if (authMessage.type !== 'auth' || !tokenMatches(authMessage.token, this.token)) {
+            reject('Invalid token');
+            return;
+          }
+          console.log('🔗 Python client authenticated');
+          this.setupClient(ws);
+          ws.send(JSON.stringify({ type: 'auth_ok' }));
+        } catch {
+          reject('Invalid auth message');
+        }
+      });
+    });
   }
 
   private setupClient(ws: WebSocket): void {
