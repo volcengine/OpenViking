@@ -127,6 +127,54 @@ class _MediaProvider(_FakeProvider):
         return self.supports_media
 
 
+class _WriteExperienceProvider(_FakeProvider):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+        self.responses = iter(
+            [
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="read-1",
+                            name="read_file",
+                            arguments={"path": "notes.txt"},
+                            tokens=1,
+                        )
+                    ],
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="write-before-exp",
+                            name="write_file",
+                            arguments={"path": "answer.txt", "content": "draft"},
+                            tokens=1,
+                        )
+                    ],
+                ),
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="write-after-exp",
+                            name="write_file",
+                            arguments={"path": "answer.txt", "content": "verified"},
+                            tokens=1,
+                        )
+                    ],
+                ),
+                LLMResponse(content="done"),
+            ]
+        )
+
+    async def chat(self, messages, **kwargs):
+        self.calls.append(copy.deepcopy(messages))
+        return next(self.responses)
+
+
 class _ImageRegistry:
     def __init__(self, content=None):
         self.content = content
@@ -156,6 +204,28 @@ class _ImageRegistry:
         return ToolExecutionResult(
             result=MultimodalToolResult(text=label, content=content), effective_params=params
         )
+
+
+class _ReadWriteRegistry:
+    def __init__(self):
+        self.calls = []
+
+    def get_definitions(self, **kwargs):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": name,
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+            for name in ("read_file", "write_file")
+        ]
+
+    async def execute_detailed(self, name, params, **kwargs):
+        self.calls.append((name, copy.deepcopy(params)))
+        return ToolExecutionResult(result=f"{name} result", effective_params=params)
 
 
 class _SteerProvider(LLMProvider):
@@ -354,6 +424,65 @@ async def test_agent_loop_prefers_new_media_across_consecutive_tool_rounds(make_
     assert isinstance(tool_messages[0]["content"], str)
     assert "earlier tool result was omitted" in tool_messages[0]["content"]
     assert isinstance(tool_messages[1]["content"], list)
+
+
+def test_write_experience_request_context_preserves_multimodal_prompt_and_tool_tail():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,aW1hZ2U="}},
+                {"type": "text", "text": "inspect this image"},
+            ],
+        },
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "read-1"}]},
+        {"role": "tool", "tool_call_id": "read-1", "content": "image details"},
+    ]
+    original = copy.deepcopy(messages)
+
+    request_messages = loop_module._with_user_request_context(messages, "experience")
+
+    assert request_messages is not None
+    assert [message["role"] for message in request_messages] == ["user", "assistant", "tool"]
+    assert request_messages[-1]["role"] == "tool"
+    assert request_messages[0]["content"] == [
+        {"type": "text", "text": "experience"},
+        *original[0]["content"],
+    ]
+    assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_write_experience_is_request_only_and_keeps_tool_result_last(make_loop):
+    provider = _WriteExperienceProvider()
+    registry = _ReadWriteRegistry()
+    loop = make_loop(provider=provider, max_iterations=4)
+    loop.context.memory.get_viking_experience_context = AsyncMock(
+        return_value="Keep writes atomic and verify the result."
+    )
+    messages = [{"role": "user", "content": "read the notes, then write the answer"}]
+
+    final, _reasoning, tools_used, _usage, _iteration = await loop._run_agent_loop(
+        messages=messages,
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="write-exp"),
+        publish_events=False,
+        tool_registry=registry,
+    )
+
+    assert final == "done"
+    assert len(provider.calls) == 4
+    retry_request = provider.calls[2]
+    assert [message["role"] for message in retry_request] == ["user", "assistant", "tool"]
+    assert retry_request[-1]["role"] == "tool"
+    assert retry_request[0]["content"] == (
+        "## Relevant Agent Experience\nKeep writes atomic and verify the result.\n\n"
+        "read the notes, then write the answer"
+    )
+    assert "Relevant Agent Experience" not in provider.calls[3][0]["content"]
+    assert messages[0]["content"] == "read the notes, then write the answer"
+    assert [name for name, _params in registry.calls] == ["read_file", "write_file"]
+    assert [tool["tool_name"] for tool in tools_used] == ["read_file", "write_file"]
+    loop.context.memory.get_viking_experience_context.assert_awaited_once()
 
 
 def test_agent_loop_omits_spawn_tool_when_subagents_disabled(make_loop, temp_dir: Path):

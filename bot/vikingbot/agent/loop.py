@@ -95,6 +95,30 @@ def _inline_media_bytes(messages: list[dict]) -> int:
     return total
 
 
+def _with_user_request_context(messages: list[dict], context: str) -> list[dict] | None:
+    """Prepend request-only context to the newest compatible user message."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") != "user":
+            continue
+
+        content = message.get("content")
+        if isinstance(content, str):
+            request_content: str | list[dict] = f"{context}\n\n{content}" if content else context
+        elif isinstance(content, list):
+            request_content = [{"type": "text", "text": context}, *content]
+        else:
+            continue
+
+        request_messages = list(messages)
+        request_message = dict(message)
+        request_message["content"] = request_content
+        request_messages[index] = request_message
+        return request_messages
+
+    return None
+
+
 def _demote_historical_tool_media(
     messages: list[dict], *, history_end: int, bytes_needed: int
 ) -> int:
@@ -1828,6 +1852,7 @@ class AgentLoop:
             "cache_read_input_tokens": 0,
         }
         write_exp_injected = False
+        pending_write_experience: str | None = None
         stop_tools = set(stop_tool_names or [])
         compact_pending = False
         compact_threshold_chars = (context_compact_budget or 0) * 0.85
@@ -1908,8 +1933,15 @@ class AgentLoop:
                 for definition in tool_definitions
                 if isinstance(definition, dict)
             }
+            request_messages = messages
+            if pending_write_experience:
+                request_messages = (
+                    _with_user_request_context(messages, pending_write_experience) or messages
+                )
+                pending_write_experience = None
+
             response, _streamed_content, streamed_reasoning = await self._chat_with_stream_events(
-                messages=messages,
+                messages=request_messages,
                 tools=tool_definitions,
                 session_key=session_key,
                 publish_events=publish_events,
@@ -1956,13 +1988,13 @@ class AgentLoop:
                                 f"[WRITE_EXP]: write tool detected, exp_found={bool(_exp)}, query={_query[:50]}"
                             )
                             if _exp:
-                                messages.append(
-                                    {
-                                        "role": "user",
-                                        "content": f"## Relevant Agent Experience\n{_exp}",
-                                    }
+                                _write_context = f"## Relevant Agent Experience\n{_exp}"
+                                if _with_user_request_context(messages, _write_context) is not None:
+                                    pending_write_experience = _write_context
+                                    continue
+                                logger.warning(
+                                    "[WRITE_EXP]: no compatible user message for experience context"
                                 )
-                                continue
                         except Exception as _e:
                             logger.warning(f"[WRITE_EXP]: failed to load experience: {_e}")
 
