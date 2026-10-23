@@ -26,6 +26,7 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_UNKNOWN,
     classify_api_error,
     extract_metric_error_code,
+    is_retryable_rate_limit_error,
     retry_async,
     retry_sync,
 )
@@ -432,3 +433,28 @@ def test_numeric_status_code_with_compact_error_code_context_still_matches():
     assert classify_api_error(RuntimeError("Error code:413-Payload Too Large")) == (
         ERROR_CLASS_INPUT_TOO_LARGE
     )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "stale_lock=cantaloup:403",
+        "worker died at openviking/worker.py:403 pre-import",
+        "worker endpoint=cantaloup:429 failed",
+    ],
+)
+def test_numeric_status_code_after_compound_colon_is_not_matched(message):
+    assert classify_api_error(RuntimeError(message)) == ERROR_CLASS_UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("worker endpoint=cantaloup:429 failed", False),
+        ("HTTP 429 Too Many Requests", True),
+        ("status:429", True),
+        ("Error code: 429 - rate limit exceeded", True),
+    ],
+)
+def test_rate_limit_status_rejects_compound_colon_suffix(message, expected):
+    assert is_retryable_rate_limit_error(RuntimeError(message)) is expected
