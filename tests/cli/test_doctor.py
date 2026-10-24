@@ -8,6 +8,7 @@ import importlib
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,6 +17,7 @@ import pytest
 
 from openviking_cli.doctor import (
     _probe_embedding_provider,
+    _probe_vlm_provider,
     check_agfs,
     check_config,
     check_disk,
@@ -500,7 +502,11 @@ class TestCheckVlm:
             )
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            ok, detail, fix = check_vlm()
+            with patch(
+                "openviking_cli.doctor._probe_vlm_provider",
+                return_value=(True, "openai/gpt-4o-mini probe ok", None),
+            ):
+                ok, detail, fix = check_vlm()
         assert ok
 
     def test_pass_with_credentials_config(self, tmp_path: Path):
@@ -520,7 +526,11 @@ class TestCheckVlm:
             )
         )
         with patch("openviking_cli.doctor._find_config", return_value=config):
-            ok, detail, fix = check_vlm()
+            with patch(
+                "openviking_cli.doctor._probe_vlm_provider",
+                return_value=(True, "openai/gpt-4o-mini probe ok", None),
+            ):
+                ok, detail, fix = check_vlm()
         assert ok
         assert "openai/gpt-4o-mini" in detail
         assert fix is None
@@ -609,6 +619,158 @@ class TestCheckVlm:
         assert ok
         assert "openai-codex/gpt-5.3-codex" in detail
         assert "oauth via openviking" in detail
+
+
+class TestProbeVlmProvider:
+    def test_vlm_probe_passes_on_successful_completion(self):
+        class FakeVLM:
+            async def get_completion_async(self, **kwargs):
+                return "ok"
+
+        ok, detail, fix = _probe_vlm_provider(
+            SimpleNamespace(get_vlm_instance=lambda: FakeVLM()), "openai", "gpt-4o-mini"
+        )
+
+        assert ok
+        assert detail == "openai/gpt-4o-mini probe ok"
+        assert fix is None
+
+    def test_vlm_probe_reports_provider_error(self):
+        class FakeVLM:
+            async def get_completion_async(self, **kwargs):
+                raise RuntimeError("model not found")
+
+        ok, detail, fix = _probe_vlm_provider(
+            SimpleNamespace(get_vlm_instance=lambda: FakeVLM()), "openai", "missing-model"
+        )
+
+        assert not ok
+        assert "probe failed" in detail
+        assert "model not found" in detail
+        assert "model name" in fix
+
+    def test_vlm_probe_reports_client_construction_failure(self):
+        def boom():
+            raise ValueError("bad credentials block")
+
+        ok, detail, fix = _probe_vlm_provider(
+            SimpleNamespace(get_vlm_instance=boom), "openai", "custom-model"
+        )
+
+        assert not ok
+        assert "invalid VLM client config" in detail
+        assert fix == "Fix vlm section in ov.conf"
+
+
+class TestCheckVlmLiveProbe:
+    """End-to-end check_vlm runs against a local OpenAI-compatible endpoint."""
+
+    @staticmethod
+    def _start_chat_server(status: int = 200):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        seen = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                seen.append((self.path, self.rfile.read(length)))
+                if status == 200:
+                    payload = json.dumps(
+                        {
+                            "id": "chatcmpl-doctor-probe",
+                            "object": "chat.completion",
+                            "created": 1,
+                            "model": "custom-model",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {"role": "assistant", "content": "ok"},
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                            "usage": {
+                                "prompt_tokens": 1,
+                                "completion_tokens": 1,
+                                "total_tokens": 2,
+                            },
+                        }
+                    ).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                else:
+                    payload = json.dumps(
+                        {"error": {"message": "model not found", "type": "invalid_request_error"}}
+                    ).encode()
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, seen
+
+    def test_probe_ok_against_local_openai_endpoint(self, tmp_path: Path):
+        server, seen = self._start_chat_server(status=200)
+        try:
+            config = tmp_path / "ov.conf"
+            config.write_text(
+                json.dumps(
+                    {
+                        "vlm": {
+                            "provider": "openai",
+                            "model": "custom-model",
+                            "api_key": "sk-local",
+                            "api_base": f"http://127.0.0.1:{server.server_address[1]}/v1",
+                            "max_retries": 0,
+                        }
+                    }
+                )
+            )
+            with patch("openviking_cli.doctor._find_config", return_value=config):
+                ok, detail, fix = check_vlm()
+        finally:
+            server.shutdown()
+
+        assert ok
+        assert "openai/custom-model probe ok" in detail
+        assert fix is None
+        assert seen and seen[0][0].endswith("/chat/completions")
+
+    def test_probe_fails_when_model_is_not_callable(self, tmp_path: Path):
+        server, _seen = self._start_chat_server(status=404)
+        try:
+            config = tmp_path / "ov.conf"
+            config.write_text(
+                json.dumps(
+                    {
+                        "vlm": {
+                            "provider": "openai",
+                            "model": "not-callable-model",
+                            "api_key": "sk-local",
+                            "api_base": f"http://127.0.0.1:{server.server_address[1]}/v1",
+                            "max_retries": 0,
+                        }
+                    }
+                )
+            )
+            with patch("openviking_cli.doctor._find_config", return_value=config):
+                ok, detail, fix = check_vlm()
+        finally:
+            server.shutdown()
+
+        assert not ok
+        assert "probe failed" in detail
+        assert "model name" in fix
 
 
 class TestCheckOllama:
@@ -1051,7 +1213,11 @@ class TestRunDoctor:
                 "openviking_cli.doctor._probe_embedding_provider",
                 return_value=(True, "openai/m probe ok", None),
             ):
-                code = run_doctor()
+                with patch(
+                    "openviking_cli.doctor._probe_vlm_provider",
+                    return_value=(True, "openai/m probe ok", None),
+                ):
+                    code = run_doctor()
         captured = capsys.readouterr()
         assert "OpenViking Doctor" in captured.out
         # May not be 0 if native engine is missing, but the function should complete
