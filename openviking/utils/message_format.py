@@ -77,7 +77,7 @@ def format_messages(messages: List[Dict[str, Any]]) -> str:
             output.append(f"\n[{role}] (id={tool_call_id})")
             if content:
                 try:
-                    result_json = json.loads(content)
+                    result_json = json.loads(content) if isinstance(content, str) else content
                     output.append(json.dumps(result_json, indent=2, ensure_ascii=False))
                 except (json.JSONDecodeError, TypeError):
                     output.append(content)
