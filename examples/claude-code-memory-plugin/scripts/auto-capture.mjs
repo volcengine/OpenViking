@@ -15,6 +15,12 @@
  *
  * Incremental tracking: state file per CC session_id records capturedTurnCount.
  *
+ * Forked sessions (Claude Desktop side chats, /fork, --resume --fork-session)
+ * start with a copy of the parent history; on a session's first capture the
+ * leading inherited prefix is detected (foreign sessionId stamps, or message
+ * uuids already recorded by another session) and skipped, so the parent's
+ * turns are not committed twice. See lib/fork-history.mjs.
+ *
  * Ported from openclaw-plugin/ context-engine.ts + text-utils.ts
  * (MEMORY_TRIGGERS / extractNewTurnMessages).
  */
@@ -34,6 +40,13 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import {
+  countForeignSessionPrefix,
+  countKnownUuidPrefix,
+  hashUuid,
+  readKnownUuidHashes,
+  recordSessionUuidHashes,
+} from "./lib/fork-history.mjs";
 import { replayPending } from "./lib/pending-queue.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
@@ -81,6 +94,69 @@ async function saveState(sessionId, state) {
     await mkdir(STATE_DIR, { recursive: true });
     await writeFile(stateFilePath(sessionId), JSON.stringify(state));
   } catch { /* best effort */ }
+}
+
+/**
+ * On the first capture of a session, find where a forked transcript's
+ * inherited history ends so the cursor can start after it (issue #6524).
+ *
+ * Two conservative signals, both restricted to a leading run of transcript
+ * entries: a foreign `sessionId` stamp kept from the copy, and leading message
+ * uuids another session has already recorded in the shared uuid index. Returns
+ * the number of leading turns that are inherited (0 for an ordinary session,
+ * which trips neither signal) and records the entry boundary on the state for
+ * later uuid-index updates.
+ */
+async function skipInheritedHistory(sessionId, state, messages, cfg) {
+  let foreignPrefix = 0;
+  let uuidPrefix = 0;
+  try {
+    foreignPrefix = countForeignSessionPrefix(messages, sessionId);
+    if (foreignPrefix < messages.length) {
+      uuidPrefix = countKnownUuidPrefix(messages, await readKnownUuidHashes(sessionId));
+    }
+  } catch (err) {
+    logError("fork_history_detect", err);
+    return 0;
+  }
+
+  const inheritedEntries = Math.max(foreignPrefix, uuidPrefix);
+  if (inheritedEntries <= 0) return 0;
+
+  const inheritedTurns = extractCaptureTurns(messages.slice(0, inheritedEntries), cfg).length;
+  state.inheritedEntries = inheritedEntries;
+  log("forked_history_detected", {
+    sessionId,
+    inheritedEntries,
+    inheritedTurns,
+    foreignSessionPrefix: foreignPrefix,
+    knownUuidPrefix: uuidPrefix,
+  });
+  return inheritedTurns;
+}
+
+/**
+ * Advance the cursor past every turn in the transcript and, so forks of this
+ * session can later skip the same history, record the uuid hashes of the
+ * entries the cursor passed (everything after the inherited prefix).
+ */
+async function advanceCapturedState(sessionId, state, messages, allTurns) {
+  await saveState(sessionId, {
+    ...state,
+    capturedTurnCount: allTurns.length,
+  });
+  try {
+    const start = Number(state.inheritedEntries) > 0 ? Number(state.inheritedEntries) : 0;
+    const hashes = new Set();
+    for (const message of messages.slice(start)) {
+      if (message && typeof message.uuid === "string" && message.uuid) {
+        hashes.add(hashUuid(message.uuid));
+      }
+    }
+    await recordSessionUuidHashes(sessionId, Array.from(hashes));
+  } catch (err) {
+    logError("fork_history_index", err);
+  }
 }
 
 async function reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state) {
@@ -246,13 +322,19 @@ async function main({ cfg, input, cwd }) {
 
   const state = await loadState(sessionId);
   await reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state);
-  const newTurns = allTurns.slice(state.capturedTurnCount);
+  // A forked session starts with a copy of its parent's history; on the first
+  // capture the cursor must start after that prefix, not at zero.
+  const startAt = state.capturedTurnCount > 0
+    ? state.capturedTurnCount
+    : Math.max(state.capturedTurnCount, await skipInheritedHistory(sessionId, state, messages, cfg));
+  const newTurns = allTurns.slice(startAt);
   const captureTurns = cfg.captureAssistantTurns
     ? newTurns
     : newTurns.filter(turn => turn.role === "user");
   log("transcript_parse", {
     totalTurns: allTurns.length,
     previouslyCaptured: state.capturedTurnCount,
+    inheritedTurnsSkipped: startAt - state.capturedTurnCount,
     newTurns: newTurns.length,
     captureTurns: captureTurns.length,
     assistantTurnsSkipped: newTurns.length - captureTurns.length,
@@ -264,10 +346,7 @@ async function main({ cfg, input, cwd }) {
   }
 
   if (captureTurns.length === 0) {
-    await saveState(sessionId, {
-      ...state,
-      capturedTurnCount: allTurns.length,
-    });
+    await advanceCapturedState(sessionId, state, messages, allTurns);
     log("state_update", { newCapturedTurnCount: allTurns.length, reason: "assistant_only_increment" });
     return;
   }
@@ -286,10 +365,7 @@ async function main({ cfg, input, cwd }) {
   const combined = formatTurnsAsText(captureTurns);
   if (!sanitizeCapturedText(combined)) {
     log("skip", { stage: "batch_empty" });
-    await saveState(sessionId, {
-      ...state,
-      capturedTurnCount: allTurns.length,
-    });
+    await advanceCapturedState(sessionId, state, messages, allTurns);
     return;
   }
 
@@ -301,10 +377,7 @@ async function main({ cfg, input, cwd }) {
     );
     if (!hasTrigger) {
       log("skip", { stage: "keyword_mode_no_trigger", turns: captureTurns.length });
-      await saveState(sessionId, {
-        ...state,
-        capturedTurnCount: allTurns.length,
-      });
+      await advanceCapturedState(sessionId, state, messages, allTurns);
       return;
     }
   }
@@ -339,10 +412,7 @@ async function main({ cfg, input, cwd }) {
       logError("pending_enqueue", "some turns failed to enqueue; state not advanced");
       return;
     }
-    await saveState(sessionId, {
-      ...state,
-      capturedTurnCount: allTurns.length,
-    });
+    await advanceCapturedState(sessionId, state, messages, allTurns);
     log("state_update", { newCapturedTurnCount: allTurns.length, reason: "pending_queued" });
     writeJsonState("last-capture.json", {
       turns_captured: 0,
@@ -397,10 +467,7 @@ async function main({ cfg, input, cwd }) {
   // A missing live-message file is recoverable after the server is fixed, so
   // retain the cursor for that failure. Other non-retryable 4xx responses keep
   // the historical terminal behavior instead of retrying invalid payloads.
-  await saveState(sessionId, {
-    ...state,
-    capturedTurnCount: allTurns.length,
-  });
+  await advanceCapturedState(sessionId, state, messages, allTurns);
   log("state_update", { newCapturedTurnCount: allTurns.length });
 
   // Client-driven commit (ported from openclaw-plugin/context-engine.ts:afterTurn).
