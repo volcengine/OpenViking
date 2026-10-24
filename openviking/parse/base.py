@@ -61,6 +61,11 @@ def format_table_to_markdown(rows: List[List[str]], has_header: bool = True) -> 
 
     # Calculate maximum width for each column; a delimiter cell needs at least "---"
     col_count = max(len(row) for row in rows)
+    # Drop spreadsheet padding without changing empty tables or column count.
+    data_rows = rows[1:] if has_header else rows
+    if any(cell.strip() for row in data_rows for cell in row):
+        while not any(cell.strip() for cell in rows[-1]):
+            rows.pop()
     col_widths = [3] * col_count
     for row in rows:
         for i, cell in enumerate(row):
