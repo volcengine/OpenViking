@@ -12,9 +12,25 @@ from typing import Any
 
 import httpx
 from loguru import logger
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.registry import ToolRegistry
+
+_TRACE_CONTEXT_KEYS = ("traceparent", "tracestate")
+_trace_context_propagator = TraceContextTextMapPropagator()
+
+
+def _current_trace_context_meta() -> dict[str, str] | None:
+    """Return the active W3C trace context in the MCP SEP-414 carrier."""
+    carrier: dict[str, str] = {}
+    try:
+        _trace_context_propagator.inject(carrier)
+    except Exception as exc:
+        logger.debug("MCP: failed to inject trace context: {}", exc)
+        return None
+    meta = {key: carrier[key] for key in _TRACE_CONTEXT_KEYS if key in carrier}
+    return meta or None
 
 
 def _extract_nullable_branch(options: Any) -> tuple[dict[str, Any], bool] | None:
@@ -110,7 +126,11 @@ class MCPToolWrapper(Tool):
 
         try:
             result = await asyncio.wait_for(
-                self._session.call_tool(self._original_name, arguments=kwargs),
+                self._session.call_tool(
+                    self._original_name,
+                    arguments=kwargs,
+                    meta=_current_trace_context_meta(),
+                ),
                 timeout=self._tool_timeout,
             )
         except asyncio.TimeoutError:
