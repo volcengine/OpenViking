@@ -231,6 +231,41 @@ describe('FilePreview Markdown rendering', () => {
     expect(previewMocks.renderMermaid).not.toHaveBeenCalled()
   })
 
+  it.each(['closing', 'switching files'])(
+    'releases a downloaded image URL when %s',
+    async (action) => {
+      previewState.override = { content: '', fileType: 'image' }
+      vi.mocked(getContentDownload).mockResolvedValue({
+        data: new Blob(['image'], { type: 'image/jpeg' }),
+      } as never)
+      const { rerender, unmount } = renderPreview(
+        {
+          ...file,
+          name: 'photo.jpg',
+          uri: 'viking://resources/wiki/photo.jpg',
+        },
+        vi.fn(),
+      )
+      await waitFor(() =>
+        expect(
+          screen.getByRole('img', { name: 'photo.jpg' }).getAttribute('src'),
+        ).toBe('blob:internal-image'),
+      )
+      expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+
+      if (action === 'closing') {
+        unmount()
+      } else {
+        previewState.override = null
+        rerender(<FilePreview file={file} onClose={vi.fn()} />)
+      }
+
+      expect(URL.revokeObjectURL).toHaveBeenCalledExactlyOnceWith(
+        'blob:internal-image',
+      )
+    },
+  )
+
   it('renders explicit and relative internal images through authenticated downloads', async () => {
     previewState.override = {
       content: [
