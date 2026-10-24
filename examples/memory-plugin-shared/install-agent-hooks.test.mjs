@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { removeHostJsonConfigs, writeHostJsonConfigs } from "./lib/install/host-json-config.mjs";
 
 // `--source dev` installs out of the checkout the installer sits in, and the
 // rest of the suite reads that tree while these installs run, so the installs
@@ -631,6 +632,58 @@ test("cursor installs and uninstalls through a symlinked OPENVIKING_HOME", () =>
       [],
     );
     assert.equal(Boolean(JSON.parse(readFileSync(mcpPath, "utf8")).mcpServers?.openviking), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// The rendered `VAR='value' 'node' 'script'` command form cannot execute in a
+// Windows shell, and ZCode discards the failure silently, so a Windows install
+// renders the zcode template's hooks as shell-free process entries instead.
+// These tests drive writeHostJsonConfigs directly with an injected platform —
+// upstream CI runs on POSIX, where the win32 branch would otherwise be dead.
+test("zcode hooks render as process entries on Windows and command entries elsewhere", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-zcode-platform-"));
+  try {
+    const hooksPath = join(home, "hooks.json");
+    const render = (platform) => writeHostJsonConfigs({
+      kind: "zcode",
+      hooksPath,
+      mcpPath: join(home, "mcp.json"),
+      root: join(checkout, "examples", "agent-hook-plugin"),
+      clientId: "zcode",
+      nodeBin: "/usr/bin/node",
+      sourceMode: "dev",
+      platform,
+    });
+    const entries = () => {
+      const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+      return hooks.hooks.SessionStart.flatMap((group) => group.hooks);
+    };
+
+    render("win32");
+    for (const hook of entries()) {
+      assert.equal(hook.type, "process");
+      assert.equal(hook.command, "/usr/bin/node");
+      assert.equal(hook.args.at(-1), "zcode");
+      assert.ok(existsSync(hook.args[0]), `${hook.args[0]} is missing after install`);
+      assert.ok(Number.isInteger(hook.timeoutMs) && hook.timeoutMs > 0);
+      assert.equal("timeout" in hook, false);
+    }
+    const win = JSON.parse(readFileSync(hooksPath, "utf8"));
+    assert.ok(win.hooks.PreToolUse.some((group) => group.matcher === "Read|Glob|Grep"));
+    // ownsHook has to keep recognizing the process form so an uninstall of a
+    // Windows install reclaims its entries instead of leaving them behind.
+    removeHostJsonConfigs({ hooksPath, mcpPath: "" });
+    assert.deepEqual(JSON.parse(readFileSync(hooksPath, "utf8")).hooks, {});
+
+    render("linux");
+    for (const hook of entries()) {
+      assert.equal(hook.type, "command");
+      assert.match(hook.command, /OPENVIKING_INTEGRATION_ID='openviking-memory'/u);
+      assert.match(hook.command, /# openviking-memory$/u);
+      assert.equal(hook.timeout, 30);
+    }
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
