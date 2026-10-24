@@ -186,7 +186,12 @@ async def _copy_local_tree(
 
     async def copy_file(local_path: Path, target_file_uri: str) -> None:
         async with semaphore:
-            content = await asyncio.to_thread(local_path.read_bytes)
+            try:
+                content = await asyncio.to_thread(local_path.read_bytes)
+            except FileNotFoundError:
+                # Local trees can change after os.walk() discovers a file.
+                # Preserve the rest of the snapshot when that file is gone.
+                return
             await viking_fs.write_file_bytes(target_file_uri, content, ctx=ctx)
 
     await asyncio.gather(*(copy_file(path, uri) for path, uri in files))
