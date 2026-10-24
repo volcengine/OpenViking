@@ -5,6 +5,7 @@
 import asyncio
 import base64
 import os
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -787,6 +788,22 @@ class TestGitAccessor:
 
         request = urlopen.call_args.args[0]
         assert request.full_url == "https://github.com/example/repo/archive/test%23ssrf.zip"
+
+    async def test_zip_rejects_case_collisions_before_any_write(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        archive_path = tmp_path / "repository.zip"
+        destination = tmp_path / "extracted"
+        destination.mkdir()
+        with zipfile.ZipFile(archive_path, "w") as zip_file:
+            zip_file.writestr("safe.txt", "safe")
+            zip_file.writestr("Report.txt", "first")
+            zip_file.writestr("report.txt", "second")
+
+        with pytest.raises(ValueError, match="ZIP member path collision"):
+            await accessor._extract_zip(str(archive_path), str(destination))
+
+        assert list(destination.iterdir()) == []
 
     async def test_git_error_does_not_expose_remote_stderr(self, accessor: GitAccessor) -> None:
         process = SimpleNamespace(
