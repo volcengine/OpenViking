@@ -18,10 +18,28 @@ class _FakeProcess:
         return None
 
 
-def test_start_vikingbot_gateway_forces_localhost_host(monkeypatch):
+def _force_path_fallback(monkeypatch, path="/usr/bin/vikingbot"):
+    monkeypatch.setattr(
+        bootstrap.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1),
+    )
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: path)
+
+
+def test_start_vikingbot_gateway_prefers_current_interpreter_and_forces_localhost(monkeypatch):
     captured = {}
 
-    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/vikingbot")
+    def _fake_run(cmd, capture_output=None, timeout=None):
+        captured["probe_cmd"] = cmd
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        bootstrap.shutil,
+        "which",
+        lambda name: pytest.fail("PATH fallback must not run when the local module is available"),
+    )
     monkeypatch.delenv(OPENVIKING_CLI_CONFIG_ENV, raising=False)
 
     def _fake_popen(cmd, stdout=None, stderr=None, text=None, env=None, **kwargs):
@@ -36,7 +54,8 @@ def test_start_vikingbot_gateway_forces_localhost_host(monkeypatch):
     process = bootstrap._start_vikingbot_gateway(enable_logging=False, log_dir="/tmp/logs")
 
     assert process is not None
-    assert captured["cmd"][:2] == ["vikingbot", "gateway"]
+    assert captured["probe_cmd"] == [bootstrap.sys.executable, "-m", "vikingbot", "--help"]
+    assert captured["cmd"][:4] == [bootstrap.sys.executable, "-m", "vikingbot", "gateway"]
     assert captured["process_options"]["start_new_session"] == (bootstrap.os.name != "nt")
     assert "--host" in captured["cmd"]
     assert captured["cmd"][captured["cmd"].index("--host") + 1] == "127.0.0.1"
@@ -49,7 +68,7 @@ def test_start_vikingbot_gateway_forces_localhost_host(monkeypatch):
 def test_start_vikingbot_gateway_uses_custom_port(monkeypatch):
     captured = {}
 
-    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/vikingbot")
+    _force_path_fallback(monkeypatch)
     monkeypatch.delenv(OPENVIKING_CLI_CONFIG_ENV, raising=False)
 
     def _fake_popen(cmd, stdout=None, stderr=None, text=None, env=None, **kwargs):
@@ -79,7 +98,7 @@ def test_start_vikingbot_gateway_prefers_colocated_ovcli_conf(monkeypatch, tmp_p
     config_path.write_text("{}", encoding="utf-8")
     cli_config_path.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/vikingbot")
+    _force_path_fallback(monkeypatch)
 
     def _fake_popen(cmd, stdout=None, stderr=None, text=None, env=None, **kwargs):
         captured["cmd"] = cmd
@@ -111,7 +130,7 @@ def test_start_vikingbot_gateway_preserves_explicit_cli_config_env(monkeypatch, 
     colocated_cli_config.write_text("{}", encoding="utf-8")
     explicit_cli_config.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/vikingbot")
+    _force_path_fallback(monkeypatch)
 
     def _fake_popen(cmd, stdout=None, stderr=None, text=None, env=None, **kwargs):
         captured["cmd"] = cmd
@@ -136,7 +155,7 @@ def test_start_vikingbot_gateway_preserves_explicit_cli_config_env(monkeypatch, 
 def test_start_vikingbot_gateway_passes_managed_server_runtime(monkeypatch):
     captured = {}
 
-    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/vikingbot")
+    _force_path_fallback(monkeypatch)
 
     def _fake_popen(cmd, stdout=None, stderr=None, text=None, env=None, **kwargs):
         captured["env"] = env
@@ -224,7 +243,7 @@ def test_failed_readiness_terminates_owned_child(monkeypatch, tmp_path):
 
     process = Mock(pid=123)
     process.poll.return_value = None
-    monkeypatch.setattr(bootstrap.shutil, "which", lambda _: "/bin/vikingbot")
+    _force_path_fallback(monkeypatch, path="/bin/vikingbot")
     monkeypatch.setattr(bootstrap.subprocess, "Popen", lambda *_, **__: process)
 
     def fail(*_):
