@@ -296,19 +296,19 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 
 `language` 属于说明模板的变量，不属于上述正文变量。
 正文不要引用其他 Account/User、请求上下文或任意 Python 对象。
-仅 Events 可调用以下 `extract_context` 只读方法（位置参数）：
+仅 Events 可调用以下 `extract_context` 只读方法（除 `range_padding` 外均使用位置参数）：
 
 - `get_resource_event_content(ranges, summary)`：资源添加事件正文；非资源事件为空。
 - `get_first_message_time_from_ranges(ranges)`：第一条来源消息日期。
 - `get_first_message_time_with_weekday_from_ranges(ranges)`：日期及星期。
-- `get_event_content(ranges, summary[, ratio_threshold])`：按已有逻辑选择 ChatLog/摘要；省略阈值为 0.2，显式 0 表示存在原文时优先原文。
+- `get_event_content(ranges, summary[, ratio_threshold], range_padding=1)`：阈值按位置传入，省略时为 0.2，显式 0 表示存在原文时优先原文。`range_padding` 仅按名称传入，默认前后各扩 1 条原始消息，设 0 禁用；只扩展 ChatLog，不改原 ranges，不能引入其他记忆所有者的消息。
 - `get_year(ranges)`、`get_month(ranges)`、`get_day(ranges)`：来源日期分量。
 
 首个参数可使用统一语法白名单内的表达式，包括局部变量、条件表达式及允许的过滤器链。
 每次实际调用方法前，参数求值结果必须是普通字符串，且与当前记忆原始 `ranges` 完全相等，或为空字符串（不读取来源消息）。
 例如 `ranges | default('') | trim` 在结果未改变时可用；也可先 `{% set selected = ranges %}`，再调用 `get_year(selected)`。
 比较范围时不做归一化；缺失字段本来就会传入空字符串。发布时仅校验语法，不执行方法；改变范围或传入非字符串会在实际渲染时返回 `content_template: invalid_ranges`，在方法读取消息前拒绝，并停止该次记忆文件写入。
-阈值只能为 0～1 的数字字面量。
+阈值只能为 0～1 的数字字面量；`range_padding` 只能为非负整数字面量（不接受布尔值），例如 `get_event_content(ranges, summary, 0, range_padding=1)`。不支持其他关键字或动态参数展开。
 允许去掉 ChatLog 或资源事件分支，但去掉后不再自动展示这些正文/资源链接；原始 Session 仍保留。
 
 支持的 Jinja 子集：

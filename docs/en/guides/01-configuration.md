@@ -1715,9 +1715,36 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `version` | Deprecated and ignored. OpenViking always uses the v3 memory extraction pipeline; existing configs that set this field still load without error. | `"v3"` |
 | `custom_templates_dir` | Custom memory templates directory. If set, templates from this directory are loaded in addition to built-in templates. | `""` |
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
+| `minimal_mode` | Opt-in events-only memory: an LLM selects ranges and code assembles source text, without event summaries or other memory learning. Disabled or omitted uses normal extraction and learning. | `false` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
 | `session_auto_commit` | Server-wide automatic session commit controls. This belongs under `memory`, not under `server`; see [Session Auto Commit Configuration](#session-auto-commit-configuration). | See section above |
+
+#### Minimal memory mode
+
+Set this field in the existing `memory` section of `ov.conf`:
+
+```json
+{
+  "memory": {
+    "minimal_mode": true
+  }
+}
+```
+
+- The mode is disabled by default. With `false` or no setting, normal extraction, summaries, memory types, Agent evolution and Skill settings retain their semantics. Event ChatLog rendering defaults to one neighboring original message on each side in both modes. This changes newly rendered event bodies, not the LLM-selected `ranges` metadata.
+- When enabled, the existing LLM/ExtractLoop selects possibly non-contiguous event ranges. Only events are written, with code-generated names and no generated event titles, goals or summaries. Other memory learning, including Case, Trajectory, Experience and Skill, is skipped for this session commit without changing those global settings.
+- Padding is shared `ExtractContext` rendering behavior, not tied to a particular Context Provider or an `ov.conf` setting. It validates the original ranges, expands by **original messages**, not chunks, clips to the submitted messages, and unions spans only within each event. Original ranges, file names, URIs and event timestamps are preserved. Adding another memory owner's messages fails; padding cannot repair an invalid selection.
+- Both `events.yaml` and the minimal template use `get_event_content(ranges, summary, ratio_threshold, range_padding=1)`. The third argument remains the summary/original-selection character ratio threshold (default `0.2`); the optional keyword-only `range_padding` is the number of neighboring messages per side (default `1`, `0` disables padding). Empty source text still falls back to the summary. Resource events retain their dedicated, unpadded body.
+
+```jinja2
+{{ extract_context.get_event_content(ranges, summary, 0) }}     {# Default: one message per side #}
+{{ extract_context.get_event_content(ranges, summary, 0, range_padding=0) }}  {# No padding #}
+{{ extract_context.get_event_content(ranges, summary, 0, range_padding=2) }}  {# Two messages per side #}
+```
+
+- Minimal mode uses a server-owned template with an empty summary; account event templates do not override it. Padding adds no LLM calls, but initial segmentation and embedding still incur their usual costs. Historical benchmark runs rewrote ranges before persistence and are not new measurements of this body-only rendering implementation.
+- Online answering/retrieval, existing memories, working-memory/archive summaries and directory indexing are unchanged. No-summary refers to newly created minimal event bodies. Disabling the mode does not delete or rewrite previously generated memories.
 
 ### ovcli.conf
 

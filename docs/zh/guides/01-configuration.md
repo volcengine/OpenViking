@@ -1682,9 +1682,36 @@ openviking-server --config /path/to/ov.conf
 | `version` | 已废弃且会被忽略。OpenViking 始终使用 v3 记忆抽取链路；已有配置中保留该字段仍可正常加载，不会报错。 | `"v3"` |
 | `custom_templates_dir` | 自定义 memory templates 目录。设置后会在内置模板之外加载该目录中的模板。 | `""` |
 | `extraction_enabled` | session commit 时是否执行长期记忆抽取。 | `true` |
+| `minimal_mode` | 极简长期记忆模式：LLM 只选事件 ranges，代码拼接原文，不生成事件摘要，也不执行其他类型的记忆学习。关闭或省略时使用常规抽取/学习流程。 | `false` |
 | `session_skill_extraction_enabled` | session commit 时是否同时抽取可复用 skill 到当前用户的 skill 目录。 | `false` |
 | `link_enabled` | 记忆抽取是否写入和解析 memory links。 | `false` |
 | `session_auto_commit` | 服务端 session 自动 commit 的全局控制项。该配置属于 `memory` 段，不属于 `server` 段；详见 [Session Auto Commit 配置](#session-auto-commit-配置)。 | 见上文 |
+
+#### 极简记忆模式
+
+只需在现有 `ov.conf` 的 `memory` 段中设置：
+
+```json
+{
+  "memory": {
+    "minimal_mode": true
+  }
+}
+```
+
+- `minimal_mode` 默认关闭；设为 `false` 或省略，保留常规抽取、摘要、记忆类型、Agent evolution 和 Skill 开关语义。普通和极简模式的 event ChatLog 均在模板渲染时默认前后各扩 1 条原始消息；这会改变新 event 正文，但不改写 LLM 选择的 `ranges` 元数据。
+- 开启后，使用现有 LLM/ExtractLoop 分事件并选择可不连续的 ranges；只写 events，文件名由代码生成，不让模型生成事件标题、goal 或 summary。暂停此 session commit 的 Case、Trajectory、Experience、Skill 及其他类型的记忆学习，不修改相关全局开关。
+- 扩展属于共享 `ExtractContext` 的正文渲染能力，不依赖某个 Context Provider，也不在 `ov.conf` 中配置。校验原始 ranges 后按**原始消息**而非拆分 chunk 扩展，截断于当前提交的消息边界，同一事件内合并范围，不合并不同事件。保留原 ranges、文件名、URI 和事件时间；扩展若引入其他记忆所有者的消息则报错。无效 ranges 不会因扩展而变合法。
+- 普通 `events.yaml` 和极简模板均调用 `get_event_content(ranges, summary, ratio_threshold, range_padding=1)`。第三个参数仍是摘要/原选区正文的字符数比例阈值（默认 `0.2`）；可选具名参数 `range_padding` 是前后各扩展的消息数（默认 `1`，`0` 不扩展）。正文为空时仍回退 summary；资源事件的专用正文不扩展。
+
+```jinja2
+{{ extract_context.get_event_content(ranges, summary, 0) }}     {# 默认前后各扩 1 条 #}
+{{ extract_context.get_event_content(ranges, summary, 0, range_padding=0) }}  {# 不扩展 #}
+{{ extract_context.get_event_content(ranges, summary, 0, range_padding=2) }}  {# 前后各扩 2 条 #}
+```
+
+- 极简模式使用服务端专用模板，传空 summary；账户自定义 event 模板不会覆盖它。扩展不额外调用 LLM，但最初分段仍调用 LLM，embedding 仍有成本。历史评测使用写入前改写 ranges 的实验版本，不能当作当前仅扩展正文版本的新测量结果。
+- 在线问答/检索、已有记忆、会话 working-memory/归档摘要策略均不改变。这里“不生成摘要”特指新极简 event 记忆正文；仍沿用现有目录索引。关闭开关不会删除或改写已产生的极简记忆。
 
 ### ovcli.conf
 

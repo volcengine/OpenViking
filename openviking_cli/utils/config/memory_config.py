@@ -94,6 +94,14 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
+    minimal_mode: bool = Field(
+        default=False,
+        description=(
+            "Opt in to events-only memory: an LLM selects source ranges and code writes "
+            "the original conversation, without event summaries or other memory learning. "
+            "When disabled, use normal extraction and learning."
+        ),
+    )
     extraction_output_format: Literal["json", "python"] = Field(
         default="python",
         description=(

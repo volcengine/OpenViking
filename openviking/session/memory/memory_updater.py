@@ -219,6 +219,10 @@ def _operation_trace_id(op: ResolvedOperation) -> str | None:
     return current_trace_id or None
 
 
+class EventRangePaddingError(ValueError):
+    """Event content cannot safely preserve its source or memory ownership."""
+
+
 class ExtractContext:
     """Extract context for template rendering."""
 
@@ -229,6 +233,9 @@ class ExtractContext:
         *,
         split_long_text_messages: bool = True,
     ):
+        self._source_message_ids = (
+            [message.id for message in messages or []] if chunk_meta is None else None
+        )
         if chunk_meta is None:
             if split_long_text_messages:
                 self.messages, self.chunk_meta = self._build_extraction_messages(messages)
@@ -435,21 +442,113 @@ class ExtractContext:
         self._session_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         return self._session_timestamp
 
+    def _parse_message_ranges(self, ranges: str) -> set[int]:
+        """Validate the original selection before clipping any padded neighbors."""
+        selected: set[int] = set()
+        for part in ranges.split(","):
+            match = re.fullmatch(r"\s*(\d+)(?:\s*-\s*(\d+))?\s*", part)
+            if match is None:
+                raise EventRangePaddingError(f"Invalid source ranges: {ranges!r}")
+            start = int(match[1])
+            end = int(match[2]) if match[2] is not None else start
+            if not 0 <= start <= end < len(self.messages):
+                raise EventRangePaddingError(f"Source ranges out of bounds: {ranges!r}")
+            selected.update(range(start, end + 1))
+        return selected
+
+    @staticmethod
+    def _format_message_ranges(indices: set[int]) -> str:
+        ordered = sorted(indices)
+        spans: list[str] = []
+        start = end = ordered[0]
+        for index in ordered[1:]:
+            if index == end + 1:
+                end = index
+            else:
+                spans.append(str(start) if start == end else f"{start}-{end}")
+                start = end = index
+        spans.append(str(start) if start == end else f"{start}-{end}")
+        return ",".join(spans)
+
+    def expand_message_ranges(self, ranges: str, padding: int = 1) -> str:
+        """Pad within this context by original messages, not extraction chunks.
+
+        Selected source messages and their neighbors are retained in full when
+        padding is enabled. Only spans within this event are unioned. The caller's
+        ranges and messages are never modified, and new owners cannot be added.
+        """
+        if isinstance(padding, bool) or not isinstance(padding, int) or padding < 0:
+            raise EventRangePaddingError("padding must be a nonnegative integer")
+        selected = self._parse_message_ranges(ranges)
+        if padding == 0:
+            return ranges
+        unit_source_ids = [
+            chunk.source_message_id if (chunk := self.chunk_meta.get(id(message))) else message.id
+            for message in self.messages
+        ]
+        # An explicitly supplied chunk context already contains extraction units.
+        source_ids = (
+            self._source_message_ids
+            if self._source_message_ids is not None
+            else list(dict.fromkeys(unit_source_ids))
+        )
+        source_positions = {source_id: i for i, source_id in enumerate(source_ids)}
+        if len(source_positions) != len(source_ids):
+            raise EventRangePaddingError("Original message IDs must be unique")
+        if any(source_id not in source_positions for source_id in unit_source_ids):
+            raise EventRangePaddingError("Extraction unit has no original source message")
+        unit_sources = [source_positions[source_id] for source_id in unit_source_ids]
+        if unit_sources != sorted(unit_sources) or set(unit_sources) != set(range(len(source_ids))):
+            raise EventRangePaddingError(
+                "Extraction units must cover the original messages in order"
+            )
+        expanded_sources = {
+            source_index
+            for unit_index in selected
+            for source_index in range(
+                max(0, unit_sources[unit_index] - padding),
+                min(len(source_ids), unit_sources[unit_index] + padding + 1),
+            )
+        }
+        expanded = {i for i, source in enumerate(unit_sources) if source in expanded_sources}
+        owners = {
+            message.peer_id or "__self"
+            for i in selected
+            if (message := self.messages[i]).role == "user" or message.peer_id
+        }
+        if any(
+            (message.peer_id or "__self") not in owners
+            for i in expanded - selected
+            if (message := self.messages[i]).role == "user" or message.peer_id
+        ):
+            raise EventRangePaddingError(
+                "Event range padding must not cross memory-owner boundaries"
+            )
+        return self._format_message_ranges(expanded)
+
     def get_event_content(
-        self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
+        self,
+        ranges_str: str,
+        summary: str | None,
+        ratio_threshold: float = 0.2,
+        *,
+        range_padding: int = 1,
     ) -> str:
-        """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
+        """Choose source text or summary, padding only the rendered source text.
+
+        The ratio uses the original selection's character count, as before.
+        Padding adds neighboring original messages, not chunks; zero disables it.
+        Metadata ranges remain unchanged. Empty source text still uses the summary.
+        """
         if not ranges_str:
             return summary or ""
-        msg_range = self.read_message_ranges(ranges_str)
-        original = msg_range.pretty_print()
-        if not summary or not summary.strip():
-            return original or ""
+        expanded = self.expand_message_ranges(ranges_str, range_padding)
+        original = self.read_message_ranges(ranges_str).pretty_print()
         if not original:
+            return summary if summary and summary.strip() else ""
+        if summary and summary.strip() and len(summary) / len(original) < ratio_threshold:
             return summary
-        if len(summary) / len(original) >= ratio_threshold:
-            return original
-        return summary
+        return self.read_message_ranges(expanded).pretty_print()
 
     def get_resource_event_content(self, ranges_str: str, summary: str) -> str:
         """Return a user-readable event body for add-resource derived events."""
@@ -1090,20 +1189,24 @@ class MemoryUpdater:
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
-        # Validate every gated candidate before any write or dependent delete. The
-        # same write-set lease protects fresh reads, validation, and persistence.
+        # Render events and validate gated candidates before any write/dependent delete.
+        # Padding must not leave a partially written batch when an owner check fails.
+        # The same write-set lease protects fresh reads, validation, and persistence.
         prepared: Dict[int, List[Tuple[str, str]]] = {}
         staged: Dict[str, MemoryFile] = {}
         gate_failed = False
         for index, resolved_op in enumerate(applicable_upserts):
-            if not get_field_gates(resolved_op.memory_type):
+            gates = get_field_gates(resolved_op.memory_type)
+            if not gates and resolved_op.memory_type != "events":
                 continue
             try:
-                if lease_ref is None:
+                if gates and lease_ref is None:
                     raise RuntimeError("Content validation requires a write-set pathlock")
                 prepared[index] = await self._prepare_upsert(
                     resolved_op, ctx, extract_context=extract_context, staged=staged
                 )
+            except EventRangePaddingError:
+                raise
             except Exception as exc:
                 gate_failed = True
                 for uri in resolved_op.uris:
@@ -1111,7 +1214,7 @@ class MemoryUpdater:
         if gate_failed:
             return result
 
-        # Apply unified operations using the already validated bytes where gated.
+        # Apply unified operations using the already prepared bytes where available.
         for index, resolved_op in enumerate(applicable_upserts):
             try:
                 await self._apply_upsert(
@@ -1128,6 +1231,8 @@ class MemoryUpdater:
                 else:
                     for uri in resolved_op.uris:
                         result.add_written(uri)
+            except EventRangePaddingError:
+                raise
             except Exception as e:
                 tracer.error(
                     f"Failed to apply operation: op_type={type(resolved_op).__name__}, uris={resolved_op.uris}",

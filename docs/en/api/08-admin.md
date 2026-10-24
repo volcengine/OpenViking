@@ -352,12 +352,17 @@ retrieval input. Paths, field definitions and merge rules remain locked.
 | identity | name, creature, vibe, emoji, avatar, introduction |
 
 `language` is a description variable, not a content variable. Only Events
-may call these read-only `extract_context` helpers with positional arguments:
+may call these read-only `extract_context` helpers with positional arguments (except the optional keyword-only `range_padding`):
 `get_resource_event_content(ranges, summary)`,
 `get_first_message_time_from_ranges(ranges)`,
 `get_first_message_time_with_weekday_from_ranges(ranges)`,
-`get_event_content(ranges, summary[, ratio_threshold])`,
+`get_event_content(ranges, summary[, ratio_threshold], range_padding=1)`,
 `get_year(ranges)`, `get_month(ranges)`, `get_day(ranges)`.
+`range_padding` must be a nonnegative integer literal (not a boolean); it defaults to
+one original message per side and zero disables padding. For example,
+`get_event_content(ranges, summary, 0, range_padding=1)`. Only ChatLog is expanded;
+metadata ranges stay unchanged and new memory owners cannot be introduced. No other
+keywords or dynamic argument unpacking are supported.
 The first argument may use any expression allowed by the same syntax sandbox,
 including local aliases, conditionals and approved filter chains. Immediately
 before each helper call, its evaluated value must be a plain string exactly equal

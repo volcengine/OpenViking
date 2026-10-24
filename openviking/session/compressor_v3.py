@@ -45,6 +45,7 @@ from openviking.session.memory.experience.dag import MAX_EVIDENCE_SUMMARY_CHARS
 from openviking.session.memory.experience.rubric import parse_case_rubric
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import get_default_registry
+from openviking.session.memory.memory_updater import EventRangePaddingError
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -523,6 +524,13 @@ class SessionCompressorV3:
         extract_max_iterations: int = DEFAULT_EXTRACT_MAX_ITERATIONS,
         extract_thinking: bool = False,
     ):
+        memory_config = get_openviking_config().memory
+        minimal_mode = getattr(memory_config, "minimal_mode", False)
+        if minimal_mode:
+            allowed_memory_types = {"events"} & (
+                allowed_memory_types if allowed_memory_types is not None else {"events"}
+            )
+            agent_evolution_enabled = False
         if not agent_evolution_enabled:
             effective_types = (
                 set(get_default_registry().list_names(include_disabled=False))
@@ -558,7 +566,7 @@ class SessionCompressorV3:
                 extract_thinking=extract_thinking,
             )
             agent_memory_types = _allowed_agent_memory_types(allowed_memory_types)
-            session_skills_enabled = self._session_skill_extraction_enabled()
+            session_skills_enabled = not minimal_mode and self._session_skill_extraction_enabled()
             if (
                 agent_evolution_enabled
                 and cases_allowed
@@ -607,7 +615,11 @@ class SessionCompressorV3:
                 archive_uri=archive_uri or "",
             )
         except Exception as exc:
-            if strict_extract_errors or isinstance(exc, ConflictError):
+            if (
+                minimal_mode
+                or strict_extract_errors
+                or isinstance(exc, (ConflictError, EventRangePaddingError))
+            ):
                 raise
             tracer.error(
                 "V3 memory extraction failed; returning empty result", e=exc, console=False
@@ -654,6 +666,27 @@ class SessionCompressorV3:
         registry = await resolve_account_memory_registry(
             viking_fs, ctx.account_id, get_default_registry()
         )
+        updater_registry = registry  # Keep mode-local templates out of the shared updater.
+        memory_config = get_openviking_config().memory
+        minimal_mode = getattr(memory_config, "minimal_mode", False)
+        tracer.set("memory.extraction.backend", "llm_event_ranges" if minimal_mode else "llm")
+        provider_type = SessionExtractContextProvider
+        provider_options = {}
+        if minimal_mode:
+            from openviking.session.memory.minimal_mode_context_provider import (
+                MinimalModeContextProvider,
+                make_minimal_mode_registry,
+            )
+
+            allowed_memory_types = {"events"} & (
+                allowed_memory_types if allowed_memory_types is not None else {"events"}
+            )
+            schema = registry.get("events")
+            if schema is None or not schema.enabled or not allowed_memory_types:
+                return _V3ExtractionResult()
+            registry = make_minimal_mode_registry(registry)
+            provider_type = MinimalModeContextProvider
+            provider_options["source_uri"] = archive_uri or session_id or ""
         if allow_self_memory:
             await registry.initialize_memory_files(
                 ctx,
@@ -663,7 +696,7 @@ class SessionCompressorV3:
         if self.vlm_resolver is None:
             raise RuntimeError("SessionCompressorV3 requires a VLM resolver for account-owned work")
         vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
-        context_provider = SessionExtractContextProvider(
+        context_provider = provider_type(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
             extraction_context=extraction_context,
@@ -674,6 +707,7 @@ class SessionCompressorV3:
             transaction_handle=None,
             memory_registry=registry,
             vlm_config=vlm_config,
+            **provider_options,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -701,6 +735,8 @@ class SessionCompressorV3:
             thinking=extract_thinking,
         )
         operations, _tools_used = await orchestrator.run()
+        # Keep template ranges aligned with preprocessing, including vision descriptions.
+        messages = context_provider.messages
         if operations is None:
             tracer.info("[v3_patch_merge] No memory operations generated")
             return _V3ExtractionResult()
@@ -714,7 +750,7 @@ class SessionCompressorV3:
 
         updater = await get_streaming_memory_updater(
             key=make_streaming_memory_updater_key(request_context=ctx),
-            registry=registry,
+            registry=updater_registry,
             vikingdb=self.vikingdb,
             config=self.streaming_memory_updater_config,
             vlm_resolver=self.vlm_resolver,

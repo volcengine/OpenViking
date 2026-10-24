@@ -52,6 +52,7 @@ _NODES = (
     nodes.Tuple,
     nodes.Getattr,
     nodes.Call,
+    nodes.Keyword,
     nodes.Filter,
     nodes.Test,
     nodes.Compare,
@@ -242,16 +243,11 @@ def _validate_call(node: nodes.Call, memory_type: str) -> None:
         or target.attr not in _EVENT_METHODS
     ):
         raise ContentTemplateError("unsupported_call", node.lineno)
-    if (
-        node.kwargs
-        or node.dyn_args
-        or node.dyn_kwargs
-        or len(node.args) not in _EVENT_METHODS[target.attr]
-    ):
+    if node.dyn_args or node.dyn_kwargs or len(node.args) not in _EVENT_METHODS[target.attr]:
         raise ContentTemplateError("invalid_arguments", node.lineno)
     # Range expressions follow the same syntax rules as other expressions.
     # Their evaluated values are checked before calling an extraction helper.
-    if len(node.args) == 3:
+    if len(node.args) >= 3:
         ratio = node.args[2]
         if (
             not isinstance(ratio, nodes.Const)
@@ -260,6 +256,21 @@ def _validate_call(node: nodes.Call, memory_type: str) -> None:
         ):
             raise ContentTemplateError("invalid_ratio", node.lineno)
 
+    if node.kwargs:
+        if (
+            target.attr != "get_event_content"
+            or len(node.kwargs) != 1
+            or node.kwargs[0].key != "range_padding"
+        ):
+            raise ContentTemplateError("invalid_arguments", node.lineno)
+        padding = node.kwargs[0].value
+        if (
+            not isinstance(padding, nodes.Const)
+            or type(padding.value) is not int
+            or padding.value < 0
+        ):
+            raise ContentTemplateError("invalid_padding", node.lineno)
+
 
 def _call_event_helper(
     env: _ContentEnvironment,
@@ -267,6 +278,7 @@ def _call_event_helper(
     original_ranges: str,
     ranges: Any,
     *args: Any,
+    **kwargs: Any,
 ) -> Any:
     # Validate values, not a particular AST shape: aliases, conditions and
     # filters are fine, but cannot change which source messages a helper reads.
@@ -280,7 +292,7 @@ def _call_event_helper(
     # Wrapping a helper must not bypass its original sandbox callable flags.
     if not env.is_safe_callable(helper):
         raise TemplateError("Unsafe event helper")
-    return helper(ranges, *args)
+    return helper(ranges, *args, **kwargs)
 
 
 def validate_content_template(template: str, memory_type: str) -> None:
