@@ -14,7 +14,7 @@ from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, Re
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.utils.token_estimation import estimate_text_tokens
-from openviking_cli.retrieve.types import ContextType, TypedQuery
+from openviking_cli.retrieve.types import ContextType, TraceEventType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import RerankConfig
 
@@ -161,6 +161,48 @@ async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
     assert storage.search_calls[0]["ctx"] == _ctx()
     assert storage.search_calls[0]["query_vector"] == [1.0]
     assert storage.search_calls[0]["sparse_query_vector"] == {"hello": 1.0}
+
+
+@pytest.mark.parametrize(("score_gte", "expected_count"), [(False, 1), (True, 2)])
+def test_score_distribution_matches_threshold_mode(score_gte, expected_count):
+    distribution = HierarchicalRetriever._score_distribution(
+        [("equal", 0.5), ("above", 0.6)],
+        threshold=0.5,
+        score_gte=score_gte,
+    )
+
+    assert distribution["above_threshold"] == expected_count
+    assert distribution["threshold_operator"] == (">=" if score_gte else ">")
+
+
+@pytest.mark.asyncio
+async def test_thinking_trace_records_scoring_and_directory_events(monkeypatch):
+    fake_client = FakeRerankClient([0.1, 0.2])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+    storage = DummyStorage(
+        [
+            _result("viking://resources/file-a", 0.9, abstract="a"),
+            _result("viking://resources/file-b", 0.4, abstract="b"),
+        ]
+    )
+    retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=_config())
+    query = _query()
+    query.target_directories = ["viking://resources"]
+
+    result = await retriever.retrieve(query, ctx=_ctx(), limit=2, mode=RetrieverMode.THINKING)
+
+    event_types = [event.event_type for event in result.thinking_trace.events]
+    assert TraceEventType.EMBEDDING_SCORES in event_types
+    assert TraceEventType.DIRECTORY_QUEUED in event_types
+    rerank_events = [
+        event for event in result.thinking_trace.events
+        if event.event_type == TraceEventType.RERANK_SCORES
+    ]
+    assert len(rerank_events) == 1
+    assert rerank_events[0].data["fallback_to_vector_scores"] is False
 
 
 @pytest.mark.asyncio

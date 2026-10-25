@@ -8,7 +8,7 @@ import asyncio
 import math
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import default_target_directories
@@ -36,6 +36,9 @@ from openviking_cli.retrieve.types import (
     ContextType,
     MatchedContext,
     QueryResult,
+    ScoreDistribution,
+    ThinkingTrace,
+    TraceEventType,
     TypedQuery,
 )
 from openviking_cli.utils.config import RerankConfig
@@ -138,6 +141,7 @@ class HierarchicalRetriever:
         telemetry = get_current_telemetry()
         effective_threshold = self._resolve_threshold(score_threshold)
         image_query = query.image_query
+        thinking_trace = ThinkingTrace()
         if mode is None:
             mode = RetrieverMode.THINKING if self._rerank_client else RetrieverMode.QUICK
         use_rerank = (
@@ -248,12 +252,40 @@ class HierarchicalRetriever:
             collected_by_uri.values(), key=lambda candidate: candidate["_score"], reverse=True
         )
         scores = [candidate["_score"] for candidate in candidates]
+        thinking_trace.add_event(
+            TraceEventType.EMBEDDING_SCORES,
+            "Scored retrieval candidates with vector search",
+            {
+                "distribution": self._score_distribution(
+                    [(c.get("uri", ""), c["_score"]) for c in candidates],
+                    effective_threshold,
+                    score_gte,
+                ),
+            },
+        )
+        thinking_trace.add_event(
+            TraceEventType.DIRECTORY_QUEUED,
+            f"Searched {len(root_uris)} directories",
+            {"count": len(root_uris), "directories": [{"uri": uri} for uri in root_uris]},
+        )
         rerank_used = use_rerank and bool(candidates)
         if rerank_used:
             scores = await self._rerank_scores(
                 query.query,
                 [str(candidate.get("abstract", "")) for candidate in candidates],
                 scores,
+            )
+            thinking_trace.add_event(
+                TraceEventType.RERANK_SCORES,
+                "Reranked retrieval candidates",
+                {
+                    "fallback_to_vector_scores": False,
+                    "distribution": self._score_distribution(
+                        [(c.get("uri", ""), score) for c, score in zip(candidates, scores, strict=True)],
+                        effective_threshold,
+                        score_gte,
+                    ),
+                },
             )
 
         # A low vector score can still rerank highly, so filter only after reranking.
@@ -279,6 +311,7 @@ class HierarchicalRetriever:
             query=query,
             matched_contexts=final,
             searched_directories=root_uris,
+            thinking_trace=thinking_trace,
         )
 
     def _resolve_threshold(self, threshold: Optional[float]) -> float:
@@ -298,6 +331,19 @@ class HierarchicalRetriever:
         if score_gte:
             return score >= threshold
         return score > threshold
+
+    @staticmethod
+    def _score_distribution(
+        uri_scores: List[Tuple[str, float]],
+        threshold: float,
+        score_gte: bool,
+    ) -> Dict[str, Any]:
+        distribution = ScoreDistribution.from_scores(uri_scores, threshold=threshold).to_dict()
+        distribution["above_threshold"] = sum(
+            1 for _, score in uri_scores if HierarchicalRetriever._passes_threshold(score, threshold, score_gte)
+        )
+        distribution["threshold_operator"] = ">=" if score_gte else ">"
+        return distribution
 
     async def _rerank_scores(
         self,
