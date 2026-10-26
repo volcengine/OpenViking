@@ -188,6 +188,23 @@ class MetricRegistry:
             bucket_counts, count, value_sum, labels=dict(normalized)
         )
 
+    def initialize_counter(
+        self,
+        name: str,
+        *,
+        labels: Mapping[str, str] | None = None,
+        label_names: Sequence[str] = (),
+    ) -> None:
+        """
+        Materialize a Counter series at zero without treating zero as an increment.
+
+        Args:
+            name: Prometheus metric name.
+            labels: Optional label dict. Keys must exactly match `label_names`.
+            label_names: Ordered label key tuple for this metric name.
+        """
+        self.counter(name, label_names=label_names).initialize(labels=labels)
+
     def set_gauge(
         self,
         name: str,
@@ -492,6 +509,17 @@ class _CounterFamily:
                 return
             value, start_time_ns = self._values.get(key, (0.0, 0))
             self._values[key] = (value + float(amount), start_time_ns or time.time_ns())
+
+    def initialize(self, *, labels: Mapping[str, str] | None) -> None:
+        """Materialize one counter series at zero while preserving any existing value."""
+        key = self._normalize_and_validate(labels)
+        with self._lock:
+            if key in self._values:
+                return
+            if len(self._values) >= self._max_series:
+                self._on_drop(self.name)
+                return
+            self._values[key] = (0.0, 0)
 
     def copy_values(self) -> dict[tuple[tuple[str, str], ...], tuple[float, int]] | None:
         """Return totals with their start times, or None if deletion emptied this family."""
@@ -814,6 +842,10 @@ class _Counter:
     def set(self, value: float, *, labels: Mapping[str, str] | None = None) -> None:
         """Replace the labelled series with a validated absolute value; return None."""
         self._family.set(labels=labels, value=value)
+
+    def initialize(self, *, labels: Mapping[str, str] | None = None) -> None:
+        """Materialize one series at zero without weakening positive-increment validation."""
+        self._family.initialize(labels=labels)
 
 
 class _Gauge:
