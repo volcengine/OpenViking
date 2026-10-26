@@ -1221,7 +1221,7 @@ Jev 适配器将 query 和候选文档作为共享的 System One `state`，支�
 
 查询扩展需要传入有内容的 `session_id` 并启用意图分析，重写需要传入 `rewrite`。这些模型调用受各自超时限制；失败后回退到未扩展的查询或未重写的结果。
 
-`relation_expansion` 在带 Rerank 的 `search()` 中沿文件 frontmatter 里显式声明的 `related` 关联扩展候选，详见[关联扩展](../concepts/07-retrieval.md#关联扩展默认关闭)。默认关闭；未配置可用的 `rerank` 时不生效。
+`relation_expansion` 在带 Rerank 的 `search()` 中沿文件 frontmatter 里显式声明的 `related` 关联扩展候选，详见[关联扩展](../concepts/07-retrieval.md#关联扩展-默认关闭)。默认关闭；未配置可用的 `rerank` 时不生效。
 
 ```json
 {
