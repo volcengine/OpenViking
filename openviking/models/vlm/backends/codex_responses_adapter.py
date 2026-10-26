@@ -8,6 +8,8 @@ import json
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
+from openviking.utils.message_format import normalize_openai_tool_call_ids
+
 
 def _convert_content_for_responses(content: Any) -> Any:
     if isinstance(content, str):
@@ -239,7 +241,7 @@ class CodexCompletionsAdapter:
 
     def _create_response(self, **kwargs) -> Any:
         client = self._client_factory()
-        messages = kwargs.get("messages") or []
+        messages = normalize_openai_tool_call_ids(kwargs.get("messages") or [])
         model = kwargs.get("model") or self._model
         instructions_parts: List[str] = []
         input_messages: List[Dict[str, Any]] = []
