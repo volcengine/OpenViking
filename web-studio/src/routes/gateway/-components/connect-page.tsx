@@ -1,6 +1,11 @@
 import type * as React from 'react'
 import { Link, getRouteApi } from '@tanstack/react-router'
-import { KeyRoundIcon, MessagesSquareIcon, PuzzleIcon } from 'lucide-react'
+import {
+  KeyRoundIcon,
+  MessagesSquareIcon,
+  PuzzleIcon,
+  SlidersHorizontalIcon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
@@ -40,6 +45,8 @@ const HEADER_SENDERS: Record<string, string> = {
 
 const UPSTREAM_KEY_EXAMPLE = `${UPSTREAM_KEY_HEADER}: <provider-api-key>`
 const PLUGIN_HEADER_EXAMPLE = 'X-OpenViking-Plugin: <plugin-name>'
+const CONTEXT_HEADER_EXAMPLE =
+  'X-OpenViking-Context: {"recall":false,"max_tokens":800}'
 
 /**
  * Gateway address and client setup guides (`?client=` picks the client,
@@ -70,9 +77,10 @@ export function ConnectPage() {
             baseUrl={info.data.base_url}
             upstreams={upstreams.data}
           />
-          <div className="grid gap-4 xl:grid-cols-3">
+          <div className="grid gap-4 lg:grid-cols-2">
             <IdentityCard />
             <PassthroughCard upstreams={upstreams.data} />
+            <ContextCard />
             <PluginCard />
           </div>
         </>
@@ -257,6 +265,24 @@ function PassthroughCard({ upstreams }: { upstreams?: Upstream[] }) {
             : t('connect.passthrough.none')}
         </p>
       ) : null}
+    </ReferenceCard>
+  )
+}
+
+function ContextCard() {
+  const { t } = useTranslation('gateway')
+  return (
+    <ReferenceCard
+      icon={<SlidersHorizontalIcon />}
+      title={t('connect.context.title')}
+      description={t('connect.context.description')}
+      docs="contextHeader"
+    >
+      <CodeBlock code={CONTEXT_HEADER_EXAMPLE} wrap />
+      <p>
+        <CodeText text={t('connect.context.tools')} />
+      </p>
+      <p>{t('connect.context.scope')}</p>
     </ReferenceCard>
   )
 }

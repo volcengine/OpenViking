@@ -103,7 +103,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 
 ## 上下文配置的设置 {#context-profile-settings}
 
-在 Studio 中：**上下文配置** → 打开一份配置。下面几张表按编辑器的分区排列，先写 Studio 中的名称，再写管理 API 中的名称（管理 API 把上下文配置称为 `policies`）。**名称**（`name`，默认 `Default`）是配置的显示名称；各分区的作用见[上下文配置](08-context-profiles.md#context-profiles)。
+在 Studio 中：**上下文配置** → 打开一份配置。下面几张表按编辑器的分区排列，先写 Studio 中的名称，再写管理 API 中的名称（管理 API 把上下文配置称为 `policies`）。**名称**（`name`，默认 `Default`）是配置的显示名称；各分区的作用见[上下文配置](08-context-profiles.md#context-profiles)。**允许客户端覆盖设置**（`client_overrides`，默认 `true`）允许客户端用 `X-OpenViking-Context` 请求头为新对话修改其余所有设置，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。
 
 ### 召回记忆 {#profile-recall}
 
@@ -123,7 +123,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 检索文本长度 | `query_max_chars` | `8000` | 3–32,000 | 取消息的多少个字符作为检索文本。 |
 | 按分类限量 | `quotas` | `{}`（关闭） | 键：`events`、`entities`、`preferences`、`experiences`、`resources`、`skills`；设置时至少一项大于 0（仅 Studio 校验） | 每个分类最多取的条数；只检索大于 0 的分类。 |
 
-管理 API 保存 `context_types` 和 `quotas` 时不做校验。`quotas` 里出现未知的键时，OpenViking 会拒绝检索请求，导致每次召回都失败。
+管理 API 保存 `context_types` 和 `quotas` 的键时不做校验。`quotas` 里出现未知的键时，OpenViking 会拒绝检索请求，导致每次召回都失败。
 
 ### 保存对话 {#profile-saving}
 

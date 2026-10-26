@@ -89,6 +89,7 @@ Expand a row to see:
 - context window use, and whether the history was compacted or the model started a new window
 - the saving status, with the next retry time
 - OpenViking tool details, including why tools were not offered
+- the profile settings the client sent in `X-OpenViking-Context`, by name only; they take effect only on a conversation's first request
 
 For a request with an issue, the expanded row also explains what happened and what to do.
 

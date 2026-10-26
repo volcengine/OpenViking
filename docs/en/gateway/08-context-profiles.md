@@ -10,7 +10,7 @@ In Studio: **Profiles** tab. A context profile decides how OpenViking Gateway re
 
 A [context profile](../guides/15-gateway.md#key-terms) is a named set of memory settings. Each [gateway key](09-gateway-keys.md#gateway-keys) uses one profile, chosen when the key is issued, and one profile can serve many keys. For example, a "Coding" profile might recall memories, resources and skills, while a "Chat" profile recalls only memories, with a smaller budget.
 
-A profile has four sections. The defaults below are also the recommended settings:
+Besides its name and the [Let clients override settings](#client-overrides) switch, a profile has four sections. The defaults below are also the recommended settings:
 
 | Section | What it does | Main settings and defaults |
 | --- | --- | --- |
@@ -26,13 +26,13 @@ Saved changes reach only conversations that start afterwards; see [When changes 
 ### Create, duplicate or delete a profile {#manage-profiles}
 
 1. Open the **Profiles** tab. While it is empty, choose **Create with recommended settings** to create a profile named "Default" in one click, or **Customize** to open the editor first. Once a profile exists, use **New profile** instead.
-2. In the editor, enter a **Name**; it is shown when someone chooses a profile for a gateway key. Change the sections described on this page as needed.
+2. In the editor, enter a **Name**; it is shown when someone chooses a profile for a gateway key. Below it, **Let clients override settings** is on; see [Let clients override settings](#client-overrides). Change the sections described on this page as needed.
 3. Choose **Create profile**, or **Save** when you edit an existing one. You should see a card for the profile that summarizes each section and counts the keys that use it (**Not used by any key** at first).
 
 Other actions:
 
 - **Duplicate**, on a card or in the editor's **More actions** (⋯) menu, opens a copy named "Copy of …". It is the quickest way to make a variant.
-- **Reset to recommended**, in the same menu, restores the recommended settings; save to apply them.
+- **Reset to recommended**, in the same menu, restores the recommended settings of the four sections; the name and **Let clients override settings** stay as they are. Save to apply them.
 - A profile that keys use cannot be deleted. Revoke those keys first, or, if they are still needed, issue replacements that use another profile.
 - While Studio is read-only, cards show **View** instead of **Edit**, and creating, duplicating and deleting are unavailable; see [Unlock editing](06-manage-in-studio.md#unlock-editing).
 
@@ -100,6 +100,24 @@ The last two sections of the editor each have their own page:
 - **OpenViking tools** holds the **Tools** list and **Show tool calls**, with **Rounds per request**, **Time limit per call**, **Result size**, **Total time** and **Token budget** under **Advanced settings**. See [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04-openviking-tools.md#limits). The gateway runs the selected tools without the client's permission prompts; read [Risks and controls](04-openviking-tools.md#risks-and-controls) before checking tools that change data.
 
 The API name and range of every setting are in the [Configuration reference](13-configuration.md#context-profile-settings).
+
+## Let clients override settings {#client-overrides}
+
+**Let clients override settings**, below the profile's **Name**, is on by default. It lets a client change the profile's settings for a conversation: the client sends the fields to change as a JSON object in an `X-OpenViking-Context` request header, with the API names from the [Configuration reference](13-configuration.md#context-profile-settings). For example:
+
+```text
+X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
+```
+
+- **What it can change.** Every setting except `name` and `client_overrides`. Fields the header leaves out keep the profile's values. `{"disabled_tools":[]}` offers every OpenViking tool, including the ones that change data and any the server adds later.
+- **When it applies.** As with a saved profile change, a conversation keeps the settings it started with: only the header on a conversation's first request shapes it. Later headers are still checked, so an invalid one, or any header once the switch is off, still fails.
+- **Errors.** With the switch off, any request that carries the header gets 403 `context_override_not_allowed` instead of being served with the saved settings. With it on, the request gets 400 `context_override_invalid` when the header:
+  - is not a JSON object;
+  - names an unknown field, `name` or `client_overrides`;
+  - holds a value out of range.
+- **In the request log.** [Request details](10-overview-and-requests.md#request-details) list the names of the fields the client sent in the header, never their values.
+
+The switch defaults on, so anyone holding a key that uses the profile can change any field, including budgets and write tools; turn it off on profiles that must stay locked. How each client sends the header is in [Override profile settings](03-connect-clients.md#override-profile-settings).
 
 ## Next steps {#next-steps}
 

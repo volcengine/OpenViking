@@ -32,12 +32,22 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 
 默认情况下，服务商的 API Key 由网关保管，客户端只需发送网关密钥。[上游](07-upstreams.md#upstreams)也可以把 **API Key 由谁提供**设为**每个客户端自带 API Key**（见[凭证](07-upstreams.md#credentials)）。这时客户端仍把网关密钥填在原来填 API Key 的地方，同时在每个请求里用 `X-OpenViking-Upstream-Key` 请求头带上自己的服务商 API Key。在 Studio 中，**接入**标签页的**客户端自带服务商 API Key**卡片会列出哪些上游需要它。
 
-缺了这个请求头，所有请求都会返回 401 `Upstream API key is missing`。各客户端的添加方式：
+缺了这个请求头，所有请求都会返回 401 `Upstream API key is missing`。各客户端的添加方式见[在客户端里添加请求头](#add-a-header)。
 
-| 客户端 | 如何发送 `X-OpenViking-Upstream-Key` |
+## 覆盖上下文配置 {#override-profile-settings}
+
+客户端可以用 `X-OpenViking-Context` 请求头，为新对话修改密钥所用上下文配置的设置。它的值是一个 JSON 对象，列出要修改的字段，例如 `{"recall":false}` 表示不召回，`{"disabled_tools":[]}` 表示提供全部 OpenViking 工具，包括会修改数据的工具。配置需要开启**允许客户端覆盖设置**（默认开启）；请求头能包含什么、可能返回哪些错误，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。各客户端的添加方式见[在客户端里添加请求头](#add-a-header)。
+
+对话会沿用开始时的设置，所以修改后的请求头从下一段新对话起生效，例如换一个新的 `X-OpenViking-Session` 值。与所有 `X-OpenViking-*` 请求头一样，它不会转发给服务商。
+
+## 在客户端里添加请求头 {#add-a-header}
+
+上面两个请求头都要随每个请求发送。各客户端的添加方式：
+
+| 客户端 | 如何添加请求头 |
 | --- | --- |
-| Claude Code | `export ANTHROPIC_CUSTOM_HEADERS='X-OpenViking-Upstream-Key: <provider-key>'` |
-| Codex CLI | 在服务商配置里使用 `env_http_headers`，例如 `env_http_headers = { "X-OpenViking-Upstream-Key" = "PROVIDER_API_KEY" }`，并把服务商 API Key 导出为 `PROVIDER_API_KEY` |
+| Claude Code | `export ANTHROPIC_CUSTOM_HEADERS='<Name>: <value>'`。有多个请求头时每行一个，例如 `export ANTHROPIC_CUSTOM_HEADERS=$'X-OpenViking-Upstream-Key: <provider-key>\nX-OpenViking-Context: {"recall":false}'` |
+| Codex CLI | 在服务商配置里，固定值用 `http_headers`，例如 `http_headers = { "X-OpenViking-Context" = '{"recall":false}' }`；从环境变量读取用 `env_http_headers`，例如 `env_http_headers = { "X-OpenViking-Upstream-Key" = "PROVIDER_API_KEY" }`，并把服务商 API Key 导出为 `PROVIDER_API_KEY` |
 | OpenAI 和 Anthropic SDK | 在客户端上设置 `default_headers`，或在每个请求里传 `extra_headers` |
 | Open WebUI | 加到连接的自定义请求头里，与会话请求头放在一起 |
 
