@@ -857,6 +857,8 @@ class CompileService:
     def _validate_target(target: str) -> None:
         classification = classify_uri(target)
         parts = uri_parts(target)
+        if classification.is_system:
+            raise InvalidArgumentError("Compile target must not be in the system namespace")
         if classification.context_type == "skill":
             if (
                 not classification.is_skill_namespace

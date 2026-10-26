@@ -48,14 +48,55 @@ def test_compile_builtin_skill_uri(skill, valid):
             service._normalize_request_uris(request, ctx)
 
 
-def test_compile_builtin_skill_namespace_is_source_only():
+@pytest.mark.parametrize(
+    "target",
+    [
+        "viking://system",
+        "viking://system/compile",
+        "viking://system/compile/example-skills",
+        "viking://system/resources/wiki",
+    ],
+)
+def test_compile_builtin_skill_namespace_is_source_only(target):
     from openviking.service.compile_service import CompileService
 
     CompileService._validate_target("viking://user/alice/skills")
     CompileService._validate_target("viking://agent/skills")
 
-    with pytest.raises(InvalidArgumentError, match="supported skills namespace"):
-        CompileService._validate_target("viking://system/compile/example-skills")
+    with pytest.raises(InvalidArgumentError, match="system namespace"):
+        CompileService._validate_target(target)
+
+
+@pytest.mark.asyncio
+async def test_compile_api_rejects_system_target_without_creating_task(service, app, client):
+    from openviking.server.auth import get_request_context
+    from openviking.service.task_tracker import get_task_tracker
+
+    ctx = RequestContext(user=service.user, role=Role.USER, api_key="test-compile-key")
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    tracker = get_task_tracker()
+    before = {
+        task.task_id
+        for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+    }
+
+    response = await client.post(
+        "/api/v1/compile",
+        json={
+            "from": ["viking://resources/source"],
+            "to": "viking://system/compile-output",
+            "skill": "viking://system/compile/example-skills/llm-wiki",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "system namespace" in response.text
+    after = {
+        task.task_id
+        for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+    }
+    assert after == before
 
 
 @pytest.mark.asyncio
