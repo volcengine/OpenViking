@@ -16,6 +16,7 @@ from openviking.storage.viking_fs import _grep as grep_module
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.grep_config import GrepConfig
+from tests.utils.mock_agfs import MockLocalAGFS
 
 
 class _DummyAgfs:
@@ -118,6 +119,25 @@ def fs(monkeypatch):
 
 async def _fake_stat(uri, ctx=None, skip_count=False):
     return {"name": uri.rsplit("/", 1)[-1], "isDir": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uri", ["viking://", "viking:///", "viking://user/"])
+async def test_grep_fallback_from_root_preserves_user_visibility(tmp_path, uri):
+    fs = VikingFS(agfs=MockLocalAGFS(root_path=tmp_path))
+    ctx = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
+    note_uri = "viking://user/test_user/memories/note.md"
+    for file_uri in [note_uri, "viking://user/other_user/memories/note.md"]:
+        fs.agfs.write(fs._uri_to_path(file_uri, ctx), b"## Situation\nA matching note")
+
+    result = await fs.grep(
+        uri,
+        pattern="^## Situation$",
+        ctx=ctx,
+        content_transform=lambda content, _uri: content,
+    )
+
+    assert result["matches"] == [{"line": 1, "uri": note_uri, "content": "## Situation"}]
 
 
 @pytest.mark.asyncio

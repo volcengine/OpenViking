@@ -15,6 +15,7 @@ from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs._base import logger
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.config.grep_config import GrepEngine
+from openviking_cli.utils.uri import VikingURI
 
 _GREP_LS_PAGE_SIZE = 1000
 _FULLTEXT_UNSUPPORTED_CACHE_TTL = 60.0
@@ -807,7 +808,7 @@ class _GrepMixin:
                     return
 
                 for entry in entries:
-                    entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
+                    entry_uri = VikingURI(normalized_current_uri).join(entry["name"]).uri
                     if excluded_prefix and (
                         entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
                     ):
