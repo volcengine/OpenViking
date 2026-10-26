@@ -100,7 +100,7 @@ export function AgentPanel({
   const handleNewSession = useCallback(() => {
     if (isCreatingSession) return
     creationGenerationRef.current += 1
-    chat.abort()
+    chat.abort({ closeLocalStream: true, discardPartial: true })
     chat.setMessages([])
     creationStartedRef.current = false
     setSessionError(null)
@@ -114,7 +114,7 @@ export function AgentPanel({
   const handleSwitchSession = useCallback(
     (nextSessionId: string) => {
       creationGenerationRef.current += 1
-      chat.abort()
+      chat.abort({ closeLocalStream: true, discardPartial: true })
       creationStartedRef.current = false
       setSessionError(null)
       setIsCreatingSession(false)
@@ -146,6 +146,7 @@ export function AgentPanel({
     chat.streamingContent,
     chat.streamingReasoning,
     chat.streamingToolCalls,
+    chat.streamingInsertIndex,
   ])
 
   const send = useCallback(
@@ -173,7 +174,10 @@ export function AgentPanel({
           }
         }
       }
-      void chat.send(message)
+      const sending = chat.send(message)
+      if (chat.status === 'streaming') {
+        await sending
+      }
       return true
     },
     [chat, createSession, onSessionChange, persistedSessionId, sessionId],
@@ -244,6 +248,7 @@ export function AgentPanel({
                   ? {
                       iteration: chat.iteration,
                       parts: chat.streamingParts,
+                      insertIndex: chat.streamingInsertIndex,
                     }
                   : undefined
               }
@@ -331,7 +336,10 @@ export function AgentPanel({
                           )
                           if (session.session_id === sessionId) {
                             creationGenerationRef.current += 1
-                            chat.abort()
+                            chat.abort({
+                              closeLocalStream: true,
+                              discardPartial: true,
+                            })
                             chat.setMessages([])
                             creationStartedRef.current = false
                             setIsCreatingSession(false)

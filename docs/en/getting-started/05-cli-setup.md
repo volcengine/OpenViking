@@ -67,7 +67,7 @@ Otherwise ASK me which target to use, unless I already told you:
 
 | Target | URL | API key |
 |---|---|---|
-| OpenViking Service (Volcengine) | Fixed. Do not pass `--url`. | Required. I get it in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing) under User Management → API Key. |
+| OpenViking Service (Volcengine) | Fixed. Do not pass `--url`. | Required. I get it in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_05-cli-setup) under User Management → API Key. |
 | Remote custom server | ASK me. | ASK me. |
 | Local custom server | `http://127.0.0.1:1933` | Usually none. |
 
@@ -146,7 +146,7 @@ You also need connection details. They depend on the server type:
 
 | Server type | Server URL | API key |
 |---|---|---|
-| OpenViking Service (Volcengine) | Fixed. You do not enter it. | Required. Get it in the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing) under **User Management → API Key**. |
+| OpenViking Service (Volcengine) | Fixed. You do not enter it. | Required. Get it in the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_05-cli-setup) under **User Management → API Key**. |
 | Remote self-hosted server | Get it from your administrator. | Get it from your administrator. |
 | Self-hosted server on this machine | `http://127.0.0.1:1933` | Not needed for the default setup. |
 

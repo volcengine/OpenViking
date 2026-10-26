@@ -1514,6 +1514,13 @@ class PersistCollection(LocalCollection):
                     logger.error(f"Failed to flush index {index_name}: {e}")
 
         self.indexes.iterate(persist_index)
+        if persisted_count > 0:
+            # Recovery only replays deltas newer than each index's snapshot, so
+            # anything older than the oldest snapshot is dead weight.
+            try:
+                self._delete_expire_delta_record()
+            except Exception as e:
+                logger.error(f"Failed to prune delta records: {e}")
         return persisted_count
 
     def _new_index(

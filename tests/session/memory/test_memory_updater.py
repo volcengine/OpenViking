@@ -1316,15 +1316,20 @@ class TestMemoryUpdater:
         updater._apply_delete.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_apply_operations_keeps_source_when_locked_target_read_fails(self):
+    async def test_apply_operations_preserves_memories_when_fresh_reads_fail(self):
         source_uri = "viking://user/u/memories/entities/person/阿珍.md"
         target_uri = "viking://user/u/memories/entities/person/陈静娴.md"
+        update_uri = "viking://user/u/memories/entities/person/小王.md"
+        read_error = OSError("read failed")
         old_file = MemoryFile(uri=source_uri, memory_type="entities", content="source")
         mock_viking_fs = MagicMock()
         mock_viking_fs.read_file = AsyncMock(
-            side_effect=[NotFoundError(target_uri, "file"), OSError("read failed")]
+            side_effect=[NotFoundError(target_uri, "file"), read_error, read_error]
         )
-        updater = MemoryUpdater(registry=MagicMock())
+        mock_viking_fs.write_file = AsyncMock()
+        registry = MagicMock()
+        registry.get.return_value = MemoryTypeSchema(memory_type="entities")
+        updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
@@ -1337,7 +1342,15 @@ class TestMemoryUpdater:
                     memory_fields={"name": "陈静娴"},
                     memory_type="entities",
                     uris=[target_uri],
-                )
+                ),
+                ResolvedOperation(
+                    old_memory_file_content=MemoryFile(
+                        uri=update_uri, memory_type="entities", content="stale snapshot"
+                    ),
+                    memory_fields={"content": "updated"},
+                    memory_type="entities",
+                    uris=[update_uri],
+                ),
             ],
             delete_file_contents=[],
             errors=[],
@@ -1345,7 +1358,13 @@ class TestMemoryUpdater:
 
         result = await updater.apply_operations(operations, MagicMock())
 
-        assert any(uri == target_uri for uri, _error in result.errors)
+        assert {uri for uri, error in result.errors if error is read_error} == {
+            target_uri,
+            update_uri,
+        }
+        assert result.written_uris == []
+        assert result.edited_uris == []
+        mock_viking_fs.write_file.assert_not_awaited()
         assert result.deleted_uris == []
         updater._apply_delete.assert_not_awaited()
 

@@ -54,7 +54,7 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | query | str | No | "" | Search query string. May be omitted for an image query or a filter-only lookup |
-| image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
+| image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
@@ -180,6 +180,8 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 ```
 
 Tags must use strict `k=v` strings. When multiple tags are provided, `find()` requires all of them; the example above only returns contexts whose explicit retrieval tags contain both `env=prod` and `team=search`.
+
+Legacy invalid stored tags are discarded when a full index record is written or an explicit tag field is updated. Reads filter invalid tags without changing storage. To repair a known affected file or directory without re-embedding or replacing its valid tags, call `POST /api/v1/content/set_tags` with `{"uri": "<affected-uri>", "tags": [], "mode": "append"}`. For directories, add `"recursive": true` only when descendants should also be repaired. Bare values such as `default` are removed, not assigned an inferred key.
 
 **Python SDK**
 
@@ -392,8 +394,9 @@ Semantic retrieval with optional session-aware query planning.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | query | str | No | "" | Search query string. Required unless `image_url` is provided |
-| image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
+| image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | search_type | `"semantic"` \| `"keywords"` | No | `"semantic"` | Retrieval type. `semantic` uses embeddings and vector recall; `keywords` uses BM25 keyword recall |
+| mode | `"list"` \| `"context"` | No | `"list"` | Return ranked hits or assembled context. CLI `--mode` maps to this field; context-specific parameters are described below |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
@@ -568,6 +571,12 @@ fmt.Println(result.Total)
 # Search with session ID
 ov search "best practices" --session-id abc123
 
+# Assemble context using the server defaults, with event time decay
+ov search "recent decisions" --mode context --events-time-decay-protection 7d
+
+# Return the complete context result as JSON
+ov -o json search "best practices" --mode context
+
 # Limit to a context type
 ov search "best practices" --context-type skill
 
@@ -593,6 +602,8 @@ ov search "how to implement OAuth" -L 1,2
 # Image queries also use --image; they use direct retrieval and skip session planning
 ov search "similar poster" --image ./poster.png --uri "viking://resources/images"
 ```
+
+`ov search --mode list` is the default and returns the usual hit list. With `--mode context`, the default terminal output prints the assembled `rendered` text (or a non-empty `digest` when returned); `-o json` preserves the full result, including `entries`, `rendered`, `digest`, and `stats`. The CLI uses server defaults for context-specific options such as `max_tokens`, `detail`, and `rewrite`; it does not expose flags for these options yet. Context mode rejects `--uri` and `--read-content`; the server ignores `--level` because assembly selects content tiers.
 
 **Response Example**
 
@@ -679,7 +690,7 @@ Injecting context every turn used to mean searching per type, reading each hit b
 | `purpose` | `chat` \| `coding` | None | Enables six-domain bucket sampling with the preset quotas below. Applies only when `quotas` is not given |
 | `detail` | `abstract` \| `overview` \| `full` \| object | None | Requests one starting/maximum tier for every entry. Entries whose requested tier is unavailable or does not fit step down instead of being truncated. Omitted, each category takes its default tier (below). Also accepts a per-category object such as `{"events":"overview","preferences":"abstract"}`; categories left out keep their default. `"auto"` is a deprecated spelling and behaves as if omitted |
 | `dedup_turns` | int | 0 | Cooldown window in turns; needs `session_id`. Ledger lives at `{session_uri}/.recall_log.json` |
-| `exclude_uris` | string[] | [] | Stateless dedup fallback, up to 200 entries, unioned with `dedup_turns` |
+| `exclude_uris` | string[] | [] | Stateless dedup fallback, up to 200 entries, unioned with `dedup_turns`. A directory URI excludes its whole subtree, so echo a served directory as its `.abstract.md` and `.overview.md` URIs to exclude just that node; `dedup_turns` cools served URIs exactly |
 | `peer_scope` | `actor` \| `all` | `all` | `actor` excludes other peers while keeping global, self-owned and current-actor content |
 | `other_peer_penalty` | number \| object | per-category defaults | Score penalty applied to other-peer hits |
 
@@ -845,7 +856,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
-| level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
+| level_limit | int | No | 10 | Maximum directory depth to traverse. HTTP SDKs use the server default when omitted. |
 | tags | string[] | No | Unset | Search only files matching every supplied `k=v` retrieval tag |
 | include_tags | bool | No | `false` | Include each matched file's retrieval tags without filtering |
 | before_context | int | No | 0 | Number of context lines returned before each match; supported by the HTTP API and CLI |

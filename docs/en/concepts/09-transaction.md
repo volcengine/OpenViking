@@ -275,12 +275,12 @@ value = owner_id:time_ns:lock_type
 HASH keys are isolated by path scope:
 
 ```text
-ov:pathlock:{namespace}:global:tokens
-ov:pathlock:{namespace}:scope:_system:tokens
-ov:pathlock:{namespace}:scope:account:{account}:tokens
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-All keys use `{namespace}` as the Redis Cluster hash tag. Exact acquisition
+All keys use `{service_name}` as the Redis Cluster hash tag. Exact acquisition
 reads the target and ancestors with `HMGET`; Tree acquisition scans only its
 scope HASH with `HGETALL`. Global `/` and `/local` locks do not scan account
 or `_system` HASHes. Cross-scope batches are rejected.
@@ -383,8 +383,8 @@ After startup, QueueManager resumes persisted `session_commit` jobs:
 Path locks are enabled by default with the `filesystem` provider. Use
 `storage.agfs.pathlock.provider=cache` for Redis-backed coordination between
 processes. Cache-backed PathLock requires a top-level Redis Cache Provider and
-a non-empty PathLock namespace. The runtime wait timeout is fixed at `0.0`
-seconds. `storage.transaction` remains only as a legacy compatibility layer:
+uses top-level `service_name` as the Redis namespace. The runtime wait timeout
+is fixed at `0.0` seconds. `storage.transaction` remains only as a legacy compatibility layer:
 `lock_timeout` is deprecated and ignored, `lock_expire` is automatically
 mapped when the new field is unset, and `redo_recovery_enabled` is deprecated
 and ignored.
@@ -408,6 +408,7 @@ Redis-backed configuration:
 
 ```json
 {
+  "service_name": "production",
   "cache": {
     "provider": "redis",
     "params": {
@@ -419,7 +420,6 @@ Redis-backed configuration:
     "agfs": {
       "pathlock": {
         "provider": "cache",
-        "namespace": "production",
         "lock_expire_secs": 30.0
       }
     }
@@ -430,7 +430,6 @@ Redis-backed configuration:
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `provider` | str | `filesystem`, `memory`, or `cache` | `filesystem` |
-| `namespace` | str or null | Required when `provider=cache`; identifies one OpenViking deployment | `null` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale | `30.0` |
 
 Legacy compatibility form:

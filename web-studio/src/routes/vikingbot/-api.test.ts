@@ -61,14 +61,23 @@ it('keeps provider credential fields inside a generic envelope', () => {
     body: { revision: 3, credentials, user_id: 'bot' },
   })
 })
-it('reuses the safe admin-user projection', async () => {
-  transport.get.mockResolvedValue([{ user_id: 'bot', api_key_available: true }])
-  expect(await getBotUsers()).toEqual([{ user_id: 'bot', available: true }])
-  expect(transport.get).toHaveBeenCalledWith({
-    url: '/api/v1/admin/accounts/team/users',
-    query: { role: 'user', include_credentials: false },
-  })
-})
+it.each(['api_key', 'trusted'] as const)(
+  'selects users using the %s auth contract',
+  async (mode) => {
+    transport.get.mockResolvedValue([
+      { user_id: 'bot', api_key_available: true },
+      { user_id: 'keyless', api_key_available: false },
+    ])
+    expect(await getBotUsers(mode)).toEqual([
+      { user_id: 'bot', available: true },
+      { user_id: 'keyless', available: mode === 'trusted' },
+    ])
+    expect(transport.get).toHaveBeenCalledWith({
+      url: '/api/v1/admin/accounts/team/users',
+      query: { role: 'user', include_credentials: false },
+    })
+  },
+)
 it('uses current account and encodes identifiers without moving conversation keys into paths', () => {
   transport.accountId = 'team two'
   getMessages('app/id', 'group/thread:topic', 7)

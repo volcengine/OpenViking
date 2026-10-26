@@ -291,6 +291,7 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 - **环境变量是逗号分隔的列表**，先按逗号切分再解析，所以需要字面逗号的规则（比如带下界的 `{10,}`）只能写进上面的数组。（`\x2c` 能表示模式里其它位置的字面逗号，但它不是量词语法。）
 - **顺序有意义，丢弃优先。** 第一条命中的 `d`（或未命中的 `k`）就决定了结果。过滤发生在 `OPENVIKING_MIN_QUERY_LENGTH` 和内置的应答语／slash 命令启发式之前，所以剥掉前缀后只剩「好的」的文本会按应答语丢弃。被替换成空串不算丢弃 —— query 空了只是长度不够。
 - **过滤只管送出去的内容，管不到已经存下的。** 会话中途新增 `d`/`k` 规则还会让捕获游标计数的回合列表变短，这会被当成 transcript 被改写、从最后一个用户回合重放 —— 和切换 `OPENVIKING_CAPTURE_ASSISTANT_TURNS` 是同一个现象。
+- **替换会作用到工具调用，取舍判断不会。** 在写路径上，`s` 规则也会改写工具调用输入里的每个字符串值和工具结果的输出，所以脱敏规则同样能盖住出现在命令或命令输出里的密钥；`d`/`k` 规则只看回合的文本。
 - **坏规则只会被跳过，不会让 hook 挂掉。** `ov-memory-doctor` 会列出生效的规则，并对编译失败的那条给出确切的解析或 RegExp 报错。
 
 ### 插件配置放在 `ovcli.conf`
@@ -315,7 +316,7 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 
 ### digest 压缩
 
-`recallCompress` 决定 digest 在哪里生成，默认值为 `auto`。`client` 始终通过 `claude -p` 在本地压缩（默认 Sonnet + 低推理档——Haiku 不支持 effort 旋钮，时延不可控），token 成本留在你自己的订阅额度里。`server` 让 OpenViking 生成 digest。`auto` 优先本地，探测不到可用的宿主 CLI 时回落到服务端。压缩器执行失败或输出校验失败时会退回未压缩的上下文块；任一压缩器精确返回 `NO_RELEVANT_MEMORY` 都是成功的空结果，不注入任何内容。压缩子进程运行时所有 OpenViking hook 均被禁用，不会递归。旧的环境变量 `OPENVIKING_RECALL_REWRITE` 和配置键 `recallRewrite` 仍作为低优先级兼容别名保留。
+`recallCompress` 决定 digest 在哪里生成，默认值为 `auto`。`client` 始终通过 `claude -p` 在本地压缩（默认 Haiku + 低推理档），token 成本留在你自己的订阅额度里。`server` 让 OpenViking 生成 digest。`auto` 优先本地，探测不到可用的宿主 CLI 时回落到服务端。压缩器执行失败或输出校验失败时会退回未压缩的上下文块；任一压缩器精确返回 `NO_RELEVANT_MEMORY` 都是成功的空结果，不注入任何内容。压缩子进程运行时所有 OpenViking hook 均被禁用，不会递归。旧的环境变量 `OPENVIKING_RECALL_REWRITE` 和配置键 `recallRewrite` 仍作为低优先级兼容别名保留。
 
 ### 遗留 `claude_code` 块（在 `ov.conf` 里）
 

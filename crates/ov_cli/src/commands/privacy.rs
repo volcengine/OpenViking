@@ -3,21 +3,22 @@ use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::io::{self, IsTerminal, Write};
 
-fn parse_kv_pairs(pairs: &[String]) -> Result<HashMap<String, String>> {
+fn parse_field_pairs(pairs: &[String]) -> Result<HashMap<String, String>> {
     let mut parsed: HashMap<String, String> = HashMap::new();
     for pair in pairs {
-        let (key, value) = pair.split_once('=').ok_or_else(|| {
+        let (field, value) = pair.split_once('=').ok_or_else(|| {
             Error::Client(format!(
-                "Invalid --key format: {} (expected key=value)",
+                "Invalid --field format: {} (expected field=value)",
                 pair
             ))
         })?;
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(Error::Client("--key key cannot be empty".to_string()));
+        let field = field.trim();
+        if field.is_empty() {
+            return Err(Error::Client("--field name cannot be empty".to_string()));
         }
-        parsed.insert(key.to_string(), value.to_string());
+        parsed.insert(field.to_string(), value.to_string());
     }
     Ok(parsed)
 }
@@ -55,7 +56,7 @@ fn parse_values_json(
 
 fn to_kv_row(key: &str, value: &Value) -> Value {
     serde_json::json!({
-        "key": key,
+        "field": key,
         "value": match value {
             Value::String(s) => Value::String(s.clone()),
             _ => Value::String(value.to_string()),
@@ -106,8 +107,8 @@ fn extract_kv_cells(rows: &[Value]) -> Vec<(String, String)> {
         let Some(obj) = row.as_object() else {
             continue;
         };
-        let key = obj
-            .get("key")
+        let field = obj
+            .get("field")
             .map(|v| match v {
                 Value::String(s) => s.clone(),
                 _ => v.to_string(),
@@ -120,23 +121,23 @@ fn extract_kv_cells(rows: &[Value]) -> Vec<(String, String)> {
                 _ => v.to_string(),
             })
             .unwrap_or_default();
-        cells.push((key, value));
+        cells.push((field, value));
     }
     cells
 }
 
 fn render_kv_ascii_table(rows: &[Value]) -> String {
     let cells = extract_kv_cells(rows);
-    let mut key_width = string_width("key");
+    let mut field_width = string_width("field");
     let mut value_width = string_width("value");
     for (k, v) in &cells {
-        key_width = key_width.max(string_width(k));
+        field_width = field_width.max(string_width(k));
         value_width = value_width.max(string_width(v));
     }
 
     let border = format!(
         "+{}+{}+",
-        "-".repeat(key_width + 2),
+        "-".repeat(field_width + 2),
         "-".repeat(value_width + 2)
     );
 
@@ -145,7 +146,7 @@ fn render_kv_ascii_table(rows: &[Value]) -> String {
     out.push('\n');
     out.push_str(&format!(
         "| {} | {} |\n",
-        pad_right("key", key_width),
+        pad_right("field", field_width),
         pad_right("value", value_width)
     ));
     out.push_str(&border);
@@ -154,7 +155,7 @@ fn render_kv_ascii_table(rows: &[Value]) -> String {
     for (k, v) in cells {
         out.push_str(&format!(
             "| {} | {} |\n",
-            pad_right(&k, key_width),
+            pad_right(&k, field_width),
             pad_right(&v, value_width)
         ));
     }
@@ -246,6 +247,94 @@ pub async fn get_current(
     Ok(())
 }
 
+pub async fn reference(
+    client: &HttpClient,
+    category: &str,
+    target_key: &str,
+    field: Option<&str>,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let field = infer_field(client, "reference", category, target_key, field).await?;
+    let result = client
+        .privacy_get_field(category, target_key, &field, false)
+        .await?;
+    output_success(&result, output_format, compact);
+    Ok(())
+}
+
+pub async fn resolve(
+    client: &HttpClient,
+    selector_or_category: &str,
+    target_key: Option<&str>,
+    field: Option<&str>,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = match (target_key, field) {
+        (None, None) => client.privacy_resolve_selector(selector_or_category).await?,
+        (Some(target_key), field) => {
+            let field =
+                infer_field(client, "resolve", selector_or_category, target_key, field).await?;
+            client
+                .privacy_get_field(selector_or_category, target_key, &field, true)
+                .await?
+        }
+        (None, Some(_)) => {
+            return Err(Error::Client(
+                "Resolve accepts either one reference/field URI or category target [field]."
+                    .to_string(),
+            ));
+        }
+    };
+    output_success(&result, output_format, compact);
+    Ok(())
+}
+
+async fn infer_field(
+    client: &HttpClient,
+    command: &str,
+    category: &str,
+    target_key: &str,
+    field: Option<&str>,
+) -> Result<String> {
+    if let Some(field) = field {
+        return Ok(field.to_string());
+    }
+
+    let result = client.privacy_list_fields(category, target_key).await?;
+    let entries = result
+        .get("fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::Parse("Expected fields array in Privacy response".to_string()))?;
+    let fields = entries
+        .iter()
+        .filter_map(|entry| entry.get("field").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    select_inferred_field(command, category, target_key, fields)
+}
+
+fn select_inferred_field(
+    command: &str,
+    category: &str,
+    target_key: &str,
+    mut fields: Vec<String>,
+) -> Result<String> {
+    fields.sort();
+
+    match fields.as_slice() {
+        [field] => Ok(field.clone()),
+        [] => Err(Error::Client(format!(
+            "Privacy target {category}/{target_key} has no active fields."
+        ))),
+        _ => Err(Error::Client(format!(
+            "Privacy target {category}/{target_key} has multiple active fields: {}. Specify one, for example: ov privacy {command} {category} {target_key} <field>",
+            fields.join(", ")
+        ))),
+    }
+}
+
 pub async fn list_versions(
     client: &HttpClient,
     category: &str,
@@ -296,13 +385,92 @@ pub async fn activate(
     Ok(())
 }
 
+pub async fn delete(
+    client: &HttpClient,
+    selector_or_category: &str,
+    target_key: Option<&str>,
+    field: Option<&str>,
+    yes: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let display = match (target_key, field) {
+        (None, None) => selector_or_category.to_string(),
+        (Some(target), None) => format!("{selector_or_category}/{target}"),
+        (Some(target), Some(field)) => format!("{selector_or_category}/{target}#{field}"),
+        (None, Some(_)) => unreachable!("Clap cannot supply the third positional alone"),
+    };
+    if !yes && !confirm_delete(&display)? {
+        output_success(
+            &serde_json::json!({
+                "selector": display,
+                "deleted": false,
+                "cancelled": true,
+            }),
+            output_format,
+            compact,
+        );
+        return Ok(());
+    }
+
+    let result = match (target_key, field) {
+        (None, None) => client.privacy_delete_selector(selector_or_category).await?,
+        (Some(target), None) => client.privacy_delete(selector_or_category, target).await?,
+        (Some(target), Some(field)) => {
+            client
+                .privacy_delete_field(selector_or_category, target, field)
+                .await?
+        }
+        (None, Some(_)) => unreachable!("Clap cannot supply the third positional alone"),
+    };
+    output_success(&result, output_format, compact);
+    Ok(())
+}
+
+pub async fn scan(
+    client: &HttpClient,
+    uri: &str,
+    fix: bool,
+    node_limit: u16,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let body = serde_json::json!({
+        "uri": uri,
+        "fix": fix,
+        "node_limit": node_limit,
+    });
+    let result = client.privacy_scan(&body).await?;
+    output_success(&result, output_format, compact);
+    Ok(())
+}
+
+fn confirm_delete(display: &str) -> Result<bool> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(Error::Client(
+            "Deleting a privacy target requires confirmation. Pass --yes to skip the prompt."
+                .to_string(),
+        ));
+    }
+
+    print!(
+        "Delete Privacy selection {}? [y/N]: ",
+        display
+    );
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    let answer = answer.trim().to_ascii_lowercase();
+    Ok(answer == "y" || answer == "yes")
+}
+
 pub async fn upsert(
     client: &HttpClient,
     category: &str,
     target_key: &str,
     values_json: Option<&str>,
     values_file: Option<&str>,
-    key_pairs: &[String],
+    field_pairs: &[String],
     change_reason: &str,
     labels_json: Option<&str>,
     output_format: OutputFormat,
@@ -311,40 +479,21 @@ pub async fn upsert(
     let parsed_values = parse_values_json(values_json, values_file)?;
     let mut final_values: Map<String, Value> = parsed_values.clone().unwrap_or_default();
 
-    let key_overrides = parse_kv_pairs(key_pairs)?;
+    let field_overrides = parse_field_pairs(field_pairs)?;
     let mut requested_keys: HashSet<String> = HashSet::new();
     if let Some(values_from_json) = parsed_values.as_ref() {
         requested_keys.extend(values_from_json.keys().cloned());
     }
-    requested_keys.extend(key_overrides.keys().cloned());
+    requested_keys.extend(field_overrides.keys().cloned());
 
-    if !key_overrides.is_empty() {
-        let current = client.privacy_get_current(category, target_key).await?;
-        let mut base_values = current
-            .get("current")
-            .and_then(|v| v.get("values"))
-            .and_then(Value::as_object)
-            .ok_or_else(|| {
-                Error::Parse(
-                    "privacy get current response missing current.values object".to_string(),
-                )
-            })?
-            .clone();
-
-        if let Some(values_from_json) = parsed_values {
-            for (key, value) in values_from_json {
-                base_values.insert(key, value);
-            }
-        }
-        for (key, value) in key_overrides {
-            base_values.insert(key, Value::String(value));
-        }
-        final_values = base_values;
+    let partial_update = !field_overrides.is_empty();
+    for (field, value) in field_overrides {
+        final_values.insert(field, Value::String(value));
     }
 
     if final_values.is_empty() {
         return Err(Error::Client(
-            "No values provided; use --values-json/--values-file or --key-{key} <value>"
+            "No values provided; use --values-json/--values-file, --field <field=value>, or --field-<name> <value>"
                 .to_string(),
         ));
     }
@@ -370,9 +519,11 @@ pub async fn upsert(
         payload["labels"] = labels;
     }
 
-    let result = client
-        .privacy_upsert(category, target_key, &payload)
-        .await?;
+    let result = if partial_update {
+        client.privacy_patch(category, target_key, &payload).await?
+    } else {
+        client.privacy_upsert(category, target_key, &payload).await?
+    };
     if matches!(output_format, OutputFormat::Table) {
         let values = result
             .get("values")
@@ -400,6 +551,30 @@ pub async fn upsert(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn inferred_field_requires_an_unambiguous_target() {
+        let one = vec!["pat".to_string()];
+        assert_eq!(
+            select_inferred_field("reference", "credential", "github", one)
+                .expect("one field should be inferred"),
+            "pat"
+        );
+
+        let multiple = vec!["region".to_string(), "pat".to_string()];
+        let error = select_inferred_field("resolve", "credential", "github", multiple)
+            .expect_err("multiple fields must not be guessed")
+            .to_string();
+        assert!(error.contains("multiple active fields: pat, region"));
+        assert!(error.contains("ov privacy resolve credential github <field>"));
+    }
+
+    #[test]
+    fn privacy_table_uses_field_header() {
+        let rendered = render_kv_ascii_table(&[json!({"field": "pat", "value": "secret"})]);
+        assert!(rendered.contains("| field | value  |"));
+        assert!(!rendered.contains("| key "));
+    }
 
     #[test]
     fn version_like_table_output_keeps_profile_section() {

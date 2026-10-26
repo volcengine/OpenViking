@@ -59,6 +59,7 @@ const createTouchTexture = (): TouchTexture => {
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
+  // eslint-disable-next-line studio-i18n/no-literal-message -- Developer invariant; retain the diagnostic for debugging.
   if (!ctx) throw new Error('2D context not available');
   ctx.fillStyle = 'black';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -703,7 +704,7 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
       ref={containerRef}
       className={`w-full h-full relative overflow-hidden ${className ?? ''}`}
       style={style}
-      aria-label="PixelBlast interactive background"
+      aria-hidden="true"
     />
   );
 };

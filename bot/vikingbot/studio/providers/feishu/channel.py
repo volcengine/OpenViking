@@ -17,9 +17,10 @@ def now():
 
 
 class StudioFeishuChannel(FeishuChannel):
-    def __init__(self, config, bus, *, record, store, **kwargs):
+    def __init__(self, config, bus, *, record, store, openviking_connection, **kwargs):
         super().__init__(config, bus, **kwargs)
         self.record = record
+        self.openviking_connection = openviking_connection
         self._session_prefix = f"studio:{record['id']}:"
         self.store = store
         self.verification = None
@@ -100,7 +101,6 @@ class StudioFeishuChannel(FeishuChannel):
         )
         if not inserted:
             return
-        connection = dict(self.record["identity"])
         # Partition peer memory by group/topic, never by the installing administrator.
         peer = "feishu-" + hashlib.sha256(chat_id.encode()).hexdigest()[:24]
         await self.bus.publish_inbound(
@@ -113,7 +113,7 @@ class StudioFeishuChannel(FeishuChannel):
                 need_reply=need_reply,
                 media=media or [],
                 metadata=metadata,
-                openviking_connection=connection,
+                openviking_connection=self.openviking_connection,
             )
         )
 
@@ -163,7 +163,7 @@ class StudioFeishuChannel(FeishuChannel):
             raise ValueError("Missing message scope")
         peer = "feishu-" + hashlib.sha256(msg.session_key.chat_id.encode()).hexdigest()[:24]
         client = await VikingClient.create(
-            connection=self.record["identity"],
+            connection=self.openviking_connection,
             actor_peer_id=peer,
             config=self._bot_config,
         )

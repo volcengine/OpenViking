@@ -1,3 +1,4 @@
+import { useReadOnly } from './read-only'
 import * as React from 'react'
 import { ChevronRightIcon, CircleAlertIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -17,12 +18,17 @@ import {
 } from '#/components/ui/collapsible'
 import { Switch } from '#/components/ui/switch'
 
+import type { DocsSection } from '../-lib/client-guides'
+import { DocsLink } from './docs-link'
+
 type SettingSectionProps = {
   /** Anchor id for in-page navigation. */
   id?: string
   icon?: React.ReactNode
   title: string
   description?: React.ReactNode
+  /** Docs section explaining these settings, linked after the description. */
+  docs?: DocsSection
   /** State of the header switch; omit for a section without one. */
   checked?: boolean
   onCheckedChange?: (checked: boolean) => void
@@ -52,6 +58,7 @@ export function SettingSection({
   icon,
   title,
   description,
+  docs,
   checked,
   onCheckedChange,
   switchDisabled,
@@ -62,9 +69,10 @@ export function SettingSection({
   children,
 }: SettingSectionProps) {
   const { t } = useTranslation('gateway')
+  const readOnly = useReadOnly()
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
   // Save checks every setting, so one that needs fixing must stay visible.
-  const open = checked !== false || invalid
+  const open = readOnly || checked !== false || invalid
   const hasBody = open && Boolean(children || advanced)
   return (
     <Card id={id} className="scroll-mt-20 gap-0 py-0">
@@ -76,13 +84,19 @@ export function SettingSection({
         {description ? (
           <CardDescription className="max-w-2xl leading-6">
             {description}
+            {docs ? (
+              <>
+                {' '}
+                <DocsLink section={docs} variant="text" />
+              </>
+            ) : null}
           </CardDescription>
         ) : null}
         {checked !== undefined ? (
           <CardAction>
             <Switch
               checked={checked}
-              disabled={switchDisabled}
+              disabled={switchDisabled || readOnly}
               aria-label={title}
               onCheckedChange={(value) => onCheckedChange?.(value)}
             />
@@ -102,7 +116,7 @@ export function SettingSection({
           {advanced ? (
             <Collapsible
               className="grid gap-5"
-              open={advancedOpen || advancedInvalid}
+              open={readOnly || advancedOpen || advancedInvalid}
               onOpenChange={setAdvancedOpen}
             >
               <CollapsibleTrigger className="group/advanced flex w-fit items-center gap-1.5 rounded-sm text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">

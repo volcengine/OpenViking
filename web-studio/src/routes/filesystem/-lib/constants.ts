@@ -91,7 +91,6 @@ export const TERMINAL_COMMANDS: TerminalCommandSuggestion[] = [
       'session.messages',
       'session.archive',
       'session.commit',
-      'session.extract',
       'session.message',
       'session.toolResults',
       'session.toolResult',

@@ -1,11 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Runtime index of durable queue work owned by a tracked task.
-
-QueueFS remains the durable source of truth.  This index is rebuilt from all
-unacknowledged queue messages during startup and then maintained by enqueue/ACK
-hooks.  It deliberately does not persist a second counter beside QueueFS.
-"""
+"""Process-local execution context and cancellable handles for Task Work."""
 
 from __future__ import annotations
 
@@ -15,16 +10,14 @@ import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Iterable, Iterator, Mapping, Optional
+from typing import Any, Dict, Generator, Mapping, Optional
 from uuid import uuid4
 
-from openviking.service.task_processing_time import ProcessingClock, processing_owner
+from openviking.service.task_domain import TaskWorkRejected as TaskWorkRejected
 
 TASK_WORK_ID_FIELD = "_task_work_id"
-
-
-class TaskWorkRejected(Exception):
-    """Task cancellation prevented descendant queue work from being created."""
+TASK_ACCOUNT_ID_FIELD = "_task_account_id"
+TASK_USER_ID_FIELD = "_task_user_id"
 
 
 @dataclass(frozen=True)
@@ -32,6 +25,8 @@ class TaskExecutionContext:
     task_id: str
     account_id: str
     user_id: str
+    enqueued_work: Optional[list[tuple[str, str]]] = None
+    work_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -53,13 +48,23 @@ def bind_task_context(
     task_id: str,
     account_id: str,
     user_id: str,
-) -> Iterator[None]:
-    """Propagate task ownership to queue messages produced by this coroutine."""
+    *,
+    enqueued_work: Optional[list[tuple[str, str]]] = None,
+    work_id: Optional[str] = None,
+) -> Generator[None, None, None]:
+    """Propagate Task ownership to queue messages produced by this coroutine."""
+    current = _current_task_context.get()
+    if enqueued_work is None and current is not None and current.task_id == str(task_id):
+        enqueued_work = current.enqueued_work
+    if work_id is None and current is not None and current.task_id == str(task_id):
+        work_id = current.work_id
     token = _current_task_context.set(
         TaskExecutionContext(
             task_id=str(task_id),
             account_id=str(account_id),
             user_id=str(user_id),
+            enqueued_work=enqueued_work,
+            work_id=work_id,
         )
     )
     try:
@@ -69,8 +74,8 @@ def bind_task_context(
 
 
 @contextmanager
-def detach_task_context() -> Iterator[None]:
-    """Keep independently scheduled work outside the current task lifecycle."""
+def detach_task_context() -> Generator[None, None, None]:
+    """Keep independently scheduled work outside the current Task lifecycle."""
     token = _current_task_context.set(None)
     try:
         yield
@@ -80,6 +85,25 @@ def detach_task_context() -> Iterator[None]:
 
 def get_task_context() -> Optional[TaskExecutionContext]:
     return _current_task_context.get()
+
+
+def record_enqueued_work(queue_name: str, work_id: str) -> None:
+    """Record a committed child enqueue for the currently executing handler."""
+    current = _current_task_context.get()
+    if current is not None and current.enqueued_work is not None:
+        current.enqueued_work.append((queue_name, work_id))
+
+
+def get_enqueued_work_ids(queue_name: Optional[str] = None) -> list[str]:
+    """Return committed child Work IDs produced by the current handler."""
+    current = _current_task_context.get()
+    if current is None or current.enqueued_work is None:
+        return []
+    return [
+        work_id
+        for work_queue, work_id in current.enqueued_work
+        if queue_name is None or work_queue == queue_name
+    ]
 
 
 def _payload_dict(message: Any) -> Optional[Dict[str, Any]]:
@@ -95,6 +119,11 @@ def _payload_dict(message: Any) -> Optional[Dict[str, Any]]:
 
 
 def _owner_from_payload(payload: Mapping[str, Any]) -> tuple[str, str]:
+    task_account_id = payload.get(TASK_ACCOUNT_ID_FIELD)
+    task_user_id = payload.get(TASK_USER_ID_FIELD)
+    if task_account_id and task_user_id:
+        return str(task_account_id), str(task_user_id)
+
     account_id = payload.get("account_id")
     user_id = payload.get("user_id")
 
@@ -107,13 +136,19 @@ def _owner_from_payload(payload: Mapping[str, Any]) -> tuple[str, str]:
     if isinstance(context_data, dict):
         account_id = account_id or context_data.get("account_id")
         user_id = user_id or context_data.get("owner_user_id")
+    payload_data = payload.get("payload")
+    if isinstance(payload_data, dict):
+        context_data = payload_data.get("context_data")
+        if isinstance(context_data, dict):
+            account_id = account_id or context_data.get("account_id")
+            user_id = user_id or context_data.get("owner_user_id")
     return str(account_id or ""), str(user_id or "")
 
 
 def prepare_task_payload(
     data: Dict[str, Any],
 ) -> tuple[Dict[str, Any], Optional[QueueTaskMetadata]]:
-    """Copy a payload and attach durable task metadata when it belongs to a task."""
+    """Copy a payload and attach durable Task metadata when it belongs to a Task."""
     payload = dict(data)
     current = _current_task_context.get()
     task_id = payload.get("task_id") or (current.task_id if current is not None else "")
@@ -121,14 +156,23 @@ def prepare_task_payload(
         return payload, None
 
     task_id = str(task_id)
-    account_id, user_id = _owner_from_payload(payload)
-    if current is not None and current.task_id == task_id:
-        account_id = account_id or current.account_id
-        user_id = user_id or current.user_id
+    has_authoritative_context = (
+        current is not None
+        and current.task_id == task_id
+        and current.account_id
+        and current.user_id
+    )
+    if has_authoritative_context:
+        account_id, user_id = current.account_id, current.user_id
+    else:
+        account_id, user_id = "", ""
 
     work_id = str(payload.get(TASK_WORK_ID_FIELD) or uuid4())
     payload["task_id"] = task_id
     payload[TASK_WORK_ID_FIELD] = work_id
+    if has_authoritative_context:
+        payload[TASK_ACCOUNT_ID_FIELD] = account_id
+        payload[TASK_USER_ID_FIELD] = user_id
     if account_id and user_id:
         payload.setdefault("account_id", account_id)
         payload.setdefault("user_id", user_id)
@@ -136,15 +180,13 @@ def prepare_task_payload(
 
 
 def extract_task_metadata(message: Any) -> Optional[QueueTaskMetadata]:
-    """Read task metadata from either a QueueFS envelope or its inner payload."""
+    """Read Task metadata from either a QueueFS envelope or its inner payload."""
     payload = _payload_dict(message)
     if payload is None:
         return None
     task_id = payload.get("task_id")
     work_id = payload.get(TASK_WORK_ID_FIELD)
     if not work_id and isinstance(message, dict) and "data" in message and message.get("id"):
-        # Messages produced before task work IDs were introduced can still be
-        # rebuilt from their stable QueueFS envelope ID.
         work_id = f"queuefs:{message['id']}"
     if not task_id or not work_id:
         return None
@@ -152,227 +194,131 @@ def extract_task_metadata(message: Any) -> Optional[QueueTaskMetadata]:
     return QueueTaskMetadata(str(task_id), str(work_id), account_id, user_id)
 
 
+@contextmanager
+def bind_task_context_from_message(message: Any) -> Generator[None, None, None]:
+    """Bind TaskContext for direct queue handler calls that bypass middleware."""
+    if _current_task_context.get() is not None:
+        yield
+        return
+
+    metadata = extract_task_metadata(message)
+    if metadata is None:
+        payload = _payload_dict(message)
+        if payload is None or not payload.get("task_id"):
+            yield
+            return
+        account_id, user_id = _owner_from_payload(payload)
+        metadata = QueueTaskMetadata(
+            str(payload["task_id"]),
+            str(payload.get(TASK_WORK_ID_FIELD) or ""),
+            account_id,
+            user_id,
+        )
+    if not metadata.account_id or not metadata.user_id:
+        yield
+        return
+
+    with bind_task_context(
+        metadata.task_id,
+        metadata.account_id,
+        metadata.user_id,
+        work_id=metadata.work_id or None,
+    ):
+        yield
+
+
 class TaskWorkIndex:
-    """Thread-safe, rebuildable index of persistent and currently active task work."""
+    """Process-local asyncio handles used to accelerate cancellation."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._work: Dict[str, set[tuple[str, str]]] = {}
-        self._active: Dict[str, set[asyncio.Task[Any]]] = {}
-        self._failures: Dict[str, str] = {}
-        self._processing: Dict[str, ProcessingClock] = {}
-        self._finalize_before_ack: Optional[Callable[[QueueTaskMetadata], Awaitable[None]]] = None
-        self._is_cancellation_requested: Optional[Callable[[str], bool]] = None
+        self._active: Dict[tuple[str, str, str], set[asyncio.Task[Any]]] = {}
 
-    def set_callbacks(
+    def has_other_active(
         self,
+        task_id: str,
+        current_task: Optional[asyncio.Task[Any]],
         *,
-        finalize_before_ack: Callable[[QueueTaskMetadata], Awaitable[None]],
-        is_cancellation_requested: Callable[[str], bool],
-    ) -> None:
-        self._finalize_before_ack = finalize_before_ack
-        self._is_cancellation_requested = is_cancellation_requested
-
-    def rebuild(
-        self,
-        snapshots: Mapping[str, Iterable[Any]],
-    ) -> Dict[str, tuple[str, str]]:
-        """Rebuild work from QueueFS and return owners needed to restore task records."""
-        work: Dict[str, set[tuple[str, str]]] = {}
-        owners: Dict[str, tuple[str, str]] = {}
-        for queue_name, messages in snapshots.items():
-            for message in messages:
-                metadata = extract_task_metadata(message)
-                if metadata is None:
-                    continue
-                work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
-                if metadata.account_id and metadata.user_id:
-                    owners[metadata.task_id] = (metadata.account_id, metadata.user_id)
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Return whether another in-process handler can finish producing Work."""
         with self._lock:
-            self._work = work
-            self._failures = {}
-        return owners
-
-    def register(self, queue_name: str, metadata: Optional[QueueTaskMetadata]) -> bool:
-        """Atomically reject cancelled work or add it to the runtime index."""
-        if metadata is None:
-            return True
-        with self._lock:
-            if self.cancellation_requested(metadata.task_id):
-                return False
-            self._work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
-        return True
-
-    def _remove_work(
-        self,
-        queue_name: str,
-        metadata: QueueTaskMetadata,
-    ) -> tuple[bool, bool]:
-        """Remove one work item and report whether it existed and made its task idle."""
-        removed = False
-        with self._lock:
-            entries = self._work.get(metadata.task_id)
-            if entries is not None:
-                entry = (queue_name, metadata.work_id)
-                removed = entry in entries
-                entries.discard(entry)
-                if not entries:
-                    self._work.pop(metadata.task_id, None)
-            became_idle = (
-                removed
-                and not self._work.get(metadata.task_id)
-                and not self._active.get(metadata.task_id)
+            return any(
+                task is not current_task
+                for (account, user, active_task_id), tasks in self._active.items()
+                if active_task_id == task_id
+                and (account_id is None or account == account_id)
+                and (user_id is None or user == user_id)
+                for task in tasks
             )
-            return removed, became_idle
 
-    async def discard(self, queue_name: str, message: Any) -> None:
-        """Discard work that was never durably enqueued and finalize if it was last."""
-        metadata = (
-            message if isinstance(message, QueueTaskMetadata) else extract_task_metadata(message)
-        )
-        if metadata is None:
-            return
-        _removed, became_idle = self._remove_work(queue_name, metadata)
-        callback = self._finalize_before_ack
-        if became_idle and callback is not None:
-            await callback(metadata)
-
-    async def prepare_ack(
+    def forget_task(
         self,
-        queue_name: str,
-        message: Any,
-    ) -> Optional[QueueTaskMetadata]:
-        """Remove work provisionally and finalize its task before the last durable ACK."""
-        metadata = (
-            message if isinstance(message, QueueTaskMetadata) else extract_task_metadata(message)
-        )
-        if metadata is None:
-            return None
-
-        removed, became_idle = self._remove_work(queue_name, metadata)
-        if not removed:
-            return None
-        if not became_idle:
-            return metadata
-
-        callback = self._finalize_before_ack
-        if callback is None:
-            return metadata
-        try:
-            await callback(metadata)
-        except BaseException:
-            self.rollback_ack(queue_name, metadata)
-            raise
-        return metadata
-
-    def rollback_ack(self, queue_name: str, metadata: QueueTaskMetadata) -> None:
-        """Restore provisionally removed work when finalization or ACK fails."""
+        task_id: str,
+        *,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
         with self._lock:
-            self._work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
-
-    def has_work(self, task_id: str, exclude_work_id: Optional[str] = None) -> bool:
-        with self._lock:
-            if exclude_work_id is not None:
-                return any(
-                    work_id != exclude_work_id
-                    for _queue_name, work_id in self._work.get(task_id, ())
-                )
-            return bool(self._work.get(task_id) or self._active.get(task_id))
-
-    def cancellation_requested(self, task_id: str) -> bool:
-        callback = self._is_cancellation_requested
-        return bool(callback is not None and callback(task_id))
-
-    def record_failure(self, task_id: str, error: str) -> None:
-        """Record the first failed work item owned by a task."""
-        with self._lock:
-            self._failures.setdefault(task_id, error)
-
-    def failure(self, task_id: str) -> Optional[str]:
-        with self._lock:
-            return self._failures.get(task_id)
-
-    def clear_failure(self, task_id: str) -> None:
-        with self._lock:
-            self._failures.pop(task_id, None)
-
-    def init_processing(self, task_id: str) -> None:
-        with self._lock:
-            self._processing.setdefault(task_id, ProcessingClock())
-
-    def processing_seconds(self, task_id: str) -> Optional[float]:
-        with self._lock:
-            clock = self._processing.get(task_id)
-            return clock.seconds() if clock else None
-
-    def forget_processing(self, task_id: str) -> None:
-        with self._lock:
-            self._processing.pop(task_id, None)
-
-    @contextmanager
-    def pause_processing(self, task_id: str, *, worker: Any = None) -> Iterator[None]:
-        worker = worker if worker is not None else asyncio.current_task()
-        with self._lock:
-            clock = self._processing.get(task_id)
-            was_processing = clock is not None and worker in clock.workers
-            if was_processing:
-                clock.leave(worker)
-        try:
-            yield
-        finally:
-            with self._lock:
-                if was_processing and self._processing.get(task_id) is clock:
-                    clock.enter(worker)
-
-    @contextmanager
-    def measure_processing(self, task_id: str) -> Iterator[None]:
-        # Timing ownership is separate from cancellation ownership: a shared DAG
-        # worker must never become cancellable on behalf of one queued task.
-        worker = object()
-        token = processing_owner.set((self, task_id, worker))
-        with self._lock:
-            clock = self._processing.get(task_id)
-            if clock is not None:
-                clock.enter(worker)
-        try:
-            yield
-        finally:
-            with self._lock:
-                if clock is not None:
-                    clock.leave(worker)
-            processing_owner.reset(token)
+            for key in [
+                key
+                for key in self._active
+                if key[2] == task_id
+                and (account_id is None or key[0] == account_id)
+                and (user_id is None or key[1] == user_id)
+            ]:
+                self._active.pop(key, None)
 
     def register_active(
         self,
         task_id: str,
         active_task: asyncio.Task[Any],
+        *,
+        account_id: str,
+        user_id: str,
     ) -> None:
         with self._lock:
-            cancelled = self.cancellation_requested(task_id)
-            if not cancelled:
-                self._active.setdefault(task_id, set()).add(active_task)
-                clock = self._processing.get(task_id)
-                if clock is not None:
-                    clock.enter(active_task)
-                processing_owner.set((self, task_id, active_task))
-        if cancelled:
-            active_task.get_loop().call_soon(active_task.cancel)
+            self._active.setdefault((account_id, user_id, task_id), set()).add(active_task)
 
-    def unregister_active(self, task_id: str, active_task: asyncio.Task[Any]) -> None:
-        if processing_owner.get() == (self, task_id, active_task):
-            processing_owner.set(None)
+    def unregister_active(
+        self,
+        task_id: str,
+        active_task: asyncio.Task[Any],
+        *,
+        account_id: str,
+        user_id: str,
+    ) -> None:
         with self._lock:
-            clock = self._processing.get(task_id)
-            if clock is not None:
-                clock.leave(active_task)
-            entries = self._active.get(task_id)
+            key = (account_id, user_id, task_id)
+            entries = self._active.get(key)
             if entries is not None:
                 entries.discard(active_task)
                 if not entries:
-                    self._active.pop(task_id, None)
+                    self._active.pop(key, None)
 
-    def cancel_active(self, task_id: str) -> None:
+    def active_tasks_by_owner(self) -> Dict[tuple[str, str], set[str]]:
         with self._lock:
-            active = list(self._active.get(task_id, ()))
+            grouped: Dict[tuple[str, str], set[str]] = {}
+            for account_id, user_id, task_id in self._active:
+                grouped.setdefault((account_id, user_id), set()).add(task_id)
+            return grouped
+
+    def cancel_active(
+        self,
+        task_id: str,
+        *,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
+        with self._lock:
+            active = [
+                task
+                for (account, user, active_task_id), tasks in self._active.items()
+                if active_task_id == task_id
+                and (account_id is None or account == account_id)
+                and (user_id is None or user == user_id)
+                for task in tasks
+            ]
         for task in active:
             task.get_loop().call_soon_threadsafe(task.cancel)

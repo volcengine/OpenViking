@@ -23,7 +23,7 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Register/remove users | Y | Y (own account) | N |
 | Manage groups and membership | Y | Y (own account) | N |
 | List agents (deprecated, returns empty list) | Y | Y (own account) | N |
-| Regenerate user key | Y | Y (own account) | N |
+| Regenerate user key (API Key mode only) | Y | Y (own account) | N |
 | Promote user to ADMIN | Y | Y (own account) | N |
 
 ## CLI `--sudo` Option
@@ -59,13 +59,13 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
 
-The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. A group must be empty before deletion.
+The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. Groups can be deleted whether empty or non-empty. Deleting a group removes all its memberships, preserves users and their credentials, and does not rewrite resource ACL or context records.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"group_id":"engineering"}` |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete an empty group |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group and all its memberships, including when the group is non-empty |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
@@ -78,6 +78,8 @@ ov acl grant viking://resources/project-a \
 ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
 ```
+
+To delete a group that still has members, call `DELETE /api/v1/admin/accounts/acme/groups/engineering`.
 
 The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 
@@ -534,6 +536,125 @@ Consumer failures are logged without rolling back the persisted override, so
 a successful response confirms the configuration update but does not certify
 that every derived client has applied it. See [runtime configuration source and reload behavior](../guides/01-configuration.md#runtime-configuration-source).
 
+File-mode saves require the complete `content` and the previous `revision`.
+Draft previews (`source=file&dry_run=true`) accept optional VLM/Embedding form `settings`;
+other sections remain editable through the complete file.
+File reads and previews return `form_readonly: true` when the document contains dollar signs, Windows `%VAR%` references, or escaped dollar/percent signs. Model form data is omitted and form patches are rejected. Use file mode to edit the original text, including quoted and unquoted environment references. Validation follows startup expansion of the original text; saves do not serialize the document. CLI startup arguments are reapplied during validation, as during restart.
+
+#### Draft Model Connection Test
+
+ROOT can test a draft VLM or Embedding connection without saving or publishing
+the submitted settings. This private Studio endpoint is intentionally hidden
+from the generated OpenAPI schema and always returns `Cache-Control: no-store`.
+
+```http
+POST /api/v1/admin/configuration/test-model
+Content-Type: application/json
+X-API-Key: <root-api-key>
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `kind` | string | Yes | - | `vlm` or `embedding` |
+| `config` | object | Yes | - | Draft provider credential or endpoint fields to test |
+| `fallback` | object | No | `{}` | Existing effective configuration used for omitted non-secret fields |
+| `thinking` | boolean | No | `null` | VLM thinking-mode override for the probe |
+| `mode` | string | No | `dense` | Embedding mode: `dense`, `sparse`, or `hybrid` |
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/configuration/test-model \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-api-key>" \
+  -d '{
+    "kind": "vlm",
+    "config": {
+      "provider": "openai",
+      "api_key": "draft-key"
+    },
+    "fallback": {
+      "model": "gpt-4.1"
+    }
+  }'
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "ok": true,
+    "ms": 120
+  }
+}
+```
+
+The endpoint redacts provider errors and does not persist the submitted draft.
+
+#### Server Restart
+
+Only ROOT can restart a single-worker `openviking-server` CLI process.
+Multi-worker and embedded ASGI launch modes do not support remote restart.
+
+```http
+POST /api/v1/admin/restart
+Content-Type: application/json
+X-API-Key: <root-api-key>
+
+{"revision": "<saved-file-revision>"}
+```
+
+`revision` is a required, non-empty string. Obtain the current file revision and
+restart capability from `GET /api/v1/admin/configuration?source=file`;
+`result.restart` contains `supported`, `instance_id`, and `restarting`.
+The restart endpoint does not save configuration. Save any changes first using
+`PATCH /api/v1/admin/configuration?source=file`, with `content` and the previous
+`revision`, then submit the returned revision to the restart endpoint.
+
+The server checks the current file revision and validates the configuration before
+accepting the restart. A stale revision or invalid file returns `INVALID_ARGUMENT`;
+an unsupported launch mode or unreadable file returns `FAILED_PRECONDITION`.
+No restart is requested when these checks fail.
+
+An accepted request returns **HTTP 202**, before graceful shutdown:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "supported": true,
+    "instance_id": "current-instance-id",
+    "restarting": true
+  }
+}
+```
+
+The CLI drains active requests, stops its managed Bot, and replaces the process
+with the original interpreter, arguments, environment, and working directory.
+File saves are rejected once restart has been requested. HTTP 202 confirms
+acceptance, not successful recovery: poll the file configuration endpoint until
+`instance_id` changes and `restarting` is false. External dependencies may still
+prevent startup. If the address, port, or ROOT credential changes, update the
+client connection before polling. See [server configuration](../configuration/01-server.md).
+
+Before accepting a restart, the CLI saves the exact file bytes loaded by the
+running process in a separate private recovery backup (0600, containing sensitive
+configuration). If the new process fails while loading configuration, starting
+the Bot, initializing the application, or binding its port, it atomically restores
+the previous running configuration and starts again once. The recovered instance
+returns `result.restart.rolled_back: true`; Studio reports the rollback.
+The recovery backup is deleted after application startup and socket binding succeed.
+Subsequent runtime failures do not trigger rollback. Remote restart cannot switch
+to multiple workers; use the deployment platform for that change.
+
+This recovery backup differs from `.studio.bak`, which only contains the file
+before the most recent save and may never have started successfully. Recovery
+only restores the configuration file, not storage or external side effects.
+It does not handle stalled startup, forced process termination, or machine failure.
+External file changes after restart prevent automatic restoration. If the restored
+configuration also fails to start, no further retry occurs; an administrator must
+recover the service on the server.
+
 #### Account Configuration Reference
 
 Initialize Account configuration through `settings` on the create endpoint,
@@ -880,14 +1001,15 @@ Create a new workspace with its first admin user.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| account_id | str | Yes | - | Workspace ID |
+| account_id | str | Yes | - | Workspace ID; at most 255 UTF-8 bytes for new file-backed accounts |
 | admin_user_id | str | Yes | - | First admin user ID |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 | user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 | settings | object | No | `null` | Initial Account runtime configuration. ROOT-only; supports `feishu`, `github`, `acl`, `agent_evolution`, `vlm`, `query_planner`, `embedding`, and `vectordb`. `vectordb` and Embedding create-only fields can only be set here |
 
 **Notes:**
-- In `trusted` mode, `user_key` is omitted from the response
+- File-backed account creation rejects an `account_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the account registry. Newly persisted user IDs are limited to 255 characters across account-store providers. Trusted mode rejects an oversized new user or a new oversized account before enqueueing auto-registration, so invalid identities cannot block other identities from registering. Existing oversized File users and accounts remain readable.
+- In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
 - `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
 - Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
@@ -1286,7 +1408,7 @@ Register a new user in a workspace.
 | user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 
 **Notes:**
-- In `trusted` mode, `user_key` is omitted from the response
+- In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
 - ADMIN can only register users in their own account
 - The `"root"` role cannot be minted through user registration
@@ -1418,7 +1540,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | role | str | No | null | Filter by role |
 | query | str | No | null | HTTP-only, case-insensitive literal substring match on user IDs |
 | include_summary | bool | No | false | HTTP-only, return paginated users and account statistics in an object |
-| include_credentials | bool | No | true | HTTP-only. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. The default preserves the existing mode-dependent response. |
+| include_credentials | bool | No | true | HTTP-only. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. `api_key_available` is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. The default preserves the existing mode-dependent response. |
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
@@ -1738,6 +1860,7 @@ Generate and store a user API key. With the default random generation, the old k
 | seed | str | No | `null` | Optional deterministic API key seed in the JSON request body. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 
 **Notes:**
+- `trusted` mode rejects this operation with HTTP 412 (`FAILED_PRECONDITION`) without generating or modifying credentials.
 - ADMIN can only regenerate keys for users in their own account
 - With random generation or a new seed, the old key stops working immediately; update clients that use it
 - Omit `seed` for the default random regenerated key. Deterministic examples use `OV_KEY_SEED` or `OV_NEW_KEY_SEED`; set these to a securely generated secret before use. In Go, import `os`. Do not use the example variable names as seed values.

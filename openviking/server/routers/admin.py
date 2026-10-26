@@ -4,9 +4,10 @@
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, Path, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
+from fastapi import Response as HTTPResponse
 from pydantic import BaseModel, Field
 
 from openviking.config.scope import ConfigScope
@@ -15,7 +16,6 @@ from openviking.server.api_keys.models import validate_account_user_role
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
     get_request_context,
-    registry_watcher_running,
     require_auth_root,
     require_auth_root_or_admin,
     should_expose_user_key,
@@ -138,6 +138,8 @@ class ConfigPatchRequest(BaseModel):
     """
 
     settings: dict[str, Any] = Field(default_factory=dict)
+    revision: str | None = None
+    content: str | None = None
 
 
 _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
@@ -224,7 +226,7 @@ async def set_agent_evolution_status(
 
 
 def _get_api_key_manager(request: Request):
-    """Get APIKeyManager from app state."""
+    """Return API key management operations for compatibility callers."""
     return get_api_key_manager_or_raise(request)
 
 
@@ -243,21 +245,18 @@ def _check_account_access(ctx: RequestContext, account_id: str) -> None:
         raise PermissionDeniedError(f"ADMIN can only manage account: {ctx.account_id}")
 
 
-async def _check_account_exists(
-    request: Request, account_id: str, *, refresh_scope: str | None = None
-):
+async def _check_account_exists(request: Request, account_id: str):
     manager = getattr(request.app.state, "api_key_manager", None)
     if manager is None:
         return None
-    watcher_running = registry_watcher_running(request)
-    if not watcher_running:
-        await manager.refresh_accounts_from_store()
-    accounts = manager.get_accounts()
-    if not any(item.get("account_id") == account_id for item in accounts):
+    account = await manager.get_account(account_id)
+    if account is None:
         raise NotFoundError(account_id, "account")
-    manager.ensure_account_active(account_id)
-    if refresh_scope is not None and not watcher_running:
-        await manager.refresh_account_users_from_store(refresh_scope)
+    if account["status"] != "active":
+        raise FailedPreconditionError(
+            "Account is not active",
+            details={"task_id": account.get("task_id")},
+        )
     return manager
 
 
@@ -340,9 +339,9 @@ async def _rollback_account_creation(
 ) -> None:
     """Compensate resources created after the account registry entry.
 
-    ``APIKeyManager.create_account`` already rolls back its own registry writes.
-    This covers the later workspace, user-config and runtime-config steps when
-    one of them fails.
+    Account creation and its initial API key are committed atomically by the
+    AccountStore. This covers the later workspace, user-config and runtime-config
+    steps when one of them fails.
     """
     if deletion_service is not None and actor is not None:
         try:
@@ -395,7 +394,7 @@ async def _check_user_exists(
     request: Request, account_id: str, user_id: str, manager=None
 ) -> None:
     manager = manager or _get_api_key_manager(request)
-    if not manager.has_user(account_id, user_id):
+    if await manager.get_user_for_management(account_id, user_id) is None:
         raise NotFoundError(user_id, "user")
 
 
@@ -516,10 +515,9 @@ async def list_accounts(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """List accounts in creation order. `name` supports wildcard (* and ?) matching."""
-    manager = _get_api_key_manager(request)
-    if not registry_watcher_running(request):
-        await manager.refresh_accounts_from_store()
-    accounts = manager.get_accounts(name_filter=name, limit=limit, page=page, query_filter=query)
+    accounts = await _get_api_key_manager(request).list_accounts(
+        name_filter=name, limit=limit, page=page, query_filter=query
+    )
     return Response(status="ok", result=accounts)
 
 
@@ -800,16 +798,109 @@ async def patch_account_configuration(
     )
 
 
+class ModelConnectionTestRequest(BaseModel):
+    kind: Literal["vlm", "embedding"]
+    config: dict[str, Any]
+    fallback: dict[str, Any] = Field(default_factory=dict)
+    thinking: bool | None = None
+    mode: Literal["dense", "sparse", "hybrid"] = "dense"
+
+
+@router.post("/configuration/test-model", include_in_schema=False)
+@require_auth_root
+async def test_model_configuration(
+    body: ModelConnectionTestRequest,
+    request: Request,
+    response: HTTPResponse,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Private Studio operation; drafts are never saved or installed at runtime."""
+    from openviking.server.model_connection_test import probe_model
+
+    response.headers["Cache-Control"] = "no-store"
+    result = await probe_model(body.kind, body.config, body.fallback, body.thinking, body.mode)
+    return Response(status="ok", result=result)
+
+
 @router.get("/configuration")
 @require_auth_root
 async def get_cluster_configuration(
     request: Request,
+    response: HTTPResponse,
+    source: str = Query("runtime", pattern="^(runtime|file)$"),
+    account_id: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Return the cluster layer's explicit runtime configuration."""
     runtime_config = _get_runtime_config_manager()
+    if source == "file":
+        from openviking.config.config_file import read_config_file
+
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            result = await asyncio.to_thread(
+                read_config_file, getattr(request.app.state, "server_config_overrides", None)
+            )
+        except (ValueError, OSError) as exc:
+            raise FailedPreconditionError(
+                "Cannot read the server startup configuration file"
+            ) from exc
+        cluster = await runtime_config.get_settings(ConfigScope.cluster())
+        account = (
+            await runtime_config.get_settings(ConfigScope.account(account_id)) if account_id else {}
+        )
+        model_kinds = ("vlm", "embedding", "query_planner", "rerank")
+        result["overrides"] = {
+            "cluster": [key for key in model_kinds if (cluster or {}).get(key) is not None],
+            "account": [key for key in model_kinds if (account or {}).get(key) is not None],
+        }
+        result["restart"] = request.app.state.restart_controller.status()
+        return Response(status="ok", result=result)
     settings = await runtime_config.get_settings(ConfigScope.cluster())
     return Response(status="ok", result={"settings": settings})
+
+
+class RestartRequest(BaseModel):
+    revision: str = Field(min_length=1)
+
+
+@router.post("/restart", status_code=202)
+@require_auth_root
+async def restart_server(
+    body: RestartRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    response: HTTPResponse,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    from openviking.config.config_file import preview_config_file, read_config_file
+
+    controller = request.app.state.restart_controller
+    server_overrides = getattr(request.app.state, "server_config_overrides", None)
+    if controller.shutdown is None:
+        raise FailedPreconditionError(
+            "Remote restart requires the single-worker openviking-server CLI"
+        )
+    async with controller.lock:
+        try:
+            config = await asyncio.to_thread(read_config_file, server_overrides)
+            if config["revision"] != body.revision:
+                raise ValueError("ov.conf changed; reload before restarting")
+            await asyncio.to_thread(preview_config_file, config["content"], {}, server_overrides)
+            if controller.recovery is not None and not controller.requested:
+                await asyncio.to_thread(controller.recovery.prepare, body.revision)
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+        except OSError as exc:
+            raise FailedPreconditionError(
+                "Cannot read the server startup configuration file"
+            ) from exc
+        # Runs after the accepted response has been sent. Uvicorn drains active
+        # requests and the CLI cleans up its managed Bot before replacing itself.
+        result = controller.request()
+        background_tasks.add_task(controller.stop)
+        response.headers["Cache-Control"] = "no-store"
+        return Response(status="ok", result=result)
 
 
 @router.patch("/configuration")
@@ -817,9 +908,42 @@ async def get_cluster_configuration(
 async def patch_cluster_configuration(
     body: ConfigPatchRequest,
     request: Request,
+    response: HTTPResponse,
+    source: str = Query("runtime", pattern="^(runtime|file)$"),
+    dry_run: bool = Query(False),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Apply a three-state PATCH to the cluster configuration layer."""
+    if dry_run and (source != "file" or body.content is None):
+        raise InvalidArgumentError("dry_run requires source=file and full file content")
+    if source == "file":
+        from openviking.config.config_file import preview_config_file, save_config_file
+
+        server_overrides = getattr(request.app.state, "server_config_overrides", None)
+        async with request.app.state.restart_controller.lock:
+            if request.app.state.restart_controller.requested:
+                raise FailedPreconditionError("Server restart is already in progress")
+            response.headers["Cache-Control"] = "no-store"
+            try:
+                if dry_run:
+                    result = await asyncio.to_thread(
+                        preview_config_file, body.content, body.settings, server_overrides
+                    )
+                else:
+                    if body.content is None or body.settings:
+                        raise ValueError("File saves require full content and no model settings")
+                    result = await asyncio.to_thread(
+                        save_config_file, body.content, body.revision or "", server_overrides
+                    )
+            except ValueError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
+            except OSError as exc:
+                raise FailedPreconditionError(
+                    "Cannot write ov.conf; check file and directory permissions"
+                ) from exc
+            return Response(status="ok", result=result)
+    if body.content is not None:
+        raise InvalidArgumentError("Full file content requires source=file")
     runtime_config = _get_runtime_config_manager()
     try:
         await runtime_config.patch_cluster(body.settings)
@@ -889,15 +1013,12 @@ async def list_users(
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
-    if not registry_watcher_running(request):
-        await manager.refresh_account_users_from_store(account_id)
-    expose_key = should_expose_user_key(request)
-    users = manager.get_users_page(
+    users = await manager.list_users_page(
         account_id,
         limit=limit,
         name_filter=name,
         role_filter=role,
-        expose_key=expose_key or not include_credentials,
+        expose_key=should_expose_user_key(request) or not include_credentials,
         page=page,
         query_filter=query,
     )
@@ -906,6 +1027,8 @@ async def list_users(
             {
                 "user_id": user["user_id"],
                 "role": user["role"],
+                # A key prefix identifies a hash-only credential, which cannot
+                # be supplied to server-side Gateway or Bot Studio bindings.
                 "api_key_available": bool(user.get("api_key")),
             }
             for user in users["users"]
@@ -923,7 +1046,7 @@ async def get_user_settings(
 ):
     """Return the configured and effective memory policy for one User."""
     _check_account_access(ctx, account_id)
-    manager = await _check_account_exists(request, account_id, refresh_scope=account_id)
+    manager = await _check_account_exists(request, account_id)
     await _check_user_exists(request, account_id, user_id, manager)
     service = get_service()
     if service.viking_fs is None:
@@ -955,7 +1078,7 @@ async def patch_user_settings(
 ):
     """Update or clear the allowlisted User memory policy without restarting."""
     _check_account_access(ctx, account_id)
-    manager = await _check_account_exists(request, account_id, refresh_scope=account_id)
+    manager = await _check_account_exists(request, account_id)
     await _check_user_exists(request, account_id, user_id, manager)
     service = get_service()
     if service.viking_fs is None:
@@ -1007,8 +1130,7 @@ async def set_user_role(
     _check_account_access(ctx, account_id)
     if body.role != Role.ADMIN:
         raise InvalidArgumentError("set_user_role only supports promotion to admin.")
-    manager = _get_api_key_manager(request)
-    await manager.set_role(account_id, user_id, Role.ADMIN)
+    await _get_api_key_manager(request).set_role(account_id, user_id, Role.ADMIN)
     return Response(
         status="ok",
         result={
@@ -1051,7 +1173,9 @@ async def create_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = await _get_api_key_manager(request).create_group(account_id, body.group_id)
+    result = await _get_api_key_manager(request).create_group(
+        account_id, body.group_id
+    )
     return Response(status="ok", result=result)
 
 
@@ -1063,9 +1187,7 @@ async def list_groups(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    manager = _get_api_key_manager(request)
-    await manager.ensure_account_groups_loaded(account_id)
-    result = manager.get_groups(account_id)
+    result = await _get_api_key_manager(request).get_groups(account_id)
     return Response(status="ok", result=result)
 
 
@@ -1091,9 +1213,9 @@ async def list_group_members(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    manager = _get_api_key_manager(request)
-    await manager.ensure_account_groups_loaded(account_id)
-    members = manager.get_group_members(account_id, group_id)
+    members = await _get_api_key_manager(request).get_group_members(
+        account_id, group_id
+    )
     return Response(status="ok", result={"group_id": group_id, "members": members})
 
 
@@ -1107,7 +1229,9 @@ async def add_group_member(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    added = await _get_api_key_manager(request).add_group_member(account_id, group_id, user_id)
+    added = await _get_api_key_manager(request).add_group_member(
+        account_id, group_id, user_id
+    )
     return Response(status="ok", result={"added": added})
 
 
@@ -1121,5 +1245,7 @@ async def remove_group_member(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    removed = await _get_api_key_manager(request).remove_group_member(account_id, group_id, user_id)
+    removed = await _get_api_key_manager(request).remove_group_member(
+        account_id, group_id, user_id
+    )
     return Response(status="ok", result={"removed": removed})

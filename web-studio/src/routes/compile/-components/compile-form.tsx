@@ -7,6 +7,7 @@ import { Link, useNavigate, useBlocker } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { isOvClientError } from '#/lib/ov-client'
+import { createRandomUuid } from '#/lib/browser-crypto'
 import { FolderOpen, Plus, X } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -258,7 +259,7 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
       const body = submission.current?.request || request()
       if (!submission.current)
         submission.current = {
-          key: recoverKey || `${Date.now()}:${crypto.randomUUID()}`,
+          key: recoverKey || `${Date.now()}:${createRandomUuid()}`,
           request: body,
         }
       const key = submission.current.key

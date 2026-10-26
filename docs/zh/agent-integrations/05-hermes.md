@@ -27,15 +27,15 @@ hermes
 - **Quick Local** 安装本地服务和 embedding 模型，复用受支持的 Hermes LLM 抽取记忆。
   LLM 仍可使用远程 API。
 - **OpenViking Service (VolcEngine Cloud)** 通过服务 API Key 连接火山引擎的
-  [OpenViking 托管云服务](https://www.volcengine.com/product/openviking-service)，
+  [OpenViking 托管云服务](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)，
   无需安装服务端或配置本地模型。
 - **Custom** 使用 URL 和凭据连接自己的服务，也可以复用已保存的 `ovcli.conf`。
 
 配置后正常聊天即可。插件默认在待提交内容达到 20,000 tokens、会话结束或切换时
 请求提交。OpenViking 完成抽取后，记忆才能被召回。已有服务端数据会保留。
 
-Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和已知本地
-embedding 问题见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
+Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和运行环境
+升级说明见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
 
 ## 查看状态
 

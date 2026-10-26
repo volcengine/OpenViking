@@ -13,7 +13,9 @@ from .common import (
     ToolLoopError,
     ToolProtocol,
     ToolRound,
+    append,
     call,
+    merge_usage,
     strip_notices,
 )
 
@@ -25,10 +27,7 @@ class AnthropicProtocol(ToolProtocol):
     summary_drops = ("stop_sequences", "output_config.format")
     reply_ends = frozenset({"end_turn", "stop_sequence", "tool_use"})
     signed_thinking = True
-
-    @staticmethod
-    def auth_header(key):
-        return {"x-api-key": key}
+    usage_excludes_cache = True
 
     @staticmethod
     def thinking_as_text(message):
@@ -153,7 +152,7 @@ class AnthropicProtocol(ToolProtocol):
         kind = value.get("type")
         if kind == "message_start":
             self.envelope = copy.deepcopy(value["message"])
-            self.usage.update(self.envelope.get("usage") or {})
+            merge_usage(self.usage, self.envelope.get("usage") or {})
             self.opened = True
         elif kind == "content_block_start":
             self.blocks[value["index"]] = copy.deepcopy(value["content_block"])
@@ -161,11 +160,11 @@ class AnthropicProtocol(ToolProtocol):
             index, delta = value["index"], value["delta"]
             block = self.blocks[index]
             if "partial_json" in delta:
-                self.arguments[index] = self.arguments.get(index, "") + delta["partial_json"]
+                append(self.arguments, index, delta["partial_json"])
             else:
                 for key in ("text", "thinking", "signature"):
                     if key in delta:
-                        block[key] = block.get(key, "") + delta[key]
+                        append(block, key, delta[key])
                 if delta.get("type") == "citations_delta":
                     block.setdefault("citations", []).append(copy.deepcopy(delta["citation"]))
         elif kind == "content_block_stop":
@@ -177,7 +176,7 @@ class AnthropicProtocol(ToolProtocol):
         elif kind == "message_delta":
             self.finish = value.get("delta", {}).get("stop_reason") or self.finish
             self.envelope.update(value.get("delta", {}))
-            self.usage.update(value.get("usage") or {})
+            merge_usage(self.usage, value.get("usage") or {})
         elif kind == "message_stop":
             self.stopped = True
 

@@ -1,27 +1,40 @@
+import {
+  resolveApiKeyAuth,
+  createConnectionHealthHeaders,
+} from '#/lib/connection/auth'
 import * as React from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 
 import i18n from '#/i18n'
+import { identifyServiceProvider } from '#/lib/studio-service'
 import { fetchAdminAccounts } from '#/lib/admin'
 import { isOvClientError, ovClient } from '#/lib/ov-client'
+import {
+  readConnectionProfiles,
+  persistConnectionProfiles,
+  updateActiveProfile,
+  normalizeProfileConnection,
+  isValidConnectionUrl,
+} from '#/lib/connection/profiles'
+import type {
+  ConnectionProfile,
+  ConnectionProfiles,
+} from '#/lib/connection/profiles'
 
 import {
-  detectServerMode,
+  resolveServerAuthMode,
+  resetServerHealthCache,
   fetchServerHealth,
   normalizeBaseUrl,
-} from './use-server-mode'
-import type { ServerMode } from './use-server-mode'
+  readServerIdentity,
+} from '#/lib/connection/health'
+import type { ServerMode } from '#/lib/connection/health'
 
-export type ConnectionRole = 'admin' | 'root' | 'unknown' | 'user'
+import type { ConnectionDraft, ConnectionRole } from '#/lib/connection/types'
 
-export type ConnectionDraft = {
-  accountId: string
-  adminApiKey: string
-  apiKey: string
-  baseUrl: string
-  userId: string
-}
+export type { ConnectionDraft, ConnectionRole } from '#/lib/connection/types'
+export { createConnectionHealthHeaders } from '#/lib/connection/auth'
 
 export type ConnectionIdentitySummary = {
   labelKey: string
@@ -37,13 +50,22 @@ export type GeneratedCredential = {
 }
 
 type AppConnectionContextValue = {
+  profiles: Array<ConnectionProfile>
+  activeProfileId: string
+  saveProfile: (profile: ConnectionProfile) => void
+  activateProfile: (id: string) => void
+  deleteProfile: (id: string) => void
   clearGeneratedCredential: () => void
   connection: ConnectionDraft
   connectionRole: ConnectionRole
   generatedCredential: GeneratedCredential | null
   identityScopeKey: string
   isConnectionRoleLoading: boolean
+  isGatewayHost: boolean
+  openvikingUrl: string
   openConnectionSettings: () => void
+  reconnect: () => void
+  serverHealth: Record<string, unknown> | null
   saveConnection: (next: ConnectionDraft) => void
   setGeneratedCredential: (credential: GeneratedCredential) => void
   serverMode: ServerMode
@@ -66,6 +88,12 @@ type ConnectionErrorKey =
 
 export function createConnectionError(key: ConnectionErrorKey): Error {
   return new Error(i18n.t(`connection:errors.${key}`))
+}
+
+function connectionChangedError(): Error & { code: 'connectionChanged' } {
+  return Object.assign(new Error(i18n.t('studio:profiles.connectionChanged')), {
+    code: 'connectionChanged' as const,
+  })
 }
 
 const ENV_BASE_URL =
@@ -151,6 +179,11 @@ function normalizeConnectionDraft(
   connection: ConnectionDraft,
 ): ConnectionDraft {
   return {
+    serviceSelection:
+      connection.serviceSelection === 'opensource' ||
+      connection.serviceSelection === 'volcengine'
+        ? connection.serviceSelection
+        : 'auto',
     accountId: connection.accountId.trim(),
     adminApiKey: connection.adminApiKey.trim(),
     apiKey: connection.apiKey.trim(),
@@ -158,7 +191,7 @@ function normalizeConnectionDraft(
     // slash here ran on every keystroke and fought the input: typing the "//"
     // of "http://" kept collapsing back to "http:". Trailing slashes are
     // stripped where the URL is actually used instead (ovClient.setOptions,
-    // detectServerMode, detectConnectionRole, and the admin client).
+    // fetchServerHealth, detectConnectionRole, and the admin client).
     baseUrl: connection.baseUrl.trim(),
     userId: connection.userId.trim(),
   }
@@ -180,6 +213,7 @@ export function createIdentityScopeKey(
   const dataKey = connection.apiKey || connection.adminApiKey
   return [
     normalizeBaseUrl(connection.baseUrl),
+    connection.serviceSelection ?? 'auto',
     serverMode,
     connection.accountId,
     connection.userId,
@@ -193,6 +227,7 @@ export function createConnectionRoleProbeKey(
 ): string {
   return [
     normalizeBaseUrl(connection.baseUrl),
+    connection.serviceSelection ?? 'auto',
     serverMode,
     connection.accountId,
     connection.userId,
@@ -225,17 +260,13 @@ export function resolveInitialApiKey({
 }
 
 export function resolveConnectionRoleProbeState({
-  accountId = '',
   apiKey,
   baseUrl,
   serverMode,
-  userId = '',
 }: {
-  accountId?: string
   apiKey: string
   baseUrl: string
   serverMode: ServerMode
-  userId?: string
 }): {
   isLoading: boolean
   role: ConnectionRole
@@ -250,9 +281,7 @@ export function resolveConnectionRoleProbeState({
   if (serverMode === 'dev') {
     return { isLoading: false, role: 'root', shouldProbe: false }
   }
-  const hasTrustedIdentity =
-    serverMode === 'trusted' && Boolean(accountId.trim() && userId.trim())
-  if (!apiKey && !hasTrustedIdentity) {
+  if (!apiKey) {
     return { isLoading: false, role: 'unknown', shouldProbe: false }
   }
   return { isLoading: true, role: 'unknown', shouldProbe: true }
@@ -278,12 +307,16 @@ function applyConnection(
 ): void {
   ovClient.setOptions({
     baseUrl: connection.baseUrl,
+    apiKeyAuth: resolveApiKeyAuth(
+      connection.baseUrl,
+      connection.serviceSelection,
+    ),
   })
   ovClient.setConnection({
     accountId: connection.accountId,
     adminApiKey: connection.adminApiKey,
     apiKey: connection.apiKey,
-    identityHeaders: serverMode === 'trusted',
+    identityHeaders: serverMode === 'trusted' || serverMode === 'dev',
     userId: connection.userId,
   })
 }
@@ -307,29 +340,12 @@ type ConnectionIdentity = {
   userId: string
 }
 
-function createConnectionHealthHeaders(
-  connection: ConnectionDraft,
-  credential: 'control' | 'data' = 'control',
-): Record<string, string> {
-  const headers: Record<string, string> = {}
-  const apiKey =
-    credential === 'data'
-      ? connection.apiKey || connection.adminApiKey
-      : connection.adminApiKey || connection.apiKey
-  if (apiKey) {
-    headers['X-API-Key'] = apiKey
-  }
-  if (connection.accountId) {
-    headers['X-OpenViking-Account'] = connection.accountId
-  }
-  if (connection.userId) {
-    headers['X-OpenViking-User'] = connection.userId
-  }
-  return headers
-}
-
 async function canListAccounts(connection: ConnectionDraft): Promise<boolean> {
-  if (!connection.adminApiKey) {
+  if (
+    !connection.adminApiKey ||
+    identifyServiceProvider(connection.baseUrl) === 'volcengine' ||
+    connection.serviceSelection === 'volcengine'
+  ) {
     return false
   }
 
@@ -371,9 +387,8 @@ async function detectConnectionIdentity(
       : healthRole
 
   return {
-    accountId: typeof data.account_id === 'string' ? data.account_id : '',
+    ...readServerIdentity(data),
     role,
-    userId: typeof data.user_id === 'string' ? data.user_id : '',
   }
 }
 
@@ -422,7 +437,11 @@ export function resolveSwitchedIdentity(
 export function createManagementAccountConnection(
   connection: ConnectionDraft,
   accountId: string,
+  isGatewayHost = false,
 ): ConnectionDraft {
+  if (isGatewayHost) {
+    return { ...connection, accountId: accountId.trim() }
+  }
   return {
     ...connection,
     accountId: accountId.trim(),
@@ -486,6 +505,7 @@ export function summarizeConnectionIdentity(
 export function useAppConnection(): AppConnectionContextValue {
   const context = React.useContext(AppConnectionContext)
   if (!context) {
+    // eslint-disable-next-line studio-i18n/no-literal-message -- Developer invariant; retain the diagnostic for debugging.
     throw new Error(
       'useAppConnection must be used within AppConnectionProvider.',
     )
@@ -501,19 +521,42 @@ export function AppConnectionProvider({
 }) {
   const queryClient = useQueryClient()
   const authPromptSuppressedUntilRef = React.useRef(0)
+  const connectionRevisionRef = React.useRef(0)
+  const connectionGenerationRef = React.useRef(0)
+  const hostDiscoveryRef = React.useRef<Promise<Record<
+    string,
+    unknown
+  > | null> | null>(null)
   const navigate = useNavigate()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
   const initialConnectionRef = React.useRef<ConnectionDraft | null>(null)
+  const profilesRef = React.useRef<ConnectionProfiles | null>(null)
   const synchronizedRoleProbeRef = React.useRef<{
     key: string
     role: ConnectionRole
   } | null>(null)
   if (initialConnectionRef.current === null) {
-    initialConnectionRef.current = readInitialConnection()
+    // The provider remounts after /config. Filesystem query keys are shared
+    // across profiles, so discard results fetched under the previous identity
+    // before any workspace route can read them.
+    queryClient.clear()
+    profilesRef.current = readConnectionProfiles(readInitialConnection())
+    initialConnectionRef.current = normalizeConnectionDraft(
+      profilesRef.current.profiles.find(
+        (p) => p.id === profilesRef.current!.activeId,
+      )!.connection,
+    )
     applyConnection(initialConnectionRef.current, 'checking')
   }
+
+  const [profileState, setProfileState] = React.useState(profilesRef.current!)
+  const storeProfiles = React.useCallback((next: ConnectionProfiles) => {
+    profilesRef.current = next
+    persistConnectionProfiles(next)
+    setProfileState(next)
+  }, [])
 
   const [connection, setConnection] = React.useState<ConnectionDraft>(
     initialConnectionRef.current,
@@ -529,6 +572,26 @@ export function AppConnectionProvider({
       ),
   )
   const [serverMode, setServerMode] = React.useState<ServerMode>('checking')
+  const [serverHealth, setServerHealth] = React.useState<{
+    key: string
+    data: Record<string, unknown>
+  } | null>(null)
+  const [connectionAttempt, setConnectionAttempt] = React.useState(0)
+  const reconnect = React.useCallback(() => {
+    connectionRevisionRef.current += 1
+    authPromptSuppressedUntilRef.current =
+      Date.now() + AUTH_PROMPT_SUPPRESSION_MS
+    synchronizedRoleProbeRef.current = null
+    resetServerHealthCache()
+    setServerHealth(null)
+    setServerMode('checking')
+    setConnectionRole('unknown')
+    setConnectionRoleLoading(true)
+    queryClient.clear()
+    setConnectionAttempt((attempt) => attempt + 1)
+  }, [queryClient])
+  const [isGatewayHost, setIsGatewayHost] = React.useState(false)
+  const [openvikingUrl, setOpenvikingUrl] = React.useState('')
   const [generatedCredential, setGeneratedCredential] =
     React.useState<GeneratedCredential | null>(null)
 
@@ -544,17 +607,91 @@ export function AppConnectionProvider({
   }, [connection, serverMode])
 
   React.useEffect(() => {
+    storeProfiles(updateActiveProfile(profilesRef.current!, connection))
+  }, [connection, storeProfiles])
+
+  React.useEffect(() => {
     let cancelled = false
 
+    const isCancelled = () => cancelled
     setServerMode('checking')
-    void detectServerMode(
-      connection.baseUrl,
-      createConnectionHealthHeaders(connection),
-    ).then((mode) => {
-      if (!cancelled) {
+    setServerHealth(null)
+    void (async () => {
+      // A standalone Studio is bound to the gateway serving /studio. Discover
+      // that host without forwarding credentials saved for another server.
+      if (
+        isBrowser() &&
+        window.location.pathname.startsWith('/studio') &&
+        normalizeBaseUrl(connection.baseUrl) !== window.location.origin
+      ) {
+        hostDiscoveryRef.current ??= fetchServerHealth(
+          window.location.origin,
+        ).catch(() => null)
+        const host = await hostDiscoveryRef.current
+        if (isCancelled()) return
+        if (host?.service === 'openviking-gateway') {
+          setIsGatewayHost(true)
+          setOpenvikingUrl(
+            typeof host.openviking_url === 'string' ? host.openviking_url : '',
+          )
+          const next = synchronizeConnectionRuntime(
+            {
+              ...connection,
+              serviceSelection: 'opensource',
+              baseUrl: window.location.origin,
+              apiKey: '',
+              adminApiKey: '',
+              accountId: 'default',
+              userId: 'default',
+            },
+            'checking',
+          )
+          queryClient.clear()
+          connectionGenerationRef.current += 1
+          setConnection(next)
+          return
+        }
+      }
+      let health: Record<string, unknown>
+      try {
+        // The gateway answers an invalid OV key with health minus identity.
+        health = await fetchServerHealth(
+          connection.baseUrl,
+          createConnectionHealthHeaders(connection, 'data'),
+        )
+      } catch {
+        if (!isCancelled()) setServerMode('offline')
+        return
+      }
+      if (!isCancelled()) {
+        setIsGatewayHost(health.service === 'openviking-gateway')
+        setOpenvikingUrl(
+          typeof health.openviking_url === 'string'
+            ? health.openviking_url
+            : '',
+        )
+        const mode = resolveServerAuthMode(health)
+        const resolved = synchronizeResolvedDataIdentity(connection, {
+          accountId:
+            typeof health.account_id === 'string' ? health.account_id : '',
+          userId: typeof health.user_id === 'string' ? health.user_id : '',
+          role: isConnectionRole(health.role) ? health.role : 'unknown',
+        })
+        const next = resolved
+          ? synchronizeConnectionRuntime(resolved, mode)
+          : connection
+        if (resolved) {
+          queryClient.clear()
+          connectionGenerationRef.current += 1
+          setConnection(next)
+        }
+        setServerHealth({
+          key: createConnectionRoleProbeKey(next, 'checking'),
+          data: health,
+        })
         setServerMode(mode)
       }
-    })
+    })()
 
     return () => {
       cancelled = true
@@ -564,7 +701,10 @@ export function AppConnectionProvider({
     connection.adminApiKey,
     connection.apiKey,
     connection.baseUrl,
+    connection.serviceSelection,
     connection.userId,
+    connectionAttempt,
+    queryClient,
   ])
 
   React.useEffect(() => {
@@ -572,11 +712,9 @@ export function AppConnectionProvider({
     const isCancelled = () => cancelled
     const apiKey = connection.adminApiKey || connection.apiKey
     const roleProbe = resolveConnectionRoleProbeState({
-      accountId: connection.accountId,
       apiKey,
       baseUrl: connection.baseUrl,
       serverMode,
-      userId: connection.userId,
     })
     const probeKey = createConnectionRoleProbeKey(connection, serverMode)
     const synchronizedProbe = synchronizedRoleProbeRef.current
@@ -599,37 +737,16 @@ export function AppConnectionProvider({
     }
 
     void detectConnectionIdentity(connection)
+      .catch(() => ({
+        accountId: '',
+        role: 'unknown' as const,
+        userId: '',
+      }))
       .then(async (controlIdentity) => {
         if (isCancelled()) {
           return
         }
-        const dataIdentity =
-          connection.apiKey &&
-          (controlIdentity.role === 'root' ||
-            (controlIdentity.role === 'admin' &&
-              controlIdentity.accountId === connection.accountId))
-            ? await detectConnectionIdentity(connection, 'data')
-            : !connection.adminApiKey
-              ? controlIdentity
-              : null
-        if (isCancelled()) {
-          return
-        }
-
         const { accountId, role } = controlIdentity
-        const dataConnection = dataIdentity
-          ? synchronizeResolvedDataIdentity(connection, dataIdentity)
-          : null
-        if (dataConnection) {
-          const next = synchronizeConnectionRuntime(dataConnection, serverMode)
-          synchronizedRoleProbeRef.current = {
-            key: createConnectionRoleProbeKey(next, serverMode),
-            role,
-          }
-          queryClient.clear()
-          setConnection(next)
-          return
-        }
         // An account-admin Root key is scoped to its own account. Pin that
         // account as the assumed identity so admin and data calls target the
         // right tenant instead of failing with a mismatch (the server rejects
@@ -637,6 +754,8 @@ export function AppConnectionProvider({
         // key is not account-scoped, so its account selection is left intact.
         if (
           role === 'admin' &&
+          (!connection.apiKey ||
+            connection.apiKey === connection.adminApiKey) &&
           accountId &&
           connection.accountId !== accountId
         ) {
@@ -649,6 +768,7 @@ export function AppConnectionProvider({
             role,
           }
           queryClient.clear()
+          connectionGenerationRef.current += 1
           setConnection(next)
           return
         }
@@ -670,6 +790,7 @@ export function AppConnectionProvider({
     connection.adminApiKey,
     connection.apiKey,
     connection.baseUrl,
+    connection.serviceSelection,
     connection.userId,
     queryClient,
     serverMode,
@@ -695,7 +816,20 @@ export function AppConnectionProvider({
   }, [openConnectionSettings])
 
   const value = React.useMemo<AppConnectionContextValue>(() => {
+    const sourceGeneration = connectionGenerationRef.current
+    const sourceProfileId = profileState.activeId
+    const assertSourceConnection = () => {
+      if (
+        sourceGeneration !== connectionGenerationRef.current ||
+        sourceProfileId !== profilesRef.current?.activeId
+      ) {
+        throw connectionChangedError()
+      }
+    }
+
     const commitConnection = (next: ConnectionDraft) => {
+      connectionGenerationRef.current += 1
+      connectionRevisionRef.current += 1
       authPromptSuppressedUntilRef.current =
         Date.now() + AUTH_PROMPT_SUPPRESSION_MS
       const normalized = synchronizeConnectionRuntime(next, serverMode)
@@ -703,15 +837,79 @@ export function AppConnectionProvider({
       setConnection(normalized)
     }
 
+    const activateConnection = (next: ConnectionDraft) => {
+      connectionGenerationRef.current += 1
+      // Apply the new credentials before any new route effects can issue requests.
+      const normalized = synchronizeConnectionRuntime(next, 'checking')
+      reconnect()
+      setGeneratedCredential(null)
+      setConnection(normalized)
+    }
+
     return {
+      profiles: profileState.profiles,
+      activeProfileId: profileState.activeId,
+      saveProfile: (profile) => {
+        if (!isValidConnectionUrl(profile.connection.baseUrl))
+          throw new Error(i18n.t('studio:profiles.invalidUrl'))
+        const normalized = {
+          ...profile,
+          name: profile.name.trim(),
+          connection: normalizeConnectionDraft(
+            normalizeProfileConnection(profile.connection),
+          ),
+        }
+        const current = profilesRef.current!
+        const exists = current.profiles.some((p) => p.id === profile.id)
+        storeProfiles({
+          ...current,
+          profiles: exists
+            ? current.profiles.map((p) =>
+                p.id === profile.id ? normalized : p,
+              )
+            : [...current.profiles, normalized],
+        })
+        if (profile.id === current.activeId)
+          activateConnection(normalized.connection)
+      },
+      activateProfile: (id) => {
+        const current = profilesRef.current!
+        const profile = current.profiles.find((p) => p.id === id)
+        if (!profile || id === current.activeId) return
+        storeProfiles({ ...current, activeId: id })
+        activateConnection(profile.connection)
+      },
+      deleteProfile: (id) => {
+        const current = profilesRef.current!
+        if (id === current.activeId) return
+        storeProfiles({
+          ...current,
+          profiles: current.profiles.filter((p) => p.id !== id),
+        })
+      },
       clearGeneratedCredential: () => setGeneratedCredential(null),
       connection,
       connectionRole,
       generatedCredential,
-      identityScopeKey: createIdentityScopeKey(connection, serverMode),
+      identityScopeKey:
+        profileState.activeId +
+        '\u0000' +
+        createIdentityScopeKey(connection, serverMode),
       isConnectionRoleLoading,
+      isGatewayHost,
+      openvikingUrl,
       openConnectionSettings,
-      saveConnection: commitConnection,
+      reconnect,
+      serverHealth:
+        serverHealth?.key ===
+        createConnectionRoleProbeKey(connection, 'checking')
+          ? serverHealth.data
+          : null,
+      saveConnection: (next) => {
+        if (!isValidConnectionUrl(next.baseUrl))
+          throw new Error(i18n.t('studio:profiles.invalidUrl'))
+        commitConnection(normalizeProfileConnection(next))
+      },
       setGeneratedCredential,
       serverMode,
       switchIdentity: async ({
@@ -720,8 +918,16 @@ export function AppConnectionProvider({
         apiKey,
         userId,
       }) => {
+        assertSourceConnection()
         if (serverMode === 'dev' || serverMode === 'checking') {
           throw createConnectionError('identitySwitchUnsupported')
+        }
+
+        const revision = ++connectionRevisionRef.current
+        const assertCurrentConnection = () => {
+          assertSourceConnection()
+          if (revision !== connectionRevisionRef.current)
+            throw connectionChangedError()
         }
 
         const requested = normalizeConnectionDraft({
@@ -731,6 +937,7 @@ export function AppConnectionProvider({
           userId,
         })
         const identity = await detectConnectionIdentity(requested, 'data')
+        assertCurrentConnection()
         const resolvedIdentity = resolveSwitchedIdentity(
           requested,
           identity,
@@ -740,6 +947,9 @@ export function AppConnectionProvider({
           throw createConnectionError('credentialMismatch')
         }
 
+        if (pathname === '/directory' || pathname === '/memories') {
+          await navigate({ replace: true, to: pathname })
+        }
         if (pathname === '/filesystem') {
           await navigate({
             replace: true,
@@ -747,29 +957,41 @@ export function AppConnectionProvider({
             to: '/filesystem',
           })
         }
+        assertCurrentConnection()
         commitConnection({
           ...requested,
           ...resolvedIdentity,
         })
       },
       switchManagementAccount: async (accountId) => {
+        assertSourceConnection()
         if (connectionRole !== 'root') {
           throw createConnectionError('rootRequired')
         }
         commitConnection(
-          createManagementAccountConnection(connection, accountId),
+          createManagementAccountConnection(
+            connection,
+            accountId,
+            isGatewayHost,
+          ),
         )
       },
     }
   }, [
     connection,
+    profileState,
+    storeProfiles,
     connectionRole,
     generatedCredential,
     isConnectionRoleLoading,
+    isGatewayHost,
+    openvikingUrl,
     navigate,
     openConnectionSettings,
     pathname,
     queryClient,
+    reconnect,
+    serverHealth,
     serverMode,
   ])
 

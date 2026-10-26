@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import base64
 import contextvars
+import dataclasses
 import os
+import shlex
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import wraps
@@ -49,6 +51,7 @@ from openviking.core.uri_validation import (
     validate_request_viking_uri,
 )
 from openviking.parse.mode import ParseMode, normalize_parse_mode
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.context_assembler import (
     DEFAULT_MAX_TOKENS,
@@ -62,12 +65,12 @@ from openviking.server.auth import (
     _extract_api_key,
     get_api_key_manager_or_raise,
     normalize_actor_peer_header,
-    registry_watcher_running,
     resolve_identity,
     should_expose_user_key,
 )
 from openviking.server.dependencies import get_server_config, get_service
-from openviking.server.identity import RequestContext, Role
+from openviking.server.error_mapping import map_exception
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.local_input_guard import (
     TEMP_FILE_ID_RE,
     is_remote_resource_source,
@@ -77,7 +80,7 @@ from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.routers.search import context_only_fields_error
 from openviking.server.skill_ingest import install_skills
 from openviking.server.temp_upload_store import TempUploadStore
-from openviking.server.upload_token_store import upload_token_store
+from openviking.server.upload_token_store import download_token_store, upload_token_store
 from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.storage.acl import AclSpec
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
@@ -200,7 +203,7 @@ class _IdentityASGIMiddleware:
             actor_peer_id = normalize_actor_peer_header(
                 request.headers.get("x-openviking-actor-peer")
             )
-            ctx = _build_request_context(
+            ctx = await _build_request_context(
                 request,
                 identity,
                 actor_peer_id=actor_peer_id,
@@ -373,9 +376,7 @@ async def list_users(
     if include_credentials and not should_expose_user_key(request):
         raise PermissionDeniedError("Credential disclosure is disabled in trusted auth mode")
     manager = get_api_key_manager_or_raise(request)
-    if not registry_watcher_running(request):
-        await manager.refresh_account_users_from_store(ctx.account_id)
-    result = manager.get_users_page(
+    result = await manager.list_users_page(
         ctx.account_id,
         limit=limit,
         page=page,
@@ -397,10 +398,8 @@ async def list_groups(context: Context) -> dict[str, Any]:
     """
     ctx = _get_ctx()
     manager = get_api_key_manager_or_raise(context.request_context.request)
-    await manager.ensure_account_groups_loaded(ctx.account_id)
-    return {
-        "groups": [{"group_id": group["group_id"]} for group in manager.get_groups(ctx.account_id)]
-    }
+    groups = await manager.get_groups(ctx.account_id)
+    return {"groups": [{"group_id": group["group_id"]} for group in groups]}
 
 
 @_mcp_error_results()
@@ -840,10 +839,9 @@ def _mcp_media_download_hint(uri: str) -> str:
     """Return actionable fallbacks when media cannot be inlined."""
     path = uri.split("#", 1)[0].split("?", 1)[0]
     filename = PurePosixPath(path).name or "download"
-    encoded_uri = quote(uri, safe="")
     return (
-        f'Use `ov get "{uri}" "./{filename}"` or GET '
-        f"`/api/v1/content/download?uri={encoded_uri}` to fetch the original file."
+        f'Call the download tool with uri="{uri}" for a temporary curl-able URL, '
+        f'or use `ov get "{uri}" "./{filename}"` to fetch the original file.'
     )
 
 
@@ -995,6 +993,110 @@ async def read(
     if results and all(isinstance(result, _MCPToolFailure) for result in results):
         return _mcp_failure(combined)
     return combined
+
+
+# -- download --------------------------------------------------------------
+
+
+def _human_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    value = size / 1024
+    for unit in ("KB", "MB"):
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+async def download(uri: str) -> str:
+    """Get a short-lived URL for downloading the original bytes of one file (any type, including PDF, images, archives, audio and video). It does not return the content; use `read` to read text. Fetch the URL with `curl -fL -o <local path> <url>`; no OpenViking API key is needed. The link works once and expires in about 10 minutes; call download again for a new link. Directories are not supported: use `list` or `tree` and download files one at a time."""
+    service = get_service()
+    ctx = _get_ctx()
+    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+    server_config = get_server_config()
+    stat_ctx = ctx
+    if (
+        server_config is not None
+        and server_config.get_effective_auth_mode() != AuthMode.API_KEY.value
+        and ctx.role != Role.USER
+    ):
+        # Outside API-key mode the token fetch runs as USER, so check with that authority.
+        stat_ctx = dataclasses.replace(ctx, role=Role.USER)
+    try:
+        stat = await service.fs.stat(resolved_uri, ctx=stat_ctx, skip_count=True)
+    except AGFSNotFoundError as exc:
+        raise NotFoundError(resolved_uri, "file") from exc
+    except AGFSClientError as exc:
+        mapped = map_exception(exc, resource=resolved_uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from exc
+        raise
+    if stat.get("isDir"):
+        return _mcp_failure(
+            f"Cannot download {uri}: URI points to a directory. Downloads are per-file: "
+            "use the list or tree tool to find files and download them one at a time."
+        )
+
+    ttl_seconds = (
+        server_config.upload_signed_ttl_seconds
+        if server_config is not None
+        else _DEFAULT_UPLOAD_TTL_SECONDS
+    )
+    token, expires_at = download_token_store.issue(
+        ctx.user.account_id,
+        ctx.user.user_id,
+        ttl_seconds=ttl_seconds,
+        role=ctx.role,
+        from_oauth=ctx.from_oauth,
+        actor_peer_id=ctx.actor_peer_id or "",
+        uri=resolved_uri,
+    )
+    base_url, url_source = _resolve_public_base_url()
+    download_url = f"{base_url}/api/v1/content/download?token={quote(token, safe='')}"
+    expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
+    minutes = max(1, ttl_seconds // 60)
+    filename = stat.get("name") or PurePosixPath(resolved_uri).name or "download"
+    size = stat.get("size")
+    details = (
+        f"{filename}, {_human_size(size)}"
+        if isinstance(size, int) and not isinstance(size, bool) and size >= 0
+        else filename
+    )
+
+    prose = (
+        f"Download link for {resolved_uri} ({details}):\n"
+        "\n"
+        f"  curl -fL -o {shlex.quote('./' + filename)} {shlex.quote(download_url)}\n"
+        "\n"
+        "Choose any local path for -o. The URL's token authorizes this one download against "
+        "OpenViking itself (no OpenViking API key needed). It works once: if the fetch fails, "
+        "call download again for a new link.\n"
+        "\n"
+        "If the OpenViking server sits behind a private gateway or reverse proxy that "
+        "requires extra request headers (e.g. `openviking_name`, tenant/vault headers, "
+        "or a gateway API key), those headers are enforced on every request including "
+        "this download — replay the same headers you use for MCP calls when fetching the "
+        "file. A gateway rejection typically looks like HTTP 400/401/403 before the "
+        "token is even checked.\n"
+        "\n"
+        f"This download URL expires in ~{minutes} minutes ({expires_iso})."
+    )
+
+    if url_source not in ("env", "config"):
+        prose += (
+            "\n\n"
+            "Note for the user: this download URL was auto-detected from the incoming "
+            "request because OPENVIKING_PUBLIC_BASE_URL is not set on the server. "
+            "If the download fails (connection refused, wrong host, TLS error), ask the "
+            "server operator to set OPENVIKING_PUBLIC_BASE_URL to the agent-facing "
+            "URL of the OpenViking server (e.g. via docker-compose `environment:` "
+            "or systemd unit) and retry."
+        )
+
+    return prose
 
 
 # -- list ------------------------------------------------------------------
@@ -1173,7 +1275,7 @@ async def remember(messages: list[StoreMessage]) -> str:
     service = get_service()
     ctx = _get_ctx()
     session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
-    session = await service.sessions.get(session_id, ctx, auto_create=True)
+    session = await service.sessions.open(session_id, ctx, auto_create=True)
     added = 0
     for msg in messages:
         if msg.content:
@@ -1205,15 +1307,14 @@ async def write(
     content: str,
     mode: Literal["replace", "append", "create"] = "replace",
     wait: bool = False,
-    timeout: Optional[float] = None,
     acl: Optional[AclSpec] = None,
 ) -> str:
     """Write text to a viking:// file. Use this for files you author yourself (notes, profiles, state), the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite. To store a file, document, URL, or repo the user gives you, use add_resource; for a skill, use add_skill. Do not copy its text into a file here instead.
 
     - mode="replace" (default): overwrite the file; creates it and any missing parent directories if needed.
-    - mode="create": fail if the file already exists.
-    - Any new file (whether created by "replace" or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
-    - mode="append": append to the end of an existing file; fails if the file does not exist.
+    - mode="create": compatibility alias for replace; overwrite an existing file or create it if missing.
+    - Any new file (whether created by "replace", "append", or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
+    - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL
       requires manage on the target, or its parent for a new file. Omit to preserve
@@ -1225,19 +1326,9 @@ async def write(
     ctx = _get_ctx()
     uri = _resolve_mcp_workspace_uri(uri, ctx)
 
-    try:
-        result = await service.fs.write(
-            uri=uri, content=content, ctx=ctx, mode=mode, wait=wait, timeout=timeout, acl=acl
-        )
-    except NotFoundError:
-        if mode != "replace":
-            raise
-        # Replace doubles as create-or-overwrite so agents can save a new file
-        # without first checking whether it exists; strict creation stays
-        # available via mode="create".
-        result = await service.fs.write(
-            uri=uri, content=content, ctx=ctx, mode="create", wait=wait, timeout=timeout, acl=acl
-        )
+    result = await service.fs.write(
+        uri=uri, content=content, ctx=ctx, mode=mode, wait=wait, acl=acl
+    )
     written = result.get("written_bytes", 0)
     message = (
         f"Wrote {written} bytes to {result.get('uri', uri)} (mode={result.get('mode', mode)})."
@@ -1253,7 +1344,6 @@ async def edit(
     new_string: str,
     replace_all: bool = False,
     wait: bool = False,
-    timeout: Optional[float] = None,
 ) -> str:
     """Replace an exact string with new text in an existing viking:// file. Use this for targeted changes instead of rewriting the whole file with the write tool. old_string must match the file's current content exactly, including indentation and newlines; use the read tool first to see it. The edit fails and the file is left unchanged if old_string is not found, or if it matches more than once and replace_all is false (pass more surrounding context to make it unique, or set replace_all=true to replace every occurrence). Pass new_string="" to delete old_string.
 
@@ -1289,9 +1379,7 @@ async def edit(
     updated = current.replace(old_string, new_string)
     if updated == current:
         return f"No changes: {uri} already matches the requested edit."
-    result = await service.fs.write(
-        uri=uri, content=updated, ctx=ctx, mode="replace", wait=wait, timeout=timeout
-    )
+    result = await service.fs.write(uri=uri, content=updated, ctx=ctx, mode="replace", wait=wait)
     written = result.get("written_bytes", 0)
     message = f"Edited {result.get('uri', uri)} ({written} bytes written)."
     return message + _indexing_hint(result)
@@ -1439,11 +1527,22 @@ async def add_resource(
     resource and never becomes an installed skill. Copying a source's text into a file with
     write instead skips parsing and stores a plain file.
 
+    Preserve the existing Resource layout and account policy. Resource directory rules do not
+    apply to Memory, which is organized by the memory extraction system. Keep one stable root
+    per source; use ``parent`` for a new source and exact ``to`` for an in-place refresh.
+    Inspect the target space with ``list``/``tree`` before adding when practical and reuse its
+    existing directories; never create a synonymous category (e.g. ``documents/``, ``pdfs/``)
+    when one already fits. For a new category prefer the conventional names ``repos/``,
+    ``docs/``, ``sites/``, ``datasets/``, ``media/``, ``artifacts/``,
+    ``projects/<name>/`` for a multi-category project, or another plural domain noun for entity
+    collections (``items/``, ``people/``).
+
     Where it goes: ``viking://resources/`` is shared with the whole account and is the
     default when ``to`` and ``parent`` are empty (unless a default add target is
     configured). ``viking://~/resources/`` is the caller's own resources, visible only to
-    them; pass ``parent="viking://~/resources"`` to store it there. If the user has not
-    said, ask whether the resource is personal or shared with the account.
+    them. If visibility cannot be inferred, prefer the current identity's
+    ``parent="viking://~/resources/inbox"`` and report that choice; never silently put
+    identity-private material in the shared root.
 
     Remote URL: pass ``path`` as an http(s)://, git@, ssh://, or git:// URL. A sitemap /
     RSS / Atom URL ingests the WHOLE site as one resource tree; pass ``args={"site": true}``
@@ -1470,12 +1569,13 @@ async def add_resource(
             "vectors_only" to skip semantic understanding and only build vector indexes.
         to: Exact final URI including the leaf name (e.g.
             "viking://resources/volcengine/OpenViking", or
-            "viking://~/resources/OpenViking" for a personal copy). Written verbatim; an existing
+            "viking://~/resources/OpenViking" for an identity-private copy). Written verbatim; an existing
             target is synced to match the new source, so visible entries it does not
             contain are deleted. Required when ``add_type`` is set.
-        parent: Existing directory to store the resource under, for remote or
+        parent: Directory to store the resource under, for remote or
             local-file imports (e.g. "viking://~/resources" or "viking://resources");
-            the leaf name comes from the source. Never overwrites
+            missing directories are created automatically. The leaf name comes from the source.
+            Never overwrites
             — a collision reserves the next free name ("name_1", "name_2", ...) and
             returns a warning. Mutually exclusive with ``to``; not supported when
             ``add_type`` is set. Leaving both empty derives the directory and the name
@@ -1596,6 +1696,7 @@ async def add_resource(
                 add_type=add_type or None,
                 to=to or None,
                 parent=parent or None,
+                create_parent=bool(parent),
                 reason=description,
                 wait=False,
                 watch_interval=watch_interval,

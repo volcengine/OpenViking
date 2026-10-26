@@ -32,6 +32,7 @@ from .profile import build_profile
 from .protocols import (
     classify,
     clean_text,
+    client_openviking_tools,
     is_user,
     plugin_present,
     prefix_chain,
@@ -45,8 +46,8 @@ from .records import RecordKind as K
 from .state_store import get_state
 from .storage import KernelStore, digest
 from .tool_catalog import reply_block_reason, select_tools, tool_block_reason
-from .tool_protocols import hidden_chain, replay_hidden, tool_protocol
-from .tool_protocols.common import SummaryError
+from .tool_protocols import hidden_chain, replay_hidden, reply_chain, tool_protocol
+from .tool_protocols.common import PREFIX, SummaryError
 from .vendors import parameter_fingerprint
 from .windows import remind, status_line
 
@@ -209,18 +210,41 @@ class MemoryKernel:
             scope, sid, list(dict.fromkeys(["", *chain, *body_chain])), ancestors
         )
         plugin = plugin_present(body, headers)
-        root = await self.session_root(
-            records, scope, sid, body, protocol, upstream, policy, credential, plugin
-        )
+        root = await self.session_root(records, scope, sid, body, upstream, policy, credential)
         upstream = next((u for u in upstreams if u["id"] == root["upstream_id"]), upstream)
         policy = Policy.model_validate(root["policy"])
         kind, anchor = classify(body, headers, messages)
+        if body.get("tools"):
+            if (K.CLIENT_TOOLS, "") not in records:
+                await self.store.replay.put(scope, sid, K.CLIENT_TOOLS, "", {})
+        elif (
+            kind == "user"
+            and (K.CLIENT_TOOLS, "") in records
+            and not any(adapter.is_reply(m) for m in messages)
+        ):
+            # Clients such as Claude Code send side requests, like summarizing a fetched
+            # page, under the conversation's session header: a fresh exchange without
+            # tools. A turn of the conversation itself resends its replies.
+            kind = "auxiliary"
         disabled = (K.DISABLED, "") in records
         if plugin and not disabled:
             await self.store.replay.put(scope, sid, K.DISABLED, "", {"reason": "plugin_present"})
             disabled = True
         # A token count gets gateway tools exactly when the request it measures would.
         owner = not disabled and kind in {"user", "continuation"}
+        root = await self.session_tools(
+            records,
+            scope,
+            sid,
+            root,
+            body,
+            protocol,
+            upstream,
+            credential,
+            owner,
+            body_chain,
+            counting,
+        )
         kind = "count" if counting else kind
         result = {**body, adapter.field: [dict(m) for m in sent]}
         prepared = Prepared(
@@ -296,23 +320,9 @@ class MemoryKernel:
             result["input"] = body["input"]
         return prepared
 
-    async def session_root(
-        self, records, scope, sid, body, protocol, upstream, policy, credential, plugin
-    ):
+    async def session_root(self, records, scope, sid, body, upstream, policy, credential):
         root = records.get((K.ROOT, ""))
         if root is None:
-            # The tool list is frozen here, so a failed load leaves the session without tools.
-            tools, reason = [], ""
-            if (
-                not plugin
-                and policy.get("gateway_tools")
-                and not tool_block_reason(body, protocol, upstream)
-            ):
-                try:
-                    catalog = await self.viking.tools(credential["openviking_key"])
-                    tools = select_tools(catalog, policy)
-                except VikingError:
-                    reason = "tools_unavailable"
             root = await self.store.replay.put(
                 scope,
                 sid,
@@ -320,8 +330,6 @@ class MemoryKernel:
                 "",
                 {
                     "upstream_id": upstream["id"],
-                    "tools": tools,
-                    "tool_skip_reason": reason,
                     "policy": policy,
                     "credential_id": credential["id"],
                     "vendor": {
@@ -332,6 +340,60 @@ class MemoryKernel:
                 },
             )
         return root
+
+    async def session_tools(
+        self,
+        records,
+        scope,
+        sid,
+        root,
+        body,
+        protocol,
+        upstream,
+        credential,
+        owner,
+        body_chain,
+        counting=False,
+    ):
+        """The root with the session's gateway tools and why there are none."""
+        policy = root["policy"]
+        # A branch where the model called a gateway tool keeps the tools, so its
+        # history still replays.
+        used = any((K.HIDDEN, anchor) in records for anchor in body_chain)
+        # Sessions created before tools had their own record keep them in the root.
+        decision = records.get((K.TOOLS, "")) or (root if "tools" in root else None)
+        if decision is None:
+            # Helper requests, such as a title with structured output, often come first;
+            # the first request that could use tools decides for the session. So does
+            # one resending tool rounds, as a sub-agent in a session of its own does.
+            if not (owner or used) or not policy.get("gateway_tools"):
+                return {**root, "tools": [], "tool_skip_reason": ""}
+            if tool_block_reason(body, protocol, upstream):
+                return {**root, "tools": [], "tool_skip_reason": ""}
+            # A failed load leaves the session without tools.
+            tools, reason = [], ""
+            try:
+                tools = select_tools(await self.viking.tools(credential["openviking_key"]), policy)
+            except VikingError:
+                reason = "tools_unavailable"
+            decision = await self.store.replay.put(
+                scope, sid, K.TOOLS, "", {"tools": tools, "tool_skip_reason": reason}
+            )
+        tools, reason = decision["tools"], decision.get("tool_skip_reason", "")
+        closed = records.get((K.TOOLS_CLOSED, ""))
+        # Client OpenViking tools may appear late, as when MCP servers connect after the
+        # first turn. Until the model has called a gateway tool, they turn gateway tools
+        # off for good; the client changed its tool list then, so caches miss anyway.
+        # A token count may cover only part of the client's tools, so it never decides.
+        if tools and closed is None and owner and not counting and not used:
+            names = [t["function"]["name"].removeprefix(PREFIX) for t in tools]
+            if client_openviking_tools(body, names):
+                closed = await self.store.replay.put(
+                    scope, sid, K.TOOLS_CLOSED, "", {"reason": "tool_name_collision"}
+                )
+        if closed is not None and not used:
+            tools, reason = [], closed["reason"]
+        return {**root, "tools": tools, "tool_skip_reason": reason}
 
     @staticmethod
     def configure_tools(request, policy, owner):
@@ -346,9 +408,13 @@ class MemoryKernel:
             reason = tool_block_reason(
                 request.original, request.protocol, request.upstream, restores
             )
+            # Upstreams reject duplicate tool names, so an exact clash always skips.
             names = {t["function"]["name"] for t in tools}
             collision = any(
-                t.get("function", t).get("name") in names for t in request.original.get("tools", [])
+                isinstance(t, dict)
+                and isinstance(t.get("function", t), dict)
+                and t.get("function", t).get("name") in names
+                for t in request.original.get("tools") or []
             )
             hidden = any((K.HIDDEN, anchor) in request.records for anchor in request.body_chain)
             if reason or collision:
@@ -363,7 +429,7 @@ class MemoryKernel:
                 request.metrics["tools_tokens"] = token_estimate(
                     orjson.dumps(adapter.wire_tools(tools)).decode()
                 )
-        elif policy.gateway_tools:
+        elif policy.gateway_tools and owner:
             request.metrics["tool_skip_reason"] = (
                 tool_block_reason(request.original, request.protocol, request.upstream)
                 or request.root["tool_skip_reason"]
@@ -409,7 +475,24 @@ class MemoryKernel:
         cut = active_cut(request)
         current = [value for index, value in existing if index > cut]
         used = sum(v.get("tokens", 0) for v in current)
-        exclude = list(dict.fromkeys(u for v in current for u in v.get("uris", [])))
+        # ponytail: exclude_uris matches a whole subtree since #5627, so echoing a
+        # served directory would hide every file written under it later. A URI
+        # without a dot in its last segment is treated as a directory and echoed
+        # as its own level files, which excludes the node but not its children;
+        # an extensionless file may be served again and a dotted directory still
+        # hides its subtree. Upgrade path: a server-reported is_directory flag.
+        exclude = list(
+            dict.fromkeys(
+                x
+                for v in current
+                for u in v.get("uris", [])
+                for x in (
+                    [u]
+                    if "." in u.rsplit("/", 1)[-1]
+                    else [f"{u}/.abstract.md", f"{u}/.overview.md"]
+                )
+            )
+        )
         budget = min(policy.max_tokens, policy.session_max_tokens - used)
         query = clean_text(unwrap_client(text_content(request.messages[request.anchor])))[
             : policy.query_max_chars
@@ -565,9 +648,7 @@ class MemoryKernel:
         for text in tool_protocol(request.protocol).unsigned_thinking(output):
             await self.store.state.swap(request.scope, THINKING + digest(text), Document(), {})
         if output and request.kind in {"user", "continuation"}:
-            chain = await asyncio.to_thread(
-                hidden_chain, [*request.messages, *output], request.protocol
-            )
+            chain = reply_chain(request, output)
             request.reply_anchor = chain[-1]
             if response.finished and not request.disabled and replays_reasoning(request.upstream):
                 await self.record_reasoning(request, output, chain)
@@ -585,9 +666,7 @@ class MemoryKernel:
         if not reasoning:
             return
         if visible is not output:
-            chain = await asyncio.to_thread(
-                hidden_chain, [*request.messages, *visible], request.protocol
-            )
+            chain = reply_chain(request, visible)
             # Without its reasoning items the reply ends at another anchor; forks find it there.
             if chain[-1]:
                 await self.store.replay.put(request.scope, request.session, K.REPLY, chain[-1], {})

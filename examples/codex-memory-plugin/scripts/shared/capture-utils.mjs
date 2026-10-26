@@ -362,14 +362,41 @@ export function extractPartsFromPayload(payload, options = {}) {
   return parts;
 }
 
+function substituteValue(value, rules, role) {
+  if (typeof value === "string") {
+    let current = value;
+    for (const rule of rules) {
+      if (rule.op !== "s" || (rule.scope && rule.scope !== role)) continue;
+      current = current.replace(rule.re, rule.replacement);
+    }
+    return current;
+  }
+  if (Array.isArray(value)) return value.map((item) => substituteValue(item, rules, role));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, substituteValue(item, rules, role)]),
+    );
+  }
+  return value;
+}
+
+function substituteToolPart(part, rules, role) {
+  if (part.type !== "tool") return part;
+  const out = { ...part };
+  if (part.tool_input !== undefined) out.tool_input = substituteValue(part.tool_input, rules, role);
+  if (part.tool_output !== undefined) out.tool_output = substituteValue(part.tool_output, rules, role);
+  return out;
+}
+
 /**
  * Prune blank text parts and run `cfg.captureFilters` over the ones that remain.
  *
  * One drop verdict is taken per turn, on the aggregate of its text parts; the
  * individual parts are then rewritten with the substitutions only, so a rule can
- * never both keep and drop the same turn. Tool call/result parts are carried
- * through untouched — filters match conversation text, not tool payloads — but a
- * turn dropped on its text takes its tool parts with it.
+ * never both keep and drop the same turn. Tool call/result parts get the
+ * substitutions too, on their input values and output, so a redaction rule also
+ * covers a secret that reached a command or its output; only text parts decide
+ * the drop verdict, and a turn dropped on its text takes its tool parts with it.
  */
 export function filterCaptureParts(parts, role, cfg = {}) {
   const kept = [];
@@ -389,7 +416,9 @@ export function filterCaptureParts(parts, role, cfg = {}) {
   if (!compiled.rules.length || kept.length === 0) return blank;
 
   const textParts = kept.filter((part) => part.type === "text");
-  if (textParts.length === 0) return blank;
+  if (textParts.length === 0) {
+    return { parts: kept.map((part) => substituteToolPart(part, compiled.rules, role)), dropped: false };
+  }
 
   const verdict = applyInputFilters(textParts.map((part) => part.text).join("\n\n"), compiled.rules, {
     role,
@@ -399,7 +428,7 @@ export function filterCaptureParts(parts, role, cfg = {}) {
   const out = [];
   for (const part of kept) {
     if (part.type !== "text") {
-      out.push(part);
+      out.push(substituteToolPart(part, compiled.rules, role));
       continue;
     }
     const shaped = applyInputFilters(part.text, compiled.rules, { role, substituteOnly: true });
@@ -431,7 +460,7 @@ function faithfulCaptureDecision(text, cfg) {
 /**
  * Shape one host message before an adapter builds its session payload.
  * Sanitize injected context before evaluating keep/drop rules, so text that
- * will not be sent cannot satisfy a keep rule. Tool parts are never filtered.
+ * will not be sent cannot satisfy a keep rule. Tool parts never decide keep or drop.
  */
 export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}, faithful = false } = {}) {
   const options = { toolMaxChars: cfg.captureToolMaxChars, toolNameById };
@@ -617,7 +646,7 @@ function hasEnoughSignal(text) {
 }
 
 function isPunctuationOnly(text) {
-  return !/[a-z0-9\u3400-\u9fff]/i.test(text);
+  return !/[\p{L}\p{N}\u3400-\u9fff]/u.test(text);
 }
 
 /**

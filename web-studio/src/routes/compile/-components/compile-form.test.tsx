@@ -67,6 +67,27 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   clients.splice(0).forEach((client) => client.clear())
+  vi.unstubAllGlobals()
+})
+
+it('submits over HTTP origins without crypto.randomUUID', async () => {
+  const getRandomValues = globalThis.crypto.getRandomValues.bind(
+    globalThis.crypto,
+  )
+  vi.stubGlobal('crypto', { getRandomValues })
+  prepareCompileHandoff(
+    'recovery-test',
+    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
+  )
+  api.createCompile.mockResolvedValueOnce(task)
+
+  const page = mount()
+  page.submit()
+
+  await waitFor(() => expect(api.createCompile).toHaveBeenCalledOnce())
+  expect(api.createCompile.mock.calls[0][1]).toMatch(
+    /^[0-9]+:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  )
 })
 
 it('recovers an accepted submission after response loss and reload without resubmitting missing args', async () => {

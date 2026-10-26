@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from contextlib import contextmanager
 
 import pytest
 from conftest import make_due, replay_records
@@ -294,20 +295,44 @@ async def test_repeated_prepare_has_one_read_and_no_capture_write(
     assert len(old.value["pending"]) == 5
 
 
+async def test_reply_lookup_searches_its_index_without_statistics(setup_kernel, monkeypatch):
+    # Stores are never ANALYZEd; scanning a user's records cost 20 ms at 1k sessions.
+    _, store, _, _ = setup_kernel
+    statements, connect = [], store.connect
+
+    @contextmanager
+    def traced():
+        with connect() as c:
+            c.set_trace_callback(statements.append)
+            yield c
+            c.set_trace_callback(None)
+
+    monkeypatch.setattr(store, "connect", traced)
+    await store.replay.replies("scope", ["a", "b"])
+    with connect() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + statements[0])]
+    assert any("INDEX replay_kinds (scope=? AND kind=? AND anchor=?)" in step for step in plan)
+
+
 async def test_hot_read_ignores_unrelated_operational_documents(
     setup_kernel, credential, policy, monkeypatch
 ):
     kernel, store, _, _ = setup_kernel
     policy.update(recall=False)
     p = await prepare(kernel, credential, policy, history(1)[:1])
-    with store.connect() as c:
-        c.executemany(
-            "INSERT INTO state(scope,key,value,version,touched) VALUES (?,?,?,1,?)",
-            [
-                (p.scope, f"tool:unrelated-{i}", store.encode({"content": "old"}), time.time())
-                for i in range(1500)
-            ],
-        )
+
+    def insert():
+        # Encoding runs the encryptor on the event loop, so it must happen off the loop thread.
+        with store.connect() as c:
+            c.executemany(
+                "INSERT INTO state(scope,key,value,version,touched) VALUES (?,?,?,1,?)",
+                [
+                    (p.scope, f"tool:unrelated-{i}", store.encode({"content": "old"}), time.time())
+                    for i in range(1500)
+                ],
+            )
+
+    await store.run(insert, write=True)
     decoded = []
     original = store.decode
 

@@ -4,7 +4,7 @@ RAGFS 缓存是 OpenViking 的可选读缓存层，用于加速文件全量读�
 
 CachedFileSystem 适用前提：
 
-- 只有一个 OpenViking / RAGFS 进程写入同一 namespace。
+- 只有一个 OpenViking / RAGFS 进程写入同一 cache namespace。
 - 文件和目录变更都经过 RAGFS。
 - backend 不被外部绕过 RAGFS 直接修改。
 - 缓存 Provider 的同一 key 写入或删除成功后，后续读取不会返回旧值。
@@ -24,6 +24,7 @@ openviking-server doctor
 
 ```json
 {
+  "service_name": "openviking-server",
   "cache": {
     "provider": "redis",
     "params": {
@@ -41,13 +42,11 @@ openviking-server doctor
       "backend": "local",
       "cachefs": {
         "backend": "cache",
-        "namespace": "openviking",
         "max_file_size_bytes": 1048576,
         "bypass_prefixes": ["/queue", "/tmp"]
       },
       "pathlock": {
         "provider": "cache",
-        "namespace": "openviking",
         "lock_expire_secs": 30.0
       }
     }
@@ -85,19 +84,19 @@ openviking-server
 ### Cache PathLock
 
 将 `storage.agfs.pathlock.provider` 设为 `cache`，即可通过共享 Redis
-CacheRuntime 协调多个 OpenViking 进程的路径锁。`pathlock.namespace`
-为必填项，同一 OpenViking 部署的所有进程必须使用相同值。Cache PathLock
-只支持内置 Redis Provider。独立部署应使用不同 namespace；分布式路径锁不会解除 CachedFileSystem 的单写者前提。
+CacheRuntime 协调多个 OpenViking 进程的路径锁。OpenViking 会从顶层
+`service_name` 生成 PathLock Redis namespace。独立部署应使用不同
+`service_name`。Cache PathLock 只支持内置 Redis Provider；分布式路径锁不会解除 CachedFileSystem 的单写者前提。
 
 Redis HASH key 按逻辑路径 scope 拆分：
 
 ```text
-ov:pathlock:{namespace}:global:tokens
-ov:pathlock:{namespace}:scope:_system:tokens
-ov:pathlock:{namespace}:scope:account:{account}:tokens
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-`{namespace}` 是 Redis Cluster hash tag，因此同一部署的 PathLock key
+`{service_name}` 是 Redis Cluster hash tag，因此同一部署的 PathLock key
 仍位于同一 slot。Tree 冲突检查只扫描请求所属 scope 的 HASH。`/` 和
 `/local` 使用 global HASH，但不会扫描 account 或 `_system` HASH。
 跨 scope batch 会被拒绝。
@@ -116,9 +115,6 @@ ov:pathlock:{namespace}:scope:account:{account}:tokens
 | Redis `mode="singleton"` | `mode="standalone"` |
 | `tls_enabled=true` | endpoint 使用 `rediss://` |
 | `read_from_replica` | 已删除，所有读命令统一访问主节点 |
-| Redis Provider `key_prefix` | CacheFS 使用 `cachefs.namespace`；QueueFS 使用 `queuefs.cache_key_prefix` |
-
-OpenViking 会对已删除字段直接返回迁移错误，不再静默转换。
 
 ## DynamicProvider
 
@@ -138,6 +134,9 @@ Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低运行时版本�
 
 ## 配置项
 
+顶层 `service_name` 默认是 `"openviking-server"`，会为 CacheFS、QueueFS cache backend、
+Cache PathLock 和 cache-backed 多写 metadata 提供 Redis namespace。
+
 顶层 `cache` 与 `storage` 并列：
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -150,7 +149,6 @@ Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低运行时版本�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `backend` | str | `"local"` | `local` 沿用原逻辑；`cache` 启用 CachedFileSystem |
-| `namespace` | str | `"openviking"` | 缓存命名空间，用于隔离不同部署或租户 |
 | `max_file_size_bytes` | int | `1048576` | 允许进入缓存的最大完整文件大小 |
 | `traversal_mode` | str | `"backend"` | 递归 API 使用 backend 遍历或 `cached_traversal` |
 | `bypass_prefixes` | list[str] | `[]` | 强制绕过缓存的路径前缀 |
@@ -160,7 +158,6 @@ Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低运行时版本�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `provider` | str | `"filesystem"` | `filesystem`、`memory` 或 `cache` |
-| `namespace` | str 或 null | `null` | `provider=cache` 时必填，同一部署的协作进程共享此命名空间 |
 | `lock_expire_secs` | float | `30.0` | 锁 stale 超时；不得小于 `1.0` |
 
 Redis 配置：
@@ -229,7 +226,7 @@ RAGFS 主要缓存三类对象。
 文件 key 使用稳定命名空间和路径 hash：
 
 ```text
-ragfs:v1:{namespace}:file:{hash(path)}
+<service_name>:ov:cache:v1:file:<hash(path)>
 ```
 
 文件 value 是 `CacheEnvelope`，包含文件内容、对象类型、路径和 generation 快照。全量读取命中后，RAGFS 会先校验 envelope 和 generation，再返回内容。
@@ -241,7 +238,7 @@ ragfs:v1:{namespace}:file:{hash(path)}
 目录 key：
 
 ```text
-ragfs:v1:{namespace}:dir:{hash(path)}
+<service_name>:ov:cache:v1:dir:<hash(path)>
 ```
 
 目录缓存保存 backend 原始 `read_dir` entries，而不是权限过滤后的最终结果。权限、角色和 agent context 仍在 OpenViking 上层实时处理。
@@ -253,7 +250,7 @@ ragfs:v1:{namespace}:dir:{hash(path)}
 子树 generation key：
 
 ```text
-ragfs:v1:{namespace}:subtree:{hash(scope)}
+<service_name>:ov:cache:v1:subtree:<hash(scope)>
 ```
 
 `remove_all` 和目录 `rename` 可能让 Provider 中残留子孙 key。RAGFS 通过 bump subtree generation，让旧 envelope 的 generation 快照失效，后续真实读取会回源并重建缓存。

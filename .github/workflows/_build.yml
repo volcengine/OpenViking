@@ -320,6 +320,9 @@ jobs:
         from openviking.pyagfs import get_binding_client
         import openviking.storage.vectordb.engine as engine
 
+        if importlib.util.find_spec("openviking.integrations") is not None:
+            raise SystemExit("Server wheel must not ship the removed framework namespace")
+
         binding_client, _ = get_binding_client()
         if binding_client is None:
             raise SystemExit("ragfs binding client was not installed")
@@ -555,6 +558,9 @@ jobs:
         from openviking.pyagfs import get_binding_client
         import openviking.storage.vectordb.engine as engine
 
+        if importlib.util.find_spec("openviking.integrations") is not None:
+            raise SystemExit("Server wheel must not ship the removed framework namespace")
+
         binding_client, _ = get_binding_client()
         if binding_client is None:
             raise SystemExit("ragfs binding client was not installed")
@@ -590,6 +596,9 @@ jobs:
         from importlib.resources import files
 
         import openviking.storage.vectordb.engine as engine
+
+        if importlib.util.find_spec("openviking.integrations") is not None:
+            raise SystemExit("Server wheel must not ship the removed framework namespace")
 
         print(f"Loaded runtime engine variant {engine.ENGINE_VARIANT}")
         print(f"Available engine variants {engine.AVAILABLE_ENGINE_VARIANTS}")

@@ -277,6 +277,10 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
             reindex_contexts.append(ctx)
             return {"ok": True}
 
+        async def execute_in_current_task(self, *, uri, mode, ctx):
+            reindex_contexts.append(ctx)
+            return {"ok": True}
+
         async def reindex_directory_marker(self, *, dir_uri, level, ctx):
             reindex_contexts.append(ctx)
 
@@ -649,6 +653,10 @@ async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob
             calls.append(uri)
             return {"ok": True}
 
+        async def execute_in_current_task(self, *, uri, mode, ctx):
+            calls.append(uri)
+            return {"ok": True}
+
     def factory(*, vlm_resolver, vector_config_resolver):
         assert vlm_resolver is service.viking_fs._vlm_resolver
         assert vector_config_resolver is service.vector_config_resolver
@@ -694,6 +702,9 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
 
     class _SpyExecutor:
         async def execute(self, *, uri, mode, wait, ctx):
+            return {"ok": True}
+
+        async def execute_in_current_task(self, *, uri, mode, ctx):
             return {"ok": True}
 
         async def reindex_directory_marker(self, *, dir_uri, level, ctx):

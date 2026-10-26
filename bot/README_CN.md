@@ -317,7 +317,8 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.gateway.port` | `18790` | Gateway 监听端口 |
 | `bot.sandbox.backend` | `direct` | 执行后端 |
 | `bot.sandbox.mode` | `shared` | 工作区隔离方式 |
-| `bot.sandbox.backends.direct.allow_compile_exec` | `true` | 如需关闭可显式设为 `false` |
+| `bot.sandbox.backends.direct.allow_exec` | `true` | 是否允许 Agent 通过内置 `exec` 工具在宿主机执行命令；关闭后也禁止子 Agent 和 Compile 使用该工具 |
+| `bot.sandbox.backends.direct.allow_compile_exec` | `false` | Compile 默认使用专用读取工具；只有此项和 `allow_exec` 均为 `true` 时，才允许 Compile Agent 在宿主机执行命令 |
 | `bot.heartbeat.enabled` | `true` | 是否周期检查 `HEARTBEAT.md` |
 | `bot.heartbeat.interval_seconds` | `600` | 心跳间隔 |
 | `bot.mode` | `normal` | 可选 `normal`、`readonly`、`debug` |
@@ -478,7 +479,22 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 - `per-session`：每个 Session 独立；
 - `per-channel`：同一渠道实例共享。
 
-DirectBackend 默认 `restrict_to_workspace: false`。对不可信用户开放 Gateway 时，应选择隔离后端，并设置渠道白名单和网络/文件策略。
+Direct 默认允许 Agent 在宿主机执行命令。要关闭这项能力，在 `ov.conf` 中设置并重启 Bot：
+
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "direct",
+      "backends": {
+        "direct": { "allow_exec": false }
+      }
+    }
+  }
+}
+```
+
+关闭后，聊天、子 Agent 和 Compile 均不能调用内置 `exec` 工具；聊天、检索和工作区文件工具仍可使用。`allow_compile_exec=true` 不能覆盖此设置。此开关仅针对 Direct 的 Agent 命令执行，不影响其他沙箱后端，也不提供文件或网络隔离。对不可信用户开放 Gateway 时，应选择隔离后端，并设置渠道白名单和网络/文件策略。
 
 ```json
 {

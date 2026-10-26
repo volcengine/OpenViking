@@ -5,6 +5,8 @@ import ast
 import re
 from typing import Any, Iterator
 
+import httpx
+
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -30,7 +32,11 @@ from openviking.pyagfs.exceptions import (
     GitConcurrentCommitError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.utils.exceptions import HTTP_STATUS_TO_ERROR_CODE, error_code_from_http_status
+from openviking.utils.exceptions import (
+    HTTP_STATUS_TO_ERROR_CODE,
+    AllCredentialsFailedError,
+    error_code_from_http_status,
+)
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -335,6 +341,21 @@ def _build_upstream_error(
 
 
 def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
+    for item in _iter_exception_chain(exc):
+        if isinstance(item, AllCredentialsFailedError):
+            failures = [_map_upstream_api_error(error) for _, _, error, _ in item.errors]
+            codes = {failure.code if failure is not None else "INTERNAL" for failure in failures}
+            # A mixed failure has no single accurate status. Do not infer one
+            # from whichever credential happens to appear first in the message.
+            if len(codes) != 1 or "INTERNAL" in codes:
+                return InternalError(str(exc))
+            return _build_upstream_error(
+                code=codes.pop(),
+                message=_upstream_detail_message(exc),
+                source=item,
+                vlm_context=exc,
+            )
+
     if _is_model_api_key_configuration_error(exc):
         return FailedPreconditionError(
             "Model provider API key is not configured",
@@ -343,6 +364,19 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
 
     status, source = _extract_structured_http_status(exc)
     if status is None:
+        for item in _iter_exception_chain(exc):
+            if isinstance(item, httpx.TimeoutException):
+                code = "DEADLINE_EXCEEDED"
+            elif isinstance(item, (httpx.NetworkError, httpx.RemoteProtocolError)):
+                code = "UNAVAILABLE"
+            else:
+                continue
+            return _build_upstream_error(
+                code=code,
+                message=_upstream_detail_message(exc),
+                source=item,
+                vlm_context=exc,
+            )
         status = _extract_text_http_status(exc)
     if status is not None:
         code = error_code_from_http_status(status, default="UNKNOWN")
@@ -475,12 +509,9 @@ def map_exception(
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, FileNotFoundError):
         return _not_found_error(resource, resource_type)
-    if _is_model_api_key_configuration_error(exc):
-        return FailedPreconditionError(
-            "Model provider API key is not configured",
-            details={"reason": _trim_message(_exception_chain_text(exc))},
-        )
     if isinstance(exc, ValueError):
+        if _is_model_api_key_configuration_error(exc):
+            return _map_upstream_api_error(exc)
         message = str(exc)
         if is_invalid_uri_error(exc):
             return InvalidURIError(resource or message, message)

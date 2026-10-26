@@ -1,11 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""SQLite adapters and encrypted management data. Writes have a dedicated executor."""
+"""SQLite adapters with optionally encrypted values. Writes have a dedicated executor."""
 
 import asyncio
 import hashlib
 import os
 import queue
+import re
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -13,9 +14,11 @@ from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import orjson
-from cryptography.fernet import Fernet
+
+from openviking.crypto.encryptor import MAGIC
 
 from .cache import TTLCache
 from .capture_store import CaptureQueue, SQLiteCaptureQueue
@@ -24,7 +27,10 @@ from .state_store import SQLiteStateStore, StateStore
 
 # Pre-release builds stamped versions 1-4 on incompatible layouts; reusing
 # one of them would let old files through and fail on the first write.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+# Gateway data is not an OpenViking account's; it derives its own key from the root key.
+ENCRYPTION_ACCOUNT = "_gateway"
+LEGACY_KEY_ENVIRONMENT = "OPENVIKING_GATEWAY_ENCRYPTION_KEY"
 
 
 def digest(value: str) -> str:
@@ -43,14 +49,15 @@ class KernelStore(Protocol):
 
 
 class Database:
-    def __init__(self, path: Path, encryption_key: str):
+    def __init__(self, path: Path, encryptor=None):
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = path
         # Protect the file before SQLite opens it, not once per operation.
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         os.fchmod(fd, 0o600)
         os.close(fd)
-        self.cipher = Fernet(encryption_key.encode())
+        self.encryptor = encryptor
+        self.loop = None
         self.pool = queue.LifoQueue(maxsize=6)
         self.readers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gateway-read")
         self.writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gateway-write")
@@ -75,6 +82,31 @@ class Database:
             except queue.Full:
                 connection.close()
 
+    @staticmethod
+    def use_wal(connection):
+        # Leaving rollback mode needs an exclusive lock, and SQLite reports a concurrent
+        # switch as "database is locked" at once instead of waiting out the busy timeout.
+        # Workers opening a new or v5 store together retry until one has converted it.
+        for _ in range(200):
+            try:
+                connection.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as error:
+                if "locked" not in str(error):
+                    raise
+                time.sleep(0.05)
+        connection.execute("PRAGMA journal_mode=WAL")
+
+    @staticmethod
+    def begin_migration(connection):
+        """Serialize the one-time migration across standalone/server workers."""
+        # Re-encoding a large v5 store outlasts the 30 s busy timeout of workers waiting here.
+        connection.execute("PRAGMA busy_timeout=600000")
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+        finally:
+            connection.execute("PRAGMA busy_timeout=30000")
+
     def close(self):
         self.readers.shutdown(wait=True)
         self.writer.shutdown(wait=True)
@@ -85,20 +117,67 @@ class Database:
                 return
 
     def encode(self, value: Any) -> bytes:
-        return self.cipher.encrypt(orjson.dumps(value))
+        data = orjson.dumps(value)
+        if self.encryptor is None:
+            return data
+        return self.crypt(self.encryptor.encrypt(ENCRYPTION_ACCOUNT, data))
 
     def decode(self, value: bytes) -> Any:
-        return orjson.loads(self.cipher.decrypt(value))
+        # Values written before encryption was enabled stay readable as plaintext.
+        if value.startswith(MAGIC):
+            if self.encryptor is None:
+                raise RuntimeError(
+                    "Gateway data is encrypted; configure the encryption settings it was "
+                    "written with"
+                )
+            value = self.crypt(self.encryptor.decrypt(ENCRYPTION_ACCOUNT, value))
+        return orjson.loads(value)
+
+    def crypt(self, coroutine):
+        """Run an encryptor coroutine on the app loop from a storage thread."""
+        return asyncio.run_coroutine_threadsafe(coroutine, self.loop).result()
 
     async def run(self, fn, *args, write=False):
-        return await asyncio.get_running_loop().run_in_executor(
+        self.loop = asyncio.get_running_loop()
+        return await self.loop.run_in_executor(
             self.writer if write else self.readers, partial(fn, *args)
         )
 
+    def migrate_legacy_values(self, c, tables):
+        """Rewrite v0.5.0 values, which were Fernet-encrypted with a gateway-owned key."""
+        from cryptography.fernet import Fernet
+
+        cipher = None
+        for table in tables:
+            last = 0
+            while rows := c.execute(
+                f"SELECT rowid,value FROM {table} WHERE rowid>? ORDER BY rowid LIMIT 500",
+                (last,),
+            ).fetchall():
+                cipher = cipher or Fernet(self.legacy_key())
+                for rowid, value in rows:
+                    c.execute(
+                        f"UPDATE {table} SET value=? WHERE rowid=?",
+                        (self.encode(orjson.loads(cipher.decrypt(value))), rowid),
+                    )
+                last = rows[-1][0]
+
+    def legacy_key(self) -> bytes:
+        if key := os.environ.get(LEGACY_KEY_ENVIRONMENT):
+            return key.encode()
+        try:
+            return (self.path.parent / "encryption.key").read_bytes().strip()
+        except FileNotFoundError:
+            raise ValueError(
+                f"{self.path} holds data encrypted by OpenViking Gateway 0.5; set "
+                f"{LEGACY_KEY_ENVIRONMENT} or restore {self.path.parent / 'encryption.key'} "
+                "with the original key to migrate it"
+            ) from None
+
 
 class SQLiteKernelStore(Database):
-    def __init__(self, path, encryption_key):
-        super().__init__(path, encryption_key)
+    def __init__(self, path, encryptor=None):
+        super().__init__(path, encryptor)
         self.replay = SQLiteReplayStore(self)
         self.capture = SQLiteCaptureQueue(self)
         self.state = SQLiteStateStore(self)
@@ -107,9 +186,9 @@ class SQLiteKernelStore(Database):
     async def initialize(self):
         def initialize():
             with self.connect() as c:
-                if c.execute("PRAGMA user_version").fetchone()[0] not in (0, SCHEMA_VERSION):
+                if c.execute("PRAGMA user_version").fetchone()[0] not in (0, 5, SCHEMA_VERSION):
                     raise ValueError("Unsupported gateway schema; configure a fresh storage_path")
-                c.execute("PRAGMA journal_mode=WAL")
+                self.use_wal(c)
                 c.executescript("""
                     CREATE TABLE IF NOT EXISTS sessions (
                         scope TEXT, session TEXT, touched REAL NOT NULL,
@@ -132,7 +211,11 @@ class SQLiteKernelStore(Database):
                     CREATE INDEX IF NOT EXISTS capture_ready ON capture(ready,lease);
                     CREATE TABLE IF NOT EXISTS deleted_scopes (scope TEXT PRIMARY KEY);
                 """)
+                self.begin_migration(c)
+                if c.execute("PRAGMA user_version").fetchone()[0] == 5:
+                    self.migrate_legacy_values(c, ("replay", "state", "capture"))
                 c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                c.commit()
 
         await self.run(initialize, write=True)
 
@@ -237,34 +320,67 @@ class SQLiteKernelStore(Database):
 
 
 class ManagementStore(Database):
-    def __init__(self, path, encryption_key):
-        super().__init__(path, encryption_key)
+    def __init__(self, path, encryptor=None):
+        super().__init__(path, encryptor)
         self.cache = TTLCache(ttl=2, capacity=2048)
 
     async def initialize(self):
         def initialize():
             with self.connect() as c:
-                if c.execute("PRAGMA user_version").fetchone()[0] not in (0, SCHEMA_VERSION):
+                if c.execute("PRAGMA user_version").fetchone()[0] not in (0, 5, SCHEMA_VERSION):
                     raise ValueError("Unsupported gateway schema; configure a fresh storage_path")
-                c.execute("PRAGMA journal_mode=WAL")
+                self.use_wal(c)
                 c.executescript("""
                     CREATE TABLE IF NOT EXISTS objects (
                         account TEXT, kind TEXT, id TEXT, revision INTEGER, value BLOB,
                         PRIMARY KEY(account,kind,id));
                     CREATE INDEX IF NOT EXISTS object_identity ON objects(kind,id);
                     CREATE TABLE IF NOT EXISTS request_logs (
-                        id INTEGER PRIMARY KEY, account TEXT, time REAL, value BLOB);
-                    CREATE INDEX IF NOT EXISTS log_account ON request_logs(account,time);
+                        id INTEGER PRIMARY KEY, account TEXT, time REAL, value BLOB, user TEXT);
                     CREATE TABLE IF NOT EXISTS object_expiry (
                         account TEXT, kind TEXT, id TEXT, expires REAL,
                         PRIMARY KEY(account,kind,id));
                     CREATE INDEX IF NOT EXISTS expiry_time ON object_expiry(expires);
                 """)
+                self.begin_migration(c)
+                if c.execute("PRAGMA user_version").fetchone()[0] == 5:
+                    c.execute("ALTER TABLE request_logs ADD COLUMN user TEXT")
+                    self.migrate_legacy_values(c, ("objects", "request_logs"))
+                    for row in c.execute("SELECT * FROM objects WHERE kind='upstreams'").fetchall():
+                        value = self.decode(row["value"])
+                        # Keep v5 request URLs: v5 appended /v1 to non-Ark bases lacking it.
+                        # Bases already ending in another version (/api/paas/v4) produced
+                        # .../v4/v1 in v5, which no provider serves; leave them as entered.
+                        base = value["base_url"].rstrip("/")
+                        path = urlsplit(base).path
+                        ark = value.get("vendor") in {"ark", "byteplus"}
+                        if value["protocol"] == "anthropic":
+                            if ark and not path:
+                                base += "/api/compatible"
+                            if base.endswith("/v1"):
+                                base = base[:-3]
+                        elif ark:
+                            if not path:
+                                base += "/api/v3"
+                        elif not re.search(r"/v\d+$", path):
+                            base += "/v1"
+                        if base != value["base_url"]:
+                            value["base_url"] = base
+                            c.execute(
+                                "UPDATE objects SET value=?,revision=revision+1 "
+                                "WHERE account=? AND kind=? AND id=?",
+                                (self.encode(value), row["account"], row["kind"], row["id"]),
+                            )
+                c.execute("DROP INDEX IF EXISTS log_account")
+                c.execute(
+                    "CREATE INDEX IF NOT EXISTS log_account_user ON request_logs(account,user,time)"
+                )
                 c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                c.commit()
 
         await self.run(initialize, write=True)
 
-    async def list(self, account, kind):
+    async def list(self, account, kind, user_id=None):
         def read():
             with self.connect() as c:
                 return [
@@ -276,8 +392,14 @@ class ManagementStore(Database):
                 ]
 
         if kind in {"keys", "upstreams"}:
-            return await self.cache.get(("list", account, kind), lambda: self.run(read))
-        return await self.run(read)
+            values = await self.cache.get(("list", account, kind), lambda: self.run(read))
+        else:
+            values = await self.run(read)
+        return (
+            [value for value in values if value.get("user_id") == user_id]
+            if user_id is not None
+            else values
+        )
 
     async def get(self, account, kind, identifier):
         def read():
@@ -352,28 +474,56 @@ class ManagementStore(Database):
 
         return await self.cache.get(("auth", identifier), lambda: self.run(read))
 
-    async def log(self, account, value):
+    async def log(self, account, value, user_id=None):
         def log():
             with self.connect() as c:
                 c.execute(
-                    "INSERT INTO request_logs(account,time,value) VALUES (?,?,?)",
-                    (account, time.time(), self.encode(value)),
+                    "INSERT INTO request_logs(account,time,value,user) VALUES (?,?,?,?)",
+                    (account, time.time(), self.encode(value), user_id),
                 )
 
         await self.run(log, write=True)
 
-    async def logs(self, account, limit=200):
+    async def logs(self, account, limit=200, user_id=None):
         def read():
             with self.connect() as c:
+                where, args = "account=?", [account]
+                if user_id is not None:
+                    where += " AND user=?"
+                    args.append(user_id)
                 return [
                     {"time": r["time"], **self.decode(r["value"])}
                     for r in c.execute(
-                        "SELECT time,value FROM request_logs WHERE account=? ORDER BY id DESC LIMIT ?",
-                        (account, limit),
+                        f"SELECT time,value FROM request_logs WHERE {where} ORDER BY id DESC LIMIT ?",
+                        (*args, limit),
                     )
                 ]
 
         return await self.run(read)
+
+    async def delete_user(self, account, user_id):
+        def delete():
+            with self.connect() as c:
+                c.execute("BEGIN IMMEDIATE")
+                for row in c.execute(
+                    "SELECT kind,id,value FROM objects WHERE account=? "
+                    "AND kind IN ('keys','users','responses')",
+                    (account,),
+                ).fetchall():
+                    if self.decode(row["value"]).get("user_id") == user_id:
+                        identity = (account, row["kind"], row["id"])
+                        c.execute(
+                            "DELETE FROM objects WHERE account=? AND kind=? AND id=?", identity
+                        )
+                        c.execute(
+                            "DELETE FROM object_expiry WHERE account=? AND kind=? AND id=?",
+                            identity,
+                        )
+                c.execute("DELETE FROM request_logs WHERE account=? AND user=?", (account, user_id))
+                c.commit()
+
+        await self.run(delete, write=True)
+        self.cache.clear()
 
     async def expire_logs(self, before):
         def expire():
@@ -401,3 +551,23 @@ class ManagementStore(Database):
 
         await self.run(delete, write=True)
         self.cache.clear()
+
+
+async def delete_user_data(management, store, account, user_id):
+    """Revoke keys and erase gateway state; OpenViking memory is unaffected."""
+    # Keys go first, so a response finishing meanwhile no longer finds one to record state for.
+    await management.delete_user(account, user_id)
+    for protocol in ("chat", "responses", "anthropic"):
+        await store.expire(0, digest(account + "\0" + user_id + "\0" + protocol))
+
+
+async def delete_account_data(management, store, account):
+    users = {
+        value["user_id"]
+        for kind in ("users", "keys")
+        for value in await management.list(account, kind)
+        if value.get("user_id")
+    }
+    for user_id in users:
+        await delete_user_data(management, store, account, user_id)
+    await management.delete_account(account)

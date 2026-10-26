@@ -120,7 +120,7 @@ def main():
         bob_uri = result.get("root_uri", "")
         print(f"  URI: {bob_uri}")
         print("  等待处理...")
-        client.wait_processed(timeout=120)
+        client.wait_processed()
         print("  完成")
 
         # ── 5. 创建会话，模拟入职学习 ──
@@ -163,7 +163,7 @@ def main():
         client.commit_session(session.session_id)
         print("  commit 完成")
         time.sleep(2)
-        client.wait_processed(timeout=120)
+        client.wait_processed()
         print("  记忆向量化完成")
 
         # ── 7. 回顾自己的记忆 ──

@@ -106,6 +106,8 @@ ov add-resource https://raw.githubusercontent.com/volcengine/OpenViking/refs/hea
 ov ls viking://resources
 ov tree viking://resources -L 2
 ov read viking://resources/...
+# 读取第 11～15 行（offset 从 0 开始；limit 为 -1 时读到结尾）
+ov read viking://resources/... --offset 10 --limit 5
 
 # 检索上下文
 ov find "what is openviking"
@@ -155,6 +157,8 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 - `search` - 上下文感知检索，实验特性。
 - `grep` - 内容模式搜索。
 - `glob` - 文件 glob 搜索。
+
+`search --mode list`（默认）返回排序命中列表。`search --mode context` 按服务端默认配置组装上下文并输出文本；使用 `-o json` 可保留完整的 `entries`、`rendered`、`digest` 和 `stats` 结果。context 模式支持 `--events-time-decay-protection`，但拒绝 `--uri` 和 `--read-content`，服务端会忽略 `--level`。CLI 暂未提供 `max_tokens`、`detail` 等 context 专用选项。
 
 ### Session 与记忆
 
@@ -253,11 +257,11 @@ ov -o json config list
 
 ```bash
 # 添加 URL 并等待处理完成
-ov add-resource https://example.com/docs --wait --timeout 60
+ov add-resource https://example.com/docs --wait
 
 # 添加本地目录并过滤文件
 ov add-resource ./dir \
-  --wait --timeout 600 \
+  --wait \
   --ignore-dirs "node_modules,dist" \
   --include "*.md,*.py" \
   --exclude "*.tmp,*.log"
@@ -268,6 +272,10 @@ ov add-resource ./docs -p "viking://resources/docs/{calendar:today}" --wait
 # 带过滤条件的搜索
 ov find "API authentication" --threshold 0.7 --limit 5
 ov find "authentication" --uri viking://resources/project --level 0,1
+
+# 组装上下文并启用事件时间衰减，或查看完整 JSON 结果
+ov search "recent decisions" --mode context --events-time-decay-protection 7d
+ov -o json search "authentication" --mode context
 
 # 递归列目录
 ov ls viking://resources --recursive

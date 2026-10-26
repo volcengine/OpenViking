@@ -271,16 +271,14 @@ class ExtractLoop:
             self.context_provider.instruction()
         )
         output_contract = self._output_protocol.render_contract(self._output_context)
+        context_rules = self._output_protocol.render_context_rules(self._output_context)
         messages.append(
             {
                 "role": "system",
                 "content": f"""
 {provider_instruction}
 {reference_rules}
-## Read Format Rules
-- The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`.
-- Read content is returned in Claude Code format: each visible line is prefixed with `line_number<TAB>`.
-- When you copy text from read results into SEARCH/REPLACE or DELETE operations, copy the exact text after the line-number prefix. Never include the line-number prefix itself in `search`, `replace`, or `delete`.
+{context_rules}
 {output_contract}
         """,
             }

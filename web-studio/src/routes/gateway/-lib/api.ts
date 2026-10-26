@@ -1,6 +1,11 @@
+import { getManagementKey, lockManagementKey } from './management-key'
 import { createAdminClient } from '#/lib/admin'
 import type { AdminConnection } from '#/lib/admin'
+
 import { getOvResult, isOvClientError } from '#/lib/ov-client'
+
+/** Credentials captured with the query scope; undefined reads the current tab key. */
+export type GatewayConnection = AdminConnection & { managementKey?: string }
 
 /** Wire protocol an upstream speaks; the gateway never converts between them. */
 export type Protocol = 'anthropic' | 'chat' | 'responses'
@@ -12,6 +17,8 @@ export type Vendor =
   | 'ark'
   | 'byteplus'
 export type AuthMode = 'managed' | 'passthrough'
+/** Header the upstream key is sent in. */
+export type KeyHeader = 'authorization' | 'api-key' | 'x-api-key'
 
 /** Sources recall searches, in display order. */
 export const CONTEXT_TYPES = ['memory', 'resource', 'skill'] as const
@@ -53,7 +60,10 @@ type UpstreamSettings = {
   name: string
   protocol: Protocol
   base_url: string
+  /** Append the selected protocol's endpoint path to base_url. */
+  append_endpoint_path: boolean
   auth_mode: AuthMode
+  key_header: KeyHeader
   models: string[]
   /** Name clients use → model sent to the upstream. */
   aliases: Record<string, string>
@@ -78,12 +88,13 @@ export type Upstream = UpstreamSettings & {
   id: string
   revision: number
   has_api_key: boolean
-  header_names: string[]
+  header_names?: string[]
 }
 
 /**
  * Body of `PUT upstreams/{id}`. A blank `api_key` keeps the stored key; a
- * header with a blank value keeps its stored value; omitted headers are removed.
+ * header with a blank value keeps its stored value; omitted headers are retained.
+ * Changing base_url clears retained API-key and header secrets.
  */
 export type UpstreamInput = UpstreamSettings & {
   api_key: string
@@ -160,9 +171,7 @@ export function keysUsing(
  * Who a new key acts as: a user of this account, whose key OpenViking Server
  * looks up itself, or that user's OpenViking key pasted by the admin.
  */
-export type KeyOwner =
-  | { user_id: string; openviking_key?: never }
-  | { openviking_key: string; user_id?: never }
+export type KeyOwner = { user_id?: string; openviking_key?: string }
 
 export type KeyRequest = KeyOwner & {
   name: string
@@ -175,8 +184,11 @@ export type KeyRequest = KeyOwner & {
 export type KeyUser = {
   user_id: string
   role: 'admin' | 'user'
-  /** False when the server can't read the user's key, e.g. it keeps only a hash. */
-  api_key_available: boolean
+  /**
+   * False when the server can't read the user's key, e.g. it keeps only a
+   * hash. OpenViking servers that predate the field omit it.
+   */
+  api_key_available?: boolean
 }
 
 export type CacheStats = {
@@ -193,6 +205,32 @@ export type OpenVikingHealth = {
   version?: string
   auth_mode?: string
   reason?: string
+}
+
+/** A conversation whose latest long model calls all missed the prompt cache. */
+export type CacheMiss = {
+  upstream_id: string
+  model: string
+  /** Long calls in a row without a cache hit. */
+  streak: number
+  /** Epoch seconds of the newest call. */
+  last_at: number
+}
+
+export type CacheAlerts = {
+  /** Conversations missing the cache; null without any. */
+  misses: {
+    conversations: number
+    /** Shortest streak and smallest first-call input among them. */
+    streak: number
+    input_tokens: number
+    /** All are Anthropic conversations that never wrote the cache either. */
+    no_writes: boolean
+    /** The newest three conversations. */
+    recent: CacheMiss[]
+  } | null
+  /** Ids of upstreams whose long calls have not hit the cache lately, sorted. */
+  unreported: string[]
 }
 
 export type Overview = {
@@ -214,6 +252,8 @@ export type Overview = {
   sample_limit: number
   /** Days the request log keeps records. */
   log_retention_days: number
+  /** Conversations and upstreams missing the prompt cache; null without any. */
+  cache_alerts: CacheAlerts | null
 }
 
 /** One request-log record (metadata only); every field but `time` is optional. */
@@ -252,7 +292,10 @@ export type LogRecord = {
   degradation?: string
   /** Anchor of the cut whose replacement this request used. */
   compaction_applied?: string
-  /** Why generating a summary failed; the full history was sent. */
+  /**
+   * Why compaction failed. The full history was sent, except for
+   * `still_over_threshold`, where the summary was written and kept.
+   */
   compaction_failed?: string
   /** Estimated size of the summary written for this request. */
   compaction_tokens?: number
@@ -279,35 +322,48 @@ export type ConnectionInfo = {
   public_url_configured: boolean
 }
 
+export type GatewayAccess = {
+  managed: boolean
+  can_write_objects: boolean
+  can_import_vlm: boolean
+  can_issue_for_others: boolean
+  role: string
+  account_id: string
+  user_id: string
+  warnings: string[]
+}
+
+export type VlmImportResult = {
+  imported: Array<{ id: string; name: string }>
+  needs_confirmation: Array<{ id: string; name: string }>
+  skipped: Array<{ id: string; reason: string }>
+}
+
 export type UpstreamTestResult = {
+  url?: string
   ok: boolean
+  kind?: 'connection' | 'model'
   status?: number
   reason?: string
+  response?: {
+    http_version: string
+    status: number
+    reason: string
+    headers: Record<string, string | string[]>
+    body: string
+    truncated?: boolean
+  }
 }
 
 /** Conversation to resync, taken from a log record. */
 export type ResyncTarget = { session: string; protocol: Protocol }
 
-export type GatewayErrorReason =
-  | 'not_enabled'
-  | 'token_missing'
-  | 'token_mismatch'
-  | 'unreachable'
-  | 'unsupported'
-  | 'conflict'
-  | 'invalid'
-  | 'forbidden'
-  | 'not_found'
-  | 'unauthorized'
-  | 'other'
+export type GatewayErrorReason = string
 
-/** Reasons the layout answers with a setup card instead of the gateway pages. */
-const UNAVAILABLE: GatewayErrorReason[] = [
+const UNAVAILABLE = [
   'not_enabled',
-  'token_missing',
-  'token_mismatch',
-  'unreachable',
-  'unsupported',
+  'trusted_mode_unsupported',
+  'openviking_unreachable',
 ]
 
 /** A failed gateway call: HTTP status, the server's own message, and a category. */
@@ -315,18 +371,27 @@ export class GatewayError extends Error {
   readonly status?: number
   readonly detail: string
   readonly reason: GatewayErrorReason
+  readonly keyCount?: number
+  readonly requiredVersion?: string
 
   constructor(
     detail: string,
     status?: number,
     cause?: unknown,
     reason?: GatewayErrorReason,
+    metadata?: Record<string, unknown>,
   ) {
     super(detail, cause ? { cause } : undefined)
     this.name = 'GatewayError'
     this.detail = detail
     this.status = status
-    this.reason = reason ?? classify(detail, status)
+    this.reason = reason ?? classify(status)
+    this.keyCount =
+      typeof metadata?.key_count === 'number' ? metadata.key_count : undefined
+    this.requiredVersion =
+      typeof metadata?.required_version === 'string'
+        ? metadata.required_version
+        : undefined
   }
 
   /** True when the gateway itself is off, misconfigured, down or missing. */
@@ -334,14 +399,6 @@ export class GatewayError extends Error {
     return UNAVAILABLE.includes(this.reason)
   }
 }
-
-const AVAILABILITY: Array<[RegExp, GatewayErrorReason]> = [
-  [/gateway is not enabled/i, 'not_enabled'],
-  [/management token is not configured/i, 'token_missing'],
-  // The gateway's answer when OpenViking sends a different management token.
-  [/invalid gateway management credential/i, 'token_mismatch'],
-  [/management service is unavailable/i, 'unreachable'],
-]
 
 const STATUS_REASONS: Partial<Record<number, GatewayErrorReason>> = {
   400: 'invalid',
@@ -352,9 +409,7 @@ const STATUS_REASONS: Partial<Record<number, GatewayErrorReason>> = {
   422: 'invalid',
 }
 
-function classify(detail: string, status?: number): GatewayErrorReason {
-  const match = AVAILABILITY.find(([pattern]) => pattern.test(detail))
-  if (match) return match[1]
+function classify(status?: number): GatewayErrorReason {
   return (status === undefined ? undefined : STATUS_REASONS[status]) ?? 'other'
 }
 
@@ -379,6 +434,12 @@ function readDetail(body: unknown): string | undefined {
   return undefined
 }
 
+function readReason(body: unknown): string | undefined {
+  return isRecord(body) && typeof body.reason === 'string'
+    ? body.reason
+    : undefined
+}
+
 /** Normalizes anything a gateway call can throw into a `GatewayError`. */
 export function toGatewayError(error: unknown): GatewayError {
   if (error instanceof GatewayError) return error
@@ -387,6 +448,8 @@ export function toGatewayError(error: unknown): GatewayError {
       readDetail(error.responseBody) ?? error.message,
       error.statusCode,
       error,
+      readReason(error.responseBody),
+      isRecord(error.responseBody) ? error.responseBody : undefined,
     )
   }
   return new GatewayError(
@@ -396,15 +459,19 @@ export function toGatewayError(error: unknown): GatewayError {
   )
 }
 
-const BASE_PATH = '/api/v1/admin/gateway'
+const BASE_PATH = '/gateway/admin'
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
-type RequestOptions = { query?: Record<string, unknown>; body?: unknown }
+type RequestOptions = {
+  query?: Record<string, unknown>
+  body?: unknown
+  headers?: Record<string, string>
+}
 
 /** One OpenViking Server call; any failure becomes a `GatewayError`. */
 async function call<T>(
-  connection: AdminConnection,
+  connection: GatewayConnection,
   method: Method,
   url: string,
   options: RequestOptions = {},
@@ -414,7 +481,7 @@ async function call<T>(
       ? {}
       : {
           body: options.body,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...options.headers },
         }
   try {
     return await getOvResult<T>(
@@ -422,6 +489,7 @@ async function call<T>(
         method,
         url,
         query: options.query,
+        headers: options.headers,
         ...body,
       }),
     )
@@ -431,14 +499,34 @@ async function call<T>(
 }
 
 /** Calls the gateway's management API through OpenViking Server. */
-function send<T>(
-  connection: AdminConnection,
+async function send<T>(
+  connection: GatewayConnection,
   method: Method,
   segments: string[],
-  options?: RequestOptions,
+  options?: Omit<RequestOptions, 'headers'>,
 ): Promise<T> {
   const url = [BASE_PATH, ...segments.map(encodeURIComponent)].join('/')
-  return call<T>(connection, method, url, options)
+  const managementKey =
+    connection.managementKey ?? getManagementKey(connection.baseUrl)
+  try {
+    return await call<T>(connection, method, url, {
+      ...options,
+      query: { ...options?.query, account_id: connection.accountId },
+      headers: managementKey
+        ? { 'X-OpenViking-Gateway-Management-Key': managementKey }
+        : undefined,
+    })
+  } catch (error) {
+    const failure = toGatewayError(error)
+    // Lock only a stored key, not a candidate or a key replaced meanwhile.
+    if (
+      failure.reason === 'management_key_invalid' &&
+      managementKey === getManagementKey(connection.baseUrl)
+    ) {
+      lockManagementKey(connection.baseUrl, true)
+    }
+    throw failure
+  }
 }
 
 /**
@@ -446,61 +534,84 @@ function send<T>(
  * means the OpenViking server has no OpenViking Gateway management at all.
  */
 export async function getConnectionInfo(
-  connection: AdminConnection,
+  connection: GatewayConnection,
 ): Promise<ConnectionInfo> {
   try {
     return await send<ConnectionInfo>(connection, 'GET', ['guides'])
   } catch (error) {
     const failure = toGatewayError(error)
     if (failure.status !== 404) throw failure
-    throw new GatewayError(failure.detail, 404, failure, 'unsupported')
+    throw new GatewayError(failure.detail, 404, failure, 'not_enabled')
   }
 }
 
-export const getOverview = (connection: AdminConnection) =>
+/** Pass `managementKey` in the connection to check a candidate key. */
+export async function getAccess(
+  connection: GatewayConnection,
+): Promise<GatewayAccess> {
+  try {
+    return await send<GatewayAccess>(connection, 'GET', ['access'])
+  } catch (error) {
+    const failure = toGatewayError(error)
+    if (failure.status === 404)
+      throw new GatewayError(failure.detail, 404, failure, 'not_enabled')
+    throw failure
+  }
+}
+
+export const importVlm = (connection: GatewayConnection) =>
+  send<VlmImportResult>(connection, 'POST', ['upstreams', 'import-vlm'])
+
+export const getOverview = (connection: GatewayConnection) =>
   send<Overview>(connection, 'GET', ['overview'])
 
 /** Newest-first request log; the gateway caps `limit` at 1,000. */
-export const listLogs = (connection: AdminConnection, limit = 200) =>
+export const listLogs = (connection: GatewayConnection, limit = 200) =>
   send<LogRecord[]>(connection, 'GET', ['logs'], { query: { limit } })
 
-export const listUpstreams = (connection: AdminConnection) =>
+export const listUpstreams = (connection: GatewayConnection) =>
   send<Upstream[]>(connection, 'GET', ['upstreams'])
 
-/** Available MCP tools; empty until this account has a gateway key. */
-export const listTools = (connection: AdminConnection) =>
+/** OpenViking MCP tools, read with the caller's OpenViking key (root: a key issued in this account). */
+export const listTools = (connection: GatewayConnection) =>
   send<GatewayTool[]>(connection, 'GET', ['tools'])
 
 /** Creates or replaces an upstream. Build the body with `toUpstreamInput`. */
 export const saveUpstream = (
-  connection: AdminConnection,
+  connection: GatewayConnection,
   id: string,
   input: UpstreamInput,
 ) => send<Upstream>(connection, 'PUT', ['upstreams', id], { body: input })
 
 /** Fails with reason `conflict` while keys still use the upstream. */
-export const deleteUpstream = (connection: AdminConnection, id: string) =>
+export const deleteUpstream = (connection: GatewayConnection, id: string) =>
   send<{ deleted: boolean }>(connection, 'DELETE', ['upstreams', id])
 
-/** Calls the upstream's model list with its stored credentials. */
-export const testUpstream = (connection: AdminConnection, id: string) =>
-  send<UpstreamTestResult>(connection, 'POST', ['upstreams', id, 'test'])
+/** Checks connectivity, or sends one small generation request when a model is given. */
+export const testUpstream = (
+  connection: GatewayConnection,
+  id: string,
+  model?: string,
+) =>
+  send<UpstreamTestResult>(connection, 'POST', ['upstreams', id, 'test'], {
+    body: model ? { model } : {},
+  })
 
-export const listProfiles = (connection: AdminConnection) =>
+export const listProfiles = (connection: GatewayConnection) =>
   send<Profile[]>(connection, 'GET', ['policies'])
 
 /** Creates or replaces a profile. Build the body with `toProfileSettings`. */
 export const saveProfile = (
-  connection: AdminConnection,
+  connection: GatewayConnection,
   id: string,
   settings: ProfileSettings,
 ) => send<Profile>(connection, 'PUT', ['policies', id], { body: settings })
 
 /** Fails with reason `conflict` while keys still use the profile. */
-export const deleteProfile = (connection: AdminConnection, id: string) =>
+export const deleteProfile = (connection: GatewayConnection, id: string) =>
   send<{ deleted: boolean }>(connection, 'DELETE', ['policies', id])
 
-export const listKeys = (connection: AdminConnection) =>
+export const listKeys = (connection: GatewayConnection) =>
   send<GatewayKey[]>(connection, 'GET', ['keys'])
 
 const KEY_USER_ROLES: readonly string[] = ['admin', 'user']
@@ -510,7 +621,7 @@ const KEY_USER_ROLES: readonly string[] = ['admin', 'user']
  * whether it can read each user's key; the key never reaches the browser.
  */
 export async function listKeyUsers(
-  connection: AdminConnection,
+  connection: GatewayConnection,
 ): Promise<KeyUser[]> {
   const users = await call<Array<Omit<KeyUser, 'role'> & { role: string }>>(
     connection,
@@ -527,15 +638,15 @@ export async function listKeyUsers(
  * Issues a key; the response is the only time the secret is available. For a
  * `user_id`, OpenViking Server sends that user's stored key to the gateway.
  */
-export const issueKey = (connection: AdminConnection, request: KeyRequest) =>
+export const issueKey = (connection: GatewayConnection, request: KeyRequest) =>
   send<IssuedKey>(connection, 'POST', ['keys'], { body: request })
 
-export const revokeKey = (connection: AdminConnection, id: string) =>
+export const revokeKey = (connection: GatewayConnection, id: string) =>
   send<{ deleted: boolean }>(connection, 'DELETE', ['keys', id])
 
 /** Starts a fresh OpenViking session for one conversation of a key. */
 export const resyncCapture = (
-  connection: AdminConnection,
+  connection: GatewayConnection,
   keyId: string,
   target: ResyncTarget,
 ) =>
@@ -547,7 +658,7 @@ export const resyncCapture = (
   )
 
 /** Revokes every key of an OpenViking user and deletes their gateway conversations. */
-export const deleteUserData = (connection: AdminConnection, userId: string) =>
+export const deleteUserData = (connection: GatewayConnection, userId: string) =>
   send<{ deleted: boolean }>(connection, 'DELETE', ['users', userId, 'data'])
 
 /**

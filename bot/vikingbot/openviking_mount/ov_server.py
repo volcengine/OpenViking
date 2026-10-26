@@ -156,12 +156,6 @@ class VikingClient:
             if isinstance(value, str) and value.strip():
                 normalized[key] = value.strip()
         if not normalized.get("api_key"):
-            if (
-                normalized.get("api_key_type") == "root"
-                and normalized.get("account_id")
-                and normalized.get("user_id")
-            ):
-                return normalized
             return None
         return normalized
 
@@ -532,16 +526,31 @@ class VikingClient:
         )
         return result
 
+    async def compile_embeddings(
+        self, texts: List[str], *, target_uri: str, expected_model: str | None = None
+    ) -> Dict[str, Any]:
+        """Use the authenticated server embedder for transient Compile routing batches."""
+        response = await self.client._request(
+            "POST",
+            "/api/v1/compile/embeddings",
+            json={"texts": texts, "target_uri": target_uri, "expected_model": expected_model},
+        )
+        return self.client._handle_response_data(response).get("result", {})
+
     async def list_resources(
         self,
         path: Optional[str] = None,
         recursive: bool = False,
         node_limit: int = 1000,
+        *,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """列出资源"""
+        """列出资源；offset 跳过指定数量的可见节点，递归深度遵循服务端默认值。"""
         if path is None or path == "":
             path = viking_resource_prefix
-        entries = await self.client.ls(path, recursive=recursive, node_limit=node_limit)
+        entries = await self.client.ls(
+            path, recursive=recursive, node_limit=node_limit, offset=offset
+        )
         return entries
 
     async def stat(self, uri: str) -> Dict[str, Any]:
@@ -563,8 +572,11 @@ class VikingClient:
     async def mkdir(self, uri: str) -> None:
         await self.client.mkdir(uri)
 
-    async def tree(self, uri: str, *, node_limit: int = 1000) -> List[Dict[str, Any]]:
-        return await self.client.tree(uri, node_limit=node_limit)
+    async def tree(
+        self, uri: str, *, node_limit: int = 1000, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Return one visible tree page; offset skips entries from preceding pages."""
+        return await self.client.tree(uri, node_limit=node_limit, offset=offset)
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         return await self.client.read_raw(uri, offset=offset, limit=limit)
@@ -621,13 +633,11 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         return await self.client.add_skill(
             path,
-            target_uri=target_uri,
+            options={"target_uri": target_uri},
             wait=wait,
-            timeout=timeout,
         )
 
     async def update_skill(
@@ -637,14 +647,12 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         return await self.client.update_skill(
             skill_name,
             path,
-            target_uri=target_uri,
+            options={"target_uri": target_uri},
             wait=wait,
-            timeout=timeout,
         )
 
     async def batch_write(
@@ -653,13 +661,14 @@ class VikingClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
-        timeout: Optional[float] = None,
+        skip_conflicts: bool = False,
     ) -> Dict[str, Any]:
+        """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
         return await self.client.batch_write(
             root_uri=root_uri,
             operations=operations,
             wait=wait,
-            timeout=timeout,
+            options={"skip_conflicts": skip_conflicts},
         )
 
     async def read_content(
@@ -1025,7 +1034,7 @@ class VikingClient:
                         "type": "tool",
                         "tool_id": tool_id,
                         "tool_name": tool_name,
-                        "tool_uri": f"viking://session/{session_id}/tools/{tool_id}"
+                        "tool_uri": f"viking://~/sessions/{session_id}/tools/{tool_id}"
                         if session_id
                         else "",
                         "tool_input": tool_input,

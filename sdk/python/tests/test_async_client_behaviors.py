@@ -1,10 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 from openviking_sdk import (
     AsyncHTTPClient,
@@ -143,7 +145,8 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_normalizes_message_part_objects():
+@pytest.mark.parametrize("tool_input", [None, {}, {"query": "OpenViking"}])
+async def test_async_http_client_normalizes_message_part_objects(tool_input):
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
     client._http = fake_http
@@ -163,7 +166,7 @@ async def test_async_http_client_normalizes_message_part_objects():
             ToolPart(
                 tool_id="call-1",
                 tool_name="search",
-                tool_input={"query": "OpenViking"},
+                tool_input=tool_input,
                 tool_status="completed",
                 duration_ms=12.5,
                 prompt_tokens=42,
@@ -200,7 +203,7 @@ async def test_async_http_client_normalizes_message_part_objects():
                     "type": "tool",
                     "tool_id": "call-1",
                     "tool_name": "search",
-                    "tool_input": {"query": "OpenViking"},
+                    **({"tool_input": tool_input} if tool_input is not None else {}),
                     "tool_status": "completed",
                     "duration_ms": 12.5,
                     "prompt_tokens": 42,
@@ -1120,7 +1123,6 @@ def test_sync_add_resource_accepts_and_forwards_declared_add_type():
         "to": "viking://resources/feishu",
         "parent": None,
         "wait": False,
-        "timeout": None,
         "options": {"add_type": "feishu"},
     }
 
@@ -1323,6 +1325,40 @@ async def test_search_uses_session_wrapper_session_id_in_payload():
             "limit": 5,
         },
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("level_limit", [None, 0, 1])
+async def test_grep_sends_optional_depth_through_public_clients(sync, level_limit):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "result": {"matches": []}})
+
+    client = (SyncHTTPClient if sync else AsyncHTTPClient)(url="http://localhost:1933")
+    async_client = client._async_client if sync else client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    kwargs = {} if level_limit is None else {"level_limit": level_limit}
+    try:
+        if sync:
+            result = client.grep("viking://resources", "needle", **kwargs)
+        else:
+            result = await client.grep("viking://resources", "needle", **kwargs)
+        assert result == {"matches": []}
+        assert len(requests) == 1
+        assert requests[0].method == "POST"
+        assert requests[0].url.path == "/api/v1/search/grep"
+        payload = json.loads(requests[0].content)
+        if level_limit is None:
+            assert "level_limit" not in payload
+        else:
+            assert payload["level_limit"] == level_limit
+    finally:
+        await async_client.close()
 
 
 @pytest.mark.asyncio
@@ -1562,42 +1598,30 @@ async def test_ls_and_tree_preserve_query_options_and_pagination():
 
 
 @pytest.mark.asyncio
-async def test_rm_uses_delete_request_with_timeout_when_provided():
+async def test_batch_write_serializes_processing_mode_and_operation_metadata():
     client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(request=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: None
-
-    await client.rm("/resources/demo.md", recursive=True, wait=True, timeout=5.0)
-
-    fake_http.request.assert_awaited_once_with(
-        "DELETE",
-        "/api/v1/fs",
-        params={
-            "uri": "viking://resources/demo.md",
-            "recursive": True,
-            "wait": True,
-            "timeout": 5.0,
-        },
-    )
-
-
-@pytest.mark.asyncio
-async def test_batch_write_http_timeout_outlives_server_wait_timeout():
-    client = AsyncHTTPClient(url="http://localhost:1933", timeout=180.0)
     client._request = AsyncMock(return_value=object())
     client._handle_response_data = lambda _response: {"result": {}}
 
     await client.batch_write(
         "viking://resources/wiki",
-        [],
-        wait=True,
-        timeout=300.0,
+        [
+            {
+                "uri": "viking://resources/wiki/a.md",
+                "content": "new",
+                "tags": ["team=search"],
+                "tag_mode": "append",
+                "acl": {"acl_mode": "restricted", "entries": []},
+            }
+        ],
+        options={"processing_mode": "vectors_only"},
     )
 
-    request_timeout = client._request.await_args.kwargs["timeout"]
-    assert request_timeout.read == 330.0
-    assert request_timeout.connect == 180.0
+    payload = client._request.await_args.kwargs["json"]
+    assert payload["processing_mode"] == "vectors_only"
+    assert payload["operations"][0]["tags"] == ["team=search"]
+    assert payload["operations"][0]["tag_mode"] == "append"
+    assert payload["operations"][0]["acl"] == {"acl_mode": "restricted", "entries": []}
 
 
 @pytest.mark.asyncio

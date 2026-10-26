@@ -303,7 +303,7 @@ class ToolRegistry:
         )
         result = hook_result.get("result")
         if isinstance(result, Exception):
-            result = f"Error executing {name}: {str(result)}"
+            result = f"Error: executing {name}: {str(result)}"
         return ToolExecutionResult(
             result=result,
             effective_params=effective_params,

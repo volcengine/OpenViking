@@ -164,6 +164,7 @@ scrape_configs:
 | `openviking_retrieval_zero_result_total` | Counter | `account_id, context_type` | 检索零结果次数 |
 | `openviking_retrieval_rerank_used_total` | Counter | `account_id` | 检索中使用 rerank 的次数 |
 | `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | 检索 rerank 回退次数 |
+| `openviking_resource_imports_total` | Counter | `account_id, pipeline, source_type` | 已受理的资源导入任务数；Connector 导入使用 `pipeline="connector"`，`source_type` 为 `repository` 或 `document` |
 | `openviking_resource_stage_total` | Counter | `account_id, stage, status` | 资源导入各阶段执行次数 |
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | 资源导入阶段耗时分布 |
 | `openviking_resource_wait_duration_seconds` | Histogram | `account_id, operation` | 资源导入等待耗时分布（例如队列等待） |
@@ -205,6 +206,7 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 | `openviking_vlm_tokens_input_total` | Counter | `account_id, provider, model_name` | VLM 输入 token |
 | `openviking_vlm_tokens_output_total` | Counter | `account_id, provider, model_name` | VLM 输出 token |
 | `openviking_vlm_tokens_total` | Counter | `account_id, provider, model_name` | VLM 总 token |
+| `openviking_vlm_ingestion_tokens_total` | Counter | `account_id, source_type` | 资源导入阶段 VLM 总 token，`source_type` 区分 `repository` / `document` |
 | `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name` | VLM 调用耗时分布 |
 | `openviking_embedding_requests_total` | Counter | `account_id, status` | embedding 请求数 |
 | `openviking_embedding_latency_seconds` | Histogram | `account_id, status` | embedding 耗时分布 |
@@ -214,6 +216,7 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 | `openviking_embedding_tokens_input_total` | Counter | `account_id, provider, model_name` | embedding 输入 token（per-call 聚合） |
 | `openviking_embedding_tokens_output_total` | Counter | `account_id, provider, model_name` | embedding 输出 token（per-call 聚合；若长期为 0 可能不出现） |
 | `openviking_embedding_tokens_total` | Counter | `account_id, provider, model_name` | embedding 总 token（per-call 聚合） |
+| `openviking_embedding_ingestion_tokens_total` | Counter | `account_id, source_type` | 资源导入阶段 embedding 总 token，`source_type` 区分 `repository` / `document` |
 | `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name` | rerank provider 调用次数（per-call） |
 | `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name` | rerank provider 调用耗时分布（per-call） |
 | `openviking_rerank_tokens_input_total` | Counter | `account_id, provider, model_name` | rerank 输入 token（per-call 聚合） |
@@ -288,14 +291,21 @@ RAGFS 通过一次原生 `metrics()` 调用读取文件系统、Cache、multi-ba
 | `openviking_ragfs_cache_bytes_total` | Counter | `source` | 来自后端和缓存的字节数 |
 | `openviking_ragfs_cache_operation_duration_seconds_total` | Counter | `operation` | get/put/delete 累计耗时 |
 | `openviking_ragfs_cache_inflight_events_total` | Counter | `event` | leader/follower/backend_saved 次数 |
-| `openviking_ragfs_multiwrite_background_tasks` | Gauge | 无 | 后台任务数，包含重试循环 |
-| `openviking_ragfs_multiwrite_read_routes_total` | Counter | `route` | primary/backup/redirect/miss 路由选择次数 |
+| `openviking_ragfs_multiwrite_background_tasks` | Gauge | 无 | 每个 mount 的活跃 flush runtime，值为 `0` 或 `1` |
+| `openviking_ragfs_multiwrite_pending_events` | Gauge | 无 | 已提交且正在排队、执行中或重试中的事件数 |
+| `openviking_ragfs_multiwrite_errors_total` | Counter | `worker` | `flush`、`checkpoint`、`catch_up`、`gc` 的最终失败次数 |
+| `openviking_ragfs_multiwrite_backend_lag_events` | Gauge | `backend, partition` | 所有 account 的 `tail - synced_seq` 之和 |
+| `openviking_ragfs_multiwrite_protocol_version` | Gauge | `version` | 闭集标签 `v2` 对应的 mount 数 |
+| `openviking_ragfs_multiwrite_protocol_status` | Gauge | `status` | 闭集标签 `migrating`、`stable` 对应的 mount 数 |
 
 这些指标不带 `mount` 和 `account_id` 标签。未启用 Cache 或 multi-backend
 时，不生成对应指标族。`status` 为 `success` 或 `error`。
 `exists=false` 计为成功；`replace` 使用 `rename` 操作标签。
 Histogram 包含全部操作结果，有限桶边界范围为 0.0001 至 10 秒。
 Python `get_stats()` 保留原有微秒字段。
+
+protocol 指标始终包含闭集中的两条 series。任何 protocol、account 或 segment
+manifest 无法读取或校验时，本次完整 snapshot 失败，不会发布部分 lag=0。
 
 ### 任务与 Task Tracker
 
@@ -518,7 +528,7 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 - `server.observability.metrics.exporters.otel.protocol`：`"grpc"` 或 `"http"`
 - `server.observability.metrics.exporters.otel.tls.insecure`：仅对 OTLP/gRPC 生效；`true` 表示明文连接（无 TLS）
 - `server.observability.metrics.exporters.otel.endpoint`：OTLP 端点（gRPC 用 `host:4317`；HTTP 必须是完整 URL）
-- `server.observability.metrics.exporters.otel.service_name`：OTLP `service.name` 资源属性（默认 `"openviking-server"`）
+- `server.observability.metrics.exporters.otel.service_name`：OTLP `service.name` 资源属性；省略时默认继承顶层 `service_name`
 - `server.observability.metrics.exporters.otel.export_interval_ms`：OTLP 推送间隔，单位毫秒（默认 `10000`）
 - `server.observability.metrics.exporters.otel.headers`：可选的自定义 OTLP 请求头；gRPC 会作为 metadata 发送，HTTP 会作为 headers 发送
 - 使用 gRPC 时，`headers` 中的 key 需要使用小写形式，例如 `x-byteapm-appkey`；HTTP 不受该限制

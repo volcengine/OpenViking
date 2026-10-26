@@ -48,15 +48,15 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 
 `auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
 
-| 字段 | 类型 | 默认值 | 上限 | 说明 |
-|------|------|--------|------|------|
-| `pending_token_threshold` | int | 150000 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `message_count_threshold` | int | 100 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
-| `keep_recent_count` | int | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
-| `min_commit_interval_seconds` | int | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
+| 字段 | 类型 | 默认值 | 最小值 | 上限 | 说明 |
+|------|------|--------|--------|------|------|
+| `pending_token_threshold` | int | 150000 | 0 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 100 | 0 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `idle_timeout_seconds` | int | 86400 | 0（关闭）或 300 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
+| `keep_recent_count` | int | 0 | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `min_commit_interval_seconds` | int | 0 | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
 
-所有字段最小值为 `0`，会被 clamp 到 `[0, 上限]`。未知字段会以 `InvalidArgumentError` 拒绝。idle 超时还要求服务端开启 `memory.session_auto_commit.enabled`；仅设置 `idle_timeout_seconds` 不会启动扫描器。
+新传入的 `idle_timeout_seconds` 必须为 `0`（关闭）或不小于 `300`，超过 `604800` 时会被 clamp 到该上限；为兼容存量数据，已经保存的小于 300 的正值仍按原值读取。其他字段最小值为 `0`，并会被 clamp 到各自范围。未知字段会以 `InvalidArgumentError` 拒绝。idle 超时还要求服务端开启 `memory.session_auto_commit.enabled`；仅设置 `idle_timeout_seconds` 不会启动扫描器。
 
 #### 3. 使用示例
 
@@ -1332,6 +1332,8 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 提交会话。归档消息（Phase 1）在响应返回前完成；有消息被归档时，摘要生成和记忆提取（Phase 2）在后台异步执行。产生归档的 commit 返回 `status: "accepted"` 和 `task_id`；没有可归档内容的 no-op commit 返回 `status: "skipped"` 和 `task_id: null`。
 
+原独立 session `extract` 接口已移除，记忆提取统一使用 `commit`。迁移后消息会按保留策略归档；请通过返回的 `task_id` 查询后台提取结果，不能将 `accepted` 当作提取完成。
+
 **两阶段提交流程**：
 - **Phase 1（同步）**: 按保留策略拆分消息，写入归档和恢复记录，入队 Phase 2，并将保留消息写回 live session
 - **Phase 2（异步）**: 生成摘要（L0/L1），提取长期记忆并更新关系
@@ -1470,43 +1472,6 @@ ov session commit a1b2c3d4
   }
 }
 ```
-
----
-
-### extract()
-
-#### 1. API 实现介绍
-
-对已有会话的当前 live 消息执行记忆提取，等待本次提取结果后返回。它不创建新的 commit 任务，也不替代归档；已归档历史不会作为本次 live 消息重复输入。
-
-**代码入口**：
-- `openviking/server/routers/sessions.py:extract_session()` - HTTP 路由
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| session_id | str | 是 | - | 要提取记忆的会话 ID |
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```http
-POST /api/v1/sessions/{session_id}/extract
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key"
-```
-
-**响应示例**
-
-响应的 `result` 是本次提取产生的记忆写入结果列表。列表项的具体结构取决于该会话实际提取出了哪些记忆。
 
 <a id="get_task"></a><a id="list_tasks"></a>
 

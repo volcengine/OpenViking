@@ -596,7 +596,6 @@ Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or 
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to remove |
 | wait | bool | No | False | Wait for the semantic refresh after deletion |
-| timeout | float | No | None | Refresh timeout in seconds when `wait=true` |
 | recursive | bool | No | False | Remove directory recursively |
 
 

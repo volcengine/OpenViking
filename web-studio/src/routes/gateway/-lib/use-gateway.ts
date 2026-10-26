@@ -1,13 +1,15 @@
+import i18n from '#/i18n/core'
 import { useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UseQueryOptions } from '@tanstack/react-query'
 
 import { useAppConnection } from '#/hooks/use-app-connection'
-import type { AdminConnection } from '#/lib/admin'
-import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
+import { useStudioService } from '#/hooks/use-studio-service'
+import { useManagementKey } from './management-key'
 
 import {
   getConnectionInfo,
+  getAccess,
   getOverview,
   listKeyUsers,
   listKeys,
@@ -18,6 +20,8 @@ import {
 } from './api'
 import type {
   ConnectionInfo,
+  GatewayConnection,
+  GatewayAccess,
   GatewayError,
   GatewayKey,
   GatewayTool,
@@ -30,6 +34,7 @@ import type {
 
 /** Cached gateway data, invalidated per resource after a change. */
 export type GatewayResource =
+  | 'access'
   | 'connection'
   | 'overview'
   | 'logs'
@@ -39,8 +44,8 @@ export type GatewayResource =
   | 'keys'
   | 'users'
 
-/** Whose gateway data a query holds: server, account and a hash of the admin key. */
-export type GatewayScope = readonly [string, string, string]
+/** Cache isolation by server, account and fingerprints of both credentials. */
+export type GatewayScope = readonly [string, string, string, string]
 
 function hashSecret(value: string): string {
   let hash = 0x811c9dc5
@@ -55,8 +60,14 @@ export function gatewayScope(
   baseUrl: string,
   accountId: string,
   adminApiKey: string,
+  managementKey = '',
 ): GatewayScope {
-  return [baseUrl, accountId, adminApiKey ? hashSecret(adminApiKey) : 'none']
+  return [
+    baseUrl,
+    accountId,
+    adminApiKey ? hashSecret(adminApiKey) : 'none',
+    managementKey ? hashSecret(managementKey) : 'none',
+  ]
 }
 
 /** Query key `['gateway', scope, resource, ...params]`. */
@@ -72,26 +83,22 @@ export function gatewayQueryKey(
 
 /**
  * Access and connection for gateway management. `connection` uses the
- * account admin key; `invalidate()` refreshes the listed resources, or all
+ * configured OpenViking credential; `invalidate()` refreshes the listed resources, or all
  * gateway data when called without arguments.
  */
-export function useGateway() {
-  const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
-    useAppConnection()
-  const { baseUrl, accountId, userId, adminApiKey } = connection
-  const { canManageUsers } = resolveStudioManagementCapabilities({
-    hasControlCredential: Boolean(adminApiKey.trim()),
-    isRoleLoading: isConnectionRoleLoading,
-    role: connectionRole,
-    serverMode,
-  })
-  const admin = useMemo<AdminConnection>(
-    () => ({ baseUrl, accountId, userId, apiKey: adminApiKey }),
-    [baseUrl, accountId, userId, adminApiKey],
+function useGatewayConnection() {
+  const { connection, isConnectionRoleLoading, serverMode } = useAppConnection()
+  const service = useStudioService()
+  const { baseUrl, accountId, userId } = connection
+  const apiKey = connection.adminApiKey || connection.apiKey
+  const managementKey = useManagementKey(baseUrl)
+  const admin = useMemo<GatewayConnection>(
+    () => ({ baseUrl, accountId, userId, apiKey, managementKey }),
+    [baseUrl, accountId, userId, apiKey, managementKey],
   )
   const scope = useMemo(
-    () => gatewayScope(baseUrl, accountId, adminApiKey),
-    [baseUrl, accountId, adminApiKey],
+    () => gatewayScope(baseUrl, accountId, apiKey, managementKey),
+    [baseUrl, accountId, apiKey, managementKey],
   )
   const queryClient = useQueryClient()
   const invalidate = useCallback(
@@ -106,14 +113,22 @@ export function useGateway() {
     [queryClient, scope],
   )
   return {
-    allowed: canManageUsers,
-    /** OpenViking runs in development mode, where Studio can't manage the gateway. */
+    /**
+     * Dev mode needs no credential; trusted mode lets /access explain that
+     * the gateway doesn't support it.
+     */
+    allowed:
+      service.ready &&
+      service.provider === 'opensource' &&
+      (serverMode === 'dev' ||
+        serverMode === 'trusted' ||
+        Boolean(apiKey.trim())),
+    /** Local development authenticates as default/default without a credential. */
     devMode: serverMode === 'dev',
     isRoleLoading: isConnectionRoleLoading,
-    /** Role of the admin key; `admin` or `root` whenever `allowed`. */
-    role: connectionRole,
     connection: admin,
     scope,
+    managementKey,
     invalidate,
   }
 }
@@ -127,16 +142,42 @@ export type GatewayQueryOptions<T> = Omit<
 function useGatewayQuery<T>(
   resource: GatewayResource,
   params: unknown[],
-  load: (connection: AdminConnection) => Promise<T>,
+  load: (connection: GatewayConnection) => Promise<T>,
   options: GatewayQueryOptions<T> = {},
 ) {
-  const { allowed, connection, scope } = useGateway()
+  const { allowed, connection, scope } = useGatewayConnection()
   return useQuery<T, GatewayError>({
     ...options,
     queryKey: gatewayQueryKey(scope, resource, ...params),
-    queryFn: () => load(connection),
+    queryFn: () => {
+      if (!allowed) throw new Error(i18n.t('studio:errors.gatewayUnavailable'))
+      return load(connection)
+    },
     enabled: allowed && options.enabled !== false,
   })
+}
+
+export const useAccess = (options?: GatewayQueryOptions<GatewayAccess>) =>
+  useGatewayQuery('access', [], getAccess, {
+    retry: false,
+    retryOnMount: false,
+    staleTime: 30_000,
+    ...options,
+  })
+
+/** Connection plus the permissions /access grants; pages read only these. */
+export function useGateway() {
+  const gateway = useGatewayConnection()
+  const accessQuery = useAccess()
+  const access = accessQuery.data
+  return {
+    ...gateway,
+    access,
+    accessQuery,
+    /** Upstreams and profiles can be viewed and tested, not changed. */
+    readOnly: !access?.can_write_objects,
+    canIssueForOthers: Boolean(access?.can_issue_for_others),
+  }
 }
 
 /** Gateway address for clients (also tells whether the gateway is reachable). */

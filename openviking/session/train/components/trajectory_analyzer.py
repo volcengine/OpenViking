@@ -168,8 +168,7 @@ class TrajectoryRolloutAnalyzer:
         if self.vlm is None:
             if self.vlm_resolver is None:
                 raise RuntimeError(
-                    "TrajectoryRolloutAnalyzer requires a VLM resolver "
-                    "for account-owned work"
+                    "TrajectoryRolloutAnalyzer requires a VLM resolver for account-owned work"
                 )
             vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
 
@@ -179,6 +178,7 @@ class TrajectoryRolloutAnalyzer:
             include_trajectories=include_trajectories,
             include_session_skills=include_session_skills,
             vlm_config=vlm_config,
+            source_archive_uri=source_archive_uri,
         )
         consumed_experience_uris = collect_read_experience_uris(messages, ctx=ctx)
         phase_result = await self._run_trajectory_extract_phase(

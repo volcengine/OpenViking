@@ -10,6 +10,8 @@ import {
   fetchSessions,
 } from './api'
 import type { Message } from './types/message'
+import { resolveSessionHistorySource } from './history-source'
+import { useAppConnection } from '#/hooks/use-app-connection'
 import type { SessionMemoryDiff } from './memory-diff'
 import type { SessionListItem, SessionMeta } from '@ov-server/api/v1/sessions'
 
@@ -70,17 +72,19 @@ export function useSession(sessionId: string | undefined) {
 
 /** Fetch message history for a session. */
 export function useSessionMessages(sessionId: string | undefined) {
+  const { connection } = useAppConnection()
+  const historySource = resolveSessionHistorySource(connection)
   const queryClient = useQueryClient()
 
   return useQuery<Message[]>({
-    queryKey: [...SESSIONS_KEY, sessionId, 'messages'],
+    queryKey: [...SESSIONS_KEY, sessionId, 'messages', historySource],
     queryFn: async () => {
       const session = await queryClient.fetchQuery({
         queryFn: () => fetchSession(sessionId!),
         queryKey: [...SESSIONS_KEY, sessionId],
         staleTime: 15_000,
       })
-      return fetchSessionMessages(sessionId!, session)
+      return fetchSessionMessages(sessionId!, session, historySource)
     },
     enabled: Boolean(sessionId),
     staleTime: 30_000, // cache for 30s to avoid flash on session switch

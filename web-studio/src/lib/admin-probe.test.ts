@@ -4,21 +4,17 @@ import { once } from 'node:events'
 import { probeStudioConnection } from './admin'
 
 describe('trusted connection probes', () => {
-  it.each([false, true, undefined])(
-    'uses explicit Root key requirement metadata: %s',
-    async (required) => {
-      const requests: string[] = []
+  it.each(['', 'root-key'])(
+    'requires a key for trusted data access and preserves server errors: %s',
+    async (apiKey) => {
+      const requests: Array<[string, string | undefined]> = []
       const server = createServer((req, res) => {
-        requests.push(req.url || '')
+        requests.push([
+          req.url || '',
+          req.headers['x-api-key'] as string | undefined,
+        ])
         res.setHeader('Content-Type', 'application/json')
-        if (req.url === '/health') {
-          res.end(
-            JSON.stringify({
-              auth_mode: 'trusted',
-              root_api_key_required: required,
-            }),
-          )
-        } else if (req.url?.startsWith('/api/v1/fs/ls')) {
+        if (req.url?.startsWith('/api/v1/fs/ls')) {
           res.statusCode = 403
           res.end(
             JSON.stringify({
@@ -46,22 +42,29 @@ describe('trusted connection probes', () => {
           serverMode: 'trusted',
           accountId: 'account-a',
           userId: 'alice',
-          apiKey: '',
+          apiKey,
           adminApiKey: '',
         })
-        expect(result.rootApiKeyRequired).toBe(required)
         expect(result.admin).toMatchObject({
           state: 'skipped',
-          detailCode: 'controlKeyRequired',
+          detailCode: 'trustedKeyRequired',
         })
-        expect(result.data).toMatchObject({
-          state: 'error',
-          statusCode: 403,
-          errorCode: 'PERMISSION_DENIED',
-        })
-        expect(requests.some((path) => path.startsWith('/api/v1/admin'))).toBe(
-          false,
-        )
+        if (apiKey) {
+          expect(result.data).toMatchObject({
+            state: 'error',
+            statusCode: 403,
+            errorCode: 'PERMISSION_DENIED',
+          })
+          expect(requests).toEqual([
+            [expect.stringContaining('/api/v1/fs/ls'), apiKey],
+          ])
+        } else {
+          expect(result.data).toMatchObject({
+            state: 'skipped',
+            detailCode: 'trustedKeyRequired',
+          })
+          expect(requests).toEqual([])
+        }
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()))
       }

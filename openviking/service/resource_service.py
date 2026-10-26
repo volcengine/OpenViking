@@ -67,10 +67,6 @@ from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry, register_telemetry, unregister_telemetry
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.telemetry.resource_summary import (
-    build_queue_status_payload,
-)
 from openviking.utils import is_git_repo_url, is_github_url, parse_code_hosting_url
 from openviking.utils.git_auth import (
     GitHttpAuthConfig,
@@ -513,7 +509,9 @@ class ResourceService:
                     self._runtime_config_manager,
                     ctx.account_id,
                 )
-                app_credentials = self._load_feishu_credentials_for_watch(app_id, app_secret, feishu_config)
+                app_credentials = self._load_feishu_credentials_for_watch(
+                    app_id, app_secret, feishu_config
+                )
                 watch_auth_state = create_feishu_auth_state(
                     token,
                     refresh_token.strip(),
@@ -673,6 +671,30 @@ class ResourceService:
         await asyncio.gather(*tasks, return_exceptions=True)
         self._background_tasks.clear()
 
+    def _unregister_telemetry_after_task(
+        self,
+        task_id: str,
+        telemetry_id: str,
+        *,
+        account_id: str,
+        user_id: str,
+    ) -> None:
+        async def wait_and_unregister() -> None:
+            from openviking.service.task_tracker import get_task_tracker
+
+            try:
+                await get_task_tracker().wait(
+                    task_id,
+                    account_id=account_id,
+                    user_id=user_id,
+                )
+            finally:
+                unregister_telemetry(telemetry_id)
+
+        background = asyncio.create_task(wait_and_unregister())
+        self._background_tasks.add(background)
+        background.add_done_callback(self._background_tasks.discard)
+
     async def _enqueue_add_resource_job(
         self,
         msg: Any,
@@ -685,6 +707,7 @@ class ResourceService:
     ) -> Any:
         """Persist a job and fully own the passed lock until handoff or release completes."""
         from openviking.service.task_tracker import get_task_tracker
+        from openviking.service.task_work_index import bind_task_context
         from openviking.storage.queuefs import get_queue_manager
 
         tracker = get_task_tracker()
@@ -702,7 +725,10 @@ class ResourceService:
                 ),
                 auth=task_auth,
             )
-            await get_queue_manager().enqueue(queue_name, msg.to_dict())
+            task_account_id = getattr(task, "account_id", msg.account_id)
+            task_user_id = getattr(task, "user_id", msg.user_id)
+            with bind_task_context(task.task_id, task_account_id, task_user_id):
+                await get_queue_manager().enqueue(queue_name, msg.to_dict())
             enqueued = True
             if on_enqueued is not None:
                 on_enqueued()
@@ -854,7 +880,6 @@ class ResourceService:
                         reason=msg.reason,
                         instruction=msg.instruction,
                         defer_post_processing=False,
-                        timeout=msg.timeout,
                         build_index=msg.build_index,
                         summarize=msg.summarize,
                         processing_mode=msg.processing_mode,
@@ -1230,7 +1255,6 @@ class ResourceService:
         create_parent: bool,
         reason: str,
         instruction: str,
-        timeout: Optional[float],
         build_index: bool,
         summarize: bool,
         processing_mode: ProcessingMode,
@@ -1307,7 +1331,6 @@ class ResourceService:
                 lock_handoff=lock_handoff,
                 reason=reason,
                 instruction=instruction,
-                timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
@@ -1526,7 +1549,6 @@ class ResourceService:
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
-        timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -1562,7 +1584,6 @@ class ResourceService:
             reason=reason,
             instruction=instruction,
             wait=wait,
-            timeout=timeout,
             build_index=build_index,
             summarize=summarize,
             processing_mode=processing_mode,
@@ -1590,7 +1611,6 @@ class ResourceService:
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
-        timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -1613,7 +1633,6 @@ class ResourceService:
             reason=reason,
             instruction=instruction,
             wait=False,
-            timeout=timeout,
             build_index=build_index,
             summarize=summarize,
             processing_mode=processing_mode,
@@ -1639,7 +1658,6 @@ class ResourceService:
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
-        timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -1691,7 +1709,6 @@ class ResourceService:
             reason: Reason for adding the resource
             instruction: Processing instruction for semantic extraction
             wait: Whether to wait for semantic extraction and vectorization to complete
-            timeout: Wait timeout in seconds
             build_index: Whether to build vector index immediately (default: True)
             summarize: Whether to generate summary (default: False)
             processing_mode: Post-ingest processing mode for semantic/vector work
@@ -2015,7 +2032,6 @@ class ResourceService:
                 create_parent=target_create_parent,
                 reason=reason,
                 instruction=instruction,
-                timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
@@ -2042,7 +2058,6 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 defer_post_processing=True,
-                timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
@@ -2067,17 +2082,11 @@ class ResourceService:
         from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
         task_id = result["task_id"]
-        try:
-            task = await get_task_tracker().wait(
-                task_id,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                timeout=timeout,
-            )
-        except TimeoutError as exc:
-            raise DeadlineExceededError(
-                "waiting for resource import", timeout, task_id=task_id
-            ) from exc
+        task = await get_task_tracker().wait(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
 
         if task.status == TaskStatus.COMPLETED:
             completed = dict(task.result)
@@ -2105,7 +2114,6 @@ class ResourceService:
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
-        timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -2236,7 +2244,6 @@ class ResourceService:
                     lock_handoff=lock_handoff,
                     reason=reason,
                     instruction=instruction,
-                    timeout=timeout,
                     build_index=build_index,
                     summarize=summarize,
                     processing_mode=processing_mode,
@@ -2301,7 +2308,6 @@ class ResourceService:
         ctx: RequestContext,
         reason: str,
         source_name: Optional[str],
-        timeout: Optional[float] = None,
     ) -> None:
         if not self._resource_memory_link_service:
             return
@@ -2316,48 +2322,11 @@ class ResourceService:
                 resource_uri=root_uri,
                 reason=reason,
                 source_name=source_name,
-                timeout=timeout,
             )
             result["memory_linking"] = link_result
         except Exception as exc:
             logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
             result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
-
-    async def _monitor_queue_processing(
-        self,
-        task_id: str,
-        telemetry_id: str,
-        account_id: str,
-        user_id: str,
-    ) -> None:
-        from openviking.service.task_tracker import get_task_tracker
-
-        task_tracker = get_task_tracker()
-        request_wait_tracker = get_request_wait_tracker()
-        await task_tracker.start(task_id, account_id=account_id, user_id=user_id)
-        try:
-            await request_wait_tracker.wait_for_request(telemetry_id)
-            status = request_wait_tracker.build_queue_status(telemetry_id)
-            errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
-            if errors:
-                await task_tracker.fail(
-                    task_id,
-                    f"queue processing failed: {status}",
-                    account_id=account_id,
-                    user_id=user_id,
-                )
-            else:
-                await task_tracker.complete(
-                    task_id,
-                    {"queue_status": status},
-                    account_id=account_id,
-                    user_id=user_id,
-                )
-        except Exception as exc:
-            await task_tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
-        finally:
-            request_wait_tracker.cleanup(telemetry_id)
-            unregister_telemetry(telemetry_id)
 
     @staticmethod
     def _raise_queue_status_errors(status: Dict[str, Any]) -> None:
@@ -2479,7 +2448,6 @@ class ResourceService:
         data: Any,
         ctx: RequestContext,
         wait: bool = False,
-        timeout: Optional[float] = None,
         allow_local_path_resolution: bool = True,
         source_path_hint: Optional[str] = None,
         apply_privacy: bool = True,
@@ -2494,7 +2462,6 @@ class ResourceService:
         Args:
             data: Skill data (directory path, file path, string, or dict)
             wait: Whether to wait for vectorization to complete
-            timeout: Wait timeout in seconds
             target_uri: Optional root URI override (e.g. ``viking://agent/skills``).
 
         Returns:
@@ -2509,18 +2476,15 @@ class ResourceService:
                 ctx=ctx,
                 server_config=get_server_config(),
             )
-        telemetry_id = get_current_telemetry().telemetry_id
-        request_wait_tracker = get_request_wait_tracker()
-        monitor_started = False
-        processing_started = False
         from openviking.service.task_tracker import get_task_tracker
         from openviking.service.task_tracker_concurrency import run_to_completion
         from openviking.service.task_work_index import bind_task_context
 
         task_tracker = get_task_tracker()
         task = None
-        if telemetry_id:
-            request_wait_tracker.register_request(telemetry_id)
+        outcome_recorded = False
+        telemetry_id = get_current_telemetry().telemetry_id
+        telemetry_cleanup_scheduled = False
 
         try:
             # Establish ownership before any queue work can start. Descendant
@@ -2537,12 +2501,22 @@ class ResourceService:
             # Keep the returned record before propagating cancellation, so a
             # committed task can still be settled by the exception handler.
             await run_to_completion(create_skill_task)
+            assert task is not None
             await task_tracker.start(
                 task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
             )
-            task_tracker.register_running_task(task.task_id)
+            running_work_id = await task_tracker.register_running_task(
+                task.task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
             try:
-                with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                with bind_task_context(
+                    task.task_id,
+                    ctx.account_id,
+                    ctx.user.user_id,
+                    work_id=running_work_id,
+                ):
                     if isinstance(data, SkillProcessingPreparation):
                         result = await self._skill_processor.process_prepared_skill(
                             data,
@@ -2567,85 +2541,88 @@ class ResourceService:
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
                         )
-            finally:
-                await task_tracker.unregister_running_task(task.task_id)
-            processing_started = True
-            if not wait:
-                monitor_started = True
-                asyncio.create_task(
-                    self._monitor_queue_processing(
-                        task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
+                if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
+                    result["root_uri"] = result["uri"]
+
+                result["task_id"] = task.task_id
+                if telemetry_id:
+                    self._unregister_telemetry_after_task(
+                        task.task_id,
+                        telemetry_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    telemetry_cleanup_scheduled = True
+                await task_tracker.complete(
+                    task.task_id,
+                    result,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                outcome_recorded = True
+            except BaseException as exc:
+                failure_message = str(exc) or "Skill processing cancelled"
+                await run_to_completion(
+                    lambda: task_tracker.fail(
+                        task.task_id,
+                        failure_message,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
                     )
                 )
-            if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
-                result["root_uri"] = result["uri"]
-
+                outcome_recorded = True
+                raise
+            finally:
+                await task_tracker.unregister_running_task(task.task_id)
             if wait:
                 wait_start = time.perf_counter()
                 try:
-                    if telemetry_id:
-                        await request_wait_tracker.wait_for_request(telemetry_id, timeout=timeout)
-                        status = request_wait_tracker.build_queue_status(telemetry_id)
-                    else:
-                        qm = get_queue_manager()
-                        status = build_queue_status_payload(await qm.wait_complete(timeout=timeout))
-                except TimeoutError as exc:
+                    completed = await task_tracker.wait(
+                        task.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        timeout=None,
+                    )
+                except (TimeoutError, asyncio.TimeoutError) as exc:
                     get_current_telemetry().set_error(
                         "resource_service.wait_complete",
                         "DEADLINE_EXCEEDED",
                         str(exc),
                     )
-                    raise DeadlineExceededError("queue processing", timeout) from exc
+                    raise DeadlineExceededError("queue processing", None) from exc
                 get_current_telemetry().set(
                     "queue.wait.duration_ms",
                     round((time.perf_counter() - wait_start) * 1000, 3),
                 )
-                result["queue_status"] = status
-                self._raise_queue_status_errors(status)
-                await task_tracker.complete(
+                status = await task_tracker.build_queue_status(
                     task.task_id,
-                    {"queue_status": status},
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )
+                result["queue_status"] = status
+                self._raise_queue_status_errors(status)
                 # Cancellation settles queue entries without counting errors.
-                # complete() preserves cancellation, so check it before the
-                # update caller commits the package and discards its backup.
-                if task_tracker.is_cancellation_requested(task.task_id):
+                if completed.status.value == "cancelled":
                     raise OpenVikingError(
                         "Skill processing was cancelled",
                         code="PROCESSING_ERROR",
                         details={"task_id": task.task_id, "status": "cancelled"},
                     )
-            else:
-                result["task_id"] = task.task_id
-
             return result
         except BaseException as exc:
-            if task is not None and not monitor_started:
-                if processing_started and not request_wait_tracker.is_complete(telemetry_id):
-                    # A standalone add retains its original timeout behavior.
-                    # An update's caller separately cancels before restoring.
-                    monitor_started = True
-                    asyncio.create_task(
-                        self._monitor_queue_processing(
-                            task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
-                        )
+            if task is not None and not outcome_recorded:
+                failure_message = str(exc) or "Skill processing cancelled"
+                await run_to_completion(
+                    lambda: task_tracker.fail(
+                        task.task_id,
+                        failure_message,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
                     )
-                else:
-                    failure_message = str(exc) or "Skill processing cancelled"
-                    await run_to_completion(
-                        lambda: task_tracker.fail(
-                            task.task_id,
-                            failure_message,
-                            account_id=ctx.account_id,
-                            user_id=ctx.user.user_id,
-                        )
-                    )
+                )
             raise
         finally:
-            if not monitor_started:
-                request_wait_tracker.cleanup(telemetry_id)
+            if not telemetry_cleanup_scheduled:
                 unregister_telemetry(telemetry_id)
 
     async def cancel_skill_processing(self, task_id: str, ctx: RequestContext) -> None:
@@ -2660,7 +2637,11 @@ class ResourceService:
             return  # Synchronous preparation failed before the task was created.
         # This includes queued work that must be discarded and active handlers
         # that must finish their cancellation/write cleanup, not just task status.
-        while tracker.has_work(task_id):
+        while await tracker.has_work(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        ):
             await asyncio.sleep(0.05)
 
     async def build_index(
@@ -2693,20 +2674,14 @@ class ResourceService:
         self._ensure_initialized()
         return await self._resource_processor.summarize(resource_uris, ctx, **kwargs)
 
-    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def wait_processed(self) -> Dict[str, Any]:
         """Wait for all queued processing to complete.
-
-        Args:
-            timeout: Wait timeout in seconds
 
         Returns:
             Queue status
         """
         qm = get_queue_manager()
-        try:
-            status = await qm.wait_complete(timeout=timeout)
-        except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", timeout) from exc
+        status = await qm.wait_complete()
         return {
             name: {
                 "processed": s.processed,

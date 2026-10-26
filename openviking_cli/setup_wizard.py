@@ -19,6 +19,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from openviking_cli.utils.config.consts import DEFAULT_CONFIG_DIR, OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.ollama import (
@@ -1899,6 +1900,55 @@ def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | No
     return {"host": "0.0.0.0", "port": port, "root_api_key": root_api_key}
 
 
+def _wizard_gateway(
+    server: dict[str, Any], current: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Enable the gateway on the server port and choose who may configure it."""
+    from openviking_gateway.config import EmbeddedGatewayConfig
+
+    # Settings the embedded gateway no longer reads are dropped on save.
+    removed = EmbeddedGatewayConfig.removed_fields
+    gateway = {k: v for k, v in (current or {}).items() if k not in removed}
+    _rule("OpenViking Gateway")
+    gateway["enabled"] = _prompt_confirm(
+        "Enable OpenViking Gateway on the same port?", default=gateway.get("enabled", False)
+    )
+    if gateway["enabled"]:
+        _check_gateway_public_url(server, gateway)
+        _prompt_gateway_access(server, gateway)
+    return gateway
+
+
+def _check_gateway_public_url(server: dict[str, Any], gateway: dict[str, Any]) -> None:
+    """Offer to clear a public_url left over from the old 1935 gateway port."""
+    public_url = str(gateway.get("public_url") or "")
+    port = urlsplit(public_url).port
+    server_port = int(server.get("port") or 1933)
+    if port is None or port == server_port:
+        return
+    print(f"\n  {_yellow(f'gateway.public_url points at port {port}:')} {public_url}")
+    print(f"  {_dim(f'The gateway now serves on the server port ({server_port}).')}")
+    if _prompt_confirm("Clear gateway.public_url?", default=port == 1935):
+        gateway.pop("public_url")
+
+
+def _prompt_gateway_access(server: dict[str, Any], gateway: dict[str, Any]) -> None:
+    """Remote servers choose whether users may configure upstreams themselves."""
+    if not (server.get("root_api_key") or server.get("auth_mode") == "api_key"):
+        return
+    allow_users = _prompt_confirm(
+        "Allow users to configure their own gateway upstreams?",
+        default=not bool(gateway.get("management_key")),
+    )
+    if allow_users:
+        gateway.pop("management_key", None)
+    elif not gateway.get("management_key"):
+        gateway["management_key"] = "ovgm_" + secrets.token_urlsafe(32)
+        print(f"\n  {_green('Generated gateway management key — copy it to unlock editing:')}")
+        print(f"\n    {_bold(gateway['management_key'])}\n")
+        print(f"  {_dim('Saved in ov.conf (gateway.management_key).')}")
+
+
 def _wizard_query_planner(config_dict: dict[str, Any], ollama_running: bool | None = None) -> None:
     """Optionally configure a lightweight local query-planner model.
 
@@ -2047,7 +2097,7 @@ def _prompt_embedding_flow(
 
 
 def _update_existing_config(config_path: Path, section: str) -> int:
-    """Update a single section (vlm / embedding / server) of an existing ov.conf."""
+    """Update a single section of an existing ov.conf."""
     try:
         data = json.loads(config_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -2089,6 +2139,14 @@ def _update_existing_config(config_path: Path, section: str) -> int:
                 return 0
         old_summary, new_summary = _summarize_model(old_dense), _summarize_model(dense)
         data.setdefault("embedding", {})["dense"] = dense
+    elif section == "gateway":
+        current_gateway = _config_section(data, "gateway")
+        gateway = _wizard_gateway(_config_section(data, "server"), current_gateway)
+        old_summary, new_summary = (
+            _summarize_gateway(current_gateway),
+            _summarize_gateway(gateway),
+        )
+        data["gateway"] = gateway
     else:  # server
         current_server = _config_section(data, "server")
         server_dict = _wizard_server(current=current_server)
@@ -2104,6 +2162,14 @@ def _update_existing_config(config_path: Path, section: str) -> int:
             updated_server.pop("auth_mode", None)
             updated_server.pop("root_api_key", None)
         data["server"] = updated_server
+        gateway = _config_section(data, "gateway")
+        if gateway.get("enabled"):
+            # Local dev has no restricted configuration; remote asks who may configure.
+            if server_dict.get("host") == "127.0.0.1":
+                gateway.pop("management_key", None)
+            else:
+                _prompt_gateway_access(updated_server, gateway)
+            data["gateway"] = gateway
 
     print(f"\n  {_bold('Change:')} {old_summary}")
     print(f"      {_cyan('→')}    {new_summary}")
@@ -2171,6 +2237,13 @@ def _summarize_server(server: dict[str, Any]) -> str:
     return f"{host}:{port} · auth {auth}"
 
 
+def _summarize_gateway(gateway: dict[str, Any]) -> str:
+    if not gateway.get("enabled"):
+        return "disabled"
+    access = "management key required" if gateway.get("management_key") else "users can configure"
+    return f"enabled on server port · {access}"
+
+
 def _config_section(data: dict[str, Any], *keys: str) -> dict[str, Any]:
     """Safely walk nested dict keys, returning {} on any non-dict hop."""
     node: Any = data
@@ -2197,6 +2270,7 @@ def _print_current_config(data: dict[str, Any]) -> None:
     print(f"    VLM:           {_summarize_model(_config_section(data, 'vlm'))}")
     print(f"    Query planner: {_summarize_model(_config_section(data, 'query_planner'))}")
     print(f"    Server:        {_summarize_server(_config_section(data, 'server'))}")
+    print(f"    Gateway:       {_summarize_gateway(_config_section(data, 'gateway'))}")
 
 
 def run_init() -> int:
@@ -2212,12 +2286,13 @@ def run_init() -> int:
     if config_path.exists():
         print(f"  {_yellow('Existing config found:')} {config_path}")
         data = _load_config_data(config_path)
-        vlm_now = emb_now = server_now = ""
+        vlm_now = emb_now = server_now = gateway_now = ""
         if data is not None:
             _print_current_config(data)
             vlm_now = f"(now: {_summarize_model(_config_section(data, 'vlm'))})"
             emb_now = f"(now: {_summarize_model(_config_section(data, 'embedding', 'dense'))})"
             server_now = f"(now: {_summarize_server(_config_section(data, 'server'))})"
+            gateway_now = f"(now: {_summarize_gateway(_config_section(data, 'gateway'))})"
         action = _prompt_choice(
             "What would you like to do?",
             [
@@ -2225,15 +2300,16 @@ def run_init() -> int:
                 ("Update VLM", vlm_now),
                 ("Update embedding", emb_now),
                 ("Update server & auth", server_now),
+                ("Update gateway", gateway_now),
                 ("Cancel", ""),
             ],
             default=1,
         )
-        if action == 5:
+        if action == 6:
             print("  Setup cancelled.\n")
             return 0
-        if action in (2, 3, 4):
-            section = {2: "vlm", 3: "embedding", 4: "server"}[action]
+        if action in (2, 3, 4, 5):
+            section = {2: "vlm", 3: "embedding", 4: "server", 5: "gateway"}[action]
             return _update_existing_config(config_path, section)
 
     config_dict: dict[str, Any] | None = None
@@ -2282,6 +2358,7 @@ def run_init() -> int:
         print("\n  Setup cancelled.\n")
         return 0
     config_dict["server"] = server_dict
+    config_dict["gateway"] = _wizard_gateway(server_dict)
 
     # Summary — providers/models/dimensions are shown, secrets never are.
     emb = config_dict.get("embedding", {}).get("dense", {})
@@ -2295,6 +2372,7 @@ def run_init() -> int:
     planner = config_dict.get("query_planner", {})
     print(f"    Query planner: {_summarize_model(planner)}")
     print(f"    Server:        {_summarize_server(server_dict)}")
+    print(f"    Gateway:       {_summarize_gateway(config_dict['gateway'])}")
     if server_dict.get("root_api_key"):
         print("    Root API key: configured (hidden)")
     print("    Workspace:  configured (hidden)")

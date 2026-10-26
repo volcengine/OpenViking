@@ -32,7 +32,6 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 	setString(payload, "ignore_dirs", opts.IgnoreDirs)
 	setString(payload, "include", opts.Include)
 	setString(payload, "exclude", opts.Exclude)
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	if opts.PreserveStructure != nil {
 		payload["preserve_structure"] = *opts.PreserveStructure
 	}

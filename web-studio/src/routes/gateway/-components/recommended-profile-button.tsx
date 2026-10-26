@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Button } from '#/components/ui/button'
 
 import { newObjectId, saveProfile } from '../-lib/api'
-import { gatewayErrorMessage } from '../-lib/localize'
+import { toastGatewayError } from '../-lib/error-toast'
 import { PROFILE_DEFAULTS } from '../-lib/profile-schema'
 import { useGateway } from '../-lib/use-gateway'
 
@@ -22,7 +22,7 @@ export function RecommendedProfileButton({
   disabled = false,
 }: RecommendedProfileButtonProps) {
   const { t } = useTranslation('gateway')
-  const { connection, invalidate } = useGateway()
+  const { connection, invalidate, readOnly } = useGateway()
   const create = useMutation({
     mutationFn: () =>
       saveProfile(connection, newObjectId(), {
@@ -33,8 +33,9 @@ export function RecommendedProfileButton({
       toast.success(t('profiles.toast.created', { name: profile.name }))
       await invalidate('profiles')
     },
-    onError: (error) => toast.error(gatewayErrorMessage(t, error)),
+    onError: (error) => toastGatewayError(t, error),
   })
+  if (readOnly) return null
   return (
     <Button
       type="button"

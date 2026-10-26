@@ -124,7 +124,7 @@ class AssembleParams:
 
     query: str = ""
     search_type: SearchType = "semantic"
-    image_url: Optional[str] = None
+    image_url: str | list[str] | None = None
     limit: int = DEFAULT_LIMIT
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None

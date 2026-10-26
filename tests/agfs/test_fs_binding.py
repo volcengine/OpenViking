@@ -7,9 +7,11 @@ Tests the python binding mode of VikingFS which directly uses AGFS implementatio
 without HTTP server.
 """
 
+import asyncio
 import os
 import shutil
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -279,22 +281,23 @@ class TestVikingFSBindingLocal:
                 await vfs._async_agfs.pathlock_release(adopted)
             await vfs._async_agfs.pathlock_release(owned)
 
-    @pytest.mark.parametrize(
-        "requests",
-        [
-            [],
-            [{"kind": "exact"}],
-            [{"path": "", "kind": "exact"}],
-            [{"path": "relative", "kind": "tree"}],
-            [{"path": "/local/default/temp/file", "kind": "other"}],
-        ],
-    )
-    async def test_pathlock_batch_rejects_invalid_requests(
-        self, viking_fs_binding_instance, requests
-    ):
-        """Reject malformed pathlock requests without applying defaults."""
-        with pytest.raises(ValueError):
-            await viking_fs_binding_instance._async_agfs.pathlock_acquire_batch(requests)
+    async def test_pathlock_wait_and_cancel_release_resources(self, viking_fs_binding_instance):
+        """Lock waits leave storage responsive; cancelled acquisitions release their lease."""
+        client = viking_fs_binding_instance._async_agfs
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        path = f"/local/default/temp/wait_{uuid.uuid4().hex}"
+        owner = await client.pathlock_acquire_exact(path)
+        waiter = asyncio.create_task(client.pathlock_acquire_exact(path, timeout_secs=2))
+        try:
+            await asyncio.sleep(0.01)
+            await asyncio.wait_for(client.stat("/local"), timeout=0.5)
+        finally:
+            waiter.cancel()
+            await client.pathlock_release(owner)
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+        lease = await client.pathlock_acquire_exact(path)
+        await client.pathlock_release(lease)
 
     async def test_tree_operations(self, viking_fs_binding_instance):
         """Test VikingFS tree operations."""

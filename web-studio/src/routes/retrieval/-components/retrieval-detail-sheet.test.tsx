@@ -15,10 +15,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resources } from '#/i18n/resources'
 import { RetrievalDetailSheet } from './retrieval-detail-sheet'
 
+const serviceState = vi.hoisted(() => ({ provider: 'volcengine' }))
+
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => serviceState,
+}))
+
 const t = ((key: string) => key) as TFunction<'retrieval'>
 
 afterEach(() => {
   cleanup()
+  serviceState.provider = 'volcengine'
 })
 
 describe('RetrievalDetailSheet', () => {
@@ -47,6 +54,7 @@ describe('RetrievalDetailSheet', () => {
   ])(
     'links to the selected file with its translated label in %s',
     async (lng, label) => {
+      serviceState.provider = 'opensource'
       const i18n = createInstance()
       await i18n.use(initReactI18next).init({ lng, resources })
       const uri = 'viking://resources/guide.md'

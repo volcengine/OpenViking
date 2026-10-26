@@ -30,7 +30,7 @@ Then choose a connection:
 - **Quick Local** installs a local server and embedding model. It reuses your
   supported Hermes language model for extraction, which can use a remote API.
 - **OpenViking Service (VolcEngine Cloud)** connects to VolcEngine's
-  [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service)
+  [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)
   with a service API key. You do not need to install a server or configure
   local models.
 - **Custom** connects to your own server with its URL and credentials. Setup
@@ -42,7 +42,7 @@ available after OpenViking finishes extraction. Existing server data is kept.
 
 Quick Local keeps its server running after Hermes exits. See the
 [plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
-for model support, server controls and the known local embedding issue.
+for model support, server controls and runtime upgrade instructions.
 
 ## Check status
 

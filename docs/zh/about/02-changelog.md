@@ -7,6 +7,15 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 ## 未发布
 
+- **LangChain 导入迁移（不兼容变更）**：服务端不再提供
+  `openviking.integrations.langchain` 及其转发模块，旧导入会立即失败，
+  不提供弃用过渡期或兼容占位模块。请安装 `langchain-openviking`
+  （LangGraph 使用 `pip install "langchain-openviking[langgraph]"`），
+  将导入前缀 `openviking.integrations.langchain` 改为 `langchain_openviking`，
+  子模块导入也需同步修改。例如使用
+  `from langchain_openviking import OpenVikingRetriever`。维护中的包和示例迁至
+  `integrations/frameworks/`，包名和标准导入路径保持不变。
+  详见[迁移指南](../agent-integrations/07-langchain-langgraph.md)。
 - **Working Memory 默认关闭（行为变更）**：commit 仍保存原文并抽取长期记忆，默认不生成
   WM 或 checkpoint 摘要。用户需要单独升级已安装的 agent 插件；新版默认关闭自动归档
   摘要注入和上下文接管，由宿主管理历史与压缩。VikingBot 仍默认使用 OV 管理上下文与压缩，

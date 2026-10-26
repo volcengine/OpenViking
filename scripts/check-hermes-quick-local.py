@@ -318,14 +318,30 @@ def main():
                     > 0
                 )
                 probe = (
-                    "from openviking.models.embedder.local_embedders import LocalDenseEmbedder; import math; e=LocalDenseEmbedder(model_name='bge-small-zh-v1.5-f16',cache_dir="
+                    "from concurrent.futures import ThreadPoolExecutor; "
+                    "from openviking.models.embedder.local_embedders import LocalDenseEmbedder; "
+                    "import math; e=LocalDenseEmbedder(model_name='bge-small-zh-v1.5-f16',cache_dir="
                     + repr(str(server.paths.model_cache))
-                    + "); v=e.embed('local embedding validation').dense_vector; assert len(v)==512 and all(math.isfinite(x) for x in v) and any(v)"
+                    + "); "
+                    "pool=ThreadPoolExecutor(max_workers=4); "
+                    "vectors=list(pool.map(lambda i: e.embed(f'local embedding validation {i}').dense_vector, range(8))); "
+                    "pool.shutdown(); "
+                    "assert all(len(v)==512 and all(math.isfinite(x) for x in v) and any(v) for v in vectors); "
+                    "e.close()"
                 )
                 subprocess.run(
                     [str(server.paths.runtime_python), "-c", probe], check=True, timeout=120
                 )
-                evidence["profiles"].append(server.status())
+                versions = json.loads(subprocess.check_output(
+                    [str(server.paths.runtime_python), "-c",
+                     "import json; from importlib.metadata import version; "
+                     "print(json.dumps({k:version(k) for k in ('openviking','volcengine-python-sdk','litellm','llama-cpp-python')}))"],
+                    text=True, timeout=30,
+                ))
+                from packaging.requirements import Requirement
+
+                assert versions["openviking"] in Requirement(ql.OPENVIKING_REQUIREMENT).specifier
+                evidence["profiles"].append({**server.status(), "versions": versions})
             finally:
                 reset_hermes_home_override(token)
         assert servers[0].status()["endpoint"] != servers[1].status()["endpoint"]
@@ -352,6 +368,7 @@ def main():
         evidence.update(
             external_loader=True,
             real_embeddings=True,
+            concurrent_embeddings=True,
             captured_turns=True,
             restart_preserved_data=True,
             foreign_port_recovery=True,

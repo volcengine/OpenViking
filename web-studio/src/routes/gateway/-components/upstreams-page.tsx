@@ -15,7 +15,6 @@ import {
   TriangleAlertIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
@@ -37,9 +36,10 @@ import {
 } from '#/components/ui/table'
 import { cn } from '#/lib/utils'
 
-import { keysUsing, saveUpstream } from '../-lib/api'
-import type { Upstream } from '../-lib/api'
+import { importVlm, keysUsing, saveUpstream, toGatewayError } from '../-lib/api'
+import type { Upstream, VlmImportResult } from '../-lib/api'
 import { formatNumber, hostFromUrl } from '../-lib/format'
+import { toastGatewayError } from '../-lib/error-toast'
 import {
   authModeLabel,
   gatewayErrorMessage,
@@ -53,7 +53,9 @@ import {
   useKeys,
   useUpstreams,
 } from '../-lib/use-gateway'
+import { DocsLink } from './docs-link'
 import { EmptyState, ErrorState, LoadingState } from './empty-state'
+import { Notice } from './notice'
 import { SectionHeader } from './section-header'
 import { EmptyValue, ProtocolBadge, ToneBadge } from './status-badges'
 import { DeleteUpstreamDialog, UpstreamTest } from './upstreams-actions'
@@ -98,7 +100,7 @@ function useToggleUpstream() {
     onError: (error, { upstream }) => {
       // `upstream` is the row as it was before the switch was flipped.
       setEnabled(upstream.id, upstream.enabled)
-      toast.error(gatewayErrorMessage(t, error))
+      toastGatewayError(t, error)
     },
     // Refetch after the last running toggle only (this one still counts), so
     // the fresh list doesn't undo switches whose save hasn't finished.
@@ -118,6 +120,22 @@ function useToggleUpstream() {
 /** Model providers the gateway forwards requests to. */
 export function UpstreamsPage() {
   const { t } = useTranslation('gateway')
+  const { connection, access, invalidate, scope, readOnly } = useGateway()
+  const [importResult, setImportResult] =
+    React.useState<VlmImportResult | null>(null)
+  React.useEffect(() => setImportResult(null), [scope])
+  const importer = useMutation({
+    mutationFn: () => importVlm(connection),
+    onSuccess: async (result) => {
+      setImportResult(result)
+      await invalidate('upstreams')
+    },
+    // A stale /access offered the import; the refreshed one hides it.
+    onError: (error) =>
+      toGatewayError(error).reason === 'vlm_import_forbidden'
+        ? invalidate('access')
+        : undefined,
+  })
   const upstreams = useUpstreams()
   const keys = useKeys()
   const { toggle, pending: toggling } = useToggleUpstream()
@@ -130,7 +148,7 @@ export function UpstreamsPage() {
   )
   const refreshing = upstreams.isFetching || keys.isFetching
 
-  const addButton = (
+  const addButton = !readOnly ? (
     <Button
       size="sm"
       nativeButton={false}
@@ -144,7 +162,26 @@ export function UpstreamsPage() {
       <PlusIcon />
       {t('upstreams.add')}
     </Button>
-  )
+  ) : null
+  const importButton = (empty = false) =>
+    access?.can_import_vlm ? (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={importer.isPending}
+        title={t('upstreams.import.hint')}
+        onClick={() => importer.mutate()}
+      >
+        {t(
+          importer.isPending
+            ? 'upstreams.import.running'
+            : empty
+              ? 'upstreams.import.useSettings'
+              : 'upstreams.import.action',
+        )}
+      </Button>
+    ) : null
 
   let body: React.ReactNode
   if (upstreams.isPending) {
@@ -163,8 +200,15 @@ export function UpstreamsPage() {
       <EmptyState
         icon={<ServerIcon />}
         title={t('upstreams.empty.title')}
-        description={t('upstreams.empty.description')}
-        action={addButton}
+        description={t(
+          readOnly ? 'upstreams.readOnly.empty' : 'upstreams.empty.description',
+        )}
+        action={
+          <div className="flex flex-wrap gap-2">
+            {importButton(true)}
+            {addButton}
+          </div>
+        }
       />
     )
   } else {
@@ -204,6 +248,7 @@ export function UpstreamsPage() {
             <UpstreamRow
               key={upstream.id}
               upstream={upstream}
+              readOnly={readOnly}
               usedBy={keysUsing(keys.data, { upstreamId: upstream.id })}
               toggling={toggling.has(upstream.id)}
               onToggle={(enabled) => toggle({ upstream, enabled })}
@@ -221,6 +266,7 @@ export function UpstreamsPage() {
         description={t('upstreams.description')}
         actions={
           <>
+            <DocsLink section="upstreams" />
             <Button
               type="button"
               variant="outline"
@@ -236,10 +282,29 @@ export function UpstreamsPage() {
               />
               {t('actions.refresh')}
             </Button>
+            {importButton()}
             {addButton}
           </>
         }
       />
+      {importer.isError ? (
+        <Notice
+          tone="danger"
+          action={
+            toGatewayError(importer.error).reason === 'vlm_import_unavailable'
+              ? addButton
+              : undefined
+          }
+        >
+          {gatewayErrorMessage(t, importer.error)}
+        </Notice>
+      ) : null}
+      {importResult ? (
+        <ImportResultNotice
+          result={importResult}
+          onDismiss={() => setImportResult(null)}
+        />
+      ) : null}
       <Card className="gap-0 overflow-hidden py-0">
         <CardContent className="p-0">{body}</CardContent>
       </Card>
@@ -253,8 +318,81 @@ export function UpstreamsPage() {
   )
 }
 
+/** What an import of OpenViking's model settings saved, and what needs a look. */
+export function ImportResultNotice({
+  result,
+  onDismiss,
+}: {
+  result: VlmImportResult
+  onDismiss: () => void
+}) {
+  const { t } = useTranslation('gateway')
+  const { imported, needs_confirmation: confirm, skipped } = result
+  // Upstreams awaiting Coding Plan confirmation are saved too.
+  const saved = imported.length + confirm.length
+  return (
+    <Notice
+      tone={confirm.length || skipped.length ? 'warning' : 'info'}
+      action={
+        <div className="flex flex-wrap gap-2">
+          {skipped.length ? (
+            <DocsLink section="importModels">{t('docs.learnMore')}</DocsLink>
+          ) : null}
+          <Button type="button" size="sm" variant="outline" onClick={onDismiss}>
+            {t('upstreams.import.dismiss')}
+          </Button>
+        </div>
+      }
+    >
+      {saved ? (
+        <p className="font-medium">
+          {t('upstreams.import.summary', { count: saved })}
+        </p>
+      ) : skipped.length ? null : (
+        <p className="font-medium">{t('upstreams.import.nothing')}</p>
+      )}
+      {confirm.length ? (
+        <div>
+          <p>{t('upstreams.import.needsConfirmation')}</p>
+          <ul className="list-inside list-disc">
+            {confirm.map((item) => (
+              <li key={item.id}>
+                {item.name}{' '}
+                <Link
+                  className="font-medium underline underline-offset-4"
+                  to="/gateway/upstreams/$upstreamId"
+                  params={{ upstreamId: item.id }}
+                >
+                  {t('upstreams.import.confirm')}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {skipped.length ? (
+        <div>
+          <p>{t('upstreams.import.skipped', { count: skipped.length })}</p>
+          <ul className="list-inside list-disc">
+            {skipped.map((item) => (
+              <li key={item.id}>
+                {item.id}:{' '}
+                {t(`upstreams.import.reasons.${item.reason}`, {
+                  defaultValue: t('upstreams.import.reasons.unknown'),
+                })}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {saved ? <p className="text-xs">{t('upstreams.import.repeat')}</p> : null}
+    </Notice>
+  )
+}
+
 type UpstreamRowProps = {
   upstream: Upstream
+  readOnly: boolean
   /** Keys that use this upstream; undefined while keys are loading. */
   usedBy: number | undefined
   toggling: boolean
@@ -264,6 +402,7 @@ type UpstreamRowProps = {
 
 function UpstreamRow({
   upstream,
+  readOnly,
   usedBy,
   toggling,
   onToggle,
@@ -340,7 +479,7 @@ function UpstreamRow({
         <Switch
           size="sm"
           checked={upstream.enabled}
-          disabled={toggling}
+          disabled={readOnly || toggling}
           aria-label={t(
             upstream.enabled
               ? 'upstreams.toggle.disable'
@@ -353,49 +492,52 @@ function UpstreamRow({
       <TableCell className="pr-4">
         <div className="flex items-center justify-end gap-1">
           <UpstreamTest upstream={upstream} />
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 px-2 text-xs"
-            nativeButton={false}
-            render={editLink}
-          >
-            <PencilIcon />
-            <span className="max-md:sr-only">{t('actions.edit')}</span>
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={t('actions.more')}
-                  title={t('actions.more')}
-                />
-              }
-            >
-              <EllipsisIcon />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-auto min-w-48">
-              <DropdownMenuItem
-                variant="destructive"
-                disabled={Boolean(usedBy)}
-                className="items-start"
-                onClick={onDelete}
+          {!readOnly ? (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 px-2 text-xs"
+                nativeButton={false}
+                render={editLink}
               >
-                <Trash2Icon className="mt-0.5" />
-                <span className="grid gap-0.5">
-                  <span>{t('upstreams.delete.action')}</span>
-                  {usedBy ? (
-                    <span className="text-xs">
-                      {t('upstreams.delete.blocked', { count: usedBy })}
+                <PencilIcon />
+                <span className="max-md:sr-only">{t('actions.edit')}</span>
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label={t('actions.more')}
+                      title={t('actions.more')}
+                    />
+                  }
+                >
+                  <EllipsisIcon />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-auto min-w-48">
+                  <DropdownMenuItem
+                    variant="destructive"
+                    className="items-start"
+                    onClick={onDelete}
+                  >
+                    <Trash2Icon className="mt-0.5" />
+                    <span className="grid gap-0.5">
+                      <span>{t('upstreams.delete.action')}</span>
+                      {usedBy ? (
+                        <span className="text-xs">
+                          {t('upstreams.delete.blocked', { count: usedBy })}
+                        </span>
+                      ) : null}
                     </span>
-                  ) : null}
-                </span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
+          ) : null}
         </div>
       </TableCell>
     </TableRow>

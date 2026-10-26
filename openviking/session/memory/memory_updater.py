@@ -9,6 +9,7 @@ to the storage system.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -45,7 +46,6 @@ from openviking.session.memory.utils.uri import render_template
 from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.tracer import get_trace_id
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.tags import merge_search_tags
@@ -218,6 +218,7 @@ class ExtractContext:
         chunk_meta: Optional[Dict[int, ChunkMeta]] = None,
         *,
         split_long_text_messages: bool = True,
+        source_archive_uri: str = "",
     ):
         if chunk_meta is None:
             if split_long_text_messages:
@@ -228,6 +229,7 @@ class ExtractContext:
             self.messages = messages
             self.chunk_meta = chunk_meta
         self.page_id_map = PageIdMap()
+        self.source_archive_uri = (source_archive_uri or "").rstrip("/")
 
     @classmethod
     def _build_extraction_messages(
@@ -405,6 +407,17 @@ class ExtractContext:
                 except (ValueError, TypeError):
                     continue
         return datetime.now().strftime("%Y%m%d%H%M%S")
+
+    def get_source_archive_suffix(self) -> str:
+        """Namespace filenames by their full source archive without exposing its path.
+
+        Keep legacy naming for callers outside session commits that have no archive.
+        The suffix is stable across retries, not a new random record identifier.
+        """
+        if not self.source_archive_uri:
+            return ""
+        digest = hashlib.sha256(self.source_archive_uri.encode("utf-8")).hexdigest()[:16]
+        return f"_{digest}"
 
     def get_event_content(
         self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
@@ -835,6 +848,7 @@ class MemoryUpdater:
                 ctx,
                 uri_memory_type_map={uri: memory_type} if memory_type else {},
                 ingest_options=ingest_options,
+                raise_on_enqueue_failure=True,
             )
             return attempted > 0
         except Exception:
@@ -1387,12 +1401,8 @@ class MemoryUpdater:
             except (NotFoundError, FileNotFoundError):
                 # File doesn't exist yet, that's okay
                 pass
-            except Exception:
-                if is_uri_migration:
-                    raise
-                # Preserve the legacy in-place update fallback to the prefetched
-                # snapshot when a fresh disk read is unavailable.
-                pass
+            # Any other read error propagates: the prefetched snapshot may be older
+            # than the file, so writing a result built on it could lose a newer update.
             if is_uri_migration:
                 try:
                     source_raw = await viking_fs.read_file(source_content.uri, ctx=ctx)
@@ -1749,6 +1759,7 @@ class MemoryUpdater:
         uri_memory_type_map: Dict[str, str] = None,
         search_tags_by_uri: Dict[str, List[str]] = None,
         ingest_options: Any = None,
+        raise_on_enqueue_failure: bool = False,
     ) -> int:
         """Vectorize written and edited memory files.
 
@@ -1768,7 +1779,6 @@ class MemoryUpdater:
         uri_memory_type_map = uri_memory_type_map or {}
         search_tags_by_uri = search_tags_by_uri or {}
         viking_fs = self._get_viking_fs()
-        request_wait_tracker = get_request_wait_tracker()
         attempted_count = 0
 
         # Collect all URIs to vectorize (skip .overview.md and .abstract.md - they are handled separately)
@@ -1865,31 +1875,20 @@ class MemoryUpdater:
                                 embedding_msg.context_data["_upsert_options"][
                                     "extracted_memory_type"
                                 ] = memory_type
-                    if embedding_msg.telemetry_id:
-                        request_wait_tracker.register_embedding_root(
-                            embedding_msg.telemetry_id, embedding_msg.id
-                        )
+                    enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    if not enqueued:
+                        message = f"Failed to enqueue memory for vectorization: {uri}"
+                        if raise_on_enqueue_failure:
+                            raise RuntimeError(message)
+                        tracer.error(message)
+                        continue
                     attempted_count += 1
-                    try:
-                        enqueued = await self._vikingdb.enqueue_embedding_msg(embedding_msg)
-                    except Exception as e:
-                        if embedding_msg.telemetry_id:
-                            request_wait_tracker.mark_embedding_failed(
-                                embedding_msg.telemetry_id,
-                                embedding_msg.id,
-                                str(e),
-                            )
-                        raise
-                    if not enqueued and embedding_msg.telemetry_id:
-                        request_wait_tracker.mark_embedding_failed(
-                            embedding_msg.telemetry_id,
-                            embedding_msg.id,
-                            "embedding enqueue returned false",
-                        )
                     logger.debug(f"Enqueued memory for vectorization: {uri}")
 
             except Exception as e:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
+                if raise_on_enqueue_failure:
+                    raise
         return attempted_count
 
     @staticmethod

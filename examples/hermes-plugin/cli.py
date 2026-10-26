@@ -41,6 +41,11 @@ def _run(args):
             )
         status = server.status()
         print(f"Quick Local: {status['state']} at {status['endpoint']}")
+        if status["runtime_validation_pending"]:
+            print(
+                "Runtime update needs validation: run hermes memory setup openviking "
+                "and choose Quick Local."
+            )
         if status["restart_required"]:
             print("Saved settings require a restart: hermes openviking local restart")
     except QuickLocalSetupError as exc:

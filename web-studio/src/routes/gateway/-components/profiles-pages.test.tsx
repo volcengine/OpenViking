@@ -28,12 +28,14 @@ import type {
   Profile,
   ProfileSettings,
 } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import { PROFILE_DEFAULTS, WRITE_TOOLS } from '../-lib/profile-schema'
 import { parseProfileEditorSearch } from '../-lib/search'
 import { ProfilesPage } from './profiles-page'
 import { ProfileEditor } from './profiles-editor'
 
 const api = vi.hoisted(() => ({
+  getAccess: vi.fn(),
   listProfiles: vi.fn(),
   listKeys: vi.fn(),
   listTools: vi.fn(),
@@ -48,6 +50,10 @@ const translate = vi.hoisted(
       ? `${key} ${JSON.stringify(values)}`
       : key,
 )
+
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
 
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
@@ -189,12 +195,28 @@ const saveButton = () =>
   })
 const nameInput = () =>
   screen.getByLabelText<HTMLInputElement>('profiles.name.label')
+/** Hrefs of every link with this text (Base UI gives button links the button role). */
+const hrefsOf = (text: string) =>
+  screen
+    .getAllByText(text)
+    .map((node) => node.closest('a')?.getAttribute('href'))
+
 const sectionSwitch = (section: string) =>
   screen.getByRole('switch', { name: `profiles.${section}.title` })
 /** A tool checkbox's accessible name starts with the tool name; its description follows. */
 const toolName = (name: string) => new RegExp(`^${name}\\b`)
 
 beforeEach(() => {
+  api.getAccess.mockResolvedValue({
+    managed: false,
+    can_write_objects: true,
+    can_import_vlm: true,
+    can_issue_for_others: true,
+    role: 'admin',
+    account_id: 'acme',
+    user_id: 'admin',
+    warnings: [],
+  })
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   api.listProfiles.mockResolvedValue([coding, chat])
   api.listKeys.mockResolvedValue([key('k1', 'p1'), key('k2', 'p1')])
@@ -239,6 +261,7 @@ describe('profile list', () => {
       chatCard.getByText('profiles.summary.compactionOn {"percent":"90%"}'),
     ).toBeTruthy()
     expect(chatCard.getByText('profiles.unused')).toBeTruthy()
+    expect(hrefsOf('docs.link')).toEqual([gatewayDocsUrl('profiles', 'en')])
   })
 
   it('keeps tool counts unknown until the catalog loads', async () => {
@@ -362,6 +385,19 @@ describe('profile editor', () => {
   it('hides settings of switched-off sections and switches long-conversation features on their own', async () => {
     renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
+    // Every section links its docs, switched on or not, and so does the
+    // experimental agent-managed windows setting.
+    expect(hrefsOf('docs.learnMore')).toEqual(
+      (
+        [
+          'recall',
+          'capture',
+          'longConversations',
+          'agentWindows',
+          'tools',
+        ] as const
+      ).map((section) => gatewayDocsUrl(section, 'en')),
+    )
 
     expect(
       screen.queryByLabelText('profiles.recall.maxTokens.label'),
@@ -701,4 +737,54 @@ describe('profile editor', () => {
       await screen.findByText('profiles.editor.notFound.title'),
     ).toBeTruthy()
   })
+})
+
+it('shows a read-only profile with disabled custom controls and no save action', async () => {
+  api.getAccess.mockResolvedValue({
+    managed: true,
+    can_write_objects: false,
+    can_import_vlm: false,
+    can_issue_for_others: false,
+    role: 'user',
+    account_id: 'acme',
+    user_id: 'alice',
+    warnings: [],
+  })
+  renderAt('/gateway/profiles/p1')
+  const name = await screen.findByDisplayValue<HTMLInputElement>('Coding')
+  await waitFor(() => expect(name.disabled).toBe(true))
+  for (const control of screen.getAllByRole('switch'))
+    expect(
+      control.getAttribute('data-disabled') !== null ||
+        (control as HTMLButtonElement).disabled,
+    ).toBe(true)
+  for (const control of screen.queryAllByRole('checkbox'))
+    expect(
+      control.getAttribute('data-disabled') !== null ||
+        (control as HTMLButtonElement).disabled,
+    ).toBe(true)
+  expect(screen.queryByRole('button', { name: 'actions.save' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'actions.back' })).toBeTruthy()
+  expect(api.saveProfile).not.toHaveBeenCalled()
+})
+
+it('does not expose creation or duplicate actions to read-only users', async () => {
+  api.getAccess.mockResolvedValue({
+    managed: true,
+    can_write_objects: false,
+    can_import_vlm: false,
+    can_issue_for_others: false,
+    role: 'user',
+    account_id: 'acme',
+    user_id: 'alice',
+    warnings: [],
+  })
+  renderAt('/gateway/profiles')
+  await screen.findByText('Coding')
+  expect(
+    screen.queryByRole('link', { name: 'profiles.actions.new' }),
+  ).toBeNull()
+  expect(screen.queryByRole('link', { name: 'actions.duplicate' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'actions.delete' })).toBeNull()
+  expect(screen.getAllByRole('button', { name: 'actions.view' }).length).toBe(2)
 })

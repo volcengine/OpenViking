@@ -1,4 +1,5 @@
-import type * as React from 'react'
+import { useReadOnly } from './read-only'
+import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -38,17 +39,25 @@ export function SettingField({
   children,
 }: SettingFieldProps) {
   const { t } = useTranslation('gateway')
+  const readOnly = useReadOnly()
+  const control = readOnly
+    ? React.Children.map(children, (child) =>
+        React.isValidElement<{ disabled?: boolean }>(child)
+          ? React.cloneElement(child, { disabled: true })
+          : child,
+      )
+    : children
   const hasDefault = Boolean(defaultValue)
   return (
     <Field data-invalid={Boolean(error)} className={cn('gap-2', className)}>
       <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
       {unit ? (
         <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1">{children}</div>
+          <div className="min-w-0 flex-1">{control}</div>
           <span className="shrink-0 text-sm text-muted-foreground">{unit}</span>
         </div>
       ) : (
-        children
+        control
       )}
       {description || hasDefault ? (
         <FieldDescription className="text-xs">

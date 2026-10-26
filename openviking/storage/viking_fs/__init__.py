@@ -162,10 +162,15 @@ class VikingFS(
         )
         self._background_tasks: set = set()
         self._deletion_guard: Optional[Callable[[str, str], bool]] = None
+        self._privacy_sanitizer: Optional[Any] = None
 
     def set_vlm_resolver(self, resolver: "VLMResolver") -> None:
         """Set the VLM resolver supplied by the owning service."""
         self._vlm_resolver = resolver
+
+    def set_privacy_sanitizer(self, sanitizer: Optional[Any]) -> None:
+        """Install the account service's text sanitizer for direct writes."""
+        self._privacy_sanitizer = sanitizer
 
 
 VikingFS.__module__ = __name__

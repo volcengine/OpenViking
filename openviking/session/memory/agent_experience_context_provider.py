@@ -35,6 +35,10 @@ EXPERIENCE_MEMORY_TYPE = "experiences"
 SEARCH_TOP_K = 5
 SOURCE_TRAJ_TOP_K = 3  # only attach source_trajectories for the top-3 candidates
 MAX_SOURCE_TRAJS = 3  # max trajectories to load per experience
+# Hide storage bookkeeping only in read-only grounding sent to the model.
+_SOURCE_TRAJECTORY_HIDDEN_FIELDS = frozenset(
+    {"backlinks", "source_archive_uri", "last_update_trace_id", "version"}
+)
 
 
 def _is_directory_not_found_error(exc: Exception) -> bool:
@@ -146,7 +150,11 @@ All memory content must be written in {output_language}.
             try:
                 raw = await viking_fs.read_file(uri, ctx=ctx) or ""
                 mf = MemoryFileUtils.read(raw, uri=uri)
-                result = mf.to_metadata()
+                result = {
+                    key: value
+                    for key, value in mf.to_metadata().items()
+                    if key not in _SOURCE_TRAJECTORY_HIDDEN_FIELDS
+                }
                 result["content"] = mf.content
                 result["uri"] = uri
                 results.append(result)

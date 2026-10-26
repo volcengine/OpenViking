@@ -1,3 +1,4 @@
+import { formatDateTime } from '#/i18n/format'
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -60,7 +61,7 @@ export function GroupSetup({
             </dt>
             <dd className="text-sm">
               {connection.status[key]
-                ? new Date(connection.status[key]).toLocaleString()
+                ? formatDateTime(new Date(connection.status[key]))
                 : t('noActivity')}
             </dd>
           </div>

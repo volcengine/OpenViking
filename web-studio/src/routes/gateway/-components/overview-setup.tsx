@@ -1,6 +1,11 @@
-import type * as React from 'react'
+import * as React from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowRightIcon, CheckIcon, ListChecksIcon } from 'lucide-react'
+import {
+  ArrowRightIcon,
+  CheckIcon,
+  ListChecksIcon,
+  TriangleAlertIcon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
@@ -12,10 +17,23 @@ import {
   CardHeader,
   CardTitle,
 } from '#/components/ui/card'
+import { useAppConnection } from '#/hooks/use-app-connection'
 import { cn } from '#/lib/utils'
 
+import type { IssuedKey, KeyRequest, Upstream } from '../-lib/api'
+import { quickPlan } from '../-lib/quick-start'
 import { NEW_ID } from '../-lib/search'
-import { useKeys, useProfiles, useUpstreams } from '../-lib/use-gateway'
+import {
+  useConnectionInfo,
+  useGateway,
+  useKeys,
+  useProfiles,
+  useUpstreams,
+} from '../-lib/use-gateway'
+import { ManagementUnlockButton } from './access-notices'
+import { KeysIssueDialog } from './keys-issue-dialog'
+import { KeysSecretDialog } from './keys-secret-dialog'
+import { OverviewQuickStart } from './overview-quick-start'
 import { RecommendedProfileButton } from './recommended-profile-button'
 
 type StepState = 'done' | 'current' | 'todo'
@@ -85,16 +103,45 @@ function SetupStep({
   )
 }
 
+type QuickIssued = {
+  issued: IssuedKey
+  profileName?: string
+  upstreams: Upstream[]
+}
+
 /**
  * Checklist from an empty gateway to the first request: add an upstream,
  * create a context profile (one click with recommended settings), issue a
- * key, connect a client. A step is done once its list is non-empty.
+ * key, connect a client. A step is done once its list is non-empty. Before
+ * the first key, quick mode does the first three steps in one click.
  */
 export function OverviewSetup() {
   const { t } = useTranslation('gateway')
+  const { access, readOnly } = useGateway()
+  const { isGatewayHost } = useAppConnection()
   const upstreams = useUpstreams()
   const profiles = useProfiles()
   const keys = useKeys()
+  const connectionInfo = useConnectionInfo()
+  const plan = quickPlan({
+    keys: keys.data,
+    upstreams: upstreams.data,
+    profiles: profiles.data,
+    access,
+    readOnly,
+    gatewayHost: isGatewayHost,
+  })
+  // Dialogs live here: the quick-mode card goes away once a key exists.
+  const [issueDefaults, setIssueDefaults] = React.useState<KeyRequest | null>(
+    null,
+  )
+  const [issueSession, setIssueSession] = React.useState(0)
+  const [issued, setIssued] = React.useState<QuickIssued | null>(null)
+  const [secretOpen, setSecretOpen] = React.useState(false)
+  const showSecret = (next: QuickIssued) => {
+    setIssued(next)
+    setSecretOpen(true)
+  }
 
   const counts = [upstreams.data, profiles.data, keys.data].map(
     (list) => list?.length,
@@ -103,10 +150,23 @@ export function OverviewSetup() {
   const done = [...counts.map((count) => Boolean(count)), false]
   const current = loaded ? done.indexOf(false) : -1
   const stateOf = (index: number): StepState =>
-    done[index] ? 'done' : index === current ? 'current' : 'todo'
+    done[index]
+      ? 'done'
+      : readOnly && index < 2
+        ? 'todo'
+        : index === current
+          ? 'current'
+          : 'todo'
+  // Quick mode, when offered, holds the only primary button.
   const variantOf = (index: number) =>
-    index === current ? 'default' : 'outline'
+    index === current && !plan.shown ? 'default' : 'outline'
   const [upstreamCount = 0, profileCount = 0, keyCount = 0] = counts
+  // Upstreams imported from the server's VLM settings carry a `vlm-` id.
+  const importedCount =
+    upstreams.data?.filter((item) => item.id.startsWith('vlm-')).length ?? 0
+  const blockedUpstreams = (upstreams.data ?? []).filter(
+    (item) => item.coding_plan && !item.allow_coding_plan,
+  )
 
   const viewButton = (
     to: '/gateway/upstreams' | '/gateway/profiles' | '/gateway/keys',
@@ -143,20 +203,78 @@ export function OverviewSetup() {
           </CardAction>
         ) : null}
       </CardHeader>
-      <CardContent>
+      <CardContent className="grid gap-4">
+        {plan.shown ? (
+          <>
+            <OverviewQuickStart
+              plan={plan}
+              onIssued={(key, profileName, list) =>
+                showSecret({ issued: key, profileName, upstreams: list })
+              }
+              onPickUser={(request) => {
+                setIssueSession((session) => session + 1)
+                setIssueDefaults(request)
+              }}
+            />
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="h-px flex-1 bg-border" />
+              {t('overview.quick.divider')}
+              <span className="h-px flex-1 bg-border" />
+            </div>
+          </>
+        ) : null}
         <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <SetupStep
             number={1}
             state={stateOf(0)}
             title={t('overview.setup.upstream.title')}
             description={
-              done[0]
-                ? t('overview.setup.upstream.done', { count: upstreamCount })
-                : t('overview.setup.upstream.description')
+              <>
+                <p>
+                  {done[0]
+                    ? t(
+                        readOnly
+                          ? 'overview.setup.providedUpstreams'
+                          : !importedCount
+                            ? 'overview.setup.upstream.done'
+                            : importedCount < upstreamCount
+                              ? 'overview.setup.someImportedUpstreams'
+                              : 'overview.setup.importedUpstreams',
+                        { count: upstreamCount, imported: importedCount },
+                      )
+                    : t(
+                        readOnly
+                          ? 'overview.setup.waitUpstreams'
+                          : 'overview.setup.upstream.description',
+                      )}
+                </p>
+                {readOnly
+                  ? null
+                  : blockedUpstreams.map((item) => (
+                      <p
+                        key={item.id}
+                        className="mt-1 flex items-start gap-1.5 text-xs text-amber-800 dark:text-amber-200"
+                      >
+                        <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+                        <span>
+                          {t('overview.setup.codingPlan', { name: item.name })}{' '}
+                          <Link
+                            to="/gateway/upstreams/$upstreamId"
+                            params={{ upstreamId: item.id }}
+                            className="font-medium underline underline-offset-4"
+                          >
+                            {t('overview.setup.confirm')}
+                          </Link>
+                        </span>
+                      </p>
+                    ))}
+              </>
             }
           >
             {done[0] ? (
               viewButton('/gateway/upstreams')
+            ) : readOnly ? (
+              <ManagementUnlockButton />
             ) : (
               <Button
                 size="sm"
@@ -179,12 +297,23 @@ export function OverviewSetup() {
             title={t('overview.setup.profile.title')}
             description={
               done[1]
-                ? t('overview.setup.profile.done', { count: profileCount })
-                : t('overview.setup.profile.description')
+                ? t(
+                    readOnly
+                      ? 'overview.setup.providedProfiles'
+                      : 'overview.setup.profile.done',
+                    { count: profileCount },
+                  )
+                : t(
+                    readOnly
+                      ? 'overview.setup.waitProfiles'
+                      : 'overview.setup.profile.description',
+                  )
             }
           >
             {done[1] ? (
               viewButton('/gateway/profiles')
+            ) : readOnly ? (
+              <ManagementUnlockButton />
             ) : (
               <>
                 <RecommendedProfileButton
@@ -219,7 +348,11 @@ export function OverviewSetup() {
                   <p>{t('overview.setup.key.description')}</p>
                   {loaded && !(done[0] && done[1]) ? (
                     <p className="mt-1 text-xs">
-                      {t('overview.setup.key.blocked')}
+                      {t(
+                        readOnly
+                          ? 'overview.setup.key.waiting'
+                          : 'overview.setup.key.blocked',
+                      )}
                     </p>
                   ) : null}
                 </>
@@ -256,6 +389,35 @@ export function OverviewSetup() {
           </SetupStep>
         </ol>
       </CardContent>
+      <KeysIssueDialog
+        key={issueSession}
+        open={issueDefaults !== null}
+        onOpenChange={(open) => {
+          if (!open) setIssueDefaults(null)
+        }}
+        profiles={profiles.data ?? []}
+        upstreams={upstreams.data ?? []}
+        defaults={issueDefaults ?? undefined}
+        onIssued={(key) => {
+          setIssueDefaults(null)
+          showSecret({
+            issued: key,
+            profileName: profiles.data?.find(
+              (profile) => profile.id === key.policy_id,
+            )?.name,
+            upstreams: upstreams.data ?? [],
+          })
+        }}
+      />
+      <KeysSecretDialog
+        open={secretOpen}
+        issued={issued?.issued ?? null}
+        baseUrl={connectionInfo.data?.base_url ?? ''}
+        profileName={issued?.profileName}
+        upstreams={issued?.upstreams ?? []}
+        onDone={() => setSecretOpen(false)}
+        onClosed={() => setIssued(null)}
+      />
     </Card>
   )
 }

@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '#/components/ui/select'
+import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { fetchAdminUsers } from '#/lib/admin'
 import type { AdminConnection } from '#/lib/admin'
@@ -46,7 +47,9 @@ export function CurrentUserMenu() {
   const { accountId, userId } = connection
   const accountLabel = accountId || t('header.currentUser.unset')
   const userLabel = userId || t('header.currentUser.unset')
+  const { provider } = useStudioService()
   const { canManageUsers } = resolveStudioManagementCapabilities({
+    serviceProvider: provider,
     hasControlCredential: Boolean(connection.adminApiKey.trim()),
     isRoleLoading: isConnectionRoleLoading,
     role: connectionRole,

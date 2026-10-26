@@ -1,5 +1,5 @@
 import { createOvClient, getOvResult } from '#/lib/ov-client'
-import type { ConnectionDraft } from '#/hooks/use-app-connection'
+import type { ConnectionDraft } from '#/lib/connection/types'
 import type { FSListResult } from '@ov-server/api/v1/fs'
 
 export type AclLevel = 'read' | 'write' | 'manage'

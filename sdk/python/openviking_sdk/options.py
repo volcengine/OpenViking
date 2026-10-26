@@ -103,6 +103,9 @@ class WriteOptions(_ExtraOptions, total=False):
 
 class BatchWriteOptions(_ExtraOptions, total=False):
     telemetry: Any
+    processing_mode: ProcessingMode
+    # Return target-state conflicts without overwriting them or blocking compatible writes.
+    skip_conflicts: bool
 
 
 class CompileOptions(_ExtraOptions, total=False):

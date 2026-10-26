@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { prepareCompileHandoff } from '#/routes/compile/-lib/handoff'
 import { useQuery } from '@tanstack/react-query'
 import { fetchCompileSkills } from '#/routes/compile/-lib/api'
@@ -44,7 +45,6 @@ import {
   commitSession,
   createSession,
   deleteSession,
-  extractSession,
   fetchSession,
   fetchSessionArchive,
   fetchSessionContext,
@@ -178,13 +178,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     usage: '/session commit [session_id] --keep-recent 10',
   },
   {
-    examples: ['session.extract'],
-    insertText: '/session extract ',
-    key: 'extract',
-    parameters: ['sessionId'],
-    usage: '/session extract [session_id]',
-  },
-  {
     examples: ['session.message'],
     insertText: '/session message ',
     key: 'message',
@@ -226,7 +219,10 @@ const SESSION_SUBCOMMANDS_BY_KEY = new Map(
 )
 
 type TerminalSuggestionGroup =
-  TerminalCommandGroup | 'history' | 'resource' | 'subcommand'
+  | TerminalCommandGroup
+  | 'history'
+  | 'resource'
+  | 'subcommand'
 
 type TerminalSuggestion = Omit<TerminalCommandView, 'group'> & {
   group: TerminalSuggestionGroup
@@ -342,7 +338,7 @@ function parseWaitTimeout(body: string): number | undefined {
   if (!trimmed) return undefined
   const match = trimmed.match(/^(?:--timeout\s+)?(\d+(?:\.\d+)?)$/)
   if (!match) {
-    throw new Error('Usage: /wait [--timeout seconds]')
+    throw new Error(i18n.t('studio:errors.waitUsage'))
   }
   return Number(match[1])
 }
@@ -398,7 +394,7 @@ function getNumberFlag(
   if (value === undefined || value === 'true') return undefined
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) {
-    throw new Error(`Invalid --${key}: ${value}`)
+    throw new Error(i18n.t('studio:errors.invalidFlag', { key, value }))
   }
   return parsed
 }
@@ -1224,17 +1220,6 @@ export function TerminalPanel({
                   kind: 'success',
                   refs: [sessionRef(id)],
                   title: `/session commit ${id}`,
-                })
-                return
-              }
-              case 'extract': {
-                const id = resolveSessionId()
-                const result = await extractSession(id)
-                append({
-                  body: formatJson(result),
-                  kind: 'success',
-                  refs: [sessionRef(id)],
-                  title: `/session extract ${id}`,
                 })
                 return
               }

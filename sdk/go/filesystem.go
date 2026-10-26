@@ -193,9 +193,6 @@ func (c *Client) Remove(ctx context.Context, uri string, opts *RemoveOptions) er
 	query.Set("uri", NormalizeURI(uri))
 	queryBool(query, "recursive", opts.Recursive)
 	queryBool(query, "wait", opts.Wait)
-	if opts.Timeout != nil {
-		queryFloat(query, "timeout", *opts.Timeout)
-	}
 	return c.doJSON(ctx, http.MethodDelete, "/api/v1/fs", query, nil, nil)
 }
 
@@ -282,7 +279,6 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 		"mode":    mode,
 		"wait":    opts.Wait,
 	}
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
 	if opts.ACL != nil {
@@ -324,8 +320,8 @@ func (c *Client) BatchWrite(
 	}
 	if opts != nil {
 		setAny(payload, "wait", opts.Wait)
-		setFloatPtr(payload, "timeout", opts.Timeout)
 		setAny(payload, "telemetry", opts.Telemetry)
+		setString(payload, "processing_mode", opts.ProcessingMode)
 		if err := mergeExtra(payload, opts.Extra); err != nil {
 			return nil, err
 		}

@@ -128,15 +128,30 @@ Current matching is suffix-based: `/skills/{name}/SKILL.md`, so it supports user
 - Content plane: `read` automatically restores placeholders
 - Separation of concerns: content files hold placeholders; privacy service holds sensitive values and versions
 
-Common commands:
+PrivacySanitizer does not infer sensitivity from field names. String values in the active Privacy catalog participate in automatic content scanning and reference replacement only when they contain at least 6 Unicode characters. Shorter values can still be stored, referenced, and explicitly resolved, but are excluded from global substring replacement to reduce false positives in ordinary text. Python owns catalog loading, reference generation, and cache policy; matcher construction, leftmost-longest matching, and text rewriting run in RAGFS's Rust Aho-Corasick implementation through a reusable PyO3 matcher that releases the GIL while scanning. The matcher catalog is cached per user and process-local revision; local changes invalidate it immediately, and a 3600-second TTL bounds staleness after changes made by another worker or node.
+
+Using a GitHub Personal Access Token (PAT) as an example:
 
 ```bash
-ov privacy categories
-ov privacy list skill
-ov privacy skill search-web
-ov privacy upsert skill search-web --values-json '{"api_key":"..."}'
-ov privacy activate skill search-web 1
-ov read viking://~/skills/search-web/SKILL.md
+# Create or rotate the PAT; credential/github is the target and pat is the field
+ov privacy upsert credential github --field-pat 'github_pat_...'
+
+# Omit the field when pat is the target's only field
+ov privacy reference credential github
+ov privacy resolve credential github
+
+# Equivalent explicit-field forms
+ov privacy reference credential github pat
+ov privacy resolve credential github pat
+ov privacy resolve '{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}'
+
+# Inspect/activate history, or remove pat (the final field also removes the target)
+ov privacy versions credential github
+ov privacy activate credential github 1
+ov privacy delete credential github pat --yes
+
+# Scan one explicit URI; the default only reports, while --fix replaces plaintext PATs
+ov privacy scan --uri viking://~/resources/project-a
 ```
 
 ---

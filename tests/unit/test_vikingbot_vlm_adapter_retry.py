@@ -1,15 +1,21 @@
+import json
+from collections import Counter
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import vikingbot.providers.vlm_adapter as vlm_adapter
+from vikingbot.compile.models import CompileLimits
+from vikingbot.compile.pipeline_io import JsonModel, ModelCallError
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 from volcenginesdkarkruntime._exceptions import (
     ArkAPITimeoutError,
     ArkBadRequestError,
-    ArkRateLimitError,
 )
+from volcenginesdkarkruntime._streaming import AsyncStream
 
+from openviking.models.model_error import ModelError, ModelErrorKind, model_error_kind
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking.models.vlm.backends.volcengine_vlm import (
     VOLCENGINE_CLIENT_REQUEST_ID,
@@ -17,7 +23,7 @@ from openviking.models.vlm.backends.volcengine_vlm import (
     VolcEngineVLM,
     build_volcengine_request_headers,
 )
-from openviking.utils.model_retry import is_retryable_rate_limit_error
+from openviking.models.vlm.retry_vlm import RetryVLM
 
 
 class _DisabledLangfuse:
@@ -44,18 +50,6 @@ class _FakeVolcEngineFailoverVLM(_FakeVLM):
     thinking = False
 
 
-class _AsyncChunks:
-    def __init__(self, chunks):
-        self._chunks = chunks
-
-    def __aiter__(self):
-        return self._iter()
-
-    async def _iter(self):
-        for chunk in self._chunks:
-            yield chunk
-
-
 class _FakeStreamingCompletions:
     def __init__(self, failures: list[Exception], chunks):
         self.failures = list(failures)
@@ -68,7 +62,9 @@ class _FakeStreamingCompletions:
         self.kwargs.append(kwargs)
         if self.failures:
             raise self.failures.pop(0)
-        return _AsyncChunks(self.chunks)
+        response = AsyncMock()
+        response.__aenter__.return_value.__aiter__.return_value = self.chunks
+        return response
 
 
 class _FakeStreamingVLM:
@@ -76,7 +72,8 @@ class _FakeStreamingVLM:
     model = "test-model"
     thinking = False
 
-    def __init__(self, completions: _FakeStreamingCompletions):
+    def __init__(self, completions: _FakeStreamingCompletions, max_retries: int = 2):
+        self.max_retries = max_retries
         self._client = SimpleNamespace(
             chat=SimpleNamespace(completions=completions),
         )
@@ -94,46 +91,37 @@ class _CaptureLogger:
 
 
 @pytest.mark.asyncio
-async def test_chat_retries_rate_limit_until_success(monkeypatch):
-    sleep_delays: list[float] = []
-
-    async def _sleep(delay: float):
-        sleep_delays.append(delay)
-
-    monkeypatch.setattr(vlm_adapter, "rate_limit_retry_delay", lambda attempt: attempt)
-    monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
-
-    fake_vlm = _FakeVLM(
-        [
-            RuntimeError("Error code: 429 - ModelAccountTpmRateLimitExceeded"),
-            RuntimeError("TooManyRequests: rate limit"),
-        ],
-        result="done",
+@pytest.mark.parametrize("max_retries,expected_calls", [(0, 1), (2, 3)])
+async def test_chat_preserves_model_retry_budget(monkeypatch, max_retries, expected_calls):
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", AsyncMock())
+    backend = VolcEngineVLM(
+        {"provider": "volcengine", "model": "test-model", "max_retries": max_retries}
     )
-    adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
-
-    response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
-
-    assert response.content == "done"
-    assert response.finish_reason == "stop"
-    assert fake_vlm.calls == 3
-    assert sleep_delays == [1, 2]
-
-
-@pytest.mark.asyncio
-async def test_chat_does_not_retry_errors_without_rate_limit_markers(monkeypatch):
-    async def _sleep(_delay: float):
-        raise AssertionError("non-retryable errors must not sleep/retry")
-
-    monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
-
-    fake_vlm = _FakeVLM([RuntimeError("AuthenticationError Unauthorized")])
-    adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
+    error = ModelError(ModelErrorKind.RATE_LIMIT_ERROR, "rate limited", status_code=429)
+    completion = AsyncMock(side_effect=error)
+    monkeypatch.setattr(backend, "get_completion_async", completion)
+    adapter = VLMProviderAdapter(
+        RetryVLM(backend), "test-model", langfuse_client=_DisabledLangfuse()
+    )
 
     response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
 
     assert response.finish_reason == "error"
-    assert "AuthenticationError" in response.content
+    assert response.error_kind is ModelErrorKind.RATE_LIMIT_ERROR
+    assert completion.await_count == expected_calls
+
+
+@pytest.mark.asyncio
+async def test_chat_preserves_input_error_for_compile_without_retry():
+    fake_vlm = _FakeVLM([ModelError(ModelErrorKind.INPUT_TOO_LARGE, "Input rejected")])
+    adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
+    files = SimpleNamespace(put=AsyncMock())
+    model = JsonModel(adapter, "test-model", 0.0, files, CompileLimits(), {}, Counter())
+
+    with pytest.raises(ModelCallError) as raised:
+        await model.call("reduce", [{"role": "user", "content": "hello"}], [], max_tokens=128)
+
+    assert model_error_kind(raised.value) is ModelErrorKind.INPUT_TOO_LARGE
     assert fake_vlm.calls == 1
 
 
@@ -206,20 +194,13 @@ async def test_chat_without_tools_preserves_usage_from_openai_backend(monkeypatc
         "prompt_tokens": 13,
         "completion_tokens": 5,
         "total_tokens": 18,
-        "prompt_tokens_details": None,
     }
 
 
 @pytest.mark.asyncio
 async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
-    sleep_delays: list[float] = []
-
-    async def _sleep(delay: float):
-        sleep_delays.append(delay)
-
-    monkeypatch.setattr(vlm_adapter, "rate_limit_retry_delay", lambda attempt: attempt)
-    monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
-
+    sleep = AsyncMock()
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", sleep)
     chunk = SimpleNamespace(
         usage=None,
         choices=[
@@ -230,7 +211,7 @@ async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
         ],
     )
     completions = _FakeStreamingCompletions(
-        [RuntimeError("Error code: 429 - ModelAccountTpmRateLimitExceeded")],
+        [ModelError(ModelErrorKind.RATE_LIMIT_ERROR, "temporarily unavailable")],
         [chunk],
     )
     adapter = VLMProviderAdapter(
@@ -247,11 +228,46 @@ async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
     ]
 
     assert completions.calls == 2
-    assert sleep_delays == [1]
+    sleep.assert_awaited_once()
     assert [event.type for event in events] == ["content_delta", "response"]
     assert events[0].content == "streamed"
     assert events[1].response.content == "streamed"
     assert events[1].response.finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code,expected_calls,kind",
+    [
+        ("ModelAccountTpmRateLimitExceeded", 3, ModelErrorKind.RATE_LIMIT_ERROR),
+        ("AccountQuotaExceeded", 1, ModelErrorKind.QUOTA_EXHAUSTED),
+    ],
+)
+async def test_chat_stream_obeys_retry_policy(monkeypatch, code, expected_calls, kind):
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", AsyncMock())
+    vlm = VolcEngineVLM({"model": "test-model", "api_key": "test-key", "max_retries": 2})
+    payload = (
+        "data: " + json.dumps({"error": {"code": code, "message": "limited"}}) + "\n\n"
+    ).encode()
+    responses = [
+        httpx.Response(
+            200,
+            stream=httpx.ByteStream(payload),
+            request=httpx.Request("POST", "https://example.test"),
+        )
+        for _ in range(expected_calls)
+    ]
+    async with vlm.get_async_client() as client:
+        create = AsyncMock(
+            side_effect=[AsyncStream(cast_to=dict, response=r, client=client) for r in responses]
+        )
+        monkeypatch.setattr(client.chat.completions, "create", create)
+        adapter = VLMProviderAdapter(vlm, "test-model", langfuse_client=_DisabledLangfuse())
+        events = [event async for event in adapter.chat_stream(messages=[])]
+    assert create.await_count == expected_calls
+    assert all(response.is_closed for response in responses)
+    assert events[-1].response.finish_reason == "error"
+    assert events[-1].response.error_kind is kind
 
 
 @pytest.mark.asyncio
@@ -286,7 +302,7 @@ async def test_chat_stream_logs_timeout_cause_and_request_metadata(monkeypatch):
     error.__cause__ = cause
     completions = _FakeStreamingCompletions([error], [])
     adapter = VLMProviderAdapter(
-        _FakeStreamingVLM(completions),
+        _FakeStreamingVLM(completions, max_retries=0),
         "test-model",
         langfuse_client=_DisabledLangfuse(),
     )
@@ -385,10 +401,14 @@ async def test_volcengine_stream_uses_unique_default_client_request_ids():
 
 
 @pytest.mark.asyncio
-async def test_volcengine_non_stream_uses_unique_default_client_request_ids(monkeypatch):
+@pytest.mark.parametrize(
+    "thinking,effort,expected",
+    [(True, None, "low"), (True, "high", "high"), (False, None, None), (False, "high", None)],
+)
+async def test_volcengine_request_settings_and_ids(monkeypatch, thinking, effort, expected):
     calls: list[dict] = []
 
-    async def create(**kwargs):
+    def create(**kwargs):
         calls.append(kwargs)
         return SimpleNamespace(
             choices=[
@@ -406,20 +426,30 @@ async def test_volcengine_non_stream_uses_unique_default_client_request_ids(monk
             "model": "test-model",
             "api_key": "test-key",
             "max_retries": 0,
+            "thinking": thinking,
+            "reasoning_effort": "low",
         }
     )
     monkeypatch.setattr(
         vlm,
         "get_async_client",
-        lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=create)))
+        ),
     )
+    vlm._sync_client = vlm.get_async_client()
+    vlm._sync_client.chat.completions.create = create
 
     for _ in range(2):
-        assert await vlm.get_completion_async(messages=[{"role": "user", "content": "hi"}]) == "ok"
+        assert await vlm.get_completion_async("hi", reasoning_effort=effort) == "ok"
+        if effort is None:
+            assert vlm.get_completion("hi") == "ok"
 
     request_ids = [kwargs["extra_headers"][VOLCENGINE_CLIENT_REQUEST_ID_HEADER] for kwargs in calls]
-    assert len(set(request_ids)) == 2
+    assert len(set(request_ids)) == len(calls)
     assert all(value.startswith(f"{VOLCENGINE_CLIENT_REQUEST_ID},") for value in request_ids)
+    assert all(kwargs.get("reasoning_effort") == expected for kwargs in calls)
+    assert all(("reasoning_effort" in kwargs) == thinking for kwargs in calls)
 
 
 def test_volcengine_request_headers_preserve_custom_client_request_id():
@@ -436,38 +466,19 @@ def test_volcengine_request_headers_preserve_custom_client_request_id():
     }
 
 
-def test_rate_limit_classifier_handles_target_error():
-    assert is_retryable_rate_limit_error(
-        RuntimeError("Error code: 429 - ModelAccountTpmRateLimitExceeded")
-    )
-    assert is_retryable_rate_limit_error(
-        RuntimeError(
-            "Error code: 429 - {'error': {'code': 'ModelAccountTpmRateLimitExceeded', "
-            "'message': 'TPM (Tokens Per Minute) limit of the model doubao-seed-2-0-pro "
-            "is exceeded. Please try again later Request id: "
-            "0217817720969006061aa40146dbf4d117b0497e84060d7ac9102', "
-            "'param': '', 'type': 'TooManyRequests'}}, request_id: "
-            "202606181641366ORRzhOSo5se81lzpolL"
-        )
-    )
-    assert is_retryable_rate_limit_error(RuntimeError("Error code: 429 - busy"))
-    assert not is_retryable_rate_limit_error(RuntimeError("Error code: 401 Unauthorized"))
-    assert not is_retryable_rate_limit_error(RuntimeError("trace_id=abc429def unrelated"))
-    assert not is_retryable_rate_limit_error(RuntimeError("request_id=abc429def unrelated"))
+def test_completion_usage_object_is_normalized():
+    from openai.types.completion_usage import CompletionUsage
 
-
-def test_rate_limit_classifier_handles_structured_sdk_errors():
-    request = httpx.Request("POST", "https://example.test")
-    response = httpx.Response(429, request=request)
-    exc = ArkRateLimitError(
-        "Error code: 429 - rate limited",
-        response=response,
-        body={
-            "code": "ModelAccountTpmRateLimitExceeded",
-            "type": "TooManyRequests",
-            "message": "TPM limit exceeded",
-        },
-        request_id="0217817720969006061aa40146dbf4d117b0497e84060d7ac9102",
+    adapter = VLMProviderAdapter(_FakeVLM([]), "test-model", langfuse_client=_DisabledLangfuse())
+    raw = SimpleNamespace(
+        content="ok",
+        tool_calls=[],
+        finish_reason="stop",
+        reasoning_content=None,
+        usage=CompletionUsage(prompt_tokens=12, completion_tokens=3, total_tokens=15),
     )
-
-    assert is_retryable_rate_limit_error(exc)
+    assert adapter._convert_response(raw).usage == {
+        "prompt_tokens": 12,
+        "completion_tokens": 3,
+        "total_tokens": 15,
+    }

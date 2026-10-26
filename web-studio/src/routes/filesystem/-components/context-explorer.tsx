@@ -44,7 +44,7 @@ export function ContextExplorerHeader({
   hasTasks: boolean
   isRefreshing: boolean
   isRefreshingTasks: boolean
-  onAddResource: () => void
+  onAddResource?: () => void
   onOpenProcessingTasks: () => void
   onOpenSearch: () => void
   onRefresh: () => void
@@ -92,15 +92,17 @@ export function ContextExplorerHeader({
         >
           <SearchIcon className="size-4" />
         </Button>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          title={t('explorer.addResource')}
-          onClick={onAddResource}
-        >
-          <PlusIcon className="size-4" />
-        </Button>
+        {onAddResource ? (
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            title={t('explorer.addResource')}
+            onClick={onAddResource}
+          >
+            <PlusIcon className="size-4" />
+          </Button>
+        ) : null}
         <Button
           type="button"
           size="icon-sm"
@@ -143,6 +145,7 @@ export function ContextTree({
   onSelectDirectory,
   onSelectFile,
   selectedFileUri,
+  rootUri = ROOT_URI,
 }: {
   currentUri: string
   expandedKeys: Set<string>
@@ -150,9 +153,10 @@ export function ContextTree({
   onSelectDirectory: (entry: VikingFsEntry) => void
   onSelectFile: (entry: VikingFsEntry) => void
   selectedFileUri?: string | null
+  rootUri?: string
 }) {
   const { t } = useTranslation('filesystem')
-  const rootQuery = useVikingFsList(ROOT_URI, {
+  const rootQuery = useVikingFsList(rootUri, {
     output: 'agent',
     showAllHidden: true,
     nodeLimit: 200,

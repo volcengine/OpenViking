@@ -28,7 +28,26 @@ def _reset_token_store():
     upload_token_store.clear()
 
 
-async def test_token_upload_auto_ingests_and_returns_result(upload_temp_dir: Path, monkeypatch):
+@pytest.fixture
+async def upload_api_key_manager():
+    from types import SimpleNamespace
+
+    from openviking.server.store_assembly import build_api_key_manager
+    from tests.server.account_store_fakes import InMemoryAGFS
+
+    manager = build_api_key_manager("test-root", SimpleNamespace(agfs=InMemoryAGFS()))
+    await manager.load()
+    try:
+        await manager.create_account("acct", "owner")
+        await manager.register_user("acct", "user", Role.ADMIN)
+        yield manager
+    finally:
+        await manager.close()
+
+
+async def test_token_upload_auto_ingests_and_returns_result(
+    upload_temp_dir: Path, monkeypatch, upload_api_key_manager
+):
     """An upload keeps the issuing authority, but cannot outlive a role downgrade."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -48,17 +67,12 @@ async def test_token_upload_auto_ingests_and_returns_result(upload_temp_dir: Pat
     from openviking_cli.exceptions import OpenVikingError
     from openviking_cli.session.user_id import UserIdentifier
 
-    current_role = Role.ADMIN
+    manager = upload_api_key_manager
     config = ServerConfig(auth_mode="api_key", root_api_key="test-root")
     app = FastAPI()
     app.state.config = config
     app.state.auth_plugin = ApiKeyAuthPlugin()
-    app.state.api_key_manager = SimpleNamespace(
-        has_user=lambda *_: current_role is not None,
-        get_user_role=lambda *_: current_role,
-        get_user_group_ids=lambda *_: (),
-        is_deleting=lambda *_: False,
-    )
+    app.state.api_key_manager = manager
     app.include_router(router)
 
     @app.exception_handler(OpenVikingError)
@@ -125,19 +139,30 @@ async def test_token_upload_auto_ingests_and_returns_result(upload_temp_dir: Pat
         # An outstanding token loses authority when its user is downgraded.
         identity.from_oauth = False
         token = await issue()
-        current_role = Role.USER
+        await manager.set_role("acct", "user", Role.USER)
         assert (await upload(token)).status_code == 401
 
         # A token issued as USER does not gain ADMIN authority after promotion.
         identity.role = Role.USER
         token = await issue()
-        current_role = Role.ADMIN
+        await manager.set_role("acct", "user", Role.ADMIN)
         assert (await upload(token)).status_code == 403
 
-        # Removing the user also invalidates an outstanding token.
+        # Deletion fences also apply to outstanding upload tokens.
         identity.role = Role.ADMIN
         token = await issue()
-        current_role = None
+        await manager.begin_deletion(
+            "acct",
+            "user",
+            task_id="delete-upload-user",
+            owner_account_id="acct",
+            owner_user_id="owner",
+        )
+        assert (await upload(token)).status_code == 412
+
+        # Removing the user invalidates another outstanding token.
+        token = await issue()
+        assert await manager.finish_deletion("acct", "user", "delete-upload-user")
         assert (await upload(token)).status_code == 401
 
     assert imported == [b"hello world"]

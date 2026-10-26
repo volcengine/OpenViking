@@ -25,7 +25,7 @@ from .models import Policy
 from .notices import without_notices
 from .protocols import clean_text, is_user, text_content, unwrap_client
 from .records import RecordKind as K
-from .tool_protocols import hidden_chain
+from .tool_protocols import reply_chain
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
@@ -150,11 +150,14 @@ class CapturePipeline:
                 True,
                 0,
             )
+            if value.get("error", {}).get("reason") == "gateway_key_revoked":
+                value["error"] = {}
             # Reusing a prepared prompt does not generate another queue write.
             value.update(
                 request_anchor=user_anchor,
                 credential_id=credential["id"],
                 account=credential["account"],
+                user_id=credential["user_id"],
                 protocol=request.protocol,
                 policy=policy.model_dump(),
             )
@@ -213,7 +216,11 @@ class CapturePipeline:
         value = request.capture.value
         error = value.get("error", {})
         request.metrics.update(
-            capture_status=("paused" if error["attempts"] >= MAX_ATTEMPTS else "retrying")
+            capture_status=(
+                "paused"
+                if error.get("retry_at") is None or error["attempts"] >= MAX_ATTEMPTS
+                else "retrying"
+            )
             if error
             else ("active" if policy.capture else "disabled"),
             capture_reason=error.get("reason", value.get("reason", "")),
@@ -222,7 +229,7 @@ class CapturePipeline:
 
     async def stage(self, request, response, policy):
         messages = [*request.messages, *response.output]
-        chain = await asyncio.to_thread(hidden_chain, messages, request.protocol)
+        chain = reply_chain(request, response.output)
         while True:
             old = await self.queue.get(request.scope, request.session)
             if (
@@ -344,6 +351,8 @@ class CaptureWorker:
                 "capture_status": status,
                 "capture_reason": reason,
             },
+            # Capture states written before schema 6 carry no user.
+            user_id=state.get("user_id"),
         )
 
     async def deliver(self, item):
@@ -353,11 +362,21 @@ class CaptureWorker:
             return
         disabled = await self.replay.read(item["scope"], item["session"], [""])
         key = await self.management.get(state["account"], "keys", state["credential_id"])
-        if (K.DISABLED, "") in disabled or not key:
+        if (K.DISABLED, "") in disabled:
             state["pending"] = []
             state["archive"] = None
             state["error"] = {}
             await self.save(item, doc, state)
+            return
+        if not key:
+            # No retries: periodic saves would refresh touched and defeat TTL expiry.
+            # A new authenticated request supplies a key and clears this pause.
+            state["error"] = {"attempts": 0, "reason": "gateway_key_revoked", "retry_at": None}
+            if not await self.queue.swap(
+                item["scope"], item["session"], doc, state, None, owner=item["owner"]
+            ):
+                raise BranchChanged
+            await self.log(item, state, "paused", "gateway_key_revoked")
             return
         token, session = key["openviking_key"], state["ov_session"]
         policy = Policy.model_validate(state["policy"])

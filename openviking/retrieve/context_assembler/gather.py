@@ -211,12 +211,13 @@ async def gather_candidates(
     limit: int,
     score_threshold: Optional[float],
     filter: Optional[Dict[str, Any]] = None,
-    image_url: Optional[str] = None,
+    image_url: str | list[str] | None = None,
     events_time_decay_protection: Optional[str] = None,
     search_type: SearchType = "semantic",
     peer_scope: str = "all",
     penalties: Optional[Mapping[str, float]] = None,
     excluded: Optional[Set[str]] = None,
+    cooled: Optional[Set[str]] = None,
 ) -> Tuple[List[Candidate], Dict[str, Any]]:
     """Retrieve and rank candidates, returning ``(candidates, stats)``."""
     peer_scope = "actor" if peer_scope == "actor" else "all"
@@ -224,6 +225,7 @@ async def gather_candidates(
     open_ctx = replace(ctx, actor_peer_id=None)
     penalties = penalties or {}
     excluded = excluded or set()
+    cooled = cooled or set()
     planned = [q for q in queries if q] or [""]
     preset_dirs = preset_directory_uris(ctx)
 
@@ -255,7 +257,13 @@ async def gather_candidates(
                     abstract = ""
                 uri = base_uri = f"{root}/SKILL.md"
                 is_directory = False
-            if any(_is_under(u, x) for u in (uri, base_uri) for x in excluded):
+            # Caller exclusions cover a subtree; ledger-cooled URIs are served
+            # entries, so a cooled directory must not hide files added under it.
+            if (
+                uri in cooled
+                or base_uri in cooled
+                or any(_is_under(u, x) for u in (uri, base_uri) for x in excluded)
+            ):
                 excluded_count += 1
                 continue
             origin = origin_for_uri(base_uri, ctx.actor_peer_id, user_root)
@@ -284,7 +292,7 @@ async def gather_candidates(
         without this a bucket whose whole top page is cooled comes back empty
         instead of falling through to the next-best hits.
         """
-        return want + min(len(excluded), want * 2)
+        return want + min(len(excluded) + len(cooled), want * 2)
 
     def _find(
         *,

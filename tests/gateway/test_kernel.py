@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import re
+import sys
 import time
 
 import pytest
@@ -13,7 +14,13 @@ from openviking_gateway.client import VikingError
 from openviking_gateway.kernel import token_estimate
 from openviking_gateway.models import Policy
 from openviking_gateway.protocols import (
+    AUXILIARY_PATTERNS,
+    LOWERED_AUXILIARY,
+    REI_CASE_EXCEPTIONS,
+    auxiliary,
+    canonical_arguments,
     classify,
+    client_openviking_tools,
     normalize,
     parse_body,
     plugin_present,
@@ -300,6 +307,25 @@ async def test_recall_uses_server_rendered_and_uri_only_entries(
     assert uri in viking.recalls[-1][2]
 
 
+async def test_served_directory_is_echoed_as_its_level_files(setup_kernel, credential, policy):
+    """exclude_uris matches a subtree, so a served directory is echoed as its own node only."""
+    kernel, _, viking, _ = setup_kernel
+    folder = "viking://user/alice/memories/preferences"
+    viking.entries[:] = [{"uri": f"{folder}/kestrel-theme.md"}, {"uri": folder}]
+    body = {"messages": [{"role": "user", "content": "Which theme do I like?"}]}
+    await prepare(kernel, body, credential, policy)
+    body["messages"] += [
+        {"role": "assistant", "content": "Kestrel"},
+        {"role": "user", "content": "And my region?"},
+    ]
+    await prepare(kernel, body, credential, policy)
+    assert viking.recalls[-1][2] == [
+        f"{folder}/kestrel-theme.md",
+        f"{folder}/.abstract.md",
+        f"{folder}/.overview.md",
+    ]
+
+
 async def test_empty_server_rendered_does_not_fall_back_to_entries(
     setup_kernel, credential, policy
 ):
@@ -416,11 +442,11 @@ async def test_plugin_stop_is_sticky_but_replays_existing_prefix(setup_kernel, c
         {"role": "assistant", "content": "Answer"},
         {"role": "user", "content": "Next question"},
     ]
-    two_body["tools"] = [{"type": "namespace", "name": "mcp__openviking", "tools": []}]
+    two_body["system"] = "<openviking-context>Memory</openviking-context>"
     two = await prepare(kernel, two_body, credential, policy)
     assert two.disabled
     assert two.body["messages"][0] == one.body["messages"][0]
-    del two_body["tools"]
+    del two_body["system"]
     three = await prepare(kernel, two_body, credential, policy)
     assert three.disabled and len(viking.recalls) == 1
 
@@ -552,14 +578,218 @@ def test_classification_and_plugin_namespaces():
         == "auxiliary"
     )
     assert classify({}, {"x-claude-code-agent-id": "child"}, [user])[0] == "subagent"
-    assert plugin_present(
-        {
-            "additional_tools": [
-                {"namespace": "mcp__openviking_memory", "tools": [{"name": "read"}]}
-            ]
-        },
-        {},
+    # OpenViking tools alone, as from an MCP connection, are not a plugin.
+    namespaces = {
+        "additional_tools": [{"namespace": "mcp__openviking_memory", "tools": [{"name": "read"}]}]
+    }
+    assert not plugin_present(namespaces, {})
+    assert client_openviking_tools(namespaces, OV_NAMES)
+
+
+def test_lowercase_agrees_with_case_insensitive_matching():
+    assert LOWERED_AUXILIARY
+    ascii_any_case = re.compile(r"[\x00-\x7f]", re.I)
+    differing = set()
+    for code in range(sys.maxunicode + 1):
+        char = chr(code)
+        lower = char.lower()
+        if len(lower) != 1:
+            differing.add(char)
+        elif lower.isascii() or ascii_any_case.fullmatch(char):
+            for c in map(chr, range(128)):
+                if bool(re.fullmatch(re.escape(c), char, re.I)) != (lower == c.lower()):
+                    differing.add(char)
+    assert differing == set(REI_CASE_EXCEPTIONS)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Please provide a detailed summary of the conversation", True),
+        ("[{'text': 'PLEASE PROVIDE A DETAILED SUMMARY OF THE CONVERSATION'}]", True),
+        ("Generate a concise" + "-" * 40 + "title", True),
+        ("Generate a concise" + "-" * 41 + "title", False),
+        ("Generate a concise\ntitle", False),
+        ("Create a short" + "Σ" * 40 + "Title", True),
+        ("You are a permıssion classifier", True),
+        ("Your taſk is to create a detailed summary of the conversation", True),
+        ("Generate a concise" + "İ" * 40 + "title", True),
+        ("Please provİde a detailed summary of the conversation", True),
+        ("Your tas\u212a is to create a detailed summary of the conversation", True),
+        ("请 generate a concise 标题 title", True),
+        ("Deploy please", False),
+    ],
+)
+def test_auxiliary_matches_patterns_ignoring_case(text, expected):
+    assert any(re.search(p, text, re.I) for p in AUXILIARY_PATTERNS) == expected
+    assert auxiliary(text) == expected
+
+
+OV_NAMES = ["read", "ls", "glob", "find", "search", "add_resource"]
+
+
+@pytest.mark.parametrize(
+    "tools, detected",
+    [
+        ([{"name": "openviking_search"}], True),
+        ([{"name": "mcp__claude_ai_OpenViking__search"}], True),
+        ([{"name": "mcp__plugin_openviking-memory_openviking__find"}], True),
+        (
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "mcp__ov__read", "description": "Read viking://a"},
+                }
+            ],
+            True,
+        ),
+        (
+            [{"name": "ov_ls", "input_schema": {"properties": {"uri": {"default": "viking://"}}}}],
+            True,
+        ),
+        (
+            [{"namespace": "mcp__kb", "tools": [{"name": "glob", "description": "VIKING://user"}]}],
+            True,
+        ),
+        ([{"type": "mcp", "server_label": "OpenViking", "server_url": "https://x/mcp"}], True),
+        ([{"type": "mcp_toolset", "mcp_server_name": "openviking"}], True),
+        ([{"name": "Read", "description": "Read a local file"}, {"name": "WebSearch"}], False),
+        ([{"name": "openvikingish_search"}, {"name": "mcp__myopenviking__find"}], False),
+        # A namespace counts by its tools, not its name.
+        ([{"namespace": "mcp__openviking_docs", "tools": [{"name": "fetch_page"}]}], False),
+        # An unauthenticated claude.ai connector offers only its sign-in tools.
+        ([{"name": "mcp__claude_ai_OpenViking__authenticate"}], False),
+        # A skill list quoting an OpenViking skill is not an OpenViking tool.
+        (
+            [
+                {
+                    "name": "skill",
+                    "description": "<available_skills>viking://resources/</available_skills>",
+                }
+            ],
+            False,
+        ),
+        ([{"name": "mcp__kb__fetch", "description": "Fetch viking://a"}], False),
+        ([{"name": "Read", "description": "Read a file or viking:// URI"}], False),
+    ],
+)
+def test_client_openviking_tools(tools, detected):
+    assert client_openviking_tools({"tools": tools}, OV_NAMES) == detected
+    assert client_openviking_tools({"additional_tools": tools}, OV_NAMES) == detected
+    item = {"type": "additional_tools", "tools": tools}
+    assert client_openviking_tools({"input": [item]}, OV_NAMES) == detected
+
+
+def test_client_openviking_tools_outside_tool_list():
+    servers = {"mcp_servers": [{"type": "url", "url": "https://x/mcp", "name": "openviking"}]}
+    assert client_openviking_tools(servers, OV_NAMES)
+    deferred = (
+        "<system-reminder>Deferred tools:\nmcp__claude_ai_OpenViking__search\n</system-reminder>"
     )
+    assert client_openviking_tools({"messages": [{"role": "user", "content": deferred}]}, OV_NAMES)
+    signin = "mcp__claude_ai_OpenViking__authenticate\nmcp__claude_ai_OpenViking__complete_authentication"
+    assert not client_openviking_tools(
+        {"messages": [{"role": "user", "content": signin}]}, OV_NAMES
+    )
+    prose = "Why does mcp__openviking__search fail?"
+    assert not client_openviking_tools({"messages": [{"role": "user", "content": prose}]}, OV_NAMES)
+    reply = {"role": "assistant", "content": "mcp__openviking__search"}
+    assert not client_openviking_tools({"messages": [reply]}, OV_NAMES)
+    assert not client_openviking_tools({"tools": [{"name": "Read"}]}, [])
+    assert not client_openviking_tools({"tools": None, "mcp_servers": None}, OV_NAMES)
+
+
+def test_tool_arguments_compact_in_their_own_order():
+    assert (
+        canonical_arguments('{"b": 1, "a": ["x", {"c": null}]}') == '{"b":1,"a":["x",{"c":null}]}'
+    )
+    assert canonical_arguments('{"q": "\\u84dd"}') == '{"q":"蓝"}'
+    # Partial or free-form arguments, and the parsed objects some protocols carry, stay as sent.
+    for value in ('{"b": 1', "pwd", {"b": 1}, None):
+        assert canonical_arguments(value) == value
+
+
+def test_text_clients_add_for_the_user_is_not_a_user_turn():
+    # As DSH sends a turn over Chat Completions: the runtime-context snapshot follows the
+    # prompt, and pi-ai sends a tool result's image as a user message after the tool result.
+    prompt = {"role": "user", "content": "Read red.png"}
+    snapshot = {
+        "role": "user",
+        "content": "Current runtime context. This snapshot supersedes earlier runtime-context "
+        'snapshots.\n\nCurrent working directory: "/work".',
+    }
+    call = {"id": "1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+    image = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Attached image(s) from tool result:"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    turn = [prompt, snapshot]
+    assert classify({}, {}, turn) == ("user", 0)
+    turn += [
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "1", "content": "(see attached image)"},
+        image,
+    ]
+    assert classify({}, {}, turn) == ("continuation", 0)
+    # DSH's time context, appended before a step once ten minutes have passed.
+    time = "Time sampled while preparing turn 1, step 4: 2026-10-19T17:02:11+08:00[Asia/Shanghai]"
+    turn += [
+        {"role": "user", "content": time + "\nElapsed since the preceding step context: 10m 2s."}
+    ]
+    assert classify({}, {}, turn) == ("continuation", 0)
+    # The user quoting the label is still the user.
+    quoted = {"role": "user", "content": 'Why does it say "Attached image(s) from tool result:"?'}
+    assert classify({}, {}, [*turn, quoted])[0] == "user"
+    title = {
+        "role": "user",
+        "content": 'Generate the session title from this JSON array:\n[{"seq":8}]',
+    }
+    assert classify({}, {}, [title])[0] == "auxiliary"
+
+
+async def test_tool_less_request_in_a_session_with_client_tools_is_auxiliary(
+    setup_kernel, credential, policy
+):
+    kernel, _, viking, _ = setup_kernel
+    policy = {**policy, "show_recall": True}
+
+    def body(text, tools=()):
+        return {
+            "model": "m",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": text}],
+            **({"tools": list(tools)} if tools else {}),
+        }
+
+    bash = {"name": "Bash", "input_schema": {"type": "object"}}
+    # A helper request may come first; until the client sends tools, nothing changes.
+    first = await prepare(kernel, body("Say hi"), credential, policy, "anthropic")
+    assert first.kind == "user"
+    main = await prepare(
+        kernel, body("Deploy the blue cluster", [bash]), credential, policy, "anthropic"
+    )
+    assert main.kind == "user" and main.reply_lead
+    # Claude Code summarizes a fetched page under the conversation's session header.
+    page = body("Web page content:\n---\nExample Domain\n---\n\nWhat is the title?")
+    side = await prepare(kernel, page, credential, policy, "anthropic")
+    assert side.kind == "auxiliary" and not side.reply_lead
+    assert not context_blocks(side.body["messages"][0]) and len(viking.recalls) == 2
+    # The conversation's own turn with tools switched off resends its replies and is a turn.
+    off = body("Deploy the blue cluster")
+    off["messages"] += [
+        {"role": "assistant", "content": "Which region?"},
+        {"role": "user", "content": "Singapore"},
+    ]
+    assert (await prepare(kernel, off, credential, policy, "anthropic")).kind == "user"
+    assert len(viking.recalls) == 3
+    # A session that never sent client tools, such as one-shot SDK questions, recalls each time.
+    for question in ("Where do I deploy?", "Who owns the cluster?"):
+        sdk = await prepare(kernel, body(question), credential, policy, "anthropic", session="sdk")
+        assert sdk.kind == "user"
+    assert len(viking.recalls) == 5
 
 
 def test_capture_pairs_tools_and_strips_noise():
@@ -590,6 +820,7 @@ def test_sse_chunk_boundaries_and_anthropic_usage():
     for byte in raw:
         frames += decoder.feed(bytes([byte]))
     assert b"".join(frames) == raw
+    assert SSEDecoder().feed(raw) == frames
     capture = ResponseCapture("anthropic")
     capture.event(
         {

@@ -1,9 +1,12 @@
 const keys = {
   description:
-    "Each gateway key belongs to one OpenViking user and uses one context profile and a set of upstreams. Keys can't be edited — issue a new key and revoke the old one.",
+    "Each gateway key (starting with ovgw_) belongs to one OpenViking user and uses one context profile and a set of upstreams. Keys can't be edited — issue a new key and revoke the old one.",
   issue: 'Issue key',
   loadFailed: "Couldn't load gateway keys",
   prerequisites: {
+    managed:
+      "Your gateway admin hasn't added upstreams or context profiles yet.",
+    unlock: 'Enter gateway management key',
     upstream: 'Add an upstream before issuing a key.',
     profile: 'Create a context profile before issuing a key.',
     both: 'Add an upstream and create a context profile before issuing a key.',
@@ -44,9 +47,9 @@ const keys = {
   deleteUser: {
     title: "Delete {{user}}'s gateway data?",
     description_one:
-      "This revokes {{user}}'s gateway key and deletes the conversation state the gateway keeps for this user, including turns not yet saved to OpenViking. Their clients lose access immediately. Memories already in OpenViking are not affected.",
+      "This revokes {{user}}'s gateway key and deletes their request logs and the conversation state the gateway keeps for this user, including turns not yet saved to OpenViking. Their clients lose access immediately. Memories already in OpenViking are not affected.",
     description_other:
-      'This revokes all {{count}} gateway keys of {{user}} and deletes the conversation state the gateway keeps for this user, including turns not yet saved to OpenViking. Their clients lose access immediately. Memories already in OpenViking are not affected.',
+      'This revokes all {{count}} gateway keys of {{user}} and deletes their request logs and the conversation state the gateway keeps for this user, including turns not yet saved to OpenViking. Their clients lose access immediately. Memories already in OpenViking are not affected.',
     confirm: 'Delete gateway data',
     done: "Deleted {{user}}'s gateway data",
   },
@@ -61,29 +64,34 @@ const keys = {
         'Helps you tell keys apart. The person and the client make a good name.',
     },
     user: {
-      label: 'OpenViking user',
+      self: 'Read and write memory as you ({{user}}).',
+      developmentIdentity: 'Read and write memory as {{user}}.',
+      label: 'Who is this for?',
       placeholder: 'Choose an OpenViking user',
       loading: 'Loading users…',
       description:
-        'The gateway recalls and saves memory as this user. Their OpenViking key is read on the server, stored encrypted by the gateway and never shown.',
+        'The gateway recalls and saves memory as this user. Their user API key is read on the server, stored encrypted by the gateway and never shown.',
       roles: {
         admin: 'Admin',
         user: 'User',
       },
-      unavailable: "Key can't be read on the server; paste it instead",
+      unavailable:
+        "The server can't read this user's API key; paste it instead",
       loadFailed:
-        "Couldn't load this account's users, so paste the key instead.",
-      none: "The server can't read the keys of this account's users, so paste the key instead.",
-      root: "With the root key you can't choose a user here, so paste the key instead.",
+        "Couldn't load this account's users, so paste the user API key instead.",
+      none: "The server can't read the user API keys of this account's users, so paste one instead.",
       choose: 'Choose a user',
     },
     openvikingKey: {
-      label: 'OpenViking key',
+      forUser: "Paste {{user}}'s user API key",
+      managementKey:
+        "This is a gateway management key. Paste this user's user API key instead.",
+      label: 'OpenViking API key',
       description:
-        "An OpenViking user key from this account. The gateway recalls and saves memory as this user. Root keys aren't accepted. Stored encrypted and never shown again.",
+        "The user API key of a user in this account. The gateway recalls and saves memory as this user. Root API keys aren't accepted. Stored encrypted and never shown again.",
       gatewayKey:
-        "This is a gateway key. Enter the OpenViking user's own key instead.",
-      paste: 'Paste an OpenViking key',
+        "This is a gateway key (for clients). Paste this user's user API key instead.",
+      paste: 'Paste a user API key',
     },
     profile: {
       label: 'Context profile',
@@ -100,6 +108,7 @@ const keys = {
       required: 'Choose at least one upstream',
       empty: 'There are no upstreams yet.',
       create: 'Add one',
+      blocked: 'Blocked',
       off: 'Off',
     },
     models: {
@@ -111,11 +120,12 @@ const keys = {
     submit: 'Issue key',
   },
   errors: {
+    requiredVersion: 'Required version: {{version}}.',
     title: "Couldn't issue the key",
     rootKey:
-      'This is a root key. Use the key of an OpenViking user in this account.',
+      'This is a root API key. Use the user API key of a user in this account.',
     otherAccount:
-      'This OpenViking key belongs to another account. Use a user key from this account.',
+      'This OpenViking API key belongs to another account. Use a user API key from this account.',
     invalidKey:
       "OpenViking rejected this key. Check that it's complete and hasn't been regenerated.",
     unavailable:
@@ -123,14 +133,18 @@ const keys = {
     versionMismatch:
       'OpenViking is older than the gateway requires. Upgrade OpenViking, then try again.',
     unknownUser: 'This user is no longer in this account. Choose another user.',
+    userRequired:
+      'A root API key has no user of its own. Choose the user this key is for.',
     userKeyUnreadable:
-      "The server can't read this user's OpenViking key. Paste the key instead.",
+      'The server only stores a hash of this user’s API key and cannot read it. Paste their user API key instead.',
   },
   secret: {
+    identity: 'This key reads and writes memory as {{user}}.',
+    dependency:
+      "It's tied to {{user}}'s current user API key. If that key is regenerated, this gateway key stops working and you'll need to issue a new one.",
     title: 'Copy your gateway key',
     once: 'This is the only time the full key is shown.',
     copyKey: 'Copy gateway key',
-    user: 'OpenViking user',
     profile: 'Context profile',
     connectTitle: 'Connect a client',
     clients: {

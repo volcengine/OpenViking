@@ -44,6 +44,23 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _has_context_type_filter(scope: Any) -> bool:
+    """Recognize explicit type constraints in public DSL and internal filter ASTs."""
+    if isinstance(scope, dict):
+        return scope.get("field") == "context_type" or any(
+            _has_context_type_filter(value)
+            for value in scope.values()
+            if isinstance(value, (dict, list))
+        )
+    if isinstance(scope, list):
+        return any(_has_context_type_filter(value) for value in scope)
+    if hasattr(scope, "payload"):
+        return _has_context_type_filter(scope.payload)
+    return getattr(scope, "field", None) == "context_type" or any(
+        _has_context_type_filter(value) for value in getattr(scope, "conds", [])
+    )
+
+
 class RetrieverMode(str):
     THINKING = "thinking"
     QUICK = "quick"
@@ -102,6 +119,7 @@ class HierarchicalRetriever:
         events_time_decay_protection: Optional[str] = None,
         request_now: Optional[datetime] = None,
         search_type: SearchType = "semantic",
+        has_explicit_target: Optional[bool] = None,
     ) -> QueryResult:
         """
         Run one global vector search, then optionally rerank its candidates.
@@ -114,6 +132,7 @@ class HierarchicalRetriever:
             score_gte: True uses >=, False uses >
             scope_dsl: Additional scope constraints passed from public find/search filter
             level: Optional result level filter (0=L0, 1=L1, 2=L2)
+            has_explicit_target: Whether target_uri was supplied before default expansion
         """
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
@@ -140,6 +159,8 @@ class HierarchicalRetriever:
         vector_proxy = VikingDBManagerProxy(self.vector_store, ctx)
 
         target_dirs = [d for d in (query.target_directories or []) if d]
+        if has_explicit_target is None:
+            has_explicit_target = bool(target_dirs)
 
         if not await vector_proxy.collection_exists_bound():
             logger.warning(
@@ -177,7 +198,12 @@ class HierarchicalRetriever:
             root_uris = default_target_directories(ctx, context_type=query.context_type)
 
         context_type = query.context_type.value if query.context_type else None
-        if image_query and context_type is None:
+        if (
+            image_query
+            and context_type is None
+            and not has_explicit_target
+            and not _has_context_type_filter(scope_dsl)
+        ):
             context_type = ContextType.RESOURCE.value
 
         search_limit = limit * self.RERANK_CANDIDATE_MULTIPLIER if use_rerank else limit

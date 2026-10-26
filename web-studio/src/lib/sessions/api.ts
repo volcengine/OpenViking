@@ -1,3 +1,5 @@
+import i18n from '#/i18n/core'
+import { parseSessionArchive, parseSessionMessages } from './parse-messages'
 import {
   deleteSessionBySessionId,
   getContentRead,
@@ -8,7 +10,6 @@ import {
   postBotV1Chat,
   postSessions,
   postSessionIdCommit,
-  postSessionIdExtract,
   postSessionIdMessages,
 } from '#/gen/ov-client/sdk.gen'
 import {
@@ -99,18 +100,30 @@ export async function deleteSession(
 // Session Messages
 // ---------------------------------------------------------------------------
 
-function isMessage(value: unknown): value is Message {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'id' in value &&
-    'role' in value &&
-    'parts' in value
-  )
-}
+export type SessionHistorySource = 'api' | 'content' | 'none'
 
-function getMessages(value: unknown): Message[] {
-  return Array.isArray(value) ? value.filter(isMessage) : []
+async function fetchArchiveFileMessages(
+  session: SessionMeta,
+  archiveId: string,
+): Promise<Message[]> {
+  // Use the server's session URI: hosted user space names need not match user IDs.
+  if (!session.uri) {
+    throw new OvClientError({
+      code: 'INVALID_SESSION_ARCHIVE',
+      message: i18n.t('studio:errors.sessionUriMissing'),
+    })
+  }
+  const result = await getOvResult<unknown>(
+    getContentRead({
+      query: {
+        uri: `${session.uri.replace(/\/+$/, '')}/history/${archiveId}/messages.jsonl`,
+        offset: 0,
+        limit: -1,
+        raw: true,
+      } as Parameters<typeof getContentRead>[0]['query'] & { raw?: boolean },
+    }),
+  )
+  return parseSessionArchive(result, archiveId)
 }
 
 function deduplicateMessages(messages: Message[]): Message[] {
@@ -160,6 +173,7 @@ function isMissingArchive(error: unknown): boolean {
 export async function fetchSessionMessages(
   sessionId: string,
   sessionMeta?: SessionMeta,
+  historySource: SessionHistorySource = 'api',
 ): Promise<Message[]> {
   const context = await getOvResult<SessionContextResult>(
     getSessionIdContext({
@@ -167,9 +181,12 @@ export async function fetchSessionMessages(
     }),
   )
 
+  if (historySource === 'none') return parseSessionMessages(context.messages)
+
   let commitCount = 0
+  let session = sessionMeta
   try {
-    const session = sessionMeta ?? (await fetchSession(sessionId))
+    session ??= await fetchSession(sessionId)
     commitCount = Math.max(0, Math.floor(session.commit_count || 0))
   } catch {
     // Older servers may not expose session details. Current context is still
@@ -185,20 +202,22 @@ export async function fetchSessionMessages(
     SESSION_ARCHIVE_CONCURRENCY,
     async (archiveId) => {
       try {
-        return await fetchSessionArchive(sessionId, archiveId)
+        return historySource === 'content'
+          ? await fetchArchiveFileMessages(session!, archiveId)
+          : parseSessionMessages(
+              (await fetchSessionArchive(sessionId, archiveId)).messages,
+            )
       } catch (error) {
         if (isMissingArchive(error)) return null
         throw error
       }
     },
   )
-  const archivedMessages = archives.flatMap((archive) =>
-    archive ? getMessages(archive.messages) : [],
-  )
+  const archivedMessages = archives.flatMap((archive) => archive ?? [])
 
   return deduplicateMessages([
     ...archivedMessages,
-    ...getMessages(context.messages),
+    ...parseSessionMessages(context.messages),
   ])
 }
 
@@ -238,7 +257,7 @@ export async function fetchSessionFirstTitle(
 }
 
 function firstUserTitle(value: unknown): string {
-  const first = getMessages(value).find(
+  const first = parseSessionMessages(value).find(
     (message) =>
       message.role === 'user' &&
       message.parts.some((part) => part.type === 'text' && part.text.trim()),
@@ -329,14 +348,6 @@ export async function commitSession(
   )
 }
 
-export async function extractSession(sessionId: string): Promise<unknown> {
-  return getOvResult<unknown>(
-    postSessionIdExtract({
-      path: { session_id: sessionId },
-    }),
-  )
-}
-
 export async function fetchSessionToolResults(
   sessionId: string,
   options: { limit?: number; toolName?: string } = {},
@@ -422,7 +433,8 @@ function extractErrorMessage(text: string, fallback: string): string {
 function buildFetchHeaders(): Record<string, string> {
   const conn = ovClient.getConnection()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (conn.apiKey) headers['X-API-Key'] = conn.apiKey
+  const apiKey = conn.apiKey || conn.adminApiKey
+  if (apiKey) headers['X-API-Key'] = apiKey
   if (conn.identityHeaders) {
     if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
     if (conn.userId) headers['X-OpenViking-User'] = conn.userId
@@ -443,7 +455,7 @@ export async function fetchBotHealth(): Promise<unknown> {
       code: response.status === 503 ? 'BOT_MODE_DISABLED' : 'BOT_HEALTH_FAILED',
       message: extractErrorMessage(
         text,
-        `Bot health check failed (${response.status})`,
+        i18n.t('studio:errors.botHealth', { status: response.status }),
       ),
       responseBody: text,
       statusCode: response.status,
@@ -491,6 +503,77 @@ export async function sendChat(
   } as unknown as NonNullable<Parameters<typeof postBotV1Chat<true>>[0]>)
 
   return response.data as BotChatResponse
+}
+
+export type InterruptChatSessionResult = {
+  interrupted: boolean
+}
+
+export type SteerChatSessionResult = {
+  accepted: boolean
+}
+
+export async function steerChatSession(
+  sessionId: string,
+  request: BotChatRequest,
+): Promise<SteerChatSessionResult> {
+  const baseUrl = ovClient.getOptions().baseUrl
+  const conn = ovClient.getConnection()
+  const response = await fetch(
+    `${baseUrl}/bot/v1/sessions/${encodeURIComponent(sessionId)}/steer`,
+    {
+      method: 'POST',
+      headers: buildFetchHeaders(),
+      body: JSON.stringify({
+        ...request,
+        session_id: sessionId,
+        user_id: request.user_id || conn.userId || undefined,
+      }),
+    },
+  )
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new OvClientError({
+      code: 'BOT_STEER_FAILED',
+      message: extractErrorMessage(
+        text,
+        i18n.t('studio:errors.botSteer', { status: response.status }),
+      ),
+      responseBody: text,
+      statusCode: response.status,
+    })
+  }
+
+  return response.json().catch(() => ({ accepted: false }))
+}
+
+export async function interruptChatSession(
+  sessionId: string,
+): Promise<InterruptChatSessionResult> {
+  const baseUrl = ovClient.getOptions().baseUrl
+  const response = await fetch(
+    `${baseUrl}/bot/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+    {
+      method: 'POST',
+      headers: buildFetchHeaders(),
+    },
+  )
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new OvClientError({
+      code: 'BOT_INTERRUPT_FAILED',
+      message: extractErrorMessage(
+        text,
+        i18n.t('studio:errors.botInterrupt', { status: response.status }),
+      ),
+      responseBody: text,
+      statusCode: response.status,
+    })
+  }
+
+  return response.json().catch(() => ({ interrupted: false }))
 }
 
 // ---------------------------------------------------------------------------
