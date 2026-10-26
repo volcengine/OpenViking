@@ -350,6 +350,52 @@ class TestAccessSitemap:
         finally:
             resource.cleanup()
 
+    def test_filter_entries_normalizes_equivalent_hosts_and_fragments(self):
+        feed_url = "https://EXAMPLE.com.:443/sitemap.xml"
+        first_fragment = "https://example.com/page#overview"
+        entries = [
+            FeedEntry(url=first_fragment),
+            FeedEntry(url="https://example.com/page#details"),
+            FeedEntry(url="https://example.com/page?view=one"),
+            FeedEntry(url="https://example.com/page?view=two"),
+            FeedEntry(url="https://example.com:8443/private"),
+            FeedEntry(url="https://example.com:not-a-port/bad"),
+            FeedEntry(url="https://other.example/page"),
+        ]
+
+        filtered = WebFeedAccessor()._filter_entries(
+            entries, feed_url, {"same_host_only": True}, None, None
+        )
+
+        assert [entry.url for entry in filtered] == [
+            first_fragment,
+            "https://example.com/page?view=one",
+            "https://example.com/page?view=two",
+        ]
+
+    async def test_fragment_variants_are_mirrored_once(self, patch_httpx):
+        base = "https://example.com"
+        first_fragment = f"{base}/page#overview"
+        second_fragment = f"{base}/page#details"
+        routes = {
+            f"{base}/sitemap.xml": _FakeResponse(
+                content=_urlset([(first_fragment, None), (second_fragment, None)])
+            ),
+            first_fragment: _FakeResponse(content=_page("first")),
+            second_fragment: _FakeResponse(content=_page("second")),
+        }
+        patch_httpx(routes)
+
+        resource = await WebFeedAccessor().access(
+            f"{base}/sitemap.xml", respect_robots=False, politeness_delay=0
+        )
+        try:
+            assert resource.meta["page_count"] == 1
+            assert list(resource.meta["pages"]) == [first_fragment]
+            assert len(list(resource.path.rglob("*.html"))) == 1
+        finally:
+            resource.cleanup()
+
 
 # --------------------------------------------------------------------------- #
 # access() — auto-discovery from a bare domain / HTML page (args={"site": True})
