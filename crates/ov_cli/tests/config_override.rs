@@ -2,19 +2,23 @@
 use serde_json::{Value, json};
 use std::{
     fs,
+    io::Read,
     process::{Command, Output, Stdio},
 };
 
-fn run(dir: &std::path::Path, selected: &str, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_ov"))
+fn command(dir: &std::path::Path, selected: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ov"));
+    command
         .current_dir(dir)
         .env("OPENVIKING_CLI_CONFIG_FILE", selected)
         .env("OPENVIKING_LANG", "en")
         .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
-        .args(args)
-        .output()
-        .unwrap()
+        .stdin(Stdio::null());
+    command
+}
+
+fn run(dir: &std::path::Path, selected: &str, args: &[&str]) -> Output {
+    command(dir, selected).args(args).output().unwrap()
 }
 
 fn seed(dir: &std::path::Path, name: &str, url: &str) {
@@ -53,6 +57,39 @@ fn status_and_config_list_identify_the_selected_file() {
             .iter()
             .any(|e| e["name"] == "selected" && e["active"] == true)
     );
+}
+
+#[test]
+fn config_list_succeeds_when_stdout_closes_early() {
+    let dir = tempfile::tempdir().unwrap();
+    let selected = dir.path().join("ovcli.conf.selected");
+    seed(dir.path(), "ovcli.conf.selected", "http://127.0.0.1:9");
+    let long_url = format!("http://127.0.0.1/{}", "a".repeat(4_096));
+    for index in 0..512 {
+        let name = format!("ovcli.conf.generated-{index:04}");
+        seed(dir.path(), &name, &long_url);
+    }
+    let selected = selected.to_str().unwrap();
+    let args = ["config", "list", "-o", "json"];
+
+    let complete = run(dir.path(), selected, &args);
+    assert!(complete.status.success(), "{complete:?}");
+    assert!(complete.stdout.len() > 1024 * 1024);
+
+    let mut child = command(dir.path(), selected)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut prefix = [0; 1];
+    stdout.read_exact(&mut prefix).unwrap();
+    drop(stdout);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
 }
 
 #[test]
