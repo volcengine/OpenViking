@@ -8,6 +8,7 @@ Provides search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.namespace_policy import is_system_uri
 from openviking.core.retrieval_types import SearchType
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
@@ -26,6 +27,13 @@ if TYPE_CHECKING:
     from openviking.session import Session
 
 logger = get_logger(__name__)
+
+
+def _reject_system_targets(target_uri: Union[str, List[str]]) -> None:
+    targets = [target_uri] if isinstance(target_uri, str) else target_uri
+    for uri in targets:
+        if uri and is_system_uri(uri):
+            raise InvalidArgumentError(f"search is not supported for namespace: {uri}")
 
 
 def _validate_query(
@@ -146,6 +154,7 @@ class SearchService:
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _validate_query(query, resolved_image_url)
+        _reject_system_targets(target_uri)
         if search_type == "keywords":
             await self.ensure_keywords_search_supported(ctx)
         viking_fs = self._ensure_initialized()
@@ -202,6 +211,7 @@ class SearchService:
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _validate_query(query, resolved_image_url, filter)
+        _reject_system_targets(target_uri)
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,
@@ -235,6 +245,7 @@ class SearchService:
         from openviking_cli.retrieve import ContextType, FindResult, TypedQuery
 
         _validate_query(query)
+        _reject_system_targets(target_uri)
         fs = self._ensure_initialized()
         targets = resolve_retrieval_targets(target_uri, ctx).target_directories
         for target in targets:

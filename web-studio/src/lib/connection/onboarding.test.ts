@@ -328,3 +328,68 @@ describe('management bootstrap', () => {
     ).toBe('/filesystem')
   })
 })
+
+it.each([
+  ['root', 'chosen-account'],
+  ['admin', 'bound-account'],
+])(
+  'keeps the selected user when verifying a %s control credential',
+  async (role, expectedAccount) => {
+    get
+      .mockResolvedValueOnce({
+        data: {
+          version: 'test',
+          auth_mode: 'api_key',
+          role,
+          account_id: role === 'root' ? 'default' : 'bound-account',
+          user_id: 'default',
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: {},
+        data: { status: 'ok', result: [] },
+      })
+    const result = await verifyStudioSetup(
+      {
+        ...draft,
+        apiKey: '',
+        adminApiKey: 'control-key',
+        accountId: 'chosen-account',
+        userId: 'alice',
+      },
+      new AbortController().signal,
+    )
+    expect(result.accountId).toBe(expectedAccount)
+    expect(result.userId).toBe('alice')
+    expect(result.apiKey).toBe('')
+    expect(get.mock.calls[1][0].path.account_id).toBe(expectedAccount)
+  },
+)
+
+it('uses the User API Key identity when a separate control key is also configured', async () => {
+  get
+    .mockResolvedValueOnce({
+      data: {
+        version: 'test',
+        auth_mode: 'api_key',
+        role: 'user',
+        account_id: 'user-account',
+        user_id: 'alice',
+      },
+    })
+    .mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      data: { status: 'ok', result: [] },
+    })
+  const result = await verifyStudioSetup(
+    { ...draft, adminApiKey: 'control-key' },
+    new AbortController().signal,
+  )
+  expect(result.accountId).toBe('user-account')
+  expect(result.userId).toBe('alice')
+  expect(vi.mocked(createClient).mock.calls[0][0]?.headers?.['X-API-Key']).toBe(
+    'synthetic-key',
+  )
+})

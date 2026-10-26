@@ -256,7 +256,25 @@ from langchain_openviking import OpenVikingStore
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
+store.put(("users", "ada"), "preferences", None)  # a None value deletes the item
 ```
+
+Following LangGraph's `BaseStore` contract, passing `None` as the value deletes the item and is
+equivalent to `delete()`. Deleting a key that does not exist is a no-op.
+
+`put()` validates the namespace before changing records. Other removal errors propagate to
+the caller. Record and search-projection removal are separate operations: if only one
+succeeds, resolve the reported error and retry the operation to finish cleanup.
+
+Record reads return `None` only for a missing record; permission, backend, and invalid-JSON
+errors propagate, and `put()` does not overwrite a record after a failed read.
+`list_namespaces(prefix=("users", "*"))` matches one namespace label per `*`, including
+when `root_uri` uses a peer home alias such as `viking://~/peers/support/memories/langgraph_store`.
+
+`search()` accepts nested JSON filters such as `filter={"metadata": {"color": "blue"}}`.
+Filter keys `eq`, `ne`, `gt`, `gte`, `lt`, `lte` and `in` are reserved operator aliases at every nesting level.
+Use `index=["items[*].text"]` to index selected array fields while retaining the complete
+stored value. Existing index projections are updated when the item is written again.
 
 ### LangGraph middleware
 
@@ -293,6 +311,13 @@ except OpenVikingPartialWriteError as exc:
 recorder.flush("support-thread-1")
 recorder.close()
 ```
+
+Pass `commit_policy=` to `record()` or `arecord()` to override the recorder's
+policy for that call without changing its default. `None` uses the default;
+`OpenVikingCommitPolicy(mode="never")` suppresses a new post-write commit, but
+still retries any previously failed commit. `history.clear()` and `aclear()`
+raise if deletion or recreation fails; a failed recreation leaves the old
+session deleted and does not acknowledge pending context references.
 
 `record()` writes only the messages supplied by the caller. It filters framework
 control messages, writes in server-safe batches, and applies the configured

@@ -570,7 +570,7 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
     "dense": {
       "provider": "gemini",
       "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
+      "model": "gemini-embedding-2",
       "dimension": 3072
     }
   }
@@ -578,11 +578,15 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
 ```
 
 可用 Gemini 嵌入模型:
-- `gemini-embedding-2-preview`: 8192 token 输入限制, 1–3072 输出维度 (MRL)
+- `gemini-embedding-2`: 8192 token 输入限制, 1–3072 输出维度 (MRL)
 - `gemini-embedding-001`: 2048 token 输入限制, 1–3072 输出维度 (MRL)
 - `text-embedding-004`: 2048 token 输入限制, 768 输出维度（固定）
 
 推荐维度: `768`、`1536` 或 `3072`（默认: `3072`）。
+
+稳定版 Gemini Embedding 2 不接受 `task_type` 请求字段，而是使用文档规定的文本任务指令。
+配置 `query_param` 或 `document_param` 后，OpenViking 会自动添加相应指令。如果修改已有索引的
+embedding 模型，除非 provider 明确保证两个向量空间兼容，否则应重新生成该索引的向量。
 
 获取 API Key: https://aistudio.google.com/apikey
 
@@ -645,7 +649,7 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
     "dense": {
       "provider": "gemini",
       "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
+      "model": "gemini-embedding-2",
       "dimension": 3072,
       "query_param": "RETRIEVAL_QUERY",
       "document_param": "RETRIEVAL_DOCUMENT"
@@ -1142,7 +1146,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
   "rerank": {
     "provider": "jev",
     "api_key": "your-vercel-ai-gateway-api-key",
-    "api_base": "https://ai-gateway.vercel.sh/typesafe",
+    "api_base": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
     "model": "typesafe-ai/jev",
     "threshold": 0.1
   }
@@ -1180,7 +1184,7 @@ Jev 适配器将 query 和候选文档作为共享的 System One `state`，支�
 | `sk` | str | VikingDB Secret Key（仅 `vikingdb` 提供方使用） |
 | `model_name` | str | 模型名称（仅 `vikingdb` 提供方使用，默认：`doubao-seed-rerank`） |
 | `api_key` | str | API Key（用于 `openai`、`cohere` 或 `jev` 提供方） |
-| `api_base` | str | 接口地址（用于 `openai` 或 `jev`；Jev 默认为 `https://api.typesafe.ai`，Vercel 使用 `https://ai-gateway.vercel.sh/typesafe`） |
+| `api_base` | str | 完整接口地址（用于 `openai` 或 `jev`；Jev 默认为 `https://api.typesafe.ai/v1/systemone`，Vercel 使用 `https://ai-gateway.vercel.sh/typesafe/v1/systemone`；自定义 Jev URL 会原样使用） |
 | `model` | str | 模型名称（用于 OpenAI 兼容、LiteLLM 或 `jev` 提供方） |
 | `mode` | `"noul"`、`"choice"` 或 `null` | Jev Rerank 模式；省略或 `null` 时使用 `"noul"` |
 | `timeout` | float | HTTP Rerank provider（包括 Jev）的请求超时时间，单位为秒。默认：`30.0` |

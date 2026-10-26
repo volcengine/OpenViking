@@ -51,6 +51,11 @@ from openviking.core.uri_validation import (
     validate_request_viking_uri,
 )
 from openviking.parse.mode import ParseMode, normalize_parse_mode
+from openviking.privacy.operations import (
+    build_privacy_tree,
+    privacy_field_metadata,
+    resolve_privacy_field,
+)
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.context_assembler import (
@@ -92,6 +97,7 @@ from openviking.utils.search_filters import (
 from openviking.utils.skill_processor import SkillProcessor
 from openviking.utils.time_decay import validate_event_time_decay_request
 from openviking_cli.exceptions import (
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
@@ -429,6 +435,91 @@ async def set_acl(uri: str, acl: AclSpec) -> dict[str, Any]:
         ctx=ctx,
         acl_mode=acl.acl_mode,
     )
+
+
+# -- privacy ---------------------------------------------------------------
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+async def privacy_tree(
+    category: Annotated[
+        Optional[str], Field(description="Only list this category, e.g. credential or skill")
+    ] = None,
+) -> dict[str, Any]:
+    """Find saved API keys, tokens and other private fields for the current user.
+    Use when you need to check whether a GitHub PAT or a skill's api_key is saved.
+    Returns categories, targets, active versions, configured flags and complete
+    {{ov_privacy:...}} references, never secret values or history. Pass a returned
+    reference to privacy_resolve when you need the actual value for a task.
+    """
+    ctx = _get_ctx()
+    return await build_privacy_tree(get_service().privacy_configs, ctx, category)
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+async def privacy_resolve(
+    reference: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=2048,
+            description="Copy the entire {{ov_privacy:...}} placeholder unchanged, or supply one field-level Privacy URI. Omit surrounding text such as Authorization: Bearer.",
+        ),
+    ],
+) -> dict[str, Any]:
+    """Turn an {{ov_privacy:...}} placeholder into its actual API key or token.
+    When a SKILL.md, document or tool result contains, for example,
+    {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}},
+    and the task needs that credential, pass the whole placeholder as reference.
+    Use the returned value in the API's Authorization header or credential field;
+    do not send the placeholder itself as a key. Returns one current field owned
+    by the caller. Keep references in saved documents and do not echo the secret
+    in chat. If you do not know the reference, use privacy_tree first.
+    """
+    ctx = _get_ctx()
+    return await resolve_privacy_field(get_service().privacy_configs, ctx, reference)
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+async def privacy_upsert(
+    category: Annotated[str, Field(description="Credential category, e.g. credential or skill")],
+    target_key: Annotated[
+        str, Field(description="Credential target, e.g. github or the skill name")
+    ],
+    values: Annotated[
+        dict[str, Any],
+        Field(
+            description='Fields to save, e.g. {"pat": "user-provided-token"}. Unspecified fields are preserved.'
+        ),
+    ],
+) -> dict[str, Any]:
+    """Save a credential the user supplies, e.g. a GitHub PAT or a skill's api_key.
+    For a GitHub PAT use category="credential", target_key="github", values={"pat":
+    "<user-provided-token>"}. Creates the target or merges the supplied fields;
+    updating pat preserves other fields such as username. Changed values create
+    and activate a version; this does not rotate keys at GitHub or other providers.
+    Returns updated-field metadata and {{ov_privacy:...}} references, never values.
+    Use those references instead of embedding the key in saved documents or memory.
+    """
+    ctx = _get_ctx()
+    privacy = get_service().privacy_configs
+    if privacy is None:
+        raise FailedPreconditionError("Privacy configuration service is unavailable")
+    current = await privacy.patch_values(
+        ctx, category, target_key, values, updated_by=ctx.user.user_id
+    )
+    return {
+        "owner_user_id": ctx.user.user_id,
+        "category": category,
+        "target_key": target_key,
+        "version": current.version,
+        "fields": privacy_field_metadata(
+            ctx, category, target_key, {field: current.values[field] for field in values}
+        ),
+    }
 
 
 # -- find / search ---------------------------------------------------------

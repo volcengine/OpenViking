@@ -18,6 +18,7 @@ from langchain_openviking.client import (
     OptionalDependencyError,
     call_openviking,
     ensure_client,
+    is_not_found_error,
     item_value,
     iter_result_items,
     missing_dependency,
@@ -30,9 +31,11 @@ if TYPE_CHECKING:
         GetOp,
         Item,
         ListNamespacesOp,
+        MatchCondition,
         PutOp,
         SearchItem,
         SearchOp,
+        get_text_at_path,
     )
 else:
     try:
@@ -41,14 +44,16 @@ else:
             GetOp,
             Item,
             ListNamespacesOp,
+            MatchCondition,
             PutOp,
             SearchItem,
             SearchOp,
+            get_text_at_path,
         )
     except ImportError:  # pragma: no cover - exercised by optional import path
         _LANGGRAPH_IMPORT_ERROR = missing_dependency("langgraph", "langgraph")
         BaseStore = object
-        GetOp = PutOp = SearchOp = ListNamespacesOp = object
+        GetOp = PutOp = SearchOp = ListNamespacesOp = MatchCondition = object
         Item = SearchItem = object
 
 logger = logging.getLogger(__name__)
@@ -60,6 +65,7 @@ class OpenVikingStore(BaseStore):
     Values are stored as JSON records under ``<root_uri>/data``. A separate
     markdown projection under ``<root_uri>/index`` gives OpenViking semantic
     retrieval a compact document to index for query-based ``search`` calls.
+    Removal ignores missing targets and propagates other backend errors.
 
     Args:
         root_uri: Base URI for the store. Defaults to the ``viking://~`` home alias,
@@ -125,11 +131,9 @@ class OpenVikingStore(BaseStore):
                     )
                 )
             elif isinstance(op, ListNamespacesOp):
-                prefix, suffix = self._match_conditions_to_prefix_suffix(op.match_conditions)
                 results.append(
-                    self.list_namespaces(
-                        prefix=prefix,
-                        suffix=suffix,
+                    self._list_namespaces(
+                        op.match_conditions,
                         max_depth=op.max_depth,
                         limit=op.limit,
                         offset=op.offset,
@@ -145,7 +149,9 @@ class OpenVikingStore(BaseStore):
     def get(self, namespace: tuple[str, ...], key: str, *, refresh_ttl: Any = None) -> Any:
         try:
             record = self._read_record(self._data_uri(namespace, key))
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
             return None
         return Item(
             namespace=tuple(record["namespace"]),
@@ -159,17 +165,23 @@ class OpenVikingStore(BaseStore):
         self,
         namespace: tuple[str, ...],
         key: str,
-        value: Mapping[str, Any],
+        value: Mapping[str, Any] | None,
         index: bool | list[str] | None = None,
         *,
         ttl: Any = None,
     ) -> None:
+        from langgraph.store.base import _validate_namespace
+
         if ttl is not None:
             raise NotImplementedError(
                 "TTL is not supported by OpenVikingStore. "
                 "OpenViking stores LangGraph values as durable content records."
             )
         namespace = tuple(namespace)
+        _validate_namespace(namespace)
+        if value is None:
+            self.delete(namespace, key)
+            return
         now = datetime.now(timezone.utc)
         data_uri = self._data_uri(namespace, key)
         record = self._write_record(data_uri, namespace, key, dict(value), now)
@@ -215,15 +227,38 @@ class OpenVikingStore(BaseStore):
         limit: int = 100,
         offset: int = 0,
     ) -> list[tuple[str, ...]]:
+        conditions = []
+        if prefix:
+            conditions.append(MatchCondition("prefix", prefix))
+        if suffix:
+            conditions.append(MatchCondition("suffix", suffix))
+        return self._list_namespaces(conditions, max_depth=max_depth, limit=limit, offset=offset)
+
+    def _list_namespaces(
+        self,
+        match_conditions: Iterable[Any] | None,
+        *,
+        max_depth: int | None,
+        limit: int,
+        offset: int,
+    ) -> list[tuple[str, ...]]:
+        conditions = tuple(match_conditions or ())
+        scan_prefix: tuple[str, ...] = ()
+        for condition in conditions:
+            if condition.match_type == "prefix":
+                path = tuple(condition.path)
+                literal_prefix = path[: path.index("*")] if "*" in path else path
+                if len(literal_prefix) > len(scan_prefix):
+                    scan_prefix = literal_prefix
+
         namespaces = set()
-        for uri in self._all_data_uris(prefix or ()):
+        # Wildcards match namespace labels, never physical URI path segments.
+        for uri in self._all_data_uris(scan_prefix):
             parsed = self._parse_data_uri(uri)
             if parsed is None:
                 continue
             namespace, _key = parsed
-            if prefix and not _tuple_matches_prefix(namespace, prefix):
-                continue
-            if suffix and not _tuple_matches_suffix(namespace, suffix):
+            if not all(_namespace_matches(namespace, condition) for condition in conditions):
                 continue
             if max_depth is not None and len(namespace) > max_depth:
                 namespace = namespace[:max_depth]
@@ -309,7 +344,9 @@ class OpenVikingStore(BaseStore):
     ) -> dict[str, Any]:
         try:
             existing = self._read_record(uri)
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
             record = _store_record(namespace, key, value, created_at=now, updated_at=now)
             self._write_create(uri, json.dumps(record, ensure_ascii=False, indent=2))
             return record
@@ -353,9 +390,10 @@ class OpenVikingStore(BaseStore):
     def _remove(self, uri: str) -> None:
         try:
             call_openviking(self._client(), "rm", uri=uri, recursive=False)
-        except Exception:
-            logger.debug("OpenVikingStore remove ignored missing/unavailable URI", exc_info=True)
-            pass
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
+            logger.debug("OpenVikingStore remove ignored missing URI", exc_info=True)
 
     def _data_uri(self, namespace: tuple[str, ...], key: str) -> str:
         return f"{self._data_prefix_uri(namespace)}/{_segment(key)}.json"
@@ -412,20 +450,6 @@ class OpenVikingStore(BaseStore):
             score=score,
         )
 
-    def _match_conditions_to_prefix_suffix(
-        self, conditions: Iterable[Any] | None
-    ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
-        prefix = None
-        suffix = None
-        for condition in conditions or []:
-            match_type = getattr(condition, "match_type", None)
-            path = tuple(getattr(condition, "path", ()) or ())
-            if match_type == "prefix":
-                prefix = path
-            elif match_type == "suffix":
-                suffix = path
-        return prefix, suffix
-
 
 def _segment(value: str) -> str:
     return quote(str(value), safe="")
@@ -445,14 +469,20 @@ def _parse_canonicalized_record_uri(
 ) -> tuple[tuple[str, ...], str] | None:
     root = classify_uri(root_uri)
     root_tail = _identity_relative_root_tail(root)
-    if root_tail is None:
-        return None
-
     candidate = classify_uri(uri)
-    if candidate.scope != root.scope or candidate.content_index is None:
-        return None
+    if root.parts[:2] == ("~", "peers") and root.content_index == 3:
+        if candidate.scope != "user" or candidate.content_index != 4:
+            return None
+        # Only the current-user alias changes; keep the peer ID in the match.
+        root_tail = root.parts[1:]
+        candidate_tail = candidate.parts[2:]
+    else:
+        if root_tail is None:
+            return None
+        if candidate.scope != root.scope or candidate.content_index is None:
+            return None
+        candidate_tail = candidate.parts[candidate.content_index :]
 
-    candidate_tail = candidate.parts[candidate.content_index :]
     if len(candidate_tail) < len(root_tail) + 2:
         return None
     if candidate_tail[: len(root_tail)] != root_tail:
@@ -531,7 +561,11 @@ def _extract_uris(value: Any) -> list[str]:
 
 def _project_value(value: dict[str, Any], index: bool | list[str] | None) -> dict[str, Any]:
     if isinstance(index, list):
-        return {field: _nested_value(value, field) for field in index}
+        projected = {field: _nested_value(value, field) for field in index}
+        for field in index:
+            if projected[field] is None:
+                projected[field] = get_text_at_path(value, field) or None
+        return projected
     return value
 
 
@@ -549,13 +583,30 @@ def _matches_filter(value: dict[str, Any], filter: dict[str, Any] | None) -> boo
         return True
     for path, expected in filter.items():
         actual = _nested_value(value, path)
-        if isinstance(expected, dict):
-            for op, target in expected.items():
-                if not _compare(actual, op, target):
-                    return False
-        elif actual != expected:
+        if not _matches_value(actual, expected):
             return False
     return True
+
+
+def _matches_value(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        if any(
+            key.startswith("$") or key in {"eq", "ne", "gt", "gte", "lt", "lte", "in"}
+            for key in expected
+        ):
+            return all(_compare(actual, op, target) for op, target in expected.items())
+        return isinstance(actual, dict) and all(
+            _matches_value(actual.get(key), target) for key, target in expected.items()
+        )
+    if isinstance(expected, (list, tuple)):
+        return (
+            isinstance(actual, (list, tuple))
+            and len(actual) == len(expected)
+            and all(
+                _matches_value(left, right) for left, right in zip(actual, expected, strict=False)
+            )
+        )
+    return actual == expected
 
 
 def _compare(actual: Any, op: str, target: Any) -> bool:
@@ -588,9 +639,16 @@ def _safe_ordered_compare(actual: Any, target: Any, compare) -> bool:
         return False
 
 
-def _tuple_matches_prefix(value: tuple[str, ...], prefix: tuple[str, ...]) -> bool:
-    return len(value) >= len(prefix) and value[: len(prefix)] == prefix
-
-
-def _tuple_matches_suffix(value: tuple[str, ...], suffix: tuple[str, ...]) -> bool:
-    return len(value) >= len(suffix) and value[-len(suffix) :] == suffix
+def _namespace_matches(value: tuple[str, ...], condition: Any) -> bool:
+    path = condition.path
+    if len(value) < len(path):
+        return False
+    if condition.match_type == "prefix":
+        selected = value[: len(path)]
+    elif condition.match_type == "suffix":
+        selected = value[-len(path) :] if path else ()
+    else:
+        raise ValueError(f"Unsupported match type: {condition.match_type}")
+    return all(
+        pattern == "*" or actual == pattern for actual, pattern in zip(selected, path, strict=False)
+    )

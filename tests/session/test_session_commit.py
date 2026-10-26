@@ -19,6 +19,11 @@ from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.session.memory.memory_updater import (
+    MemoryReadError,
+    MemoryUpdateError,
+    MemoryUpdateResult,
+)
 from openviking.utils.time_utils import parse_iso_datetime
 
 
@@ -43,6 +48,25 @@ async def _marker_exists(session, archive_uri: str, name: str) -> bool:
 
 class TestCommit:
     """Test commit"""
+
+    async def test_memory_apply_failure_does_not_reextract(
+        self, session_with_messages, monkeypatch
+    ):
+        import openviking.session.session as session_module
+
+        monkeypatch.setattr(session_module, "_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS", 0)
+        session = session_with_messages
+        uri = "viking://user/default/memories/preferences/style.md"
+        result = MemoryUpdateResult()
+        result.add_error(uri, MemoryReadError(uri, TimeoutError("read timeout")))
+        extract = AsyncMock(side_effect=MemoryUpdateError(result))
+        session._session_compressor.extract_long_term_memories = extract
+        committed = await session.commit_async()
+        task = await _wait_for_task(committed["task_id"])
+        assert extract.await_count == 1
+        assert task["status"] == "failed"
+        meta = await session._archives.read_meta(committed["archive_uri"])
+        assert not meta.get("completed_memory_steps", {}).get("long_term")
 
     async def test_commit_preserves_unicode_separators_and_accepts_later_messages(
         self, wm_session_with_messages: Session

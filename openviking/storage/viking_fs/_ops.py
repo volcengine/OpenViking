@@ -7,7 +7,7 @@ import math
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -404,8 +404,11 @@ class _OpsMixin:
         recursive: bool = False,
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
+        *,
+        maintain_vectors: bool = True,
+        copy_semantic_sidecars: bool = True,
     ) -> Dict[str, Any]:
-        """Copy a file or directory together with its vector records."""
+        """Copy a file or directory, optionally including semantic state."""
         old_uri = self._normalize_transfer_uri(old_uri)
         new_uri = self._normalize_transfer_uri(new_uri)
         await self._ensure_copy_source_access(old_uri, recursive=recursive, ctx=ctx)
@@ -467,23 +470,26 @@ class _OpsMixin:
                 is_dir=is_dir,
                 ctx=ctx,
                 lease_ref=lease,
+                copy_semantic_sidecars=copy_semantic_sidecars,
             )
-            try:
-                vector_result = await self._copy_vector_store_uris(
-                    old_uri,
-                    new_uri,
-                    recursive=is_dir,
-                    ctx=ctx,
-                    **({"source_uris": source_uris} if is_dir else {}),
-                )
-            except Exception:
+            vector_result = None
+            if maintain_vectors:
                 try:
-                    await self._cleanup_transfer_target(
-                        new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                    vector_result = await self._copy_vector_store_uris(
+                        old_uri,
+                        new_uri,
+                        recursive=is_dir,
+                        ctx=ctx,
+                        **({"source_uris": source_uris} if is_dir else {}),
                     )
                 except Exception:
-                    logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
-                raise
+                    try:
+                        await self._cleanup_transfer_target(
+                            new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                        )
+                    except Exception:
+                        logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
+                    raise
             result: Dict[str, Any] = {
                 "operation_id": operation_id,
                 "operation": "copy",
@@ -663,6 +669,7 @@ class _OpsMixin:
         is_dir: bool,
         ctx: Optional[RequestContext],
         lease_ref: Dict[str, Any],
+        copy_semantic_sidecars: bool = True,
     ) -> int:
         if is_dir:
             return await self._copy_directory_under_tree_locks(
@@ -672,6 +679,7 @@ class _OpsMixin:
                 new_uri=new_uri,
                 ctx=ctx,
                 lease_ref=lease_ref,
+                copy_semantic_sidecars=copy_semantic_sidecars,
             )
 
         await self._async_agfs.cp(
@@ -702,6 +710,9 @@ class _OpsMixin:
         new_uri: str,
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
+        *,
+        vector_mode: Literal["transfer", "delete_source", "none"] = "transfer",
+        copy_semantic_sidecars: bool = True,
     ) -> Dict[str, Any]:
         """Move file/directory while extending an optional outer pathlock lease.
 
@@ -801,6 +812,7 @@ class _OpsMixin:
                         is_temp=is_temp,
                         ctx=ctx,
                         lease_ref=lease,
+                        copy_semantic_sidecars=copy_semantic_sidecars,
                     )
                     or 0
                 )
@@ -818,18 +830,24 @@ class _OpsMixin:
                         )
                 raise
 
-            # Update VectorDB URIs (on failure, clean up the copy)
+            # Update or remove source VectorDB records before deleting the source.
             vector_transfer_completed = False
             try:
-                vector_result = await self._update_vector_store_uris(
-                    old_uri,
-                    new_uri,
-                    recursive=is_dir,
-                    ctx=ctx,
-                    **({"source_uris": uris_to_move} if is_dir else {}),
-                )
-                vector_transfer_completed = True
-                if acl_manager is not None and new_acl_scope:
+                vector_result = None
+                if vector_mode == "transfer":
+                    vector_result = await self._update_vector_store_uris(
+                        old_uri,
+                        new_uri,
+                        recursive=is_dir,
+                        ctx=ctx,
+                        **({"source_uris": uris_to_move} if is_dir else {}),
+                    )
+                    vector_transfer_completed = True
+                elif vector_mode == "delete_source":
+                    await self._delete_from_vector_store(uris_to_move, ctx=ctx)
+                elif vector_mode != "none":
+                    raise ValueError(f"unsupported move vector mode: {vector_mode}")
+                if vector_mode == "transfer" and acl_manager is not None and new_acl_scope:
                     await acl_manager.refresh_context_subtree(
                         new_uri,
                         self._ctx_or_default(ctx),
@@ -902,6 +920,7 @@ class _OpsMixin:
         is_temp: bool,
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
+        copy_semantic_sidecars: bool = True,
     ) -> int:
         """Copy source to destination for mv without deleting source."""
         del is_temp
@@ -915,6 +934,7 @@ class _OpsMixin:
             is_dir=is_dir,
             ctx=ctx,
             lease_ref=lease_ref,
+            copy_semantic_sidecars=copy_semantic_sidecars,
         )
 
     async def _copy_directory_under_tree_locks(
@@ -927,6 +947,7 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None,
         transfer_source_uri: str | None = None,
         transfer_target_uri: str | None = None,
+        copy_semantic_sidecars: bool = True,
     ) -> int:
         """Copy a directory under the operation's source and target Tree leases.
 
@@ -979,9 +1000,12 @@ class _OpsMixin:
                     lease_ref=lease_ref,
                     transfer_source_uri=transfer_source_uri,
                     transfer_target_uri=transfer_target_uri,
+                    copy_semantic_sidecars=copy_semantic_sidecars,
                 )
             else:
                 if name in ABSTRACT_OVERVIEW_FILENAMES:
+                    if not copy_semantic_sidecars:
+                        continue
                     raw = await self._async_agfs.cat(old_child, fs_ctx=fs_ctx)
                     level = (
                         ContextLevel.ABSTRACT if name == ".abstract.md" else ContextLevel.OVERVIEW
@@ -1089,6 +1113,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         skip_count: bool = False,
         include_lock_status: bool = False,
+        include_vector_fields: bool = True,
     ) -> Dict[str, Any]:
         """
         File/directory information.
@@ -1160,10 +1185,10 @@ class _OpsMixin:
             # Add deterministic vector record id for files (level 2).
             # This matches the ID used in VikingDB so callers can cross-reference
             # vector records without an extra lookup.
-            if not result.get("isDir", False):
+            if include_vector_fields and not result.get("isDir", False):
                 result["id"] = vector_record_id(real_ctx.account_id, uri, level=2)
             # Add count for directories if vector store available
-            if not skip_count and result.get("isDir", False):
+            if include_vector_fields and not skip_count and result.get("isDir", False):
                 try:
                     vector_store = self._get_vector_store()
                     if vector_store:
@@ -1206,6 +1231,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         extra_fields: Optional[List[str]] = None,
         tag_filter: Optional[Dict[str, Any]] = None,
+        force_fs: bool = False,
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive.
 
@@ -1232,17 +1258,18 @@ class _OpsMixin:
                 return {"matches": [], "count": 0}
             raise NotFoundError(uri, "directory")
 
-        remote_result = await self._try_glob_vikingdb(
-            pattern=pattern,
-            uri=uri,
-            node_limit=node_limit,
-            return_entries=return_entries,
-            extra_fields=aug_fields,
-            tag_filter=tag_filter,
-            ctx=real_ctx,
-        )
-        if remote_result is not None:
-            return remote_result
+        if not force_fs:
+            remote_result = await self._try_glob_vikingdb(
+                pattern=pattern,
+                uri=uri,
+                node_limit=node_limit,
+                return_entries=return_entries,
+                extra_fields=aug_fields,
+                tag_filter=tag_filter,
+                ctx=real_ctx,
+            )
+            if remote_result is not None:
+                return remote_result
 
         # Tag filtering happens in FSService on the local fallback path. Fetch
         # all matches so an early filesystem limit cannot discard later tagged

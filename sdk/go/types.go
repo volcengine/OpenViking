@@ -258,10 +258,11 @@ type BatchWriteOperation struct {
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
-	Wait           *bool
-	Telemetry      any
-	ProcessingMode string
-	Extra          map[string]any
+	DeferProcessing bool
+	Wait            *bool
+	Telemetry       any
+	ProcessingMode  string
+	Extra           map[string]any
 }
 
 // SetTagsOptions controls SetTags.

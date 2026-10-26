@@ -157,10 +157,47 @@ async def test_write_without_wait_is_immediately_readable(client_with_resource):
     body = write_resp.json()
     assert body["result"]["semantic_status"] == "queued"
     assert body["result"]["vector_status"] == "queued"
+    task_id = body["result"]["task_id"]
 
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
     assert read_resp.status_code == 200
     assert read_resp.json()["result"] == original + "\nImmediate append."
+
+    wait_resp = await client.post("/api/v1/system/wait", json={})
+    assert wait_resp.status_code == 200
+    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+    assert task_resp.status_code == 200
+    assert task_resp.json()["result"]["status"] == "completed"
+
+
+async def test_write_agent_skill_completes_without_lock_self_blocking(client):
+    uri = "viking://agent/skills/content-write-lock/SKILL.md"
+    content = """---
+name: content-write-lock
+description: Verify direct Agent Skill writes complete.
+---
+
+# Content Write Lock
+
+Use this skill to verify lock handoff behavior.
+"""
+
+    write_resp = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": uri,
+            "content": content,
+            "mode": "create",
+            "wait": True,
+        },
+    )
+
+    assert write_resp.status_code == 200
+    body = write_resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["uri"] == uri
+    assert body["result"]["semantic_status"] == "complete"
+    assert body["result"]["vector_status"] == "complete"
 
 
 @pytest.mark.asyncio

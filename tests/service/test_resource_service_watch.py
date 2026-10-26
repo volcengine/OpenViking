@@ -1022,7 +1022,7 @@ async def test_add_resource_processor_records_paused_watch_result(
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),

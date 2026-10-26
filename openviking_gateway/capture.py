@@ -23,7 +23,7 @@ from .archives import TERMINAL, observe_archive
 from .capture_store import Document, LeaseLost
 from .models import Policy
 from .notices import without_notices
-from .protocols import clean_text, is_user, text_content, unwrap_client
+from .protocols import clean_text, is_user, string_type, text_content, unwrap_client
 from .records import RecordKind as K
 from .tool_protocols import reply_chain
 
@@ -453,14 +453,14 @@ def capture_messages(messages, chain):
     for message in messages:
         if message.get("role") == "tool":
             results[message.get("tool_call_id")] = message.get("content", "")
-        if message.get("type") in {"function_call_output", "custom_tool_call_output"}:
+        if string_type(message) in {"function_call_output", "custom_tool_call_output"}:
             results[message.get("call_id")] = message.get("output", "")
         for block in message.get("content", []) if isinstance(message.get("content"), list) else []:
             if isinstance(block, dict) and block.get("type") == "tool_result":
                 results[block.get("tool_use_id")] = block.get("content", "")
     output = []
     for message, anchor in zip(messages, chain, strict=True):
-        if message.get("role") not in {"user", "assistant"} and message.get("type") not in {
+        if message.get("role") not in {"user", "assistant"} and string_type(message) not in {
             "function_call",
             "custom_tool_call",
         }:
@@ -473,7 +473,7 @@ def capture_messages(messages, chain):
         text = clean_text(unwrap_client(text))
         parts = [{"type": "text", "text": text}] if text else []
         calls = list(message.get("tool_calls") or [])
-        if message.get("type") in {"function_call", "custom_tool_call"}:
+        if string_type(message) in {"function_call", "custom_tool_call"}:
             calls.append(message)
         calls.extend(
             b

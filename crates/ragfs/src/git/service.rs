@@ -871,6 +871,51 @@ impl GitService {
         }
     }
 
+    /// List files that changed under `paths` between two commits.
+    ///
+    /// `base = None` compares against an empty tree, so every file is added.
+    /// Each entry is `(account-relative path, "added" | "modified" | "deleted")`.
+    /// A directory missing from one side counts as an empty tree there.
+    pub async fn diff_paths(
+        &self,
+        account: &str,
+        base: Option<&str>,
+        head: &str,
+        paths: &[String],
+    ) -> Result<Vec<(String, &'static str)>, GitError> {
+        validate_account_id(account)?;
+        for path in paths {
+            validate_relative_path(path)?;
+        }
+        let store = self.object_store.as_ref();
+        let mut roots = Vec::new();
+        for target in base.into_iter().chain([head]) {
+            let oid = resolve_ref(self.ref_store.as_ref(), store, account, target).await?;
+            roots.push(load_commit_meta(store, account, &oid).await?.tree);
+        }
+        let head_tree = roots.pop();
+        let base_tree = roots.pop();
+        let mut out = Vec::new();
+        for dir in paths {
+            let dir = dir.trim_matches('/');
+            let mut sides = [None, None];
+            for (side, tree) in sides.iter_mut().zip([base_tree, head_tree]) {
+                if let Some(tree) = tree {
+                    *side = crate::git::tree_builder::lookup(store, account, tree, dir)
+                        .await?
+                        .filter(|(_, mode)| mode.is_tree())
+                        .map(|(oid, _)| oid);
+                }
+            }
+            for (path, change) in
+                crate::git::tree_builder::diff_trees(store, account, sides[0], sides[1]).await?
+            {
+                out.push((format!("{dir}/{path}"), change));
+            }
+        }
+        Ok(out)
+    }
+
     /// Walk commit history newest-first, optionally returning only commits
     /// that changed at least one requested path relative to their first parent.
     ///
@@ -4759,10 +4804,7 @@ mod tests {
         );
     }
 
-    // Regression: a path the restore diff wants to delete may already be absent
-    // from the VFS (e.g. a derived file like `.abstract.md` removed out of
-    // band). The delete must be idempotent — restore should succeed and advance
-    // the branch ref rather than aborting with a `vfs: not found` error.
+    // Restore deletion is idempotent when a tracked file is already absent.
     #[tokio::test]
     async fn test_restore_tolerates_already_deleted_path() {
         let dir = tempfile::tempdir().unwrap();
@@ -4775,12 +4817,11 @@ mod tests {
             ref_store.clone() as Arc<dyn RefStore>,
         );
 
-        // Source commit: a.md plus a derived file the diff will later delete.
+        // The source excludes the file that HEAD adds.
         vfs.put("resources/proj_a/a.md", b"A v1");
         let source_oid = make_commit(&svc, "acct", "main", "source").await;
 
-        // HEAD adds the derived file, so restoring source wants to delete it.
-        vfs.put("resources/proj_a/.abstract.md", b"derived");
+        vfs.put("resources/proj_a/obsolete.md", b"obsolete");
         vfs.put("resources/proj_a/a.md", b"A v2");
         let head_oid = match svc
             .commit(req(
@@ -4789,7 +4830,7 @@ mod tests {
                 "head",
                 Some(vec![
                     "resources/proj_a/a.md".to_string(),
-                    "resources/proj_a/.abstract.md".to_string(),
+                    "resources/proj_a/obsolete.md".to_string(),
                 ]),
             ))
             .await
@@ -4799,9 +4840,7 @@ mod tests {
             other => panic!("expected Created, got {other:?}"),
         };
 
-        // Simulate the derived file vanishing from the VFS out of band, so the
-        // restore's delete step hits a missing path.
-        vfs.delete("resources/proj_a/.abstract.md");
+        vfs.delete("resources/proj_a/obsolete.md");
 
         let resp = svc
             .restore(RestoreRequest {
@@ -4826,7 +4865,7 @@ mod tests {
             } => {
                 // The diff still *plans* the delete (count is unchanged); the
                 // VFS apply just no-ops on the missing path.
-                assert_eq!(deleted, 1, ".abstract.md");
+                assert_eq!(deleted, 1, "obsolete.md");
                 assert_eq!(deleted_paths.len(), 1);
                 new_commit_oid
             }

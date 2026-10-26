@@ -26,6 +26,7 @@ describe('AgentToolbar', () => {
         onNewSession={onNewSession}
         onOpenHistory={onOpenHistory}
         sessionTitle="Current session"
+        showNewSession
       />,
     )
 

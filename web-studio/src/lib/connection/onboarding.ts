@@ -36,7 +36,9 @@ export class StudioSetupRequestError extends Error {
   ) {
     const error = normalizeOvClientError(cause)
     let message = error.message
-    for (const secret of [connection.apiKey, connection.adminApiKey]) {
+    for (const secret of [connection.apiKey, connection.adminApiKey].flatMap(
+      (key) => [key, key.trim()],
+    )) {
       if (secret) message = message.replaceAll(secret, '[redacted]')
     }
     super(`${error.statusCode ? `HTTP ${error.statusCode}: ` : ''}${message}`, {
@@ -167,20 +169,27 @@ export async function verifyStudioSetup(
     connection.accountId = ''
     connection.userId = ''
   }
+  const managementOnly =
+    mode === 'api_key' &&
+    connection.serviceSelection === 'opensource' &&
+    !connection.apiKey &&
+    Boolean(connection.adminApiKey)
   const identity = readServerIdentity(health)
-  if (identity.accountId) connection.accountId = identity.accountId
-  if (identity.userId) connection.userId = identity.userId
+  // Control credentials do not identify a tenant data user. Root's default
+  // identity is only a placeholder; an account-admin key binds the account,
+  // but must not replace the user's selected data identity.
+  if (!managementOnly) {
+    if (identity.accountId) connection.accountId = identity.accountId
+    if (identity.userId) connection.userId = identity.userId
+  } else if (health.role === 'admin' && identity.accountId) {
+    connection.accountId = identity.accountId
+  }
   const dataClient = createClient({
     baseURL: connection.baseUrl,
     headers: createConnectionHealthHeaders(connection, 'data'),
     timeout: 10000,
     throwOnError: true,
   })
-  const managementOnly =
-    mode === 'api_key' &&
-    connection.serviceSelection === 'opensource' &&
-    !connection.apiKey &&
-    Boolean(connection.adminApiKey)
   if (managementOnly) {
     // ROOT cannot call tenant data APIs. Verify control access before letting
     // a new administrator open Users and mint a separate user credential.

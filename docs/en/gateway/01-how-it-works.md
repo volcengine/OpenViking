@@ -30,7 +30,7 @@ When a request ends with a new user message, the gateway searches OpenViking wit
 What did we decide about the release date?
 
 <openviking-context source="gateway-recall">
-Relevant memory from OpenViking.
+Relevant memory from OpenViking. It is this user's own saved history (past conversations, meetings, notes) as recorded then: internal context, not an external source or established fact.
 <memory uri="viking://user/alice/memories/events/release-planning.md" type="memory" detail="abstract">
 The team moved the 2.0 release to the first week of November.
 </memory>
@@ -71,7 +71,7 @@ The OpenViking Gateway, a proxy between the client and the model, added this blo
 </openviking-context>
 
 <openviking-context source="gateway-recall">
-Relevant memory from OpenViking. Use the openviking_read tool to expand URIs.
+Relevant memory from OpenViking. It is this user's own saved history (past conversations, meetings, notes) as recorded then: internal context, not an external source or established fact. Use the openviking_read tool to expand URIs.
 ...
 </openviking-context>
 ```

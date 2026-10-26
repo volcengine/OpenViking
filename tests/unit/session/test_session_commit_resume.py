@@ -11,11 +11,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
+from openviking.pyagfs.exceptions import AGFSConnectionError
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker
 from openviking.session.memory_policy import MemoryPolicy
-from openviking.session.session import Session
+from openviking.session.session import Session, SessionMeta
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from tests.test_task_tracker import _FakeAgfs
 
 
@@ -67,16 +69,22 @@ class _MemoryVikingFS:
     async def read_file(self, uri, ctx=None):
         if uri not in self.files:
             raise FileNotFoundError(uri)
-        return self.files[uri]
+        content = self.files[uri]
+        return content.decode("utf-8") if isinstance(content, bytes) else content
 
     async def write_file(self, uri, content, ctx=None, lease_ref=None):
-        self.files[uri] = content
+        self.files[uri] = content.decode("utf-8") if isinstance(content, bytes) else content
 
     async def append_file(self, uri, content, ctx=None):
         self.files[uri] += content
 
     async def exists(self, uri, ctx=None):
         return uri in self.files or any(path.startswith(f"{uri}/") for path in self.files)
+
+    async def stat(self, uri, ctx=None, skip_count=False):
+        if not await self.exists(uri, ctx):
+            raise FileNotFoundError(uri)
+        return {"path": uri}
 
     async def ls(self, uri, ctx=None):
         prefix = f"{uri}/"
@@ -206,47 +214,96 @@ async def test_phase2_cancellation_marks_archive_only_when_requested(
 
 
 @pytest.mark.asyncio
-async def test_resume_queued_commit_continues_phase2(monkeypatch):
+async def test_resume_queued_commit_preserves_live_state_when_statistics_are_unavailable(
+    monkeypatch,
+):
     session_uri = "viking://user/default/sessions/session-1"
     archive_uri = f"{session_uri}/history/archive_001"
-    archived = Message(id="archived", role="user", parts=[TextPart("old")])
-    retained = Message(id="retained", role="assistant", parts=[TextPart("new")])
+    meta_uri = f"{session_uri}/.meta.json"
+    live_uri = f"{session_uri}/messages.jsonl"
+    archived = Message(id="archived", role="user", parts=[TextPart("archive input")])
+    latest_meta = SessionMeta(
+        session_id="session-1",
+        message_count=7,
+        total_message_count=50,
+        commit_count=2,
+        auto_commit_policy={"keep_recent_count": 3},
+    )
+    latest_meta.llm_token_usage["total_tokens"] = 100
+    original_meta = json.dumps(latest_meta.to_dict())
     files = {
-        f"{session_uri}/messages.jsonl": f"{retained.to_jsonl()}\n",
-        f"{session_uri}/.meta.json": json.dumps(
-            {"session_id": "session-1", "message_count": 1, "commit_count": 1}
-        ),
-        f"{archive_uri}/messages.jsonl": f"{archived.to_jsonl()}\n",
+        live_uri: "{live file being rewritten",
+        meta_uri: original_meta,
+        f"{archive_uri}/messages.jsonl": archived.to_jsonl() + "\n",
+        f"{archive_uri}/.meta.json": json.dumps({"phase1": {"status": "ready"}}),
     }
-    viking_fs = _MemoryVikingFS(files)
-    session = Session(viking_fs=viking_fs, session_id="session-1", session_uri=session_uri)
-    tracker = TaskTracker(_TaskStore())
-    set_task_tracker(tracker)
-    monkeypatch.setattr(session, "_run_memory_extraction", AsyncMock())
-    message = SessionCommitMsg(
-        task_id="task-1",
+    storage = _MemoryVikingFS(files)
+    original_read = storage.read_file
+
+    async def read(uri, ctx=None):
+        if uri == meta_uri:
+            raise AGFSConnectionError("metadata unavailable")
+        return await original_read(uri, ctx)
+
+    reads = AsyncMock(side_effect=read)
+    monkeypatch.setattr(storage, "read_file", reads)
+    extract = AsyncMock(return_value={"contexts": [SimpleNamespace(category="profile")]})
+    summarize = AsyncMock(return_value="# Session Summary\n\nArchive summarized.")
+    session = Session(
+        viking_fs=storage,
         session_id="session-1",
         session_uri=session_uri,
-        archive_uri=archive_uri,
-        user={"account_id": "default", "user_id": "default"},
-        memory_policy={"memory_types": []},
-        auto_commit_policy={"pending_token_threshold": 8000},
+        session_compressor=SimpleNamespace(extract_long_term_memories=extract),
     )
+    # Neither persisted statistics nor a stale instance may supply the fallback.
+    session.meta.llm_token_usage["total_tokens"] = 999
+    tracker = TaskTracker(_TaskStore())
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    monkeypatch.setattr(session, "_generate_archive_summary_async", summarize)
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(extraction_enabled=True, session_skill_extraction_enabled=False)
+        ),
+    )
+    message = SessionCommitMsg(
+        task_id="task-1",
+        session_id=session.session_id,
+        session_uri=session_uri,
+        archive_uri=archive_uri,
+        user=session.user.to_dict(),
+        memory_policy=MemoryPolicy(memory_types={"profile"}, enable_working_memory=True).to_dict(),
+    )
+    processor = SessionCommitProcessor(SimpleNamespace(session=lambda *args, **kwargs: session))
 
-    try:
-        await session.resume_queued_commit(message)
-    finally:
-        set_task_tracker(None)
+    await processor.on_dequeue(message.to_dict())
 
-    session._run_memory_extraction.assert_awaited_once()
-    assert session._run_memory_extraction.await_args.kwargs["task_id"] == "task-1"
-    assert session._run_memory_extraction.await_args.kwargs["agent_evolution_enabled"] is True
-    assert session._run_memory_extraction.await_args.kwargs["auto_commit_policy"] == {
-        "pending_token_threshold": 8000
+    task = await tracker.get(message.task_id)
+    assert task.status is TaskStatus.COMPLETED
+    assert task.result["memories_extracted"] == {"profile": 1}
+    assert task.result["token_usage"] == {
+        "llm": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cached_tokens": 0,
+            "reasoning_tokens": 0,
+        },
+        "embedding": {"total_tokens": 0},
+        "total": {"total_tokens": 0, "cached_tokens": 0, "reasoning_tokens": 0},
     }
-    assert [item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]] == [
-        "archived"
-    ]
+    assert files[meta_uri] == original_meta
+    assert f"{archive_uri}/.done" in files
+    assert [message.id for message in summarize.await_args.args[0]] == ["archived"]
+    assert [message.id for message in extract.await_args.kwargs["messages"]] == ["archived"]
+    assert extract.await_args.kwargs["allowed_memory_types"] == {"profile"}
+
+    await processor.on_dequeue(message.to_dict())
+
+    extract.assert_awaited_once()
+    summarize.assert_awaited_once()
+    assert all(call.args[0] != live_uri for call in reads.await_args_list)
+    assert files[meta_uri] == original_meta
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+import { createRandomUuid } from '#/lib/browser-crypto'
 import type { ConnectionDraft } from '#/lib/connection/types'
 import { resolveConfiguredServiceProvider } from '../studio-service'
 
@@ -138,5 +139,32 @@ export function updateActiveProfile(
         ? { ...profile, connection: normalizeProfileConnection(connection) }
         : profile,
     ),
+  }
+}
+
+// Explicit identity switches preserve the previous identity and its credentials.
+// Ordinary configuration edits still update the selected profile in place.
+export function activateIdentityProfile(
+  value: ConnectionProfiles,
+  connection: ConnectionDraft,
+): ConnectionProfiles {
+  const normalized = normalizeProfileConnection(connection)
+  const fingerprint = connectionProfileFingerprint(normalized)
+  const existing = value.profiles.find(
+    (profile) =>
+      connectionProfileFingerprint(profile.connection) === fingerprint,
+  )
+  if (existing) return { ...value, activeId: existing.id }
+  const id = createRandomUuid()
+  return {
+    activeId: id,
+    profiles: [
+      ...value.profiles,
+      {
+        id,
+        name: `${normalized.accountId}/${normalized.userId}`,
+        connection: normalized,
+      },
+    ],
   }
 }

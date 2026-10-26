@@ -375,7 +375,7 @@ impl FileSystem for EncryptionWrappedFS {
             self.create_temp_root(&temp_root).await?;
         }
 
-        // Acquire dual-path exact lock for the temp publish path and the final visible path.
+        // Acquire dual-path exact lock only when no outer PathLock already covers the final path.
         let final_lock_path = self.backend_lock_path(path);
         let temp_lock_path = self.backend_lock_path(&temp_path);
         let final_request = PathLockRequest {
@@ -401,18 +401,10 @@ impl FileSystem for EncryptionWrappedFS {
             AutoPathLockAction::Covered(_) => "covered",
             AutoPathLockAction::Acquire => "acquire",
         };
-        debug!(path = %path, temp_path = %temp_path, final_lock_path = %requests[1].path, temp_lock_path = %requests[0].path, action = %action_name, "encrypted write resolved dual-path pathlock action");
+        debug!(path = %path, temp_path = %temp_path, final_lock_path = %requests[1].path, temp_lock_path = %requests[0].path, action = %action_name, "encrypted write resolved pathlock action");
         let lock_guard = match action {
             AutoPathLockAction::Disabled => None,
-            AutoPathLockAction::Covered(outer) => {
-                let owner_capability =
-                    (outer.lease.lease_ref.as_str(), outer.ownership_ref.as_str());
-                Some(
-                    self.pathlock_manager
-                        .acquire_batch(&requests, Duration::from_secs(1), Some(owner_capability))
-                        .await?,
-                )
-            }
+            AutoPathLockAction::Covered(_) => None,
             AutoPathLockAction::Acquire => Some(
                 self.pathlock_manager
                     .acquire_batch(&requests, Duration::from_secs(1), None)

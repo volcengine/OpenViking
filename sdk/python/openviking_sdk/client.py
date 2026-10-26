@@ -58,6 +58,8 @@ from .options import (
     PreflightAssetOptions,
     ReindexOptions,
     ResolveAssetsOptions,
+    RuleCompileOptions,
+    RuleSearchOptions,
     SearchContextOptions,
     SearchContextResult,
     SearchOptions,
@@ -1667,6 +1669,102 @@ class AsyncHTTPClient:
         response = await self._request("POST", "/api/v1/compile", json=payload)
         return self._handle_response(response)
 
+    async def rule_compile(
+        self,
+        instruction: Optional[str] = None,
+        options: Optional[RuleCompileOptions] = None,
+    ) -> Dict[str, Any]:
+        """Compile inline instructions and resource-backed files into durable rules."""
+        option_values = dict(options or {})
+        raw_sources: Any = option_values.pop("sources", [])
+        if option_values:
+            names = ", ".join(sorted(option_values))
+            raise ValueError(f"Unsupported rule compile options: {names}")
+        if not isinstance(raw_sources, list):
+            raise ValueError("Rule compile sources must be a list")
+
+        sources: List[Dict[str, Any]] = []
+        for source in raw_sources:
+            if isinstance(source, dict):
+                normalized = dict(source)
+                if normalized.get("resource_uri"):
+                    normalized["resource_uri"] = VikingURI.normalize(
+                        str(normalized["resource_uri"])
+                    )
+                    sources.append(normalized)
+                    continue
+                for target_field in ("to", "parent"):
+                    if normalized.get(target_field):
+                        normalized[target_field] = VikingURI.normalize(
+                            str(normalized[target_field])
+                        )
+                path_value = normalized.get("path")
+                if isinstance(path_value, str):
+                    local_path = Path(path_value).expanduser()
+                    if local_path.exists() and not normalized.get("add_type"):
+                        normalized.pop("path")
+                        normalized.setdefault("source_name", local_path.name)
+                        if local_path.is_dir():
+                            zip_path = self._zip_directory(str(local_path))
+                            try:
+                                normalized["temp_file_id"] = await self._upload_temp_file(zip_path)
+                            finally:
+                                Path(zip_path).unlink(missing_ok=True)
+                        else:
+                            normalized["temp_file_id"] = await self._upload_temp_file(
+                                str(local_path)
+                            )
+                sources.append(normalized)
+                continue
+
+            value = os.fspath(source)
+            if value.startswith("viking://"):
+                sources.append({"resource_uri": VikingURI.normalize(value)})
+                continue
+            path = Path(value).expanduser()
+            if path.is_dir():
+                zip_path = self._zip_directory(str(path))
+                try:
+                    temp_file_id = await self._upload_temp_file(zip_path)
+                finally:
+                    Path(zip_path).unlink(missing_ok=True)
+                sources.append(
+                    {
+                        "temp_file_id": temp_file_id,
+                        "source_name": path.name,
+                    }
+                )
+            elif path.is_file():
+                sources.append(
+                    {
+                        "temp_file_id": await self._upload_temp_file(str(path)),
+                        "source_name": path.name,
+                    }
+                )
+            else:
+                sources.append({"path": value})
+
+        payload = {"instruction": instruction, "sources": sources}
+        response = await self._request(
+            "POST",
+            "/api/v1/rules/compile",
+            json=self._compact_request_body(payload),
+        )
+        return self._handle_response(response)
+
+    async def rule_search(
+        self,
+        task_context: str,
+        options: Optional[RuleSearchOptions] = None,
+    ) -> Dict[str, Any]:
+        payload = self._build_options_payload(
+            options,
+            RuleSearchOptions,
+            fixed={"task_context": task_context},
+        )
+        response = await self._request("POST", "/api/v1/rules/search", json=payload)
+        return self._handle_response(response)
+
     async def cancel_task(self, task_id: str) -> Dict[str, Any]:
         response = await self._request("POST", f"/api/v1/tasks/{task_id}/cancel")
         return self._handle_response(response)
@@ -1947,6 +2045,14 @@ class AsyncHTTPClient:
         response = await self._request("GET", "/api/v1/admin/accounts", params=params)
         return self._handle_response(response)
 
+    async def admin_get_account(self, account_id: str) -> Dict[str, Any]:
+        """Return one account's credential-free metadata.
+
+        Raises NotFoundError when the account does not exist.
+        """
+        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}")
+        return self._handle_response(response)
+
     async def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         response = await self._request("DELETE", f"/api/v1/admin/accounts/{account_id}")
         return self._handle_response(response)
@@ -1992,6 +2098,18 @@ class AsyncHTTPClient:
             params["query"] = query
         response = await self._request(
             "GET", f"/api/v1/admin/accounts/{account_id}/users", params=params
+        )
+        return self._handle_response(response)
+
+    async def admin_get_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        """Return one user's credential-free membership info (user_id, role).
+
+        Raises NotFoundError when the user does not exist. Never returns
+        api_key or key_prefix.
+        """
+        response = await self._request(
+            "GET",
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}",
         )
         return self._handle_response(response)
 
@@ -2290,6 +2408,22 @@ class AsyncHTTPClient:
             "/api/v1/snapshot/diff",
             params=params,
         )
+        return self._handle_response(response)
+
+    async def git_diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs under directories; a null base means an empty tree."""
+        params: Dict[str, Any] = {"paths": paths, "to": to_ref, "offset": offset, "limit": limit}
+        if from_ref is not None:
+            params["from"] = from_ref
+        response = await self._request("GET", "/api/v1/snapshot/diff-paths", params=params)
         return self._handle_response(response)
 
     async def git_get_ignore(self) -> str:
@@ -2911,6 +3045,20 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.compile(from_uris, to, skill, options))
 
+    def rule_compile(
+        self,
+        instruction: Optional[str] = None,
+        options: Optional[RuleCompileOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.rule_compile(instruction, options))
+
+    def rule_search(
+        self,
+        task_context: str,
+        options: Optional[RuleSearchOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.rule_search(task_context, options))
+
     def cancel_task(self, task_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.cancel_task(task_id))
 
@@ -3057,6 +3205,9 @@ class SyncHTTPClient:
     def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_delete_account(account_id))
 
+    def admin_get_account(self, account_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_account(account_id))
+
     def admin_register_user(
         self,
         account_id: str,
@@ -3092,6 +3243,9 @@ class SyncHTTPClient:
 
     def admin_remove_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_remove_user(account_id, user_id))
+
+    def admin_get_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_user(account_id, user_id))
 
     def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_set_role(account_id, user_id, role))
@@ -3281,6 +3435,20 @@ class AsyncHTTPSnapshotNamespace:
             to_ref=to_ref,
         )
 
+    async def diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs between snapshots under the supplied directories."""
+        return await self._client.git_diff_paths(
+            paths, from_ref=from_ref, to_ref=to_ref, offset=offset, limit=limit
+        )
+
     async def get_gitignore(self) -> str:
         return await self._client.git_get_ignore()
 
@@ -3368,6 +3536,22 @@ class SyncHTTPSnapshotNamespace:
     ) -> Dict[str, Any]:
         """Compare one file between two snapshot refs."""
         return run_async(self._ns().diff(path, from_ref=from_ref, to_ref=to_ref))
+
+    def diff_paths(
+        self,
+        paths: List[str],
+        *,
+        to_ref: str,
+        from_ref: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs between snapshots under the supplied directories."""
+        return run_async(
+            self._ns().diff_paths(
+                paths, from_ref=from_ref, to_ref=to_ref, offset=offset, limit=limit
+            )
+        )
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

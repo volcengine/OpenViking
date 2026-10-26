@@ -16,32 +16,63 @@ from typing import Any
 
 import orjson
 
+from .config import ClientRules
+
 NORMALIZATION_VERSION = "v1"
-_RULES = json.loads(files("openviking_gateway").joinpath("client-rules.json").read_text())
-PLUGIN_TAGS = tuple(_RULES["plugin_tags"])
-NOISE_TAGS = tuple(_RULES["noise_tags"])
-AUXILIARY_PATTERNS = tuple(_RULES["auxiliary_patterns"])
-# Whole messages clients write on the user's behalf: pi-ai's label for a tool result's
-# images, which it sends as a user message after the tool result, and DSH's runtime and
-# time snapshots, which DSH can append mid-turn. Each is a message of its own, so a
-# snapshot pattern takes the rest of the text. Anchored, so other text fails at once.
-NOISE_PATTERNS = tuple(re.compile(p) for p in _RULES["noise_patterns"])
+PACKAGED_RULES = json.loads(files("openviking_gateway").joinpath("client-rules.json").read_text())
 # re.I tries a pattern at every offset; plain ASCII patterns (no escapes, sets or flags),
 # lowercased, get re's literal search instead, the same match unless the text has one of
 # the only letters where lower() and re.I differ against ASCII (checked in the tests).
 REI_CASE_EXCEPTIONS = "İıſ"
-LOWERED_AUXILIARY = (
-    tuple(re.compile(p.lower()) for p in AUXILIARY_PATTERNS)
-    if all(p.isascii() and not re.search(r"[\\\[]|\(\?", p) for p in AUXILIARY_PATTERNS)
-    else ()
-)
+
+
+def lowered(pattern: str) -> re.Pattern | None:
+    plain = pattern.isascii() and not re.search(r"[\\\[]|\(\?", pattern)
+    return re.compile(pattern.lower()) if plain else None
+
+
+def configure_rules(changes: ClientRules | None = None) -> list[str]:
+    """Apply ``GatewayConfig.client_rules`` to the packaged rules, for the whole process.
+
+    Returns the removals that name no packaged entry. Each call starts from the packaged
+    rules, so calling it again with other changes replaces the earlier ones.
+    """
+    global PLUGIN_TAGS, NOISE_TAGS, NOISE_BLOCKS, AUXILIARY_PATTERNS, NOISE_PATTERNS, AUXILIARY
+    changes = changes or ClientRules()
+    rules, unknown = {}, []
+    for name, packaged in PACKAGED_RULES.items():
+        change = getattr(changes, name)
+        removed = set(change.remove)
+        unknown += [f"{name}: {entry}" for entry in sorted(removed.difference(packaged))]
+        kept = [entry for entry in packaged if entry not in removed]
+        rules[name] = tuple(dict.fromkeys([*kept, *change.add]))
+    PLUGIN_TAGS = rules["plugin_tags"]
+    NOISE_TAGS = rules["noise_tags"]
+    NOISE_BLOCKS = tuple(
+        re.compile(rf"<{re.escape(tag)}(?=[\s>])[^>]*>[\s\S]*?</{re.escape(tag)}>", re.I)
+        for tag in NOISE_TAGS
+    )
+    AUXILIARY_PATTERNS = rules["auxiliary_patterns"]
+    # Whole messages clients write on the user's behalf: pi-ai's label for a tool result's
+    # images, which it sends as a user message after the tool result, and DSH's runtime and
+    # time snapshots, which DSH can append mid-turn. Each is a message of its own, so a
+    # snapshot pattern takes the rest of the text. Anchored, so other text fails at once.
+    NOISE_PATTERNS = tuple(re.compile(p) for p in rules["noise_patterns"])
+    # Each pattern keeps its lowercase form when it has one, so one configured regex does
+    # not move the others off the fast path.
+    AUXILIARY = tuple((lowered(p), re.compile(p, re.I)) for p in AUXILIARY_PATTERNS)
+    return unknown
+
+
+configure_rules()
+
 # Vendors whose models expect their reasoning back in later turns.
 REASONING_VENDORS = {"deepseek", "ark", "byteplus"}
 
 
 def clean_text(text: str) -> str:
-    for tag in NOISE_TAGS:
-        text = re.sub(rf"<{tag}\b[^>]*>[\s\S]*?</{tag}>", " ", text, flags=re.I)
+    for block in NOISE_BLOCKS:
+        text = block.sub(" ", text)
     text = re.sub(r"^\s*\[Subagent Context\][^\n]*", "", text, flags=re.M)
     for pattern in NOISE_PATTERNS:
         text = pattern.sub("", text)
@@ -93,6 +124,12 @@ def parse_body(raw: bytes) -> dict | None:
         return None
 
 
+def string_type(value: Any) -> str:
+    """A block's ``type`` when it is a string; malformed histories may carry an object."""
+    kind = value.get("type") if isinstance(value, dict) else None
+    return kind if isinstance(kind, str) else ""
+
+
 def text_content(message: dict) -> str:
     content = message.get("content", "")
     if isinstance(content, str):
@@ -102,7 +139,7 @@ def text_content(message: dict) -> str:
             x.get("text", "")
             for x in content
             if isinstance(x, dict)
-            and x.get("type") in {"text", "input_text", "output_text"}
+            and string_type(x) in {"text", "input_text", "output_text"}
             and isinstance(x.get("text", ""), str)
         )
     return ""
@@ -131,10 +168,10 @@ def normalize(value: Any) -> Any:
             if not (
                 isinstance(v, dict)
                 and (
-                    v.get("type") in {"thinking", "redacted_thinking"}
+                    string_type(v) in {"thinking", "redacted_thinking"}
                     or (
-                        v.get("type") in {"text", "input_text", "output_text"}
-                        and not v.get("text", "").strip()
+                        string_type(v) in {"text", "input_text", "output_text"}
+                        and not (isinstance(v.get("text", ""), str) and v.get("text", "").strip())
                     )
                 )
             )
@@ -151,7 +188,7 @@ def normalize(value: Any) -> Any:
             content = out["content"]
             if isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict):
                 block = content[0]
-                if set(block) == {"type", "text"} and block["type"] in {
+                if set(block) == {"type", "text"} and string_type(block) in {
                     "text",
                     "input_text",
                     "output_text",
@@ -160,7 +197,9 @@ def normalize(value: Any) -> Any:
             if isinstance(content, str):
                 content = unwrap_client(content).strip()
             out["content"] = content
-        if out.get("type") in {"text", "input_text", "output_text"}:
+        if string_type(out) in {"text", "input_text", "output_text"} and isinstance(
+            out.get("text", ""), str
+        ):
             out["text"] = unwrap_client(out.get("text", "")).strip()
         # Responses message items may omit type/status/id when resent by a client.
         # IDs of opaque items (item_reference, reasoning, calls) remain significant.
@@ -285,7 +324,7 @@ def client_openviking_tools(body: dict, names) -> bool:
             continue
         # Hosted MCP servers (Responses mcp, Anthropic mcp_servers and mcp_toolset) list
         # no tools, so their name is all there is.
-        server = definition.get("type") in {"mcp", "mcp_toolset", "url"}
+        server = string_type(definition) in {"mcp", "mcp_toolset", "url"}
         named_tool = isinstance(definition.get("name"), str) and not server
         # A tool must be one of OpenViking's, so a connector's authenticate tool is not.
         if any(
@@ -323,10 +362,11 @@ def is_user(message):
 
 def auxiliary(text: str) -> bool:
     """Whether ``text`` matches an auxiliary pattern, ignoring case."""
-    if LOWERED_AUXILIARY and not any(c in text for c in REI_CASE_EXCEPTIONS):
-        text = text.lower()
-        return any(pattern.search(text) for pattern in LOWERED_AUXILIARY)
-    return any(re.search(pattern, text, re.I) for pattern in AUXILIARY_PATTERNS)
+    lower = None if any(c in text for c in REI_CASE_EXCEPTIONS) else text.lower()
+    return any(
+        fast.search(lower) if fast and lower is not None else pattern.search(text)
+        for fast, pattern in AUXILIARY
+    )
 
 
 def classify(body: dict, headers: dict, messages: list[dict]) -> tuple[str, int]:
@@ -348,15 +388,23 @@ def classify(body: dict, headers: dict, messages: list[dict]) -> tuple[str, int]
             "x-claude-code-request-type",
             "x-claude-code-request-kind",
             "x-claude-code-agent-type",
-            "x-codex-turn-metadata",
         )
     )
     if re.search(r"compact|summar|title|classif|heartbeat|suggest|permission", hints, re.I):
         return "auxiliary", anchor
-    probe = str(body.get("system", "")) + str(body.get("instructions", ""))
+    # Codex sends the whole turn metadata (workspace paths, remotes, tool names) on every
+    # request; only its request_kind says what the request is.
+    try:
+        turn = orjson.loads(headers.get("x-codex-turn-metadata") or "null")
+    except orjson.JSONDecodeError:
+        turn = None
+    if isinstance(turn, dict) and turn.get("request_kind") in ("compaction", "memory"):
+        return "auxiliary", anchor
+    # Each part on its own and as plain text, so a pattern's anchors and line breaks hold.
+    parts = [text_content({"content": body.get(key, "")}) for key in ("system", "instructions")]
     if anchor >= 0:
-        probe += text_content(messages[anchor])
-    if auxiliary(probe):
+        parts.append(text_content(messages[anchor]))
+    if any(auxiliary(part) for part in parts if part):
         return "auxiliary", anchor
     if anchor < 0:
         return "continuation", anchor
@@ -396,7 +444,7 @@ def strip_thinking(messages: list[dict]) -> list[dict]:
             message["content"] = [
                 b
                 for b in message["content"]
-                if b.get("type") not in {"thinking", "redacted_thinking"}
+                if string_type(b) not in {"thinking", "redacted_thinking"}
             ]
     return result
 

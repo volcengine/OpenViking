@@ -15,6 +15,7 @@ import pytest
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
+from openviking.service.task_domain import TaskPatch
 from openviking.service.task_store import (
     PersistentTaskStore,
     _task_from_payload,
@@ -184,10 +185,10 @@ async def test_start_task(tracker: TaskTracker):
     assert retrieved.status == TaskStatus.RUNNING
 
 
-async def test_update_stage_and_record_owner_cancelled(tracker: TaskTracker):
+async def test_patch_stage_and_record_owner_cancelled(tracker: TaskTracker):
     task = await tracker.create("add_resource", **_owner_kwargs())
     await tracker.start(task.task_id, stage="queued")
-    await tracker.update_stage(task.task_id, "parsing")
+    await tracker.patch_task(task.task_id, TaskPatch(stage="parsing"), **_owner_kwargs())
     retrieved = await tracker.get(task.task_id)
     assert retrieved is not None
     assert retrieved.status == TaskStatus.RUNNING
@@ -198,6 +199,47 @@ async def test_update_stage_and_record_owner_cancelled(tracker: TaskTracker):
     assert cancelled is not None
     assert cancelled.status == TaskStatus.CANCELLED
     assert cancelled.stage == "cancelled"
+
+
+async def test_patch_task_updates_fields_and_dispatch_marker_atomically(tracker: TaskTracker):
+    task = await tracker.create("content_write", **_owner_kwargs())
+    await tracker.start(task.task_id)
+
+    patch = await tracker.patch_task(
+        task.task_id,
+        TaskPatch(
+            result={"semantic_status": "deferred", "vector_status": "queued"},
+            stage="dispatched",
+            meta={"request": {"attempt": 1}},
+            auth={"source": "content_write"},
+            add_enqueue_complete_work_ids=frozenset({"root-work-1"}),
+        ),
+        **_owner_kwargs(),
+    )
+
+    assert patch.is_applied
+    stored = await tracker.get(task.task_id, **_owner_kwargs())
+    assert stored is not None
+    assert stored.status == TaskStatus.RUNNING
+    assert stored.result == {"semantic_status": "deferred", "vector_status": "queued"}
+    assert stored.stage == "dispatched"
+    assert stored.meta == {"request": {"attempt": 1}}
+    assert await tracker.get_task_auth(task.task_id, **_owner_kwargs()) == {
+        "source": "content_write",
+        "enqueue_complete_work_ids": ["root-work-1"],
+    }
+
+    cleared = await tracker.patch_task(
+        task.task_id,
+        TaskPatch(clear_fields=frozenset({"result", "stage"})),
+        **_owner_kwargs(),
+    )
+
+    assert cleared.is_applied
+    stored = await tracker.get(task.task_id, **_owner_kwargs())
+    assert stored is not None
+    assert stored.result is None
+    assert stored.stage is None
 
 
 async def test_complete_task(tracker: TaskTracker):
@@ -436,6 +478,23 @@ async def test_create_if_no_running_isolated_by_owner(tracker: TaskTracker):
     assert bob_task is not None
     assert alice_task.task_id != bob_task.task_id
 
+    replay = await tracker.create_if_no_running(
+        "reindex",
+        "viking://resources/demo",
+        account_id="acme",
+        user_id="alice",
+        task_id=alice_task.task_id,
+    )
+    assert replay.task_id == alice_task.task_id
+    with pytest.raises(ValueError, match="Task ID belongs to another operation"):
+        await tracker.create_if_no_running(
+            "reindex",
+            "viking://resources/other",
+            account_id="acme",
+            user_id="alice",
+            task_id=alice_task.task_id,
+        )
+
 
 # ── Serialization ──
 
@@ -465,9 +524,9 @@ async def test_to_dict(tracker: TaskTracker):
         "provider": "git_http_basic",
         "password": "secret",
     }
-    await tracker.update_task_auth(
+    await tracker.patch_task(
         task.task_id,
-        {"external_task_id": "session-1"},
+        TaskPatch(auth={"external_task_id": "session-1"}),
         **_owner_kwargs(),
     )
     assert await tracker.get_task_auth(task.task_id, **_owner_kwargs()) == {
@@ -1191,7 +1250,11 @@ async def test_session_service_get_commit_task_also_filters_account():
 
 async def test_feishu_response_checkpoint_survives_reload(tracker):
     task = await tracker.create("add_resource", **_owner_kwargs())
-    await tracker.record_feishu_response(task.task_id, "nested/doc", "response-1", "acme", "alice")
+    await tracker.patch_task(
+        task.task_id,
+        TaskPatch(meta={"feishu_responses": {"nested/doc": "response-1"}}),
+        **_owner_kwargs(),
+    )
     restored = TaskTracker(store=tracker._store)
     record = await restored.get(task.task_id, **_owner_kwargs())
     assert record.meta["feishu_responses"] == {"nested/doc": "response-1"}
@@ -1268,7 +1331,11 @@ async def test_event_history_is_bounded_and_reports_truncation(tracker, stage_pr
 
     task = await tracker.create("add_resource", **_owner_kwargs())
     for index in range(80):
-        await tracker.update_stage(task.task_id, f"{index}:{stage_prefix}", **_owner_kwargs())
+        await tracker.patch_task(
+            task.task_id,
+            TaskPatch(stage=f"{index}:{stage_prefix}"),
+            **_owner_kwargs(),
+        )
     await tracker.complete(task.task_id, {"done": True}, **_owner_kwargs())
     history = (await tracker.get_with_events(task.task_id, **_owner_kwargs())).execution_events
     assert len(history["items"]) <= MAX_TASK_EVENTS
@@ -1316,8 +1383,8 @@ async def test_processing_time_persists_and_restored_active_tasks_are_unknown(mo
     await tracker.register_running_task(task.task_id, **_owner_kwargs())
     now[0] = 13
     assert (await tracker.get(task.task_id)).processing_seconds == 3
-    # A stage update neither resets nor stops the processing clock.
-    await tracker.update_stage(task.task_id, "semantic", **_owner_kwargs())
+    # A stage patch neither resets nor stops the processing clock.
+    await tracker.patch_task(task.task_id, TaskPatch(stage="semantic"), **_owner_kwargs())
     restarted = TaskTracker(store=PersistentTaskStore(agfs))
     assert (await restarted.get(task.task_id, **_owner_kwargs())).processing_seconds is None
     # Waiting, I/O, and backoff after a worker claims the task remain part of

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ComponentProps } from 'react'
 import {
   cleanup,
   createEvent,
@@ -17,6 +18,13 @@ import { Route } from '../route'
 import zh from '#/i18n/locales/zh-CN/workspace'
 import en from '#/i18n/locales/en/workspace'
 import type { ModelConfig } from '../-lib/config-file-api'
+
+vi.mock('@tanstack/react-router', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  Link: ({ to, ...props }: { to: string } & ComponentProps<'a'>) => (
+    <a href={to} {...props} />
+  ),
+}))
 
 const state = vi.hoisted(() => ({
   role: 'root',
@@ -119,7 +127,7 @@ const rerank = {
   provider: 'jev',
   model: 'jev-latest',
   api_key: 'jev-secret',
-  api_base: 'https://api.typesafe.ai',
+  api_base: 'https://api.typesafe.ai/v1/systemone',
   mode: 'noul',
   threshold: 0.1,
   timeout: 30,

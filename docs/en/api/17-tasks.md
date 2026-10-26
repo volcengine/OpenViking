@@ -197,6 +197,8 @@ Persisted task files now contain `execution_events`. Rolling back requires a ver
 
 `memories_extracted` in the completed task result reports per-category counts for this commit only. Sum its values when you want the total for this commit.
 
+`token_usage` normally reports cumulative session usage after the statistics update. If Phase 2 cannot read valid session metadata after bounded retries for transient storage errors, extraction still completes without changing the session's `.meta.json`. The statistics failure is logged, and `token_usage` retains its full structure with every counter set to `0`; these zeros indicate unavailable statistics, not zero actual usage. That commit's cumulative token and memory counts are not backfilled automatically; its extraction results and telemetry remain available.
+
 ---
 
 ### cancel_task()

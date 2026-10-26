@@ -51,11 +51,14 @@ class SemanticMessageWork:
         return resolve_telemetry(self.msg.telemetry_id)
 
     async def acquire_lock(self, ctx: RequestContext) -> bool:
-        self.scope = await SemanticLockScope.resolve(
-            self.msg.lock_handoff,
-            caller_lock=self.caller_lock,
-            fallback_path_factory=lambda: get_viking_fs()._uri_to_path(self.msg.uri, ctx=ctx),
-        )
+        async def acquire() -> None:
+            self.scope = await SemanticLockScope.resolve(
+                self.msg.lock_handoff,
+                caller_lock=self.caller_lock,
+                fallback_path_factory=lambda: get_viking_fs()._uri_to_path(self.msg.uri, ctx=ctx),
+            )
+
+        await run_to_completion(acquire)
         return True
 
     async def run_write(self, factory: Callable[[], Awaitable[_Result]]) -> _Result:
@@ -63,13 +66,7 @@ class SemanticMessageWork:
 
     async def finish_processing(self, succeeded: bool) -> None:
         assert self.scope is not None
-        context = get_task_context()
-        if self.msg.wait_for_request_completion and context is not None:
-            await get_task_tracker().wait_for_task_work(
-                context.task_id,
-                exclude_work_id=context.work_id,
-            )
-        elif self.msg.lock_handoff is not None:
+        if self.msg.lock_handoff is not None:
             await self._wait_for_embedding_work(
                 stop_waiting=getattr(self.processor, "_embedding_worker_stopped", None),
             )

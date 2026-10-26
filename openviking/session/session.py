@@ -31,6 +31,9 @@ from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import TextPart, ToolPart
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
+from openviking.privacy.session_extractor import extract_and_store_session_privacy
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
@@ -59,6 +62,7 @@ from openviking.session.extraction_batch import (
     resolve_extraction_batch_limits,
 )
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
+from openviking.session.memory.memory_updater import MemoryUpdateError
 from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.retention import (
@@ -462,8 +466,12 @@ class Session:
         memory_policy_provider: Optional[MemoryPolicyProvider] = None,
         vlm_resolver: Optional["VLMResolver"] = None,
         expiry_reporter: Optional[SessionExpiryReporter] = None,
+        privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ):
         self._viking_fs = viking_fs
+        self._privacy_config_service = privacy_config_service
+        self._privacy_sanitizer = privacy_sanitizer
         self._vikingdb_manager = vikingdb_manager
         self._session_compressor = session_compressor
         self.user = user or UserIdentifier.the_default_user()
@@ -593,6 +601,64 @@ class Session:
             ).to_dict()
         return found
 
+    async def _read_commit_meta(self) -> SessionMeta:
+        """Read a valid root metadata snapshot under the caller's Session lock.
+
+        Commit recovery and statistics must never replace unreadable metadata
+        with this instance's defaults or an earlier in-memory snapshot.
+        """
+
+        async def read() -> str:
+            return await self._viking_fs.read_file(f"{self._session_uri}/.meta.json", ctx=self.ctx)
+
+        def is_retryable(exc: Exception) -> bool:
+            if isinstance(exc, (TimeoutError, ConnectionError)):
+                return True
+            mapped = map_exception(exc)
+            return mapped is not None and mapped.code in {"UNAVAILABLE", "DEADLINE_EXCEEDED"}
+
+        content = await retry_async(
+            read,
+            max_retries=2,
+            base_delay=0.1,
+            max_delay=0.3,
+            jitter=False,
+            is_retryable=is_retryable,
+            logger=logger,
+            operation_name="session commit metadata read",
+        )
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("Session metadata must be an object")
+        # Preserve the normal loader's legacy coercions before validating the
+        # counters that recovery and statistics will persist.
+        meta = SessionMeta.from_dict(data)
+        for name in (
+            "message_count",
+            "total_message_count",
+            "commit_count",
+            "pending_tokens",
+            "keep_recent_count",
+            "keep_recent_turn_count",
+            "retained_message_token_budget",
+            "min_raw_tail_steps",
+        ):
+            value = getattr(meta, name)
+            if name == "total_message_count" and value is None:
+                continue
+            if type(value) is not int or value < 0:
+                raise ValueError(f"Invalid Session metadata counter: {name}")
+        for name in ("llm_token_usage", "embedding_token_usage", "memories_extracted"):
+            counters = getattr(meta, name)
+            if not isinstance(counters, dict) or any(
+                type(value) is not int or value < 0 for value in counters.values()
+            ):
+                raise ValueError(f"Invalid Session metadata counters: {name}")
+        for name in ("memory_policy", "auto_commit_policy"):
+            if getattr(meta, name) is not None and not isinstance(getattr(meta, name), dict):
+                raise ValueError(f"Invalid Session metadata policy: {name}")
+        return meta
+
     async def _rebuild_pending_tokens(self) -> None:
         """Recompute ``pending_tokens`` from the current message list.
 
@@ -702,9 +768,10 @@ class Session:
         if not self._viking_fs:
             return
         self._meta.updated_at = get_current_timestamp()
+        # bytes bypass VikingFS PrivacySanitizer, preserving JSON keys and identity fields.
         await self._viking_fs.write_file(
             uri=f"{self._session_uri}/.meta.json",
-            content=json.dumps(self._meta.to_dict(), ensure_ascii=False),
+            content=json.dumps(self._meta.to_dict(), ensure_ascii=False).encode("utf-8"),
             ctx=self.ctx,
             lease_ref=lease_ref,
         )
@@ -784,12 +851,9 @@ class Session:
             content = await self._reload()
             await self._apply_appended_messages_to_state(messages)
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
-            # Preserve existing JSONL verbatim, as append_file did. Existing
-            # content is already stored bytes; only initial creation used the
-            # text-write privacy transformation.
-            persisted_content = (
-                batch_content if content is None else (content + batch_content).encode("utf-8")
-            )
+            # Payloads are already protected. Bytes bypass the generic sanitizer
+            # so it cannot rewrite JSON keys or identity fields.
+            persisted_content = ((content or "") + batch_content).encode("utf-8")
             await self._viking_fs.write_file(
                 f"{self._session_uri}/messages.jsonl",
                 persisted_content,
@@ -924,6 +988,14 @@ class Session:
         messages_spec: List[dict],
     ) -> List[Message]:
         """Asynchronously add multiple messages without blocking the caller loop."""
+        if self._privacy_config_service is not None:
+            messages_spec = await extract_and_store_session_privacy(
+                self.session_id,
+                messages_spec,
+                self.ctx,
+                self._privacy_config_service,
+                self._privacy_sanitizer,
+            )
         message_groups = self._build_message_groups(messages_spec)
         messages = []
         for group in message_groups:
@@ -1068,7 +1140,7 @@ class Session:
             meta.update(updates)
             await self._viking_fs.write_file(
                 uri=f"{archive_uri}/.meta.json",
-                content=json.dumps(meta, ensure_ascii=False),
+                content=json.dumps(meta, ensure_ascii=False).encode("utf-8"),
                 ctx=self.ctx,
                 lease_ref=lease_ref,
             )
@@ -1246,13 +1318,14 @@ class Session:
             # Root is authoritative and proves the rewrite completed. Reconcile
             # metadata that may have been interrupted immediately afterwards.
             try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
+                self._meta = await self._read_commit_meta()
+            except Exception as exc:
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage="phase1_recovery",
+                    error=f"Cannot restore Phase 1 metadata: {exc}",
                 )
-                self._meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
-                pass
+                return False
             self._messages = live_messages
             self._remember_retention_policy(
                 keep_recent_count=max(0, int(marker.get("keep_recent_count", 0) or 0)),
@@ -1269,6 +1342,10 @@ class Session:
                 self._archives.archive_index_from_uri(archive_uri),
             )
             self._meta.last_commit_at = get_current_timestamp()
+            if isinstance(queue_message, dict) and queue_message.get("record_auto_commit_success"):
+                # Recovery must restore the Phase 1 throttle stamp even if
+                # the later Phase 2 statistics update is skipped.
+                self._meta.last_auto_commit_at = get_current_timestamp()
             await self._rebuild_pending_tokens()
             await self._save_meta()
             await self._write_phase1_ready_marker(archive_uri)
@@ -1614,7 +1691,7 @@ class Session:
                     archive_persist_tasks.append(
                         self._viking_fs.write_file(
                             uri=f"{archive_uri}/messages.jsonl",
-                            content="\n".join(lines) + "\n",
+                            content=("\n".join(lines) + "\n").encode("utf-8"),
                             ctx=self.ctx,
                         )
                     )
@@ -1666,11 +1743,9 @@ class Session:
                 # this intentional registration window as an orphan.
                 phase1_stage = "publication_lease"
                 archive_path = self._viking_fs._uri_to_path(archive_uri, ctx=self.ctx)
-                publication_lease = (
-                    await self._viking_fs._async_agfs.pathlock_acquire_exact(
-                        archive_path,
-                        timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
-                    )
+                publication_lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+                    archive_path,
+                    timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
                 )
                 await self._write_phase1_ready_marker(archive_uri)
                 if record_idle_commit_success:
@@ -1821,7 +1896,7 @@ class Session:
         try:
             await self._viking_fs.write_file(
                 f"{archive_uri}/.done",
-                json.dumps({"context_reset": True, "enable_working_memory": False}),
+                json.dumps({"context_reset": True, "enable_working_memory": False}).encode("utf-8"),
                 ctx=self.ctx,
             )
         except Exception as exc:
@@ -2273,7 +2348,10 @@ class Session:
                             max_retries=_MEMORY_EXTRACTION_MAX_RETRIES,
                             base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
                             max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
-                            is_retryable=is_retryable_api_error,
+                            is_retryable=lambda error: (
+                                not isinstance(error, MemoryUpdateError)
+                                and is_retryable_api_error(error)
+                            ),
                             logger=logger,
                             operation_name=operation_name,
                         )
@@ -2506,12 +2584,15 @@ class Session:
             # Phase 2 complete — update meta with telemetry and commit info
             snapshot = telemetry.finish("ok")
             _publish_telemetry_summary_best_effort(snapshot)
-            await self._merge_and_save_commit_meta(
+            updated_meta = await self._merge_and_save_commit_meta(
                 archive_index=archive_index,
                 memories_extracted=memories_extracted,
                 telemetry_snapshot=snapshot,
                 record_auto_commit_success=record_auto_commit_success,
             )
+            # Keep the response schema stable when cumulative statistics are
+            # unavailable. This zero snapshot is never persisted to the session.
+            usage_meta = updated_meta if updated_meta is not None else SessionMeta()
 
             result_payload = {
                 "session_id": self.session_id,
@@ -2534,13 +2615,13 @@ class Session:
                 "agent_evolution_enabled": agent_evolution_enabled,
                 "agent_memory_skip_reason": agent_memory_skip_reason,
                 "token_usage": {
-                    "llm": dict(self._meta.llm_token_usage),
-                    "embedding": dict(self._meta.embedding_token_usage),
+                    "llm": dict(usage_meta.llm_token_usage),
+                    "embedding": dict(usage_meta.embedding_token_usage),
                     "total": {
-                        "total_tokens": self._meta.llm_token_usage["total_tokens"]
-                        + self._meta.embedding_token_usage["total_tokens"],
-                        "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
-                        "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
+                        "total_tokens": usage_meta.llm_token_usage["total_tokens"]
+                        + usage_meta.embedding_token_usage["total_tokens"],
+                        "cached_tokens": usage_meta.llm_token_usage["cached_tokens"],
+                        "reasoning_tokens": usage_meta.llm_token_usage["reasoning_tokens"],
                     },
                 },
             }
@@ -2632,7 +2713,7 @@ class Session:
         )
         await self._viking_fs.write_file(
             uri=f"{archive_uri}/.done",
-            content=content,
+            content=content.encode("utf-8"),
             ctx=self.ctx,
         )
 
@@ -2648,6 +2729,9 @@ class Session:
         """Persist a terminal failure marker under the marker file's own lock."""
         if not self._viking_fs:
             return
+        # Sanitize error separately because bytes bypass VikingFS PrivacySanitizer.
+        if self._privacy_sanitizer is not None:
+            error = (await self._privacy_sanitizer.sanitize(error, ctx=self.ctx)).content
         payload = {
             "stage": stage,
             "error": error,
@@ -2659,7 +2743,7 @@ class Session:
             payload["blocked_by"] = blocked_by
         await self._viking_fs.write_file(
             uri=f"{archive_uri}/.failed.json",
-            content=json.dumps(payload, ensure_ascii=False),
+            content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             ctx=self.ctx,
         )
 
@@ -2969,22 +3053,23 @@ class Session:
         telemetry_snapshot: Any,
         *,
         record_auto_commit_success: bool = False,
-    ) -> None:
-        """Merge Phase 2 results without overwriting concurrent root updates."""
+    ) -> Optional[SessionMeta]:
+        """Return saved metadata, or None when its read fails and statistics are skipped."""
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
-            latest_meta = self._meta
             try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
+                latest_meta = await self._read_commit_meta()
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "Session %s extraction completed without updating statistics: %s",
+                    self.session_id,
+                    reason,
                 )
-                latest_meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
-                latest_meta = self._meta
+                return None
 
             if telemetry_snapshot:
                 llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
@@ -3007,28 +3092,15 @@ class Session:
                     latest_meta.memories_extracted.get("total", 0) + count
                 )
             latest_meta.last_commit_at = get_current_timestamp()
-            latest_meta.message_count = await self._read_live_message_count()
             if record_auto_commit_success:
                 # Mirror the Phase 1 success stamp so the persisted meta reflects
                 # a clean auto-commit even after Phase 2 reloads the latest meta.
                 latest_meta.last_auto_commit_at = get_current_timestamp()
             self._meta = latest_meta
             await self._save_meta()
+            return latest_meta
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
-
-    async def _read_live_message_count(self) -> int:
-        """Count current live session messages from persisted storage."""
-        if not self._viking_fs:
-            return len(self._messages)
-        try:
-            content = await self._viking_fs.read_file(
-                f"{self._session_uri}/messages.jsonl",
-                ctx=self.ctx,
-            )
-        except Exception:
-            return len(self._messages)
-        return len([line for line in content.strip().split("\n") if line.strip()])
 
     async def _read_live_messages_strict(self) -> List[Message]:
         """Read the authoritative root JSONL without silently dropping corrupt rows."""
@@ -3421,6 +3493,8 @@ class Session:
         abstract = self._generate_abstract()
         overview = self._generate_overview(turn_count)
 
+        # Payloads are already sanitized; bytes bypass VikingFS PrivacySanitizer
+        # to preserve JSON keys and identity fields.
         lines = [m.to_jsonl() for m in messages]
         content = "\n".join(lines) + "\n" if lines else ""
         abstract_content = render_abstract_overview(
@@ -3449,7 +3523,7 @@ class Session:
         root_write_results = await asyncio.gather(
             viking_fs.write_file(
                 uri=f"{self._session_uri}/messages.jsonl",
-                content=content,
+                content=content.encode("utf-8"),
                 ctx=self.ctx,
                 lease_ref=lease_ref,
             ),

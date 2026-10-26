@@ -40,6 +40,7 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `max_body_bytes` | 两者 | `33554432`（32 MiB） | 1,024 及以上 | 请求和上传的大小上限，单位为字节 |
 | `upstream_timeout_seconds` | 两者 | `600` | 大于 0 | 服务商请求超时 |
 | `health_interval_seconds` | 两者 | `60` | 1 及以上 | 检查 OpenViking 状态的间隔秒数 |
+| `client_rules` | 两者 | `{}`（只用内置规则） | 见[客户端规则](#client-rules) | 在网关内置的辅助请求和客户端插入消息识别规则上增删条目 |
 
 ## 环境变量 {#environment-variables}
 
@@ -54,6 +55,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 - 以 `tcp://` 或 `udp://` 开头的值会被忽略。这样，Kubernetes 为名为 `openviking-gateway` 的 Service 自动注入的变量（例如 `OPENVIKING_GATEWAY_PORT=tcp://…`）不会覆盖文件。
 - 文件中的值也可以写成 `"$VAR"`，从环境变量中取值。
 - `encryption` 块只能写在文件里。
+- `client_rules` 用 JSON 传整段配置：`OPENVIKING_GATEWAY_CLIENT_RULES='{"auxiliary_patterns":{"add":["You are the Acme title writer"]}}'`。
 - 容器通常不需要配置文件，用环境变量设置需要的字段即可。
 
 ## 校验 {#validation}
@@ -63,8 +65,41 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `openviking_url` 和 `public_url` | 必须是 HTTP(S)，不能含凭证、查询参数或 fragment |
 | 上游的 `base_url` | 规则不同，见[接口](07-upstreams.md#endpoint) |
 | `management_key` | 解析 `$VAR` 引用后至少 32 个字符；`$VAR` 没能解析时校验失败 |
+| `client_rules` | 新增的模式必须是合法的 Python 正则表达式；新增的标签名以英文字母开头，只能包含英文字母、数字、`_`、`.`、`:` 和 `-` |
 | 未知字段 | 校验失败 |
 | 已删除的字段 | 忽略，启动时打印警告：`encryption_key_env`，以及 `ov.conf` 中[迁移](../guides/22-gateway-operations.md#migration)列出的 v0.5 字段 |
+
+## 客户端规则 {#client-rules}
+
+网关靠固定文本区分[辅助请求](10-overview-and-requests.md#request-types)、客户端代用户插入的消息和真正的用户消息，这些文本列在内置的 [`client-rules.json`](https://github.com/volcengine/OpenViking/blob/main/openviking_gateway/client-rules.json) 里。如果某个客户端的标题、摘要请求在请求日志里显示为**新消息**，或者真实消息被当成了辅助请求，可以在 `client_rules` 里增删条目：
+
+```json
+{
+  "gateway": {
+    "enabled": true,
+    "client_rules": {
+      "auxiliary_patterns": {
+        "add": ["You are the Acme title writer"],
+        "remove": ["Create a short.{0,40}title"]
+      },
+      "noise_tags": { "add": ["acme-context"] }
+    }
+  }
+}
+```
+
+在 `gateway.conf` 里，`client_rules` 直接写在根层级，不需要外面的 `gateway`。
+
+| 列表 | 条目 | 命中后的效果 |
+| --- | --- | --- |
+| `auxiliary_patterns` | 正则表达式，不区分大小写 | 分别与 Messages 的 `system` 字段、Responses 的 `instructions` 和最后一条用户消息匹配，命中的请求算作**辅助请求**。Chat Completions `messages` 和 Responses `input` 里的 system、developer 消息不参与匹配，这类客户端要匹配用户消息里的文本。 |
+| `noise_patterns` | 正则表达式，区分大小写 | 网关读取对话时忽略这些文本：不参与请求分类和记忆检索，也不写入保存的消息和工具结果，但仍原样发给模型。删完为空的用户消息不算新用户消息，请求按同一轮的延续处理。 |
+| `noise_tags` | 标签名 | `<tag …>…</tag>` 块（不区分大小写），处理方式同 `noise_patterns`。 |
+| `plugin_tags` | 标签名 | 系统提示词或客户端消息中出现 `<tag`，表示客户端里运行着 OpenViking 记忆插件。该对话此后网关只做转发：不加记忆、不提供 OpenViking 工具、不保存（见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)）。只添加插件自己写入的标签。 |
+
+- **`add` 追加到内置列表，`remove` 从内置列表中去掉条目。** `remove` 的条目要和 `client-rules.json` 里的写法完全一致。没有匹配到任何条目的 `remove`（例如升级后内置条目改了写法）会被忽略，启动时打印警告。内置列表不能整体替换，这样后续版本新增的条目仍然生效。
+- **只匹配客户端自己写的文本。** 用客户端自己提示词里的整句，不要用短语。用户消息一旦命中，这一整轮都算辅助请求，不检索也不保存；如果模式还能命中主对话的系统提示词，对话里的每个请求都会这样。噪声模式要锚定整条消息（JSON 里写作 `"\\A…\\Z"`），避免从真实消息里删掉文字。
+- **修改在启动时生效。** 改完后重启 Server 或独立网关。
 
 ## 上下文配置的设置 {#context-profile-settings}
 

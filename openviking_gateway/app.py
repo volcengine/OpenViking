@@ -25,6 +25,7 @@ from .config import PUBLIC_OPENVIKING_URLS, GatewayConfig, normalize_url
 from .kernel import MemoryKernel
 from .management import import_vlm_objects, register_management, request_credential
 from .models import Policy
+from .protocols import configure_rules
 from .proxy import ProxyRequest, filtered_headers
 from .storage import ManagementStore, SQLiteKernelStore, delete_account_data, delete_user_data
 
@@ -45,6 +46,12 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
 
     ``encryptor`` is an OpenViking ``FileEncryptor``; without one, values are stored as plaintext.
     """
+    if unknown := configure_rules(config.client_rules):
+        # An upgrade may rename a packaged rule; a stale removal must not stop the host.
+        logger.warning(
+            "gateway.client_rules removes entries the packaged rules do not have: %s",
+            "; ".join(unknown),
+        )
     store = SQLiteKernelStore(config.directory / "kernel.sqlite3", encryptor)
     management = ManagementStore(config.directory / "management.sqlite3", encryptor)
 

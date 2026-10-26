@@ -8,11 +8,13 @@ import workspace from './zh-CN/workspace'
 import resources from './zh-CN/resources'
 import activity from './zh-CN/activity'
 import memoryTemplates from './zh-CN/memory-templates'
+import dataManagement from './zh-CN/data-management'
 
 const zhCN = {
   studio,
   onboarding,
   gateway,
+  dataManagement,
   compile,
   vikingbot,
   ...workspace,

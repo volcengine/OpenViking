@@ -28,7 +28,7 @@ When you are ready to build, choose an [application workflow](../workflows/01-ov
 | When is processing complete, and how does recovery work? | [Queue State and Completion Semantics](16-queue-lifecycle.md) → [Path Locks and Crash Recovery](09-transaction.md) |
 | How do primary and backup writes, reads and observation work? | [Multi-Write Storage](14-multi-write-storage.md) → [Metrics](12-metrics.md) |
 | Who can see which content, and how are permissions inherited? | [Multi-Tenant](11-multi-tenant.md) → [Resource Access Control (ACL)](15-acl.md) |
-| How are data encrypted and skill privacy handled? | [Data Encryption](10-encryption.md) → [Privacy Configs and Skill Privacy Extraction/Restore](13-privacy.md) |
+| How does OpenViking encrypt data and protect privacy in Skills and Sessions? | [Data Encryption](10-encryption.md) → [Privacy Configs and Automatic Management](13-privacy.md) |
 
 Configuration and deployment steps live in [Deploy & Operate](../guides/00-overview.md). Concept pages explain behavior and constraints; task guides explain how to configure and verify them, with links between the two.
 

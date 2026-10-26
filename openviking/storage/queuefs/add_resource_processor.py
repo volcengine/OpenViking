@@ -10,11 +10,13 @@ from typing import Any, Dict, Optional
 
 from openviking.observability.context import bind_execution_context
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import TaskPatch
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_work_index import (
     bind_task_context_from_message,
     extract_task_metadata,
 )
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
@@ -85,17 +87,19 @@ class AddResourceProcessor(DequeueHandlerBase):
         ctx: RequestContext,
     ) -> None:
         if msg.lock_handoff is not None:
+            lock_guard = PathLockGuard(self._viking_fs._async_agfs)
             try:
-                lock = await self._viking_fs._async_agfs.pathlock_adopt(msg.lock_handoff)
+                await lock_guard.adopt(msg.lock_handoff)
                 if msg.cleanup_empty_target_on_failure:
                     await self._resource_service._cleanup_reserved_target_if_empty(
                         root_uri=msg.root_uri,
                         ctx=ctx,
-                        resource_lock=lock,
+                        resource_lock=lock_guard.lease,
                     )
-                await self._viking_fs._async_agfs.pathlock_release(lock)
             except Exception as exc:
                 logger.warning("[AddResource] Failed to release cancelled lock handoff: %s", exc)
+            finally:
+                await lock_guard.close()
         with suppress(Exception):
             await self._cleanup_staged_source(msg, ctx)
         with suppress(Exception):
@@ -185,9 +189,13 @@ class AddResourceProcessor(DequeueHandlerBase):
 
         replay_result = getattr(task, "result", None)
         resource_lock = None
+        lock_guard = PathLockGuard(self._viking_fs._async_agfs)
         if replay_result is None:
             try:
-                resource_lock = await self._load_lock(msg, ctx)
+                await lock_guard.acquire(lambda: self._load_lock(msg, ctx))
+            except asyncio.CancelledError:
+                await lock_guard.close()
+                raise
             except Exception as exc:
                 if await self._requeue_lock_handoff(msg, exc):
                     return ProcessResult.requeued()
@@ -222,9 +230,9 @@ class AddResourceProcessor(DequeueHandlerBase):
         async def _set_stage(stage: str) -> None:
             nonlocal current_stage
             current_stage = stage
-            await tracker.update_stage(
+            await tracker.patch_task(
                 msg.task_id,
-                stage,
+                TaskPatch(stage=stage),
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
@@ -250,16 +258,18 @@ class AddResourceProcessor(DequeueHandlerBase):
                         user_id=ctx.user.user_id,
                         stage="queued",
                     )
+                    task_auth = await tracker.get_task_auth(
+                        msg.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    resource_lock = lock_guard.detach()
                     result = await self._resource_service.execute_add_resource_job(
                         msg,
                         ctx=ctx,
                         resource_lock=resource_lock,
                         stage_callback=_set_stage,
-                        task_auth=await tracker.get_task_auth(
-                            msg.task_id,
-                            account_id=ctx.account_id,
-                            user_id=ctx.user.user_id,
-                        ),
+                        task_auth=task_auth,
                     )
                     if result.get("status") == "error":
                         errors = result.get("errors") or ["resource processing failed"]
@@ -276,13 +286,15 @@ class AddResourceProcessor(DequeueHandlerBase):
                             error,
                         )
                         code = result.get("code")
-                        failure_result = {"code": code} if isinstance(code, str) and code else None
+                        failure_result = {"code": code} if isinstance(code, str) and code else {}
+                        if isinstance(result.get("details"), dict):
+                            failure_result["details"] = result["details"]
                         await tracker.fail(
                             msg.task_id,
                             error,
                             account_id=ctx.account_id,
                             user_id=ctx.user.user_id,
-                            result=failure_result,
+                            result=failure_result or None,
                         )
                         await self._record_watch_execution(msg, "failed", error)
                         terminal = True
@@ -399,22 +411,29 @@ class AddResourceProcessor(DequeueHandlerBase):
                     str(exc) or type(exc).__name__,
                 )
                 failure_result = (
-                    {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else None
+                    {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else {}
                 )
+                if isinstance(exc, OpenVikingError) and isinstance(exc.details, dict):
+                    failure_result["details"] = exc.details
                 await tracker.fail(
                     msg.task_id,
                     str(exc),
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
-                    result=failure_result,
+                    result=failure_result or None,
                 )
                 terminal = True
                 return ProcessResult.failed(str(exc))
             finally:
                 unregister_telemetry(telemetry_id)
+                await lock_guard.close()
                 with suppress(Exception):
                     if resource_lock is not None:
-                        await self._viking_fs._async_agfs.pathlock_release(resource_lock)
+                        cleanup_guard = PathLockGuard(
+                            self._viking_fs._async_agfs,
+                            resource_lock,
+                        )
+                        await cleanup_guard.close()
                 if terminal:
                     with suppress(Exception):
                         await self._cleanup_staged_source(msg, ctx)

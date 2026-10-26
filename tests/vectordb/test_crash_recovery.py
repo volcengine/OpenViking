@@ -6,6 +6,7 @@ import shutil
 import sys
 import time
 import unittest
+import weakref
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from unittest.mock import patch
 from openviking.storage.vectordb import engine
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
+from openviking.storage.vectordb.store.store_manager import StoreManager
 
 DB_PATH_CRASH = "./test_data/test_db_crash_recovery"
 DB_PATH_ROBUST = "./test_data/test_db_robust_crash"
@@ -92,9 +94,16 @@ def worker_write_and_crash(path, start_id, count, event_ready):
         col.upsert_data(data[2:])
         col.update_data([{"id": start_id, "data": LARGE_TEXT}])
         col.update_data([{"id": start_id, "data": LARGE_TEXT + " updated"}])
-        # Leave a large deletion in the log too, without changing the final count.
-        col.upsert_data([{"id": start_id + count, "vector": [0.1] * 4, "data": LARGE_TEXT}])
-        col.delete_data([start_id + count])
+        # Replay long PUT and DEL runs, including a large deletion, without
+        # changing the final count.
+        transient_ids = list(range(start_id + count, start_id + 2 * count))
+        col.upsert_data(
+            [
+                {"id": uid, "vector": [0.1] * 4, "data": LARGE_TEXT if i == 0 else "temporary"}
+                for i, uid in enumerate(transient_ids)
+            ]
+        )
+        col.delete_data(transient_ids)
         print("[Subprocess] Upsert done. Not closing.")
 
         # Notify main process that write is done
@@ -231,6 +240,7 @@ class TestCrashRecovery(unittest.TestCase):
             shutil.rmtree(DB_PATH_ROBUST)
 
     def tearDown(self):
+        self.doCleanups()
         if os.path.exists(DB_PATH_CRASH):
             shutil.rmtree(DB_PATH_CRASH)
         if os.path.exists(DB_PATH_ROBUST):
@@ -247,7 +257,7 @@ class TestCrashRecovery(unittest.TestCase):
         ctx = multiprocessing.get_context("spawn")
         event = ctx.Event()
 
-        data_count = 100
+        data_count = 2050
         p = ctx.Process(target=worker_write_and_crash, args=(DB_PATH_CRASH, 0, data_count, event))
         p.start()
 
@@ -270,10 +280,27 @@ class TestCrashRecovery(unittest.TestCase):
         # Recover
         print("[Main] Recovering collection in main process...")
         # Re-opening the collection should trigger recovery logic (PersistentIndex should rebuild/catchup from Store)
-        col = get_or_create_local_collection(path=DB_PATH_CRASH)
+        live_deltas: weakref.WeakValueDictionary[int, DeltaRecord] = weakref.WeakValueDictionary()
+        peak_live_deltas = 0
+        read_deltas = StoreManager.get_delta_data_after_ts
+
+        def tracked_deltas(manager, version):
+            nonlocal peak_live_deltas
+            for number, record in enumerate(read_deltas(manager, version)):
+                live_deltas[number] = record
+                peak_live_deltas = max(peak_live_deltas, len(live_deltas))
+                yield record
+
+        with patch.object(StoreManager, "get_delta_data_after_ts", tracked_deltas):
+            col = get_or_create_local_collection(path=DB_PATH_CRASH)
+        self.addCleanup(col.close)
+        self.assertGreater(peak_live_deltas, 0, "Recovery must exercise the persisted delta log")
+        self.assertLessEqual(
+            peak_live_deltas, 1025, "Recovery must release replayed deltas during long PUT/DEL runs"
+        )
 
         # 1. Verify Data Persistence (Store)
-        print("[Main] Verifying data fetch (All 100 items)...")
+        print(f"[Main] Verifying data fetch (All {data_count} items)...")
         # Check all IDs
         all_ids = list(range(data_count))
         res = col.fetch_data(all_ids)
@@ -307,7 +334,6 @@ class TestCrashRecovery(unittest.TestCase):
         )
         self.assertEqual(set(found_ids), set(all_ids))
 
-        col.close()
         print("[Main] Simple recovery test passed.")
 
     def run_process_and_crash(self, target_func):

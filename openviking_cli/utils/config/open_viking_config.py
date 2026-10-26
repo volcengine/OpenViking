@@ -6,7 +6,7 @@ import logging
 import os
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -60,6 +60,7 @@ from .queue_worker_config import QueueWorkersConfig
 from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
+from .rules_config import RulesConfig
 from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
@@ -200,6 +201,9 @@ class CompileApiConfig(BaseModel):
     gateway_token: str = ""
     http_timeout_seconds: float = 10.0
     poll_interval_ms: int = 30000
+    # Run Redis-backed Compile scheduling on this instance.
+    scheduler_enabled: bool = False
+    scheduler_backend: Literal["redis"] = "redis"
 
     @model_validator(mode="after")
     def _validate(self) -> "CompileApiConfig":
@@ -266,6 +270,11 @@ class OpenVikingConfig(BaseModel):
     )
 
     rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
+
+    rules: RulesConfig = Field(
+        default_factory=RulesConfig,
+        description="Rule compilation and applicability model configuration",
+    )
 
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,
@@ -514,9 +523,19 @@ class OpenVikingConfig(BaseModel):
         return self
 
     def _check_expiry_backend(self) -> None:
-        idle = self.memory.session_auto_commit
-        if idle.enabled and idle.idle_backend == "redis":
+        if self.uses_redis_expiry():
             self.expiry.validate_for_runtime()
+
+    def uses_redis_session_expiry(self) -> bool:
+        idle = self.memory.session_auto_commit
+        return idle.enabled and idle.idle_backend == "redis"
+
+    def uses_redis_compile_schedule(self) -> bool:
+        return self.compile_api.scheduler_enabled
+
+    def uses_redis_expiry(self) -> bool:
+        """Whether any feature needs the distributed ExpiryScheduler."""
+        return self.uses_redis_session_expiry() or self.uses_redis_compile_schedule()
 
     agent_evolution: AgentEvolutionConfig = RuntimeField(
         default_factory=AgentEvolutionConfig,

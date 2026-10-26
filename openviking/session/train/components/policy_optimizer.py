@@ -51,6 +51,15 @@ class PatchMergePolicyOptimizer:
     memory_type: str = "experiences"
     memory_registry: MemoryTypeRegistry | None = None
     vlm_resolver: VLMResolver | None = None
+    thinking: bool | None = None
+    """Per-call thinking override for the merge extract loop.
+
+    None (default) defers to the VLM backend's configured ``thinking`` policy.
+    True/False force the mode for every merge call, overriding the backend
+    configuration. The optimizer never forces thinking on by itself: forcing
+    ``thinking=True`` for experiences/trajectories merges made reasoning consume
+    the whole completion budget and truncate the emitted program mid-string.
+    """
 
     @tracer(
         "train.policy_optimizer.patch_merge.plan",
@@ -183,7 +192,7 @@ class PatchMergePolicyOptimizer:
             context_provider=provider,
             isolation_handler=isolation_handler,
             max_iterations=1,
-            thinking=self.memory_type in {"trajectories", "experiences"},
+            thinking=self.thinking,
         )
         operations, _ = await orchestrator.run()
         return operations

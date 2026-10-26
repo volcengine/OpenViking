@@ -95,6 +95,10 @@ function normalizeMessage(message, cfg) {
   if (message.content !== undefined) {
     content = message.content;
   } else if (message.message && typeof message.message === "object") {
+    // Claude Code also wraps copies of messages in bookkeeping lines (e.g. an
+    // `api-request-blob` repeats a request message already in the transcript);
+    // only the user/assistant entries are the conversation.
+    if (message.type !== undefined && message.type !== "user" && message.type !== "assistant") return null;
     role = message.message.role || role;
     content = message.message.content;
   }

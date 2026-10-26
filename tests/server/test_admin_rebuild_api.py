@@ -526,7 +526,7 @@ async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
         async def create_if_no_running(self, *args, **kwargs):
             return FakeTask()
 
-        update_stage = AsyncMock()
+        patch_task = AsyncMock()
         fail = AsyncMock()
 
     class FakeAGFS:
@@ -602,8 +602,9 @@ async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["stat", "lock"])
-async def test_reindex_wait_false_marks_task_failed_when_submit_preparation_fails(
-    monkeypatch, failure
+@pytest.mark.parametrize("has_work", [False, True])
+async def test_reindex_submit_failure_only_fails_tasks_without_accepted_work(
+    monkeypatch, failure, has_work
 ):
     from openviking.service.reindex_executor import ReindexExecutor
 
@@ -612,6 +613,7 @@ async def test_reindex_wait_false_marks_task_failed_when_submit_preparation_fail
 
     tracker = SimpleNamespace(
         create_if_no_running=AsyncMock(return_value=FakeTask()),
+        has_work=AsyncMock(return_value=has_work),
         fail=AsyncMock(),
     )
 
@@ -652,12 +654,15 @@ async def test_reindex_wait_false_marks_task_failed_when_submit_preparation_fail
             ctx=ctx,
         )
 
-    tracker.fail.assert_awaited_once_with(
-        "task-1",
-        "Failed to enqueue reindex processing",
-        account_id="test",
-        user_id="alice",
-    )
+    if has_work:
+        tracker.fail.assert_not_awaited()
+    else:
+        tracker.fail.assert_awaited_once_with(
+            "task-1",
+            "Failed to enqueue reindex processing",
+            account_id="test",
+            user_id="alice",
+        )
 
 
 @pytest.mark.asyncio
@@ -950,7 +955,8 @@ async def test_reindex_rfv_enqueues_semantic_plan_without_snapshot_source_bytes(
     )
 
     assert calls == ["to_handoff", "handoff", "enqueue"]
-    assert run.lease_handed_off is True
+    assert run.lease is None
+    assert run.lock is None
     assert queue.message.plan == plan
     assert queue.message.propagate_to_parent is False
     assert queue.message.generation_trigger == "reindex"

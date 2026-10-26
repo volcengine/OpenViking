@@ -8,6 +8,96 @@ from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
 
+async def test_privacy_tree_lists_current_fields_without_values(client: httpx.AsyncClient, service):
+    created = await client.post(
+        "/api/v1/privacy-configs/credential/github",
+        json={"values": {"pat": "historical-secret-marker", "old_field": "old-value-marker"}},
+    )
+    assert created.status_code == 200, created.text
+    owner = created.json()["result"]["created_by"]
+    for category, target, values in [
+        ("credential", "github", {"pat": "active-secret-marker", "region": "", "unset": None}),
+        ("credential", "flags", {"disabled": False, "retries": 0}),
+        ("skill", "demo", {"api/key": "skill-secret-marker"}),
+    ]:
+        response = await client.post(
+            f"/api/v1/privacy-configs/{category}/{target}", json={"values": values}
+        )
+        assert response.status_code == 200, response.text
+
+    ctx = RequestContext(user=UserIdentifier(service.user.account_id, owner), role=Role.USER)
+    await service.viking_fs.mkdir(f"viking://user/{owner}/privacy/credential/lock-only", ctx=ctx)
+    other_ctx = RequestContext(
+        user=UserIdentifier(service.user.account_id, "other-owner"), role=Role.USER
+    )
+    await service.privacy_configs.upsert(
+        other_ctx, "credential", "other-owner-target", {"token": "other-owner-secret-marker"}
+    )
+    response = await client.get("/api/v1/privacy-configs/tree")
+    assert response.status_code == 200, response.text
+    categories = response.json()["result"]
+    assert categories["owner_user_id"] == owner
+    assert [node["category"] for node in categories["categories"]] == ["credential", "skill"]
+    credential, skill = categories["categories"]
+    assert [node["target_key"] for node in credential["targets"]] == ["flags", "github"]
+    github = credential["targets"][1]
+    assert github == {
+        "target_key": "github",
+        "version": 2,
+        "fields": [
+            {
+                "field": field,
+                "configured": configured,
+                "reference": build_privacy_field_reference(owner, "credential", "github", field),
+            }
+            for field, configured in [("pat", True), ("region", False), ("unset", False)]
+        ],
+    }
+    assert all(field["configured"] for field in credential["targets"][0]["fields"])
+    assert skill["targets"][0]["fields"][0]["reference"] == build_privacy_field_reference(
+        owner, "skill", "demo", "api/key"
+    )
+    for secret in [
+        "historical-secret-marker",
+        "old-value-marker",
+        "active-secret-marker",
+        "skill-secret-marker",
+        "other-owner-secret-marker",
+        "other-owner-target",
+    ]:
+        assert secret not in response.text
+    assert '"values"' not in response.text
+    assert "old_field" not in response.text
+
+    # Activation can select an older version; the tree must follow current, not latest history.
+    activated = await client.post(
+        "/api/v1/privacy-configs/credential/github/activate", json={"version": 1}
+    )
+    assert activated.status_code == 200, activated.text
+    tree = (await client.get("/api/v1/privacy-configs/tree")).json()["result"]
+    assert tree["categories"][0]["targets"][1]["version"] == 1
+
+
+async def test_privacy_tree_category_filter_and_route_not_shadowed(client: httpx.AsyncClient):
+    empty = await client.get("/api/v1/privacy-configs/tree")
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["result"]["categories"] == []
+    for category in ["credential", "skill"]:
+        created = await client.post(
+            f"/api/v1/privacy-configs/{category}/demo", json={"values": {"token": "secret-marker"}}
+        )
+        assert created.status_code == 200, created.text
+    filtered = await client.get("/api/v1/privacy-configs/tree", params={"category": "skill"})
+    assert filtered.status_code == 200, filtered.text
+    assert [node["category"] for node in filtered.json()["result"]["categories"]] == ["skill"]
+    for category in ["", "..", "bad/category"]:
+        invalid = await client.get("/api/v1/privacy-configs/tree", params={"category": category})
+        assert invalid.status_code == 400, invalid.text
+        assert invalid.json()["error"]["code"] == "INVALID_ARGUMENT"
+    missing = await client.get("/api/v1/privacy-configs/tree", params={"category": "missing"})
+    assert missing.json()["result"]["categories"] == [{"category": "missing", "targets": []}]
+
+
 async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
     upsert = await client.post(
         "/api/v1/privacy-configs/skill/demo-skill",

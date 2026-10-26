@@ -24,8 +24,9 @@ const mocks = vi.hoisted(() => ({
   fetchFsStat: vi.fn(),
   invalidateList: vi.fn(),
   navigate: vi.fn(),
+  dataManagement: vi.fn(),
   refreshLabel: 'refresh',
-  search: {} as { file?: string; uri?: string },
+  search: {} as { file?: string; panel?: 'agent' | 'terminal'; uri?: string },
 }))
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -95,13 +96,23 @@ vi.mock('./-components/context-explorer', () => ({
     <button type="button" aria-label={mocks.refreshLabel} onClick={onRefresh} />
   ),
   ContextTree: () => null,
-  PanelTab: () => null,
+  PanelTab: ({ label }: { label: string }) => (
+    <button type="button" role="tab">
+      {label}
+    </button>
+  ),
   FilesystemResizeHandle: () => null,
 }))
 
 vi.mock('./-components/agent-panel', () => ({ AgentPanel: mocks.agent }))
 vi.mock('./-components/terminal-panel', () => ({
   TerminalPanel: mocks.terminal,
+}))
+vi.mock('./-components/data-management-dialog', () => ({
+  DataManagementDialog: (props: { uri: string; isDirectory: boolean }) => {
+    mocks.dataManagement(props)
+    return <div data-testid="data-management-uri">{props.uri}</div>
+  },
 }))
 vi.mock('#/routes/resources/-components/find-palette', () => ({
   FindPalette: () => null,
@@ -131,18 +142,65 @@ describe('filesystem context tree refresh', () => {
     mocks.fetchFsStat.mockReset()
     mocks.invalidateList.mockReset().mockResolvedValue(undefined)
     mocks.navigate.mockReset()
+    mocks.dataManagement.mockReset()
   })
 
-  it('reuses the same workbench for hosted reads without scope tabs or incompatible local tools', () => {
-    mocks.provider = 'volcengine'
+  it('offers OVPack for the parent resource directory while a file is selected', async () => {
+    mocks.search = {
+      file: 'viking://resources/preferences/response-tone.md',
+      uri: 'viking://resources/preferences/',
+    }
     render(<FilesystemRoute />)
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
+    )
+    expect(screen.getByTestId('data-management-uri').textContent).toBe(
+      'viking://resources/preferences/',
+    )
+    expect(mocks.dataManagement.mock.lastCall?.[0].isDirectory).toBe(true)
+  })
+
+  it('offers OVPack on hosted resource directories too', async () => {
+    mocks.provider = 'volcengine'
+    mocks.search = {
+      file: 'viking://resources/preferences/response-tone.md',
+      uri: 'viking://resources/preferences/',
+    }
+    render(<FilesystemRoute />)
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'dataManagement:transferTitle' }),
+    )
+    expect(screen.getByTestId('data-management-uri').textContent).toBe(
+      'viking://resources/preferences/',
+    )
+    expect(mocks.dataManagement.mock.lastCall?.[0].isDirectory).toBe(true)
+  })
+
+  it('shows only the CLI tab for hosted reads while keeping local tools unavailable', async () => {
+    mocks.provider = 'volcengine'
+    mocks.search = { file: firstFile, panel: 'agent', uri: parentDirectory }
+    render(<FilesystemRoute />)
+    await userEvent.click(
+      screen.getByRole('button', { name: 'dataManagement:historyTitle' }),
+    )
+    expect(screen.getByTestId('data-management-uri').textContent).toBe(
+      firstFile,
+    )
+    expect(
+      screen.queryByRole('button', { name: 'dataManagement:transferTitle' }),
+    ).toBeNull()
     expect(screen.getByTestId('preview').textContent).toBe(firstFile)
     expect(mocks.preview.mock.lastCall?.[0].readOnly).not.toBe(true)
     expect(mocks.preview.mock.lastCall?.[0].defaultReadLimit).toBe(10000)
     expect(mocks.uploadProvider.mock.lastCall?.[0]).toBe(false)
     expect(mocks.agent).not.toHaveBeenCalled()
-    expect(mocks.terminal).not.toHaveBeenCalled()
-    expect(screen.queryByRole('tab')).toBeNull()
+    expect(mocks.terminal).toHaveBeenCalled()
+    expect(mocks.agent).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    expect(screen.getByRole('tab', { name: 'tabs.terminal' })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: 'tabs.agent' })).toBeNull()
     expect(screen.queryByText('addResource.title')).toBeNull()
   })
 

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Task-scoped access to centrally managed Feishu OAuth credentials."""
+"""Task-scoped access to centrally managed external OAuth credentials."""
 
 import asyncio
 import math
@@ -248,6 +248,19 @@ async def document_auth_config(args: Dict[str, Any], ctx: RequestContext) -> Dic
     return {"lark_access_token": token, OAUTH_REF_ARG: reference}
 
 
+async def confluence_auth_config(args: Dict[str, Any], ctx: RequestContext) -> Dict[str, str]:
+    """Resolve a Confluence OAuth reference into the plugin's Bearer-token config."""
+    if args.get("auth_config") or any(
+        key in args for key in ("access_token", "api_token", "email")
+    ):
+        raise InvalidArgumentError(
+            "OAuth references cannot be combined with explicit Confluence credentials."
+        )
+    reference = validate_oauth_ref(args[OAUTH_REF_ARG], ctx.user.user_id, platform="confluence")
+    provider = ExternalFeishuToken(reference, ctx.api_key or "")
+    return {"access_token": await asyncio.to_thread(provider.get_token)}
+
+
 def is_external_feishu_auth(state: Optional[Dict[str, Any]]) -> bool:
     return isinstance(state, dict) and state.get("provider") == EXTERNAL_FEISHU_PROVIDER
 
@@ -259,10 +272,10 @@ class ExternalFeishuToken:
         self._url = external_auth_url()
         if not self._url:
             raise InvalidArgumentError(
-                "connector.auth is required for external Feishu authorization."
+                "connector.auth is required for external OAuth authorization."
             )
         if not api_key:
-            raise InvalidArgumentError("External Feishu authorization requires an API key.")
+            raise InvalidArgumentError("External OAuth authorization requires an API key.")
         self._reference = reference
         self._api_key = api_key
         self._client = ConnectorClient("", "", account_id=reference["account_id"])

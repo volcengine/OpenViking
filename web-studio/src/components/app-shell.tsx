@@ -46,7 +46,6 @@ import {
 } from '#/components/ui/collapsible'
 import { CrossDeviceVerifyDialog } from '#/components/cross-device-verify-dialog'
 import { AccountSwitcher } from '#/components/account-switcher'
-import { CurrentUserMenu } from '#/components/current-user-menu'
 import { GeneratedCredentialDialog } from '#/components/generated-credential-dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
@@ -325,6 +324,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (pathname === '/config')
     return (
       <StudioSetup
+        canReturnToWorkspace={!needsSetup}
+        onCancel={() => {
+          if (needsSetup) {
+            window.location.assign('https://docs.openviking.ai/')
+          } else {
+            void navigate({ to: '/', replace: true })
+          }
+        }}
         onComplete={(connection) => {
           setNeedsSetup(false)
           void navigate({
@@ -781,9 +788,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
               <GithubIcon className="size-4" />
             </a>
 
-            <div className="h-6 w-px bg-border/80" aria-hidden="true" />
-
-            {isGatewayHost ? null : <CurrentUserMenu />}
           </div>
         </header>
 

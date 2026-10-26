@@ -647,6 +647,86 @@ func TestAdminEmptySeedPayloadsAreSent(t *testing.T) {
 	}
 }
 
+func TestAdminGetAccount(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if r.URL.Path != "/api/v1/admin/accounts/acct" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{
+			"account_id": "acct",
+			"created_at": "2026-10-20T03:00:00Z",
+			"user_count": 2,
+			"status":     "active",
+		})
+	}))
+	defer closeServer()
+
+	account, err := client.AdminGetAccount(context.Background(), "acct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account["status"] != "active" || account["user_count"] != float64(2) {
+		t.Fatalf("account = %#v", account)
+	}
+	if _, ok := account["api_key"]; ok {
+		t.Fatal("account metadata must not include credentials")
+	}
+}
+
+func TestAdminGetAccountNotFound(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeAPIError(t, w, http.StatusNotFound, "NOT_FOUND", nil)
+	}))
+	defer closeServer()
+
+	if _, err := client.AdminGetAccount(context.Background(), "missing"); !IsCode(err, "NOT_FOUND") {
+		t.Fatalf("err = %v, want NOT_FOUND", err)
+	}
+}
+
+func TestAdminGetUser(t *testing.T) {
+	var requestedPath string
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s", r.Method)
+		}
+		requestedPath = r.URL.Path
+		writeOK(t, w, map[string]any{"user_id": "alice", "role": "admin"})
+	}))
+	defer closeServer()
+
+	user, err := client.AdminGetUser(context.Background(), "acct", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user["user_id"] != "alice" || user["role"] != "admin" {
+		t.Fatalf("user = %#v", user)
+	}
+	if _, ok := user["api_key"]; ok {
+		t.Fatal("user membership must not include credentials")
+	}
+	if _, ok := user["key_prefix"]; ok {
+		t.Fatal("user membership must not include credentials")
+	}
+	if requestedPath != "/api/v1/admin/accounts/acct/users/alice" {
+		t.Fatalf("path = %s", requestedPath)
+	}
+}
+
+func TestAdminGetUserNotFound(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeAPIError(t, w, http.StatusNotFound, "NOT_FOUND", nil)
+	}))
+	defer closeServer()
+
+	if _, err := client.AdminGetUser(context.Background(), "acct", "ghost"); !IsCode(err, "NOT_FOUND") {
+		t.Fatalf("err = %v, want NOT_FOUND", err)
+	}
+}
+
 func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/search" {
@@ -872,7 +952,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/content/batch-write":
 			body := readJSONBody(t, r)
-			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" {
+			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != true {
 				t.Fatalf("body = %#v", body)
 			}
 			operations, ok := body["operations"].([]any)
@@ -914,7 +994,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			TagMode: "append",
 			ACL:     &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
 		},
-	}, &BatchWriteOptions{ProcessingMode: "vectors_only", Extra: map[string]any{"future_flag": 0}}); err != nil {
+	}, &BatchWriteOptions{ProcessingMode: "vectors_only", DeferProcessing: true, Extra: map[string]any{"future_flag": 0}}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := client.DownloadBytes(context.Background(), "resources/project/a.txt")

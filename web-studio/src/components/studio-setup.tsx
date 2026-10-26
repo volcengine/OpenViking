@@ -10,6 +10,7 @@ import {
   ServerIcon,
   Loader2Icon,
 } from 'lucide-react'
+import { SetupIdentityDirectory } from './setup-identity-directory'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import {
@@ -33,11 +34,13 @@ import {
   studioSetupDestination,
   CLOUD_SETUP_URL,
   completeStudioSetup,
-  markStudioSetupPending,
   savedSetupConnections,
   verifyStudioSetup,
 } from '#/lib/connection/onboarding'
-import { isValidConnectionUrl } from '#/lib/connection/profiles'
+import {
+  connectionProfileFingerprint,
+  isValidConnectionUrl,
+} from '#/lib/connection/profiles'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
 const LANGUAGES = [
@@ -49,7 +52,7 @@ const PROVIDERS = [
   ['volcengine', CloudIcon],
 ] as const
 const THEMES = ['light', 'dark', 'system'] as const
-const ADVANCED_FIELDS = ['adminApiKey', 'accountId', 'userId'] as const
+const ADVANCED_FIELDS = ['accountId', 'userId'] as const
 const NEW_CONNECTION = 'new'
 type SavedConnection = ReturnType<typeof savedSetupConnections>[number]
 
@@ -57,25 +60,15 @@ function withoutCredentials(connection: ConnectionDraft): ConnectionDraft {
   return { ...connection, apiKey: '', adminApiKey: '' }
 }
 
-function savedConnectionTitle(profile: SavedConnection): string {
-  const identity = [
-    profile.connection.accountId,
-    profile.connection.userId,
-  ].filter((value) => value && value !== 'default')
-  return identity.length
-    ? `${profile.name} · ${identity.join('/')}`
-    : profile.name
-}
-
 function savedConnectionLabel(
   profile: SavedConnection,
   profiles: SavedConnection[],
+  providerLabel: string,
 ): string {
-  const title = savedConnectionTitle(profile)
+  const domain = new URL(profile.connection.baseUrl).host
+  const title = `${providerLabel} · ${domain}`
   const sameLabel = profiles.filter(
-    (candidate) =>
-      savedConnectionTitle(candidate) === title &&
-      candidate.connection.baseUrl === profile.connection.baseUrl,
+    (candidate) => new URL(candidate.connection.baseUrl).host === domain,
   )
   if (sameLabel.length < 2) return title
   return `${title} (${sameLabel.findIndex((candidate) => candidate.id === profile.id) + 1})`
@@ -96,13 +89,20 @@ function newConnectionDraft(
 
 export function StudioSetup({
   onComplete,
+  onCancel,
+  canReturnToWorkspace = false,
 }: {
   onComplete: (connection: ConnectionDraft) => void
+  onCancel?: () => void
+  canReturnToWorkspace?: boolean
 }) {
   const { t, i18n } = useTranslation(['onboarding', 'studio', 'settings'])
   const { theme, setTheme } = useTheme()
   const [step, setStep] = useState(0)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [controlVerified, setControlVerified] = useState(false)
+  const [selectedDirectoryIdentity, setSelectedDirectoryIdentity] =
+    useState(false)
   const [activeProfileId] = useState(() => {
     try {
       return JSON.parse(
@@ -139,14 +139,7 @@ export function StudioSetup({
       .filter((profile) => {
         const connection = profile.connection
         const address = new URL(connection.baseUrl).href.replace(/\/+$/, '')
-        const identity = JSON.stringify([
-          connection.serviceSelection,
-          address,
-          connection.accountId,
-          connection.userId,
-          connection.apiKey,
-          connection.adminApiKey,
-        ])
+        const identity = JSON.stringify([connection.serviceSelection, address])
         if (seen.has(identity)) return false
         seen.add(identity)
         return true
@@ -201,7 +194,6 @@ export function StudioSetup({
   const cardAnimationRef = useRef<Animation | null>(null)
   const previousCardHeightRef = useRef<number | null>(null)
   useEffect(() => {
-    markStudioSetupPending()
     return () => abortRef.current?.abort()
   }, [])
   useEffect(() => {
@@ -239,6 +231,14 @@ export function StudioSetup({
     ? 'zh-CN'
     : 'en'
   function update(next: Partial<ConnectionDraft>) {
+    if ('baseUrl' in next || 'adminApiKey' in next) setControlVerified(false)
+    if (
+      'baseUrl' in next ||
+      'adminApiKey' in next ||
+      'accountId' in next ||
+      'userId' in next
+    )
+      setSelectedDirectoryIdentity(false)
     connectionRevisionRef.current += 1
     verifiedSelectionRef.current = null
     setDraft((value) => ({ ...value, ...next }))
@@ -253,6 +253,8 @@ export function StudioSetup({
       draft.serviceSelection === 'volcengine' ? 'volcengine' : 'opensource'
     if (selectedConnectionId === NEW_CONNECTION)
       newDraftsRef.current[provider] = draft
+    setControlVerified(false)
+    setSelectedDirectoryIdentity(false)
     setSelectedConnectionId(id)
     providerSelectionsRef.current[provider] = id
     setDraft(
@@ -284,6 +286,8 @@ export function StudioSetup({
             (profile) => profile.connection.serviceSelection === provider,
           )?.id ??
           NEW_CONNECTION)
+    setControlVerified(false)
+    setSelectedDirectoryIdentity(false)
     setSelectedConnectionId(nextId)
     const savedHostedConnection = savedConnections.find(
       (profile) => profile.connection.serviceSelection === 'volcengine',
@@ -313,27 +317,15 @@ export function StudioSetup({
         return
       }
       try {
-        const matchingHostedProfile =
-          verified.serviceSelection === 'volcengine'
-            ? savedSetupConnections().find(
-                (profile) =>
-                  profile.connection.serviceSelection === 'volcengine' &&
-                  new URL(profile.connection.baseUrl).href.replace(
-                    /\/+$/,
-                    '',
-                  ) === new URL(verified.baseUrl).href.replace(/\/+$/, '') &&
-                  typeof profile.connection.apiKey === 'string' &&
-                  profile.connection.apiKey.trim() === verified.apiKey,
-              )
-            : undefined
+        const matchingProfile = savedSetupConnections().find(
+          (profile) =>
+            connectionProfileFingerprint(profile.connection) ===
+            connectionProfileFingerprint(verified),
+        )
         completeStudioSetup(
           verified,
           t(`studio:providers.${verified.serviceSelection}`),
-          verified.serviceSelection === 'volcengine'
-            ? matchingHostedProfile?.id
-            : selectedConnectionId === NEW_CONNECTION
-              ? undefined
-              : selectedConnectionId,
+          matchingProfile?.id,
         )
         onComplete(verified)
       } catch {
@@ -360,6 +352,19 @@ export function StudioSetup({
         !controller.signal.aborted &&
         connectionRevision === connectionRevisionRef.current
       ) {
+        if (
+          selectedDirectoryIdentity &&
+          draft.apiKey &&
+          (result.accountId !== draft.accountId ||
+            result.userId !== draft.userId)
+        ) {
+          setError(t('directoryIdentityMismatch'))
+          return
+        }
+        setControlVerified(
+          result.serviceSelection === 'opensource' &&
+            Boolean(result.adminApiKey),
+        )
         setDraft(result)
         verifiedSelectionRef.current = selectedConnectionId
         setVerified(result)
@@ -394,6 +399,20 @@ export function StudioSetup({
           <span className="text-base font-semibold tracking-tight">
             {t('brand')}
           </span>
+          {onCancel ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="ml-auto"
+              onClick={() => {
+                connectionRevisionRef.current += 1
+                abortRef.current?.abort()
+                onCancel()
+              }}
+            >
+              {t(canReturnToWorkspace ? 'cancel' : 'exit')}
+            </Button>
+          ) : null}
         </div>
         <div className="grid items-start gap-6 lg:grid-cols-[1fr_1.15fr] lg:gap-20">
           <header className="lg:pt-5">
@@ -515,6 +534,7 @@ export function StudioSetup({
                               ? savedConnectionLabel(
                                   selectedProfile,
                                   providerConnections,
+                                  t('openSourceConnection'),
                                 )
                               : t('newConnection')}
                           </SelectValue>
@@ -534,6 +554,7 @@ export function StudioSetup({
                                 {savedConnectionLabel(
                                   profile,
                                   providerConnections,
+                                  t('openSourceConnection'),
                                 )}
                               </span>
                             </SelectItem>
@@ -586,32 +607,18 @@ export function StudioSetup({
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      <label
-                        htmlFor="setup-hosted-url"
+                      <p
+                        id="setup-hosted-url-label"
                         className="text-sm font-medium"
                       >
                         {t('hostedEndpoint')}
-                      </label>
-                      <Input
-                        id="setup-hosted-url"
-                        className="h-11 rounded-lg"
-                        type="url"
-                        value={draft.baseUrl}
-                        aria-invalid={Boolean(draft.baseUrl) && !canContinue}
-                        onChange={(event) =>
-                          update({
-                            baseUrl: event.target.value,
-                            apiKey: '',
-                            adminApiKey: '',
-                          })
-                        }
-                        {...PLAIN_INPUT_PROPS}
-                      />
-                      {draft.baseUrl && !canContinue ? (
-                        <p className="text-xs text-destructive">
-                          {t('studio:profiles.invalidUrl')}
-                        </p>
-                      ) : null}
+                      </p>
+                      <p
+                        aria-labelledby="setup-hosted-url-label"
+                        className="break-all rounded-lg bg-muted/30 px-4 py-3 text-sm text-muted-foreground"
+                      >
+                        {draft.baseUrl}
+                      </p>
                     </div>
                   )}
                   <fieldset className="space-y-3">
@@ -697,8 +704,12 @@ export function StudioSetup({
                   <fieldset disabled={busy} className="space-y-4">
                     <div className="grid gap-2 text-sm">
                       <span className="font-medium">
-                        {t('settings:fields.baseUrl')}
+                        {t('studio:serviceType')}
                       </span>
+                      <p>{t(`studio:providers.${draft.serviceSelection}`)}</p>
+                    </div>
+                    <div className="grid gap-2 text-sm">
+                      <span className="font-medium">{t('hostedEndpoint')}</span>
                       <p className="break-all rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm">
                         {draft.baseUrl}
                       </p>
@@ -744,7 +755,33 @@ export function StudioSetup({
                           : 'keyHelp',
                       )}
                     </p>
-                    {draft.serviceSelection === 'opensource' ? (
+                    {draft.serviceSelection === 'opensource' && (
+                      <div className="grid gap-2 text-sm font-medium">
+                        <label htmlFor="setup-adminApiKey">
+                          {t('settings:fields.rootApiKey')}
+                        </label>
+                        <Input
+                          id="setup-adminApiKey"
+                          aria-describedby="setup-control-hint"
+                          type="password"
+                          value={draft.adminApiKey}
+                          onChange={(event) =>
+                            update({ adminApiKey: event.target.value })
+                          }
+                          className="h-11 rounded-lg"
+                          {...PLAIN_INPUT_PROPS}
+                          autoComplete="new-password"
+                        />
+                        <p
+                          id="setup-control-hint"
+                          className="text-xs font-normal text-muted-foreground"
+                        >
+                          {t('verifyDirectoryHint')}
+                        </p>
+                      </div>
+                    )}
+                    {draft.serviceSelection === 'opensource' &&
+                    !controlVerified ? (
                       <div>
                         <button
                           type="button"
@@ -774,27 +811,19 @@ export function StudioSetup({
                                   htmlFor={`setup-${key}`}
                                 >
                                   {t(
-                                    `settings:fields.${key === 'accountId' ? 'account' : key === 'userId' ? 'user' : 'rootApiKey'}`,
+                                    `settings:fields.${key === 'accountId' ? 'account' : 'user'}`,
                                   )}
                                   <Input
                                     id={`setup-${key}`}
                                     className="focus-visible:ring-inset"
                                     name={key}
-                                    type={
-                                      key === 'adminApiKey'
-                                        ? 'password'
-                                        : 'text'
-                                    }
+                                    type={'text'}
                                     value={draft[key]}
                                     onChange={(event) =>
                                       update({ [key]: event.target.value })
                                     }
                                     {...PLAIN_INPUT_PROPS}
-                                    autoComplete={
-                                      key === 'adminApiKey'
-                                        ? 'new-password'
-                                        : 'off'
-                                    }
+                                    autoComplete={'off'}
                                   />
                                 </label>
                               ))}
@@ -804,6 +833,22 @@ export function StudioSetup({
                       </div>
                     ) : null}
                   </fieldset>
+                  {controlVerified && (
+                    <SetupIdentityDirectory
+                      connection={draft}
+                      disabled={busy}
+                      onSelect={(identity) => {
+                        const changed =
+                          identity.accountId !== draft.accountId ||
+                          identity.userId !== draft.userId
+                        update({
+                          ...identity,
+                          ...(changed ? { apiKey: '' } : {}),
+                        })
+                        setSelectedDirectoryIdentity(true)
+                      }}
+                    />
+                  )}
                   {error && error !== t('keyRequired') ? (
                     <p
                       role="alert"
@@ -866,7 +911,7 @@ function ThemePreview({ appearance }: { appearance: (typeof THEMES)[number] }) {
   return (
     <div
       aria-hidden="true"
-      className={`relative h-14 overflow-hidden rounded-md border border-black/10 ${appearance === 'light' ? 'bg-[#f9fafb]' : appearance === 'dark' ? 'bg-[#191b20]' : 'bg-[linear-gradient(110deg,#f9fafb_50%,#191b20_50%)]'}`}
+      className={`relative h-14 overflow-hidden rounded-md border border-black/10 bg-clip-padding ${appearance === 'light' ? 'bg-[#f9fafb]' : appearance === 'dark' ? 'bg-[#191b20]' : 'bg-[linear-gradient(110deg,#f9fafb_calc(50%_-_0.5px),#191b20_calc(50%_+_0.5px))]'}`}
     >
       <div
         className={`flex h-4 items-center gap-1 border-b px-2 ${appearance === 'dark' ? 'border-white/10' : 'border-black/10'}`}

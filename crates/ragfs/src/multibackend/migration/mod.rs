@@ -104,7 +104,7 @@ impl FullDataImporter {
             }
             self.import_scope(account).await?;
         }
-        self.cleanup_v1_metadata().await?;
+        self.cleanup_v1_global_metadata().await?;
 
         let stable_bytes = serde_json::to_vec(&ProtocolState {
             protocol_version: ProtocolVersion::V2,
@@ -149,11 +149,24 @@ impl FullDataImporter {
     async fn import_account(&self, account: &str) -> Result<()> {
         let root = format!("/{account}");
         let mut pending = vec![root];
+        let mut scanned_dirs = 0usize;
+        let mut imported_files = 0usize;
+        let mut sync_logs_removed = 0usize;
+        tracing::info!(account = %account, "multi-write full-data import scope started");
         while let Some(directory) = pending.pop() {
+            scanned_dirs += 1;
             let mut entries = self.primary.read_internal_dir(&directory).await?;
             entries.sort_by(|left, right| left.name.cmp(&right.name));
             for entry in entries {
                 let path = child_path(&directory, &entry.name);
+                if entry.name == ".sync_log.json" && !entry.is_dir {
+                    match self.primary.remove(&path).await {
+                        Ok(()) => sync_logs_removed += 1,
+                        Err(Error::NotFound(_)) => {}
+                        Err(error) => return Err(error),
+                    }
+                    continue;
+                }
                 let logical_path = format!("{MULTIWRITE_MOUNT_PREFIX}{path}");
                 if is_multiwrite_internal_path(&logical_path) {
                     continue;
@@ -175,34 +188,31 @@ impl FullDataImporter {
                         }],
                     )
                     .await?;
+                imported_files += 1;
+                if imported_files % 10_000 == 0 {
+                    tracing::info!(
+                        account = %account,
+                        dirs = scanned_dirs,
+                        files = imported_files,
+                        sync_logs_removed,
+                        pending_dirs = pending.len(),
+                        "multi-write full-data import scope progress"
+                    );
+                }
             }
         }
+        tracing::info!(
+            account = %account,
+            dirs = scanned_dirs,
+            files = imported_files,
+            sync_logs_removed,
+            "multi-write full-data import scope completed"
+        );
         Ok(())
     }
 
-    /// Remove V1 metadata through the configured primary filesystem.
-    /// Returns an error when scanning or primary removal fails.
-    async fn cleanup_v1_metadata(&self) -> Result<()> {
-        match self.primary.stat("/_system/.multiwrite.global.json").await {
-            Ok(_) => {}
-            Err(Error::NotFound(_)) => return Ok(()),
-            Err(error) => return Err(error),
-        }
-
-        let page = self
-            .primary
-            .glob_directory("/", "**/.sync_log.json", true, None, None, None)
-            .await?;
-        for entry in page.entries {
-            if entry.is_dir {
-                continue;
-            }
-            match self.primary.remove(&entry.path).await {
-                Ok(()) | Err(Error::NotFound(_)) => {}
-                Err(error) => return Err(error),
-            }
-        }
-
+    /// Remove V1 global metadata through the configured primary filesystem.
+    async fn cleanup_v1_global_metadata(&self) -> Result<()> {
         match self
             .primary
             .remove("/_system/.multiwrite.global.json")

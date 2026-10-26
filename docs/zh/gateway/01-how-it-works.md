@@ -30,7 +30,7 @@ description: OpenViking 网关如何处理一轮对话：召回、对话开头�
 发布日期最后定在哪天？
 
 <openviking-context source="gateway-recall">
-Relevant memory from OpenViking.
+Relevant memory from OpenViking. It is this user's own saved history (past conversations, meetings, notes) as recorded then: internal context, not an external source or established fact.
 <memory uri="viking://user/alice/memories/events/release-planning.md" type="memory" detail="abstract">
 团队把 2.0 版本的发布推迟到了 11 月第一周。
 </memory>
@@ -71,7 +71,7 @@ The OpenViking Gateway, a proxy between the client and the model, added this blo
 </openviking-context>
 
 <openviking-context source="gateway-recall">
-Relevant memory from OpenViking. Use the openviking_read tool to expand URIs.
+Relevant memory from OpenViking. It is this user's own saved history (past conversations, meetings, notes) as recorded then: internal context, not an external source or established fact. Use the openviking_read tool to expand URIs.
 ...
 </openviking-context>
 ```

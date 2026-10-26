@@ -110,7 +110,7 @@ def _task_tracker():
     return SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
         mark_cancelled=AsyncMock(),
@@ -318,6 +318,10 @@ async def test_connector_watch_stores_only_encrypted_replay_state(
         "resource_name": "Team Docs",
         "resource_tag": "tos_docs",
     }
+    assert task.to_dict()["processor_kwargs"]["resource_config"] == {
+        "resource_name": "Team Docs",
+        "resource_tag": "tos_docs",
+    }
     assert task.auth_state["provider"] == "connector_encrypted"
     assert "secret" not in json.dumps(task.auth_state)
     assert "auth_state" not in task.to_dict()
@@ -328,14 +332,7 @@ async def test_connector_watch_stores_only_encrypted_replay_state(
     ) == (
         "secret",
         "tos",
-        {
-            "tos_prefix": ["tos://bucket/docs/"],
-            "resource_config": {
-                "resource_name": "Team Docs",
-                "resource_tag": "tos_docs",
-                "ignored": "value",
-            },
-        },
+        {"tos_prefix": ["tos://bucket/docs/"]},
         None,
     )
     assert connector_client.submit_doc_add.await_args.kwargs["param_config"] == {
@@ -2579,7 +2576,7 @@ async def test_monitor_connector_task_maps_terminal_status(
             on_success=on_success,
         )
 
-    assert tracker.update_stage.await_args.args[1] == expected_stage
+    assert tracker.patch_task.await_args.args[1].stage == expected_stage
     assert outcome["status"] == expected_status
     if expected_status == "completed":
         on_success.assert_awaited_once_with(None)
@@ -2821,6 +2818,63 @@ async def test_declared_add_type_routes_generic_type_to_connector(
     )
     assert request_log.args[2]["auth_config"] == "[REDACTED]"
     assert "s3cret" not in str(info_log.call_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_oauth_ref", [False, True])
+async def test_confluence_uses_oauth_ref_only_when_present(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+    with_oauth_ref,
+):
+    connector_config.allowed_add_types = ["confluence"]
+    connector_config.auth = "https://connector.example/oauth/access_token"
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+    reference = {
+        "account_id": "cloud-account",
+        "user_id": "cloud-user",
+        "ov_user_id": "alice",
+        "platform": "confluence",
+        "type": "oauth",
+    }
+    fetch = Mock(return_value={"access_token": " oauth-token ", "expires_at": 4102444800})
+    monkeypatch.setattr(auth.ConnectorClient, "get_oauth_access_token", fetch)
+    args = {
+        "cloud_id": "cloud-1",
+        "resources": [{"type": "page", "id": "123"}],
+    }
+    expected_auth = {"email": "user@example.com", "api_token": "api-token"}
+    if with_oauth_ref:
+        args[auth.OAUTH_REF_ARG] = reference
+    else:
+        args["auth_config"] = expected_auth
+
+    await service.add_resource(
+        path="https://example.atlassian.net/wiki/spaces/ENG/pages/123/Page",
+        ctx=ctx,
+        add_type="confluence",
+        to="viking://resources/kb/confluence",
+        args=args,
+    )
+
+    request = connector_client.submit_doc_add.await_args.kwargs
+    assert request["param_config"] == {
+        "cloud_id": "cloud-1",
+        "resources": [{"type": "page", "id": "123"}],
+        "path": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/Page",
+    }
+    if with_oauth_ref:
+        assert request["auth_config"] == {"access_token": "oauth-token"}
+        fetch.assert_called_once_with(connector_config.auth, ctx.api_key, reference)
+    else:
+        assert request["auth_config"] == expected_auth
+        fetch.assert_not_called()
 
 
 @pytest.mark.asyncio

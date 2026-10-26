@@ -121,14 +121,17 @@ async def _build_request_context(
     plugin.get_request_context_checks(request.url.path, identity)
     account_id = identity.account_id or "default"
     user_id = identity.user_id or "default"
+    group_ids = identity.group_ids
+    if (
+        not group_ids
+        and identity.role != Role.ROOT
+        and _uses_local_account_store(plugin)
+    ):
+        group_ids = await resolve_group_ids(request, account_id, user_id)
     ctx = RequestContext(
         user=UserIdentifier(account_id, user_id),
         role=identity.role,
-        group_ids=(
-            await resolve_group_ids(request, account_id, user_id)
-            if identity.role != Role.ROOT and _uses_local_account_store(plugin)
-            else ()
-        ),
+        group_ids=group_ids,
         actor_peer_id=actor_peer_id,
         from_oauth=identity.from_oauth,
         api_key=api_key,

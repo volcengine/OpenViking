@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import deepcopy
 from types import MappingProxyType
@@ -23,8 +24,13 @@ from langchain_core.messages import (
     convert_to_openai_messages,
 )
 from langchain_core.runnables import RunnableLambda
-from langgraph.store.base import PutOp
-from openviking_sdk.errors import InvalidArgumentError
+from langgraph.store.base import InvalidNamespaceError, PutOp, SearchOp
+from openviking_sdk.errors import (
+    InvalidArgumentError,
+    NotFoundError,
+    PermissionDeniedError,
+    UnavailableError,
+)
 
 import langchain_openviking.client as client_helpers
 from langchain_openviking import (
@@ -1205,10 +1211,20 @@ def test_generic_chat_message_roles_in_recall_query(message, expected):
     assert get_latest_user_text([HumanMessage(content="Earlier question."), message]) == expected
 
 
-def test_session_context_assembler_uses_archive_active_messages_and_recall():
-    client = InMemoryOpenVikingClient(
-        {"viking://resources/runbooks/deploy.md": "Azure deployments use OpenViking context."}
-    )
+@pytest.mark.parametrize("metadata_prefix", ["openviking", "recall", "", "my_recall"])
+@pytest.mark.parametrize(
+    "uri, context_type",
+    [
+        ("viking://resources/runbooks/deploy.md", "resource"),
+        ("viking://user/default/memories/preferences/deploy.md", "memory"),
+        ("viking://skills/deploy.md", "skill"),
+    ],
+)
+def test_session_context_assembler_uses_archive_active_messages_and_recall(
+    metadata_prefix, uri, context_type
+):
+    content = "Azure deployments use OpenViking context. " * 20
+    client = InMemoryOpenVikingClient({uri: content})
     client.add_message("assembler-session", "user", content="Earlier user turn")
     client.add_message("assembler-session", "assistant", content="Earlier assistant turn")
     client.commit_session("assembler-session", enable_working_memory=True)
@@ -1217,7 +1233,9 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall():
     assembler = OpenVikingSessionContextAssembler(
         include_session_context=True,
         client=client,
-        target_uri="viking://resources",
+        retriever=OpenVikingRetriever(
+            client=client, target_uri=uri, metadata_prefix=metadata_prefix, search_mode="search"
+        ),
     )
     assembled = assembler.assemble(session_id="assembler-session", query="azure context")
 
@@ -1227,7 +1245,23 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall():
     assert "Active session messages" in assembled.block
     assert "Active turn" in assembled.block
     assert "Azure deployments" in assembled.block
-    assert assembled.context_parts[0]["type"] == "context"
+    assert assembled.context_parts == [
+        {"type": "context", "uri": uri, "context_type": context_type, "abstract": content[:240]}
+    ]
+    recorder = OpenVikingSessionRecorder(client=client)
+    recorder.record(
+        "assembler-session",
+        [HumanMessage(content="Deployment question"), AIMessage(content="Deployment answer")],
+        context_parts=assembled.context_parts,
+    )
+    assert [
+        part
+        for message in client.sessions["assembler-session"][-2:]
+        for part in message["parts"]
+        if part["type"] == "context"
+    ] == assembled.context_parts
+    asyncio.run(recorder.aclose())
+    asyncio.run(assembler.aclose())
 
 
 def test_session_context_assembler_keeps_peer_id_out_of_recall():
@@ -1609,7 +1643,11 @@ def test_chat_message_history_clear_raises_when_delete_fails():
     assert len(client.sessions["clear-session"]) == 1
 
 
-def test_langgraph_store_round_trip_and_semantic_search():
+@pytest.mark.parametrize(
+    "invalid_namespace",
+    [(), ("users", "", "ada"), ("users", 1), ("users", "ada.profile"), ("langgraph", "ada")],
+)
+def test_langgraph_store_round_trip_and_semantic_search(invalid_namespace):
     client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client)
 
@@ -1640,6 +1678,113 @@ def test_langgraph_store_round_trip_and_semantic_search():
 
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
+    records = dict(client.records)
+    for value in ({"color": "invalid"}, None):
+        with pytest.raises(InvalidNamespaceError):
+            store.put(invalid_namespace, "preferences", value)
+        assert client.records == records
+        with pytest.raises(InvalidNamespaceError):
+            asyncio.run(store.aput(invalid_namespace, "preferences", value))
+        assert client.records == records
+
+    # A None value is a deletion in LangGraph's BaseStore contract.
+    store.put(("users", "ada"), "profile", None)
+    assert store.get(("users", "ada"), "profile") is None
+    assert "profile" not in {found.key for found in store.search(("users",), limit=5)}
+
+    # Deleting a missing key is idempotent and must not create a record.
+    store.put(("users", "ada"), "absent", None)
+    assert store.get(("users", "ada"), "absent") is None
+
+    store.put(("users", "ada"), "preferences", None)
+    store.put(("users", "ada"), "bad-rank", None)
+    assert store.search(("users",), limit=5) == []
+    assert store.list_namespaces(prefix=("users",)) == []
+
+
+@pytest.mark.parametrize("method", ["put", "aput", "batch", "abatch", "delete", "adelete"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_langgraph_store_none_deletes_through_public_store_methods(
+    method: str, existing: bool
+) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada", "memories")
+    other_namespace = ("users", "grace", "memories")
+    store.put(other_namespace, "keep", {"text": "independent memory"})
+    if existing:
+        store.put(namespace, "item", {"text": "memory to remove"})
+
+    if method == "put":
+        store.put(namespace, "item", None)
+    elif method == "aput":
+        asyncio.run(store.aput(namespace, "item", None))
+    elif method == "batch":
+        store.batch([PutOp(namespace, "item", None)])
+    elif method == "abatch":
+        asyncio.run(store.abatch([PutOp(namespace, "item", None)]))
+    elif method == "delete":
+        store.delete(namespace, "item")
+    else:
+        asyncio.run(store.adelete(namespace, "item"))
+
+    assert store.get(namespace, "item") is None
+    assert store.search(namespace) == []
+    assert store.search(namespace, query="memory to remove") == []
+    assert store.list_namespaces() == [other_namespace]
+    assert store.get(other_namespace, "keep").value == {"text": "independent memory"}
+
+
+@pytest.mark.parametrize("index", [False, ["text"]])
+@pytest.mark.parametrize("existing", [False, True])
+def test_langgraph_store_put_none_deletes_with_index_overrides(
+    index: bool | list[str], existing: bool
+) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada")
+    if existing:
+        store.put(namespace, "item", {"text": "memory to remove"})
+
+    store.put(namespace, "item", None, index=index)
+
+    assert store.get(namespace, "item") is None
+    assert store.search(namespace) == []
+    assert store.search(namespace, query="memory to remove") == []
+    assert store.list_namespaces() == []
+
+
+@pytest.mark.parametrize("method", ["put", "aput"])
+@pytest.mark.parametrize("value", [{}, {"number": 0}, {"text": "saved memory"}])
+def test_langgraph_store_dictionary_values_remain_stored(method: str, value: dict) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada")
+    if method == "put":
+        store.put(namespace, "item", value)
+    else:
+        asyncio.run(store.aput(namespace, "item", value))
+
+    assert store.get(namespace, "item").value == value
+    assert store.search(namespace)[0].value == value
+    assert store.list_namespaces() == [namespace]
+
+
+@pytest.mark.parametrize("method", ["put", "aput"])
+@pytest.mark.parametrize("value", [None, {"text": "replacement"}])
+def test_langgraph_store_unsupported_ttl_still_rejects_before_mutation(
+    method: str, value: dict | None
+) -> None:
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    namespace = ("users", "ada")
+    original = {"text": "original memory"}
+    store.put(namespace, "item", original)
+
+    with pytest.raises(NotImplementedError, match="TTL"):
+        if method == "put":
+            store.put(namespace, "item", value, ttl=60)
+        else:
+            asyncio.run(store.aput(namespace, "item", value, ttl=60))
+
+    assert store.get(namespace, "item").value == original
+
 
 @pytest.mark.parametrize("use_batch", [False, True])
 def test_langgraph_store_accepts_mapping_values(use_batch):
@@ -1659,6 +1804,148 @@ def test_langgraph_store_accepts_mapping_values(use_batch):
     assert original == {"color": "azure", "nested": {"rank": 3}}
 
 
+@pytest.mark.parametrize(
+    ("method", "collection", "deindex"),
+    [
+        (method, collection, False)
+        for method in ("delete", "adelete", "put", "aput", "batch", "abatch")
+        for collection in ("data", "index")
+    ]
+    + [(method, "index", True) for method in ("put", "aput", "batch", "abatch")],
+)
+@pytest.mark.parametrize(
+    "error", [PermissionDeniedError(), UnavailableError(), TimeoutError("removal timed out")]
+)
+async def test_langgraph_store_removal_errors_remain_visible_and_retryable(
+    method, collection, deindex, error
+):
+    class FailingRemoveClient(InMemoryOpenVikingClient):
+        fail = True
+
+        def rm(self, uri, recursive=False):
+            if self.fail and f"/{collection}/" in uri:
+                raise error
+            if uri not in self.records:
+                raise NotFoundError(uri)
+            return super().rm(uri, recursive=recursive)
+
+    client = FailingRemoveClient()
+    store = OpenVikingStore(client=client)
+    namespace, key, value = ("users",), "ada", {"color": "azure"}
+    store.put(namespace, key, value)
+    store.put(("other",), key, {"color": "teal"})
+
+    async def mutate():
+        replacement = value if deindex else None
+        index = False if deindex else None
+        if method == "delete":
+            store.delete(namespace, key)
+        elif method == "adelete":
+            await store.adelete(namespace, key)
+        elif method == "put":
+            store.put(namespace, key, replacement, index=index)
+        elif method == "aput":
+            await store.aput(namespace, key, replacement, index=index)
+        else:
+            ops = [
+                PutOp(namespace, key, replacement, index=index),
+                PutOp(namespace, "later", {"written": True}),
+            ]
+            if method == "batch":
+                store.batch(ops)
+            else:
+                await store.abatch(ops)
+
+    with pytest.raises(type(error)) as caught:
+        await mutate()
+    assert str(caught.value) == str(error)
+    assert getattr(caught.value, "code", None) == getattr(error, "code", None)
+    assert bool(store.get(namespace, key)) is (deindex or collection == "data")
+    assert store.get(namespace, "later") is None
+    assert store.get(("other",), key).value == {"color": "teal"}
+
+    client.fail = False
+    await mutate()
+    assert store.search(namespace, query="azure") == []
+    item = store.get(namespace, key)
+    assert (item.value if item else None) == (value if deindex else None)
+    if method in ("batch", "abatch"):
+        assert store.get(namespace, "later").value == {"written": True}
+
+
+@pytest.mark.parametrize("missing_error", [FileNotFoundError, NotFoundError])
+def test_langgraph_store_removal_keeps_missing_targets_idempotent(missing_error):
+    class StrictRemoveClient(InMemoryOpenVikingClient):
+        def rm(self, uri, recursive=False):
+            if uri not in self.records:
+                raise missing_error(uri)
+            return super().rm(uri, recursive=recursive)
+
+    store = OpenVikingStore(client=StrictRemoveClient())
+    namespace, key, value = ("users",), "ada", {"color": "azure"}
+    store.delete(namespace, key)
+    store.put(namespace, key, value, index=False)
+    assert store.get(namespace, key).value == value
+    store.put(namespace, key, value)
+    assert len(store.search(namespace, query="azure")) == 1
+    store.delete(namespace, key)
+    store.delete(namespace, key)
+    assert store.get(namespace, key) is None
+    assert store.search(namespace, query="azure") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", [None, "doc"])
+@pytest.mark.parametrize(
+    "filter, expected",
+    [
+        ({"metadata": {"color": "blue"}}, ["alpha"]),
+        ({"metadata": {"nested": {"owner": "ada"}}}, ["alpha"]),
+        ({"metadata": {"nested": {"rank": {"$gte": 2}}}}, ["alpha"]),
+        ({"metadata": {"detail.region": "eu"}}, ["alpha"]),
+        ({"tags": [{"role": "reviewer"}, "memory"]}, ["alpha"]),
+        ({"tags": [{"role": "reviewer"}]}, []),
+        ({"metadata": {}}, ["alpha", "beta"]),
+        ({"metadata": {"color": "black"}}, []),
+        ({"metadata.nested.rank": {"gte": 2}}, ["alpha"]),
+        ({"metadata.nested": {"$eq": {"rank": 3, "owner": "ada"}}}, ["alpha"]),
+        ({"metadata": {"eq": "blue", "label": "blue"}}, ["scalar"]),
+        ({"metadata": {"$unknown": "blue"}}, ["scalar"]),
+        ({"tags": ["reviewer", "memory"]}, ["scalar"]),
+        ({"kind": "doc"}, ["alpha", "beta", "scalar"]),
+    ],
+)
+async def test_langgraph_store_structured_filters(filter, expected, query):
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    for key, value in {
+        "alpha": {
+            "kind": "doc",
+            "metadata": {
+                "color": "blue",
+                "nested": {"rank": 3, "owner": "ada"},
+                "detail.region": "eu",
+            },
+            "tags": [{"role": "reviewer", "active": True}, "memory"],
+        },
+        "beta": {
+            "kind": "doc",
+            "metadata": {"color": "red", "nested": {"rank": 1, "owner": "bob"}},
+            "tags": [{"role": "reader", "active": True}, "memory"],
+        },
+        "scalar": {"kind": "doc", "metadata": "blue", "tags": ["reviewer", "memory"]},
+    }.items():
+        store.put(("users", "ada"), key, value)
+
+    op = SearchOp(("users",), filter=filter, query=query)
+    results = [
+        store.search(("users",), filter=filter, query=query),
+        await store.asearch(("users",), filter=filter, query=query),
+        store.batch([op])[0],
+        (await store.abatch([op]))[0],
+    ]
+    assert all(sorted(item.key for item in items) == expected for items in results)
+
+
 def test_langgraph_store_semantic_search_keeps_peer_id_out_of_retrieval():
     client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client, actor_peer_id="peer-store")
@@ -1674,6 +1961,71 @@ def test_langgraph_store_rejects_ttl_writes():
 
     with pytest.raises(NotImplementedError, match="TTL is not supported"):
         store.put(("users", "ada"), "temporary", {"note": "expires"}, ttl=60)
+
+
+@pytest.mark.parametrize("use_default", [False, True])
+@pytest.mark.parametrize(
+    ("field", "query", "expected_match"),
+    [
+        ("$", "solstice", True),
+        ("", "solstice", True),
+        ("items[0].text", "pulsar", True),
+        ("items[-1].text", "galaxy", True),
+        ("items[*].text", "galaxy", True),
+        ("nested[*].parts[*].text", "aurora", True),
+        ("metadata.*", "quasar", True),
+        ("{text,metadata.title}", "nebula", True),
+        ("text", "nebula", True),
+        ("metadata.title", "quasar", True),
+        ("absent", "solstice", False),
+        ("literal[0]", "nova", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_langgraph_store_indexes_selected_field_paths(
+    field, query, expected_match, use_default
+):
+    value = {
+        "text": "nebula",
+        "metadata": {"title": "quasar"},
+        "items": [{"text": "pulsar"}, {"text": "galaxy"}],
+        "nested": [{"parts": [{"text": "aurora"}]}],
+        "literal[0]": "nova",
+        "ignored": "solstice",
+    }
+    original = deepcopy(value)
+    for mode in ("put", "aput", "batch", "abatch"):
+        client = InMemoryOpenVikingClient()
+        store = OpenVikingStore(client=client, index=[field] if use_default else None)
+        index = None if use_default else [field]
+        if mode == "put":
+            store.put(("documents",), "note", value, index=index)
+        elif mode == "aput":
+            await store.aput(("documents",), "note", value, index=index)
+        elif mode == "batch":
+            store.batch([PutOp(("documents",), "note", value, index=index)])
+        else:
+            await store.abatch([PutOp(("documents",), "note", value, index=index)])
+
+        assert store.get(("documents",), "note").value == value
+        assert value == original
+        expected_keys = ["note"] if expected_match else []
+        assert [item.key for item in store.search(("documents",), query=query)] == expected_keys
+        filter = {"metadata": {"title": "quasar"}}
+        op = SearchOp(("documents",), query=query, filter=filter)
+        results = [
+            store.search(("documents",), query=query, filter=filter),
+            await store.asearch(("documents",), query=query, filter=filter),
+            store.batch([op])[0],
+            (await store.abatch([op]))[0],
+        ]
+        assert all([item.key for item in items] == expected_keys for items in results)
+        assert (
+            store.search(("documents",), query=query, filter={"metadata": {"title": "absent"}})
+            == []
+        )
+        if field not in {"$", ""}:
+            assert store.search(("documents",), query="solstice") == []
 
 
 def test_langgraph_store_batch_rejects_ttl_writes():
@@ -1700,15 +2052,35 @@ def test_langgraph_store_batch_rejects_ttl_writes():
             "viking://~/memories",
             "viking://user/default/memories",
         ),
+        (
+            "viking://~/peers/support/memories/langgraph_store",
+            "viking://~/peers/support/memories",
+            "viking://user/default/peers/support/memories",
+        ),
+        (
+            "viking://~/peers/support/resources/langgraph_store",
+            "viking://~/peers/support/resources",
+            "viking://user/default/peers/support/resources",
+        ),
+        (
+            "viking://user/default/peers/support/memories/langgraph_store",
+            "viking://user/default/peers/support/memories",
+            "viking://user/default/peers/support/memories",
+        ),
     ],
     ids=[
         "user-memory",
+        "peer-memory",
+        "peer-resource",
+        "explicit-peer-memory",
     ],
 )
+@pytest.mark.parametrize("asynchronous", [False, True])
 def test_langgraph_store_accepts_canonical_result_uris_for_home_alias_root(
     root_uri,
     alias_prefix,
     canonical_prefix,
+    asynchronous,
 ):
     class CanonicalizingClient(InMemoryOpenVikingClient):
         def _canonicalize(self, value):
@@ -1738,11 +2110,30 @@ def test_langgraph_store_accepts_canonical_result_uris_for_home_alias_root(
 
     store.put(("users", "ada"), "preferences", {"color": "azure"})
 
-    semantic = store.search(("users",), query="azure", limit=5)
+    async def read_results():
+        return (
+            await store.aget(("users", "ada"), "preferences"),
+            await store.asearch(("users",)),
+            await store.alist_namespaces(prefix=("users", "*")),
+            await store.asearch(("users",), query="azure", limit=5),
+        )
 
-    assert semantic[0].namespace == ("users", "ada")
-    assert semantic[0].key == "preferences"
-    assert semantic[0].value["color"] == "azure"
+    direct, ordinary, namespaces, semantic = (
+        asyncio.run(read_results())
+        if asynchronous
+        else (
+            store.get(("users", "ada"), "preferences"),
+            store.search(("users",)),
+            store.list_namespaces(prefix=("users", "*")),
+            store.search(("users",), query="azure", limit=5),
+        )
+    )
+    assert direct.value == {"color": "azure"}
+    assert [item.key for item in ordinary] == ["preferences"]
+    assert namespaces == [("users", "ada")]
+    assert [(item.namespace, item.key, item.value) for item in semantic] == [
+        (("users", "ada"), "preferences", {"color": "azure"})
+    ]
 
 
 def test_langgraph_store_ignores_unrelated_canonical_result_uris():
@@ -1761,6 +2152,19 @@ def test_langgraph_store_ignores_unrelated_canonical_result_uris():
         store._parse_index_uri("viking://user/support/memories/other_store/index/users/ada.md")
         is None
     )
+
+    peer_store = OpenVikingStore(
+        client=InMemoryOpenVikingClient(),
+        root_uri="viking://~/peers/support/memories/langgraph_store",
+    )
+    for unrelated_root in (
+        "viking://user/default/peers/other/memories/langgraph_store",
+        "viking://user/default/memories/langgraph_store",
+        "viking://agent/support/memories/langgraph_store",
+        "viking://user/default/peers/support/memories/other_store",
+        "viking://user/default/peers/support/resources/langgraph_store",
+    ):
+        assert peer_store._parse_index_uri(f"{unrelated_root}/index/users/ada.md") is None
 
 
 def test_langgraph_store_waits_for_indexing_by_default():

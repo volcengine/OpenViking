@@ -450,9 +450,11 @@ JSON 输出 - 错误：
 | POST | `/api/v1/watches/{task_id}/trigger` | 按任务 ID 触发 watch |
 | POST | `/api/v1/snapshot/commit` | 创建快照 |
 | GET | `/api/v1/snapshot/log` | 查看快照历史 |
+| GET | `/api/v1/snapshot/versions` | 列出 Compile 产出文件的版本 |
 | POST | `/api/v1/snapshot/restore` | 恢复历史快照 |
 | GET | `/api/v1/snapshot/show` | 查看快照或其中的文件 |
 | GET | `/api/v1/snapshot/diff` | 对比快照 |
+| GET | `/api/v1/snapshot/diff-paths` | 分页列出变化的源文件 |
 | GET | `/api/v1/snapshot/ignore` | 读取快照忽略规则 |
 | PUT | `/api/v1/snapshot/ignore` | 替换快照忽略规则 |
 | DELETE | `/api/v1/snapshot/ignore` | 清空快照忽略规则 |
@@ -501,9 +503,11 @@ JSON 输出 - 错误：
 | POST | `/api/v1/admin/accounts` | 创建账号及首个管理员 |
 | GET | `/api/v1/admin/accounts` | 列出账号 |
 | POST | `/api/v1/admin/migrate` | 迁移旧版身份数据 |
+| GET | `/api/v1/admin/accounts/{account_id}` | 获取单个账号的无凭据元数据 |
 | DELETE | `/api/v1/admin/accounts/{account_id}` | 删除账号 |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 获取单个用户的无凭据成员信息（user_id、role） |
 | GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户记忆策略 |
 | PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户记忆策略 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
@@ -516,6 +520,7 @@ JSON 输出 - 错误：
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 添加用户组成员 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除用户组成员 |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
+| GET | `/api/v1/privacy-configs/tree` | 树形列出当前目标和字段元数据，不返回值 |
 | POST | `/api/v1/privacy-configs/scan` | 扫描或修复正文中的登记值 |
 | GET | `/api/v1/privacy-configs/{category}` | 列出分类目标 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | 获取生效配置 |
@@ -571,6 +576,11 @@ JSON 输出 - 错误：
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
+| GET | `/api/v1/compile/config` | 读取目标配置 |
+| POST | `/api/v1/compile/config/update` | 更新目标配置 |
+| GET | `/api/v1/compile/configs` | 列出可见目标 |
+| GET | `/api/v1/compile/operations` | 列出目标操作记录 |
+| GET | `/api/v1/compile/operations/{operation_id}/outputs` | 列出操作产出及版本引用 |
 | POST | `/api/v1/compile/embeddings` | 生成 Compile 临时路由文本的向量 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
 | GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |

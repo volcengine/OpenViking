@@ -40,6 +40,7 @@ pub mod lock;
 pub mod metrics;
 pub mod multibackend;
 pub mod plugins;
+pub mod privacy_extractor;
 pub mod privacy_matcher;
 pub mod shape;
 

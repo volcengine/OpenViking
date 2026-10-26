@@ -90,6 +90,16 @@ ov status
 
 使用普通 user API key 时，`account` 和 `user` 通常可以省略，因为服务端可以从 key 推导身份。使用 `trusted` 鉴权或租户级操作时，建议显式配置它们。仅 root key 的配置必须显式配置 `account` 和 `user`，因为 root key 本身不包含租户身份。
 
+### 私有 CA 证书
+
+`ov` 同时信任内置的公共 CA 根证书和操作系统原生信任库中的证书。可以把组织的私有 CA 安装到系统信任库，也可以为单次命令通过 `SSL_CERT_FILE` 指定 PEM 证书包：
+
+```bash
+SSL_CERT_FILE=/path/to/company-ca.pem ov health
+```
+
+在 Unix 上，也可以通过 `SSL_CERT_DIR` 指定以冒号分隔的证书目录列表。TLS 证书校验仍然保持启用。
+
 更完整的配置说明见 [docs/zh/getting-started/05-cli-setup.md](../../docs/zh/getting-started/05-cli-setup.md)。
 
 ## 快速开始

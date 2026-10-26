@@ -6,7 +6,7 @@ import copy
 
 import orjson
 
-from ..protocols import strip_thinking, text_content
+from ..protocols import string_type, strip_thinking, text_content
 from .common import (
     SUMMARY_HEADROOM,
     SummaryError,
@@ -94,7 +94,7 @@ class AnthropicProtocol(ToolProtocol):
             blocks = [
                 [position, block]
                 for position, block in enumerate(content if isinstance(content, list) else [])
-                if isinstance(block, dict) and block.get("type") in THINKING
+                if string_type(block) in THINKING
             ]
             if blocks:
                 reasoning[index] = {"blocks": blocks}
@@ -108,7 +108,7 @@ class AnthropicProtocol(ToolProtocol):
         if (
             message.get("role") != "assistant"
             or not isinstance(content, list)
-            or any(isinstance(b, dict) and b.get("type") in THINKING for b in content)
+            or any(string_type(b) in THINKING for b in content)
         ):
             return [message]
         # Blocks go back where the reply had them, so the client's form must equal it without them.

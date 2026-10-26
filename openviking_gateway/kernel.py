@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 
 import orjson
 
-from .blocks import block, gateway_note, history_hint, token_estimate
+from .blocks import RECALL_PROVENANCE_NOTE, block, gateway_note, history_hint, token_estimate
 from .capture import CapturePipeline, lineage
 from .capture_store import Document
 from .client import VikingError
@@ -512,7 +512,7 @@ class MemoryKernel:
             budget = await self.reserve_recall(request, policy, used, window)
             reserved = budget > 0
         tools = request.root["tools"]
-        lead = "Relevant memory from OpenViking."
+        lead = f"Relevant memory from OpenViking. {RECALL_PROVENANCE_NOTE}"
         if any(tool["function"]["name"] == "openviking_read" for tool in tools):
             lead += " Use the openviking_read tool to expand URIs."
         overhead = token_estimate(block("gateway-recall", lead + "\n"))

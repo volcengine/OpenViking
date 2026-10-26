@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Dict, Optional
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_work_index import bind_task_context_from_message, extract_task_metadata
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.reindex_msg import ReindexMsg
@@ -98,9 +100,12 @@ class ReindexProcessor(DequeueHandlerBase):
         }:
             unregister_telemetry(msg.telemetry_id or "")
             return ProcessResult.success()
-        lease = None
+        lock_guard = PathLockGuard(self._viking_fs._async_agfs)
         try:
-            lease = await self._adopt_or_reacquire(msg, ctx)
+            await lock_guard.acquire(lambda: self._adopt_or_reacquire(msg, ctx))
+        except asyncio.CancelledError:
+            await lock_guard.close()
+            raise
         except Exception as exc:
             if await self._requeue_lock_handoff(msg, exc):
                 return ProcessResult.requeued()
@@ -138,8 +143,7 @@ class ReindexProcessor(DequeueHandlerBase):
                 # _run owns an existing lease and releases or hands it off on
                 # every exit path. Clear this consumer's reference before the
                 # call so an exception cannot release the same lease twice.
-                executor_lease = lease
-                lease = None
+                executor_lease = lock_guard.detach()
                 result = await executor._run(
                     uri=msg.uri,
                     object_type=msg.object_type,
@@ -173,8 +177,7 @@ class ReindexProcessor(DequeueHandlerBase):
             )
             return ProcessResult.failed(str(exc))
         finally:
-            if lease is not None:
-                await self._viking_fs._async_agfs.pathlock_release(lease)
+            await lock_guard.close()
             unregister_telemetry(telemetry_id)
 
     async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
@@ -188,9 +191,11 @@ class ReindexProcessor(DequeueHandlerBase):
             return ProcessResult.failed(str(exc))
 
         if msg.lock_handoff is not None:
+            lock_guard = PathLockGuard(self._viking_fs._async_agfs)
             try:
-                lock = await self._viking_fs._async_agfs.pathlock_adopt(msg.lock_handoff)
-                await self._viking_fs._async_agfs.pathlock_release(lock)
+                await lock_guard.adopt(msg.lock_handoff)
             except Exception as exc:
                 logger.warning("[Reindex] Failed to release cancelled lock handoff: %s", exc)
+            finally:
+                await lock_guard.close()
         return ProcessResult.cancelled()

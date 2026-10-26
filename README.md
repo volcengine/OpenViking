@@ -398,6 +398,7 @@ The server supports [accounts and user isolation](https://docs.openviking.ai/en/
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI native distributed file system
 - [loopx](https://github.com/huangruiteng/loopx) - Lightweight loop engineering state kernel
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - The agent that grows with you
+- [NVIDIA cuVS](https://github.com/NVIDIA/cuvs) - GPU-accelerated vector search and clustering library
 
 To propose a partnership, [open an issue](https://github.com/volcengine/OpenViking/issues).
 

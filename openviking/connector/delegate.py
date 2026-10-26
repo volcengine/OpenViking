@@ -28,6 +28,7 @@ import httpx
 
 from openviking.connector.auth import (
     OAUTH_REF_ARG,
+    confluence_auth_config,
     document_auth_config,
     extract_credential_reference,
     project_auth_config,
@@ -57,6 +58,7 @@ from openviking.resource.processing_mode import (
     ProcessingMode,
 )
 from openviking.server.identity import RequestContext
+from openviking.service.task_domain import TaskPatch
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import InternalError, InvalidArgumentError
 from openviking_cli.utils import get_logger
@@ -606,6 +608,9 @@ class ConnectorDelegate:
         if add_type == "feishu_doc" and OAUTH_REF_ARG in (connector_args or {}):
             auth_config = await document_auth_config(connector_args or {}, ctx)
             forwarded_args.pop(OAUTH_REF_ARG, None)
+        if add_type == "confluence" and OAUTH_REF_ARG in (connector_args or {}):
+            auth_config = await confluence_auth_config(connector_args or {}, ctx)
+            forwarded_args.pop(OAUTH_REF_ARG, None)
 
         # Imports carrying an OpenViking-managed credential reference resolve the
         # full auth_config through the unified resolver just before forwarding,
@@ -907,9 +912,9 @@ class ConnectorDelegate:
                     )
                     last_status = status
 
-                await task_tracker.update_stage(
+                await task_tracker.patch_task(
                     ov_task_id,
-                    f"connector:{status}",
+                    TaskPatch(stage=f"connector:{status}"),
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )

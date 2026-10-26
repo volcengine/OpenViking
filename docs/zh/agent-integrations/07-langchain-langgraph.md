@@ -244,7 +244,24 @@ from langchain_openviking import OpenVikingStore
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
+store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该条目
 ```
+
+按 LangGraph `BaseStore` 约定，传入 `None` 作为值表示删除该条目，等价于 `delete()`。
+删除不存在的键不会产生任何影响。
+
+`put()` 会在修改记录前校验命名空间。其他删除错误会向调用方抛出。
+记录和搜索索引文件分别删除；如果只完成其中一步，请解决报告的错误后重试，以完成清理。
+
+读取记录时，仅记录不存在才返回 `None`；权限、后端和 JSON 解析错误会向调用方抛出，
+`put()` 不会在读取失败后覆盖记录。
+`list_namespaces(prefix=("users", "*"))` 中的每个 `*` 匹配一层命名空间，
+也适用于 `viking://~/peers/support/memories/langgraph_store` 这样的 peer 主目录别名。
+
+`search()` 支持 `filter={"metadata": {"color": "blue"}}` 这样的嵌套 JSON 筛选。
+筛选中的 `eq`、`ne`、`gt`、`gte`、`lt`、`lte` 和 `in` 在所有嵌套层级均为保留的运算符别名。
+使用 `index=["items[*].text"]` 可以只索引数组中的指定字段，同时保留完整的存储值。
+已有条目的索引会在再次写入该条目时更新。
 
 ### LangGraph middleware
 
@@ -280,6 +297,11 @@ except OpenVikingPartialWriteError as exc:
 recorder.flush("support-thread-1")
 recorder.close()
 ```
+
+向 `record()` 或 `arecord()` 传入 `commit_policy=` 可仅覆盖本次调用的策略，
+不改变 recorder 的默认值。`None` 使用默认策略；`OpenVikingCommitPolicy(mode="never")`
+禁止本次写入后的新 commit，但仍会重试之前失败的 commit。`history.clear()` 和 `aclear()`
+会在删除或重建失败时抛出异常；重建失败时旧 session 已被删除，待确认的上下文引用不会被确认。
 
 `record()` 只写入调用方传入的消息；它会过滤框架控制消息、按服务端限制分批写入，并应用已配置的
 commit 策略。如果后续批次或写入后的 commit 失败，`OpenVikingPartialWriteError` 会报告已经

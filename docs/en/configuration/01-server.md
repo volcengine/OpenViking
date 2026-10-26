@@ -33,6 +33,7 @@ This outline shows common top-level groups, not a runnable configuration. For a 
   "vlm": {},
   "query_planner": {},
   "rerank": {},
+  "rules": {},
   "retrieval": {},
   "storage": {},
   "server": {},
@@ -56,6 +57,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Model for retrieval intent analysis and recall rewriting. Falls back to `vlm` when omitted or empty; recall rewrite in `auto` mode requires a configured cluster `query_planner` or an account-level `query_planner` or `vlm` override |
 | `rerank` | object | disabled | Retrieval result reranking |
+| `rules` | object | empty config | Optional dedicated models for rule compilation and applicability matching |
 | `retrieval` | object | see below | Ranking and intent-analysis behavior |
 | `grep` | object | built-in defaults | Text search engine |
 | `glob` | object | built-in defaults | Path glob engine |
@@ -147,6 +149,96 @@ API-based `embedding`, `vlm`, `query_planner`, and `rerank` configurations reuse
 
 Changing the model or `dimension` can make existing vector collections incompatible and may require migration or reindexing.
 
+### `rules`
+
+Optional models and lifecycle settings for compiled Rules:
+
+```json
+{
+  "rules": {
+    "jev_rule_matcher": {
+      "provider": "typesafe",
+      "api_key": "${JEV_API_KEY}"
+    },
+    "compiler": {
+      "provider": "openai",
+      "model": "gpt-4o"
+    },
+    "compiler_context_window": 0
+  }
+}
+```
+
+| Field | Type / values | Default | Purpose |
+|---|---|---|---|
+| `jev_rule_matcher` | Jev Noul config / `null` | `null` | Jev Noul matcher for Scenario filtering and Rule applicability |
+| `compiler` | VLM config / `null` | `null` | Dedicated Rule compiler |
+| `compiler_context_window` | `0` or integer `>= 2048` | `0` | Compiler context window; `0` auto-detects with a conservative fallback |
+| `scenario_irrelevance_threshold` | number, `0.5`-`1.0` | `0.9` | Skip a Scenario only at or above this irrelevance probability |
+| `archived_retention_days` | integer, `>= 1` | `30` | Days before archived Rules are permanently removed |
+| `archived_cleanup_interval_seconds` | integer, `>= 60` | `2592000` | Archived-Rule cleanup interval |
+| `archived_cleanup_enabled` | boolean | `true` | Enable periodic archived-Rule cleanup |
+
+Rule compilation always calls the dedicated compiler, or the account VLM fallback,
+with `thinking=true`, overriding its configured default. Use a model that supports
+thinking mode, or compilation may fail.
+
+#### `rules.jev_rule_matcher`
+
+This block configures the independent Jev System One judgments used for Scenario
+filtering and Rule applicability. It does not configure retrieval reranking.
+
+| Field | Type / values | Default | Purpose |
+|---|---|---|---|
+| `provider` | `typesafe`, `vercel`, `openrouter`, `custom` | `typesafe` | Select endpoint and model defaults |
+| `api_key` | string | required | API key for the selected provider |
+| `api_base` | URL / `null` | provider default | Complete System One request URL; an explicit value is used unchanged |
+| `model` | string / `null` | provider default | Model name or endpoint ID; required for `custom` |
+| `timeout` | number | `30` | HTTP request timeout in seconds |
+| `extra_headers` | object / `null` | `null` | Additional HTTP request headers |
+| `log_payloads` | boolean | `false` | Log complete requests and responses; these may contain task and Rule content |
+
+| Provider | Default request URL | Default model | Notes |
+|---|---|---|---|
+| `typesafe` | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | Direct TypeSafe access |
+| `vercel` | `https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | Vercel AI Gateway TypeSafe-compatible API |
+| `openrouter` | `https://openrouter.ai/api/v1/systemone` | `jev-latest` | OpenRouter System One API |
+| `custom` | none | none | Requires both `api_base` and `model` |
+
+`api_base` and `model` override provider defaults independently. An explicit
+`api_base` is the complete POST URL and is never modified, including for `custom`.
+`extra_headers` extends provider headers and can override a provider default.
+Rule matching always uses independent Noul judgments, so it has no `mode`,
+`threshold`, or `max_input_tokens` setting. Configure Scenario filtering with
+`rules.scenario_irrelevance_threshold`; Rule applicability uses the threshold supplied
+as `rule_probability_threshold` in the Rule search request (default `0.65`).
+
+Rule status is `active`, `paused`, or `archived`. `PAUSE` suspends retrieval without
+expiry; `ARCHIVE` starts retention from `archived_at`. `RESTORE` reactivates a paused
+Rule. Compilation considers active and paused Rules; archived Rules are logically
+deleted, are not compiler candidates, and cannot be restored through Rule compilation.
+`ARCHIVE` requires explicit deletion, discard, or recycle-bin intent in the user's
+instruction; non-deletion deactivation requests use `PAUSE`.
+
+Rules live directly in `memories/rules/<scenario_id>/`: `abstract.md` stores Scenario
+metadata and `<atomic_id>.md` stores each Rule. See
+[Rule Scenarios](../concepts/17-rule-scenarios.md) for the storage format.
+
+When `jev_rule_matcher` is unconfigured, unavailable, fails, or returns invalid
+results, Scenario and Rule judgments pass the candidates without calling a VLM.
+Scenario diagnostics record `decision=pass`.
+Rules return `judge=pass`, a warning, and score `1.0` to pass the threshold; this score
+is not a model-estimated applicability probability. Agents still check applicability
+and exceptions against task facts. Compilation falls back from `compiler` to the
+account VLM. The former `rule_matcher` setting has been removed and is no longer read.
+
+Rule `applies_when` may be empty and defaults to an empty string. Empty means
+applicable in every situation unless `exception` holds. Candidates with neither an
+applicability condition nor an exception receive probability `1.0` directly.
+The Compiler prefers faithful, non-empty, decidable conditions derived from source
+objects, operations, prerequisites, and scenarios. It must not invent triggers or
+discard source restrictions. Empty does not mean unknown or inapplicable.
+
 ### `rerank`
 
 | Field | Type / values | Default | Purpose |
@@ -160,7 +252,7 @@ Changing the model or `dimension` can make existing vector collections incompati
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
-`jev` supports direct TypeSafe access (`https://api.typesafe.ai`, model `jev-latest`) and Vercel AI Gateway's TypeSafe-compatible endpoint (`https://ai-gateway.vercel.sh/typesafe`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields; both speak the same protocol. Its default `noul` mode scores each candidate independently. The optional `choice` mode compares all candidates and returns relative probabilities; set `threshold` to `0` when using it. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
+`jev` supports direct TypeSafe access (`https://api.typesafe.ai/v1/systemone`, model `jev-latest`) and Vercel AI Gateway's TypeSafe-compatible endpoint (`https://ai-gateway.vercel.sh/typesafe/v1/systemone`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields; both speak the same protocol. For rerank, `api_base` may be either the service root or the complete System One URL; `/v1/systemone` is appended when absent. Its default `noul` mode scores each candidate independently. The optional `choice` mode compares all candidates and returns relative probabilities; set `threshold` to `0` when using it. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
 
 ## Retrieval Settings
 

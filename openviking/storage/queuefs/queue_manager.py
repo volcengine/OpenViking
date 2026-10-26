@@ -95,6 +95,7 @@ class QueueManager:
     EXTERNAL_PARSE = "ExternalParse"
     ADD_RESOURCE = "AddResource"
     REINDEX = "Reindex"
+    CONTENT_WRITE = "ContentWrite"
     SESSION_COMMIT = "SessionCommit"
     EXTERNAL_TASK = "ExternalTask"
     # Account and user cleanup share one consumer. Retain the persisted name

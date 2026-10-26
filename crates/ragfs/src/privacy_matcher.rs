@@ -5,7 +5,13 @@
 //! references; RAGFS owns only automaton construction and text rewriting.
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
+use regex::Regex;
 use std::collections::HashSet;
+use std::sync::LazyLock;
+
+static PRIVACY_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\{\{[ \t]*ov_privacy:[^{}\r\n]+\}\}").expect("fixed reference regex")
+});
 
 /// Replacement emitted for one non-overlapping leftmost-longest match.
 #[derive(Clone, PartialEq, Eq)]
@@ -24,6 +30,15 @@ pub struct PrivacySanitizeResult {
     /// Rewritten UTF-8 text.
     pub content: String,
     /// Non-overlapping replacements in source order.
+    pub replacements: Vec<PrivacyReplacement>,
+    /// Reference candidates for ambiguous values that occurred in the input.
+    pub ambiguous_references: Vec<Vec<String>>,
+}
+
+/// Match metadata without a rewritten copy of the input.
+#[derive(Default)]
+pub struct PrivacyMatchResult {
+    /// Non-overlapping replacements in source order, using character offsets.
     pub replacements: Vec<PrivacyReplacement>,
     /// Reference candidates for ambiguous values that occurred in the input.
     pub ambiguous_references: Vec<Vec<String>>,
@@ -109,37 +124,73 @@ impl PrivacyMatcher {
         content: &str,
         max_replacements: usize,
     ) -> (PrivacySanitizeResult, bool) {
-        let Some(matcher) = &self.matcher else {
-            return (
-                PrivacySanitizeResult {
-                    content: content.to_string(),
-                    replacements: Vec::new(),
-                    ambiguous_references: Vec::new(),
-                },
-                false,
-            );
-        };
-
         let mut rewritten = String::with_capacity(content.len());
-        let mut replacements = Vec::new();
-        let mut ambiguous_references = Vec::new();
+        let mut cursor = 0;
+        let (result, exceeded) =
+            self.visit_matches_limited(content, max_replacements, |start, end, reference| {
+                rewritten.push_str(&content[cursor..start]);
+                rewritten.push_str(reference);
+                cursor = end;
+            });
+        if exceeded {
+            rewritten = content.to_string();
+        } else {
+            rewritten.push_str(&content[cursor..]);
+        }
+        (
+            PrivacySanitizeResult {
+                content: rewritten,
+                replacements: result.replacements,
+                ambiguous_references: result.ambiguous_references,
+            },
+            exceeded,
+        )
+    }
+
+    /// Find matches without constructing rewritten text.
+    ///
+    /// Exceeding the replacement limit discards all partial metadata, just as
+    /// `sanitize_limited` does.
+    pub fn find_limited(
+        &self,
+        content: &str,
+        max_replacements: usize,
+    ) -> (PrivacyMatchResult, bool) {
+        self.visit_matches_limited(content, max_replacements, |_, _, _| {})
+    }
+
+    fn visit_matches_limited(
+        &self,
+        content: &str,
+        max_replacements: usize,
+        mut on_match: impl FnMut(usize, usize, &str),
+    ) -> (PrivacyMatchResult, bool) {
+        let mut result = PrivacyMatchResult::default();
+        let Some(matcher) = &self.matcher else {
+            return (result, false);
+        };
         let mut source_byte_cursor = 0;
         let mut source_char_cursor = 0;
+        let mut references = PRIVACY_REFERENCE.find_iter(content).peekable();
 
         for matched in matcher.find_iter(content) {
-            if replacements.len() >= max_replacements {
-                return (
-                    PrivacySanitizeResult {
-                        content: content.to_string(),
-                        replacements: Vec::new(),
-                        ambiguous_references: Vec::new(),
-                    },
-                    true,
-                );
+            while references
+                .peek()
+                .is_some_and(|item| item.end() <= matched.start())
+            {
+                references.next();
+            }
+            if references
+                .peek()
+                .is_some_and(|item| item.start() < matched.end())
+            {
+                continue;
+            }
+            if result.replacements.len() >= max_replacements {
+                return (PrivacyMatchResult::default(), true);
             }
             let start = matched.start();
             let end = matched.end();
-            rewritten.push_str(&content[source_byte_cursor..start]);
             source_char_cursor += content[source_byte_cursor..start].chars().count();
             let char_start = source_char_cursor;
             source_char_cursor += content[start..end].chars().count();
@@ -149,32 +200,19 @@ impl PrivacyMatcher {
             let reference = match target {
                 PatternTarget::Reference(reference) => reference.clone(),
                 PatternTarget::Ambiguous(candidates) => {
-                    ambiguous_references.push(candidates.clone());
+                    result.ambiguous_references.push(candidates.clone());
                     self.ambiguous_placeholder.clone()
                 }
             };
-            rewritten.push_str(&reference);
-            replacements.push(PrivacyReplacement {
+            on_match(start, end, &reference);
+            result.replacements.push(PrivacyReplacement {
                 start: char_start,
                 end: char_end,
                 reference,
             });
             source_byte_cursor = end;
         }
-        if replacements.is_empty() {
-            rewritten.push_str(content);
-        } else {
-            rewritten.push_str(&content[source_byte_cursor..]);
-        }
-
-        (
-            PrivacySanitizeResult {
-                content: rewritten,
-                replacements,
-                ambiguous_references,
-            },
-            false,
-        )
+        (result, false)
     }
 }
 
@@ -199,52 +237,59 @@ mod tests {
     }
 
     #[test]
-    fn uses_leftmost_longest_and_unicode_character_offsets() {
+    fn registered_values_preserve_references_and_report_unicode_spans() {
+        let reference = "{{ov_privacy:default:viking://~/privacy/session/demo#/values/key}}";
         let matcher = matcher(vec![
             ("秘密", vec!["short"]),
             ("秘密值", vec!["long"]),
-            ("token", vec!["token-ref"]),
+            ("session", vec!["ref-b", "ref-a", "ref-a"]),
+            ("default", vec!["owner-ref"]),
         ]);
-        let result = matcher.sanitize("前缀秘密值 token");
-        assert_eq!(result.content, "前缀long token-ref");
-        assert_eq!(result.replacements.len(), 2);
+        let input = format!("🙂秘密值 {reference} session default");
+        let (found, exceeded) = matcher.find_limited(&input, 3);
+        assert!(!exceeded);
+        let spans: Vec<_> = found
+            .replacements
+            .iter()
+            .map(|hit| (hit.start, hit.end, hit.reference.as_str()))
+            .collect();
+        let end = input.chars().count();
         assert_eq!(
-            (result.replacements[0].start, result.replacements[0].end),
-            (2, 5)
+            spans,
+            vec![
+                (1, 4, "long"),
+                (end - 15, end - 8, "{{ov_privacy:ambiguous}}"),
+                (end - 7, end, "owner-ref"),
+            ]
         );
+        assert_eq!(found.ambiguous_references, vec![vec!["ref-a", "ref-b"]]);
         assert_eq!(
-            (result.replacements[1].start, result.replacements[1].end),
-            (6, 11)
+            matcher.sanitize(&input).content,
+            format!("🙂long {reference} {{{{ov_privacy:ambiguous}}}} owner-ref")
         );
     }
 
     #[test]
-    fn reports_ambiguity_without_exposing_pattern() {
-        let matcher = matcher(vec![("secret", vec!["ref-b", "ref-a", "ref-a"])]);
-        let result = matcher.sanitize("x secret y");
-        assert_eq!(result.content, "x {{ov_privacy:ambiguous}} y");
-        assert_eq!(result.ambiguous_references, vec![vec!["ref-a", "ref-b"]]);
-    }
-
-    #[test]
-    fn empty_catalog_is_a_noop() {
-        let matcher = PrivacyMatcher::new(Vec::new(), "ambiguous").unwrap();
-        let result = matcher.sanitize("unchanged");
-        assert_eq!(result.content, "unchanged");
-        assert!(result.replacements.is_empty());
-    }
-
-    #[test]
-    fn limited_scan_stops_without_returning_partial_rewrites() {
-        let matcher = matcher(vec![("secret", vec!["ref"])]);
-        let (result, limit_exceeded) = matcher.sanitize_limited("secret secret secret", 2);
-        assert!(limit_exceeded);
-        assert_eq!(result.content, "secret secret secret");
-        assert!(result.replacements.is_empty());
-
-        let (result, limit_exceeded) = matcher.sanitize_limited("secret secret", 2);
-        assert!(!limit_exceeded);
-        assert_eq!(result.content, "ref ref");
-        assert_eq!(result.replacements.len(), 2);
+    fn match_limits_discard_partial_rewrites_and_metadata() {
+        let matcher = matcher(vec![
+            ("secret", vec!["ref"]),
+            ("shared", vec!["ref-a", "ref-b"]),
+        ]);
+        for (input, expected, exceeded) in [
+            ("shared secret", "{{ov_privacy:ambiguous}} ref", false),
+            ("shared secret secret", "shared secret secret", true),
+        ] {
+            let (rewritten, rewrite_exceeded) = matcher.sanitize_limited(input, 2);
+            let (found, find_exceeded) = matcher.find_limited(input, 2);
+            assert_eq!(rewrite_exceeded, exceeded);
+            assert_eq!(find_exceeded, exceeded);
+            assert_eq!(rewritten.content, expected);
+            assert_eq!(found.replacements.len(), if exceeded { 0 } else { 2 });
+            if exceeded {
+                assert!(rewritten.replacements.is_empty());
+                assert!(rewritten.ambiguous_references.is_empty());
+                assert!(found.ambiguous_references.is_empty());
+            }
+        }
     }
 }

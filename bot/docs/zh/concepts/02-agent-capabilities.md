@@ -38,6 +38,7 @@ Skill 可以编排多个工具，但不会自动获得额外权限。工具是�
 | 命令 | `exec` | 在沙箱后端执行 shell 命令 |
 | 网络 | `web_search`、`web_fetch` | 搜索和读取网页 |
 | OpenViking | `openviking_list/search/grep/glob/multi_read` | 浏览、检索和读取上下文 |
+| OpenViking | `openviking_rule_search` | 检索适用于具体任务的已编译约束 |
 | OpenViking | `openviking_add_resource`、`openviking_memory_commit` | 添加资源和提交记忆 |
 | 对外操作 | `message`、`generate_image` | 主动发送消息或生成图片 |
 | 自动化 | `cron` | 管理定时 Agent 任务，默认关闭 |

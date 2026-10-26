@@ -24,6 +24,7 @@ from openviking.service.task_domain import (
     TERMINAL_TASK_STATUSES,
     DeletedTask,
     DeleteExpiredResult,
+    TaskPatch,
     TaskRecord,
     TaskRetentionPolicy,
     TaskStatus,
@@ -205,29 +206,10 @@ class TaskWorkStore(Protocol):
         user_id: Optional[str],
     ) -> StoreOperationResult: ...
 
-    async def update_stage(
+    async def patch_task(
         self,
         task_id: str,
-        stage: str,
-        *,
-        meta: Optional[Dict[str, Any]],
-        account_id: Optional[str],
-        user_id: Optional[str],
-    ) -> StoreOperationResult: ...
-
-    async def update_auth(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> StoreOperationResult: ...
-
-    async def merge_meta(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
+        patch: TaskPatch,
         *,
         account_id: str,
         user_id: str,
@@ -264,24 +246,6 @@ class TaskWorkStore(Protocol):
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult: ...
-
-    async def mark_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> StoreOperationResult: ...
-
-    async def is_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> bool: ...
 
     async def add_work(
         self, work: WorkRecord, *, account_id: str, user_id: str
@@ -507,53 +471,20 @@ class PersistentTaskStore(TaskWorkStore):
 
         return await self._mutate_task(task_id, account_id, user_id, mutate)
 
-    async def update_stage(
+    async def patch_task(
         self,
         task_id: str,
-        stage: str,
-        *,
-        meta: Optional[Dict[str, Any]],
-        account_id: Optional[str],
-        user_id: Optional[str],
-    ) -> StoreOperationResult:
-        def mutate(task: TaskRecord, _work_set: _WorkSet) -> StoreOperationResult:
-            if task.status not in ACTIVE_TASK_STATUSES:
-                return _inactive_task_result(task, "Task stage cannot be updated")
-            task.stage = stage
-            if meta:
-                _deep_merge(task.meta, deepcopy(meta))
-            return StoreOperationResult.applied()
-
-        return await self._mutate_task(task_id, account_id, user_id, mutate)
-
-    async def update_auth(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
+        patch: TaskPatch,
         *,
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult:
         def mutate(task: TaskRecord, _work_set: _WorkSet) -> StoreOperationResult:
             if task.status not in ACTIVE_TASK_STATUSES:
-                return _inactive_task_result(task, "Task auth cannot be updated")
-            _deep_merge(task.auth, deepcopy(values))
-            return StoreOperationResult.applied()
-
-        return await self._mutate_task(task_id, account_id, user_id, mutate)
-
-    async def merge_meta(
-        self,
-        task_id: str,
-        values: Dict[str, Any],
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> StoreOperationResult:
-        def mutate(task: TaskRecord, _work_set: _WorkSet) -> StoreOperationResult:
-            if task.status not in (TaskStatus.PENDING, TaskStatus.RUNNING):
-                return _inactive_task_result(task, "Task meta cannot be updated")
-            _deep_merge(task.meta, deepcopy(values))
+                return _inactive_task_result(task, "Task cannot be patched")
+            if patch.is_empty():
+                return StoreOperationResult.noop()
+            _apply_task_patch(task, patch)
             return StoreOperationResult.applied()
 
         return await self._mutate_task(task_id, account_id, user_id, mutate)
@@ -648,40 +579,6 @@ class PersistentTaskStore(TaskWorkStore):
             return StoreOperationResult.applied()
 
         return await self._mutate_task(task_id, account_id, user_id, mutate)
-
-    async def mark_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> StoreOperationResult:
-        def mutate(task: TaskRecord, _work_set: _WorkSet) -> StoreOperationResult:
-            if task.status not in ACTIVE_TASK_STATUSES:
-                return StoreOperationResult.noop(
-                    StoreOperationCode.ALREADY_TERMINAL,
-                    f"Task is already {task.status.value}",
-                )
-            completed = set(task.auth.get("enqueue_complete_work_ids") or ())
-            if work_id in completed:
-                return StoreOperationResult.noop(StoreOperationCode.DUPLICATE)
-            completed.add(work_id)
-            task.auth["enqueue_complete_work_ids"] = sorted(completed)
-            return StoreOperationResult.applied()
-
-        return await self._mutate_task(task_id, account_id, user_id, mutate)
-
-    async def is_enqueue_complete(
-        self,
-        task_id: str,
-        work_id: str,
-        *,
-        account_id: str,
-        user_id: str,
-    ) -> bool:
-        task = await self.get_task(task_id, account_id=account_id, user_id=user_id)
-        return bool(task and work_id in set(task.auth.get("enqueue_complete_work_ids") or ()))
 
     async def add_work(
         self, work: WorkRecord, *, account_id: str, user_id: str
@@ -1693,6 +1590,33 @@ def _deep_merge(target: Dict[str, Any], values: Dict[str, Any]) -> None:
             _deep_merge(target[key], value)
         else:
             target[key] = value
+
+
+def _apply_task_patch(task: TaskRecord, patch: TaskPatch) -> None:
+    if "result" in patch.clear_fields:
+        task.result = None
+    elif patch.result is not None:
+        task.result = deepcopy(patch.result)
+
+    if "stage" in patch.clear_fields:
+        task.stage = None
+    elif patch.stage is not None:
+        task.stage = patch.stage
+
+    if "meta" in patch.clear_fields:
+        task.meta = {}
+    elif patch.meta is not None:
+        _deep_merge(task.meta, deepcopy(patch.meta))
+
+    if "auth" in patch.clear_fields:
+        task.auth = {}
+    elif patch.auth is not None:
+        _deep_merge(task.auth, deepcopy(patch.auth))
+
+    if patch.add_enqueue_complete_work_ids:
+        completed = set(task.auth.get("enqueue_complete_work_ids") or ())
+        completed.update(patch.add_enqueue_complete_work_ids)
+        task.auth["enqueue_complete_work_ids"] = sorted(completed)
 
 
 def _inactive_task_result(task: TaskRecord, message: str) -> StoreOperationResult:

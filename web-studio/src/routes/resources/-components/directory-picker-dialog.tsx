@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronRight, FolderIcon, FolderOpen } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
@@ -29,6 +30,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 interface DirectoryPickerDialogProps {
+  emptyAction?: ReactNode
   userResourceRoot?: string
   identityScopeKey?: string
   open: boolean
@@ -55,6 +57,7 @@ function parseBreadcrumbs(uri: string): Array<{ label: string; uri: string }> {
 }
 
 export function DirectoryPickerDialog({
+  emptyAction,
   identityScopeKey = 'default',
   userResourceRoot,
   open,
@@ -189,6 +192,7 @@ export function DirectoryPickerDialog({
             <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
               <FolderOpen className="size-8" />
               <p className="text-sm">{t('dirPicker.empty')}</p>
+              {emptyAction}
             </div>
           )}
         </ScrollArea>

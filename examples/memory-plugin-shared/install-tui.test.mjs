@@ -58,6 +58,7 @@ SEL_CURSOR_APP=1
 SEL_TRAE=1
 SEL_TRAE_CN=0
 SEL_KIMICODE=0
+SEL_CODEBUDDY=0
 tui_finish_selection
 printf '%s\\n' "$SELECTED_HARNESSES"
 `);

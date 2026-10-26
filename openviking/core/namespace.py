@@ -14,6 +14,7 @@ from openviking_cli.utils.uri import VikingURI
 _CONTENT_TYPES_BY_SCOPE = {
     "user": {"memories": "memory", "resources": "resource", "skills": "skill"},
     "agent": {"skills": "skill"},
+    "system": {"example-skills": "skill"},
 }
 _PEER_CONTENT_SEGMENTS = frozenset({"memories", "resources"})
 _USER_RELATIVE_ROOT_SEGMENTS = frozenset({"peers", "privacy", "sessions"})
@@ -50,6 +51,10 @@ class UriClassification:
     @property
     def is_skill(self) -> bool:
         return self.context_type == "skill"
+
+    @property
+    def is_system(self) -> bool:
+        return self.scope == "system"
 
     @property
     def is_user_namespace_root(self) -> bool:
@@ -115,6 +120,8 @@ def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
     """Return the content segment for a supported namespace shape."""
     if len(parts) >= 2 and parts[:2] == ("agent", "skills"):
         return 1
+    if len(parts) >= 3 and parts[:3] == ("system", "compile", "example-skills"):
+        return 2
     if len(parts) < 2 or parts[0] != "user":
         return None
     if len(parts) >= 5 and parts[2] == "peers" and parts[4] in _PEER_CONTENT_SEGMENTS:
