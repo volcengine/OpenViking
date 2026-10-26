@@ -22,7 +22,7 @@ from openviking_gateway.tool_loop import REFUSED
     ],
 )
 async def test_http_replay_and_client_visibility(running_gateway, path, protocol):
-    _, client, _, key, seen, _ = running_gateway
+    _, client, admin, key, seen, _ = running_gateway
     headers = {
         "Authorization": "Bearer " + key["key"],
         "X-OpenViking-Session": "chat-1",
@@ -50,6 +50,39 @@ async def test_http_replay_and_client_visibility(running_gateway, path, protocol
     assert seen[-1][2].get(
         "Authorization", seen[-1][2].get("x-api-key", seen[-1][2].get("X-Api-Key"))
     ) in {"Bearer model-secret", "model-secret"}
+    logs = (await client.get("/admin/logs", headers=admin)).json()
+    assert (
+        logs[0]["upstream_response_id"]
+        == {
+            "chat": "r-1",
+            "anthropic": "msg-1",
+            "responses": "resp-1",
+        }[protocol]
+    )
+
+
+async def test_request_log_omits_a_missing_upstream_response_id(running_gateway):
+    app, client, admin, key, _, _ = running_gateway
+
+    async def handler(request):
+        if request.path != "/v1/chat/completions":
+            return None
+        return web.json_response(
+            {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                ]
+            }
+        )
+
+    app.state.test_backend["handler"] = handler
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer " + key["key"]},
+        json={"model": "model", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert response.status_code == 200, response.text
+    assert "upstream_response_id" not in (await client.get("/admin/logs", headers=admin)).json()[0]
 
 
 @pytest.mark.parametrize("client_name", ["claude-code", "codex-cli", "openai-python"])

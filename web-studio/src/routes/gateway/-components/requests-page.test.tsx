@@ -80,6 +80,7 @@ const RECORDS: LogRecord[] = [
   {
     time: NOW - 30,
     request_id: 'req-user',
+    upstream_response_id: 'chatcmpl-provider-42',
     kind: 'user',
     model: 'gpt-5',
     status: 200,
@@ -309,6 +310,24 @@ describe('RequestsPage', () => {
     expect(await screen.findByText('No matching requests')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
     expect(await screen.findByText('claude-sonnet')).toBeTruthy()
+  })
+
+  it('searches and exposes the upstream response ID', async () => {
+    renderPage()
+    await screen.findByText('gpt-5')
+    fireEvent.change(
+      screen.getByRole('searchbox', {
+        name: 'Search model, conversation or key',
+      }),
+      { target: { value: 'chatcmpl-provider-42' } },
+    )
+    await waitFor(() => expect(screen.queryByText('gpt-5-mini')).toBeNull())
+    expand('gpt-5')
+    expect(screen.getByText('Upstream response ID')).toBeTruthy()
+    expect(screen.getByText('chatcmpl-provider-42')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: 'Copy upstream response ID' }),
+    ).toBeTruthy()
   })
 
   it('finds a conversation by the id the client sent', async () => {

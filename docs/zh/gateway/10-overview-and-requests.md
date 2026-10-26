@@ -56,7 +56,7 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | **异常** | 降级请求、对话保存处于**重试中**或**已暂停**的请求，以及服务商返回 HTTP 400 及以上状态码的请求（见[上游返回错误](12-troubleshooting.md#the-upstream-returned-an-error)） |
 | **请求类型** | 某一种[请求类型](#request-types) |
 
-搜索范围包括模型、对话 ID、请求 ID、密钥名称或前缀，以及上游名称。日志只保存对话 ID 的哈希，所以 Studio 会先在浏览器里对粘贴的对话 ID 求哈希再匹配。这要求 Studio 通过 HTTPS 或 localhost 打开；用普通 HTTP 打开时，按对话 ID 搜索什么也找不到。
+搜索范围包括模型、对话 ID、请求 ID、上游响应 ID、密钥名称或前缀，以及上游名称。日志只保存对话 ID 的哈希，所以 Studio 会先在浏览器里对粘贴的对话 ID 求哈希再匹配。这要求 Studio 通过 HTTPS 或 localhost 打开；用普通 HTTP 打开时，按对话 ID 搜索什么也找不到。
 
 ### 各列含义 {#columns}
 
@@ -83,7 +83,7 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 
 展开一行可以看到：
 
-- 对话 ID、上游、网关密钥和耗时
+- 网关请求 ID、上游响应 ID（如有）、对话 ID、上游、网关密钥和耗时
 - token 明细
 - 记忆检索结果
 - 上下文窗口用量，以及历史是否经过压缩、模型是否开启了新窗口

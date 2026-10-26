@@ -346,6 +346,8 @@ class ProxyRequest:
 
     async def finish(self):
         self.metrics.update(self.capture.usage or {})
+        if self.capture.response_id:
+            self.metrics["upstream_response_id"] = self.capture.response_id
         if self.upstream.get("vendor") in ARK_VENDORS:
             self.metrics["cache_min_tokens"] = self.upstream.get("cache_min_tokens", 1024)
             self.metrics["cache_eligible"] = (
