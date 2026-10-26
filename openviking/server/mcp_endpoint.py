@@ -62,7 +62,6 @@ from openviking.server.auth import (
     _extract_api_key,
     get_api_key_manager_or_raise,
     normalize_actor_peer_header,
-    registry_watcher_running,
     resolve_identity,
     should_expose_user_key,
 )
@@ -373,8 +372,6 @@ async def list_users(
     if include_credentials and not should_expose_user_key(request):
         raise PermissionDeniedError("Credential disclosure is disabled in trusted auth mode")
     manager = get_api_key_manager_or_raise(request)
-    if not registry_watcher_running(request):
-        await manager.refresh_account_users_from_store(ctx.account_id)
     result = manager.get_users_page(
         ctx.account_id,
         limit=limit,

@@ -889,8 +889,6 @@ async def list_users(
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
-    if not registry_watcher_running(request):
-        await manager.refresh_account_users_from_store(account_id)
     expose_key = should_expose_user_key(request)
     users = manager.get_users_page(
         account_id,

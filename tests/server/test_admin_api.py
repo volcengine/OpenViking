@@ -2004,34 +2004,51 @@ async def test_list_accounts_without_watcher_reads_only_accounts_registry(
     assert read_paths == ["/local/_system/accounts.json"]
 
 
-async def test_list_users_without_watcher_reads_only_target_user_registry(
+async def test_list_users_reads_memory_without_storage(
     lightweight_admin_client: httpx.AsyncClient,
     lightweight_admin_app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Without a watcher, user listing must not load unrelated registries."""
+    """HTTP and MCP list locally registered users even when storage is unavailable."""
+    from types import SimpleNamespace
+
+    from openviking.server import mcp_endpoint
+
     acct = _uid()
     await lightweight_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    manager = lightweight_admin_app.state.api_key_manager
-    original_read_json = manager._legacy._read_json
-    read_paths: list[str] = []
-
-    async def _record_read(path: str):
-        read_paths.append(path)
-        return await original_read_json(path)
-
-    monkeypatch.setattr(manager._legacy, "_read_json", _record_read)
+    created = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200, created.text
+    monkeypatch.setattr(
+        lightweight_admin_app.state.fake_service.viking_fs.agfs,
+        "read",
+        Mock(side_effect=OSError("registry storage unavailable")),
+    )
 
     resp = await lightweight_admin_client.get(
         f"/api/v1/admin/accounts/{acct}/users", headers=root_headers()
     )
 
     assert resp.status_code == 200, resp.text
-    assert read_paths == [f"/local/{acct}/_system/users.json"]
+    assert [user["user_id"] for user in resp.json()["result"]] == ["alice", "bob"]
+
+    request = FastAPIRequest({"type": "http", "app": lightweight_admin_app})
+    context = SimpleNamespace(request_context=SimpleNamespace(request=request))
+    token = mcp_endpoint._mcp_ctx.set(RequestContext(UserIdentifier(acct, "alice"), Role.ADMIN))
+    try:
+        assert await mcp_endpoint.list_users(context) == {
+            "users": [{"user_id": "alice"}, {"user_id": "bob"}],
+            "total": 2,
+        }
+    finally:
+        mcp_endpoint._mcp_ctx.reset(token)
 
 
 async def test_list_users_for_default_account_without_users_file_returns_empty_list(

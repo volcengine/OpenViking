@@ -1272,6 +1272,8 @@ ov admin register-user acme bob-private --role user \
 
 列出工作区中的活跃用户。正在删除中的用户不会返回。
 
+HTTP 和 MCP 的 `list_users` 都直接读取当前进程的内存用户登记信息，查询时不刷新文件。本进程完成的用户修改立即可见；其他进程的修改在后台 watcher 同步或登记信息重新加载后可见。
+
 **处理流程：**
 1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
 2. 调用 API Key Manager 获取活跃用户列表（按创建顺序排列）
