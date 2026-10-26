@@ -19,7 +19,14 @@ from pydantic import ValidationError
 from .capture import reset_capture
 from .client import VikingError
 from .config import MOUNT_PATH
-from .models import CaptureReset, KeyRequest, Policy, Upstream, UpstreamTestRequest
+from .models import (
+    CaptureReset,
+    KeyRequest,
+    Policy,
+    Upstream,
+    UpstreamTestRequest,
+    validation_detail,
+)
 from .overview import overview_summary
 from .protocols import text_content
 from .proxy import fill_key, upstream_headers, upstream_key, upstream_url
@@ -113,13 +120,7 @@ async def read_body(request, model, prepare=None):
         payload = await request.json()
         return model.model_validate(prepare(payload) if prepare else payload)
     except ValidationError as error:
-        fail(
-            422,
-            "invalid_configuration",
-            "; ".join(
-                item["msg"] for item in error.errors(include_input=False, include_context=False)
-            ),
-        )
+        fail(422, "invalid_configuration", validation_detail(error))
     except ValueError:
         fail(422, "invalid_configuration")
 
@@ -191,6 +192,37 @@ async def caller(request, *, require_identity=True, write=False):
     if write and not can_write:
         fail(403, "management_key_required")
     return Caller(account, credential, identity, manager, can_write)
+
+
+async def register_user(app, account_id, user_id):
+    """Record a new key's user and lift an earlier deletion of their gateway data."""
+    for protocol in ("anthropic", "chat", "responses"):
+        await app.state.store.allow_scope(digest(account_id + "\0" + user_id + "\0" + protocol))
+    await app.state.management.save(account_id, "users", user_id, {"user_id": user_id})
+
+
+async def openviking_credential(app, key):
+    """The record an OpenViking API key used as a gateway key authenticates with.
+
+    The first request confirms the key with OpenViking and stores it like an issued key;
+    its binding is resolved per request (``resolve_binding``).
+    """
+    identifier = digest("openviking\0" + key)
+    if credential := await app.state.management.credential(identifier):
+        return credential
+    identity = await app.state.viking.health(key)
+    account, user_id = identity["account_id"], identity["user_id"]
+    stored = {
+        "source": "openviking",
+        "openviking_key": key,
+        "user_id": user_id,
+        # Current keys are "<account>.<user>.<secret>": only the secret tells them apart.
+        "prefix": key.rsplit(".", 1)[-1][:8],
+        "created_at": time.time(),
+    }
+    await app.state.management.save(account, "keys", identifier, stored)
+    await register_user(app, account, user_id)
+    return await app.state.management.credential(identifier)
 
 
 async def import_vlm_objects(app, account_id):
@@ -340,9 +372,9 @@ def register_management(app):
         async def delete_object(identifier: str, request: Request):
             who = await caller(request, require_identity=False, write=True)
             count = sum(
-                key["policy_id"] == identifier
+                key.get("policy_id") == identifier
                 if kind == "policies"
-                else identifier in key["upstream_ids"]
+                else identifier in key.get("upstream_ids", [])
                 for key in await management.list(who.account_id, "keys")
             )
             if count:
@@ -437,13 +469,7 @@ def register_management(app):
             "created_at": time.time(),
         }
         result = await management.save(who.account_id, "keys", digest(secret), stored)
-        for protocol in ("anthropic", "chat", "responses"):
-            await store.allow_scope(
-                digest(who.account_id + "\0" + identity["user_id"] + "\0" + protocol)
-            )
-        await management.save(
-            who.account_id, "users", identity["user_id"], {"user_id": identity["user_id"]}
-        )
+        await register_user(app, who.account_id, identity["user_id"])
         return {**public_object("keys", result), "key": secret}
 
     @router.post("/keys/{identifier}/capture/reset")
@@ -596,6 +622,10 @@ def public_object(kind, value, *, read_only=False):
             value["header_names"] = list(headers)
     if kind == "keys":
         value.pop("openviking_key", None)
+        if value.get("source") == "openviking":
+            # Listed in the shape of an issued key, but it stores no binding: resolve_binding
+            # gives it the account's defaults per request.
+            value.update(name="", policy_id="", upstream_ids=[], models=[])
     return value
 
 

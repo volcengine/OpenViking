@@ -459,7 +459,10 @@ class ManagementStore(Database):
             self.cache.clear()
 
     async def authenticate(self, key):
-        identifier = digest(key)
+        return await self.credential(digest(key))
+
+    async def credential(self, identifier):
+        """The key record with this id in any account."""
 
         def read():
             with self.connect() as c:
@@ -555,10 +558,11 @@ class ManagementStore(Database):
 
 async def delete_user_data(management, store, account, user_id):
     """Revoke keys and erase gateway state; OpenViking memory is unaffected."""
-    # Keys go first, so a response finishing meanwhile no longer finds one to record state for.
-    await management.delete_user(account, user_id)
+    # Scopes are blocked first, so state a response records meanwhile is refused. Keys go
+    # after: an OpenViking key's record, recreated by its next request, lifts the block again.
     for protocol in ("chat", "responses", "anthropic"):
         await store.expire(0, digest(account + "\0" + user_id + "\0" + protocol))
+    await management.delete_user(account, user_id)
 
 
 async def delete_account_data(management, store, account):

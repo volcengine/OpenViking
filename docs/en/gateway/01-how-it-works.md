@@ -133,7 +133,7 @@ The table explains why the gateway's main design choices were made and what they
 | When turns are saved | One turn behind: only when the next message brings the previous turn back is it clear the user kept it. | The last turn is saved only after **Save the latest reply after** (10 minutes by default). |
 | Long conversations | The gateway has the same model write the summary: only the gateway knows what the model actually received, and the summary request mostly hits the cache. | The turn that triggers compaction costs one extra, billed model call; text before the cut is no longer sent to the model. |
 | Local state | SQLite on one host, with no Postgres or Redis dependency, which suits self-hosting. | The gateway cannot fail over between machines and is a single point on the model call path. |
-| Client identity | The gateway issues its own keys instead of using OpenViking keys directly: they can be revoked on their own, and one person's clients can use different context profiles. | The gateway has to store users' OpenViking keys, so turn on encryption; a leaked gateway key exposes that user's memory. |
+| Client identity | By default the gateway issues its own keys instead of using OpenViking keys directly: they can be revoked on their own, and one person's clients can use different context profiles. With `openviking_keys` on, clients can also use OpenViking API keys directly, which take the account's default profile and upstreams. | The gateway has to store users' OpenViking keys, so turn on encryption; a leaked gateway key exposes that user's memory. An OpenViking key used directly can only be revoked in OpenViking. |
 
 ## Next steps {#next-steps}
 

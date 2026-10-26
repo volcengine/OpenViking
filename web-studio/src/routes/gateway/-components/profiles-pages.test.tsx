@@ -322,6 +322,24 @@ describe('profile list', () => {
     )
   })
 
+  it('does not count OpenViking API keys as users of the default profile', async () => {
+    api.listProfiles.mockResolvedValue([{ ...coding, id: 'default' }])
+    // As the server lists them: no binding of their own.
+    api.listKeys.mockResolvedValue([
+      { ...key('k3', ''), source: 'openviking', upstream_ids: [] },
+    ])
+    renderAt('/gateway/profiles')
+    await screen.findByRole('link', { name: 'Coding' })
+
+    const codingCard = within(card('Coding'))
+    expect(codingCard.getByText('profiles.unused')).toBeTruthy()
+    expect(
+      codingCard.getByRole<HTMLButtonElement>('button', {
+        name: 'actions.delete',
+      }).disabled,
+    ).toBe(false)
+  })
+
   it('creates a profile with the recommended settings in one click', async () => {
     api.listProfiles.mockResolvedValue([])
     renderAt('/gateway/profiles')
@@ -385,11 +403,12 @@ describe('profile editor', () => {
   it('hides settings of switched-off sections and switches long-conversation features on their own', async () => {
     renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
-    // Every section links its docs, switched on or not, and so does the
-    // experimental agent-managed windows setting.
+    // Every section links its docs, switched on or not, and so do the
+    // client override and experimental agent-managed windows settings.
     expect(hrefsOf('docs.learnMore')).toEqual(
       (
         [
+          'clientOverrides',
           'recall',
           'capture',
           'longConversations',
@@ -687,6 +706,30 @@ describe('profile editor', () => {
     expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
       recall: false,
       show_recall: true,
+    })
+  })
+
+  it('lets clients override settings by default and keeps the switch on reset', async () => {
+    // Profiles saved before the switch existed lack the field; the gateway treats it as on.
+    const { client_overrides: _, ...legacy } = chat
+    api.listProfiles.mockResolvedValue([legacy as Profile])
+    renderAt('/gateway/profiles/p2')
+    await screen.findByDisplayValue('Chat')
+    const overrides = () =>
+      screen.getByRole('switch', { name: 'profiles.clientOverrides.label' })
+    expect(overrides().getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(overrides())
+    fireEvent.click(screen.getByRole('button', { name: 'actions.more' }))
+    fireEvent.click(
+      await screen.findByRole('menuitem', { name: 'profiles.actions.reset' }),
+    )
+    expect(overrides().getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
+    expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
+      client_overrides: false,
     })
   })
 

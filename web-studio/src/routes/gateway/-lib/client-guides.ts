@@ -399,6 +399,7 @@ export const DOCS_SECTIONS = {
   },
   conversations: { page: 'clients', id: 'how-conversations-are-recognized' },
   providerKey: { page: 'clients', id: 'bring-your-own-provider-key' },
+  contextHeader: { page: 'clients', id: 'override-profile-settings' },
   // OpenViking tools
   tools: { page: 'tools', id: 'choose-tools' },
   toolsNotOffered: { page: 'tools', id: 'when-tools-are-not-offered' },
@@ -423,6 +424,7 @@ export const DOCS_SECTIONS = {
   profiles: { page: 'profiles', id: 'context-profiles' },
   recall: { page: 'profiles', id: 'recall-memory' },
   capture: { page: 'profiles', id: 'save-conversations' },
+  clientOverrides: { page: 'profiles', id: 'client-overrides' },
   // Gateway keys
   keys: { page: 'keys', id: 'gateway-keys' },
   // Overview and requests

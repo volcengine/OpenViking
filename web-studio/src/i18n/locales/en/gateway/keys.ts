@@ -31,6 +31,10 @@ const keys = {
   missing: 'Missing',
   missingProfile: 'This context profile no longer exists',
   missingUpstream: 'This upstream no longer exists',
+  openviking: {
+    name: 'OpenViking API key',
+    defaults: 'Account default',
+  },
   extra: '+{{count}}',
   actions: {
     revokeKey: 'Revoke “{{name}}”',
@@ -48,8 +52,12 @@ const keys = {
     title: "Delete {{user}}'s gateway data?",
     description_one:
       "This revokes {{user}}'s gateway key and deletes their request logs and the conversation state the gateway keeps for this user, including turns not yet saved to OpenViking. Their clients lose access immediately. Memories already in OpenViking are not affected.",
+    description_zero:
+      'This deletes the request logs of {{user}} and the conversation state the gateway keeps for this user, including turns not yet saved to OpenViking. Memories already in OpenViking are not affected.',
     description_other:
       'This revokes all {{count}} gateway keys of {{user}} and deletes their request logs and the conversation state the gateway keeps for this user, including turns not yet saved to OpenViking. Their clients lose access immediately. Memories already in OpenViking are not affected.',
+    directKey:
+      'Clients using their OpenViking API key directly keep working until it is regenerated in OpenViking.',
     confirm: 'Delete gateway data',
     done: "Deleted {{user}}'s gateway data",
   },

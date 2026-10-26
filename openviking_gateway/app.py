@@ -23,10 +23,15 @@ from .capture import CaptureWorker
 from .client import VikingClient, VikingError
 from .config import PUBLIC_OPENVIKING_URLS, GatewayConfig, normalize_url
 from .kernel import MemoryKernel
-from .management import import_vlm_objects, register_management, request_credential
+from .management import (
+    import_vlm_objects,
+    openviking_credential,
+    register_management,
+    request_credential,
+)
 from .models import Policy
 from .protocols import configure_rules
-from .proxy import ProxyRequest, filtered_headers
+from .proxy import ProxyRequest, filtered_headers, resolve_binding
 from .storage import ManagementStore, SQLiteKernelStore, delete_account_data, delete_user_data
 
 logger = logging.getLogger(__name__)
@@ -175,8 +180,12 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
         key = request_credential(request)
         if key.startswith("sk-ant-oat"):
             raise HTTPException(403, "Claude subscription OAuth credentials are not supported")
-        credential = await management.authenticate(key)
-        invalid = "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated. Issue a new key in OpenViking Studio → Gateway → Keys."
+        if config.openviking_keys and key and not key.startswith("ovgw_"):
+            credential = await openviking_credential(app, key)
+            invalid = "OpenViking rejected this API key. It may have been regenerated; use the user's current OpenViking API key."
+        else:
+            credential = await management.authenticate(key)
+            invalid = "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated. Issue a new key in OpenViking Studio → Gateway → Keys."
         if not credential:
             raise HTTPException(401, invalid)
         if app.state.viking.unavailable_reason:
@@ -208,14 +217,14 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
     @app.get("/v1/models")
     async def models(request: Request):
         credential, _ = await authenticate(request)
-        values = await management.list(credential["account"], "upstreams")
+        binding = await resolve_binding(management, credential)
         names = sorted(
             {
                 model
-                for u in values
-                if u["id"] in credential["upstream_ids"] and u.get("enabled", True)
+                for u in binding.upstreams
+                if u.get("enabled", True)
                 for model in [*u.get("models", []), *u.get("aliases", {})]
-                if not credential["models"] or model in credential["models"]
+                if not binding.models or model in binding.models
             }
         )
         return {

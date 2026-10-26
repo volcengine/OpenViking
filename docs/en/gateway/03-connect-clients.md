@@ -4,7 +4,7 @@ description: Point Claude Code, Codex, chat apps, SDKs and other clients at Open
 
 # Connect clients to OpenViking Gateway
 
-This page gives the exact settings for each client and a way to check that they work. Every client needs three things: the gateway address, a gateway key, and an enabled upstream bound to that key that speaks the client's protocol and serves the model it requests. No gateway key yet? Start with [Get started](02-quickstart.md).
+This page gives the exact settings for each client and a way to check that they work. Every client needs three things: the gateway address, a gateway key (or, when the deployment turns on `openviking_keys`, the user's OpenViking API key; see [Use an OpenViking API key directly](09-gateway-keys.md#openviking-keys)), and an enabled upstream bound to that key that speaks the client's protocol and serves the model it requests. No gateway key yet? Start with [Get started](02-quickstart.md).
 
 Two limits apply to every client:
 
@@ -32,12 +32,22 @@ The last column is explained in [How conversations are recognized](#how-conversa
 
 By default the gateway holds the provider API key, and clients send only the gateway key. An [upstream](07-upstreams.md#upstreams) can instead have **Who provides the API key** set to **Each client sends its own key** (see [Credentials](07-upstreams.md#credentials)). Then the client keeps the gateway key in its usual API key setting and also sends its own provider API key in an `X-OpenViking-Upstream-Key` header on every request. In Studio, the **Bring your own provider key** card on the **Connect** tab lists which of your upstreams need it.
 
-Without the header, every request fails with 401 `Upstream API key is missing`. To add it:
+Without the header, every request fails with 401 `Upstream API key is missing`. How each client sends it is in [Add a header to a client](#add-a-header).
 
-| Client | How to send `X-OpenViking-Upstream-Key` |
+## Override profile settings {#override-profile-settings}
+
+A client can change the settings of its key's context profile for a new conversation with an `X-OpenViking-Context` header. Its value is a JSON object of the fields to change, for example `{"recall":false}` to skip recall, or `{"disabled_tools":[]}` to offer every OpenViking tool, including the ones that change data. The profile must have **Let clients override settings** on, which is the default; what the header may contain and the errors it can get are in [Let clients override settings](08-context-profiles.md#client-overrides). How each client sends it is in [Add a header to a client](#add-a-header).
+
+A conversation keeps the settings it started with, so a changed header takes effect in the next new conversation, for example with a new `X-OpenViking-Session` value. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
+
+## Add a header to a client {#add-a-header}
+
+The two headers above go on every request. To add one:
+
+| Client | How to add a header |
 | --- | --- |
-| Claude Code | `export ANTHROPIC_CUSTOM_HEADERS='X-OpenViking-Upstream-Key: <provider-key>'` |
-| Codex CLI | `env_http_headers` in the provider block, for example `env_http_headers = { "X-OpenViking-Upstream-Key" = "PROVIDER_API_KEY" }`, with the key exported as `PROVIDER_API_KEY` |
+| Claude Code | `export ANTHROPIC_CUSTOM_HEADERS='<Name>: <value>'`. For several headers, put each on its own line, for example `export ANTHROPIC_CUSTOM_HEADERS=$'X-OpenViking-Upstream-Key: <provider-key>\nX-OpenViking-Context: {"recall":false}'` |
+| Codex CLI | In the provider block, `http_headers` for a fixed value, for example `http_headers = { "X-OpenViking-Context" = '{"recall":false}' }`, or `env_http_headers` to read the value from an environment variable, for example `env_http_headers = { "X-OpenViking-Upstream-Key" = "PROVIDER_API_KEY" }` with the provider key exported as `PROVIDER_API_KEY` |
 | OpenAI and Anthropic SDKs | `default_headers` on the client, or `extra_headers` on each request |
 | Open WebUI | Add it to the connection's custom headers, next to the session headers |
 

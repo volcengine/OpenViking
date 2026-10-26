@@ -16,6 +16,19 @@ description: 签发把客户端接入 OpenViking 网关的网关密钥，并在�
 
 **密钥**标签页列出你自己的密钥；账号管理员和 root 能看到本账号的全部密钥，并多出一列 **OpenViking 用户**。**密钥**列只显示每把密钥的开头几个字符。
 
+网关密钥是客户端可用的两种凭证之一。另一种是用户自己的 OpenViking API 密钥，需要部署方允许，见[直接使用 OpenViking API 密钥](#openviking-keys)。
+
+## 直接使用 OpenViking API 密钥 {#openviking-keys}
+
+部署方把 [`openviking_keys`](13-configuration.md#gateway-fields) 设为 `true` 后，客户端可以在填网关密钥的地方直接填用户的 OpenViking API 密钥。此时凡是不以 `ovgw_` 开头的密钥，都按 OpenViking API 密钥处理。这个开关默认关闭；关闭时这类密钥直接被拒绝，不会去问 OpenViking。
+
+- **身份就是密钥本身的用户。** 首次请求时，网关先向 OpenViking 确认这把密钥：接受 admin 和 user 密钥，不接受 root 密钥。要换成另一位用户，客户端改用那位用户的密钥即可，没有用来切换身份的 header。
+- **使用账号的默认设置。** 使用账号的 `default` [上下文配置](08-context-profiles.md#context-profiles)（没有时用内置默认值）和全部已启用的上游，不限模型。客户端仍可用 `X-OpenViking-Context` 请求头为对话修改这份配置的设置，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。
+- **网关像保存签发的密钥一样保存它**，所以记忆保存和日志都照常工作。请开启[加密](../guides/22-gateway-operations.md#encryption)。**密钥**标签页把它列为 **OpenViking API 密钥**，配置和上游显示为**账号默认**。
+- **只有 OpenViking 能吊销它。** **密钥**标签页上没有它的**吊销**按钮。[删除用户的网关数据](#delete-a-users-gateway-data)会删掉网关保存的副本、日志和对话状态，但仍带着这把密钥的客户端照常可用，从头开始。要让它失效，请在 OpenViking 中重新生成密钥，或关闭 `openviking_keys`。密钥重新生成后，网关会在随后的请求中删除副本，与[网关密钥](#when-the-openviking-key-changes)相同。
+
+如果客户端需要自己的上下文配置、上游或允许的模型，或者需要单独吊销，请使用网关密钥。
+
 ## 签发密钥 {#issue-a-key}
 
 如果**密钥**标签页提示先添加上游或创建上下文配置，请先完成；自己没有权限时，联系部署网关的人。在全新的网关上，概览页**快速模式**卡片里的**一键生成密钥**可以一步完成这些准备并签发密钥，见[快速开始清单和快速模式](06-manage-in-studio.md#get-started-checklist)。
@@ -71,7 +84,7 @@ description: 签发把客户端接入 OpenViking 网关的网关密钥，并在�
 
 吊销密钥不会删除网关为用户保存的数据。要删除，账号管理员或 root 在**密钥**标签页打开该用户任意一把密钥的 **…** 菜单，选择**删除该用户的网关数据…**，再点**删除网关数据**确认。这一操作会：
 
-- 吊销该用户的全部网关密钥，其客户端立即失去访问权限；
+- 吊销该用户的全部网关密钥，其客户端立即失去访问权限；[直接使用该用户 OpenViking API 密钥](#openviking-keys)的客户端仍可使用，直到在 OpenViking 中重新生成这把密钥；
 - 删除网关为该用户保存的对话状态，包括尚未保存到 OpenViking 的内容；
 - 删除该用户的请求日志。
 

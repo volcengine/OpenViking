@@ -8,16 +8,18 @@ import logging
 import time
 import uuid
 from dataclasses import replace
+from typing import NamedTuple
 from urllib.parse import quote, unquote_plus
 
 import aiohttp
 import orjson
 from fastapi import HTTPException
 from fastapi.responses import Response, StreamingResponse
+from pydantic import ValidationError
 from starlette.background import BackgroundTask
 
 from .capture import CapturePipeline
-from .models import KEY_PLACEHOLDER, Policy
+from .models import KEY_PLACEHOLDER, Policy, validation_detail
 from .protocols import SSEDecoder, parse_body
 from .storage import digest
 from .tool_executor import ToolExecutor
@@ -106,6 +108,35 @@ def upstream_key(upstream, incoming):
     return key
 
 
+def context_error(detail, status=400, reason="context_override_invalid"):
+    """An ``X-OpenViking-Context`` error, in the management API's ``{reason, detail}`` shape."""
+    return HTTPException(status, {"reason": reason, "detail": detail})
+
+
+def context_override(policy, header):
+    """The stored policy with the fields of an ``X-OpenViking-Context`` header applied."""
+    if not policy.get("client_overrides", True):
+        raise context_error(
+            "This key's context profile does not accept X-OpenViking-Context.",
+            403,
+            "context_override_not_allowed",
+        )
+    try:
+        override = json.loads(header)
+    except (ValueError, RecursionError):
+        raise context_error("X-OpenViking-Context is not valid JSON")
+    if not isinstance(override, dict):
+        raise context_error("X-OpenViking-Context must be a JSON object")
+    # The profile's name and its switch are not per-conversation settings.
+    if blocked := override.keys() & {"name", "client_overrides"}:
+        raise context_error("X-OpenViking-Context cannot set " + ", ".join(sorted(blocked)))
+    try:
+        merged = Policy.model_validate({**policy, **override}).model_dump()
+    except ValidationError as error:
+        raise context_error(validation_detail(error))
+    return {**policy, **merged}, sorted(override)
+
+
 def fill_key(url, key):
     return url.replace(KEY_PLACEHOLDER, quote(key, safe=""))
 
@@ -150,6 +181,29 @@ def matches(upstream, protocol, model):
             or model in upstream["models"]
             or model in upstream.get("aliases", {})
         )
+    )
+
+
+class Binding(NamedTuple):
+    policy: dict | None
+    # Disabled ones included; callers skip them.
+    upstreams: list[dict]
+    # Empty allows every model.
+    models: list[str]
+
+
+async def resolve_binding(management, credential):
+    """The context profile, upstreams and models a credential's requests use."""
+    account = credential["account"]
+    upstreams = await management.list(account, "upstreams")
+    if credential.get("source") == "openviking":
+        # An OpenViking key stores no binding: it uses the account's defaults.
+        policy = await management.get(account, "policies", "default")
+        return Binding(policy or Policy().model_dump(), upstreams, [])
+    return Binding(
+        await management.get(account, "policies", credential["policy_id"]),
+        [u for u in upstreams if u["id"] in credential["upstream_ids"]],
+        credential["models"],
     )
 
 
@@ -223,20 +277,22 @@ class ProxyRequest:
             except (ValueError, RecursionError):
                 pass
         self.model = routing.get("model", "") if isinstance(routing, dict) else ""
+        binding = await resolve_binding(self.management, self.credential)
         # Calls on a stored response are pinned to its upstream and carry no model.
-        if self.credential["models"] and self.raw and not self.path.startswith("/v1/responses/"):
+        if binding.models and self.raw and not self.path.startswith("/v1/responses/"):
             if self.request.headers.get("content-encoding", "identity").lower() != "identity":
                 raise HTTPException(415, "Compressed request bodies are not supported")
             if not self.model or not isinstance(self.model, str):
                 raise HTTPException(400, "Request model is missing")
-        if self.credential["models"] and self.model and self.model not in self.credential["models"]:
+        if binding.models and self.model and self.model not in binding.models:
             raise HTTPException(403, "Model is not allowed by this key")
         self.metrics["model"] = self.model
-        self.upstreams = [
-            u
-            for u in await self.management.list(self.credential["account"], "upstreams")
-            if u["id"] in self.credential["upstream_ids"]
-        ]
+        self.policy = binding.policy
+        # The header is checked on every request that carries it, enhanced or not.
+        header = self.request.headers.get("x-openviking-context")
+        if header is not None and self.policy:
+            self.policy, self.metrics["context_override"] = context_override(self.policy, header)
+        self.upstreams = binding.upstreams
         # A stored response is pinned below; an exact responses endpoint may hold it.
         stored_response = self.path.startswith("/v1/responses/")
         candidates = sorted(
@@ -263,6 +319,10 @@ class ProxyRequest:
                 raise HTTPException(403, "Response upstream is no longer allowed")
         # Pinned upstream selection in the kernel is restricted to allowed models.
         self.candidates = candidates
+        # A missing client key fails before the request freezes a session or calls OpenViking.
+        # A conversation may stay pinned to a candidate with its own key; url() checks that one.
+        if all(u.get("auth_mode") == "passthrough" for u in candidates):
+            upstream_key(self.upstream, self.request.headers)
 
     async def prepare(self):
         if (
@@ -271,10 +331,7 @@ class ProxyRequest:
             and tool_protocol(self.protocol).enhanced_supported(self.body)
             and not self.request.headers.get("content-encoding")
         ):
-            policy = await self.management.get(
-                self.credential["account"], "policies", self.credential["policy_id"]
-            )
-            if not policy:
+            if not self.policy:
                 raise HTTPException(403, "Context policy is unavailable")
             self.body, self.prepared, metrics = await self.app.state.kernel.enhance(
                 self.body,
@@ -282,7 +339,7 @@ class ProxyRequest:
                 dict(self.request.headers),
                 self.credential,
                 self.upstream,
-                policy,
+                self.policy,
                 self.path.endswith("count_tokens"),
                 self.candidates,
                 self.summarize,
