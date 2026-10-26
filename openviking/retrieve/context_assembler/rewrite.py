@@ -32,6 +32,35 @@ def server_rewrite_enabled(mode: bool | Literal["auto"]) -> bool:
     return mode is True
 
 
+def _fold_provenance_lines(lines: list[str]) -> list[str]:
+    """Merge a source line that follows its bullet onto one line.
+
+    The prompt asks the model to end each bullet with its source, but some
+    models (Qwen on vLLM, for instance) put the ``来源：viking://...`` on the
+    next line instead. That is still a well-formed digest, so fold a standalone
+    provenance line back onto the bullet it belongs to. Only lines between the
+    bullet and its source may be blank, and the follower must carry a URI, so an
+    unrelated paragraph cannot be absorbed.
+    """
+    folded: list[str] = []
+    awaiting_source = False
+    for line in lines:
+        cleaned = line.strip()
+        if re.match(r"^[-*]\s+", cleaned):
+            folded.append(cleaned)
+            awaiting_source = True
+            continue
+        if not cleaned:
+            # A blank line does not break the bullet/source pairing.
+            continue
+        if awaiting_source and URI_PATTERN.search(cleaned):
+            folded[-1] = f"{folded[-1]} {cleaned}"
+            awaiting_source = False
+            continue
+        awaiting_source = False
+    return folded
+
+
 def normalize_digest(
     raw: Any,
     max_bullets: int = 6,
@@ -47,7 +76,7 @@ def normalize_digest(
     allowed = {str(uri).strip() for uri in valid_uris or () if str(uri).strip()}
     enforce_provenance = valid_uris is not None
     bullets: list[str] = []
-    for line in text.splitlines():
+    for line in _fold_provenance_lines(text.splitlines()):
         cleaned = line.strip()
         if not re.match(r"^[-*]\s+", cleaned):
             continue
