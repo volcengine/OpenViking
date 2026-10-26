@@ -925,6 +925,21 @@ class FileStore(AccountStore):
         if account.users[user_id].get("deletion"):
             raise FailedPreconditionError("User deletion is in progress")
 
+        # Demoting the only active admin would lock the account out of all
+        # admin operations. _begin_deletion and the MySQL store's set_role
+        # (via _protect_last_admin) both refuse the same transition; this
+        # path must not be the one exception.
+        if (
+            resolved_role != Role.ADMIN
+            and account.users[user_id].get("role") == Role.ADMIN
+        ):
+            active_admins = sum(
+                info.get("role") == Role.ADMIN and not info.get("deletion")
+                for info in account.users.values()
+            )
+            if active_admins <= 1:
+                raise FailedPreconditionError("Cannot remove the last active account admin")
+
         account.users[user_id]["role"] = resolved_role
 
         # Update role in prefix index

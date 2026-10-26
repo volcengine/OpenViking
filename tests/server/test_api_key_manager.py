@@ -504,6 +504,34 @@ async def test_set_role(manager: APIKeyManager):
     assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
 
 
+async def test_set_role_cannot_demote_last_active_admin(manager: APIKeyManager):
+    """Demoting the only active admin must fail the way deleting them does.
+
+    FileStore._begin_deletion raises "Cannot delete the last active account
+    admin" and MySQLTaskAccountStore.set_role refuses the same transition via
+    _protect_last_admin; the file-backed set_role used to allow it, leaving the
+    account without anyone able to perform admin operations.
+    """
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    bob_key = await manager.register_user(acct, "bob", "user")
+
+    # Two active admins: demotion is allowed while another one remains.
+    await manager.set_role(acct, "bob", "admin")
+    await manager.set_role(acct, "alice", "user")
+
+    # bob is now the only active admin.
+    with pytest.raises(FailedPreconditionError, match="last active account admin"):
+        await manager.set_role(acct, "bob", "user")
+    assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
+
+    # Promotions are never blocked, and with a second admin back, the
+    # previously refused demotion goes through.
+    await manager.set_role(acct, "alice", "admin")
+    await manager.set_role(acct, "bob", "user")
+    assert (await manager.resolve_identity(bob_key)).role == Role.USER
+
+
 async def test_get_users(manager: APIKeyManager):
     """list_users should list all users in an account."""
     acct = _uid()
