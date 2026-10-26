@@ -432,6 +432,13 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
 
+### [Rules (Beta)](26-rules.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/rules/compile` | Submit a background rule compilation task |
+| POST | `/api/v1/rules/search` | Retrieve applicable active rules for task context |
+
 ### [Retrieval](06-retrieval.md)
 
 | Method | Path | Description |
@@ -455,9 +462,11 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/watches/{task_id}/trigger` | Trigger a watch by task ID |
 | POST | `/api/v1/snapshot/commit` | Create a snapshot |
 | GET | `/api/v1/snapshot/log` | Read snapshot history |
+| GET | `/api/v1/snapshot/versions` | List versions of a Compile output file |
 | POST | `/api/v1/snapshot/restore` | Restore a historical snapshot |
 | GET | `/api/v1/snapshot/show` | Inspect a snapshot or one of its files |
 | GET | `/api/v1/snapshot/diff` | Compare snapshots |
+| GET | `/api/v1/snapshot/diff-paths` | Page changed source files |
 | GET | `/api/v1/snapshot/ignore` | Read snapshot ignore rules |
 | PUT | `/api/v1/snapshot/ignore` | Replace snapshot ignore rules |
 | DELETE | `/api/v1/snapshot/ignore` | Clear snapshot ignore rules |
@@ -579,6 +588,11 @@ When the gateway runs inside the server, use the server's port; when it runs sta
 | MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
 | POST | `/api/v1/compile` | Create an asynchronous Compile task |
+| GET | `/api/v1/compile/config` | Read target settings |
+| POST | `/api/v1/compile/config/update` | Update target settings |
+| GET | `/api/v1/compile/configs` | List visible targets |
+| GET | `/api/v1/compile/operations` | List target operations |
+| GET | `/api/v1/compile/operations/{operation_id}/outputs` | List operation outputs and version references |
 | POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |
 | GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |

@@ -284,7 +284,7 @@ DELETE 始终移除该类型的覆盖；重复 PUT 默认配置或 DELETE 都是
 按 Account、按模板独立存储：
 
 ```text
-/local/{account_id}/_system/memory_templates/
+viking://system/memory/memory_templates/custom/
   profile.yaml
   preferences.yaml
   events.yaml
@@ -292,18 +292,26 @@ DELETE 始终移除该类型的覆盖；重复 PUT 默认配置或 DELETE 都是
 ```
 
 仅发布自定义时创建对应文件。文件包含完整 Schema 和内部 `_updated_at` 时间戳，
-不再使用集中式 `memory_templates.json`。更新前备份至 `{type}.yaml.backup`。
+不再使用集中式 `memory_templates.json`。更新和重置不生成可见备份，并会清理旧版本遗留的
+`{type}.yaml.backup`。
 读写经过 AGFS，沿用当前部署的加密和存储配置，不能直接编辑加密后的底层文件。
 不修改 Account 的 `setting.json` 或 User 的 `user_config.json`。
 个人版使用默认 Account；企业版使用指定 Account，内核不区分两套文件结构。
+
+读取优先使用上述新路径；仅当新文件不存在时，才兼容读取旧路径
+`/local/{account_id}/_system/memory_templates/{type}.yaml`。读取不会迁移或改写文件。
+如果优先级更高的文件损坏，不会静默回退到低优先级文件或部署默认。
 
 模板读取不加锁。发布先在同目录写完唯一临时文件，再通过 AGFS 切换到正式路径：
 LocalFS 使用文件重命名，S3 使用完整对象复制替换目标后再删除临时对象，不先删除目标。
 读者允许看到完整旧版或新版；首次发布之前、恢复默认之后读取部署默认值，不读取临时文件。
 这是单文件发布语义，不保证一次列表/Registry 读取中的所有模板来自同一发布时刻。
-发布与 DELETE 仍使用跨进程写锁；发布锁同时覆盖正式路径和临时路径。锁冲突采用零等待尝试和
+发布与 DELETE 仍使用跨进程写锁；发布锁同时覆盖新路径、旧路径、遗留 backup 路径和临时路径。
+PUT 只发布到新路径，确认发布成功后再删除旧文件；DELETE 先删除旧文件，再删除新文件，
+防止旧配置重新生效。
+显式 PUT/DELETE 可替换或清理损坏文件。锁冲突采用零等待尝试和
 协程退避，最多等待 10 秒，避免锁等待占满执行后续 I/O 的默认线程池。
-临时写入失败不修改当前文件；切换后清理失败只记警告，不覆盖回滚已发布版本。
+临时写入失败不修改当前文件；切换后临时文件清理失败只记警告，不覆盖回滚已发布版本。
 若切换返回错误，会核验目标内容：确认已发布则保留新版本；无法确认则返回错误且不盲目回滚，调用方可 GET 确认状态。
 取消等待锁的请求会停止重试；已下发的 native 操作不能强行中断，会完成收尾并释放锁后再传播取消。
 因此取消已开始发布的请求不保证撤销发布。进程异常退出或清理失败可能留下 `.tmp` 文件，但读取不会使用它们。
@@ -1441,7 +1449,7 @@ ov admin register-user acme bob-private --role user \
 2. 调用 API Key Manager 获取活跃用户列表（按创建顺序排列）
 3. 应用可选的过滤条件（name、role）
 4. 应用可选的 `limit`/`page` 分页
-5. 返回用户列表（trusted 模式下不包含 user_key）
+5. 按调用者角色返回密钥信息（trusted 模式下不包含密钥信息）
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_users` - HTTP 路由
@@ -1459,14 +1467,18 @@ ov admin register-user acme bob-private --role user \
 | role | str | 否 | null | 按角色过滤 |
 | query | str | 否 | null | 仅 HTTP，按用户 ID 做不区分大小写的字面包含匹配 |
 | include_summary | bool | 否 | false | 仅 HTTP，以对象返回分页用户和账号统计 |
-| include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；仅当服务端能读取完整 key 并用于服务端绑定时 `api_key_available` 才为 true，仅存哈希的凭据返回 false；默认保持现有按鉴权模式返回字段的行为。 |
+| include_credentials | bool | 否 | true | 仅 HTTP。ROOT 可获取可用的明文密钥，ADMIN 仅获取打码后的前缀。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；仅当服务端能读取完整 key 并用于服务端绑定时 `api_key_available` 才为 true，仅存哈希的凭据返回 false。 |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
 **说明：**
 - 结果按创建顺序返回
 - ADMIN 只能列出自己所属的 account 中的用户
-- 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
+- ROOT 可通过 `api_key` 获取全部已存储的明文密钥。非 ROOT 调用方只有自身那一行返回 `api_key` 明文，其他用户（包括其他 ADMIN）均返回打码后的 `key_prefix`。自身匹配是严格匹配：列表 account、行内 user ID 以及三段式 key 内嵌的 account/user 段必须全部等于调用方认证身份，否则该行仍打码。三段式密钥保留前两段和 secret 的最后 4 个字符，secret 中其余每个字符均替换为 `*`；secret 不超过 4 个字符时完全隐藏。非三段式密钥完全隐藏；仅存哈希的凭据沿用已有前缀。
+- 打码在服务端执行，同时覆盖 HTTP 和 MCP 的 `list_users(include_credentials=true)`，因此 CLI/SDK 的 JSON 输出也受保护。客户端只能将 `key_prefix` 用于展示，切换身份时需要另行提供可用密钥。
+- `ov admin list-users` 默认还会在 CLI 侧对明文 `api_key` 行使用相同格式打码，table 和 JSON 输出保持一致，并在 stderr 打印提示。传入 `--reveal-api-keys` 可输出明文：ROOT 会显示全部密钥，ADMIN/USER 调用方仍只能看到自身密钥（其他行由服务端打码）。该 flag 只影响 CLI 渲染，不改变服务端响应。table 输出会把服务端的 `api_key`（明文或 CLI 打码值）与 `key_prefix` 合并为同一个 `api_key` 列；JSON 输出保留服务端的字段名。
+- 本限制针对已存储密钥的列表浏览。创建用户与重置密钥仍会向 ROOT 或 ADMIN 返回新密钥；普通 USER 尚无自助轮换接口。
+- 在 `trusted` 模式下，响应中不会包含 `api_key` 或 `key_prefix` 字段
 - 用户删除开始后，不再出现在该列表中
 
 **带统计的响应（HTTP）：** 设置 `include_summary=true` 后，`result` 返回对象：`users` 为当前页，`total` 为匹配人数，`account_total` 为账号总人数，`manager_count` 为 admin/root 人数，`key_count` 为具有可见密钥或前缀的用户数。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。默认仍返回用户数组，兼容现有调用。
@@ -1536,6 +1548,8 @@ fmt.Println(users)
 ov admin list-users acme
 # 如果使用 root_api_key（--sudo）：
 ov --sudo admin list-users acme
+# 输出明文密钥而不是打码值（仅 ROOT）
+ov --sudo admin list-users acme --reveal-api-keys
 # 按通配符 name 过滤
 ov admin list-users acme --name '*ali*'
 # 分页

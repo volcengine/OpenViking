@@ -24,7 +24,7 @@ from langchain_core.messages import (
     convert_to_openai_messages,
 )
 from langchain_core.runnables import RunnableLambda
-from langgraph.store.base import InvalidNamespaceError, PutOp
+from langgraph.store.base import InvalidNamespaceError, PutOp, SearchOp
 from openviking_sdk.errors import (
     InvalidArgumentError,
     NotFoundError,
@@ -1894,6 +1894,58 @@ def test_langgraph_store_removal_keeps_missing_targets_idempotent(missing_error)
     assert store.search(namespace, query="azure") == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", [None, "doc"])
+@pytest.mark.parametrize(
+    "filter, expected",
+    [
+        ({"metadata": {"color": "blue"}}, ["alpha"]),
+        ({"metadata": {"nested": {"owner": "ada"}}}, ["alpha"]),
+        ({"metadata": {"nested": {"rank": {"$gte": 2}}}}, ["alpha"]),
+        ({"metadata": {"detail.region": "eu"}}, ["alpha"]),
+        ({"tags": [{"role": "reviewer"}, "memory"]}, ["alpha"]),
+        ({"tags": [{"role": "reviewer"}]}, []),
+        ({"metadata": {}}, ["alpha", "beta"]),
+        ({"metadata": {"color": "black"}}, []),
+        ({"metadata.nested.rank": {"gte": 2}}, ["alpha"]),
+        ({"metadata.nested": {"$eq": {"rank": 3, "owner": "ada"}}}, ["alpha"]),
+        ({"metadata": {"eq": "blue", "label": "blue"}}, ["scalar"]),
+        ({"metadata": {"$unknown": "blue"}}, ["scalar"]),
+        ({"tags": ["reviewer", "memory"]}, ["scalar"]),
+        ({"kind": "doc"}, ["alpha", "beta", "scalar"]),
+    ],
+)
+async def test_langgraph_store_structured_filters(filter, expected, query):
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    for key, value in {
+        "alpha": {
+            "kind": "doc",
+            "metadata": {
+                "color": "blue",
+                "nested": {"rank": 3, "owner": "ada"},
+                "detail.region": "eu",
+            },
+            "tags": [{"role": "reviewer", "active": True}, "memory"],
+        },
+        "beta": {
+            "kind": "doc",
+            "metadata": {"color": "red", "nested": {"rank": 1, "owner": "bob"}},
+            "tags": [{"role": "reader", "active": True}, "memory"],
+        },
+        "scalar": {"kind": "doc", "metadata": "blue", "tags": ["reviewer", "memory"]},
+    }.items():
+        store.put(("users", "ada"), key, value)
+
+    op = SearchOp(("users",), filter=filter, query=query)
+    results = [
+        store.search(("users",), filter=filter, query=query),
+        await store.asearch(("users",), filter=filter, query=query),
+        store.batch([op])[0],
+        (await store.abatch([op]))[0],
+    ]
+    assert all(sorted(item.key for item in items) == expected for items in results)
+
+
 def test_langgraph_store_semantic_search_keeps_peer_id_out_of_retrieval():
     client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client, actor_peer_id="peer-store")
@@ -1909,6 +1961,71 @@ def test_langgraph_store_rejects_ttl_writes():
 
     with pytest.raises(NotImplementedError, match="TTL is not supported"):
         store.put(("users", "ada"), "temporary", {"note": "expires"}, ttl=60)
+
+
+@pytest.mark.parametrize("use_default", [False, True])
+@pytest.mark.parametrize(
+    ("field", "query", "expected_match"),
+    [
+        ("$", "solstice", True),
+        ("", "solstice", True),
+        ("items[0].text", "pulsar", True),
+        ("items[-1].text", "galaxy", True),
+        ("items[*].text", "galaxy", True),
+        ("nested[*].parts[*].text", "aurora", True),
+        ("metadata.*", "quasar", True),
+        ("{text,metadata.title}", "nebula", True),
+        ("text", "nebula", True),
+        ("metadata.title", "quasar", True),
+        ("absent", "solstice", False),
+        ("literal[0]", "nova", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_langgraph_store_indexes_selected_field_paths(
+    field, query, expected_match, use_default
+):
+    value = {
+        "text": "nebula",
+        "metadata": {"title": "quasar"},
+        "items": [{"text": "pulsar"}, {"text": "galaxy"}],
+        "nested": [{"parts": [{"text": "aurora"}]}],
+        "literal[0]": "nova",
+        "ignored": "solstice",
+    }
+    original = deepcopy(value)
+    for mode in ("put", "aput", "batch", "abatch"):
+        client = InMemoryOpenVikingClient()
+        store = OpenVikingStore(client=client, index=[field] if use_default else None)
+        index = None if use_default else [field]
+        if mode == "put":
+            store.put(("documents",), "note", value, index=index)
+        elif mode == "aput":
+            await store.aput(("documents",), "note", value, index=index)
+        elif mode == "batch":
+            store.batch([PutOp(("documents",), "note", value, index=index)])
+        else:
+            await store.abatch([PutOp(("documents",), "note", value, index=index)])
+
+        assert store.get(("documents",), "note").value == value
+        assert value == original
+        expected_keys = ["note"] if expected_match else []
+        assert [item.key for item in store.search(("documents",), query=query)] == expected_keys
+        filter = {"metadata": {"title": "quasar"}}
+        op = SearchOp(("documents",), query=query, filter=filter)
+        results = [
+            store.search(("documents",), query=query, filter=filter),
+            await store.asearch(("documents",), query=query, filter=filter),
+            store.batch([op])[0],
+            (await store.abatch([op]))[0],
+        ]
+        assert all([item.key for item in items] == expected_keys for items in results)
+        assert (
+            store.search(("documents",), query=query, filter={"metadata": {"title": "absent"}})
+            == []
+        )
+        if field not in {"$", ""}:
+            assert store.search(("documents",), query="solstice") == []
 
 
 def test_langgraph_store_batch_rejects_ttl_writes():

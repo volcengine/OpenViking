@@ -18,7 +18,9 @@ from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
+from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
 from openviking.service.compile_service import CompileService
+from openviking.service.compile_targets import CompileLifecycle, CompileStateStore
 from openviking.service.debug_service import DebugService
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.fs_service import FSService
@@ -26,6 +28,8 @@ from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
+from openviking.service.rule_cleanup import RuleCleanupScheduler
+from openviking.service.rule_service import RuleService
 from openviking.service.search_service import SearchService
 from openviking.service.session_auto_commit import SessionAutoCommitScheduler
 from openviking.service.session_service import SessionService
@@ -42,6 +46,8 @@ from openviking.storage.queuefs.reindex_processor import ReindexProcessor
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
+from openviking.system_assets.reconcile import AccountLister, SystemAssetReconciler
+from openviking.system_assets.sync import SystemAssetSynchronizer
 from openviking.utils.agfs_utils import (
     build_runtime_ragfs_binding_config,
     resolve_queuefs_mount_point,
@@ -103,10 +109,13 @@ class OpenVikingService:
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional["SessionCompressorV3"] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._system_asset_synchronizer: Optional[SystemAssetSynchronizer] = None
         self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
+        self._rule_cleanup_scheduler: Optional[RuleCleanupScheduler] = None
         self._expiry_runtime: Optional["ExpiryRuntime"] = None
+        self._compile_scheduler: Optional[CompileScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._privacy_sanitizer: Optional[PrivacySanitizer] = None
@@ -125,6 +134,7 @@ class OpenVikingService:
         self._search_service = SearchService()
         self._resource_memory_link_service = ResourceMemoryLinkService()
         self._resource_service = ResourceService()
+        self._rule_service = RuleService()
         self._session_service = SessionService()
         self._debug_service = DebugService()
         self._agent_evolution_service = AgentEvolutionService()
@@ -379,6 +389,11 @@ class OpenVikingService:
         return self._session_compressor
 
     @property
+    def compile_scheduler(self) -> Optional[CompileScheduler]:
+        """Get CompileScheduler instance (None when disabled)."""
+        return self._compile_scheduler
+
+    @property
     def watch_scheduler(self) -> Optional[WatchScheduler]:
         """Get WatchScheduler instance."""
         return self._watch_scheduler
@@ -407,6 +422,11 @@ class OpenVikingService:
     def resources(self) -> ResourceService:
         """Get ResourceService instance."""
         return self._resource_service
+
+    @property
+    def rules(self) -> RuleService:
+        """Get the rule compilation and retrieval service."""
+        return self._rule_service
 
     @property
     def sessions(self) -> SessionService:
@@ -513,14 +533,20 @@ class OpenVikingService:
         )
 
         # Initialize directories
+        system_asset_synchronizer = SystemAssetSynchronizer(
+            viking_fs=self._viking_fs,
+        )
+        self._system_asset_synchronizer = system_asset_synchronizer
         directory_initializer = DirectoryInitializer(
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
+            system_asset_synchronizer=system_asset_synchronizer,
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
         account_count, user_count = await directory_initializer.initialize_account_workspace(
-            default_ctx
+            default_ctx,
+            sync_system_assets=False,
         )
         logger.info(
             "Initialized preset directories account=%d user=%d",
@@ -582,6 +608,8 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_compressor=self._session_compressor,
             vlm_resolver=self._vlm_resolver,
+            privacy_config_service=self._privacy_config_service,
+            privacy_sanitizer=self._privacy_sanitizer,
         )
         self._resource_memory_link_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
@@ -622,6 +650,43 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
         )
         self._compile_service.configure_memory_runner(vikingdb=self._vikingdb_manager)
+        self._rule_service.set_dependencies(
+            fs=self._fs_service,
+            resources=self._resource_service,
+            search=self._search_service,
+            vlm_resolver=self._vlm_resolver,
+            rules_config=config.rules,
+            config=config,
+        )
+        if config.rules.archived_cleanup_enabled:
+            self._rule_cleanup_scheduler = RuleCleanupScheduler(
+                self._rule_service,
+                self._viking_fs,
+                config.rules,
+            )
+            await self._rule_cleanup_scheduler.start()
+        else:
+            self._rule_cleanup_scheduler = None
+        compile_config = self._config.compile_api
+        compile_store = CompileStateStore(self._agfs_client)
+        self._compile_service.configure_lifecycle(CompileLifecycle(compile_store, self._viking_fs))
+        get_task_tracker().compile_history_cleanup = compile_store.delete_expired
+        if compile_config.scheduler_enabled:
+            self._compile_scheduler = CompileScheduler(
+                self._compile_service,
+                compile_store,
+                self._viking_fs,
+            )
+            self._compile_scheduler.credential_encryptor = build_credential_encryptor(
+                self._config.encryption
+            )
+            self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
+            self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule
+            self._compile_service.lifecycle.save_credential = (
+                self._compile_scheduler.save_credential
+            )
+        self._fs_service.compile_versions = self._compile_service.lifecycle.versions
+        self._resource_service.compile_versions = self._compile_service.lifecycle.versions
 
         if self._queue_manager:
             for queue_name in (
@@ -682,8 +747,10 @@ class OpenVikingService:
         if self._queue_manager:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
+        await system_asset_synchronizer.sync(default_ctx)
 
-        if session_expiry_enabled:
+        compile_expiry_enabled = self._compile_scheduler is not None
+        if session_expiry_enabled or compile_expiry_enabled:
             from openviking.scheduling.expiry.runtime import ExpiryRuntime, ExpiryRuntimeRoles
 
             self._expiry_runtime = ExpiryRuntime(
@@ -695,16 +762,23 @@ class OpenVikingService:
                 ),
             )
             try:
-                self._session_service.configure_expiry(
-                    self._expiry_runtime.scheduler,
-                    consumer_concurrency=expiry_config.session_consumer_concurrency,
-                )
+                if session_expiry_enabled:
+                    self._session_service.configure_expiry(
+                        self._expiry_runtime.scheduler,
+                        consumer_concurrency=expiry_config.session_consumer_concurrency,
+                    )
+                if compile_expiry_enabled:
+                    self._compile_scheduler.install_expiry(self._expiry_runtime.scheduler)
                 await self._expiry_runtime.start_storage()
                 await self._expiry_runtime.start_roles()
             except Exception:
                 await self._stop_expiry()
                 raise
             logger.info("Expiry roles started")
+
+        if self._compile_scheduler is not None:
+            await self._compile_scheduler.start()
+            logger.info("CompileScheduler started (backend=redis)")
 
         # Preflight the MinerU endpoint when it will be used, so endpoint
         # misconfiguration or a stopped service surfaces now instead of on the
@@ -733,9 +807,11 @@ class OpenVikingService:
 
     async def _stop_expiry(self) -> None:
         """Stop expiry work before releasing dependencies used by callbacks."""
-        runtime = self._expiry_runtime
+        runtime = getattr(self, "_expiry_runtime", None)
         if runtime is None:
-            self._session_service.set_session_expiry_adapter(None)
+            session_service = getattr(self, "_session_service", None)
+            if session_service is not None:
+                session_service.set_session_expiry_adapter(None)
             return
         try:
             await runtime.close()
@@ -755,6 +831,11 @@ class OpenVikingService:
         await self._resource_service.close_background_tasks()
         vlm_resolver = getattr(self, "_vlm_resolver", None)
 
+        if self._compile_scheduler is not None:
+            await self._compile_scheduler.stop()
+            self._compile_scheduler = None
+            logger.info("CompileScheduler stopped")
+
         await self._stop_expiry()
 
         if self._runtime_config_manager:
@@ -771,6 +852,12 @@ class OpenVikingService:
             await self._session_auto_commit_scheduler.stop()
             self._session_auto_commit_scheduler = None
             logger.info("SessionAutoCommitScheduler stopped")
+
+        rule_cleanup_scheduler = getattr(self, "_rule_cleanup_scheduler", None)
+        if rule_cleanup_scheduler:
+            await rule_cleanup_scheduler.stop()
+            self._rule_cleanup_scheduler = None
+            logger.info("RuleCleanupScheduler stopped")
 
         if self._queue_manager:
             await asyncio.to_thread(self._queue_manager.stop)
@@ -848,8 +935,9 @@ class OpenVikingService:
         tags: list[str] | None = None,
         tag_mode: str = "replace",
         ctx: RequestContext | None = None,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
-        """Reindex semantic/vector artifacts for a URI."""
+        """Reindex a URI; task_id preserves internal async submission identity."""
         if not self._initialized:
             await self.initialize()
 
@@ -873,6 +961,8 @@ class OpenVikingService:
         if tags is not None or tag_mode == "clear":
             execute_kwargs["tags"] = tags
             execute_kwargs["tag_mode"] = tag_mode
+        if task_id is not None:
+            execute_kwargs["task_id"] = task_id
         return await executor.execute(**execute_kwargs)
 
     async def check_consistency(
@@ -925,6 +1015,18 @@ class OpenVikingService:
         if not self._directory_initializer:
             return 0, 0
         return await self._directory_initializer.initialize_account_workspace(ctx)
+
+    async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
+        """Synchronize packaged system assets for every active account."""
+        self._ensure_initialized()
+        if not self._system_asset_synchronizer:
+            return 0
+        return await SystemAssetReconciler(
+            self._system_asset_synchronizer,
+            account_lister,
+            user_id=self._config.default_user or self._user.user_id,
+            skip_account_ids={self._user.account_id},
+        ).sync_all()
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
         """Initialize current user's directory tree."""

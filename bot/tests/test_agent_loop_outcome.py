@@ -128,8 +128,16 @@ class _MediaProvider(_FakeProvider):
 
 
 class _ImageRegistry:
-    def __init__(self, content=None):
+    def __init__(
+        self,
+        content=None,
+        *,
+        preserve_complete_result=False,
+        legacy_outcome=False,
+    ):
         self.content = content
+        self.preserve_complete_result = preserve_complete_result
+        self.legacy_outcome = legacy_outcome
 
     def get_definitions(self, **kwargs):
         return [
@@ -153,8 +161,13 @@ class _ImageRegistry:
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZGF0YQ=="}},
             ]
         )
+        result = MultimodalToolResult(text=label, content=content)
+        if self.legacy_outcome:
+            return SimpleNamespace(result=result, effective_params=params, skill_uris=())
         return ToolExecutionResult(
-            result=MultimodalToolResult(text=label, content=content), effective_params=params
+            result=result,
+            effective_params=params,
+            preserve_complete_result=self.preserve_complete_result,
         )
 
 
@@ -307,6 +320,42 @@ async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, support
         assert tool_message["content"].startswith("Image resource.")
         assert "does not support media in tool results" in tool_message["content"]
     assert tools_used[0]["result"] == "Image resource."
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_honors_tool_result_preservation_policy(make_loop, monkeypatch):
+    provider = _MediaProvider([[_image_call("call-1")]])
+    loop = make_loop(provider=provider, max_iterations=2)
+    preview = AsyncMock(side_effect=lambda result, *_args, **_kwargs: result)
+    monkeypatch.setattr(loop, "_preview_tool_result", preview)
+
+    final, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "read it"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="result-policy"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(preserve_complete_result=True),
+    )
+
+    assert final == "done"
+    assert preview.await_args.kwargs["preserve_complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_accepts_legacy_detailed_outcome(make_loop, monkeypatch):
+    provider = _MediaProvider([[_image_call("call-1")]])
+    loop = make_loop(provider=provider, max_iterations=2)
+    preview = AsyncMock(side_effect=lambda result, *_args, **_kwargs: result)
+    monkeypatch.setattr(loop, "_preview_tool_result", preview)
+
+    final, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "read it"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="legacy-outcome"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(legacy_outcome=True),
+    )
+
+    assert final == "done"
+    assert preview.await_args.kwargs["preserve_complete"] is False
 
 
 @pytest.mark.asyncio

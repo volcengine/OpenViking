@@ -1,6 +1,6 @@
 ---
 name: llm-wiki
-description: Compile heterogeneous knowledge sources—including documents, notes, web content, transcripts, research materials, and code repositories—into a Karpathy-style, evidence-grounded LLM Wiki with a maintained index; default entity and concept pages; and selective method, comparison, analysis, or instruction-requested summary pages. Use with ov compile to create or incrementally refresh knowledge that is easy for people and agents to retrieve, navigate, and reuse.
+description: Compile  heterogeneous knowledge sources—including documents, notes, web content, transcripts, research materials, and code repositories—into a Karpathy-style, evidence-grounded LLM Wiki with a maintained index; default entity and concept pages; and selective method, comparison, analysis, or instruction-requested summary pages. Use with ov compile to create or incrementally refresh knowledge that is easy for people and agents to retrieve, navigate, and reuse.
 ---
 
 # LLM Wiki

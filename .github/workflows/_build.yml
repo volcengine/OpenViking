@@ -231,9 +231,17 @@ jobs:
       shell: bash
       run: |
         OPENVIKING_VERSION=$(
-          uv run --frozen python -c "from scripts.build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+          exact_tag=$(git describe --tags --exact-match "$GITHUB_SHA" 2>/dev/null || true)
+          if [[ "$exact_tag" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+            printf '%s\n' "${exact_tag#v}"
+          else
+            rm -f openviking/_version.py
+            rm -rf openviking.egg-info
+            env -u OPENVIKING_VERSION -u SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING uv run --frozen python -c "from scripts.build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+          fi
         )
         echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
+        echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
         echo "Resolved OpenViking version: $OPENVIKING_VERSION"
 
     - name: Build Rust CLI (Linux)
@@ -478,9 +486,17 @@ jobs:
       shell: bash
       run: |
         OPENVIKING_VERSION=$(
-          uv run --frozen python -c "from scripts.build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+          exact_tag=$(git describe --tags --exact-match "$GITHUB_SHA" 2>/dev/null || true)
+          if [[ "$exact_tag" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+            printf '%s\n' "${exact_tag#v}"
+          else
+            rm -f openviking/_version.py
+            rm -rf openviking.egg-info
+            env -u OPENVIKING_VERSION -u SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING uv run --frozen python -c "from scripts.build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+          fi
         )
         echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
+        echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
         echo "Resolved OpenViking version: $OPENVIKING_VERSION"
 
     - name: Build Rust CLI (macOS/Windows)

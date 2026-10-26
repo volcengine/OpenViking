@@ -43,6 +43,7 @@ class VikingURI:
       viking://user/{user_id}/sessions/{session_id}.
     - session: Legacy alias for user sessions (viking://session/{session_id}/...)
     - agent: Agent capabilities scope (viking://agent/skills/..., viking://agent/endpoints/...)
+    - system: Account-level system assets (viking://system/...)
     - queue: Queue scope (viking://queue/...)
     - ~: Server-side alias for the caller's user root, expanded to viking://user/{user_id}
 
@@ -59,6 +60,7 @@ class VikingURI:
         "resources",
         "user",
         "agent",
+        "system",
     }
     PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
     LEGACY_SCOPES = frozenset({"session"})

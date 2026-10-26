@@ -7,8 +7,8 @@ Choice compares candidates in one question and returns relative probabilities.
 Noul evaluates each document independently and returns its yes probability.
 
 Speaks only the TypeSafe System One protocol. Vercel AI Gateway exposes a
-TypeSafe-compatible endpoint (https://ai-gateway.vercel.sh/typesafe), so routing
-through Vercel is just a different api_base and model id.
+TypeSafe-compatible endpoint (https://ai-gateway.vercel.sh/typesafe/v1/systemone),
+so routing through Vercel is just a different api_base and model id.
 
 Same interface as the other rerank clients:
 rerank_batch(query, documents) -> List[float]
@@ -16,23 +16,31 @@ rerank_batch(query, documents) -> List[float]
 
 import json
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Protocol
 
 import httpx
 
+from openviking.models.jev import (
+    DEFAULT_SYSTEM_ONE_API_BASE,
+    MODE_CHOICE,
+    MODE_NOUL,
+    resolve_jev_target,
+    validate_jev_probability,
+)
 from openviking.models.rerank.base import RerankBase
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-MODE_NOUL = "noul"
-MODE_CHOICE = "choice"
+
+class _RerankMode(Protocol):
+    def build_questions(self, documents: List[str]) -> Dict[str, dict]: ...
+
+    def parse_scores(self, answers: dict, document_count: int) -> List[float]: ...
 
 
 def _validate_score(score: object) -> float:
-    if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1:
-        raise ValueError(f"Invalid relevance score: {score!r}")
-    return float(score)
+    return validate_jev_probability(score, label="relevance score")
 
 
 class NoulRerankMode:
@@ -108,13 +116,17 @@ class JevRerankClient(RerankBase):
         self,
         api_key: str,
         model_name: str = "jev-latest",
-        api_base: str = "https://api.typesafe.ai",
+        api_base: str = DEFAULT_SYSTEM_ONE_API_BASE,
         timeout: float = 30.0,
         log_payloads: bool = False,
         mode: str = MODE_NOUL,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         super().__init__()
-        modes = {MODE_NOUL: NoulRerankMode, MODE_CHOICE: ChoiceRerankMode}
+        modes: Dict[str, type[_RerankMode]] = {
+            MODE_NOUL: NoulRerankMode,
+            MODE_CHOICE: ChoiceRerankMode,
+        }
         if mode not in modes:
             raise ValueError(f"Unknown Jev rerank mode: {mode!r}")
         self.mode = mode
@@ -134,6 +146,7 @@ class JevRerankClient(RerankBase):
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                **dict(extra_headers or {}),
             },
             timeout=timeout,
         )
@@ -210,13 +223,13 @@ class JevRerankClient(RerankBase):
         """Create JevRerankClient from RerankConfig."""
         if not config or not config.is_available():
             return None
-        api_base = config.api_base or "https://api.typesafe.ai"
-        default_model = "typesafe-ai/jev" if "ai-gateway.vercel.sh" in api_base else "jev-latest"
+        api_base, model, extra_headers = resolve_jev_target(config)
         return cls(
             api_key=config.api_key,
-            model_name=config.model or default_model,
+            model_name=model,
             api_base=api_base,
             timeout=config.timeout,
             log_payloads=config.log_payloads,
-            mode=config.mode or MODE_NOUL,
+            mode=getattr(config, "mode", None) or MODE_NOUL,
+            extra_headers=extra_headers,
         )

@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   dataManagement: vi.fn(),
   refreshLabel: 'refresh',
-  search: {} as { file?: string; uri?: string },
+  search: {} as { file?: string; panel?: 'agent' | 'terminal'; uri?: string },
 }))
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -96,7 +96,11 @@ vi.mock('./-components/context-explorer', () => ({
     <button type="button" aria-label={mocks.refreshLabel} onClick={onRefresh} />
   ),
   ContextTree: () => null,
-  PanelTab: () => null,
+  PanelTab: ({ label }: { label: string }) => (
+    <button type="button" role="tab">
+      {label}
+    </button>
+  ),
   FilesystemResizeHandle: () => null,
 }))
 
@@ -174,8 +178,9 @@ describe('filesystem context tree refresh', () => {
     expect(mocks.dataManagement.mock.lastCall?.[0].isDirectory).toBe(true)
   })
 
-  it('offers snapshot history for hosted reads without incompatible local tools', async () => {
+  it('shows only the CLI tab for hosted reads while keeping local tools unavailable', async () => {
     mocks.provider = 'volcengine'
+    mocks.search = { file: firstFile, panel: 'agent', uri: parentDirectory }
     render(<FilesystemRoute />)
     await userEvent.click(
       screen.getByRole('button', { name: 'dataManagement:historyTitle' }),
@@ -191,8 +196,11 @@ describe('filesystem context tree refresh', () => {
     expect(mocks.preview.mock.lastCall?.[0].defaultReadLimit).toBe(10000)
     expect(mocks.uploadProvider.mock.lastCall?.[0]).toBe(false)
     expect(mocks.agent).not.toHaveBeenCalled()
-    expect(mocks.terminal).not.toHaveBeenCalled()
-    expect(screen.queryByRole('tab')).toBeNull()
+    expect(mocks.terminal).toHaveBeenCalled()
+    expect(mocks.agent).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    expect(screen.getByRole('tab', { name: 'tabs.terminal' })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: 'tabs.agent' })).toBeNull()
     expect(screen.queryByText('addResource.title')).toBeNull()
   })
 

@@ -188,6 +188,7 @@ pub(crate) async fn build_inactive_multi_write_fs(
         .with_backups(backup_entries)
         .initial_partitions(bc.initial_partitions)
         .checkpoint_interval(Duration::from_secs(bc.checkpoint_interval_secs))
+        .reconcile_existing_data(bc.reconcile_existing_data)
         .ctx_resolver(Arc::new(RelativePathFsContextResolver))
         .build_inactive()
         .await

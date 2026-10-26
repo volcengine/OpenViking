@@ -11,7 +11,7 @@ import asyncio
 import inspect
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -792,6 +792,7 @@ class ResourceProcessor:
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
+        target_validator: Optional[Callable[[str, RequestContext], Awaitable[None]]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -803,6 +804,9 @@ class ResourceProcessor:
         3. Source commit moves temp content to the final path
         4. (Optional) Build vector index
         5. (Optional) Summarize
+
+        target_validator rejects the resolved destination before reservation or
+        source commit; its errors propagate after temporary artifact cleanup.
         """
         result = {
             "status": "success",
@@ -1024,11 +1028,14 @@ class ResourceProcessor:
                     if candidate_uri:
                         if resource_lock is not None:
                             root_uri = candidate_uri
+                            if target_validator is not None:
+                                await target_validator(root_uri, ctx)
                         else:
                             root_uri, resource_lock = await self.reserve_unique_candidate(
                                 candidate_uri=candidate_uri,
                                 ctx=ctx,
                                 root_is_file=root_is_file,
+                                target_validator=target_validator,
                             )
                             result["root_uri"] = root_uri
                             if root_uri != candidate_uri:
@@ -1037,6 +1044,8 @@ class ResourceProcessor:
                                     f"Tip: Use --to <path> to specify exact target."
                                 )
                     else:
+                        if target_validator is not None:
+                            await target_validator(root_uri, ctx)
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
                         if target_preexisting:
                             try:
@@ -1837,8 +1846,9 @@ class ResourceProcessor:
         ctx: RequestContext,
         max_attempts: int = 100,
         root_is_file: bool = False,
+        target_validator: Optional[Callable[[str, RequestContext], Awaitable[None]]] = None,
     ) -> tuple[str, Dict[str, Any]]:
-        """Pick the first free candidate URI and reserve it with a type-aware lock."""
+        """Validate the first free candidate before reserving it with a type-aware lock."""
         from openviking.storage.errors import ResourceBusyError
 
         viking_fs = get_viking_fs()
@@ -1849,6 +1859,9 @@ class ResourceProcessor:
             root_uri = candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
             if await viking_fs.exists(root_uri, ctx=ctx):
                 continue
+
+            if target_validator is not None:
+                await target_validator(root_uri, ctx)
 
             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
             try:

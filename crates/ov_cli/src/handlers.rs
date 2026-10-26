@@ -648,6 +648,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             name,
             role,
             page,
+            reveal_api_keys,
         } => {
             commands::admin::list_users(
                 &client,
@@ -656,6 +657,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 name,
                 role,
                 page,
+                reveal_api_keys,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -1459,6 +1461,7 @@ pub async fn handle_write(
     tags: Vec<String>,
     tag_mode: String,
     acl: Option<Value>,
+    edit_source: String,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1482,6 +1485,7 @@ pub async fn handle_write(
         tags,
         &tag_mode,
         acl,
+        &edit_source,
         ctx.output_format,
         ctx.compact,
     )

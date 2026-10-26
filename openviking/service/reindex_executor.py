@@ -25,6 +25,7 @@ from openviking.core.namespace import (
     is_session_uri,
     owner_space_for_uri,
 )
+from openviking.core.namespace_policy import namespace_policy_for_uri
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.service.task_domain import TaskPatch
@@ -54,6 +55,7 @@ from openviking_cli.utils.config.embedding_config import SUMMARY_TEXT_SOURCES
 logger = get_logger(__name__)
 
 REINDEX_TASK_TYPE = "admin_reindex"
+REINDEX_ENQUEUE_ERROR = "Failed to enqueue reindex processing"
 _MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 
 
@@ -202,7 +204,17 @@ class ReindexExecutor:
         tags: list[str] | None = None,
         tag_mode: str = "replace",
         ctx: RequestContext,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
+        """Run or enqueue reindex; task_id resumes an internal async submission.
+
+        A replay reuses accepted work. A pending record without queued work
+        resumes enqueueing under the same identity.
+        """
+        if not namespace_policy_for_uri(uri).supports_reindex:
+            raise InvalidArgumentError(f"reindex is not supported for namespace: {uri}")
+        if task_id is not None and wait:
+            raise InvalidArgumentError("task_id requires asynchronous reindex")
         object_type = self._infer_target_type(uri)
         self._validate_mode(object_type, mode)
         if not recursive and object_type in {
@@ -225,6 +237,7 @@ class ReindexExecutor:
             uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
+            **({"task_id": task_id} if task_id is not None else {}),
         )
         if task is None:
             raise OpenVikingError(
@@ -232,6 +245,23 @@ class ReindexExecutor:
                 code="CONFLICT",
                 details={"uri": uri},
             )
+
+        if task_id is not None and task.error == REINDEX_ENQUEUE_ERROR:
+            raise OpenVikingError(REINDEX_ENQUEUE_ERROR, code="UNAVAILABLE")
+        if task_id is not None and (
+            task.stage == "queued"
+            or task.status != "pending"
+            or await tracker.has_work(
+                task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+        ):
+            return {
+                "task_id": task.task_id,
+                "status": "accepted",
+                "uri": uri,
+                "object_type": object_type,
+                "mode": mode,
+            }
 
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.reindex_msg import ReindexMsg
@@ -288,10 +318,12 @@ class ReindexExecutor:
         except BaseException:
             if lock_guard is not None:
                 await lock_guard.close()
-            if not enqueued:
+            if not enqueued and not await tracker.has_work(
+                task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+            ):
                 await tracker.fail(
                     task.task_id,
-                    "Failed to enqueue reindex processing",
+                    REINDEX_ENQUEUE_ERROR,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )

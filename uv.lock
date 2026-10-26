@@ -3609,6 +3609,8 @@ bot = [
     { name = "lark-oapi" },
     { name = "mcp" },
     { name = "msgpack" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "opencode-ai" },
     { name = "opensandbox" },
     { name = "opensandbox-server" },
@@ -3764,6 +3766,7 @@ requires-dist = [
     { name = "msgpack", marker = "extra == 'bot'", specifier = ">=1.0.8" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "myst-parser", marker = "extra == 'doc'", specifier = ">=2.0.0" },
+    { name = "numpy", marker = "extra == 'bot'", specifier = ">=1.26.0" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "opencode-ai", marker = "extra == 'bot'", specifier = ">=0.1.0a0" },
     { name = "opensandbox", marker = "extra == 'bot'", specifier = ">=0.1.5" },
@@ -3773,7 +3776,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.40,<2" },
     { name = "opentelemetry-instrumentation-asyncio", specifier = ">=0.61b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.40,<2" },
-    { name = "openviking-sdk", specifier = ">=0.1.15" },
+    { name = "openviking-sdk", specifier = ">=0.1.17" },
     { name = "orjson", specifier = ">=3.11.7" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "pandas", marker = "extra == 'benchmark'", specifier = ">=2.0.0" },
@@ -3863,14 +3866,14 @@ dev = [{ name = "pytest", specifier = ">=9.0.2" }]
 
 [[package]]
 name = "openviking-sdk"
-version = "0.1.15"
+version = "0.1.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/0d/4363876996c031976749c448ce449e3d5d1503c30745dba3127404664940/openviking_sdk-0.1.15.tar.gz", hash = "sha256:51586349329180d665ff9f33613aa2a33eff47d6f3e390f00077204ac139612d", size = 57632, upload-time = "2026-10-13T08:19:31.295Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/f5/2f63ccc7543e14af9facf500db8774fbd03ef47c9f7d362882f27ccaf93f/openviking_sdk-0.1.17.tar.gz", hash = "sha256:9f365e02a780ad04e4573180924e5afbe71f84342956356afc1e6834b2291751", size = 58085, upload-time = "2026-10-26T03:26:29.718Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/c2/c95482ecfd3a77294f9396b57011c5b3d01aeda5f0493515413a13127f2e/openviking_sdk-0.1.15-py3-none-any.whl", hash = "sha256:0eeb296feb0c963b43a21fc4a59cab1a487960a7c647c684ca1562246be7bd57", size = 34783, upload-time = "2026-10-13T08:19:30.101Z" },
+    { url = "https://files.pythonhosted.org/packages/42/7a/95698db99666c833fcd9fec0050f7d26f3202080003373a73a1e35bc439e/openviking_sdk-0.1.17-py3-none-any.whl", hash = "sha256:9bd2b4df917d8d807876b10acee3cc69d4ce7d292bb3b0ac44379a6ed959d205", size = 35006, upload-time = "2026-10-26T03:26:28.264Z" },
 ]
 
 [[package]]

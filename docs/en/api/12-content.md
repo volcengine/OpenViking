@@ -144,14 +144,14 @@ Read the complete text of an L0, L1, or L2 file.
 | uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` (returned by `stat()`) |
 | offset | int | No | 0 | Starting line number (0-indexed) |
 | limit | int | No | -1 | Number of lines to read, `-1` means read to end |
-| raw | bool | No | false | Return raw stored content without memory-field cleanup. In Python, use `client.read_raw(uri)` to read this form. |
+| raw | bool | No | false | Skip default sanitization and MEMORY_FIELDS cleanup, and attempt placeholder restoration. In Python, use `client.read_raw(uri)`. |
 
 **Notes**
 
 - `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
 - Instead of a Viking URI, you may pass the 32-character hex `id` returned by `stat()` for a file. The server looks up the URI via the vector index and applies the same permission checks. Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup also fails if the corresponding vector record has been deleted. In both cases, the server returns `NOT_FOUND` and indicates that the data may not have been indexed yet or may have been deleted.
 - Public URI parameters accept `resources`, `user`, and `agent` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}/messages.jsonl` or the backward-compatible `viking://session/{session_id}/messages.jsonl` alias. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
-
+- Sensitive information handling: default reads (`raw=false`) preserve existing placeholders and sanitize remaining registered plaintext values; `raw=true` skips default sanitization and returns the restored content. Restoration affects only the response, not stored files; see [Privacy Configs](../concepts/13-privacy.md).
 
 **Python SDK**
 
@@ -347,6 +347,7 @@ Write multiple files below one Resource or Memory directory, then refresh the af
 | `wait` | boolean | No | `true` | Wait for semantic/vector refresh |
 | `telemetry` | boolean/object | No | `false` | Include operation telemetry |
 | `processing_mode` | string | No | `semantic_and_vectors` | One processing mode for the whole batch: `semantic_and_vectors` or `vectors_only` |
+| `defer_processing` | boolean | No | `false` | Save files without scheduling semantic or vector work; the caller schedules later processing |
 
 Each operation contains:
 
@@ -368,7 +369,7 @@ Each operation contains:
 - `create`, `replace`, and `upsert` are compatible spellings for setting the requested final body: they overwrite an existing file and create a missing one. `append` appends when the file exists and creates it with the supplied body when it does not.
 - `processing_mode` applies to the whole batch; operations cannot mix semantic modes. `vectors_only` maintains changed-file vectors without refreshing parent semantics.
 - `tags`, `tag_mode`, and `acl` apply per operation. Tags travel with the file's first vector upsert; `clear` does not require `tags` and ignores supplied tag values.
-- The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Semantic processing starts after all writes finish and the locks are released, refreshing the affected `.overview.md` and `.abstract.md` files together.
+- The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Without deferral, asynchronous processing retains the file locks until the associated work settles, refreshing the affected `.overview.md` and `.abstract.md` files together.
 - Resource parent refreshes use the same best-effort behavior as `write()`: L0/L1 lock conflicts skip the directory refresh and its vector updates while preserving file writes and file processing. A later refresh is not guaranteed.
 - An underlying I/O failure can still leave writes completed earlier in the batch visible.
 - Existing `.abstract.md` and `.overview.md` bodies may be replaced or appended. OpenViking preserves and validates protected OKF metadata and rebuilds only the directory's existing L0/L1 vectors for these operations.

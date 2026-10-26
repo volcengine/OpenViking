@@ -12,9 +12,9 @@ import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from openviking.server.account_stores.file import FileStore
 from openviking.server.account_stores.mysql_schema import Account, Base, Credential, GroupMember
-from openviking.server.api_keys import APIKeyManager
-from openviking.server.api_keys.legacy import FileStore
+from openviking.server.api_keys import APIKeyManager, generate_api_key
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
@@ -37,15 +37,16 @@ def _file_store() -> FileStore:
         pytest.param("acme", "u" * 1024, id="long-existing-user"),
     ],
 )
-async def test_legacy_user_without_role_defaults_to_user_during_authentication(account_id, user_id):
+async def test_user_without_role_defaults_to_user_during_authentication(account_id, user_id):
     agfs = InMemoryAGFS()
     agfs.write(
         "/local/_system/accounts.json",
-        json.dumps({"accounts": {account_id: {"created_at": "legacy"}}}).encode(),
+        json.dumps({"accounts": {account_id: {"created_at": "existing"}}}).encode(),
     )
+    api_key = generate_api_key(account_id, user_id)
     agfs.write(
         f"/local/{account_id}/_system/users.json",
-        json.dumps({"users": {user_id: {"key": "legacy-key"}}}).encode(),
+        json.dumps({"users": {user_id: {"key": api_key}}}).encode(),
     )
     manager = build_api_key_manager("root", SimpleNamespace(agfs=agfs))
     await manager.load()
@@ -54,12 +55,31 @@ async def test_legacy_user_without_role_defaults_to_user_during_authentication(a
             "created_accounts": 0,
             "created_users": 0,
         }
-        identity = await manager.resolve_identity("legacy-key")
+        identity = await manager.resolve_identity(api_key)
         assert (identity.account_id, identity.user_id, identity.role) == (
             account_id,
             user_id,
             Role.USER,
         )
+    finally:
+        await manager.close()
+
+
+async def test_legacy_key_format_is_rejected_during_authentication():
+    agfs = InMemoryAGFS()
+    agfs.write(
+        "/local/_system/accounts.json",
+        json.dumps({"accounts": {"acme": {"created_at": "existing"}}}).encode(),
+    )
+    agfs.write(
+        "/local/acme/_system/users.json",
+        json.dumps({"users": {"alice": {"key": "legacy-key", "role": "user"}}}).encode(),
+    )
+    manager = build_api_key_manager("root", SimpleNamespace(agfs=agfs))
+    await manager.load()
+    try:
+        with pytest.raises(UnauthenticatedError):
+            await manager.resolve_identity("legacy-key")
     finally:
         await manager.close()
 

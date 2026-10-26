@@ -64,8 +64,8 @@ rerun it from the path it prints — Claude Code executes hooks from that copy.
 The API key is never printed in full. Three-segment keys are shown as
 `account=<a> user=<u> secret=abcd…wxyz` (the first two segments are just
 base64url identity, decoded so the user can see which account/user the key
-claims); legacy keys as `abcd…wxyz (64 chars)`. Keep it that way in anything
-you show the user.
+claims). Other shapes are shown as `abcd…wxyz (N chars, unsupported format)`.
+Keep it that way in anything you show the user.
 
 ## Step 2 — map findings to causes
 

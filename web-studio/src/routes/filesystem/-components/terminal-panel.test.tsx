@@ -10,16 +10,18 @@ afterEach(() => {
 })
 
 describe('TerminalHistoryItem', () => {
-  it('renders command entries with their terminal icon', () => {
+  it('shows the full command in a right-aligned bubble', () => {
+    const command =
+      'ov add-resource https://example.com/spec.md --to viking://resources/spec'
     const { container } = render(
       <TerminalHistoryItem
-        entry={{ id: 'command-1', kind: 'command', title: '/ls' }}
+        entry={{ id: 'command-1', kind: 'command', title: command }}
         onOpenResource={vi.fn()}
         openingUri={null}
       />,
     )
 
-    expect(screen.getByText('/ls')).not.toBeNull()
-    expect(container.querySelector('svg')).not.toBeNull()
+    expect(screen.getByText(command)).not.toBeNull()
+    expect(container.querySelector('.justify-end')).not.toBeNull()
   })
 })

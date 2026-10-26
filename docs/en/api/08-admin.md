@@ -309,7 +309,7 @@ objects using YAML field names such as `fields[].type`. List returns
 Storage is per Account and per type:
 
 ```text
-/local/{account_id}/_system/memory_templates/
+viking://system/memory/memory_templates/custom/
   profile.yaml
   preferences.yaml
   events.yaml
@@ -318,11 +318,18 @@ Storage is per Account and per type:
 
 Only published overrides create files. Each file contains the complete schema
 and an internal `_updated_at` timestamp; no `memory_templates.json` is used.
-The previous content is backed up to `{type}.yaml.backup`. Access goes through
+Updates and resets do not create visible backups and remove legacy
+`{type}.yaml.backup` files. Access goes through
 AGFS, preserving the deployment's encryption/storage configuration. Do not edit
 encrypted backing files directly. `setting.json` and User `user_config.json`
 are unchanged. Personal deployments use the default Account; enterprise
 deployments use the target Account, with no separate kernel storage layout.
+
+Reads prefer the new path above and only fall back to
+`/local/{account_id}/_system/memory_templates/{type}.yaml` when the new file is
+absent. Reads never migrate or rewrite files. If the higher-priority file is
+damaged, the server reports an error instead of silently falling back to the
+lower-priority file or deployment defaults.
 
 Template reads do not acquire locks. Publication writes a unique staging file in
 the same directory, then switches the active path through AGFS: LocalFS uses a
@@ -331,11 +338,15 @@ the staging object, without deleting the destination first. Readers may see the
 complete old or new version, or deployment defaults before the first publication
 and after DELETE. This is per-file publication, not a transaction across an
 entire template listing or registry snapshot.
-Writers/DELETE still use cross-process locks; publication locks cover both the
-active and staging paths. Contention uses zero-wait attempts with asynchronous
+Writers/DELETE still use cross-process locks; publication locks cover the new,
+legacy, obsolete backup, and staging paths. PUT publishes only to the new path
+and removes the legacy file after publication succeeds. DELETE removes the
+legacy file before the new file so that an old override cannot become active
+again. Explicit PUT/DELETE requests may replace or remove damaged content. Contention uses
+zero-wait attempts with asynchronous
 backoff for up to 10 seconds, leaving executor threads available for I/O/release.
-A failed staging write leaves the active file unchanged. Post-publication cleanup
-errors only produce warnings, never an in-place rollback. If the move reports an
+A failed staging write leaves the active file unchanged. Post-publication staging
+cleanup errors only produce warnings, never an in-place rollback. If the move reports an
 error, the destination is checked: a verified publication is retained; an
 unverifiable outcome returns an error without blindly restoring the old version.
 Use GET to confirm its state. Cancellation stops lock retries, but already
@@ -1582,7 +1593,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 2. Call API Key Manager to get active users list (in creation order)
 3. Apply optional filters (name, role)
 4. Apply optional `limit`/`page` pagination
-5. Return users list (trusted mode omits user_key)
+5. Return users list with role-based credential visibility (trusted mode omits credentials)
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_users` - HTTP route
@@ -1600,14 +1611,18 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | role | str | No | null | Filter by role |
 | query | str | No | null | HTTP-only, case-insensitive literal substring match on user IDs |
 | include_summary | bool | No | false | HTTP-only, return paginated users and account statistics in an object |
-| include_credentials | bool | No | true | HTTP-only. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. `api_key_available` is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. The default preserves the existing mode-dependent response. |
+| include_credentials | bool | No | true | HTTP-only. ROOT receives all available plaintext keys; ADMIN receives its own plaintext key and masked prefixes for other users. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. `api_key_available` is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. |
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
 **Notes:**
 - Results are returned in creation order
 - ADMIN can only list users in their own account
-- In `trusted` mode, `user_key` is omitted from the response
+- ROOT receives every stored key as plaintext in `api_key`. A non-ROOT caller receives plaintext in `api_key` only for its own row; every other user (including other ADMIN users) is returned as a masked `key_prefix`. Self-matching is strict: the listing account, the row's user ID, and the account/user segments embedded in the three-segment key must all equal the caller's authenticated identity; otherwise the row is masked. Three-segment keys retain the first two segments and only the last four characters of the secret segment; every preceding secret character is replaced by `*`. Secrets of four characters or fewer are completely hidden. Keys that are not in the three-segment format are fully masked. Hash-only credentials retain their existing prefix.
+- Masking is enforced by the server for HTTP and MCP `list_users(include_credentials=true)`, so it also applies to CLI/SDK JSON output. Clients must treat `key_prefix` as display-only and require a supplied key to switch identities.
+- `ov admin list-users` additionally masks the plaintext `api_key` rows client-side by default, in both table and JSON output, and prints a notice on stderr. Pass `--reveal-api-keys` to emit plaintext: ROOT then shows every key, while an ADMIN/USER caller still sees only its own key (other rows are masked by the server). The flag affects CLI rendering only and does not change the server response. In table output the server's `api_key` (plaintext or client-masked) and `key_prefix` fields are merged into a single `api_key` column; JSON output keeps the server field names.
+- This restriction applies to stored-key listing. Registration and key regeneration still return the newly issued key to ROOT or ADMIN; ordinary USER self-service key rotation is not yet available.
+- In `trusted` mode, both `api_key` and `key_prefix` are omitted from the response
 - Users whose deletion has started are no longer returned
 
 **Summary responses (HTTP):** Set `include_summary=true` to return an object in `result` with `users` (the current page), `total` (matching users), `account_total`, `manager_count` (admin/root), and `key_count` (users with a visible key or prefix). Account statistics ignore search/role filters and exclude deleting users; `key_count` is zero when key exposure is disabled. The default remains a user array for existing callers.
@@ -1677,6 +1692,8 @@ fmt.Println(users)
 ov admin list-users acme
 # If using root_api_key (--sudo):
 ov --sudo admin list-users acme
+# Show plaintext keys instead of masked values (ROOT: all keys; ADMIN/USER: own key only)
+ov --sudo admin list-users acme --reveal-api-keys
 # Filter by wildcard name
 ov admin list-users acme --name '*ali*'
 # Paginated

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from openviking.session.memory.account_templates import memory_template_data
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
@@ -1273,6 +1274,53 @@ sdk.commit()
         {"search": "Use Vim", "replace": "Use Neovim"},
         {"delete": "Dark theme"},
     ]
+
+
+@pytest.mark.parametrize("supersedes", [None, "", "older_pattern"])
+def test_python_experience_supersedes_is_optional(supersedes):
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.load_from_yaml(str(resolve_memory_templates_dir() / "experiences.yaml"))
+    schema = registry.get("experiences")
+    schema = registry._parse_memory_type(memory_template_data(schema))
+    context = _context([schema])
+    protocol = create_extraction_output_protocol("python")
+    argument = "" if supersedes is None else f", supersedes={supersedes!r}"
+
+    operations, error = protocol.parse(
+        f"sdk.create_experiences(experience_name='pattern', content='insight'{argument})\n"
+        "sdk.commit()",
+        context,
+    )
+
+    assert error is None
+    assert operations.model_dump()["experiences"][0]["supersedes"] == supersedes
+    assert "supersedes is optional; may be omitted" in protocol.render_contract(context)
+
+
+@pytest.mark.parametrize(
+    "filename_template, verb", [("{{ topic }}.md", "create"), ("fixed.md", "set")]
+)
+def test_python_optional_fields_do_not_relax_required_fields(filename_template, verb):
+    schema = _preference_schema()
+    schema.filename_template = filename_template
+    schema.fields[1].init_value = "initial content"
+    schema.fields[-1] = MemoryField(
+        name="score", field_type=FieldType.INT64, merge_op=MergeOp.SUM, required=False
+    )
+    context = _context([schema])
+    protocol = create_extraction_output_protocol("python")
+
+    operations, error = protocol.parse(
+        f"sdk.{verb}_preferences(topic='editor', content='Use Vim')\nsdk.commit()", context
+    )
+    assert error is None
+    assert operations.model_dump()["preferences"][0]["score"] is None
+
+    operations, error = protocol.parse(
+        f"sdk.{verb}_preferences(topic='editor')\nsdk.commit()", context
+    )
+    assert operations is None
+    assert "missing: content" in error
 
 
 @pytest.mark.parametrize("memory_type", ["experiences", "entities"])

@@ -1154,7 +1154,7 @@ TypeSafe direct access; the adapter does not special-case Vercel:
   "rerank": {
     "provider": "jev",
     "api_key": "your-vercel-ai-gateway-api-key",
-    "api_base": "https://ai-gateway.vercel.sh/typesafe",
+    "api_base": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
     "model": "typesafe-ai/jev",
     "threshold": 0.1
   }
@@ -1196,13 +1196,13 @@ using Choice through MCP.
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
 | `api_key` | str | API key (for `openai`, `cohere`, or `jev` providers) |
-| `api_base` | str | Endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai`, Vercel uses `https://ai-gateway.vercel.sh/typesafe`) |
+| `api_base` | str | Complete endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai/v1/systemone`, Vercel uses `https://ai-gateway.vercel.sh/typesafe/v1/systemone`; custom Jev URLs are used unchanged) |
 | `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
 | `mode` | `"noul"`, `"choice"`, or `null` | Jev rerank mode. `null` and omission use `"noul"` |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
 | `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
-| `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `threshold` | float | Rerank score threshold between `0.0` and `1.0`; reranked results below this are filtered out. It never filters vector scores (rerank not used, or failed), and a request `score_threshold` overrides it. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Supported providers:**
@@ -1222,6 +1222,7 @@ Configuration for session intent analysis and context assembly timeouts.
 {
   "retrieval": {
     "enable_intent": true,
+    "apply_rerank_to_context": false,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -1231,6 +1232,7 @@ Configuration for session intent analysis and context assembly timeouts.
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `enable_intent` | bool | Run intent analysis and query planning when `search()` receives a `session_id`. | `true` |
+| `apply_rerank_to_context` | bool | Rerank `mode="context"` candidates with the configured [`rerank`](#rerank) model, once per request against the original query and its expansions, before quotas and the token budget apply. Needs a usable `rerank` config; image queries keep vector scores. | `false` |
 
 Session intent analysis in ordinary `search()` and query expansion in `mode="context"` share `recall_intent_timeout_s`. Context digest rewriting uses a separate timeout:
 
@@ -1376,6 +1378,7 @@ top-level backend remains the only direct read source.
       "backups": {
         "initial_partitions": 16,
         "checkpoint_interval_secs": 86400,
+        "reconcile_existing_data": false,
         "provider": "filesystem",
         "items": [
           {
@@ -1398,6 +1401,7 @@ Common `backups` fields:
 |-----------|------|-------------|---------|
 | `initial_partitions` | int | Initial metadata partitions; changes do not affect existing accounts | `16` |
 | `checkpoint_interval_secs` | int | Checkpoint discovery interval; minimum `60` | `86400` |
+| `reconcile_existing_data` | bool | Scan primary files that already exist when multi-write is first enabled and record them in V2 metadata. Keep `false` only when backups are already aligned or historical backfill is intentionally skipped. | `false` |
 | `provider` | str | Metadata provider: `filesystem` or top-level CacheRuntime-backed `cache` | `"filesystem"` |
 | `items` | array | Backups with `name`, `backend`, `params`, and optional `encryption` | `[]` |
 

@@ -12,7 +12,6 @@ import pytest
 
 from openviking.message import Message
 from openviking.message.part import TextPart, ToolPart
-from openviking.prompts.manager import PromptManager
 from openviking.pyagfs.exceptions import AGFSIoError
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
@@ -44,6 +43,7 @@ from openviking.session.memory.utils import (
     parse_memory_file_with_fields,
 )
 from openviking.storage.abstract_overview import parse_abstract_overview
+from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -127,9 +127,7 @@ class TestMemoryUpdater:
         assert "User reason" not in content
 
         registry = MemoryTypeRegistry(load_schemas=False)
-        registry.load_from_yaml(
-            str(PromptManager._get_bundled_templates_dir() / "memory" / "events.yaml")
-        )
+        registry.load_from_yaml(str(builtin_memory_templates_dir() / "events.yaml"))
         rendered = MemoryFileUtils.write(
             MemoryFile(
                 extra_fields={
@@ -205,9 +203,7 @@ class TestMemoryUpdater:
         assert messages == original
 
         registry = MemoryTypeRegistry(load_schemas=False)
-        registry.load_from_yaml(
-            str(PromptManager._get_bundled_templates_dir() / "memory" / "events.yaml")
-        )
+        registry.load_from_yaml(str(builtin_memory_templates_dir() / "events.yaml"))
         rendered = MemoryFileUtils.write(
             MemoryFile(extra_fields={"summary": "Summary", "ranges": "0-3"}),
             content_template=registry.get("events").content_template,
@@ -450,9 +446,10 @@ class TestMemoryUpdater:
     @pytest.mark.asyncio
     async def test_generate_overview_template_fallbacks_for_builtin_memories(self):
         registry = MemoryTypeRegistry(load_schemas=False)
-        registry.load_from_yaml("openviking/prompts/templates/memory/cases.yaml")
-        registry.load_from_yaml("openviking/prompts/templates/memory/entities.yaml")
-        registry.load_from_yaml("openviking/prompts/templates/memory/preferences.yaml")
+        memory_dir = builtin_memory_templates_dir()
+        registry.load_from_yaml(str(memory_dir / "cases.yaml"))
+        registry.load_from_yaml(str(memory_dir / "entities.yaml"))
+        registry.load_from_yaml(str(memory_dir / "preferences.yaml"))
 
         case_dir = "viking://user/alice/memories/cases"
         case_uri = f"{case_dir}/merged_case.md"

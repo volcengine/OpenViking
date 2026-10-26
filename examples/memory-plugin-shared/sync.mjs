@@ -103,6 +103,11 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
@@ -132,6 +137,11 @@ export const SKILL_TARGETS = [
   {
     skill: "openviking-skills",
     dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
     committed: true,
   },
   {
@@ -181,6 +191,11 @@ export const SKILL_TARGETS = [
   {
     skill: "ov-experience-memory",
     dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
     committed: true,
   },
   {

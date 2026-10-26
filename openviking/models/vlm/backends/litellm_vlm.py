@@ -473,8 +473,11 @@ class LiteLLMVLMProvider(VLMBase):
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
         return _call()
@@ -505,8 +508,11 @@ class LiteLLMVLMProvider(VLMBase):
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
         return await _call()
@@ -529,8 +535,11 @@ class LiteLLMVLMProvider(VLMBase):
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
         return _call()
@@ -553,8 +562,11 @@ class LiteLLMVLMProvider(VLMBase):
             response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
         return await _call()

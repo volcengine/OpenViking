@@ -724,7 +724,7 @@ async def test_is_new_format_key_validation():
     valid_key = generate_api_key("account", "user")
     assert is_new_format_key(valid_key)
 
-    # Legacy format (64 hex chars)
+    # Bare single-segment keys are not accepted
     assert not is_new_format_key("a" * 64)
 
     # Empty string

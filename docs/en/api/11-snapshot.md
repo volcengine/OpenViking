@@ -1,10 +1,10 @@
 # Snapshots (Multi-Version Management)
 
-Snapshots save immutable versions of a selected file tree. Use `commit` to save a version, `log` to browse history, `show` to read an older file, `diff` to compare a file between versions, and `restore` to recover saved content. Uncommitted or excluded files are outside the recovery scope; ACLs and vector indexes are not versioned.
+Snapshots save immutable versions of a selected file tree. Use `commit` to save a version, `log` to browse history, `show` to read an older file, `diff` to compare file contents, `diff-paths` to list changed files, and `restore` to recover saved content. Uncommitted or excluded files are outside the recovery scope; ACLs and vector indexes are not versioned.
 
 Snapshots are powered by [gitoxide](https://github.com/Byron/gitoxide) embedded in the Rust RAGFS layer, maintaining one logical Git repository per `account_id`. Use the snapshot APIs to manage versions; direct edits to the underlying repository are not part of this workflow.
 
-The five core commands:
+The core commands:
 
 | Command | Purpose |
 |---------|---------|
@@ -12,6 +12,7 @@ The five core commands:
 | `log` | Walk commit history starting from the newest |
 | `show` | View a commit's metadata, or read a file's content from that commit |
 | `diff` | Compare one file between two snapshots as a unified diff |
+| `diff-paths` | Page changed source files under selected directories |
 | `restore` | Restore a directory (or the whole account tree) to a past snapshot |
 
 In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/`set`/`delete`) to exclude matching files from `commit`. See [Ignore management](#ignore-management).
@@ -30,6 +31,7 @@ Snapshots use the current ACL at operation time. ACLs are not stored in snapshot
 | Operation | Required permission |
 |-----------|---------------------|
 | `show(path=...)` / `diff` / `log` | `read` |
+| `diff_paths` | `read` on requested directories and every changed file; any denied descendant rejects the whole query without exposing its URI |
 | `commit` | `write`; directories recursively check every current descendant and fail as a whole if any node is denied |
 | `restore` overwriting a file | `write` on the file |
 | `restore` creating a file | `write` on the parent directory |
@@ -385,6 +387,61 @@ ov snapshot diff viking://resources/my_project/guide.md \
 
 ---
 
+### diff_paths()
+
+List source files added, modified, or deleted under one or more directories between snapshots. Derived summaries (`.abstract.md`, `.overview.md`, `.relations.json`) are excluded. Overlapping directory scopes produce one entry per file, ordered by URI.
+
+| HTTP parameter | Required | Default | Description |
+|----------------|----------|---------|-------------|
+| `paths` | Yes | - | Directory URIs; repeat the query parameter for each directory |
+| `from` | No | null | Base snapshot ref; omit it (SDK `from_ref=None`) to compare against an empty tree and list target files as `added` |
+| `to` | Yes | - | Valid target snapshot ref; cannot be empty or null |
+| `offset` | No | 0 | Non-negative starting position |
+| `limit` | No | 100 | Page size, from 1 to 1000 |
+
+**HTTP API**
+
+```http
+GET /api/v1/snapshot/diff-paths?paths={uri1}&paths={uri2}&from={base}&to={head}&offset=0&limit=100
+```
+
+**CLI**
+
+```bash
+ov snapshot diff-paths \
+  --paths viking://resources/research,viking://resources/notes \
+  --from 3f2a1b9c --to 9a0b1c2d --offset 0 --limit 100 -o json
+```
+
+**Python SDK (HTTP)**
+
+```python
+page = client.snapshot.diff_paths(
+    ["viking://resources/research", "viking://resources/notes"],
+    from_ref="3f2a1b9c", to_ref="9a0b1c2d", offset=0, limit=100,
+)
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "changes": [{"uri": "viking://resources/research/guide.md", "change_type": "modified"}],
+    "offset": 0,
+    "limit": 100,
+    "total": 1,
+    "has_more": false,
+    "next_offset": null
+  }
+}
+```
+
+`change_type` is `added`, `modified`, or `deleted`. While `has_more` is true, query `next_offset` with the same paths and snapshot IDs; only the final page has `next_offset=null`. Pagination limits the response size; the underlying comparison still computes the complete change list. Use [diff()](#diff) or [show()](#show) to read file contents.
+
+---
+
 ### restore()
 
 Restore a directory (or the whole account tree) to its state at `source_commit`.
@@ -522,6 +579,37 @@ With `dry_run=true`, only the planned diff is returned and nothing is written. D
   }
 }
 ```
+
+---
+
+### Single-file version restore (HTTP API)
+
+`POST /api/v1/snapshot/restore` also restores historical content of a Compile output file. This mode requires the following three fields and cannot be combined with `project_dir` or `source_commit`:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| path | str | `viking://` URI of the Compile output file |
+| restore_version | str | Historical version supplying the restored content, such as `v1` |
+| current_version | str | Current version that must match before writing, such as `v2`; a mismatch returns `409 CONFLICT` with `error.details.resource: "VERSION_CONFLICT"` |
+
+Call `GET /api/v1/snapshot/versions?uri=<file URI>` to obtain `current_version` and the version history before submitting a restore:
+
+The response's `total` counts all retained, queryable versions before applying `limit` or `before_version`; use `next_before_version` to load older versions.
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "viking://resources/wiki/entity/project.md",
+    "restore_version": "v1",
+    "current_version": "v2"
+  }'
+```
+
+When v1 differs from the current content, restoring creates v3 with v1's content and preserves the history of v1 and v2. The response contains `version_id: "v3"` and `meta.restored_from: "v1"`. Identical content returns `result: "noop"` and `meta.restored_from: null` without creating a version.
+
+Only the specified file is restored; related Wiki pages and index content retain their current content. A running Compile on the target returns `409 CONFLICT` with `error.details.resource: "COMPILE_RUNNING"`. This mode does not provide a `dry_run` preview; directory restore preview options do not apply to single-file restore.
 
 ---
 

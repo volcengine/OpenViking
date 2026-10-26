@@ -5,7 +5,7 @@
 import asyncio
 import sys
 from dataclasses import replace
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
@@ -32,6 +32,9 @@ from openviking_cli.exceptions import (
 
 def _pkg():
     return sys.modules[__package__]
+
+
+_DERIVED_FILE_NAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
 
 
 class _SnapshotMixin:
@@ -204,6 +207,7 @@ class _SnapshotMixin:
         author_name: Optional[str] = None,
         author_email: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a git snapshot of the account's tree.
 
@@ -219,6 +223,7 @@ class _SnapshotMixin:
             branch: Branch to advance. Defaults to ``"main"``.
             author_name / author_email: Override the default bot author.
             ctx: Request context (provides ``account_id``).
+            lease_ref: Existing content lease whose ownership the snapshot shares.
 
         Returns:
             Dict with ``result`` (``"created"`` / ``"noop"``) and ``commit_oid``.
@@ -286,7 +291,8 @@ class _SnapshotMixin:
         lease = None
         if lock_requests:
             try:
-                lease = await self._async_agfs.pathlock_acquire_batch(lock_requests)
+                lock_options = {"owner_lease_ref": lease_ref} if lease_ref is not None else {}
+                lease = await self._async_agfs.pathlock_acquire_batch(lock_requests, **lock_options)
             except LockAcquisitionError as exc:
                 raise ResourceBusyError(
                     "A snapshot path is being processed",
@@ -322,6 +328,7 @@ class _SnapshotMixin:
         author_name: Optional[str] = None,
         author_email: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
+        record_restore: Optional[Callable[..., Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         """Restore a project subtree to the state at ``source_commit``.
 
@@ -341,6 +348,8 @@ class _SnapshotMixin:
             message: Optional commit message; defaults to a generated string.
             author_name / author_email: Override the default bot author.
             ctx: Request context (provides ``account_id``).
+            record_restore: Optional version callback under the writeback lease;
+                whole-account restores also lend it the metadata-covering lease.
 
         Returns:
             Dict containing ``result`` (``"applied"`` / ``"noop"`` / ``"dry_run"``)
@@ -417,6 +426,7 @@ class _SnapshotMixin:
             else f"/local/{account}"
         )
         partial_exc: Optional[GitRestoreWritebackPartialError] = None
+        record_error: Optional[BaseException] = None
         try:
             lease = await self._async_agfs.pathlock_acquire_tree(lock_path)
         except LockAcquisitionError:
@@ -447,6 +457,19 @@ class _SnapshotMixin:
                 # re-raise happen below, outside the tree lock.
                 partial_exc = exc
                 result = None
+            if record_restore is not None:
+                try:
+                    from openviking.service.task_tracker_concurrency import run_to_completion
+
+                    await run_to_completion(
+                        lambda: record_restore(
+                            partial_exc.to_dict() if partial_exc else result,
+                            lease_ref=lease,
+                            metadata_lease=lease if project_dir is None else None,
+                        )
+                    )
+                except BaseException as exc:
+                    record_error = exc
         finally:
             await self._async_agfs.pathlock_release(lease)
 
@@ -471,6 +494,8 @@ class _SnapshotMixin:
             raise partial_exc
 
         if result.get("result") != "applied":
+            if record_error is not None:
+                raise record_error
             return result
 
         written = list(result.get("written_paths") or [])
@@ -495,6 +520,8 @@ class _SnapshotMixin:
                     deleted=deleted,
                     ctx=self._restore_reindex_context(real_ctx),
                 )
+        if record_error is not None:
+            raise record_error
         return result
 
     async def _schedule_restore_reindex_for_paths(
@@ -760,6 +787,35 @@ class _SnapshotMixin:
             limit=limit,
             paths=tree_paths,
         )
+
+    async def diff_paths(
+        self,
+        *,
+        dirs: List[str],
+        base: Optional[str],
+        head: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[Dict[str, str]]:
+        """List files changed under ``dirs`` between two commits.
+
+        ``base=None`` treats every file as added. Requires read access only;
+        derived summaries (.abstract.md / .overview.md / .relations.json) are
+        omitted so regenerated summaries do not count as source changes.
+        """
+        real_ctx = self._ctx_or_default(ctx)
+        await self._ensure_access_many(dirs, real_ctx, action=AclAction.READ)
+        changes = await self._async_agfs.run(
+            "git_diff_paths",
+            account=real_ctx.account_id,
+            base=base,
+            head=head,
+            paths=[self._uri_to_tree_path(uri, ctx=real_ctx) for uri in dirs],
+        )
+        return [
+            {"uri": self._tree_path_to_uri(path), "change_type": change}
+            for path, change in changes
+            if path.rsplit("/", 1)[-1] not in _DERIVED_FILE_NAMES
+        ]
 
     def _collect_restore_vector_tasks(
         self,

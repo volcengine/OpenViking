@@ -33,7 +33,7 @@ dependencies = [
     "async-timeout>=5.0.1",
     "orjson>=3.11.7",
     "packaging>=24.0",
-    "openviking-sdk>=0.1.15",
+    "openviking-sdk>=0.1.17",
     "pydantic>=2.0.0",
     "typing-extensions>=4.5.0",
     "pyyaml>=6.0",
@@ -176,6 +176,7 @@ bot = [
   "python-socketio>=5.16.2",
   "python-engineio>=4.13.2",
   "msgpack>=1.0.8",
+  "numpy>=1.26.0",
   "python-socks[asyncio]>=2.4.0",
   "prompt-toolkit>=3.0.0",
   "pygments>=2.16.0",
@@ -248,6 +249,7 @@ openviking_gateway = ["client-rules.json"]
 "vikingbot.studio.providers.feishu" = ["icon.png"]
 openviking = [
     "prompts/templates/**/*.yaml",
+    "system_assets/**/*",
     "server/static/**/*",
     "web_studio/dist/**/*",
     "lib/ragfs_python*.so",

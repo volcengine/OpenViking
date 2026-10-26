@@ -920,6 +920,7 @@ fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
 
 mod git;
 mod privacy;
+mod privacy_extractor;
 
 fn py_detach_blocking<T, F>(py: Python<'_>, f: F) -> T
 where
@@ -1800,6 +1801,30 @@ impl RAGFSBindingClient {
                 git::new_py_err_pub(py, "AGFSInternalError", message)
             }
         })
+    }
+
+    /// List changed files under directories between two commits.
+    #[pyo3(signature = (**kwargs))]
+    fn git_diff_paths(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Vec<(String, String)>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let empty = PyDict::new(py);
+        let kw = kwargs.unwrap_or(&empty);
+        let req = git::parse_diff_paths_request(kw)?;
+        let resp = py_detach_blocking(py, move || {
+            self.rt
+                .block_on(svc.diff_paths(&req.account, req.base.as_deref(), &req.head, &req.paths))
+        })
+        .map_err(|e| git::map_git_error(py, e))?;
+        Ok(resp
+            .into_iter()
+            .map(|(path, change)| (path, change.to_string()))
+            .collect())
     }
 
     /// Walk snapshot history, optionally filtered to commits touching paths.
@@ -3067,6 +3092,7 @@ impl RAGFSBindingClient {
 fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RAGFSBindingClient>()?;
     m.add_class::<privacy::PyPrivacyMatcher>()?;
+    m.add_class::<privacy_extractor::PyPrivacyExtractor>()?;
     m.add_function(wrap_pyfunction!(reopen_tracing_file, m)?)?;
 
     // Import the Python business exception so native code raises the same type

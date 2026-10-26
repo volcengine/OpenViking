@@ -19,7 +19,7 @@ from openviking.core.identifiers import (
     validate_user_id,
 )
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.api_keys.legacy import validate_file_account_id
+from openviking.server.account_stores.file import validate_file_account_id
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager

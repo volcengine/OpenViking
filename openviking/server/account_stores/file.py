@@ -55,23 +55,11 @@ GROUPS_PATH_TEMPLATE = "/local/{account_id}/_system/groups.json"
 _MAX_FILE_ACCOUNT_ID_BYTES = 255
 
 
-# Argon2id parameters - export with LEGACY_ prefix for reuse in new.py
+# Argon2id parameters shared with API key hashing.
 ARGON2_TIME_COST = 3
 ARGON2_MEMORY_COST = 65536
 ARGON2_PARALLELISM = 2
 ARGON2_HASH_LENGTH = 32
-
-# Also export with LEGACY_ prefix for clarity when imported by new.py
-LEGACY_ARGON2_TIME_COST = ARGON2_TIME_COST
-LEGACY_ARGON2_MEMORY_COST = ARGON2_MEMORY_COST
-LEGACY_ARGON2_PARALLELISM = ARGON2_PARALLELISM
-LEGACY_ARGON2_HASH_LENGTH = ARGON2_HASH_LENGTH
-
-
-def derive_seeded_api_key_secret(user_id: str, seed: str) -> str:
-    if not isinstance(seed, str) or seed == "":
-        raise InvalidArgumentError("seed must not be empty")
-    return hashlib.sha256(f"{user_id}\0{seed}".encode("utf-8")).hexdigest()
 
 
 def validate_file_account_id(account_id: str) -> None:
@@ -97,7 +85,7 @@ def _paginate(items: list, limit: int | None, page: int) -> list:
 
 
 class FileStore(AccountStore):
-    """File-backed account and API key store over the legacy AGFS layout."""
+    """File-backed account and API key store over the AGFS registry layout."""
 
     def __init__(
         self,

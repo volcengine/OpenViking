@@ -427,6 +427,13 @@ JSON 输出 - 错误：
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | 分页查询应用过指定 Experience 的 Trajectory |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | 聚合应用过指定 Experience 的 Trajectory 结果分布 |
 
+### [规则（Beta）](26-rules.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/rules/compile` | 提交规则编译后台任务 |
+| POST | `/api/v1/rules/search` | 按任务上下文召回适用的 active 规则 |
+
 ### [检索](06-retrieval.md)
 
 | 方法 | 路径 | 说明 |
@@ -450,9 +457,11 @@ JSON 输出 - 错误：
 | POST | `/api/v1/watches/{task_id}/trigger` | 按任务 ID 触发 watch |
 | POST | `/api/v1/snapshot/commit` | 创建快照 |
 | GET | `/api/v1/snapshot/log` | 查看快照历史 |
+| GET | `/api/v1/snapshot/versions` | 列出 Compile 产出文件的版本 |
 | POST | `/api/v1/snapshot/restore` | 恢复历史快照 |
 | GET | `/api/v1/snapshot/show` | 查看快照或其中的文件 |
 | GET | `/api/v1/snapshot/diff` | 对比快照 |
+| GET | `/api/v1/snapshot/diff-paths` | 分页列出变化的源文件 |
 | GET | `/api/v1/snapshot/ignore` | 读取快照忽略规则 |
 | PUT | `/api/v1/snapshot/ignore` | 替换快照忽略规则 |
 | DELETE | `/api/v1/snapshot/ignore` | 清空快照忽略规则 |
@@ -574,6 +583,11 @@ JSON 输出 - 错误：
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
+| GET | `/api/v1/compile/config` | 读取目标配置 |
+| POST | `/api/v1/compile/config/update` | 更新目标配置 |
+| GET | `/api/v1/compile/configs` | 列出可见目标 |
+| GET | `/api/v1/compile/operations` | 列出目标操作记录 |
+| GET | `/api/v1/compile/operations/{operation_id}/outputs` | 列出操作产出及版本引用 |
 | POST | `/api/v1/compile/embeddings` | 生成 Compile 临时路由文本的向量 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
 | GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |

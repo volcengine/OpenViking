@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         PutOp,
         SearchItem,
         SearchOp,
+        get_text_at_path,
     )
 else:
     try:
@@ -47,6 +48,7 @@ else:
             PutOp,
             SearchItem,
             SearchOp,
+            get_text_at_path,
         )
     except ImportError:  # pragma: no cover - exercised by optional import path
         _LANGGRAPH_IMPORT_ERROR = missing_dependency("langgraph", "langgraph")
@@ -559,7 +561,11 @@ def _extract_uris(value: Any) -> list[str]:
 
 def _project_value(value: dict[str, Any], index: bool | list[str] | None) -> dict[str, Any]:
     if isinstance(index, list):
-        return {field: _nested_value(value, field) for field in index}
+        projected = {field: _nested_value(value, field) for field in index}
+        for field in index:
+            if projected[field] is None:
+                projected[field] = get_text_at_path(value, field) or None
+        return projected
     return value
 
 
@@ -577,13 +583,30 @@ def _matches_filter(value: dict[str, Any], filter: dict[str, Any] | None) -> boo
         return True
     for path, expected in filter.items():
         actual = _nested_value(value, path)
-        if isinstance(expected, dict):
-            for op, target in expected.items():
-                if not _compare(actual, op, target):
-                    return False
-        elif actual != expected:
+        if not _matches_value(actual, expected):
             return False
     return True
+
+
+def _matches_value(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        if any(
+            key.startswith("$") or key in {"eq", "ne", "gt", "gte", "lt", "lte", "in"}
+            for key in expected
+        ):
+            return all(_compare(actual, op, target) for op, target in expected.items())
+        return isinstance(actual, dict) and all(
+            _matches_value(actual.get(key), target) for key, target in expected.items()
+        )
+    if isinstance(expected, (list, tuple)):
+        return (
+            isinstance(actual, (list, tuple))
+            and len(actual) == len(expected)
+            and all(
+                _matches_value(left, right) for left, right in zip(actual, expected, strict=False)
+            )
+        )
+    return actual == expected
 
 
 def _compare(actual: Any, op: str, target: Any) -> bool:

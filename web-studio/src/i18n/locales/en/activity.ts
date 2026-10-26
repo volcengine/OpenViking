@@ -176,6 +176,7 @@ const activity = {
         agent: 'Agent capabilities, tools, and experience',
         user: 'Personalized user memories',
         resources: 'External resources the Agent can reference',
+        system: 'Built-in system resources',
       },
     },
     agent: {
@@ -220,7 +221,7 @@ const activity = {
       noHistory: 'No command history',
       welcomeTitle: 'Terminal connected to the filesystem',
       welcomeBody:
-        'Run /status, /ls, /search, /read, /add-resource. /search is global by default; add --scope . to use the current directory, or --scope viking://resources/... to limit it to a directory.',
+        'Run /status, /ls, /find, /search, /read, /write, or /add-resource. Use --uri viking://resources/... to limit a search to a directory.',
       scopeLabel: 'cwd: {{uri}}',
       globalScope: 'global',
       opened: 'Resource opened',
@@ -229,9 +230,24 @@ const activity = {
         'OpenViking API responded normally; found {{count}} nodes under the root.',
       lsBody: 'Showing {{count}} nodes under {{uri}}.',
       fileEmpty: 'File is empty; opened in the middle preview.',
-      searchUsage: 'Usage: {{name}} <query> [--scope .|viking://resources/...]',
+      searchUsage: 'Usage: {{name}} <query> [--uri viking://resources/...]',
       searchScopeLine: 'Search scope: {{scope}}',
+      patternUsage:
+        'Usage: {{name}} <pattern> [--uri viking://...] [--node-limit n]',
+      patternHits: '{{count}} matches under {{uri}}.',
       helpParameters: 'Parameters',
+      parameterName: 'Parameter',
+      parameterRequired: 'Required',
+      parameterDescription: 'Description',
+      parameterDefault: 'Default',
+      parameterTypes: {
+        Text: 'Text',
+        URI: 'URI',
+        Number: 'Number',
+        Boolean: 'Boolean',
+      },
+      yes: 'Yes',
+      no: 'No',
       helpExamples: 'Examples',
       helpSubcommands: 'Subcommands',
       noParameters: 'No parameters',
@@ -239,9 +255,24 @@ const activity = {
       readUsage: 'Usage: /read viking://resources/...',
       enterUri: 'Please enter a viking:// URI',
       hits: 'Hit {{resources}} resources, {{memories}} memories, {{skills}} skills.',
-      addResourceBody:
-        'Opened the add-resource dialog. After submitting, the left tree refreshes; use /ls or /search to keep locating new content.',
-      addResourceTitle: 'Add resource',
+      resourceProcessing: 'Task submitted and processing. Task ID: {{taskId}}',
+      resourceCompleted: 'Import completed. Opened {{uri}}.',
+      resourceFailed: 'Resource import was not successful.',
+      resourceTaskFailed: 'Import failed: {{reason}}\nTask ID: {{taskId}}',
+      backgroundTaskFailed: 'Task failed: {{reason}}\nTask ID: {{taskId}}',
+      resourceStillProcessing:
+        'Task is still processing. Check Task Center. Task ID: {{taskId}}',
+      viewResourceTask: 'View task status',
+      taskCompleted: 'Task completed',
+      taskCompletedHint: 'The task is complete. View the result.',
+      viewResult: 'View result',
+      taskDetails: {
+        taskId: 'Task ID:',
+        rootUri: 'Root URI:',
+        uri: 'URI:',
+        name: 'Name:',
+        auxiliaryFiles: 'Auxiliary files:',
+      },
       sessionUsage:
         'Usage: /session [current|list|create|switch|get|context|messages|archive|commit|message|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: 'Usage: /session delete <session_id>',
@@ -253,29 +284,65 @@ const activity = {
       sessionSwitchedBody: 'Switched to session: {{id}}',
       sessionDeletedBody: 'Deleted session: {{id}}',
       sessionMessageAddedBody: 'Added a message to session {{id}}.',
-      unknownCommand:
-        'Unknown command. Available: /status, /ls, /search, /find, /read, /session, /add-resource.',
+      unknownCommand: 'Unknown command. Type / to browse available commands.',
+      addMemoryUsage:
+        'Usage: /add-memory "memory content" [--session-id <session ID>]',
+      addMemorySubmitted:
+        'Session committed; memory extraction is running in the background.',
+      memoryCompleted: 'Background processing completed for session {{id}}.',
+      skillCompleted: 'Skill processing completed; view it on the Skills page.',
+      addSkillUsage:
+        'Usage: /add-skill <Git URL> [-p viking://agent/skills]. Upload local files on the Skills page.',
+      addResourceUsage:
+        'Usage: /add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>] [--reason <text>]. Use Add Resource above the file tree for visual import.',
+      writeUsage:
+        'Usage: /write <URI> --content "text" [--mode replace|append|create] [--wait]',
+      waitUsage: 'Usage: /wait (the current open-source API takes no timeout)',
+      addSkillSubmitted:
+        'Skill submitted for processing; check the Skills page.',
       commandFailed: 'Command failed',
       running: 'Running command...',
       placeholder: 'Enter a CLI command, e.g. /status',
+      inputHint: 'Type / for commands · ↑↓ select · Enter complete',
       suggestionsTitle: 'Command suggestions',
       suggestionsHint: '↑↓ select · Tab complete · Enter run',
+      paletteGroups: {
+        core: 'Core workflows',
+        filesystem: 'Filesystem',
+        search: 'Search and context',
+        status: 'Configuration and status',
+        history: 'Recent commands',
+        resource: 'Resource paths',
+        subcommand: 'Session commands',
+      },
       quickStart: {
         title: 'Quick start',
+        heading: 'OpenViking CLI',
+        description: 'Work with context directly from the CLI',
         addResource: {
           title: 'Add a resource',
           command: '/add-resource',
           code: 'Import docs or files into viking://resources',
         },
+        addSkill: {
+          title: 'Add a Skill',
+          command: '/add-skill',
+          code: 'Enter a Git URL to add a personal or shared Skill',
+        },
         addMemory: {
           title: 'Add memory',
-          command: 'Agent remembers from chat',
-          code: 'Send a message in the Agent panel, then commit the session',
+          command: '/add-memory',
+          code: 'Enter memory content; optionally target an existing session',
         },
         find: {
           title: 'Find related context',
-          command: '/find openviking value',
+          command: 'ov find "What is OpenViking useful for?"',
           code: 'Search resources, memories, and skills from the current scope',
+        },
+        compile: {
+          title: 'Compile sources',
+          command: '/compile',
+          code: 'Choose source and output directories plus a Skill',
         },
       },
       commandGroups: {
@@ -287,12 +354,117 @@ const activity = {
         history: 'History',
       },
       commandParameters: {
+        compileFrom: {
+          name: '--from <source directory>',
+          description:
+            'Required. A viking:// source path; repeat for multiple sources.',
+        },
+        compileTo: {
+          name: '--to <output directory>',
+          description: 'Required. The viking:// directory for compiled output.',
+        },
+        compileSkill: {
+          name: '--skill <Skill URI>',
+          description:
+            'Required. An installed Skill used to organize the sources.',
+        },
+        skillSource: {
+          name: '<Git URL>',
+          description:
+            'Required. A Git repository or GitHub directory containing SKILL.md; upload local files on the Skills page.',
+        },
+        skillScope: {
+          name: '--scope user|agent',
+          description:
+            'Optional. Defaults to a personal Skill; agent shares it with the account.',
+        },
+        skillParent: {
+          name: '-p <URI>',
+          description: 'Optional Skill root; defaults to viking://~/skills.',
+        },
+        resourceSource: {
+          name: '<URL>',
+          description:
+            'Optional remote URL; omit to open the local upload form.',
+        },
+        resourceTo: {
+          name: '--to <URI>',
+          description:
+            'Optional exact destination URI; cannot be combined with --parent.',
+        },
+        resourceParent: {
+          name: '--parent <URI>',
+          description:
+            'Optional parent directory; cannot be combined with --to.',
+        },
+        resourceReason: {
+          name: '--reason <text>',
+          description: 'Optional reason for importing this resource.',
+        },
+        resourceArgs: {
+          name: '--args <JSON>',
+          description:
+            'Optional parser arguments, such as {"branch":"main"} for Git.',
+        },
+        writeContent: {
+          name: '--content <text>',
+          description: 'Required text to write. Quote text with spaces.',
+        },
+        writeMode: {
+          name: '--mode <mode>',
+          description:
+            'Optional replace, append, or create; defaults to replace.',
+        },
+        writeWait: {
+          name: '--wait',
+          description: 'Optional. Wait for server processing.',
+        },
+        nodeLimit: {
+          name: '--node-limit <n>',
+          description:
+            'Optional maximum result count; defaults to 10, or 256 for pattern search.',
+        },
+        threshold: {
+          name: '--threshold <score>',
+          description: 'Optional minimum result score.',
+        },
+        searchSessionId: {
+          name: '--session-id <id>',
+          description: 'Optional session to associate with the search.',
+        },
+        pattern: {
+          name: '<pattern>',
+          description:
+            'Required content pattern for grep or path pattern for glob.',
+        },
+        ignoreCase: {
+          name: '-i',
+          description: 'Optional case-insensitive grep matching.',
+        },
+        taskAction: {
+          name: 'list|status|cancel',
+          description:
+            'Required action to list compile tasks or inspect/cancel a task.',
+        },
+        taskId: {
+          name: '<task_id>',
+          description: 'Required for status and cancel.',
+        },
+        memoryContent: {
+          name: '<memory content>',
+          description: 'Required. Quote text containing spaces.',
+        },
+        memorySessionId: {
+          name: '--session-id <session ID>',
+          description:
+            'Optional existing session; a new session is created when omitted.',
+        },
         query: {
           name: 'query',
           description: 'Keywords or a semantic question to search for.',
         },
         scope: {
-          name: '--scope <.|uri>',
+          name: '--uri <.|uri>',
           description:
             'Optional. Omit for global search; pass . for the current directory; pass uri for a specific directory.',
         },
@@ -362,6 +534,24 @@ const activity = {
         },
       },
       commandExamples: {
+        compile: {
+          default: {
+            code: '/compile --from viking://resources/source --to viking://resources/output --skill viking://~/skills/daily-report',
+            description: 'Compile a source directory with an installed Skill',
+          },
+        },
+        addSkill: {
+          git: {
+            code: '/add-skill https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/daily-report',
+            description: 'Add a personal Skill from a GitHub directory',
+          },
+        },
+        addMemory: {
+          default: {
+            code: '/add-memory "a useful fact"',
+            description: 'Create a session and extract memory',
+          },
+        },
         status: {
           default: {
             code: '/status',
@@ -384,11 +574,11 @@ const activity = {
             description: 'Search globally',
           },
           current: {
-            code: '/search agent --scope .',
+            code: '/search agent --uri .',
             description: 'Use the highlighted directory',
           },
           scoped: {
-            code: '/search agent --scope viking://resources/',
+            code: '/search agent --uri viking://resources/',
             description: 'Search only within a directory',
           },
         },
@@ -398,11 +588,11 @@ const activity = {
             description: 'Find related resources globally',
           },
           current: {
-            code: '/find agent --scope .',
+            code: '/find agent --uri .',
             description: 'Use the highlighted directory',
           },
           scoped: {
-            code: '/find agent --scope viking://resources/',
+            code: '/find agent --uri viking://resources/',
             description: 'Find only within a directory',
           },
         },
@@ -416,6 +606,54 @@ const activity = {
           default: {
             code: '/add-resource',
             description: 'Open the add-resource form',
+          },
+          remote: {
+            code: `ov add-resource https://github.com/volcengine/OpenViking --to viking://resources/openviking-repo --args '{"branch":"main"}'`,
+            description: 'Import the main branch of the OpenViking repository',
+          },
+        },
+        write: {
+          default: {
+            code: '/write viking://resources/notes.md --content "New content"',
+            description: 'Replace file content',
+          },
+          append: {
+            code: '/write viking://resources/notes.md --content "More content" --append',
+            description: 'Append to an existing file',
+          },
+        },
+        grep: {
+          default: {
+            code: '/grep "OpenViking"',
+            description: 'Find text in resources',
+          },
+          scoped: {
+            code: '/grep "OpenViking" --uri viking://resources/',
+            description: 'Find text under one directory',
+          },
+        },
+        glob: {
+          default: {
+            code: '/glob "**/*.md"',
+            description: 'Match Markdown file paths',
+          },
+          scoped: {
+            code: '/glob "**/*.md" --uri viking://resources/',
+            description: 'Match paths under one directory',
+          },
+        },
+        task: {
+          list: {
+            code: '/task list --task-type compile',
+            description: 'List compile tasks',
+          },
+          status: {
+            code: '/task status <task_id>',
+            description: 'Inspect a task',
+          },
+          cancel: {
+            code: '/task cancel <task_id>',
+            description: 'Cancel a task',
           },
         },
         session: {
@@ -535,43 +773,73 @@ const activity = {
         },
         ls: {
           description: 'View resources',
-          usage: '/ls [viking://resources/...]',
+          usage: '/ls [<URI>]',
         },
         search: {
           description: 'Semantic search',
-          usage: '/search <query>',
+          usage: '/search <query> [--uri <URI>] [--node-limit <n>]',
         },
         find: {
           description: 'Find related resources',
-          usage: '/find <query>',
+          usage: '/find <query> [--uri <URI>] [--node-limit <n>]',
         },
         read: {
           description: 'Read a resource file',
-          usage: '/read viking://resources/.../file.md',
+          usage: '/read <URI>',
+        },
+        compile: {
+          description: 'Compile source materials with a Skill',
+          usage:
+            '/compile --from <source directory> --to <output directory> --skill <Skill URI>',
+        },
+        addSkill: {
+          description: 'Add a Skill from a Git URL',
+          usage: '/add-skill <Git URL> [-p <target root>]',
+        },
+        addMemory: {
+          description: 'Add a message to a session and extract memory',
+          usage: '/add-memory "memory content" [--session-id <session ID>]',
         },
         addResource: {
           description: 'Add external resources',
-          usage: '/add-resource',
+          usage:
+            '/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>]',
+        },
+        write: {
+          description: 'Write or append resource content',
+          usage: '/write <URI> --content <text> [--mode replace|append|create]',
+        },
+        grep: {
+          description: 'Search resource text patterns',
+          usage: '/grep <pattern> [--uri <URI>]',
+        },
+        glob: {
+          description: 'Search resource paths',
+          usage: '/glob <pattern> [--uri <URI>]',
+        },
+        task: {
+          description: 'Inspect and manage compile tasks',
+          usage: '/task <list|status|cancel> [<task ID>]',
         },
         session: {
           description: 'Manage Agent sessions',
-          usage: '/session subcommand',
+          usage: '/session <subcommand>',
         },
         tree: {
           description: 'Show directory tree',
-          usage: '/tree [viking://resources/...]',
+          usage: '/tree [<URI>]',
         },
         stat: {
           description: 'Show resource metadata',
-          usage: '/stat viking://resources/...',
+          usage: '/stat <URI>',
         },
         abstract: {
           description: 'Read directory abstract',
-          usage: '/abstract viking://resources/...',
+          usage: '/abstract <URI>',
         },
         overview: {
           description: 'Read directory overview',
-          usage: '/overview viking://resources/...',
+          usage: '/overview <URI>',
         },
         health: {
           description: 'Show backend health',
@@ -579,7 +847,7 @@ const activity = {
         },
         wait: {
           description: 'Wait for service readiness',
-          usage: '/wait [--timeout seconds]',
+          usage: '/wait',
         },
       },
     },

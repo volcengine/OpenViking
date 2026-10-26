@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import time
 import zipfile
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -134,6 +135,7 @@ class SkillProcessor:
         source_metadata: Optional[Dict[str, Any]] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
         lease_ref: Any = None,
+        on_package_written: Optional[Callable[[str, Any], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.
@@ -144,6 +146,8 @@ class SkillProcessor:
             user: Username for context
             target_uri: Optional root URI override (e.g. ``viking://agent/skills``).
                 When omitted, defaults to ``{user_root}/skills``.
+            on_package_written: Called with the package URI and lease before queue handoff;
+                failures abort processing while the package lease is still held.
 
         Returns:
             Processing result with status and metadata
@@ -173,6 +177,7 @@ class SkillProcessor:
             source_metadata=source_metadata,
             owner_lease_ref=owner_lease_ref,
             lease_ref=lease_ref,
+            on_package_written=on_package_written,
         )
 
     async def process_prepared_skill(
@@ -187,7 +192,9 @@ class SkillProcessor:
         source_metadata: Optional[Dict[str, Any]] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
         lease_ref: Any = None,
+        on_package_written: Optional[Callable[[str, Any], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
+        """Store a prepared package and call on_package_written under its lease before indexing."""
         cleanup_path = preparation.cleanup_path
         skill_dict = preparation.skill_dict
         auxiliary_files = preparation.auxiliary_files
@@ -268,6 +275,8 @@ class SkillProcessor:
                         viking_fs, ctx, result, source_metadata, lease_ref=lease
                     )
                 )
+            if on_package_written is not None:
+                await run_to_completion(lambda: on_package_written(skill_dir_uri, lease))
             index_start = time.perf_counter()
 
             async def enqueue_package() -> None:
