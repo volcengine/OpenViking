@@ -14,6 +14,8 @@
 #   ./run_full_eval.sh --parallel-import-sessions 20 0 1  # 覆盖默认 session 导入并发数
 #   ./run_full_eval.sh --parallel-import-sessions 50 --parallel-run-eval 20 --parallel-judge 40  # 分别设置导入、评测和裁判并发数
 #   ./run_full_eval.sh --keep-runs 20               # 保留最近 20 次实验（默认 10）
+#   ./run_full_eval.sh conv-26 --memory-readiness streaming  # 边转长期记忆边评测
+#   ./run_full_eval.sh conv-26 --memory-readiness complete   # 长期记忆完成后评测
 
 set -e
 
@@ -91,6 +93,7 @@ for arg in "$@"; do
         echo "  --parallel-run-eval N         run_eval 并发线程数（默认 100）"
         echo "  --parallel-judge N            judge 并发请求数（默认 100）"
         echo "  --keep-runs N                 保留最近 N 次实验目录（默认 10）"
+        echo "  --memory-readiness MODE       complete（默认）或 streaming"
         exit 0
     fi
 done
@@ -104,6 +107,7 @@ KEEP_RUNS=10
 PARALLEL_IMPORT_SESSIONS="50"
 PARALLEL_RUN_EVAL="100"
 PARALLEL_JUDGE="100"
+MEMORY_READINESS="complete"
 
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
@@ -220,6 +224,11 @@ for arg in "$@"; do
         PREV_ARG=""
         continue
     fi
+    if [ "$PREV_ARG" = "--memory-readiness" ]; then
+        MEMORY_READINESS="$arg"
+        PREV_ARG=""
+        continue
+    fi
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
@@ -231,7 +240,7 @@ for arg in "$@"; do
     elif [ "$arg" = "--retry-wrong" ]; then
         PREV_ARG="$arg"
         continue
-    elif [ "$arg" = "--parallel-import-sessions" ] || [ "$arg" = "--parallel-run-eval" ] || [ "$arg" = "--parallel-judge" ] || [ "$arg" = "--keep-runs" ]; then
+    elif [ "$arg" = "--parallel-import-sessions" ] || [ "$arg" = "--parallel-run-eval" ] || [ "$arg" = "--parallel-judge" ] || [ "$arg" = "--keep-runs" ] || [ "$arg" = "--memory-readiness" ]; then
         PREV_ARG="$arg"
         continue
     fi
@@ -260,7 +269,7 @@ for arg in "$@"; do
         SKIP_NEXT=false
         continue
     fi
-    if [ "$arg" = "--retry-wrong" ] || [ "$arg" = "--parallel-import-sessions" ] || [ "$arg" = "--parallel-run-eval" ] || [ "$arg" = "--parallel-judge" ] || [ "$arg" = "--keep-runs" ]; then
+    if [ "$arg" = "--retry-wrong" ] || [ "$arg" = "--parallel-import-sessions" ] || [ "$arg" = "--parallel-run-eval" ] || [ "$arg" = "--parallel-judge" ] || [ "$arg" = "--keep-runs" ] || [ "$arg" = "--memory-readiness" ]; then
         SKIP_NEXT=true
         continue
     fi
@@ -276,7 +285,23 @@ if [ "$GROUP_CHAT" = "true" ]; then
 else
     COMMON_OPTS+=("--no-group-chat")
 fi
-IMPORT_OPTS=()
+case "$MEMORY_READINESS" in
+    streaming)
+        IMPORT_OPTS=(
+            "--wait-until" "midterm-ready"
+            "--defer-long-term-until-all-midterm-ready"
+        )
+        IMPORT_READY_MESSAGE="所有目标 Session 的中期记忆已可检索；长期转换已统一释放。"
+        ;;
+    complete)
+        IMPORT_OPTS=("--wait-until" "complete")
+        IMPORT_READY_MESSAGE="所有目标 Session 的长期记忆转换已完成。"
+        ;;
+    *)
+        ui_error "--memory-readiness must be 'streaming' or 'complete'"
+        exit 1
+        ;;
+esac
 if [ -n "${OPENVIKING_API_KEY:-}" ]; then
     IMPORT_OPTS+=("--api-key" "$OPENVIKING_API_KEY" "--auth-mode" "${OPENVIKING_AUTH_MODE:-api_key}")
     if [ "${OPENVIKING_AUTH_MODE:-api_key}" = "trusted" ]; then
@@ -323,6 +348,7 @@ ui_kv "OpenViking" "$OPENVIKING_URL"
 ui_kv "运行身份" "account=$ACCOUNT · user=$OPENVIKING_USER · auth=$OPENVIKING_AUTH_MODE"
 ui_kv "会话模式" "$([ "$GROUP_CHAT" = "true" ] && printf '群聊' || printf '非群聊')"
 ui_kv "导入并发" "$PARALLEL_IMPORT_SESSIONS sessions"
+ui_kv "记忆就绪模式" "$MEMORY_READINESS"
 ui_kv "评测并发" "$PARALLEL_RUN_EVAL threads"
 ui_kv "裁判并发" "$PARALLEL_JUDGE requests"
 ui_kv "导入策略" "$([ "$SKIP_IMPORT" = "true" ] && printf '跳过导入' || printf '强制导入')"
@@ -562,8 +588,7 @@ if [ -n "$RETRY_WRONG" ]; then
         "${COMMON_OPTS[@]}"
     IMPORT_PERFORMED=true
 
-    ui_info "等待数据处理完成（30 秒）…"
-    sleep 30
+    ui_info "$IMPORT_READY_MESSAGE"
 
     # 评估错题
     ui_step 2 3 "重新评估错题"
@@ -614,8 +639,7 @@ if [ -z "$SAMPLE" ]; then
             "${IMPORT_OPTS[@]}" \
             "${COMMON_OPTS[@]}"
         IMPORT_PERFORMED=true
-        ui_info "等待数据处理完成（60 秒）…"
-        sleep 60
+        ui_info "$IMPORT_READY_MESSAGE"
     fi
 
     # 评估
@@ -716,8 +740,7 @@ if [ -n "$QUESTION_INDEX" ]; then
             "${COMMON_OPTS[@]}"
         IMPORT_PERFORMED=true
 
-        ui_info "等待数据处理完成（3 秒）…"
-        sleep 3
+        ui_info "$IMPORT_READY_MESSAGE"
     fi
 
     if [ "$SKIP_IMPORT" = "true" ]; then
@@ -820,8 +843,7 @@ PY
             "${COMMON_OPTS[@]}"
         IMPORT_PERFORMED=true
 
-        ui_info "等待数据处理完成（10 秒）…"
-        sleep 10
+        ui_info "$IMPORT_READY_MESSAGE"
     fi
 
     if [ "$SKIP_IMPORT" = "true" ]; then

@@ -742,6 +742,9 @@ class MessageRange:
 
     @staticmethod
     def _speaker_for(message: Message) -> str:
+        speaker = getattr(message, "speaker", None)
+        if speaker:
+            return speaker
         peer_id = getattr(message, "peer_id", None)
         return f"{message.role} [peer={peer_id}]" if peer_id else message.role
 
@@ -1321,7 +1324,9 @@ class MemoryUpdater:
                     uri: memory_file
                     for uri, memory_file in link_file_contents.items()
                     if uri not in result.edited_uris
-                } if self._transaction_handle is not None else None,
+                }
+                if self._transaction_handle is not None
+                else None,
             )
 
         # Referential-integrity guard (issue #5904): after apply, no in-batch

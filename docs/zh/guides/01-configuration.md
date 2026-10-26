@@ -2061,7 +2061,7 @@ openviking-server --config /path/to/ov.conf
 
 #### Topic Continuity 配置
 
-`memory.topic_continuity` 控制长期记忆提取前是否按相邻 Turn 的话题连续性分组。默认关闭；关闭时提取行为与现有 commit 批次一致。
+`memory.topic_continuity.enabled` 是唯一功能开关（默认 `false`）。开启后同时启用话题分组、中期暂存、向量索引、清理与 VikingBot 中期召回。普通 commit 自动继续执行，评测暂停/释放仍是显式请求操作。
 
 ```json
 {
@@ -2072,7 +2072,6 @@ openviking-server --config /path/to/ov.conf
       "overlap_turns": 1,
       "min_turns_to_split": 2,
       "time_gap_seconds": 0,
-      "embedding_similarity_threshold": 0.45,
       "skip_max_user_chars": 0
     }
   }
@@ -2086,7 +2085,6 @@ openviking-server --config /path/to/ov.conf
 | `overlap_turns` | int | 仅在因 `max_turns` 切开时，把上一组末尾若干 Turn 作为下一组的上下文前缀。话题切换切开不加前缀 | `1` |
 | `min_turns_to_split` | int | 归档 Turn 数少于此值时不分组 | `2` |
 | `time_gap_seconds` | int | 相邻 Turn 锚点时间间隔超过该值则视为不连续。`0` 表示忽略时间 | `0` |
-| `embedding_similarity_threshold` | float | 提供 embedder 时，余弦相似度低于该阈值视为不连续。未配置 embedder 时不生效 | `0.45` |
 | `skip_max_user_chars` | int | 一组 owned Turn 的用户提问总字符数不超过该值则跳过提取。`0` 表示不跳过 | `0` |
 
 配置了独立 `query_planner` 时，由它判断相邻 Turn 是否仍是同一话题。超时、异常或无法解析的回复都保持连续。没有独立 planner 时不会调用提取用的 VLM；此时若 `time_gap_seconds=0`，开启后只按 `max_turns` 切组。切开发生在同一次 commit 内部。

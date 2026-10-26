@@ -15,9 +15,8 @@ from openviking.session.extraction_batch import (
     resolve_extraction_batch_limits,
 )
 from openviking.session.session import Session
+from openviking.session.topic_continuity import turn_text
 from openviking.utils.token_estimation import estimate_text_tokens
-
-from openviking.session.topic_continuity import TopicContinuityOptions, turn_text
 from openviking_cli.utils.config.memory_config import MemoryConfig, TopicContinuityConfig
 
 
@@ -374,6 +373,7 @@ async def test_fallback_rejects_input_larger_than_model_window():
         )
     completion.assert_not_awaited()
 
+
 def _conversation(*turns: tuple[str, str]) -> list[Message]:
     messages: list[Message] = []
     for index, (user_text, assistant_text) in enumerate(turns, start=1):
@@ -382,7 +382,7 @@ def _conversation(*turns: tuple[str, str]) -> list[Message]:
     return messages
 
 
-def _topic_enabled(**overrides) -> TopicContinuityOptions:
+def _topic_enabled(**overrides) -> TopicContinuityConfig:
     values = {
         "enabled": True,
         "max_turns": 10,
@@ -391,7 +391,7 @@ def _topic_enabled(**overrides) -> TopicContinuityOptions:
         "skip_max_user_chars": 0,
     }
     values.update(overrides)
-    return TopicContinuityOptions(**values)
+    return TopicContinuityConfig(**values)
 
 
 def test_auto_commit_policy_resolves_phase2_batch_limits():
@@ -811,6 +811,15 @@ class _RecordingCompressor:
 
 
 class _TaskTracker:
+    async def build_queue_status(self, *_args, **_kwargs):
+        return {}
+
+    async def update_stage(self, *_args, **_kwargs):
+        return None
+
+    async def wait_for_task_work(self, *_args, **_kwargs):
+        return None
+
     async def start(self, *_args, **_kwargs) -> None:
         return None
 
@@ -856,6 +865,9 @@ async def _run_phase2(
 
     session._merge_archive_meta = _capture_meta
     session._merge_and_save_commit_meta = AsyncMock()
+    session._stage_midterm_memories = AsyncMock(return_value=1)
+    session._publish_midterm_memories_for_recall = AsyncMock(return_value=1)
+    session._reconcile_midterm_long_term_conversion = AsyncMock(return_value=(1, 1))
     await session._run_memory_extraction(
         task_id="task-topic",
         archive_uri="viking://user/default/sessions/s1/history/archive_001",
@@ -865,6 +877,14 @@ async def _run_phase2(
         memory_policy={"working_memory": {"enabled": False}},
         auto_commit_policy=None,
     )
+    if memory.topic_continuity.enabled:
+        session._stage_midterm_memories.assert_awaited_once()
+        session._publish_midterm_memories_for_recall.assert_awaited_once()
+        session._reconcile_midterm_long_term_conversion.assert_awaited_once()
+    else:
+        session._stage_midterm_memories.assert_not_awaited()
+        session._publish_midterm_memories_for_recall.assert_not_awaited()
+        session._reconcile_midterm_long_term_conversion.assert_not_awaited()
     return compressor, meta_updates
 
 

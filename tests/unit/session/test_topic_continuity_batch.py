@@ -17,9 +17,8 @@ from openviking.session.extraction_batch import (
 )
 from openviking.session.retention import build_turns
 from openviking.session.topic_continuity import (
-    HeuristicContinuityChecker,
     SmallModelContinuityChecker,
-    TopicContinuityOptions,
+    default_continuity_check,
     parse_same_topic,
     resolve_topic_continuity_check,
     should_skip_topic_group,
@@ -50,7 +49,7 @@ def _conversation(*turns: tuple[str, str]) -> list[Message]:
     return messages
 
 
-def _enabled(**overrides) -> TopicContinuityOptions:
+def _enabled(**overrides) -> TopicContinuityConfig:
     values = {
         "enabled": True,
         "max_turns": 10,
@@ -59,7 +58,7 @@ def _enabled(**overrides) -> TopicContinuityOptions:
         "skip_max_user_chars": 0,
     }
     values.update(overrides)
-    return TopicContinuityOptions(**values)
+    return TopicContinuityConfig(**values)
 
 
 def test_memory_config_defaults_disable_topic_continuity():
@@ -69,7 +68,6 @@ def test_memory_config_defaults_disable_topic_continuity():
     assert config.topic_continuity.overlap_turns == 1
     assert config.topic_continuity.min_turns_to_split == 2
     assert config.topic_continuity.time_gap_seconds == 0
-    assert config.topic_continuity.embedding_similarity_threshold == 0.45
     assert config.topic_continuity.skip_max_user_chars == 0
 
 
@@ -82,9 +80,7 @@ def test_should_batch_long_term_extraction_is_independent_of_size_limits():
     limits = ExtractionBatchLimits()
     assert should_batch_long_term_extraction(limits, None) is False
     assert should_batch_long_term_extraction(limits, _enabled()) is True
-    assert should_batch_long_term_extraction(
-        ExtractionBatchLimits(max_messages=2), None
-    ) is True
+    assert should_batch_long_term_extraction(ExtractionBatchLimits(max_messages=2), None) is True
 
 
 def test_topic_planner_disabled_matches_size_planner():
@@ -106,9 +102,7 @@ def test_topic_planner_below_min_turns_does_not_split():
         topic=_enabled(min_turns_to_split=2),
         continuity_check=lambda _previous, _current: False,
     )
-    assert [[message.id for message in batch.messages] for batch in batches] == [
-        ["u1", "a1"]
-    ]
+    assert [[message.id for message in batch.messages] for batch in batches] == [["u1", "a1"]]
 
 
 def test_topic_planner_keeps_continuous_turns_together():
@@ -200,9 +194,7 @@ def test_topic_planner_skips_short_user_groups():
         topic=_enabled(skip_max_user_chars=3),
         continuity_check=split_after_hi,
     )
-    assert [[message.id for message in batch.messages] for batch in batches] == [
-        ["u2", "a2"]
-    ]
+    assert [[message.id for message in batch.messages] for batch in batches] == [["u2", "a2"]]
 
 
 def test_topic_planner_returns_empty_for_no_messages():
@@ -221,8 +213,10 @@ def test_topic_planner_applies_size_limits_after_grouping():
         ["u1", "a1"],
         ["u2", "a2"],
     ]
-    assert all(batch.owned_message_ids == frozenset(message.id for message in batch.messages)
-               for batch in batches)
+    assert all(
+        batch.owned_message_ids == frozenset(message.id for message in batch.messages)
+        for batch in batches
+    )
 
 
 def test_heuristic_checker_splits_on_time_gap():
@@ -243,28 +237,14 @@ def test_heuristic_checker_splits_on_time_gap():
         ),
     ]
     turns = build_turns(messages)
-    checker = HeuristicContinuityChecker(time_gap_seconds=60)
+    checker = default_continuity_check(TopicContinuityConfig(time_gap_seconds=60))
     assert checker(turns[0], turns[1]) is False
 
 
-def test_heuristic_checker_uses_embedding_threshold():
-    messages = _conversation(("alpha alpha", "ok"), ("beta beta", "ok"))
-    turns = build_turns(messages)
-
-    def embed(text: str) -> list[float]:
-        return [1.0, 0.0] if "alpha" in text else [0.0, 1.0]
-
-    checker = HeuristicContinuityChecker(
-        embedding_similarity_threshold=0.5,
-        embedder=embed,
-    )
-    assert checker(turns[0], turns[1]) is False
-
-
-def test_heuristic_checker_fail_open_without_embedder():
+def test_default_checker_keeps_turns_together_without_time_gap():
     messages = _conversation(("alpha", "ok"), ("beta", "ok"))
     turns = build_turns(messages)
-    checker = HeuristicContinuityChecker()
+    checker = default_continuity_check(TopicContinuityConfig())
     assert checker(turns[0], turns[1]) is True
 
 

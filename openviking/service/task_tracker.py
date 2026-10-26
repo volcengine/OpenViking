@@ -608,6 +608,48 @@ class TaskTracker:
             user_id=user_id,
         )
 
+    async def update_stage(
+        self,
+        task_id: str,
+        stage: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        *,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        task = await self.get(task_id, account_id=account_id, user_id=user_id)
+        if task is not None and task.status in ACTIVE_TASK_STATUSES:
+            await self.patch_task(
+                task_id,
+                TaskPatch(stage=stage, meta=meta),
+                account_id=task.account_id,
+                user_id=task.user_id,
+            )
+
+    async def release_long_term_extraction(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> Optional[TaskRecord]:
+        self._validate_owner(account_id, user_id)
+        task = await self.get(task_id, account_id=account_id, user_id=user_id)
+        if task is None:
+            return None
+        if task.task_type != "session_commit":
+            raise ValueError("Only session_commit tasks support long-term release")
+        if task.status in TERMINAL_TASK_STATUSES:
+            if task.meta.get("long_term_release_requested") is True:
+                return task
+            raise ValueError("Session commit task is already terminal")
+        readiness = task.meta.get("midterm_memory_ready")
+        if not isinstance(readiness, dict) or readiness.get("ready") is not True:
+            raise ValueError("Session commit has not reached midterm_ready")
+        await self.patch_task(
+            task_id,
+            TaskPatch(stage="long_term_released", meta={"long_term_release_requested": True}),
+            account_id=account_id,
+            user_id=user_id,
+        )
+        return await self.get(task_id, account_id=account_id, user_id=user_id)
+
     async def complete(
         self,
         task_id: str,

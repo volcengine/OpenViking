@@ -63,7 +63,6 @@ from openviking.session.checkpoints import (
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
     estimate_extraction_message_tokens,
-    plan_extraction_batches,
     plan_long_term_extraction_batches,
     resolve_extraction_batch_limits,
     should_batch_long_term_extraction,
@@ -72,6 +71,14 @@ from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.memory.memory_updater import MemoryUpdateError
 from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.memory_policy import MemoryPolicy
+from openviking.session.midterm_memory import (
+    MidtermRecord,
+    build_midterm_records,
+    deserialize_midterm_manifest,
+    render_midterm_recall_record,
+    render_midterm_record,
+    serialize_midterm_manifest,
+)
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
     RetentionPlan,
@@ -80,11 +87,10 @@ from openviking.session.retention import (
     is_user_query,
     plan_retention,
 )
+from openviking.session.tool_output_externalizer import ToolOutputExternalizer
 from openviking.session.topic_continuity import (
-    TopicContinuityOptions,
     resolve_topic_continuity_check,
 )
-from openviking.session.tool_output_externalizer import ToolOutputExternalizer
 from openviking.session.working_memory import (
     WM_CREATE_WITH_CHECKPOINTS_TOOL,
     WM_SEVEN_SECTIONS,
@@ -103,6 +109,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.memory_config import TopicContinuityConfig
 
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
@@ -1016,6 +1023,7 @@ class Session:
             turn_id = spec.get("turn_id")
             message_kind = spec.get("message_kind")
             source_message_ids = spec.get("source_message_ids")
+            speaker = spec.get("speaker")
 
             try:
                 peer_id = normalize_peer_id(spec.get("peer_id"))
@@ -1031,6 +1039,7 @@ class Session:
                         role=role,
                         parts=[part],
                         peer_id=peer_id,
+                        speaker=speaker,
                         created_at=created_at,
                         turn_id=turn_id,
                         message_kind=message_kind or "tool_transport",
@@ -1047,6 +1056,7 @@ class Session:
                     role=role,
                     parts=parts,
                     peer_id=peer_id,
+                    speaker=speaker,
                     created_at=created_at,
                     turn_id=turn_id,
                     message_kind=message_kind,
@@ -1097,6 +1107,7 @@ class Session:
         turn_id: Optional[str] = None,
         message_kind: Optional[str] = None,
         source_message_ids: Optional[List[str]] = None,
+        speaker: Optional[str] = None,
     ) -> Message:
         """Add a message.
 
@@ -1109,6 +1120,7 @@ class Session:
                     "role": role,
                     "parts": parts,
                     "peer_id": peer_id,
+                    "speaker": speaker,
                     "created_at": created_at,
                     "turn_id": turn_id,
                     "message_kind": message_kind,
@@ -1127,6 +1139,7 @@ class Session:
         turn_id: Optional[str] = None,
         message_kind: Optional[str] = None,
         source_message_ids: Optional[List[str]] = None,
+        speaker: Optional[str] = None,
     ) -> Message:
         """Asynchronously add one message through the authoritative path lock."""
         msgs = await self.add_messages_async(
@@ -1135,6 +1148,7 @@ class Session:
                     "role": role,
                     "parts": parts,
                     "peer_id": peer_id,
+                    "speaker": speaker,
                     "created_at": created_at,
                     "turn_id": turn_id,
                     "message_kind": message_kind,
@@ -1453,6 +1467,7 @@ class Session:
         summary_token_ratio: Optional[float] = None,
         retained_token_ratio: Optional[float] = None,
         reasoning_effort: Optional[str] = None,
+        defer_long_term_extraction: bool = False,
     ) -> Dict[str, Any]:
         """Sync wrapper for commit_async()."""
         return run_async(
@@ -1468,6 +1483,7 @@ class Session:
                 summary_token_ratio=summary_token_ratio,
                 retained_token_ratio=retained_token_ratio,
                 reasoning_effort=reasoning_effort,
+                defer_long_term_extraction=defer_long_term_extraction,
             )
         )
 
@@ -1491,6 +1507,7 @@ class Session:
         record_idle_commit_success: bool = False,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
+        defer_long_term_extraction: bool = False,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1525,6 +1542,8 @@ class Session:
                 to event memories. ``None`` uses the session default
                 (``meta.event_search_tags``); an empty list disables default-tag
                 injection for this commit; a non-empty list overrides it.
+            defer_long_term_extraction: Pause after searchable mid-term memory
+                publication until the commit task is explicitly released.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1778,6 +1797,7 @@ class Session:
                 session_window_context=effective_window_context,
                 summary_token_ratio=effective_summary_ratio,
                 reasoning_effort=reasoning_effort,
+                defer_long_term_extraction=bool(defer_long_term_extraction),
             )
             phase1_stage = "phase1_persist"
             try:
@@ -2485,7 +2505,7 @@ class Session:
         if user_config_error is not None:
             user_config_error = str(user_config_error)
 
-        await self._run_memory_extraction(
+        return await self._run_memory_extraction(
             task_id=msg.task_id,
             archive_uri=msg.archive_uri,
             messages=archive_messages,
@@ -2501,8 +2521,8 @@ class Session:
             session_window_context=msg.session_window_context,
             summary_token_ratio=msg.summary_token_ratio,
             reasoning_effort=msg.reasoning_effort,
+            defer_long_term_extraction=msg.defer_long_term_extraction,
         )
-        return True
 
     async def _run_usage_reporting(
         self,
@@ -2526,6 +2546,267 @@ class Session:
         )
         return await reporter.extract_and_report(messages=messages, context=context)
 
+    @staticmethod
+    def _midterm_root_uri(archive_uri: str) -> str:
+        return f"{archive_uri}/midterm_memory"
+
+    async def _stage_midterm_memories(
+        self,
+        *,
+        archive_uri: str,
+        messages: List[Message],
+    ) -> int:
+        """Persist dialogue pairs for vector publication and retry-safe cleanup."""
+
+        if not self._viking_fs:
+            raise RuntimeError("VikingFS is required for mid-term memory staging")
+        root_uri = self._midterm_root_uri(archive_uri)
+        if await self._viking_fs.exists(root_uri, ctx=self.ctx):
+            await self._viking_fs.rm(root_uri, recursive=True, ctx=self.ctx)
+
+        records = build_midterm_records(
+            messages,
+            session_id=self.session_id,
+            archive_uri=archive_uri,
+        )
+        if not records:
+            return 0
+        for record in records:
+            await self._viking_fs.write_file(
+                uri=f"{root_uri}/{record.filename}",
+                content=render_midterm_record(record),
+                ctx=self.ctx,
+            )
+        manifest_uri = f"{root_uri}/manifest.json"
+        await self._viking_fs.write_file(
+            uri=manifest_uri,
+            content=serialize_midterm_manifest(records),
+            ctx=self.ctx,
+        )
+
+        # Read the durable representation back to validate the staging manifest
+        # before long-term processing continues. Long-term extraction itself keeps
+        # using the original archive messages.
+        persisted_records = deserialize_midterm_manifest(
+            await self._viking_fs.read_file(manifest_uri, ctx=self.ctx)
+        )
+        logger.info(
+            "Staged %s mid-term dialogue records at %s",
+            len(persisted_records),
+            root_uri,
+        )
+        return len(persisted_records)
+
+    async def _delete_midterm_memories(self, archive_uri: str) -> bool:
+        if not self._viking_fs:
+            return False
+        root_uri = self._midterm_root_uri(archive_uri)
+        if await self._viking_fs.exists(root_uri, ctx=self.ctx):
+            await self._viking_fs.rm(root_uri, recursive=True, ctx=self.ctx)
+            logger.info("Deleted consumed mid-term dialogue records at %s", root_uri)
+            return True
+        return False
+
+    async def _wait_for_memory_embeddings(self, tracker: Any, task_id: str) -> None:
+        """Keep evidence until queued writes finish successfully, not just settle."""
+        from openviking.service.task_work_index import get_task_context
+
+        task_context = get_task_context()
+        await tracker.wait_for_task_work(
+            task_id,
+            exclude_work_id=task_context.work_id if task_context else None,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+            timeout=_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
+        )
+        queue_status = await tracker.build_queue_status(
+            task_id, account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
+        )
+        if any(queue.get("error_count", 0) for queue in queue_status.values()):
+            raise RuntimeError("Memory embedding work failed; midterm evidence is retained")
+
+    async def _publish_midterm_memories_for_recall(self, archive_uri: str) -> int:
+        """Persist and vectorize deterministic mid-term evidence by peer scope."""
+
+        if not self._viking_fs:
+            raise RuntimeError("VikingFS is required for mid-term memory indexing")
+        manifest_uri = f"{self._midterm_root_uri(archive_uri)}/manifest.json"
+        records = deserialize_midterm_manifest(
+            await self._viking_fs.read_file(manifest_uri, ctx=self.ctx)
+        )
+        if not records:
+            return 0
+
+        from openviking.session.memory.memory_updater import MemoryUpdater
+
+        operations_by_root: dict[str, dict[str, dict[str, Any]]] = {}
+        for record in records:
+            content = render_midterm_recall_record(record)
+            for root_uri in self._midterm_recall_root_uris(record):
+                uri = f"{root_uri}/{record.recall_filename}"
+                operations_by_root.setdefault(root_uri, {})[uri] = {
+                    "uri": uri,
+                    "content": content,
+                    "mode": "upsert",
+                }
+
+        indexed = 0
+        for root_uri, operations_by_uri in operations_by_root.items():
+            operations = list(operations_by_uri.values())
+            await self._viking_fs.mkdir(root_uri, exist_ok=True, ctx=self.ctx)
+            for operation in operations:
+                uri = operation["uri"]
+                await self._viking_fs.write_file(
+                    uri=uri,
+                    content=operation["content"],
+                    ctx=self.ctx,
+                )
+                requested = await MemoryUpdater.refresh_file_embedding(
+                    viking_fs=self._viking_fs,
+                    vikingdb=self._vikingdb_manager,
+                    uri=uri,
+                    memory_type=MemoryUpdater.memory_type_from_uri(uri),
+                    ctx=self.ctx,
+                    strict=True,
+                )
+                if not requested:
+                    raise RuntimeError(f"mid-term memory embedding was not scheduled: {uri}")
+                indexed += 1
+        logger.info("Indexed %s mid-term recall records from %s", indexed, archive_uri)
+        return indexed
+
+    def _midterm_recall_root_uris(self, record: MidtermRecord) -> tuple[str, ...]:
+        user_root = f"viking://user/{self.ctx.user.user_id}"
+        peer_ids = tuple(
+            peer_id for peer_id in (safe_peer_id(item) for item in record.peer_ids) if peer_id
+        )
+        if peer_ids:
+            return tuple(f"{user_root}/peers/{peer_id}/memories/midterm_qa" for peer_id in peer_ids)
+        return (f"{user_root}/memories/midterm_qa",)
+
+    async def _reconcile_midterm_long_term_conversion(
+        self,
+        *,
+        archive_uri: str,
+        converted_message_ids: set[str],
+    ) -> tuple[int, int]:
+        """Mark records covered by long-term extraction and delete only those records."""
+
+        if not self._viking_fs:
+            return 0, 0
+        root_uri = self._midterm_root_uri(archive_uri)
+        manifest_uri = f"{root_uri}/manifest.json"
+        if not await self._viking_fs.exists(manifest_uri, ctx=self.ctx):
+            return 0, 0
+
+        records = deserialize_midterm_manifest(
+            await self._viking_fs.read_file(manifest_uri, ctx=self.ctx)
+        )
+        converted_at = get_current_timestamp()
+        updated_records: list[MidtermRecord] = []
+        newly_converted: list[MidtermRecord] = []
+        for record in records:
+            converted = bool(record.source_message_ids) and set(record.source_message_ids).issubset(
+                converted_message_ids
+            )
+            if converted and not record.converted_to_long_term:
+                record = replace(
+                    record,
+                    converted_to_long_term=True,
+                    converted_at=converted_at,
+                )
+                newly_converted.append(record)
+            updated_records.append(record)
+
+        await self._viking_fs.write_file(
+            uri=manifest_uri,
+            content=serialize_midterm_manifest(updated_records),
+            ctx=self.ctx,
+        )
+        archive_meta = await self._archives.read_meta(archive_uri)
+        previous = archive_meta.get("midterm_memory_conversion")
+        previous_hashes = (
+            previous.get("converted_content_hashes", []) if isinstance(previous, dict) else []
+        )
+        previous_message_ids = (
+            previous.get("converted_source_message_ids", []) if isinstance(previous, dict) else []
+        )
+        converted_hashes = sorted(
+            {
+                *(item for item in previous_hashes if isinstance(item, str)),
+                *(
+                    record.content_hash
+                    for record in updated_records
+                    if record.converted_to_long_term
+                ),
+            }
+        )
+        pending_hashes = sorted(
+            record.content_hash for record in updated_records if not record.converted_to_long_term
+        )
+        converted_source_message_ids = sorted(
+            {
+                *(item for item in previous_message_ids if isinstance(item, str)),
+                *(
+                    message_id
+                    for record in updated_records
+                    if record.converted_to_long_term
+                    for message_id in record.source_message_ids
+                ),
+            }
+        )
+        pending_source_message_ids = sorted(
+            message_id
+            for record in updated_records
+            if not record.converted_to_long_term
+            for message_id in record.source_message_ids
+        )
+        await self._merge_archive_meta(
+            archive_uri,
+            {
+                "midterm_memory_conversion": {
+                    "converted_content_hashes": converted_hashes,
+                    "pending_content_hashes": pending_hashes,
+                    "converted_source_message_ids": converted_source_message_ids,
+                    "pending_source_message_ids": pending_source_message_ids,
+                    "updated_at": converted_at,
+                }
+            },
+        )
+
+        deleted = 0
+        for record in updated_records:
+            if not record.converted_to_long_term:
+                continue
+            for recall_root in self._midterm_recall_root_uris(record):
+                recall_uri = f"{recall_root}/{record.recall_filename}"
+                if await self._viking_fs.exists(recall_uri, ctx=self.ctx):
+                    await self._viking_fs.rm(recall_uri, ctx=self.ctx)
+            staged_uri = f"{root_uri}/{record.filename}"
+            if await self._viking_fs.exists(staged_uri, ctx=self.ctx):
+                await self._viking_fs.rm(staged_uri, ctx=self.ctx)
+            deleted += 1
+
+        if updated_records and all(record.converted_to_long_term for record in updated_records):
+            await self._delete_midterm_memories(archive_uri)
+        else:
+            pending_records = [
+                record for record in updated_records if not record.converted_to_long_term
+            ]
+            await self._viking_fs.write_file(
+                uri=manifest_uri,
+                content=serialize_midterm_manifest(pending_records),
+                ctx=self.ctx,
+            )
+
+        if newly_converted:
+            logger.info(
+                "Marked %s mid-term records converted to long-term; deleted=%s",
+                len(newly_converted),
+                deleted,
+            )
+        return len(newly_converted), deleted
+
     async def _extract_long_term_memories_with_batching(
         self,
         *,
@@ -2537,7 +2818,7 @@ class Session:
             [str, str, List[Message], Callable[[], Awaitable[Any]]],
             Awaitable[Any],
         ],
-        topic: Optional[TopicContinuityOptions] = None,
+        topic: Optional[TopicContinuityConfig] = None,
         continuity_check: Optional[Callable[..., bool]] = None,
     ) -> Any:
         batches = plan_long_term_extraction_batches(
@@ -2641,7 +2922,8 @@ class Session:
         session_window_context: int = 128_000,
         summary_token_ratio: float = 0.25,
         reasoning_effort: Optional[str] = None,
-    ) -> None:
+        defer_long_term_extraction: bool = False,
+    ) -> bool:
         """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
         from openviking.service.task_work_index import get_task_context
@@ -2656,6 +2938,13 @@ class Session:
         skipped_memory_operations: list[dict[str, Any]] = []
         memory_diff_uri: Optional[str] = None
         completed_memory_steps: Dict[str, set[str]] = {}
+        long_term_converted_message_ids: set[str] = set()
+        midterm_enabled = False
+        midterm_memories_staged = 0
+        midterm_memories_deleted = False
+        midterm_memories_indexed = 0
+        midterm_memories_converted = 0
+        midterm_memory_records_deleted = 0
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archives.archive_index_from_uri(archive_uri)
 
@@ -2667,6 +2956,13 @@ class Session:
                 covered_failed_archives,
                 completed_memory_steps,
             ) = await self._prepare_phase2_archive_messages(archive_uri, messages)
+            archive_meta = await self._archives.read_meta(archive_uri)
+            persisted_midterm_ready = archive_meta.get("midterm_memory_ready")
+            raw_converted_ids = archive_meta.get("long_term_converted_message_ids", [])
+            if isinstance(raw_converted_ids, list):
+                long_term_converted_message_ids.update(
+                    item for item in raw_converted_ids if isinstance(item, str) and item
+                )
             if not messages:
                 raise ValueError("session commit archive has no recoverable messages")
             first_message_id = messages[0].id
@@ -2677,6 +2973,27 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
+            if (
+                defer_long_term_extraction
+                and isinstance(persisted_midterm_ready, dict)
+                and persisted_midterm_ready.get("ready") is True
+            ):
+                deferred_task = await tracker.get(
+                    task_id,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+                if deferred_task is None:
+                    raise RuntimeError(f"Deferred session commit task disappeared: {task_id}")
+                if deferred_task.meta.get("long_term_release_requested") is not True:
+                    await tracker.update_stage(
+                        task_id,
+                        "midterm_ready",
+                        account_id=self.ctx.account_id,
+                        user_id=self.ctx.user.user_id,
+                        meta={"midterm_memory_ready": persisted_midterm_ready},
+                    )
+                    return False
             register_telemetry(telemetry)
             try:
                 with bind_telemetry(telemetry):
@@ -2838,6 +3155,16 @@ class Session:
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
                         )
+                        if step == "long_term":
+                            result_contexts = (
+                                result.get("contexts", [])
+                                if isinstance(result, dict)
+                                else result or []
+                            )
+                            if result_contexts:
+                                long_term_converted_message_ids.update(
+                                    message.id for message in step_messages
+                                )
                         # Persist progress before waiting for sibling Phase 2
                         # tasks. A process restart or a sibling failure can then
                         # resume without applying this memory step twice.
@@ -2848,7 +3175,10 @@ class Session:
                                     self._archives.serialize_completed_memory_steps(
                                         completed_memory_steps
                                     )
-                                )
+                                ),
+                                "long_term_converted_message_ids": sorted(
+                                    long_term_converted_message_ids
+                                ),
                             },
                         )
                         return result
@@ -2857,12 +3187,17 @@ class Session:
                     memory_extraction_enabled = await get_memory_extraction_enabled(
                         self._runtime_config_manager, self.ctx.account_id
                     )
-                    topic_continuity = TopicContinuityOptions.from_config(
+                    topic_continuity = (
                         getattr(ov_config.memory, "topic_continuity", None)
+                        or TopicContinuityConfig()
                     )
-                    topic_for_extraction = (
-                        topic_continuity if topic_continuity.enabled else None
-                    )
+                    topic_for_extraction = topic_continuity if topic_continuity.enabled else None
+                    midterm_enabled = topic_continuity.enabled
+
+                    if defer_long_term_extraction and not midterm_enabled:
+                        raise ValueError(
+                            "defer_long_term_extraction requires memory.topic_continuity.enabled=true"
+                        )
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
@@ -2891,6 +3226,108 @@ class Session:
                         and (long_term_memory_types is None or bool(long_term_memory_types))
                         and bool(long_term_messages)
                     )
+                    if defer_long_term_extraction and not long_term_has_work:
+                        raise ValueError(
+                            "defer_long_term_extraction requires eligible long-term "
+                            "extraction work for the committed messages"
+                        )
+                    if midterm_enabled and long_term_has_work:
+                        ready_payload = (
+                            persisted_midterm_ready
+                            if isinstance(persisted_midterm_ready, dict)
+                            and persisted_midterm_ready.get("ready") is True
+                            else None
+                        )
+                        if ready_payload is not None:
+                            midterm_memories_staged = int(
+                                ready_payload.get("staged_records", 0) or 0
+                            )
+                            midterm_memories_indexed = int(
+                                ready_payload.get("indexed_records", 0) or 0
+                            )
+                        else:
+                            midterm_memories_staged = await self._stage_midterm_memories(
+                                archive_uri=archive_uri, messages=long_term_messages
+                            )
+                            if not midterm_memories_staged:
+                                raise ValueError("mid-term memory staging produced no records")
+                            midterm_memories_indexed = (
+                                await self._publish_midterm_memories_for_recall(archive_uri)
+                            )
+                            if midterm_memories_indexed:
+                                # ``refresh_file_embedding`` enqueues work.  Do not
+                                # advertise readiness until those vectors have been
+                                # consumed and are actually searchable.
+                                await self._wait_for_memory_embeddings(tracker, task_id)
+                                ready_at = get_current_timestamp()
+                                ready_payload = {
+                                    "ready": True,
+                                    "ready_at": ready_at,
+                                    "archive_uri": archive_uri,
+                                    "staged_records": midterm_memories_staged,
+                                    "indexed_records": midterm_memories_indexed,
+                                }
+                                # Persist readiness in both archive metadata and the
+                                # public task record.  Benchmark/evaluation clients may
+                                # start retrieval as soon as every import task reaches
+                                # this point, while Phase 2 keeps extracting long-term
+                                # memories in the background.
+                                await self._merge_archive_meta(
+                                    archive_uri,
+                                    {"midterm_memory_ready": ready_payload},
+                                )
+                                await tracker.update_stage(
+                                    task_id,
+                                    "midterm_ready",
+                                    account_id=self.ctx.account_id,
+                                    user_id=self.ctx.user.user_id,
+                                    meta={"midterm_memory_ready": ready_payload},
+                                )
+                        if defer_long_term_extraction:
+                            release_task = await tracker.get(
+                                task_id,
+                                account_id=self.ctx.account_id,
+                                user_id=self.ctx.user.user_id,
+                            )
+                            if release_task is None:
+                                raise RuntimeError(
+                                    f"Deferred session commit task disappeared: {task_id}"
+                                )
+                            if release_task.meta.get("long_term_release_requested") is not True:
+                                logger.info(
+                                    "Deferring long-term extraction after midterm_ready: task=%s",
+                                    task_id,
+                                )
+                                midterm_snapshot = telemetry.finish("ok")
+                                _publish_telemetry_summary_best_effort(midterm_snapshot)
+                                await self._merge_and_save_commit_meta(
+                                    archive_index=archive_index,
+                                    memories_extracted={},
+                                    telemetry_snapshot=midterm_snapshot,
+                                    record_auto_commit_success=False,
+                                )
+                                return False
+                            logger.info("Long-term extraction released: task=%s", task_id)
+                    elif (
+                        midterm_enabled
+                        and completed_memory_steps.get("long_term")
+                        and not long_term_messages
+                        and self._viking_fs
+                        and await self._viking_fs.exists(
+                            f"{self._midterm_root_uri(archive_uri)}/manifest.json",
+                            ctx=self.ctx,
+                        )
+                    ):
+                        # Recovery may start after long-term extraction coverage was
+                        # recorded but before per-record conversion cleanup completed.
+                        (
+                            midterm_memories_converted,
+                            midterm_memory_records_deleted,
+                        ) = await self._reconcile_midterm_long_term_conversion(
+                            archive_uri=archive_uri,
+                            converted_message_ids=long_term_converted_message_ids,
+                        )
+                        midterm_memories_deleted = midterm_memory_records_deleted > 0
                     if enable_working_memory or (self._session_compressor and long_term_has_work):
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
@@ -2979,6 +3416,20 @@ class Session:
                                 )
                                 if extraction_error is None:
                                     extraction_error = result
+
+                        if midterm_enabled and long_term_has_work:
+                            # Long-term extraction returns after enqueueing its
+                            # embeddings.  Keep the mid-term fallback searchable
+                            # until the replacement vectors have landed.
+                            await self._wait_for_memory_embeddings(tracker, task_id)
+                            (
+                                midterm_memories_converted,
+                                midterm_memory_records_deleted,
+                            ) = await self._reconcile_midterm_long_term_conversion(
+                                archive_uri=archive_uri,
+                                converted_message_ids=long_term_converted_message_ids,
+                            )
+                            midterm_memories_deleted = midterm_memory_records_deleted > 0
 
                         if extraction_error is not None:
                             raise extraction_error
@@ -3099,6 +3550,20 @@ class Session:
                     "skipped": len(skipped_memory_operations),
                     "skipped_operations": skipped_memory_operations,
                 },
+                **(
+                    {
+                        "midterm_memory": {
+                            "enabled": True,
+                            "staged_records": midterm_memories_staged,
+                            "indexed_records": midterm_memories_indexed,
+                            "converted_records": midterm_memories_converted,
+                            "deleted_records": midterm_memory_records_deleted,
+                            "deleted": midterm_memories_deleted,
+                        }
+                    }
+                    if midterm_enabled
+                    else {}
+                ),
                 "usage_events_extracted": usage_events_extracted,
                 "effective_memory_types": sorted(
                     _effective_memory_types(MemoryPolicy.from_dict(memory_policy))
@@ -3142,6 +3607,7 @@ class Session:
             )
 
             logger.info(f"Session {self.session_id} memory extraction completed")
+            return True
         except asyncio.CancelledError:
             telemetry.set_error("session.commit.phase2", "CANCELLED", "session commit cancelled")
             snapshot = telemetry.finish("cancelled")
@@ -3173,6 +3639,7 @@ class Session:
                 task_id, str(e), account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
             )
             logger.exception(f"Memory extraction failed for session {self.session_id}")
+            return True
 
     async def _write_done_file(
         self,

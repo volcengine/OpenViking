@@ -87,6 +87,32 @@ async def cancel_task(
     return Response(status="ok", result=task.to_dict())
 
 
+@router.post("/tasks/{task_id}/release-long-term")
+async def release_long_term_extraction(
+    task_id: str,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Release long-term extraction for a deferred Session commit task."""
+    if _ctx.role == Role.ROOT:
+        raise PermissionDeniedError("ROOT may not release user session tasks")
+    tracker = get_task_tracker()
+    try:
+        task = await tracker.release_long_term_extraction(
+            task_id,
+            account_id=_ctx.account_id,
+            user_id=_ctx.user.user_id,
+        )
+    except ValueError as exc:
+        raise FailedPreconditionError(str(exc)) from exc
+    if task is None:
+        raise OpenVikingError(
+            "Task not found or expired",
+            code="NOT_FOUND",
+            details={"resource": task_id, "type": "task"},
+        )
+    return Response(status="ok", result=task.to_dict())
+
+
 @router.get("/tasks")
 async def list_tasks(
     task_type: Optional[str] = Query(None, description="Filter by task type (e.g. session_commit)"),

@@ -12,10 +12,10 @@ from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.retention import UserTurn, build_turns
 from openviking.session.topic_continuity import (
     ContinuityChecker,
-    TopicContinuityOptions,
     default_continuity_check,
     should_skip_topic_group,
 )
+from openviking_cli.utils.config.memory_config import TopicContinuityConfig
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,7 @@ def estimate_extraction_message_tokens(messages: Iterable[Message]) -> int:
 
 def should_batch_long_term_extraction(
     limits: ExtractionBatchLimits,
-    topic: Optional[TopicContinuityOptions],
+    topic: Optional[TopicContinuityConfig],
 ) -> bool:
     return limits.enabled or (topic is not None and topic.enabled)
 
@@ -143,9 +143,7 @@ def _size_split_topic_group(
     combined = _flatten_turns(overlap_turns) + owned_messages
     batches: List[ExtractionMessageBatch] = []
     for batch in plan_extraction_batches(combined, limits):
-        batch_owned = frozenset(
-            message.id for message in batch.messages if message.id in owned_ids
-        )
+        batch_owned = frozenset(message.id for message in batch.messages if message.id in owned_ids)
         if not batch_owned:
             continue
         batches.append(_with_owned_ids(batch, batch_owned))
@@ -154,7 +152,7 @@ def _size_split_topic_group(
 
 def _group_turns_by_topic(
     turns: Sequence[UserTurn],
-    topic: TopicContinuityOptions,
+    topic: TopicContinuityConfig,
     continuity_check: ContinuityChecker,
 ) -> List[tuple[List[UserTurn], List[UserTurn]]]:
     """Return (overlap_prefix, owned_turns) groups in conversation order."""
@@ -265,7 +263,7 @@ def plan_long_term_extraction_batches(
     messages: List[Message],
     limits: ExtractionBatchLimits,
     *,
-    topic: Optional[TopicContinuityOptions] = None,
+    topic: Optional[TopicContinuityConfig] = None,
     continuity_check: Optional[Callable[[UserTurn, UserTurn], bool]] = None,
 ) -> List[ExtractionMessageBatch]:
     """Plan long-term extraction batches, optionally grouping by topic first."""

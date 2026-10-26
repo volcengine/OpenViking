@@ -357,7 +357,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             body = format_message_with_parts(msg)
             if not body.strip():
                 return None
-            speaker = msg.peer_id or msg.role
+            speaker = getattr(msg, "speaker", None) or msg.peer_id or msg.role
             return f"[{idx}][{msg.role}][{speaker}]: {body}"
 
         formatted_messages = [
@@ -390,7 +390,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         for msg in self.messages:
             role = getattr(msg, "role", "")
-            speaker = getattr(msg, "peer_id", "") or role
+            speaker = getattr(msg, "speaker", None) or getattr(msg, "peer_id", "") or role
             parts = getattr(msg, "parts", [])
 
             text_parts: List[str] = []

@@ -55,15 +55,18 @@ async def grade_answer(
     """
 
     try:
-        resp = await llm_client.chat.completions.create(
-            model=model,
-            messages=[
+        request = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": ACCURACY_PROMPT},
             ],
-            temperature=0,
-            timeout=60,
-        )
+            "temperature": 0,
+            "timeout": 60,
+        }
+        if os.getenv("LOCOMO_JUDGE_DISABLE_THINKING", "").strip() in {"1", "true", "True"}:
+            request["extra_body"] = {"thinking": {"type": "disabled"}}
+        resp = await llm_client.chat.completions.create(**request)
         content = resp.choices[0].message.content.strip()
         # 提取JSON内容
         start_idx = content.find("{")
@@ -105,7 +108,10 @@ async def main():
     )
     parser.add_argument(
         "--base-url",
-        default="https://ark.cn-beijing.volces.com/api/v3",
+        default=os.getenv(
+            "LOCOMO_JUDGE_BASE_URL",
+            "https://ark.cn-beijing.volces.com/api/v3",
+        ),
         help="Volcengine API base URL, default: https://ark.cn-beijing.volces.com/api/v3",
     )
     parser.add_argument(
@@ -115,7 +121,7 @@ async def main():
     )
     parser.add_argument(
         "--model",
-        default="doubao-seed-2-0-pro-260215",
+        default=os.getenv("LOCOMO_JUDGE_MODEL", "doubao-seed-2-0-pro-260215"),
         help="Judge model name, default: doubao-seed-2-0-pro-260215",
     )
     parser.add_argument(

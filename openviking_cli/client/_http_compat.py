@@ -183,6 +183,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
         retained_token_ratio: float | None = None,
         reasoning_effort: str | None = None,
         event_tags: list[str] | None = None,
+        defer_long_term_extraction: bool = False,
     ) -> Dict[str, Any]:
         """Commit with optional Turn-aware retention fields understood by the server."""
         payload: Dict[str, Any] = {
@@ -199,6 +200,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
             "summary_token_ratio": summary_token_ratio,
             "retained_token_ratio": retained_token_ratio,
             "reasoning_effort": reasoning_effort,
+            "defer_long_term_extraction": (True if defer_long_term_extraction else None),
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
         if event_tags is not None:
@@ -209,6 +211,11 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
             f"/api/v1/sessions/{session_path}/commit",
             json=payload,
         )
+        return self._handle_response_data(response).get("result", {})
+
+    async def release_long_term_extraction(self, task_id: str) -> Dict[str, Any]:
+        task_path = self._path_segment(task_id)
+        response = await self._request("POST", f"/api/v1/tasks/{task_path}/release-long-term")
         return self._handle_response_data(response).get("result", {})
 
 
@@ -249,6 +256,7 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
         retained_token_ratio: float | None = None,
         reasoning_effort: str | None = None,
         event_tags: list[str] | None = None,
+        defer_long_term_extraction: bool = False,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.commit_session(
@@ -265,5 +273,9 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
                 retained_token_ratio=retained_token_ratio,
                 reasoning_effort=reasoning_effort,
                 event_tags=event_tags,
+                defer_long_term_extraction=defer_long_term_extraction,
             )
         )
+
+    def release_long_term_extraction(self, task_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.release_long_term_extraction(task_id))

@@ -31,6 +31,10 @@ _MEMORY_TYPE_DESCRIPTIONS = {
         "Preference memories. Use them for likes, dislikes, habits, recurring choices, "
         "and long-term personal tendencies."
     ),
+    "midterm_qa": (
+        "Verbatim adjacent-speaker dialogue evidence. Prefer it for exact dates, "
+        "names, wording, and facts that may have been omitted from long-term summaries."
+    ),
     "cases": (
         "Structured training case memories. Use them as scenario/rubric context and "
         "follow direct deterministic links to experiences when available."
@@ -197,7 +201,7 @@ class MemoryStore:
     ) -> list[Any]:
         memories = sorted(cls._dedupe_memories(memories), key=cls._get_score, reverse=True)
         selected: list[Any] = []
-        for memory_type in _TYPE_QUOTA_MEMORY_TYPES:
+        for memory_type in quotas:
             quota = max(0, int(quotas.get(memory_type, 0) or 0))
             if quota <= 0:
                 continue
@@ -578,6 +582,12 @@ class MemoryStore:
                 "preferences": max(0, int(getattr(ov_cfg, "memory_recall_preferences_limit", 3))),
             }
             recall_max_chars = max(1, int(getattr(ov_cfg, "memory_recall_max_chars", 6500)))
+            midterm_enabled = bool(getattr(config, "_topic_continuity_enabled", False))
+            midterm_limit = max(0, int(getattr(ov_cfg, "memory_recall_midterm_limit", 10)))
+            midterm_max_chars = max(
+                1, int(getattr(ov_cfg, "memory_recall_midterm_max_chars", 6000))
+            )
+            midterm_min_score = float(getattr(ov_cfg, "memory_recall_midterm_min_score", 0.25))
             use_type_quota = not user_ids
             if use_type_quota:
                 if getattr(client, "actor_peer_id", None):
@@ -603,15 +613,41 @@ class MemoryStore:
                     peer_ids=search_peer_ids,
                     limit=_LEGACY_MEMORY_RECALL_LIMIT + 5,
                 )
-            if not result:
+                # A legacy root-level search can include the independently
+                # budgeted mid-term subtree. Keep it out of the long-term pool.
+                result = [
+                    memory
+                    for memory in self._extract_memories(result)
+                    if self._infer_memory_type(memory) != "midterm_qa"
+                ]
+
+            midterm_result: list[Any] = []
+            if midterm_enabled and midterm_limit > 0:
+                midterm_quotas = {"midterm_qa": midterm_limit}
+                if getattr(client, "actor_peer_id", None):
+                    midterm_result = await self._search_actor_peer_memories_by_type_quota(
+                        query=current_message,
+                        workspace_id=workspace_id,
+                        openviking_connection=openviking_connection,
+                        base_client=client,
+                        peer_ids=search_peer_ids or [],
+                        quotas=midterm_quotas,
+                    )
+                else:
+                    midterm_result = await self._search_viking_memory_by_type_quota(
+                        client=client,
+                        query=current_message,
+                        peer_ids=search_peer_ids,
+                        quotas=midterm_quotas,
+                    )
+
+            if not result and not midterm_result:
                 return ""
             result = [
                 memory
                 for memory in result
                 if not self._get_uri(memory).rstrip("/").endswith("/profile.md")
             ]
-            if not result:
-                return ""
             if not use_type_quota:
                 result = self._limit_memories(result, limit=_LEGACY_MEMORY_RECALL_LIMIT)
 
@@ -642,20 +678,45 @@ class MemoryStore:
                 memory_list.append(f"{i},{uri},{score}")
             raw_memories_log = "\n".join(memory_list)
             logger.info(f"[RAW_MEMORIES]\n{raw_memories_log}")
-            user_memory = await self._parse_viking_memory(
-                result,
-                client,
-                min_score=0.1,
-                max_chars=recall_max_chars,
-                full_limit=0 if use_type_quota else None,
-                type_char_budgets=(
-                    self._type_quota_char_budgets(recall_max_chars) if use_type_quota else None
-                ),
-                preference_full_limit=(_TYPE_QUOTA_PREFERENCE_FULL_LIMIT if use_type_quota else 0),
-                include_uri_entries=True,
-                read_content=read_memory_content,
-            )
-            return f"### user memories:\n{user_memory}"
+            if midterm_result:
+                midterm_log = [f"midterm_memory[{len(midterm_result)}]:"]
+                midterm_log.extend(
+                    f"{index},{self._get_uri(memory)},{self._get_score(memory)}"
+                    for index, memory in enumerate(midterm_result)
+                )
+                raw_midterm_log = "\n".join(midterm_log)
+                logger.info(f"[RAW_MIDTERM_MEMORIES]\n{raw_midterm_log}")
+
+            user_memory = ""
+            if result:
+                user_memory = await self._parse_viking_memory(
+                    result,
+                    client,
+                    min_score=0.1,
+                    max_chars=recall_max_chars,
+                    full_limit=0 if use_type_quota else None,
+                    type_char_budgets=(
+                        self._type_quota_char_budgets(recall_max_chars) if use_type_quota else None
+                    ),
+                    preference_full_limit=(
+                        _TYPE_QUOTA_PREFERENCE_FULL_LIMIT if use_type_quota else 0
+                    ),
+                    include_uri_entries=True,
+                    read_content=read_memory_content,
+                )
+            midterm_memory = ""
+            if midterm_result:
+                midterm_memory = await self._parse_viking_memory(
+                    midterm_result,
+                    client,
+                    min_score=midterm_min_score,
+                    max_chars=midterm_max_chars,
+                    full_limit=None,
+                    include_uri_entries=False,
+                    read_content=read_memory_content,
+                )
+            combined = "\n".join(block for block in (user_memory, midterm_memory) if block)
+            return f"### user memories:\n{combined}" if combined else ""
         except Exception as e:
             logger.error(f"[READ_USER_MEMORY]: search error. {e}")
             return ""

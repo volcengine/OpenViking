@@ -2082,7 +2082,7 @@ Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
 
 #### Topic Continuity Configuration
 
-`memory.topic_continuity` controls whether long-term extraction groups adjacent Turns by topic continuity. It is off by default; when disabled, extraction follows the existing commit batch.
+`memory.topic_continuity.enabled` is the single switch for topic grouping, midterm staging, vector indexing, cleanup, and VikingBot midterm recall. It defaults to `false`; set it to `true` to enable all feature stages. Normal commits continue automatically; the explicit evaluation pause/release request remains separate.
 
 ```json
 {
@@ -2093,7 +2093,6 @@ Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
       "overlap_turns": 1,
       "min_turns_to_split": 2,
       "time_gap_seconds": 0,
-      "embedding_similarity_threshold": 0.45,
       "skip_max_user_chars": 0
     }
   }
@@ -2102,12 +2101,11 @@ Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `enabled` | bool | Group adjacent Turns by topic continuity before long-term extraction. When off, keep the whole archive or auto-commit size splits | `false` |
+| `enabled` | bool | Enable topic grouping, midterm staging/indexing/cleanup, and VikingBot midterm recall together. Disabled by default | `false` |
 | `max_turns` | int | Maximum complete Turns in one topic group before a cut | `10` |
 | `overlap_turns` | int | On `max_turns` cuts only, copy the last N Turns of the previous group as context prefix. Topic-change cuts have no overlap | `1` |
 | `min_turns_to_split` | int | Skip grouping when the archive has fewer Turns than this | `2` |
 | `time_gap_seconds` | int | Adjacent Turn anchors farther apart than this are not continuous. `0` ignores time | `0` |
-| `embedding_similarity_threshold` | float | When an embedder is provided, cosine similarity below this is not continuous. Ignored without an embedder | `0.45` |
 | `skip_max_user_chars` | int | Skip extraction when owned user-query text in a group is at most this many characters. `0` never skips | `0` |
 
 When a dedicated `query_planner` is configured, it decides whether neighboring Turns stay one topic. A timeout, error, or unclear reply stays continuous. Without that planner, the extraction model is not called; with `time_gap_seconds=0`, the flag then splits only on `max_turns`. The split stays inside one commit.

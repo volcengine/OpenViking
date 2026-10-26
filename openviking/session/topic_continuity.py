@@ -5,13 +5,13 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Iterable, List, Optional, Protocol, Sequence
 
 from openviking.message import Message
 from openviking.session.retention import UserTurn, build_turns, is_user_query
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.utils.config.memory_config import TopicContinuityConfig
 from openviking_cli.utils.llm import parse_json_from_response
 
 TURN_TEXT_CHAR_CAP = 2000
@@ -23,57 +23,6 @@ _SAME_TOPIC_FALSE = {"false", "no", "different", "n"}
 
 class ContinuityChecker(Protocol):
     def __call__(self, previous: UserTurn, current: UserTurn) -> bool: ...
-
-
-@dataclass(frozen=True)
-class TopicContinuityOptions:
-    """Planner-facing copy of ``memory.topic_continuity``."""
-
-    enabled: bool = False
-    max_turns: int = 10
-    overlap_turns: int = 1
-    min_turns_to_split: int = 2
-    time_gap_seconds: int = 0
-    embedding_similarity_threshold: float = 0.45
-    skip_max_user_chars: int = 0
-
-    @classmethod
-    def from_config(cls, config: Any) -> "TopicContinuityOptions":
-        if config is None:
-            return cls()
-        return cls(
-            enabled=_bool_field(config, "enabled", False),
-            max_turns=_int_field(config, "max_turns", 10, minimum=1),
-            overlap_turns=_int_field(config, "overlap_turns", 1, minimum=0),
-            min_turns_to_split=_int_field(config, "min_turns_to_split", 2, minimum=1),
-            time_gap_seconds=_int_field(config, "time_gap_seconds", 0, minimum=0),
-            embedding_similarity_threshold=_clamp_unit_interval(
-                getattr(config, "embedding_similarity_threshold", 0.45)
-            ),
-            skip_max_user_chars=_int_field(config, "skip_max_user_chars", 0, minimum=0),
-        )
-
-
-def _bool_field(config: Any, name: str, default: bool) -> bool:
-    value = getattr(config, name, default)
-    return value if isinstance(value, bool) else default
-
-
-def _int_field(config: Any, name: str, default: int, *, minimum: int) -> int:
-    value = getattr(config, name, default)
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        parsed = default
-    return max(minimum, parsed)
-
-
-def _clamp_unit_interval(value: Any) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return 0.45
-    return min(1.0, max(0.0, parsed))
 
 
 def turn_text(turn: UserTurn, char_cap: int = TURN_TEXT_CHAR_CAP) -> str:
@@ -143,74 +92,19 @@ def _align_datetimes(left: datetime, right: datetime) -> tuple[datetime, datetim
     return left, right
 
 
-def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
-    if not left or not right:
-        return 0.0
-    size = min(len(left), len(right))
-    if size <= 0:
-        return 0.0
-    dot = 0.0
-    left_norm = 0.0
-    right_norm = 0.0
-    for index in range(size):
-        left_value = float(left[index])
-        right_value = float(right[index])
-        dot += left_value * right_value
-        left_norm += left_value * left_value
-        right_norm += right_value * right_value
-    if left_norm <= 0.0 or right_norm <= 0.0:
-        return 0.0
-    return dot / (left_norm**0.5 * right_norm**0.5)
+def default_continuity_check(options: TopicContinuityConfig) -> ContinuityChecker:
+    """Without a dedicated topic model, only the configured time gap splits turns."""
 
-
-class HeuristicContinuityChecker:
-    """Fail-open continuity: time gap, optional embedding cosine, else continuous."""
-
-    def __init__(
-        self,
-        *,
-        time_gap_seconds: int = 0,
-        embedding_similarity_threshold: float = 0.45,
-        embedder: Optional[Callable[[str], Sequence[float]]] = None,
-        text_char_cap: int = TURN_TEXT_CHAR_CAP,
-    ) -> None:
-        self._time_gap_seconds = max(0, int(time_gap_seconds or 0))
-        self._embedding_similarity_threshold = _clamp_unit_interval(
-            embedding_similarity_threshold
-        )
-        self._embedder = embedder
-        self._text_char_cap = max(0, int(text_char_cap or 0))
-
-    def __call__(self, previous: UserTurn, current: UserTurn) -> bool:
-        if self._time_gap_seconds > 0:
-            previous_time = _turn_anchor_time(previous)
-            current_time = _turn_anchor_time(current)
-            if previous_time is not None and current_time is not None:
-                previous_time, current_time = _align_datetimes(previous_time, current_time)
-                gap = abs((current_time - previous_time).total_seconds())
-                if gap > self._time_gap_seconds:
-                    return False
-
-        if self._embedder is None:
+    def check(previous: UserTurn, current: UserTurn) -> bool:
+        if options.time_gap_seconds <= 0:
             return True
-
-        previous_text = turn_text(previous, self._text_char_cap)
-        current_text = turn_text(current, self._text_char_cap)
-        if not previous_text or not current_text:
+        previous_time, current_time = _turn_anchor_time(previous), _turn_anchor_time(current)
+        if previous_time is None or current_time is None:
             return True
-        previous_vector = self._embedder(previous_text)
-        current_vector = self._embedder(current_text)
-        return (
-            _cosine_similarity(previous_vector, current_vector)
-            >= self._embedding_similarity_threshold
-        )
+        previous_time, current_time = _align_datetimes(previous_time, current_time)
+        return abs((current_time - previous_time).total_seconds()) <= options.time_gap_seconds
 
-
-def default_continuity_check(options: TopicContinuityOptions) -> ContinuityChecker:
-    return HeuristicContinuityChecker(
-        time_gap_seconds=options.time_gap_seconds,
-        embedding_similarity_threshold=options.embedding_similarity_threshold,
-    )
+    return check
 
 
 def parse_same_topic(response: Any) -> bool:
@@ -325,10 +219,8 @@ async def resolve_topic_continuity_check(
 
 __all__ = [
     "ContinuityChecker",
-    "HeuristicContinuityChecker",
     "SmallModelContinuityChecker",
     "TURN_TEXT_CHAR_CAP",
-    "TopicContinuityOptions",
     "default_continuity_check",
     "parse_same_topic",
     "resolve_topic_continuity_check",

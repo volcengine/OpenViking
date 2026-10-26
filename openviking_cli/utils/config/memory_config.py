@@ -41,14 +41,13 @@ class SessionAutoCommitConfig(BaseModel):
 
 
 class TopicContinuityConfig(BaseModel):
-    """Optional topic-continuity grouping before long-term memory extraction."""
+    """Single opt-in for topic grouping, midterm staging/indexing/cleanup, and bot recall."""
 
     enabled: bool = False
     max_turns: int = Field(default=10, ge=1)
     overlap_turns: int = Field(default=1, ge=0)
     min_turns_to_split: int = Field(default=2, ge=1)
     time_gap_seconds: int = Field(default=0, ge=0)
-    embedding_similarity_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     skip_max_user_chars: int = Field(default=0, ge=0)
 
     model_config = {"extra": "forbid"}
@@ -141,7 +140,7 @@ class MemoryConfig(BaseModel):
     topic_continuity: TopicContinuityConfig = Field(
         default_factory=TopicContinuityConfig,
         description=(
-            "When enabled, long-term extraction groups adjacent Turns inside the "
+            "Single feature switch: enables midterm staging, vector indexing, cleanup, bot recall, and groups adjacent Turns inside the "
             "same commit before calling extract_long_term_memories. A dedicated "
             "query_planner decides topic changes; without one, only a configured "
             "time gap and max_turns split the archive. Disabled by default."
