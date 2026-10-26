@@ -1365,6 +1365,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
       "backups": {
         "initial_partitions": 16,
         "checkpoint_interval_secs": 86400,
+        "reconcile_existing_data": false,
         "provider": "filesystem",
         "items": [
           {
@@ -1387,6 +1388,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 |------|------|------|--------|
 | `initial_partitions` | int | account 首次初始化的 metadata partition 数；修改不影响已有 account | `16` |
 | `checkpoint_interval_secs` | int | Checkpoint 扫描间隔，最小值为 `60` | `86400` |
+| `reconcile_existing_data` | bool | 首次启用多写时，扫描 primary 已存在文件并写入 V2 metadata。仅在 backup 已对齐或明确跳过历史回填时保持 `false`。 | `false` |
 | `provider` | str | Metadata provider：`filesystem` 或复用顶层 CacheRuntime 的 `cache` | `"filesystem"` |
 | `items` | array | backup 列表，包含 `name`、`backend`、`params` 和可选 `encryption` | `[]` |
 

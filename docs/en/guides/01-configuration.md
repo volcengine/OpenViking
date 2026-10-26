@@ -1378,6 +1378,7 @@ top-level backend remains the only direct read source.
       "backups": {
         "initial_partitions": 16,
         "checkpoint_interval_secs": 86400,
+        "reconcile_existing_data": false,
         "provider": "filesystem",
         "items": [
           {
@@ -1400,6 +1401,7 @@ Common `backups` fields:
 |-----------|------|-------------|---------|
 | `initial_partitions` | int | Initial metadata partitions; changes do not affect existing accounts | `16` |
 | `checkpoint_interval_secs` | int | Checkpoint discovery interval; minimum `60` | `86400` |
+| `reconcile_existing_data` | bool | Scan primary files that already exist when multi-write is first enabled and record them in V2 metadata. Keep `false` only when backups are already aligned or historical backfill is intentionally skipped. | `false` |
 | `provider` | str | Metadata provider: `filesystem` or top-level CacheRuntime-backed `cache` | `"filesystem"` |
 | `items` | array | Backups with `name`, `backend`, `params`, and optional `encryption` | `[]` |
 
