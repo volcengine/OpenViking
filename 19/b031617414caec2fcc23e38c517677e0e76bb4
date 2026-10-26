@@ -1,0 +1,22 @@
+docs/en/api/01-overview.md
+  h_b34c679d17e2ac 432-433
+docs/en/api/16-memory.md
+  h_b34c679d17e2ac 36-92
+docs/zh/api/01-overview.md
+  h_b34c679d17e2ac 427-428
+docs/zh/api/16-memory.md
+  h_b34c679d17e2ac 36-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "19b031617414caec2fcc23e38c517677e0e76bb4",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
