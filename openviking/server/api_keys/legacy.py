@@ -925,6 +925,7 @@ class FileStore(AccountStore):
         if account.users[user_id].get("deletion"):
             raise FailedPreconditionError("User deletion is in progress")
 
+        original_user_info = copy.deepcopy(account.users[user_id])
         account.users[user_id]["role"] = resolved_role
 
         # Update role in prefix index
@@ -942,7 +943,15 @@ class FileStore(AccountStore):
                         entry.role = resolved_role
                         break
 
-        await self._save_users_json(account_id, {user_id: account.users[user_id]})
+        try:
+            await self._save_users_json(account_id, {user_id: account.users[user_id]})
+        except Exception:
+            # Roll back like every other mutator: the auth hot path reads this
+            # in-memory state directly, so a failed persist must not leave the
+            # new role active after the caller was told the update failed.
+            account.users[user_id] = original_user_info
+            self._rebuild_prefix_index()
+            raise
 
     def _get_accounts(
         self,

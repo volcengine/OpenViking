@@ -504,6 +504,36 @@ async def test_set_role(manager: APIKeyManager):
     assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
 
 
+async def test_set_role_persist_failure_rolls_back_in_memory_role(
+    manager: APIKeyManager, monkeypatch
+):
+    """A failed persist must not leave the new role live in memory.
+
+    The auth hot path resolves roles from the in-memory store, so a set_role
+    whose registry write fails (file-lock contention, AGFS write error) has to
+    restore the previous role — otherwise the caller is told the update failed
+    while every later request is authorized with the new role.
+    """
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    bob_key = await manager.register_user(acct, "bob", "user")
+
+    async def _failing_save(*args, **kwargs):
+        raise RuntimeError("simulated registry write failure")
+
+    monkeypatch.setattr(manager._store, "_save_users_json", _failing_save)
+
+    with pytest.raises(RuntimeError, match="simulated registry write failure"):
+        await manager.set_role(acct, "bob", "admin")
+
+    assert (await manager.resolve_identity(bob_key)).role == Role.USER
+
+    # Once persistence works again the same promotion succeeds normally.
+    monkeypatch.undo()
+    await manager.set_role(acct, "bob", "admin")
+    assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
+
+
 async def test_get_users(manager: APIKeyManager):
     """list_users should list all users in an account."""
     acct = _uid()
