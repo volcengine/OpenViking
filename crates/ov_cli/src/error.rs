@@ -29,6 +29,22 @@ pub enum Error {
     #[error("Client error: {0}")]
     Client(String),
 
+    #[error("{source}. The task continues on the server; check with: ov task status {task_id}")]
+    TaskWait {
+        task_id: String,
+        #[source]
+        source: Box<Error>,
+    },
+
+    #[error("{source}. Import may have been accepted; check ov task list before resubmitting.")]
+    ResourceSubmission {
+        #[source]
+        source: Box<Error>,
+    },
+
+    #[error("Stopped waiting; check with: ov task status {task_id}")]
+    Interrupted { task_id: String },
+
     #[error("Parse error: {0}")]
     Parse(String),
 
@@ -103,6 +119,8 @@ impl Error {
             Self::Language(_) | Self::Client(_) | Self::InvalidPath(_) => "INVALID_ARGUMENT",
             Self::Network(_) => "UNAVAILABLE",
             Self::Timeout(_) => "DEADLINE_EXCEEDED",
+            Self::TaskWait { source, .. } | Self::ResourceSubmission { source } => source.code(),
+            Self::Interrupted { .. } => "CANCELLED",
             Self::Api { code, status, .. } => code
                 .as_deref()
                 .unwrap_or_else(|| code_from_http_status(*status)),

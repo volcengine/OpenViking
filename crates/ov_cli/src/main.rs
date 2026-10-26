@@ -4043,6 +4043,9 @@ async fn main() {
     };
 
     if let Err(e) = result {
+        if matches!(e, Error::Interrupted { .. }) {
+            std::process::exit(130);
+        }
         if !matches!(e, Error::AlreadyReported) {
             error_ui::print_runtime_error(
                 &command_display,

@@ -503,6 +503,19 @@ fmt.Println(result["task_id"])
 
 **CLI**
 
+`ov add-resource --wait` submits once with `wait=false`, then polls the
+returned task ID. There is no overall waiting deadline. Each status request
+has an HTTP timeout; timeouts, network errors, and HTTP 429/502/503/504 are
+retried with backoff up to 5 seconds. After 10 consecutive failed status
+requests, the CLI exits with the task ID and an `ov task status` command.
+A successful status request resets that counter.
+
+Ctrl+C stops client waiting without cancelling the server task and exits
+with code 130. On completion, the CLI returns the task result **including
+`task_id`**, which the server's `wait=true` response omits. If submission
+itself times out or loses its connection, check `ov task list` before
+resubmitting: the server may already have accepted the import.
+
 ```bash
 # Add local file
 ov add-resource ./documents/guide.md --reason "User guide"
