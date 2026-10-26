@@ -20,49 +20,32 @@ from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
 
-def test_compile_accepts_builtin_example_skill():
-    from openviking.service.compile_service import CompileRequest, CompileService
-    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
-
-    service = CompileService(CompileApiConfig(), ExternalTaskService(), SimpleNamespace())
-    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-    request = CompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://system/compile/example-skills/llm-wiki/SKILL.md",
-        }
-    )
-
-    normalized = service._normalize_request_uris(request, ctx)
-
-    assert normalized.skill == "viking://system/compile/example-skills/llm-wiki"
-
-
 @pytest.mark.parametrize(
-    "skill",
+    "skill,valid",
     [
-        "viking://system/compile/example-skills",
-        "viking://system/compile/example-skills/llm-wiki/references",
-        "viking://system/memory/memory_templates/builtin",
+        ("viking://system/compile/example-skills/llm-wiki/SKILL.md", True),
+        ("viking://system/compile/example-skills", False),
+        ("viking://system/compile/example-skills/llm-wiki/references", False),
+        ("viking://system/memory/memory_templates/builtin", False),
     ],
 )
-def test_compile_rejects_other_system_directories(skill):
+def test_compile_builtin_skill_uri(skill, valid):
+    """Compile accepts system Skill roots and rejects other system directories."""
     from openviking.service.compile_service import CompileRequest, CompileService
     from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 
     service = CompileService(CompileApiConfig(), ExternalTaskService(), SimpleNamespace())
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
     request = CompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": skill,
-        }
+        {"from": ["viking://resources/source"], "to": "viking://resources/wiki", "skill": skill}
     )
-
-    with pytest.raises(InvalidArgumentError, match="skill must resolve"):
-        service._normalize_request_uris(request, ctx)
+    if valid:
+        assert service._normalize_request_uris(request, ctx).skill == skill.removesuffix(
+            "/SKILL.md"
+        )
+    else:
+        with pytest.raises(InvalidArgumentError, match="skill must resolve"):
+            service._normalize_request_uris(request, ctx)
 
 
 def test_compile_builtin_skill_namespace_is_source_only():
@@ -198,8 +181,9 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("builtin_skill", [False, True])
 async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
-    service, app, client, monkeypatch, tmp_path
+    service, app, client, monkeypatch, tmp_path, builtin_skill
 ):
     """One target keeps its history, ordinary edits and live permissions across runs."""
     import base64
@@ -225,12 +209,15 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     app.dependency_overrides[get_request_context] = lambda: ctx
     owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
     source, target = "viking://resources/source", "viking://resources/wiki"
-    skill = f"viking://user/{ctx.user.user_id}/skills/wiki"
+    skill = (
+        "viking://system/compile/example-skills/llm-wiki"
+        if builtin_skill
+        else f"viking://user/{ctx.user.user_id}/skills/wiki"
+    )
     page, picture = f"{target}/page.md", f"{target}/diagram.png"
     png = b"\x89PNG\r\n\x1a\noriginal"
     for uri, content in {
         f"{source}/a.md": "source",
-        f"{skill}/SKILL.md": "Build a wiki",
         f"{target}/old.md": "keep renamed",
         f"{target}/discard.md": "remove",
         "viking://resources/inbox/note.md": "keep imported",
@@ -238,6 +225,8 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         picture: png,
     }.items():
         await service.viking_fs.write_file(uri, content, ctx=admin)
+    if not builtin_skill:
+        await service.viking_fs.write_file(f"{skill}/SKILL.md", "Build a wiki", ctx=admin)
     await service.runtime_config_manager.patch_account(ctx.account_id, {"acl": {"enabled": True}})
     await service.vikingdb_manager.upsert(
         {
@@ -363,6 +352,7 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     operation = await store.get_operation(ctx.account_id, target_id, first)
     checkpoint = dict(operation["meta"])
     assert checkpoint["snapshot_committed"] and checkpoint["target_head"]
+    assert (checkpoint["skill_snapshot"]["snapshot_id"] is None) == builtin_skill
     assert checkpoint["reindex_task_id"]
     versions_before_resume = await store.list_version_indexes(ctx.account_id, target_id)
     operation.update(status="committing", finished_at=None)
@@ -537,6 +527,9 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     scheduler = CompileScheduler(
         service.compile, service.compile.lifecycle.store, service.viking_fs
     )
+    scheduler.install_expiry(
+        SimpleNamespace(register_handler=Mock(), report=AsyncMock(), unregister=AsyncMock())
+    )
     scheduler.credential_encryptor = build_credential_encryptor(service._config.encryption)
     scheduler.credential_encryptor.provider.key_file = tmp_path / "compile-key"
     groups = AsyncMock(return_value=ctx.group_ids)
@@ -544,6 +537,7 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         AsyncMock(return_value=ResolvedIdentity(role=Role.USER, **owner)), groups
     )
     service.compile.lifecycle.save_credential = scheduler.save_credential
+    service.compile.lifecycle.reschedule = scheduler.reschedule
     settings = {
         "from": [source],
         "to": target,
