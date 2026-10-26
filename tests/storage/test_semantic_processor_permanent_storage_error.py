@@ -237,6 +237,21 @@ async def test_lock_error_requeues_without_consuming_failure_budget(semantic_env
 
 
 @pytest.mark.asyncio
+async def test_unknown_semantic_error_is_terminal_without_tripping_breaker(semantic_env):
+    env = semantic_env
+    msg = env.message()
+    error = RuntimeError("unexpected semantic invariant violation")
+    env.dag.run.side_effect = error
+
+    result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == str(error)
+    env.retry_queue.enqueue.assert_not_awaited()
+    env.processor._account_breaker(msg.account_id).check()
+
+
+@pytest.mark.asyncio
 async def test_semantic_model_error_fails_without_requeue(semantic_env):
     env = semantic_env
     msg = env.message()

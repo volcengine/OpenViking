@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
 from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.storage.errors import InvalidPathLockRequestError
 
 from .protocols import AGFSSyncClientProtocol
 
@@ -551,11 +552,19 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Adopt a handoff ref, returning a new owned lease."""
-        return await self.run(
-            "pathlock_adopt",
-            _fs_ctx_or_default("/", fs_ctx),
-            handoff_ref,
-        )
+        try:
+            return await self.run(
+                "pathlock_adopt",
+                _fs_ctx_or_default("/", fs_ctx),
+                handoff_ref,
+            )
+        except ValueError as exc:
+            # The native binding maps PathLockError::InvalidRequest to ValueError.
+            # Give queue consumers a typed, non-retryable error without changing
+            # unrelated ValueError contracts from legacy binding clients.
+            if str(exc).startswith("invalid lock request:"):
+                raise InvalidPathLockRequestError(str(exc)) from exc
+            raise
 
     async def pathlock_is_locked(
         self,

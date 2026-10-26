@@ -49,7 +49,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     write_abstract_overview,
 )
-from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.errors import InvalidPathLockRequestError, LockAcquisitionError
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -84,6 +84,7 @@ _PERMANENT_STORAGE_ERRORS = (
     IsADirectoryError,
     NotADirectoryError,
     AGFSNotADirectoryError,
+    InvalidPathLockRequestError,
 )
 
 

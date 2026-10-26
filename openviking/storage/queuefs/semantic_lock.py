@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Optional
 
-from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.errors import InvalidPathLockRequestError, LockAcquisitionError
 from openviking.storage.internal_names import MULTIWRITE_PATH_LOCK_FILE
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.viking_fs import get_viking_fs
@@ -16,6 +16,18 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _TREE_LOCK_SUFFIX = f"/{MULTIWRITE_PATH_LOCK_FILE}"
+
+
+def _is_recoverable_handoff_error(error: Exception) -> bool:
+    """Return whether a durable handoff can be replaced by logical reacquisition."""
+    message = str(error)
+    if isinstance(error, LockAcquisitionError):
+        return "is no longer owned by" in message or (
+            "logical-path provider handoff requires covered_paths" in message
+        )
+    return isinstance(error, InvalidPathLockRequestError) and (
+        "handoff coverage" in message and "does not map to lock path" in message
+    )
 
 
 def _tree_paths_from_handoff(lock_paths: Iterable[str]) -> list[str]:
@@ -55,13 +67,10 @@ class SemanticLockScope:
             viking_fs = get_viking_fs()
             try:
                 return cls(await viking_fs._async_agfs.pathlock_adopt(lock_handoff), _owned=True)
-            except LockAcquisitionError as error:
+            except (InvalidPathLockRequestError, LockAcquisitionError) as error:
                 # ponytail: Replace this message check with a recoverable handoff
                 # exception when the native binding exposes typed handoff failures.
-                error_message = str(error)
-                if "is no longer owned by" not in error_message and (
-                    "logical-path provider handoff requires covered_paths" not in error_message
-                ):
+                if not _is_recoverable_handoff_error(error):
                     raise
                 covered_paths = lock_handoff.get("covered_paths") or []
                 if not covered_paths:

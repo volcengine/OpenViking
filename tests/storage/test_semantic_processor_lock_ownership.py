@@ -12,8 +12,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.storage.errors import InvalidPathLockRequestError
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
+from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
@@ -71,6 +73,41 @@ async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypa
     )
 
     assert pathlock.release_calls == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_lock_reacquires_unicode_coverage_after_legacy_mapping_error(monkeypatch):
+    covered_path = "/local/default/resources/agent-memory/credit-risk/信贷风险管理_1.md"
+    lock_path = (
+        "/local/default/resources/agent-memory/credit-risk/.exact.ovlock.1.md.14dd8bad93aaa5b0"
+    )
+    lease = {"id": "reacquired-lock"}
+    pathlock = SimpleNamespace(
+        pathlock_adopt=AsyncMock(
+            side_effect=InvalidPathLockRequestError(
+                f"invalid lock request: handoff coverage '{covered_path}' "
+                f"does not map to lock path '{lock_path}'"
+            )
+        ),
+        pathlock_acquire_batch=AsyncMock(return_value=lease),
+        pathlock_release=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_lock.get_viking_fs",
+        lambda: _FakeVikingFS(pathlock),
+    )
+    handoff = {
+        "owner_id": "legacy-owner",
+        "lock_paths": [lock_path],
+        "covered_paths": [{"path": covered_path, "kind": "tree"}],
+    }
+
+    scope = await SemanticLockScope.resolve(handoff)
+
+    assert scope.lock == lease
+    pathlock.pathlock_acquire_batch.assert_awaited_once_with(handoff["covered_paths"])
+    await scope.close()
+    pathlock.pathlock_release.assert_awaited_once_with(lease)
 
 
 def test_semantic_tree_stats_aggregate_multiple_plans_for_one_request():
