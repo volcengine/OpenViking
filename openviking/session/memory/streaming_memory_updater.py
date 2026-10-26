@@ -573,7 +573,11 @@ class StreamingMemoryUpdater:
             operations = _combine_resolved_operations(
                 request.operations for request in kind_requests
             )
-            if not _requests_span_sessions(kind_requests):
+            all_uris = _unique_operation_uris(
+                getattr(operations, "upsert_operations", []) or []
+            )
+            has_duplicate_uris = len(all_uris) != len(set(all_uris))
+            if not _requests_span_sessions(kind_requests) and not has_duplicate_uris:
                 return operations
             return await merge_memory_operations(
                 operations=operations,
