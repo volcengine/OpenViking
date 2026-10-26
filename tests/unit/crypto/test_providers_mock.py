@@ -11,6 +11,7 @@ They use mocking to verify:
 4. Error handling
 """
 
+import asyncio
 import base64
 import os
 import secrets
@@ -324,6 +325,82 @@ class TestVolcengineKMSProviderMock:
         with pytest.raises(ConfigError, match="data loss risk"):
             await volcengine_mock_provider.get_root_key()
         assert volcengine_mock_provider._encrypt_with_kms.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_concurrent_bootstrap_returns_persisted_winner(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "root-key.enc"
+        first_key = b"a" * 32
+        second_key = b"b" * 32
+        generated = iter((first_key, second_key))
+        monkeypatch.setattr(providers_module.secrets, "token_bytes", lambda length: next(generated))
+
+        first = VolcengineKMSProvider("region", "access", "secret", "key", key_file=str(key_file))
+        second = VolcengineKMSProvider("region", "access", "secret", "key", key_file=str(key_file))
+        first_encrypt_started = asyncio.Event()
+        release_first_encrypt = asyncio.Event()
+
+        async def encrypt_first(plaintext: bytes) -> bytes:
+            first_encrypt_started.set()
+            await release_first_encrypt.wait()
+            return b"cipher:" + plaintext
+
+        async def encrypt_second(plaintext: bytes) -> bytes:
+            return b"cipher:" + plaintext
+
+        async def decrypt(ciphertext: bytes) -> bytes:
+            return ciphertext.removeprefix(b"cipher:")
+
+        first._encrypt_with_kms = AsyncMock(side_effect=encrypt_first)  # type: ignore[method-assign]
+        first._decrypt_with_kms = AsyncMock(side_effect=decrypt)  # type: ignore[method-assign]
+        second._encrypt_with_kms = AsyncMock(  # type: ignore[method-assign]
+            side_effect=encrypt_second
+        )
+        second._decrypt_with_kms = AsyncMock(side_effect=decrypt)  # type: ignore[method-assign]
+
+        first_task = asyncio.create_task(first.get_root_key())
+        await asyncio.wait_for(first_encrypt_started.wait(), timeout=10)
+        second_result = await asyncio.wait_for(second.get_root_key(), timeout=10)
+        release_first_encrypt.set()
+        first_result = await asyncio.wait_for(first_task, timeout=10)
+
+        assert first_result == second_result == second_key
+        assert key_file.read_bytes() == b"cipher:" + second_key
+        first._decrypt_with_kms.assert_awaited_once_with(b"cipher:" + second_key)
+        second._decrypt_with_kms.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_bootstrap_never_returns_unpersisted_key(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "root-key.enc"
+        abandoned_key = b"a" * 32
+        persisted_key = b"b" * 32
+        generated = iter((abandoned_key, persisted_key))
+        monkeypatch.setattr(providers_module.secrets, "token_bytes", lambda length: next(generated))
+
+        provider = VolcengineKMSProvider(
+            "region", "access", "secret", "key", key_file=str(key_file)
+        )
+        first_encrypt_started = asyncio.Event()
+        release_first_encrypt = asyncio.Event()
+
+        async def encrypt(plaintext: bytes) -> bytes:
+            if plaintext == abandoned_key:
+                first_encrypt_started.set()
+                await release_first_encrypt.wait()
+                raise RuntimeError("first KMS call failed")
+            return b"cipher:" + plaintext
+
+        provider._encrypt_with_kms = AsyncMock(side_effect=encrypt)  # type: ignore[method-assign]
+        first_task = asyncio.create_task(provider.get_root_key())
+        await asyncio.wait_for(first_encrypt_started.wait(), timeout=10)
+
+        second_result = await asyncio.wait_for(provider.get_root_key(), timeout=10)
+        release_first_encrypt.set()
+        with pytest.raises(ConfigError, match="data loss risk"):
+            await first_task
+
+        assert second_result == persisted_key
+        assert provider._root_key == persisted_key
+        assert key_file.read_bytes() == b"cipher:" + persisted_key
 
 
 class TestCrossProviderEnvelope:

@@ -14,10 +14,13 @@ import asyncio
 import importlib
 import os
 import secrets
+import sys
+import tempfile
 import time
 from abc import ABC
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from openviking.crypto.exceptions import (
     AuthenticationFailedError,
@@ -51,6 +54,58 @@ HKDF_INFO_PREFIX = b"openviking:kek:v1:"
 PROVIDER_LOCAL = 0x01
 PROVIDER_VAULT = 0x02
 PROVIDER_VOLCENGINE = 0x03
+
+
+@contextmanager
+def _root_key_file_lock(key_file: Path) -> Iterator[None]:
+    """Serialize root-key reads and first publication across processes."""
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = key_file.with_name(f".{key_file.name}.lock")
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(descriptor)
+
+
+def _publish_root_key_file(key_file: Path, content: bytes) -> None:
+    """Durably replace a root-key file without exposing partial content."""
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{key_file.name}.", suffix=".tmp", dir=key_file.parent
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            if sys.platform == "win32":
+                os.chmod(temporary, 0o600)
+            else:
+                os.fchmod(stream.fileno(), 0o600)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, key_file)
+        if sys.platform != "win32":
+            directory = os.open(key_file.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 class RootKeyProvider(ABC):
@@ -224,24 +279,17 @@ class LocalFileProvider(BaseProvider):
 
     async def _load_or_create_root_key(self) -> bytes:
         """Load or create Root Key."""
-        if self.key_file.exists():
-            # Read existing key
-            with open(self.key_file, "r") as f:
-                hex_key = f.read().strip()
-            try:
-                return bytes.fromhex(hex_key)
-            except ValueError:
-                raise ConfigError(f"Invalid root key format in {self.key_file}")
-        else:
-            # Create new key
+        with _root_key_file_lock(self.key_file):
+            if self.key_file.exists():
+                with open(self.key_file, "r") as f:
+                    hex_key = f.read().strip()
+                try:
+                    return bytes.fromhex(hex_key)
+                except ValueError:
+                    raise ConfigError(f"Invalid root key format in {self.key_file}")
+
             root_key = secrets.token_bytes(32)
-            # Ensure parent directory exists
-            self.key_file.parent.mkdir(parents=True, exist_ok=True)
-            # Write file with permissions 0600
-            with open(self.key_file, "w") as f:
-                f.write(root_key.hex())
-            # Set file permissions
-            os.chmod(self.key_file, 0o600)
+            _publish_root_key_file(self.key_file, root_key.hex().encode("ascii"))
             logger.info("Created new root key at %s", self.key_file)
             return root_key
 
@@ -707,41 +755,58 @@ class VolcengineKMSProvider(BaseProvider):
             return self._root_key
 
         try:
-            # Try to read encrypted root key from file
-            if self.key_file.exists():
-                with open(self.key_file, "rb") as f:
-                    encrypted_root_key = f.read()
-                self._root_key = await self._decrypt_with_kms(encrypted_root_key)
-                logger.info(f"Loaded existing root key from {self.key_file}")
-                return self._root_key
+            with _root_key_file_lock(self.key_file):
+                if self._root_key is not None:
+                    return self._root_key
+                encrypted_root_key = self.key_file.read_bytes() if self.key_file.exists() else None
         except Exception as e:
             raise ConfigError(
                 f"Failed to load existing root key from {self.key_file}. Cannot continue: {e}"
-            )
+            ) from e
 
-        # Generate new root key
-        import secrets
+        if encrypted_root_key is not None:
+            try:
+                self._root_key = await self._decrypt_with_kms(encrypted_root_key)
+            except Exception as e:
+                raise ConfigError(
+                    f"Failed to load existing root key from {self.key_file}. Cannot continue: {e}"
+                )
+            logger.info(f"Loaded existing root key from {self.key_file}")
+            return self._root_key
 
-        self._root_key = secrets.token_bytes(32)
-
-        # Encrypt and store root key. Any failure here (KMS outage, read-only
-        # or full filesystem) must clear the cached ephemeral key before raising:
-        # otherwise a retried get_root_key() hits the `self._root_key is not None`
-        # fast path and encrypts data with a key that was never persisted — the
-        # data-loss class this provider guards.
+        root_key = secrets.token_bytes(32)
         try:
-            encrypted_root_key = await self._encrypt_with_kms(self._root_key)
-            self.key_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.key_file, "wb") as f:
-                f.write(encrypted_root_key)
-            logger.info(f"Created and stored new root key at {self.key_file}")
+            encrypted_root_key = await self._encrypt_with_kms(root_key)
         except Exception as e:
-            self._root_key = None
             raise ConfigError(
                 f"Failed to persist root key to file. "
                 f"Refusing to start with ephemeral key (data loss risk): {e}"
             )
 
+        try:
+            with _root_key_file_lock(self.key_file):
+                if self._root_key is not None:
+                    return self._root_key
+                if self.key_file.exists():
+                    encrypted_root_key = self.key_file.read_bytes()
+                else:
+                    _publish_root_key_file(self.key_file, encrypted_root_key)
+                    self._root_key = root_key
+                    logger.info(f"Created and stored new root key at {self.key_file}")
+                    return self._root_key
+        except Exception as e:
+            raise ConfigError(
+                f"Failed to persist root key to file. "
+                f"Refusing to start with ephemeral key (data loss risk): {e}"
+            ) from e
+
+        try:
+            self._root_key = await self._decrypt_with_kms(encrypted_root_key)
+        except Exception as e:
+            raise ConfigError(
+                f"Failed to load existing root key from {self.key_file}. Cannot continue: {e}"
+            )
+        logger.info(f"Loaded existing root key from {self.key_file}")
         return self._root_key
 
     async def get_root_key(self) -> bytes:
