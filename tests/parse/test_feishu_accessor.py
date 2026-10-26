@@ -1811,6 +1811,29 @@ def test_embedded_sheet_uses_same_user_token(monkeypatch):
     assert read_range.call_args.kwargs["feishu_access_token"] == "u-test"
 
 
+def test_read_sheet_range_requests_calculated_display_values(monkeypatch):
+    # Without render options the values API returns formulas as written and
+    # dates as serial numbers instead of what the spreadsheet displays.
+    _install_fake_lark_modules(monkeypatch)
+    request_values = MagicMock(
+        return_value=_FakeMediaResponse(
+            b'{"data":{"valueRange":{"values":[["Total","Due"],[42,"2026/09/30"]]}}}'
+        )
+    )
+    accessor = FeishuAccessor()
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request_values))
+
+    rows = accessor._read_sheet_range("sheet-token", "sheet-1", 2, 2)
+
+    assert rows == [["Total", "Due"], ["42", "2026/09/30"]]
+    request = request_values.call_args.args[0]
+    assert request.uri == "/open-apis/sheets/v2/spreadsheets/sheet-token/values/sheet-1!A1:B2"
+    assert request.queries == {
+        "valueRenderOption": "FormattedValue",
+        "dateTimeRenderOption": "FormattedString",
+    }
+
+
 def test_access_keeps_raw_title_but_exposes_safe_original_filename(monkeypatch):
     accessor = FeishuAccessor()
 
