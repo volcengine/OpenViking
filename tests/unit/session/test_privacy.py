@@ -72,19 +72,17 @@ async def test_extract_and_restore_complete_messages(privacy, request_context):
     assert all(re.fullmatch(r"[A-Za-z0-9_-]{8}", key) for key in values)
     # Sensitive containers are captured whole, with no references inside them.
     assert list(values.values()) == [
-        "中文密码",
         "abstract-secret",
         specs[1]["parts"][0].tool_input["credentials"],
         [],
         1234,
         {},
         "another-secret",
-        "hello world",
         "error-secret",
     ]
     assert specs == before
     clean = message_jsonl(sanitized)
-    for secret in ["中文密码", "abstract-secret", "another-secret", "hello world", "error-secret"]:
+    for secret in ["abstract-secret", "another-secret", "error-secret"]:
         assert secret not in clean
     privacy.get_current.return_value = SimpleNamespace(values=values)
     assert await restore_session_content(
@@ -99,9 +97,11 @@ async def test_batch_field_id_collision_preserves_both_values(
 ):
     ids = iter(["same0001", "same0001", "next0002"])
     monkeypatch.setattr(extraction, "token_urlsafe", lambda _: next(ids))
-    specs = [{"parts": [ToolPart(tool_input={"password": "first", "api_key": "second"})]}]
+    specs = [
+        {"parts": [ToolPart(tool_input={"password": "first-secret", "api_key": "second-secret"})]}
+    ]
     protected, values = extract_session_privacy_values("demo", specs)
-    assert sorted(values.values()) == ["first", "second"]
+    assert sorted(values.values()) == ["first-secret", "second-secret"]
     privacy.get_current.return_value = SimpleNamespace(values=values)
     assert await restore_session_content(
         privacy, message_jsonl(protected), request_context, session_id="demo", jsonl=True
@@ -110,11 +110,97 @@ async def test_batch_field_id_collision_preserves_both_values(
 
 def test_exhausted_field_ids_reject_without_mutating_input(monkeypatch):
     monkeypatch.setattr(extraction, "token_urlsafe", lambda _: "same0001")
-    specs = [{"parts": [ToolPart(tool_input={"password": "first", "api_key": "second"})]}]
+    specs = [
+        {"parts": [ToolPart(tool_input={"password": "first-secret", "api_key": "second-secret"})]}
+    ]
     before = deepcopy(specs)
     with pytest.raises(ResourceExhaustedError, match="unique Session privacy field IDs"):
         extract_session_privacy_values("demo", specs)
     assert specs == before
+
+
+@pytest.mark.parametrize("key", ["password", "secret", "token", "api_key"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "dict",
+        "только",
+        "ordinary",
+        "tool_input",
+        "dictionary",
+        "только так: слово должно остаться словом",
+        "Keep this ordinary sentence in memory.",
+        "这是一段普通说明文字，不是密钥。",
+        '{"note":"keep these ordinary words"}',
+        '{"password":"ordinary"}',
+        "password=ordinary",
+        "https://example.test/documentation",
+    ],
+)
+def test_sensitive_field_names_preserve_words_and_prose(key, value):
+    specs = [{"parts": [ToolPart(tool_input={key: value}), TextPart(value)]}]
+    protected, values = extract_session_privacy_values("demo", specs)
+    assert protected == specs
+    assert values == {}
+
+
+def test_sensitive_prose_field_extracts_only_embedded_credential():
+    secret = "sk-0123456789abcdefghijklmnop"
+    text = f"Keep these words; use {secret} for authentication."
+    specs = [{"parts": [ToolPart(tool_input={"password": text})]}]
+    protected, values = extract_session_privacy_values("demo", specs)
+    [field] = values
+    assert values[field] == secret
+    assert protected[0]["parts"][0].tool_input["password"] == text.replace(
+        secret, extraction.build_session_placeholder("demo", field)
+    )
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "ghp_0123456789abcdefghijklmnop",
+        "AKIAABCDEFGHIJKLMNOP",
+        "Bearer abcdefghijklmnopqrstuv",
+        "Basic dXNlcjpwYXNz",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature",
+        "abcdef" * 6,
+        "0123456789" * 4,
+        "RaNdOmAlphabeticCredentialValue",
+        "abcdefghijklmnopqrstuvwxyz" * 2,
+        "https://user:password@example.test/path",
+        "-----BEGIN PRIVATE KEY-----\n" + "YWJj" * 16 + "\n-----END PRIVATE KEY-----",
+    ],
+)
+def test_sensitive_fields_still_capture_credential_shapes(secret):
+    specs = [{"parts": [ToolPart(tool_input={"password": secret})]}]
+    protected, values = extract_session_privacy_values("demo", specs)
+    [field] = values
+    assert values[field] == secret
+    assert protected[0]["parts"][0].tool_input["password"] == (
+        extraction.build_session_placeholder("demo", field)
+    )
+
+
+@pytest.mark.parametrize(
+    "credential,secret",
+    [
+        ("api_key=sk-0123456789abcdefghijklmnop", "sk-0123456789abcdefghijklmnop"),
+        ("Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+        ("api_key=AKIAABCDEFGHIJKLMNOP", "AKIAABCDEFGHIJKLMNOP"),
+    ],
+)
+def test_session_text_preserves_ordinary_assignments_and_extracts_real_credentials(
+    credential, secret
+):
+    text = f'password="Keep these words in memory."\nsecret=ordinary\n{credential}'
+    specs = [{"parts": [TextPart(text)]}]
+    protected, values = extract_session_privacy_values("demo", specs)
+    [field] = values
+    assert values[field] == secret
+    assert protected[0]["parts"][0].text == text.replace(
+        secret, extraction.build_session_placeholder("demo", field)
+    )
 
 
 async def test_sensitive_field_names_do_not_leak_into_references(privacy, request_context):

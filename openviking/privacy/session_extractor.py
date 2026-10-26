@@ -16,6 +16,7 @@ from openviking.privacy.rules import (
     MAX_MATCHES,
     MAX_TEXT_CHARS,
     find_privacy_matches,
+    is_credential_value,
     is_sensitive_key,
 )
 from openviking.privacy.sanitizer import PrivacyReplacement, PrivacySanitizer
@@ -227,7 +228,7 @@ class _PayloadTransformer:
 
 
 class _SessionExtraction(_PayloadTransformer):
-    """Discover values while copying inputs; sensitive fields are captured whole."""
+    """Discover values while copying inputs; capture credential-shaped fields whole."""
 
     budget: _ExtractionBudget
 
@@ -246,7 +247,7 @@ class _SessionExtraction(_PayloadTransformer):
         return super().transform_part(replace(part))
 
     def transform_field(self, key: str, value: Any, depth: int) -> Any:
-        if not is_sensitive_key(key):
+        if not is_sensitive_key(key) or (isinstance(value, str) and not is_credential_value(value)):
             return self.transform_value(value, depth)
         copied = self.literal.transform_value(value, depth)
         # Empty strings, references and environment variables retain their meaning.
@@ -276,7 +277,11 @@ class _SessionExtraction(_PayloadTransformer):
         spans: list[tuple[int, int, str | None]] = [
             (match.start, match.end, match.reference) for match in self.value_matcher(text)
         ]
-        spans.extend((match.start, match.end, None) for match in find_privacy_matches(text))
+        spans.extend(
+            (match.start, match.end, None)
+            for match in find_privacy_matches(text)
+            if is_credential_value(text[match.start : match.end])
+        )
         replacements = []
         for start, end, reference in _merge_spans(spans):
             if reference is None:
@@ -326,7 +331,7 @@ def _merge_spans(
 
 
 def _replace_spans(text: str, replacements: Iterable[PrivacyReplacement]) -> str:
-    chunks = []
+    chunks: list[str] = []
     cursor = 0
     for match in replacements:
         chunks.extend((text[cursor : match.start], match.reference))

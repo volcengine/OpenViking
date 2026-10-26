@@ -150,7 +150,7 @@ Session.add_messages_async
 #### Key Points
 
 1. **Extraction source**: fixed rules identify sensitive values without model calls; the results are used as privacy key-value pairs.
-2. **Coverage**: TextPart text, ContextPart abstracts, and ToolPart input and output. Values under sensitive tool input keys are stored and masked as a whole.
+2. **Coverage**: TextPart text, ContextPart abstracts, and ToolPart input and output. Strings under sensitive tool input keys are captured whole only when credential-shaped: token-like strings of at least 8 ASCII characters, authentication headers, private keys, or URLs containing userinfo. Ordinary words and prose retain their text; recognized embedded credentials are still extracted separately. Non-string sensitive fields retain whole-value capture. Register credentials that do not meet these heuristics explicitly in the `credential` category.
 3. **Content replacement**: sensitive spans in the original content are replaced with placeholders:
    - Sensitive values belonging to the current Session use the same placeholder format, with the Session ID or its hash value: <code>&#123;&#123;ov_privacy:session:&#123;session_id&#125;:&#123;field_name&#125;&#125;&#125;</code>.
    - If a sensitive span matches registered personal credentials (`credential`), prefer the uniquely matching field's placeholder, for example <code>&#123;&#123;ov_privacy:alice:viking://~/privacy/credential/github#/values/pat&#125;&#125;</code>.
@@ -205,6 +205,12 @@ Restoration is supported for these files under the current user's Session direct
 - Separation of concerns: content files hold placeholders; the privacy service holds sensitive values and versions
 
 PrivacySanitizer does not infer sensitivity from field names. String values in the active Privacy catalog participate in automatic content scanning and reference replacement only when they contain at least 6 Unicode characters. Shorter values can still be stored, referenced, and explicitly resolved, but are excluded from global substring replacement to reduce false positives in ordinary text. Python owns catalog loading, reference generation, and cache policy; matcher construction, leftmost-longest matching, and text rewriting run in RAGFS's Rust Aho-Corasick implementation through a reusable PyO3 matcher that releases the GIL while scanning. The matcher catalog is cached per user and process-local revision; local changes invalidate it immediately, and a 3600-second TTL bounds staleness after changes made by another worker or node.
+
+Values in the `session` category must additionally pass the same credential-shape check before global replacement. This also excludes legacy registrations of ordinary words or prose without deleting the catalog entries or preventing explicit reference restoration. Other categories retain the explicit registration behavior above.
+
+### Correcting a false Session registration
+
+Back up the affected content and privacy config first. Use `ov privacy tree --category session --references` to locate the target and field, and `ov privacy resolve session <target_key> <field>` to inspect its value locally. Before removing the registration, export affected Session content with `raw=true` while the original values are still available. Then use `ov privacy delete session <target_key> <field> --yes` to stop that active registration. Existing placeholders are not rewritten by deletion; restore affected documents from the export or a verified backup. Removing the final field deletes the target and its history, so retain your backup. In other workers, cached matchers may remain active until their 3600-second TTL expires or those workers restart.
 
 Using a GitHub Personal Access Token (PAT) as an example:
 

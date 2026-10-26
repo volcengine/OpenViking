@@ -150,7 +150,7 @@ Session.add_messages_async
 #### 关键点
 
 1. **抽取结果来源**：通过固定的常见规则（不调用模型）识别敏感值，将结果作为隐私键值。
-2. **覆盖范围**：处理 TextPart 文本、ContextPart 摘要和 ToolPart 输入、输出。工具输入中，敏感字段对应的值整体保存和遮罩。
+2. **覆盖范围**：处理 TextPart 文本、ContextPart 摘要和 ToolPart 输入、输出。敏感工具字段中的字符串仅在具有凭据形态时整体提取：至少 8 个 ASCII 字符的令牌形态字符串、认证头、私钥或包含用户凭据的 URL。普通单词和说明文字保留原文，其中可识别的密钥仍单独提取。非字符串敏感字段仍整体保存。不符合这些启发式规则的真实凭据应显式登记到 `credential` 类别。
 3. **内容替换**：原文中的敏感片段会替换为占位符：
    - 当前 Session 的敏感值统一使用以下占位符，以 Session ID 或其哈希映射值标识会话：<code>&#123;&#123;ov_privacy:session:&#123;session_id&#125;:&#123;field_name&#125;&#125;&#125;</code>。
    - 若敏感片段与已登记的个人密钥（credential）匹配，则优先使用唯一匹配字段的占位符，例如 <code>&#123;&#123;ov_privacy:alice:viking://~/privacy/credential/github#/values/pat&#125;&#125;</code>。
@@ -205,6 +205,12 @@ fs.read(uri)
 - 两者解耦：内容文件负责占位符，隐私服务负责敏感值与版本
 
 PrivacySanitizer 不根据字段名猜测敏感性。当前 active Privacy 中长度不少于 6 个 Unicode 字符的字符串值会参与正文自动扫描与引用替换；更短的值仍可保存、引用和显式读取，但不会参与全文替换，以降低普通正文误命中。Python 负责目录、引用和缓存策略，匹配器构建、最长匹配与正文重写由 `ragfs` 的 Rust Aho-Corasick 实现完成，并通过 PyO3 复用不可变 matcher、扫描时释放 GIL。匹配目录按用户和本进程 revision 缓存，本进程修改会立即失效，另外设有 3600 秒缓存 TTL 以覆盖多 worker/多节点修改。
+
+`session` 类别中的值还必须通过同一凭据形态检查，才会参与全文替换。这也会过滤旧版本误登记的普通词句，但不会删除配置或阻止显式引用还原。其他类别保持上述显式登记行为。
+
+### 清除会话中的误登记
+
+先备份受影响的内容和隐私配置。通过 `ov privacy tree --category session --references` 定位目标和字段，再用 `ov privacy resolve session <target_key> <field>` 在本地检查实际值。删除前，在原始值仍可用时使用 `raw=true` 导出受影响的会话内容，然后执行 `ov privacy delete session <target_key> <field> --yes` 停止该值的当前登记。删除不会重写已有占位符；应使用导出内容或已确认的备份修复文档。删除最后一个字段也会删除目标及其历史，因此务必保留备份。其他 worker 的匹配器缓存可能持续到 3600 秒 TTL 到期或重启相应 worker。
 
 以保存 GitHub Personal Access Token（PAT）为例：
 

@@ -116,6 +116,23 @@ async def test_sanitizer_protects_registered_strings_at_least_six_chars_without_
     assert "numeric=42" in result.content
 
 
+async def test_session_catalog_does_not_globally_replace_legacy_words_or_prose():
+    words = ["только", "ordinary", "tool_input", "Keep these ordinary words in memory."]
+    secret = "ghp_0123456789abcdefghijklmnop"
+    catalog = _PrivacyCatalog(
+        {"session": {"legacy": {**{str(i): word for i, word in enumerate(words)}, "token": secret}}}
+    )
+    sanitizer = PrivacySanitizer(catalog)
+    content = " ".join([*words, secret])
+    result = await sanitizer.sanitize(content, ctx=_ctx())
+    reference = build_privacy_field_reference("alice", "session", "legacy", "token")
+    assert result.content == content.replace(secret, reference)
+    find = await sanitizer.prepare_matcher(_ctx())
+    assert [(hit.start, hit.end, hit.reference) for hit in find(content)] == [
+        (content.index(secret), len(content), reference)
+    ]
+
+
 async def test_sanitizer_prefers_longest_overlap_and_does_not_replace_ambiguous_values():
     catalog = _PrivacyCatalog(
         {

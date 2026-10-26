@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
 from openviking.privacy.reference import build_privacy_field_reference
+from openviking.privacy.rules import is_credential_value
 from openviking.pyagfs import get_privacy_matcher_class
 from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
@@ -201,13 +202,13 @@ class PrivacySanitizer:
                 if current is None:
                     continue
                 for field_name, value in current.values.items():
-                    # Privacy is the explicit protection boundary. Do not infer
-                    # sensitivity from field names. Very short values are not
-                    # safe for global substring replacement because ordinary
-                    # prose would produce excessive false positives.
+                    # Explicit Privacy values are protected regardless of field
+                    # names. Session discoveries also need a shape check so old
+                    # false positives cannot keep replacing ordinary prose.
                     if (
                         not isinstance(value, str)
                         or len(value) < MIN_PROTECTED_VALUE_CHARS
+                        or (category == "session" and not is_credential_value(value))
                     ):
                         continue
                     reference = build_privacy_field_reference(
