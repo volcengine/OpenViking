@@ -160,6 +160,12 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
 
+模型重排序用于 `search(mode="list")` 的文本查询，不用于 `find()` 或
+`search(mode="context")`，因此采用 context 模式的自动召回不会调用重排序模型。
+`threshold` 仍会作为检索器默认的分数阈值，包括不执行重排序的 QUICK 检索；
+请求中的 `score_threshold` 可以覆盖此值。详见
+[各请求模式的重排序行为](../api/06-retrieval.md#各请求模式的重排序行为)。
+
 `jev` 通过现有 `api_base` 和 `model` 字段同时支持 TypeSafe 直连（`https://api.typesafe.ai`，模型 `jev-latest`）和 Vercel AI Gateway 的 TypeSafe 兼容端点（`https://ai-gateway.vercel.sh/typesafe`，模型 `typesafe-ai/jev`），两者协议相同。默认 `noul` 模式独立评估每个候选；可选的 `choice` 模式横向比较所有候选并返回相对概率，使用时应将 `threshold` 设为 `0`。显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 和 `jev` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
 
 ## 检索配置
@@ -178,7 +184,7 @@ Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭�
 |---|---|---|---|
 | `enable_intent` | boolean | `true` | 有 `session_id` 时是否进行意图分析和查询规划 |
 
-Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK 请求中覆盖。`retrieval.enable_intent` 控制带 Session 的 Search 是否执行 LLM 查询规划；只有配置了可用的 `rerank` provider 时才会执行结果重排。
+Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK 请求中覆盖。`retrieval.enable_intent` 控制带 Session 的 Search 是否执行 LLM 查询规划；模型重排序仅用于配置了可用 `rerank` provider 的 `search(mode="list")` 文本查询，context 模式不执行重排序。
 
 ## 存储配置
 

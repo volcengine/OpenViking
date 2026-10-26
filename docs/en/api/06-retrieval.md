@@ -9,9 +9,28 @@ OpenViking provides multiple retrieval methods, including simple vector similari
 | Intent Analysis | No | Requires session content and `retrieval.enable_intent=true` |
 | Session Context | No | Optional |
 | Query Expansion | No | When session content exists and intent analysis is enabled |
-| Reranking | No | Used for text queries when a reranker is configured |
+| Reranking | No | Text queries in `mode="list"` only, when a usable reranker is configured |
 | Default Limit | 10 | 10 per planned query |
 | Use Case | Simple queries | Conversational search |
+
+### Reranking by request mode
+
+| Request | Model reranking |
+|---------|-----------------|
+| `find()` | No; uses QUICK retrieval |
+| `search(mode="list")` | Text queries only, when a usable reranker is configured |
+| `search(mode="context")` | No; context assembly retrieves through `find()` / `find_skills()` |
+
+Automatic recall that sends `mode="context"` does not call the reranker, even
+when one is configured. Query expansion and digest generation are separate model
+operations; enabling either does not enable reranking.
+
+The score threshold still applies without model reranking. Unless the request
+sets `score_threshold`, the retriever uses `rerank.threshold` (default `0.1`)
+when it receives a rerank configuration, or `0` without one. In QUICK retrieval,
+this filters vector scores, so changing `rerank.threshold` can change context-mode
+recall even though no rerank request is made. Set `score_threshold` explicitly to
+override this default for a request.
 
 ## Retrieval Pipeline
 
@@ -652,6 +671,9 @@ ov search "similar poster" --image ./poster.png --uri "viking://resources/images
 ### search(mode="context")
 
 Assemble retrieval results into an injection-ready context block. `mode="list"` (the default) returns the ranked hit list and behaves exactly like the previous `search()`; `mode="context"` applies the token budget, selects detail levels, deduplicates across turns, and optionally produces an LLM digest in one server request.
+
+Context assembly uses QUICK retrieval without model reranking. See
+[Reranking by request mode](#reranking-by-request-mode) for the mode and score-threshold behavior.
 
 #### 1. Implementation Overview
 
