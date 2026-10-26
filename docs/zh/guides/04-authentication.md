@@ -51,6 +51,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 
 创建账号后，保存响应中的 `user_key`，将它用于 CLI、SDK 和数据 API。root key 不用于租户数据读写。
 
+User key 采用三段式格式 `base64url(account).base64url(user).base64url(secret)`。服务端只接受该格式；裸密钥或其他格式一律以 `401 Invalid API key` 拒绝。
+
 ### 方案二：OIDC（企业 SSO）
 
 OIDC 和 LDAP 需要可选认证依赖。在运行服务端的 Python 环境中安装：
@@ -157,6 +159,8 @@ OIDC Claims: {
 ## 完整配置参考
 
 ### OIDC 完整配置
+
+`issuer` 必须与身份提供方签发的令牌中的 `iss` 完全一致，包括末尾的 `/`。
 
 ```json
 {

@@ -1,4 +1,5 @@
 import { isOvClientError } from '#/lib/ov-client'
+import { createRandomUuid } from '#/lib/browser-crypto'
 import {
   lookupSubmission,
   cancelCompile,
@@ -98,7 +99,7 @@ export async function runCompileSubmission(
     throw new CompileCommandError('pendingSubmission')
   const submission = pending.current ?? {
     raw: input,
-    key: restoredKey || `${Date.now()}:${crypto.randomUUID()}`,
+    key: restoredKey || `${Date.now()}:${createRandomUuid()}`,
   }
   pending.current = submission
   saveKey(submission.key)

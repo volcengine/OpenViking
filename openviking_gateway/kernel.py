@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 
 import orjson
 
-from .blocks import block, gateway_note, history_hint, token_estimate
+from .blocks import RECALL_PROVENANCE_NOTE, block, gateway_note, history_hint, token_estimate
 from .capture import CapturePipeline, lineage
 from .capture_store import Document
 from .client import VikingError
@@ -46,7 +46,7 @@ from .records import RecordKind as K
 from .state_store import get_state
 from .storage import KernelStore, digest
 from .tool_catalog import reply_block_reason, select_tools, tool_block_reason
-from .tool_protocols import hidden_chain, replay_hidden, tool_protocol
+from .tool_protocols import hidden_chain, replay_hidden, reply_chain, tool_protocol
 from .tool_protocols.common import PREFIX, SummaryError
 from .vendors import parameter_fingerprint
 from .windows import remind, status_line
@@ -214,6 +214,18 @@ class MemoryKernel:
         upstream = next((u for u in upstreams if u["id"] == root["upstream_id"]), upstream)
         policy = Policy.model_validate(root["policy"])
         kind, anchor = classify(body, headers, messages)
+        if body.get("tools"):
+            if (K.CLIENT_TOOLS, "") not in records:
+                await self.store.replay.put(scope, sid, K.CLIENT_TOOLS, "", {})
+        elif (
+            kind == "user"
+            and (K.CLIENT_TOOLS, "") in records
+            and not any(adapter.is_reply(m) for m in messages)
+        ):
+            # Clients such as Claude Code send side requests, like summarizing a fetched
+            # page, under the conversation's session header: a fresh exchange without
+            # tools. A turn of the conversation itself resends its replies.
+            kind = "auxiliary"
         disabled = (K.DISABLED, "") in records
         if plugin and not disabled:
             await self.store.replay.put(scope, sid, K.DISABLED, "", {"reason": "plugin_present"})
@@ -463,7 +475,24 @@ class MemoryKernel:
         cut = active_cut(request)
         current = [value for index, value in existing if index > cut]
         used = sum(v.get("tokens", 0) for v in current)
-        exclude = list(dict.fromkeys(u for v in current for u in v.get("uris", [])))
+        # ponytail: exclude_uris matches a whole subtree since #5627, so echoing a
+        # served directory would hide every file written under it later. A URI
+        # without a dot in its last segment is treated as a directory and echoed
+        # as its own level files, which excludes the node but not its children;
+        # an extensionless file may be served again and a dotted directory still
+        # hides its subtree. Upgrade path: a server-reported is_directory flag.
+        exclude = list(
+            dict.fromkeys(
+                x
+                for v in current
+                for u in v.get("uris", [])
+                for x in (
+                    [u]
+                    if "." in u.rsplit("/", 1)[-1]
+                    else [f"{u}/.abstract.md", f"{u}/.overview.md"]
+                )
+            )
+        )
         budget = min(policy.max_tokens, policy.session_max_tokens - used)
         query = clean_text(unwrap_client(text_content(request.messages[request.anchor])))[
             : policy.query_max_chars
@@ -483,7 +512,7 @@ class MemoryKernel:
             budget = await self.reserve_recall(request, policy, used, window)
             reserved = budget > 0
         tools = request.root["tools"]
-        lead = "Relevant memory from OpenViking."
+        lead = f"Relevant memory from OpenViking. {RECALL_PROVENANCE_NOTE}"
         if any(tool["function"]["name"] == "openviking_read" for tool in tools):
             lead += " Use the openviking_read tool to expand URIs."
         overhead = token_estimate(block("gateway-recall", lead + "\n"))
@@ -619,9 +648,7 @@ class MemoryKernel:
         for text in tool_protocol(request.protocol).unsigned_thinking(output):
             await self.store.state.swap(request.scope, THINKING + digest(text), Document(), {})
         if output and request.kind in {"user", "continuation"}:
-            chain = await asyncio.to_thread(
-                hidden_chain, [*request.messages, *output], request.protocol
-            )
+            chain = reply_chain(request, output)
             request.reply_anchor = chain[-1]
             if response.finished and not request.disabled and replays_reasoning(request.upstream):
                 await self.record_reasoning(request, output, chain)
@@ -639,9 +666,7 @@ class MemoryKernel:
         if not reasoning:
             return
         if visible is not output:
-            chain = await asyncio.to_thread(
-                hidden_chain, [*request.messages, *visible], request.protocol
-            )
+            chain = reply_chain(request, visible)
             # Without its reasoning items the reply ends at another anchor; forks find it there.
             if chain[-1]:
                 await self.store.replay.put(request.scope, request.session, K.REPLY, chain[-1], {})

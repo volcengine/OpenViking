@@ -22,6 +22,7 @@ import type * as ConfigFileApi from '#/routes/settings/-lib/config-file-api'
 import { GatewayError } from '../-lib/api'
 import type * as Api from '../-lib/api'
 import type { GatewayConnection } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import { getManagementKey } from '../-lib/management-key'
 import { GatewayLayout } from './gateway-layout'
 
@@ -38,6 +39,10 @@ const state = vi.hoisted(() => ({
   getAccess: vi.fn(),
   getConnectionInfo: vi.fn(),
 }))
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
+
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
@@ -329,6 +334,9 @@ describe('enabling the gateway from Studio', () => {
     expect(
       screen.queryByRole('button', { name: 'unavailable.enable.action' }),
     ).toBeNull()
+    expect(
+      screen.getByText('docs.link').closest('a')?.getAttribute('href'),
+    ).toBe(gatewayDocsUrl('enableGateway', 'en'))
   })
 
   it('reports a rejected configuration that the server rolled back', async () => {
@@ -378,5 +386,8 @@ describe('enabling the gateway from Studio', () => {
       await screen.findByText('unavailable.notEnabled.description'),
     ).toBeTruthy()
     expect(screen.getByText(/"enabled":true/)).toBeTruthy()
+    expect(
+      screen.getByText('docs.link').closest('a')?.getAttribute('href'),
+    ).toBe(gatewayDocsUrl('enableGateway', 'en'))
   })
 })

@@ -5,27 +5,56 @@
 import asyncio
 import copy
 import hmac
+import json
 import secrets
 import time
 from dataclasses import dataclass
 from urllib.parse import quote
 
 import aiohttp
+import orjson
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
 from .capture import reset_capture
 from .client import VikingError
 from .config import MOUNT_PATH
-from .models import CaptureReset, KeyRequest, Policy, Upstream
-from .proxy import upstream_headers, upstream_url
+from .models import (
+    CaptureReset,
+    KeyRequest,
+    Policy,
+    Upstream,
+    UpstreamTestRequest,
+    validation_detail,
+)
+from .overview import overview_summary
+from .protocols import text_content
+from .proxy import default_policy, fill_key, upstream_headers, upstream_key, upstream_url
 from .records import RecordKind as K
 from .storage import delete_account_data, delete_user_data, digest
+from .tool_catalog import select_tools
+from .tool_protocols import ResponseCapture, tool_protocol
 
 PREFIX = "/admin"
 MANAGEMENT_HEADER = "x-openviking-gateway-management-key"
 # Fields a VLM re-import refreshes; everything else may have been edited in the gateway.
-VLM_SOURCE_FIELDS = ("base_url", "api_key", "headers", "protocol", "vendor", "coding_plan")
+VLM_SOURCE_FIELDS = (
+    "base_url",
+    "api_key",
+    "headers",
+    "protocol",
+    "vendor",
+    "coding_plan",
+    "append_endpoint_path",
+    "key_header",
+)
+UPSTREAM_TEST_PATHS = {
+    "anthropic": "/v1/messages",
+    "chat": "/v1/chat/completions",
+    "responses": "/v1/responses",
+}
+UPSTREAM_TEST_PROMPT = "Reply with only OK."
+UPSTREAM_TEST_RESPONSE_LIMIT = 16_384
 DETAILS = {
     "management_key_invalid": "The gateway management key is incorrect.",
     "management_key_required": "Changing upstreams and profiles requires the management key.",
@@ -45,6 +74,42 @@ DETAILS = {
 }
 
 
+def upstream_test_payload(upstream, model, tools):
+    """Build one small, non-streaming generation request for the configured protocol."""
+    model = upstream.get("aliases", {}).get(model, model)
+    common = {"model": model, "stream": False}
+    if upstream["protocol"] == "responses":
+        payload = {
+            **common,
+            "input": UPSTREAM_TEST_PROMPT,
+            "max_output_tokens": 64,
+            "store": False,
+        }
+    else:
+        payload = {
+            **common,
+            "messages": [{"role": "user", "content": UPSTREAM_TEST_PROMPT}],
+            "max_tokens": 64,
+        }
+        if upstream["protocol"] == "chat" and upstream.get("vendor") == "openai":
+            payload["max_completion_tokens"] = payload.pop("max_tokens")
+    if tools:
+        tool_protocol(upstream["protocol"]).add_tools(payload, tools)
+    return payload
+
+
+def upstream_test_output(protocol, body):
+    """Return whether a JSON body contains generated text for the protocol."""
+    if not isinstance(body, dict) or body.get("error"):
+        return False
+    try:
+        capture = ResponseCapture(protocol)
+        capture.nonstream(body)
+        return bool(capture.message and text_content(capture.message).strip())
+    except (AttributeError, KeyError, TypeError):
+        return False
+
+
 def fail(status, reason, detail=None, **extra):
     raise HTTPException(status, {"reason": reason, "detail": detail or DETAILS[reason], **extra})
 
@@ -55,13 +120,7 @@ async def read_body(request, model, prepare=None):
         payload = await request.json()
         return model.model_validate(prepare(payload) if prepare else payload)
     except ValidationError as error:
-        fail(
-            422,
-            "invalid_configuration",
-            "; ".join(
-                item["msg"] for item in error.errors(include_input=False, include_context=False)
-            ),
-        )
+        fail(422, "invalid_configuration", validation_detail(error))
     except ValueError:
         fail(422, "invalid_configuration")
 
@@ -93,6 +152,17 @@ class Caller:
         return self.user_id if self.role == "user" else None
 
 
+async def caller_tool_catalog(app, management, who):
+    """Read the account's MCP tools with a credential OpenViking accepts."""
+    key = who.credential
+    if who.role == "root" and who.identity.get("auth_mode") != "dev":
+        # OV refuses root on /mcp. Every caller sees the same catalog, so read it with
+        # a key issued in this account, or fall back to the last catalog read.
+        keys = await management.list(who.account_id, "keys")
+        key = next((item["openviking_key"] for item in keys), "")
+    return await app.state.viking.tools(key) if key else app.state.viking.last_tools or []
+
+
 async def caller(request, *, require_identity=True, write=False):
     state = request.app.state
     configured = state.config.management_key
@@ -122,6 +192,41 @@ async def caller(request, *, require_identity=True, write=False):
     if write and not can_write:
         fail(403, "management_key_required")
     return Caller(account, credential, identity, manager, can_write)
+
+
+async def register_user(app, account_id, user_id, ttl=None):
+    """Record a new key's user and lift an earlier deletion of their gateway data."""
+    for protocol in ("anthropic", "chat", "responses"):
+        await app.state.store.allow_scope(digest(account_id + "\0" + user_id + "\0" + protocol))
+    await app.state.management.save(account_id, "users", user_id, {"user_id": user_id}, ttl=ttl)
+
+
+async def openviking_credential(app, key):
+    """Confirm and cache an OpenViking key with its deployment's tenant partition."""
+    identifier = digest("openviking\0" + key)
+    partitioned = app.state.config.tenancy == "key"
+    if credential := await app.state.management.credential(identifier):
+        # A tenancy change moves the key to another partition: confirm it again.
+        if (credential["account"] == "k_" + identifier) == partitioned:
+            return credential
+        await app.state.management.delete(credential["account"], "keys", identifier)
+    identity = await app.state.viking.health(key)
+    account, user_id = identity["account_id"], identity["user_id"]
+    if partitioned:
+        account = "k_" + identifier
+    ttl = app.state.config.session_ttl_days * 86400
+    stored = {
+        "source": "openviking",
+        "openviking_account": identity["account_id"],
+        "openviking_key": key,
+        "user_id": user_id,
+        # Current keys are "<account>.<user>.<secret>": only the secret tells them apart.
+        "prefix": key.rsplit(".", 1)[-1][:8],
+        "created_at": time.time(),
+    }
+    await app.state.management.save(account, "keys", identifier, stored, ttl=ttl)
+    await register_user(app, account, user_id, ttl=ttl)
+    return await app.state.management.credential(identifier)
 
 
 async def import_vlm_objects(app, account_id):
@@ -180,7 +285,7 @@ def register_management(app):
         who = await caller(request)
         logs = await management.logs(who.account_id, 10000, user_id=who.log_user)
         return {
-            **overview_summary(logs),
+            **overview_summary(logs, time.time()),
             "openviking": app.state.health,
             "log_retention_days": app.state.config.log_retention_days,
         }
@@ -204,13 +309,7 @@ def register_management(app):
     @router.get("/tools")
     async def tools(request: Request):
         who = await caller(request)
-        key = who.credential
-        if who.role == "root" and who.identity.get("auth_mode") != "dev":
-            # OV refuses root on /mcp. Every caller sees the same catalog, so read it with
-            # a key issued in this account, or fall back to the last catalog read.
-            keys = await management.list(who.account_id, "keys")
-            key = next((k["openviking_key"] for k in keys), "")
-        catalog = await app.state.viking.tools(key) if key else app.state.viking.last_tools or []
+        catalog = await caller_tool_catalog(app, management, who)
         return [
             {
                 "name": t["name"],
@@ -277,9 +376,9 @@ def register_management(app):
         async def delete_object(identifier: str, request: Request):
             who = await caller(request, require_identity=False, write=True)
             count = sum(
-                key["policy_id"] == identifier
+                key.get("policy_id") == identifier
                 if kind == "policies"
-                else identifier in key["upstream_ids"]
+                else identifier in key.get("upstream_ids", [])
                 for key in await management.list(who.account_id, "keys")
             )
             if count:
@@ -374,13 +473,7 @@ def register_management(app):
             "created_at": time.time(),
         }
         result = await management.save(who.account_id, "keys", digest(secret), stored)
-        for protocol in ("anthropic", "chat", "responses"):
-            await store.allow_scope(
-                digest(who.account_id + "\0" + identity["user_id"] + "\0" + protocol)
-            )
-        await management.save(
-            who.account_id, "users", identity["user_id"], {"user_id": identity["user_id"]}
-        )
+        await register_user(app, who.account_id, identity["user_id"])
         return {**public_object("keys", result), "key": secret}
 
     @router.post("/keys/{identifier}/capture/reset")
@@ -400,53 +493,126 @@ def register_management(app):
 
     @router.post("/upstreams/{identifier}/test")
     async def test_upstream(identifier: str, request: Request):
-        who = await caller(request, require_identity=False)
+        who = await caller(request, require_identity=False, write=True)
         upstream = await management.get(who.account_id, "upstreams", identifier)
         if not upstream:
             fail(404, "not_found")
-        url = upstream_url(upstream, "/v1/models")
+        data = await read_body(request, UpstreamTestRequest)
+        assert data is not None
+        generating = data.model is not None
+        kind = "model" if generating else "connection"
+        if not generating and not upstream.get("append_endpoint_path", True):
+            # An exact endpoint has no model list; only a generation test can reach it.
+            url = upstream_url(upstream, UPSTREAM_TEST_PATHS[upstream["protocol"]])
+            return {"ok": False, "reason": "exact_endpoint_untestable", "url": url, "kind": kind}
+        path = UPSTREAM_TEST_PATHS[upstream["protocol"]] if generating else "/v1/models"
+        url = upstream_url(upstream, path)
+        if generating and upstream.get("coding_plan") and not upstream.get("allow_coding_plan"):
+            return {"ok": False, "reason": "coding_plan_blocked", "url": url, "kind": kind}
         try:
             headers = upstream_headers(upstream, {})
+            target = fill_key(url, upstream_key(upstream, {}))
         except HTTPException as error:
             if error.status_code != 401:
                 raise
             # No stored key (passthrough keys come from clients): nothing is sent.
-            return {"ok": False, "reason": "upstream_key_missing", "url": url}
+            return {"ok": False, "reason": "upstream_key_missing", "url": url, "kind": kind}
+        payload = None
+        if generating:
+            headers.setdefault("content-type", "application/json")
+            if upstream["protocol"] == "anthropic":
+                headers.setdefault("anthropic-version", "2023-06-01")
+            tools = []
+            if upstream.get("allow_gateway_tools", True):
+                policy = await default_policy(management, app.state.config, who.account_id)
+                try:
+                    tools = select_tools(
+                        await caller_tool_catalog(app, management, who),
+                        policy,
+                    )
+                except VikingError:
+                    pass
+            payload = upstream_test_payload(upstream, data.model, tools)
         try:
-            async with app.state.http.get(
-                url,
+            async with app.state.http.request(
+                "POST" if generating else "GET",
+                target,
+                data=orjson.dumps(payload) if payload is not None else None,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(
+                    total=min(app.state.config.upstream_timeout_seconds, 60)
+                ),
                 allow_redirects=False,
             ) as response:
                 status = response.status
-                if status in {404, 405}:
-                    reason, ok = "models_unavailable", True
-                elif status == 429:
-                    reason, ok = "rate_limited", True
-                elif 200 <= status < 300:
+                raw = bytearray()
+                while len(raw) <= UPSTREAM_TEST_RESPONSE_LIMIT:
+                    chunk = await response.content.read(UPSTREAM_TEST_RESPONSE_LIMIT + 1 - len(raw))
+                    if not chunk:
+                        break
+                    raw.extend(chunk)
+                truncated = len(raw) > UPSTREAM_TEST_RESPONSE_LIMIT
+                response_text = raw[:UPSTREAM_TEST_RESPONSE_LIMIT].decode("utf-8", errors="replace")
+                result = {
+                    "ok": False,
+                    "status": status,
+                    "url": url,
+                    "kind": kind,
+                }
+                if not generating and status in {404, 405}:
+                    result.update(ok=True, reason="models_unavailable")
+                elif not generating and status == 429:
+                    result.update(ok=True, reason="rate_limited")
+                elif not generating and 200 <= status < 300:
                     try:
-                        body = await response.json(content_type=None)
-                    except ValueError:
-                        body = {}
-                    ok = (
+                        body = json.loads(response_text) if not truncated else None
+                    except (TypeError, ValueError):
+                        body = None
+                    valid = (
                         isinstance(body, dict)
                         and isinstance(body.get("data"), list)
                         and not body.get("error")
                     )
-                    reason = "passed" if ok else "upstream_key_rejected"
-                else:
-                    reason, ok = (
-                        (
-                            "upstream_key_rejected"
-                            if status in {401, 403}
-                            else "upstream_unavailable"
-                        ),
-                        False,
+                    result.update(
+                        ok=valid,
+                        reason="passed" if valid else "upstream_key_rejected",
                     )
-                return {"ok": ok, "status": status, "reason": reason, "url": url}
+                elif 200 <= status < 300:
+                    try:
+                        body = json.loads(response_text) if not truncated else None
+                    except (TypeError, ValueError):
+                        body = None
+                    valid = upstream_test_output(upstream["protocol"], body)
+                    result.update(
+                        ok=valid,
+                        reason="passed" if valid else "invalid_response",
+                    )
+                elif status in {401, 403}:
+                    result["reason"] = "upstream_key_rejected"
+                elif status == 429:
+                    result["reason"] = "rate_limited"
+                elif status in {400, 404, 405, 422}:
+                    result["reason"] = "model_request_rejected"
+                else:
+                    result["reason"] = "upstream_unavailable"
+                if not result["ok"]:
+                    response_headers = {}
+                    for name in response.headers:
+                        if name in response_headers:
+                            continue
+                        values = response.headers.getall(name)
+                        response_headers[name] = values[0] if len(values) == 1 else values
+                    result["response"] = {
+                        "http_version": (f"HTTP/{response.version.major}.{response.version.minor}"),
+                        "status": status,
+                        "reason": response.reason,
+                        "headers": response_headers,
+                        "body": response_text,
+                        **({"truncated": True} if truncated else {}),
+                    }
+                return result
         except (aiohttp.ClientError, asyncio.TimeoutError):
-            return {"ok": False, "reason": "upstream_unavailable", "url": url}
+            return {"ok": False, "reason": "upstream_unavailable", "url": url, "kind": kind}
 
     app.include_router(router)
 
@@ -460,6 +626,10 @@ def public_object(kind, value, *, read_only=False):
             value["header_names"] = list(headers)
     if kind == "keys":
         value.pop("openviking_key", None)
+        if value.get("source") == "openviking":
+            # Listed in the shape of an issued key, but it stores no binding: resolve_binding
+            # gives it the account's defaults per request.
+            value.update(name="", policy_id="", upstream_ids=[], models=[])
     return value
 
 
@@ -488,55 +658,3 @@ def keep_upstream_secrets(payload, previous):
             if value or name in stored
         }
     return payload
-
-
-def overview_summary(logs):
-    """Aggregate newest-first request-log records into the management overview."""
-    requests = [log for log in logs if log.get("kind") != "capture"]
-    groups = {}
-    for label, kinds in (("first_call", {"user"}), ("continuation", {"continuation"})):
-        subset = [log for log in requests if log.get("kind") in kinds]
-        total = sum(
-            log.get("first_upstream_input_tokens", log.get("input_tokens", 0)) for log in subset
-        )
-        cached = sum(
-            log.get("first_upstream_cached_tokens", log.get("cached_tokens", 0)) for log in subset
-        )
-        hidden_calls = 0
-        if label == "continuation":
-            total += sum(log.get("hidden_upstream_input_tokens", 0) for log in requests)
-            cached += sum(log.get("hidden_upstream_cached_tokens", 0) for log in requests)
-            hidden_calls = sum(log.get("hidden_upstream_calls", 0) for log in requests)
-        groups[label] = {
-            "requests": len(subset) + hidden_calls,
-            "input_tokens": total,
-            "cached_tokens": cached,
-            "cache_hit_ratio": cached / total if total else 0,
-        }
-    degradations = {}
-    for log in logs:
-        if reason := log.get("degradation"):
-            degradations[reason] = degradations.get(reason, 0) + 1
-    # "disabled" means recall was skipped (off, budget spent or query too short).
-    recalls = [log for log in requests if log.get("recall_reason", "disabled") != "disabled"]
-    capture = {}
-    for log in logs:
-        if log.get("session") and log.get("capture_status"):
-            capture.setdefault((log["session"], log.get("protocol")), log["capture_status"])
-    return {
-        "requests": len(requests),
-        "last_request_at": requests[0].get("time") if requests else None,
-        "output_tokens": sum(log.get("output_tokens", 0) for log in requests),
-        "cache": groups,
-        "degradations": degradations,
-        "recall_count": sum(log.get("recall_count", 0) for log in requests),
-        "recall_requests": len(recalls),
-        "recall_ms": sum(log.get("recall_ms", 0) for log in recalls) / len(recalls)
-        if recalls
-        else 0,
-        "capture_issues": {
-            status: sum(1 for value in capture.values() if value == status)
-            for status in ("retrying", "paused")
-        },
-        "sample_limit": 10000,
-    }

@@ -3,11 +3,13 @@ name: Microsoft Agent Framework Integration
 on:
   pull_request:
     paths:
+      - 'integrations/frameworks/microsoft-agent-framework/**'
       - 'examples/agent-framework/**'
       - '.github/workflows/python-agent-framework.yml'
   push:
     branches: [main]
     paths:
+      - 'integrations/frameworks/microsoft-agent-framework/**'
       - 'examples/agent-framework/**'
       - '.github/workflows/python-agent-framework.yml'
 
@@ -26,7 +28,7 @@ jobs:
             sdk: 'openviking-sdk>=0.1.13,<0.2'
     defaults:
       run:
-        working-directory: examples/agent-framework
+        working-directory: integrations/frameworks/microsoft-agent-framework
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6

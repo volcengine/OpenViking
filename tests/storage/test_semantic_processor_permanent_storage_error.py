@@ -5,24 +5,26 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
-from openviking.service.task_work_index import TaskWorkIndex
+from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_tracker import TaskStatus, TaskTracker
+from openviking.service.task_work_index import bind_task_context
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.process_result import ProcessOutcome
-from openviking.storage.queuefs.retry_policy import MAX_FAILURE_REQUEUE_COUNT
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import SyncDiff
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+from tests.test_task_tracker import _FakeAgfs
 
 
 @pytest.fixture
@@ -49,21 +51,15 @@ def semantic_env(monkeypatch):
     resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
     processor = SemanticProcessor(vlm_resolver=resolver)
     processor._sync_topdown_recursive = AsyncMock(return_value=SyncDiff())
-    tracker = get_request_wait_tracker()
-    telemetry_ids = []
 
     def message(**kwargs):
-        msg = SemanticMsg(
+        return SemanticMsg(
             uri="viking://resources/notes.txt",
             context_type="resource",
             telemetry_id=str(uuid4()),
             propagate_to_parent=False,
             **kwargs,
         )
-        telemetry_ids.append(msg.telemetry_id)
-        tracker.register_request(msg.telemetry_id)
-        tracker.register_semantic_root(msg.telemetry_id, msg.id)
-        return msg
 
     yield SimpleNamespace(
         processor=processor,
@@ -71,11 +67,8 @@ def semantic_env(monkeypatch):
         lease=lease,
         dag=dag,
         retry_queue=retry_queue,
-        tracker=tracker,
         message=message,
     )
-    for telemetry_id in telemetry_ids:
-        tracker.cleanup(telemetry_id)
 
 
 def _storage_error(wrapped):
@@ -85,16 +78,6 @@ def _storage_error(wrapped):
         wrapper.__cause__ = error
         return wrapper
     return error
-
-
-async def _assert_request_failed(env, msg, error):
-    await asyncio.wait_for(env.tracker.wait_for_request(msg.telemetry_id), timeout=1)
-    assert env.tracker.build_queue_status(msg.telemetry_id)["Semantic"] == {
-        "processed": 0,
-        "requeue_count": 0,
-        "error_count": 1,
-        "errors": [{"message": str(error)}],
-    }
 
 
 @pytest.mark.asyncio
@@ -122,7 +105,6 @@ async def test_storage_error_finishes_request_and_respects_lock_ownership(
     assert result.error == str(error)
     operation.assert_awaited_once()
     env.retry_queue.enqueue.assert_not_awaited()
-    await _assert_request_failed(env, msg, error)
     env.processor._account_breaker(msg.account_id).check()
     if owned:
         env.pathlock.pathlock_adopt.assert_awaited_once_with(msg.lock_handoff)
@@ -144,22 +126,33 @@ async def test_queue_acks_failed_semantic_work(semantic_env, monkeypatch, wrappe
     monkeypatch.setattr(
         "openviking.storage.queuefs.named_queue.AsyncAGFSClient", lambda agfs: backend
     )
-    index = TaskWorkIndex()
-    finalize = AsyncMock()
-    index.set_callbacks(
-        finalize_before_ack=finalize, is_cancellation_requested=lambda task_id: False
-    )
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
     queue = NamedQueue(
         object(),
         "/queue",
         "Semantic",
         dequeue_handler=env.processor,
-        middlewares=[TaskWorkQueueMiddleware(index)],
+        middlewares=[TaskWorkQueueMiddleware()],
     )
     payload = msg.to_dict()
     if task_owned:
         payload["task_id"] = "ingestion-task"
-    await queue.enqueue(payload)
+        task = await tracker.create(
+            "add_resource",
+            task_id="ingestion-task",
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
+        await tracker.start(
+            task.task_id,
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
+        with bind_task_context(task.task_id, msg.account_id, msg.user_id):
+            await queue.enqueue(payload)
+    else:
+        await queue.enqueue(payload)
     queued_payload = backend.write.call_args.args[1].decode()
     backend.read = AsyncMock(
         side_effect=[
@@ -167,29 +160,38 @@ async def test_queue_acks_failed_semantic_work(semantic_env, monkeypatch, wrappe
             json.dumps({"pending": 0, "processing": 0}).encode(),
         ]
     )
-    assert index.has_work("ingestion-task") is task_owned
+    assert (
+        await tracker.has_work(
+            "ingestion-task",
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
+        is task_owned
+    )
 
     await asyncio.wait_for(queue.dequeue(), timeout=1)
 
-    assert backend.write.await_args_list == [
-        call("/queue/Semantic/enqueue", queued_payload.encode()),
-        call("/queue/Semantic/ack", b"queue-message"),
-    ]
     status = await queue.get_status()
     assert status.is_complete
     assert status.in_progress == status.processed == status.requeue_count == 0
     assert status.error_count == 1
     assert [entry.message for entry in status.errors] == [str(error)]
-    assert not index.has_work("ingestion-task")  # Includes active consumer registration.
-    assert index.failure("ingestion-task") == (str(error) if task_owned else None)
+    assert not await tracker.has_work(
+        "ingestion-task",
+        account_id=msg.account_id,
+        user_id=msg.user_id,
+    )
     if task_owned:
-        finalize.assert_awaited_once()
-        assert finalize.call_args.args[0].task_id == "ingestion-task"
-    else:
-        finalize.assert_not_awaited()
+        failed = await tracker.get(
+            "ingestion-task",
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
+        assert failed is not None
+        assert failed.status is TaskStatus.FAILED
+        assert failed.error == str(error)
     env.retry_queue.enqueue.assert_not_awaited()
     env.pathlock.pathlock_release.assert_awaited_once_with(env.lease)
-    await _assert_request_failed(env, msg, error)
 
 
 @pytest.mark.asyncio
@@ -202,35 +204,26 @@ async def test_malformed_resources_do_not_pause_following_valid_work(semantic_en
         result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
         assert result.outcome is ProcessOutcome.FAILED
         assert result.error == str(error)
-        await _assert_request_failed(env, msg, error)
 
     env.dag.run.side_effect = None
     valid = env.message()
     result = await asyncio.wait_for(env.processor.on_dequeue(valid.to_dict()), timeout=1)
     assert result.outcome is ProcessOutcome.SUCCESS
-    await asyncio.wait_for(env.tracker.wait_for_request(valid.telemetry_id), timeout=1)
 
     env.retry_queue.enqueue.assert_not_awaited()
     assert env.dag.run.await_count == 5
-    assert env.tracker.build_queue_status(valid.telemetry_id)["Semantic"]["processed"] == 1
     env.processor._account_breaker(valid.account_id).check()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("error", "trips_breaker"),
-    [(TimeoutError("API timeout"), True), (LockAcquisitionError("tree is locked"), False)],
-)
-async def test_retryable_errors_keep_existing_behavior(
-    semantic_env, monkeypatch, error, trips_breaker
-):
+async def test_lock_error_requeues_without_consuming_failure_budget(semantic_env, monkeypatch):
     env = semantic_env
     sleep = AsyncMock()
     monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.asyncio.sleep", sleep)
     msg = env.message()
     breaker = CircuitBreaker(failure_threshold=1)
     env.processor._circuit_breakers[msg.account_id] = breaker
-    env.dag.run.side_effect = error
+    env.dag.run.side_effect = LockAcquisitionError("tree is locked")
 
     result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
 
@@ -238,72 +231,16 @@ async def test_retryable_errors_keep_existing_behavior(
     env.retry_queue.enqueue.assert_awaited_once()
     requeued = env.retry_queue.enqueue.call_args.args[0]
     assert requeued.id == msg.id
-    assert requeued.failure_requeue_count == (0 if isinstance(error, LockAcquisitionError) else 1)
-    assert not env.tracker.is_complete(msg.telemetry_id)
-    assert env.tracker.build_queue_status(msg.telemetry_id)["Semantic"]["requeue_count"] == 1
-    if trips_breaker:
-        with pytest.raises(CircuitBreakerOpen):
-            breaker.check()
-        sleep.assert_awaited_once()
-    else:
-        breaker.check()
-        sleep.assert_not_awaited()
+    assert requeued.failure_requeue_count == 0
+    breaker.check()
+    sleep.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_semantic_failure_requeue_limit_is_terminal(semantic_env):
-    env = semantic_env
-    msg = env.message(failure_requeue_count=MAX_FAILURE_REQUEUE_COUNT)
-    error = TimeoutError("API timeout")
-    env.dag.run.side_effect = error
-
-    result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
-
-    terminal_error = f"{error} (failure requeue limit reached: {MAX_FAILURE_REQUEUE_COUNT})"
-    assert result.outcome is ProcessOutcome.FAILED
-    assert result.error == terminal_error
-    env.retry_queue.enqueue.assert_not_awaited()
-    await asyncio.wait_for(env.tracker.wait_for_request(msg.telemetry_id), timeout=1)
-    assert env.tracker.build_queue_status(msg.telemetry_id)["Semantic"] == {
-        "processed": 0,
-        "requeue_count": 0,
-        "error_count": 1,
-        "errors": [{"message": terminal_error}],
-    }
-
-
-@pytest.mark.asyncio
-async def test_semantic_failure_requeue_stops_after_three_attempts(semantic_env):
+async def test_unknown_semantic_error_is_terminal_without_tripping_breaker(semantic_env):
     env = semantic_env
     msg = env.message()
-    work = SimpleNamespace(reenqueue_after_error=AsyncMock())
-    error = TimeoutError("API timeout")
-
-    results = []
-    for _ in range(3):
-        msg = SemanticMsg.from_dict(msg.to_dict())
-        results.append(
-            await env.processor._requeue_semantic_msg_after_error(
-                msg,
-                error,
-                work=work,
-            )
-        )
-
-    assert [result.outcome for result in results] == [
-        ProcessOutcome.REQUEUED,
-        ProcessOutcome.REQUEUED,
-        ProcessOutcome.FAILED,
-    ]
-    assert msg.failure_requeue_count == MAX_FAILURE_REQUEUE_COUNT
-    assert work.reenqueue_after_error.await_count == MAX_FAILURE_REQUEUE_COUNT
-
-
-@pytest.mark.asyncio
-async def test_permanent_api_error_still_opens_breaker(semantic_env):
-    env = semantic_env
-    msg = env.message()
-    error = RuntimeError("400 invalid model parameter")
+    error = RuntimeError("unexpected semantic invariant violation")
     env.dag.run.side_effect = error
 
     result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
@@ -311,9 +248,36 @@ async def test_permanent_api_error_still_opens_breaker(semantic_env):
     assert result.outcome is ProcessOutcome.FAILED
     assert result.error == str(error)
     env.retry_queue.enqueue.assert_not_awaited()
-    await _assert_request_failed(env, msg, error)
-    with pytest.raises(CircuitBreakerOpen):
-        env.processor._account_breaker(msg.account_id).check()
+    env.processor._account_breaker(msg.account_id).check()
+
+
+@pytest.mark.asyncio
+async def test_semantic_model_error_fails_without_requeue(semantic_env):
+    env = semantic_env
+    msg = env.message()
+    error = ModelError(ModelErrorKind.TRANSIENT_SERVICE_ERROR, "model request failed")
+    env.dag.run.side_effect = error
+
+    result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == str(error)
+    env.retry_queue.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_request_does_not_open_breaker(semantic_env):
+    env = semantic_env
+    msg = env.message()
+    error = ModelError(ModelErrorKind.INVALID_REQUEST, "400 invalid model parameter")
+    env.dag.run.side_effect = error
+
+    result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == str(error)
+    env.retry_queue.enqueue.assert_not_awaited()
+    env.processor._account_breaker(msg.account_id).check()
 
 
 @pytest.mark.asyncio
@@ -333,14 +297,12 @@ async def test_open_breaker_requeues_then_recovers(semantic_env, monkeypatch):
     env.dag.run.assert_not_awaited()
     env.retry_queue.enqueue.assert_awaited_once()
     sleep.assert_awaited_once_with(30)
-    assert not env.tracker.is_complete(msg.telemetry_id)
     with pytest.raises(CircuitBreakerOpen):
         breaker.check()
 
     now[0] += 301
     result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
     assert result.outcome is ProcessOutcome.SUCCESS
-    await asyncio.wait_for(env.tracker.wait_for_request(msg.telemetry_id), timeout=1)
 
     env.dag.run.assert_awaited_once_with(msg.uri)
     assert breaker.retry_after == 0

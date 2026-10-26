@@ -4,7 +4,7 @@
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
 from fastapi import Response as HTTPResponse
@@ -521,6 +521,20 @@ async def list_accounts(
     return Response(status="ok", result=accounts)
 
 
+@router.get("/accounts/{account_id}")
+@require_auth_root
+async def get_account(
+    request: Request,
+    account_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Return credential-free metadata for one account, or 404 if absent."""
+    account = await _get_api_key_manager(request).get_account(account_id)
+    if account is None:
+        raise NotFoundError(account_id, "account")
+    return Response(status="ok", result=account)
+
+
 @router.post("/migrate")
 @require_auth_root
 async def migrate_legacy_data(
@@ -798,6 +812,30 @@ async def patch_account_configuration(
     )
 
 
+class ModelConnectionTestRequest(BaseModel):
+    kind: Literal["vlm", "embedding"]
+    config: dict[str, Any]
+    fallback: dict[str, Any] = Field(default_factory=dict)
+    thinking: bool | None = None
+    mode: Literal["dense", "sparse", "hybrid"] = "dense"
+
+
+@router.post("/configuration/test-model", include_in_schema=False)
+@require_auth_root
+async def test_model_configuration(
+    body: ModelConnectionTestRequest,
+    request: Request,
+    response: HTTPResponse,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Private Studio operation; drafts are never saved or installed at runtime."""
+    from openviking.server.model_connection_test import probe_model
+
+    response.headers["Cache-Control"] = "no-store"
+    result = await probe_model(body.kind, body.config, body.fallback, body.thinking, body.mode)
+    return Response(status="ok", result=result)
+
+
 @router.get("/configuration")
 @require_auth_root
 async def get_cluster_configuration(
@@ -975,7 +1013,11 @@ async def list_users(
     limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
     include_credentials: bool = Query(
         True,
-        description="Include credentials when permitted; false returns only credential availability",
+        description=(
+            "Include credentials: ROOT receives all plaintext keys; ADMIN/USER receive the "
+            "caller's own plaintext key and masked key_prefix for other users; "
+            "false returns only availability"
+        ),
     ),
     name: str | None = None,
     role: str | None = None,
@@ -995,6 +1037,9 @@ async def list_users(
         name_filter=name,
         role_filter=role,
         expose_key=should_expose_user_key(request) or not include_credentials,
+        mask_keys=include_credentials and ctx.role != Role.ROOT,
+        viewer_account_id=ctx.account_id,
+        viewer_user_id=ctx.user.user_id,
         page=page,
         query_filter=query,
     )
@@ -1010,6 +1055,26 @@ async def list_users(
             for user in users["users"]
         ]
     return Response(status="ok", result=users if include_summary else users["users"])
+
+
+@router.get("/accounts/{account_id}/users/{user_id}")
+@require_auth_root_or_admin
+async def get_user(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    user_id: str = Path(..., description="User ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Return one user's credential-free membership info, or 404 if absent.
+
+    Deliberately returns only ``user_id`` and ``role``; it never exposes
+    ``api_key`` or ``key_prefix``.
+    """
+    _check_account_access(ctx, account_id)
+    user = await _get_api_key_manager(request).get_user_membership(account_id, user_id)
+    if user is None:
+        raise NotFoundError(user_id, "user")
+    return Response(status="ok", result={"user_id": user_id, "role": user["role"]})
 
 
 @router.get("/accounts/{account_id}/users/{user_id}/settings")

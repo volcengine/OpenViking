@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+} from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import { AppConnectionProvider, useAppConnection } from './use-app-connection'
 
 const { health } = vi.hoisted(() => ({ health: vi.fn() }))
-vi.mock('./use-server-mode', async (importOriginal) => ({
+vi.mock('#/lib/connection/health', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   fetchServerHealth: health,
 }))
@@ -15,8 +19,43 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 afterEach(() => {
   cleanup()
+  health.mockReset()
   localStorage.removeItem('ov_console_connection')
   window.history.replaceState(null, '', '/')
+})
+
+it('does not show filesystem data cached for the previous user after re-entering from config', () => {
+  const queryClient = new QueryClient()
+  const key = ['viking-fs-ls', 'viking://', {}]
+  queryClient.setQueryData(key, 'previous-user-files')
+  localStorage.setItem(
+    'ov_console_connection',
+    JSON.stringify({
+      baseUrl: 'https://current-ov.example',
+      accountId: 'default',
+      userId: 'new-user',
+      apiKey: 'new-user-key',
+      adminApiKey: '',
+    }),
+  )
+  health.mockImplementation(() => new Promise(() => {}))
+  function Filesystem() {
+    const { data } = useQuery({
+      queryKey: key,
+      queryFn: () => new Promise<string>(() => {}),
+      staleTime: 30_000,
+    })
+    return <output data-testid="files">{data ?? 'loading'}</output>
+  }
+  render(
+    <QueryClientProvider client={queryClient}>
+      <AppConnectionProvider>
+        <Filesystem />
+      </AppConnectionProvider>
+    </QueryClientProvider>,
+  )
+  expect(screen.getByTestId('files').textContent).toBe('loading')
+  queryClient.clear()
 })
 
 it('discovers the Studio gateway origin before using a stale saved Base URL or key', async () => {
@@ -63,6 +102,7 @@ it('discovers the Studio gateway origin before using a stale saved Base URL or k
   expect(state.isGatewayHost).toBe(true)
   expect(state.connection).toEqual({
     baseUrl: window.location.origin,
+    serviceSelection: 'opensource',
     accountId: 'default',
     userId: 'default',
     apiKey: '',

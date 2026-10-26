@@ -181,6 +181,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
             root_key=config.root_api_key,
             viking_fs=service.viking_fs,
             api_key_hashing_enabled=config.api_key_hashing_enabled,
+            service_name=app.state.service_name,
             account_store_provider=config.account_store.provider,
             account_store_params=config.account_store.params,
             account_store_watch_enabled=config.api_key_watch_enabled,

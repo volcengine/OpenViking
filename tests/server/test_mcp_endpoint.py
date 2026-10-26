@@ -8,6 +8,7 @@ and service dependency, avoiding MCP protocol complexity.
 """
 
 import base64
+import json
 import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,10 +16,11 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
-from mcp.types import AudioContent, ImageContent, TextContent
+from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
+from openviking.privacy.reference import build_privacy_field_reference
 from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.dependencies import set_service
 from openviking.server.identity import AuthMode, RequestContext, Role
@@ -31,6 +33,7 @@ from openviking.server.mcp_endpoint import (
     add_resource,
     add_skill,
     cancel_watch,
+    download,
     edit,
     forget,
     glob,
@@ -87,6 +90,194 @@ def test_get_ctx_raises_when_unset():
             _get_ctx()
     finally:
         _mcp_ctx.reset(token)
+
+
+async def test_privacy_tools_describe_placeholder_resolution_and_permissions():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    for name in ("privacy_tree", "privacy_resolve"):
+        assert tools[name].annotations.readOnlyHint is True
+    assert tools["privacy_upsert"].annotations.readOnlyHint is False
+    assert tools["privacy_upsert"].annotations.destructiveHint is True
+    resolve_tool = tools["privacy_resolve"]
+    assert (
+        "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+        in resolve_tool.description
+    )
+    assert "SKILL.md" in resolve_tool.description
+    assert "Authorization" in resolve_tool.description
+    assert set(resolve_tool.inputSchema["properties"]) == {"reference"}
+    assert resolve_tool.inputSchema["required"] == ["reference"]
+    assert set(tools["privacy_upsert"].inputSchema["required"]) == {
+        "category",
+        "target_key",
+        "values",
+    }
+    assert tools["privacy_upsert"].inputSchema["properties"]["values"]["type"] == "object"
+
+
+async def test_privacy_tools_merge_discover_and_resolve_without_echoing_saved_values(client):
+    secrets = ["pat-original-marker", "pat-updated-marker", "username-private-marker"]
+    saved = await mcp_endpoint.mcp.call_tool(
+        "privacy_upsert",
+        {
+            "category": "credential",
+            "target_key": "github",
+            "values": {"pat": secrets[0], "username": secrets[2]},
+        },
+    )
+    assert saved[1]["version"] == 1
+    update = {"category": "credential", "target_key": "github", "values": {"pat": secrets[1]}}
+    patched = await mcp_endpoint.mcp.call_tool("privacy_upsert", update)
+    assert patched[1]["version"] == 2
+    assert [field["field"] for field in patched[1]["fields"]] == ["pat"]
+    repeated = await mcp_endpoint.mcp.call_tool("privacy_upsert", update)
+    assert repeated[1]["version"] == 2
+    tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {"category": "credential"})
+    response = await client.get(
+        "/api/v1/privacy-configs/tree",
+        params={"category": "credential"},
+        headers={"X-OpenViking-User": DEFAULT_CTX.user.user_id},
+    )
+    assert response.status_code == 200, response.text
+    assert tree[1] == response.json()["result"]
+    for result in (saved, patched, repeated, tree):
+        assert all(secret not in repr(result) for secret in secrets)
+        assert '"values"' not in json.dumps(result[1])
+    target = tree[1]["categories"][0]["targets"][0]
+    assert target["version"] == 2
+    resolved = await mcp_endpoint.mcp.call_tool(
+        "privacy_resolve",
+        {
+            "reference": target["fields"][0]["reference"],
+        },
+    )
+    assert resolved[1]["value"] == secrets[1]
+    assert resolved[1]["version"] == 2
+    assert "username" not in resolved[1]
+    retained = await mcp_endpoint.mcp.call_tool(
+        "privacy_resolve",
+        {
+            "reference": "viking://~/privacy/credential/github#/values/username",
+        },
+    )
+    assert retained[1]["value"] == secrets[2]
+
+
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
+async def test_privacy_resolve_checks_owner_before_storage(service, monkeypatch, role):
+    exists = AsyncMock()
+    monkeypatch.setattr(service.privacy_configs, "exists", exists)
+    token = _mcp_ctx.set(RequestContext(DEFAULT_CTX.user, role))
+    try:
+        result = await mcp_endpoint.mcp.call_tool(
+            "privacy_resolve",
+            {
+                "reference": build_privacy_field_reference(
+                    "another-owner", "credential", "github", "pat"
+                ),
+            },
+        )
+    finally:
+        _mcp_ctx.reset(token)
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    assert result.structuredContent["error"]["code"] == "PERMISSION_DENIED"
+    exists.assert_not_awaited()
+
+
+async def test_privacy_tools_keep_same_owner_in_other_accounts_isolated():
+    await mcp_endpoint.mcp.call_tool(
+        "privacy_upsert",
+        {
+            "category": "credential",
+            "target_key": "github",
+            "values": {"pat": "account-private-marker"},
+        },
+    )
+    token = _mcp_ctx.set(
+        RequestContext(UserIdentifier("another-account", DEFAULT_CTX.user.user_id), Role.USER)
+    )
+    try:
+        tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {})
+        missing = await mcp_endpoint.mcp.call_tool(
+            "privacy_resolve",
+            {
+                "reference": build_privacy_field_reference(
+                    DEFAULT_CTX.user.user_id, "credential", "github", "pat"
+                ),
+            },
+        )
+    finally:
+        _mcp_ctx.reset(token)
+    assert tree[1]["categories"] == []
+    assert missing.isError is True
+    assert missing.structuredContent["error"]["code"] == "NOT_FOUND"
+    assert "account-private-marker" not in repr((tree, missing))
+
+
+async def test_privacy_tools_return_structured_errors_without_values():
+    await mcp_endpoint.mcp.call_tool(
+        "privacy_upsert",
+        {
+            "category": "credential",
+            "target_key": "github",
+            "values": {"pat": "private-input-marker"},
+        },
+    )
+    cases = [
+        ("privacy_tree", {"category": "../credential"}, "INVALID_ARGUMENT"),
+        (
+            "privacy_resolve",
+            {"reference": "Authorization: Bearer {{ov_privacy:...}}"},
+            "INVALID_ARGUMENT",
+        ),
+        (
+            "privacy_resolve",
+            {"reference": "viking://~/privacy/credential/github#/values/missing"},
+            "NOT_FOUND",
+        ),
+        (
+            "privacy_upsert",
+            {
+                "category": "credential",
+                "target_key": "bad/target",
+                "values": {"pat": "private-input-marker"},
+            },
+            "INVALID_ARGUMENT",
+        ),
+    ]
+    for name, arguments, code in cases:
+        result = await mcp_endpoint.mcp.call_tool(name, arguments)
+        assert isinstance(result, CallToolResult)
+        assert result.isError is True
+        assert result.structuredContent["error"]["code"] == code
+        assert "private-input-marker" not in repr(result)
+
+
+async def test_privacy_tools_handle_disabled_service(service, monkeypatch):
+    monkeypatch.setattr(service, "_privacy_config_service", None)
+    tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {})
+    assert tree[1] == {"owner_user_id": DEFAULT_CTX.user.user_id, "categories": []}
+    for name, arguments, code in [
+        (
+            "privacy_resolve",
+            {"reference": "viking://~/privacy/credential/github#/values/pat"},
+            "NOT_FOUND",
+        ),
+        (
+            "privacy_upsert",
+            {
+                "category": "credential",
+                "target_key": "github",
+                "values": {"pat": "disabled-private-marker"},
+            },
+            "FAILED_PRECONDITION",
+        ),
+    ]:
+        result = await mcp_endpoint.mcp.call_tool(name, arguments)
+        assert result.isError is True
+        assert result.structuredContent["error"]["code"] == code
+        assert "disabled-private-marker" not in repr(result)
 
 
 @pytest.mark.parametrize(
@@ -1193,7 +1384,7 @@ async def test_read_rejects_images_too_large_for_common_clients(monkeypatch):
 
     assert "too large to inline" in result
     assert 'ov get "viking://resources/huge.png" "./huge.png"' in result
-    assert "/api/v1/content/download?uri=viking%3A%2F%2Fresources%2Fhuge.png" in result
+    assert 'Call the download tool with uri="viking://resources/huge.png"' in result
     read_file_bytes.assert_not_awaited()
 
 
@@ -1376,7 +1567,7 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
             self.messages.append((role, parts, peer_id, created_at))
 
     fake_session = FakeSession()
-    monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr(service.sessions, "open", AsyncMock(return_value=fake_session))
     monkeypatch.setattr(
         service.sessions,
         "commit_async",
@@ -1639,6 +1830,144 @@ async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, 
     upload_token_store.clear()
 
 
+# ---------------------------------------------------------------------------
+# download tool
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _clear_download_tokens():
+    from openviking.server.upload_token_store import download_token_store
+
+    download_token_store.clear()
+    yield download_token_store
+    download_token_store.clear()
+
+
+def _stat_service(monkeypatch, stat):
+    monkeypatch.setattr(
+        mcp_endpoint, "get_service", lambda: SimpleNamespace(fs=SimpleNamespace(stat=stat))
+    )
+
+
+async def test_download_tool_is_registered_read_only():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    tool = tools["download"]
+    assert set(tool.inputSchema["properties"]) == {"uri"}
+    assert tool.annotations.readOnlyHint is True
+    assert tool.description.startswith("Get a short-lived URL for downloading")
+
+
+async def test_download_mints_token_bound_to_identity_and_uri(monkeypatch, _clear_download_tokens):
+    store = _clear_download_tokens
+    stat = AsyncMock(return_value={"name": "design.pdf", "size": 2_516_582, "isDir": False})
+    _stat_service(monkeypatch, stat)
+    ctx = RequestContext(
+        UserIdentifier("acct", "alice"), Role.USER, actor_peer_id="bot-a", from_oauth=True
+    )
+    monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://ov.example.com/")
+    token_ctx = _mcp_ctx.set(ctx)
+    try:
+        result = await download("viking://~/specs/design.pdf")
+    finally:
+        _mcp_ctx.reset(token_ctx)
+
+    stat.assert_awaited_once_with("viking://user/alice/specs/design.pdf", ctx=ctx, skip_count=True)
+    assert "viking://user/alice/specs/design.pdf (design.pdf, 2.4 MB)" in result
+    match = re.search(
+        r"curl -fL -o \./design\.pdf 'https://ov\.example\.com/api/v1/content/download"
+        r"\?token=([A-Za-z0-9]+)'",
+        result,
+    )
+    assert match, result
+    assert "no OpenViking API key needed" in result
+    assert "replay the same headers" in result
+    assert "expires in ~10 minutes" in result
+    assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
+    info = store.peek(match.group(1))
+    assert info.uri == "viking://user/alice/specs/design.pdf"
+    assert (info.account_id, info.user_id, info.role) == ("acct", "alice", Role.USER)
+    assert info.actor_peer_id == "bot-a"
+    assert info.from_oauth is True
+
+
+async def test_download_shell_quotes_untrusted_filename(monkeypatch, _clear_download_tokens):
+    _stat_service(
+        monkeypatch, AsyncMock(return_value={"name": "$(id).pdf", "size": 3, "isDir": False})
+    )
+
+    result = await download("viking://resources/$(id).pdf")
+
+    assert "-o './$(id).pdf' " in result
+
+
+async def test_download_rejects_directory_without_minting(monkeypatch, _clear_download_tokens):
+    _stat_service(monkeypatch, AsyncMock(return_value={"name": "specs", "isDir": True}))
+
+    result = await download("viking://resources/specs")
+
+    assert "directory" in result
+    assert "list or tree" in result
+    assert _clear_download_tokens._store == {}
+
+
+async def test_download_missing_file_fails_without_minting(service, _clear_download_tokens):
+    with pytest.raises(NotFoundError):
+        await download("viking://resources/does-not-exist.pdf")
+    assert _clear_download_tokens._store == {}
+
+
+async def test_download_denied_file_fails_without_minting(monkeypatch, _clear_download_tokens):
+    _stat_service(monkeypatch, AsyncMock(side_effect=PermissionDeniedError("denied")))
+
+    with pytest.raises(PermissionDeniedError):
+        await download("viking://resources/secret.pdf")
+    assert _clear_download_tokens._store == {}
+
+
+async def test_download_checks_with_user_role_outside_api_key_mode(
+    monkeypatch, _clear_download_tokens
+):
+    stat = AsyncMock(return_value={"name": "a.bin", "size": 10, "isDir": False})
+    _stat_service(monkeypatch, stat)
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_server_config",
+        lambda: SimpleNamespace(
+            get_effective_auth_mode=lambda: "dev",
+            upload_signed_ttl_seconds=600,
+        ),
+    )
+    monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://ov.example.com")
+    ctx = RequestContext(UserIdentifier("default", "default"), Role.ROOT)
+    token_ctx = _mcp_ctx.set(ctx)
+    try:
+        await download("viking://resources/a.bin")
+    finally:
+        _mcp_ctx.reset(token_ctx)
+
+    assert stat.await_args.kwargs["ctx"].role == Role.USER
+
+
+async def test_download_inferred_base_url_adds_operator_note(monkeypatch, _clear_download_tokens):
+    from openviking.server.mcp_endpoint import _request_url_ctx
+
+    _stat_service(
+        monkeypatch, AsyncMock(return_value={"name": "a.bin", "size": 10, "isDir": False})
+    )
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
+    token = _request_url_ctx.set({"x_forwarded_host": "ov.public.example.com"})
+    try:
+        result = await download("viking://resources/a.bin")
+    finally:
+        _request_url_ctx.reset(token)
+
+    assert "https://ov.public.example.com/api/v1/content/download?token=" in result
+    assert "(a.bin, 10 B)" in result
+    assert "OPENVIKING_PUBLIC_BASE_URL is not set" in result
+
+
 async def test_add_resource_temp_file_id_lookalike_in_path_is_rejected(service):
     result = await add_resource(path="upload_abc123.pdf")
     assert "looks like a temp_file_id" in result.lower()
@@ -1697,6 +2026,7 @@ async def test_add_resource_remote_parent_is_forwarded(service, monkeypatch):
     )
 
     assert captured["parent"] == "viking://resources/imports"
+    assert captured["create_parent"] is True
     assert captured["to"] is None
 
 
@@ -1784,15 +2114,20 @@ async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
 
     async def fake_add_resource(*, path, ctx, **kwargs):
         captured["path"] = path
-        captured["allow_local_path_resolution"] = kwargs.get("allow_local_path_resolution")
+        captured.update(kwargs)
         return {"root_uri": "viking://resources/from_tfid"}
 
     monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
 
-    result = await add_resource(temp_file_id=tfid)
+    result = await add_resource(
+        temp_file_id=tfid,
+        parent="viking://resources/imports",
+    )
     assert "Resource added" in result
     assert captured["path"] == str(target.resolve())
     assert captured["allow_local_path_resolution"] is True
+    assert captured["parent"] == "viking://resources/imports"
+    assert captured["create_parent"] is True
     upload_token_store.clear()
 
 

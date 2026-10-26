@@ -1,4 +1,10 @@
-import type { Protocol, Upstream, UpstreamInput, Vendor } from './api'
+import type {
+  KeyHeader,
+  Protocol,
+  Upstream,
+  UpstreamInput,
+  Vendor,
+} from './api'
 import { checkNumber, checkRequired, collect } from './validation'
 import type { NumberRule, ValidationErrors } from './validation'
 
@@ -7,8 +13,10 @@ export const UPSTREAM_DEFAULTS: UpstreamInput = {
   name: '',
   protocol: 'chat',
   base_url: '',
+  append_endpoint_path: true,
   api_key: '',
   auth_mode: 'managed',
+  key_header: 'authorization',
   headers: {},
   models: [],
   aliases: {},
@@ -24,6 +32,13 @@ export const UPSTREAM_DEFAULTS: UpstreamInput = {
 }
 
 export const PROTOCOLS: Protocol[] = ['anthropic', 'chat', 'responses']
+export const KEY_HEADERS: KeyHeader[] = [
+  'authorization',
+  'api-key',
+  'x-api-key',
+]
+/** Where the gateway fills in the upstream key when sending. */
+export const KEY_PLACEHOLDER = '{api_key}'
 export const VENDORS: Vendor[] = [
   'generic',
   'anthropic',
@@ -202,7 +217,14 @@ export function servedModels(
   return [...new Set([...upstream.models, ...Object.keys(upstream.aliases)])]
 }
 
-/** True for an absolute http(s) URL without credentials, query or fragment. */
+/** Braces other than `{api_key}`, or any brace in the scheme or host. */
+function misplacedPlaceholder(value: string): boolean {
+  const text = value.trim()
+  const origin = /^[^/?]*\/\/[^/?]*/.exec(text)?.[0] ?? ''
+  return /[{}]/.test(text.replaceAll(KEY_PLACEHOLDER, '') + origin)
+}
+
+/** True for an absolute http(s) URL without credentials or fragment. */
 export function isValidBaseUrl(value: string): boolean {
   let url: URL
   try {
@@ -215,33 +237,48 @@ export function isValidBaseUrl(value: string): boolean {
     Boolean(url.hostname) &&
     !url.username &&
     !url.password &&
-    !url.search &&
-    !url.hash &&
-    !/[?#]/.test(value)
+    !value.includes('#') &&
+    !misplacedPlaceholder(value)
   )
 }
 
-/** SDK URL joining: OpenAI paths omit /v1; Anthropic paths retain it. */
+/** Splits off the query and the path's trailing slashes, as the gateway stores it. */
+function splitBaseUrl(value: string): [base: string, query: string] {
+  const [base, ...query] = value.trim().split('?')
+  return [base.replace(/\/+$/, ''), query.length ? '?' + query.join('?') : '']
+}
+
+/** Upstream URL joining: OpenAI paths omit /v1; Anthropic paths retain it. */
 export function upstreamUrl(
   baseUrl: string,
   protocol: Protocol,
   path: string,
+  appendEndpointPath = true,
 ): string {
-  const base = baseUrl.trim().replace(/\/+$/, '')
+  const [base, query] = splitBaseUrl(baseUrl)
+  if (!appendEndpointPath) {
+    return base + path.slice(PROTOCOL_PATHS[protocol].length) + query
+  }
   return (
-    base + (protocol === 'anthropic' ? path : path.replace(/^\/v1(?=\/)/, ''))
+    base +
+    (protocol === 'anthropic' ? path : path.replace(/^\/v1(?=\/)/, '')) +
+    query
   )
 }
 
 /** A likely URL mistake that the editor can fix without replacing a custom host. */
 export function baseUrlCorrection(
-  upstream: Pick<UpstreamInput, 'base_url' | 'vendor' | 'protocol'>,
+  upstream: Pick<
+    UpstreamInput,
+    'base_url' | 'vendor' | 'protocol' | 'append_endpoint_path'
+  >,
 ): { reason: 'anthropicVersion' | 'missingPath'; url: string } | undefined {
-  if (!isValidBaseUrl(upstream.base_url)) return undefined
-  const base = upstream.base_url.trim().replace(/\/+$/, '')
+  if (!upstream.append_endpoint_path || !isValidBaseUrl(upstream.base_url))
+    return undefined
+  const [base, query] = splitBaseUrl(upstream.base_url)
   const path = new URL(base).pathname.replace(/\/+$/, '')
   if (upstream.protocol === 'anthropic' && path.endsWith('/v1')) {
-    return { reason: 'anthropicVersion', url: base.slice(0, -3) }
+    return { reason: 'anthropicVersion', url: base.slice(0, -3) + query }
   }
   if (
     upstream.protocol !== 'anthropic' &&
@@ -250,7 +287,7 @@ export function baseUrlCorrection(
   ) {
     return {
       reason: 'missingPath',
-      url: base + (upstream.vendor === 'openai' ? '/v1' : '/api/v3'),
+      url: base + (upstream.vendor === 'openai' ? '/v1' : '/api/v3') + query,
     }
   }
 }
@@ -271,11 +308,19 @@ export function baseUrlChanged(
  * empty while the base URL is not valid yet.
  */
 export function endpointPreview(
-  upstream: Pick<UpstreamInput, 'base_url' | 'vendor' | 'protocol'>,
+  upstream: Pick<
+    UpstreamInput,
+    'base_url' | 'vendor' | 'protocol' | 'append_endpoint_path'
+  >,
   protocol: Protocol = upstream.protocol,
 ): string {
   if (!isValidBaseUrl(upstream.base_url)) return ''
-  return upstreamUrl(upstream.base_url, protocol, PROTOCOL_PATHS[protocol])
+  return upstreamUrl(
+    upstream.base_url,
+    protocol,
+    PROTOCOL_PATHS[protocol],
+    upstream.append_endpoint_path,
+  )
 }
 
 /**
@@ -302,7 +347,11 @@ export function validateUpstream(
     checkRequired(input.base_url) ??
       (isValidBaseUrl(input.base_url)
         ? undefined
-        : { key: 'validation.baseUrl' }),
+        : {
+            key: misplacedPlaceholder(input.base_url)
+              ? 'validation.baseUrlPlaceholder'
+              : 'validation.baseUrl',
+          }),
   )
   if (baseUrlCorrection(input)?.reason === 'anthropicVersion') {
     collect(errors, 'base_url', {

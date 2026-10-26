@@ -4,22 +4,30 @@
 import asyncio
 from pathlib import Path
 
+import httpx
+import openai
 import pytest
 
-from openviking.models.vlm.base import MultiCredentialVLM, VLMBase, VLMFactory
+from openviking.models.model_error import ModelError, ModelErrorKind
+from openviking.models.vlm.base import VLMBase
 from openviking.models.vlm.retry_vlm import RetryVLM
+from openviking.utils.model_retry import model_retry_scope
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
-class ProviderError(RuntimeError):
+class ProviderError(ModelError):
     def __init__(self, status_code: int):
         messages = {
             400: "400 invalid parameter",
             401: "401 unauthorized",
             503: "503 service unavailable",
         }
-        super().__init__(messages[status_code])
-        self.status_code = status_code
+        kinds = {
+            400: ModelErrorKind.INVALID_REQUEST,
+            401: ModelErrorKind.AUTHENTICATION_ERROR,
+            503: ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+        }
+        super().__init__(kinds[status_code], messages[status_code], status_code=status_code)
 
 
 class FakeVLM(VLMBase):
@@ -97,14 +105,21 @@ def test_retry_vlm_retries_sync_transient_failures(method, expected_method):
         ("get_vision_completion_async", "async_vision"),
     ],
 )
-async def test_retry_vlm_retries_async_transient_failures(method, expected_method):
-    inner = FakeVLM([ProviderError(503), "ok"])
+async def test_retry_vlm_scoped_failure_restores_async_retries(method, expected_method):
+    error = ProviderError(503)
+    inner = FakeVLM([error, ProviderError(503), "ok"])
     vlm = RetryVLM(inner)
+
+    async with model_retry_scope(0):
+        with pytest.raises(ProviderError) as raised:
+            await getattr(vlm, method)(prompt="hello")
+    assert raised.value is error
+    assert len(inner.calls) == 1
 
     result = await getattr(vlm, method)(prompt="hello")
 
     assert result == "ok"
-    assert [name for name, _kwargs in inner.calls] == [expected_method, expected_method]
+    assert [name for name, _kwargs in inner.calls] == [expected_method] * 3
 
 
 @pytest.mark.parametrize("status_code", [400, 401])
@@ -195,38 +210,60 @@ def test_retry_vlm_delegates_token_tracker_and_close():
     assert inner.closed is True
 
 
-def test_vlm_factory_wraps_provider_with_standard_retry():
-    config = {"provider": "kimi", "api_key": "key", "model": "kimi-code"}
+def test_vlm_config_switches_model_after_primary_not_found():
+    calls = []
 
-    standard = VLMFactory.create(config)
+    def handler(request):
+        calls.append(request.url.host)
+        if request.url.host == "primary.example.test":
+            return httpx.Response(
+                404,
+                json={"error": {"code": "model_not_found", "message": "Model does not exist"}},
+            )
+        assert request.url.host == "backup.example.test"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "backup response"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
 
-    assert isinstance(standard, RetryVLM)
-    assert standard.inner.__class__.__name__ == "KimiVLM"
-
-
-def test_vlm_config_wraps_each_credential_inside_failover():
     config = VLMConfig(
-        model="kimi-code",
+        model="missing-model",
+        provider="openai",
+        max_retries=2,
         credentials=[
             {
                 "id": "primary",
-                "provider": "kimi",
                 "api_key": "primary-key",
+                "api_base": "https://primary.example.test/v1",
             },
             {
                 "id": "backup",
-                "provider": "glm",
                 "api_key": "backup-key",
-                "model": "glm-4.6v",
+                "api_base": "https://backup.example.test/v1",
+                "model": "backup-model",
             },
         ],
     )
-
     instance = config.get_vlm_instance()
+    for credential in instance._vlm_instances:
+        credential.inner._sync_client = openai.OpenAI(
+            api_key="test-key",
+            base_url=credential.inner.api_base,
+            max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
 
-    assert isinstance(instance, MultiCredentialVLM)
-    assert all(isinstance(child, RetryVLM) for child in instance._vlm_instances)
-    assert [child.inner.__class__.__name__ for child in instance._vlm_instances] == [
-        "KimiVLM",
-        "GLMVLM",
-    ]
+    try:
+        assert instance.get_completion(prompt="hello") == "backup response"
+        assert calls == ["primary.example.test", "backup.example.test"]
+        assert instance.active_credential_id == "backup"
+    finally:
+        instance.close()

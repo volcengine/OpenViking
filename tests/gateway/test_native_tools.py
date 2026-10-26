@@ -1,6 +1,7 @@
 """Native wire contracts: hidden calls, exact replay and one visible stream."""
 
 import copy
+from types import SimpleNamespace
 
 import orjson
 import pytest
@@ -8,7 +9,9 @@ from aiohttp import web
 from test_app import enable_tools
 
 from openviking_gateway.protocols import SSEDecoder
-from openviking_gateway.tool_protocols.common import sse
+from openviking_gateway.tool_loop import HiddenToolLoop
+from openviking_gateway.tool_protocols import ResponseCapture
+from openviking_gateway.tool_protocols.common import ToolRound, sse
 
 PATHS = {"responses": "/v1/responses", "anthropic": "/v1/messages"}
 
@@ -807,6 +810,68 @@ async def test_native_text_streams_before_round_finishes_and_cancel_closes(proto
 
 
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
+async def test_native_events_arriving_together_leave_together(protocol):
+    """One write per upstream chunk, the same bytes as event by event, failures included."""
+    from types import SimpleNamespace
+
+    from openviking_gateway.tool_loop import HiddenToolLoop, ToolLoopError
+    from openviking_gateway.tool_protocols import ResponseCapture
+
+    events = native_events(protocol, native_response(protocol, 1, owned=True))[:-3]
+    error = {"type": "error", "error": {"type": "overloaded_error"}}
+
+    async def relay(chunks):
+        class Content:
+            async def iter_any(self):
+                for chunk in chunks:
+                    yield chunk
+
+        response = SimpleNamespace(
+            status=200,
+            headers={"content-type": "text/event-stream"},
+            content=Content(),
+            close=lambda: None,
+        )
+        prepared = SimpleNamespace(
+            body=request_body(protocol, True),
+            protocol=protocol,
+            root={"policy": {}},
+            metrics={},
+            tools_active=True,
+            reply_lead="",
+        )
+        loop = HiddenToolLoop(
+            prepared,
+            SimpleNamespace(allowed={"openviking_search"}),
+            None,
+            ResponseCapture(protocol),
+        )
+        loop.adapter.identifier = "fixed"
+        writes = []
+        with pytest.raises(ToolLoopError, match="Model stream failed"):
+            async for write in loop.run(response, None):
+                writes.append(write)
+        return writes
+
+    one_by_one = await relay([sse(event) for event in [*events, error]])
+    together = await relay([b"".join(sse(event) for event in [*events, error])])
+    assert len(together) == 1 < len(one_by_one)
+    assert together[0] == b"".join(one_by_one)
+
+
+def test_streamed_text_append_keeps_the_text_on_a_bad_delta():
+    from openviking_gateway.tool_protocols.common import append
+
+    block = {"type": "text", "text": None}
+    for piece in ("ab", "c", "d"):
+        append(block, "text", piece)
+    assert block == {"type": "text", "text": "abcd"}
+    with pytest.raises(TypeError):
+        append(block, "text", None)
+    assert block == {"type": "text", "text": "abcd"}
+
+
+@pytest.mark.parametrize("protocol", ["responses", "anthropic"])
 async def test_native_replay_survives_restart_edits_and_archive_boundary(
     setup_kernel, credential, policy, protocol
 ):
@@ -890,6 +955,26 @@ def test_custom_responses_tools_are_captured_as_complete_pairs():
             "tool_output": "/work/project",
         }
     ]
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
+def test_hidden_chain_continues_from_the_chain_before(protocol):
+    """A reply's anchors continue the request's chain: hashing only the reply gives the same."""
+    from openviking_gateway.tool_protocols import hidden_chain
+
+    messages = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": [{"type": "text", "text": "héllo 🙂", "cache_control": {}}]},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "hm"}]},
+        {"role": "assistant", "content": "Hi", "reasoning_content": "hm"},
+        {"role": "user", "content": "<context>docs</context><user_query> why? </user_query>"},
+        {"type": "function_call", "call_id": "c-1", "name": "f", "arguments": "{}"},
+    ]
+    chain = hidden_chain(messages, protocol)
+    assert chain[0] == chain[2] == "" and all(chain[3:])
+    for index in range(len(messages) + 1):
+        head = hidden_chain(messages[:index], protocol)
+        assert [*head, *hidden_chain(messages[index:], protocol, head)] == chain
 
 
 @pytest.mark.parametrize("archive", [False, True])
@@ -1310,3 +1395,31 @@ async def test_admin_disabling_anthropic_tools_preserves_history_and_logs(
     else:
         assert not logs[0].get("degradation")
         assert requests[-1]["messages"] == [requests[0]["messages"][0], *body["messages"][1:]]
+
+
+async def test_tool_loop_logs_rounds_read_one_by_one(setup_kernel, credential, policy):
+    """Rounds in different usage forms still add up, and nulls never break the sum."""
+    kernel, store, _, _ = setup_kernel
+    policy.update(gateway_tools=True, recall=False)
+    prepared = await kernel.prepare(
+        request_body("chat", False), "chat", {}, credential, {"id": "u"}, policy
+    )
+    loop = HiddenToolLoop(
+        prepared, SimpleNamespace(allowed={"openviking_search"}), store, ResponseCapture("chat")
+    )
+    usages = [
+        {"prompt_tokens": 1000, "prompt_cache_hit_tokens": 800, "prompt_tokens_details": None},
+        {"prompt_tokens": 1100, "prompt_tokens_details": {"cached_tokens": 900}},
+    ]
+    for number, usage in enumerate(usages):
+        loop.round = ToolRound([], [], usage, False)
+        loop.observe()
+        loop.rounds = number + 1
+    loop.adapter.begin()
+    loop.adapter.load(native_response("chat", 1))
+    loop.round = loop.adapter.end()
+    await loop.persist()
+    assert loop.capture.usage["input_tokens"] == 2100
+    assert loop.capture.usage["cached_tokens"] == 1700
+    assert prepared.metrics["first_upstream_cached_tokens"] == 800
+    assert prepared.metrics["hidden_upstream_cached_tokens"] == 900

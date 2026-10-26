@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from openviking.server.account_stores.base import AccountStore
-from openviking.server.api_keys.legacy import FileStore
+from openviking.server.account_stores.file import FileStore
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -20,6 +20,7 @@ def build_api_key_manager(
     viking_fs: VikingFS | None,
     *,
     api_key_hashing_enabled: bool = False,
+    service_name: str | None = None,
     account_store_provider: str = "file",
     account_store_params: dict[str, object] | None = None,
     account_store_watch_enabled: bool = False,
@@ -34,6 +35,7 @@ def build_api_key_manager(
     store = build_account_store(
         viking_fs=viking_fs,
         api_key_hashing_enabled=api_key_hashing_enabled,
+        service_name=service_name,
         account_store_provider=provider,
         account_store_params=account_store_params,
         account_store_watch_enabled=account_store_watch_enabled,
@@ -47,6 +49,7 @@ def build_account_store(
     *,
     viking_fs: VikingFS | None,
     api_key_hashing_enabled: bool,
+    service_name: str | None = None,
     account_store_provider: str,
     account_store_params: dict[str, object] | None,
     account_store_watch_enabled: bool,
@@ -58,6 +61,10 @@ def build_account_store(
         return account_store
 
     provider = account_store_provider.strip().lower()
+    if provider in {"mysql", "redis_mysql"} and service_name is None:
+        raise InvalidArgumentError(
+            f"service_name is required for the {provider} account store provider"
+        )
     if provider == "file":
         file_system = cast(VikingFS, viking_fs)
         return FileStore(
@@ -67,7 +74,31 @@ def build_account_store(
             watch_enabled=account_store_watch_enabled,
             watch_interval_seconds=account_store_watch_interval_seconds,
         )
+    if provider == "mysql":
+        try:
+            from openviking.server.account_stores.mysql import MySQLAccountStore
+        except ImportError:
+            raise RuntimeError(
+                "MySQL account storage requires openviking[mysql]"
+            ) from None
+        return MySQLAccountStore(
+            service_name=service_name,
+            params=account_store_params,
+        )
+    if provider == "redis_mysql":
+        try:
+            from openviking.server.account_stores.redis_mysql import (
+                RedisMySQLAccountStore,
+            )
+        except ImportError:
+            raise RuntimeError(
+                "Redis MySQL account storage requires openviking[redis-mysql]"
+            ) from None
+        return RedisMySQLAccountStore(
+            service_name=service_name,
+            params=account_store_params,
+        )
     raise InvalidArgumentError(
         f"Unknown account store provider '{account_store_provider}'. "
-        "Available providers: file"
+        "Available providers: file, mysql, redis_mysql"
     )

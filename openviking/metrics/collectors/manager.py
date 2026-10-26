@@ -68,11 +68,11 @@ class CollectorManager:
 
         If the collector has `config.ttl_seconds`, a gate is created to enforce TTL + SWR.
         """
-        if not isinstance(collector, Refreshable):
-            raise TypeError("CollectorManager only accepts Refreshable collectors")
+        if not isinstance(collector, MetricCollector) or not isinstance(collector, Refreshable):
+            raise TypeError("CollectorManager only accepts refreshable MetricCollector instances")
         self._collectors.append(collector)
-        collector_name = self._collector_name(collector)
-        ttl_seconds = getattr(cast(Refreshable, collector).config, "ttl_seconds", None)
+        collector_name = collector.collector_name()
+        ttl_seconds = cast(Refreshable, collector).config.ttl_seconds
         if ttl_seconds is not None:
             self._gates[collector_name] = RefreshGate(ttl_seconds=float(ttl_seconds))
 
@@ -96,9 +96,9 @@ class CollectorManager:
         tasks: list[asyncio.Task[RefreshResult]] = []
 
         for c in self._collectors:
-            collector_name = self._collector_name(c)
+            collector_name = c.collector_name()
             gate = self._gates.get(collector_name)
-            timeout_seconds = float(getattr(cast(Refreshable, c).config, "timeout_seconds", 0.5))
+            timeout_seconds = cast(Refreshable, c).config.timeout_seconds
             if gate is None:
                 tasks.append(
                     asyncio.create_task(
@@ -222,37 +222,22 @@ class CollectorManager:
                 asyncio.to_thread(collector.collect, registry), timeout=timeout
             )
             return RefreshResult(
-                collector=self._collector_name(collector),
+                collector=collector.collector_name(),
                 attempted=collected is not False,
                 success=collected is not False,
                 reason="skipped" if collected is False else "ok",
             )
         except asyncio.TimeoutError:
             return RefreshResult(
-                collector=self._collector_name(collector),
+                collector=collector.collector_name(),
                 attempted=True,
                 success=False,
                 reason="timeout",
             )
         except Exception:
             return RefreshResult(
-                collector=self._collector_name(collector),
+                collector=collector.collector_name(),
                 attempted=True,
                 success=False,
                 reason="exception",
             )
-
-    def _collector_name(self, collector: MetricCollector) -> str:
-        """
-        Resolve the display name used for refresh results and refresh-gate bookkeeping.
-
-        The manager prefers the collector's explicit `collector_name()` method and falls back to
-        a `name` attribute or the concrete class name for compatibility.
-        """
-        try:
-            return str(collector.collector_name())
-        except AttributeError:
-            name = getattr(collector, "name", None)
-            if name is not None:
-                return str(name)
-            return collector.__class__.__name__

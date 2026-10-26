@@ -919,6 +919,8 @@ fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
 }
 
 mod git;
+mod privacy;
+mod privacy_extractor;
 
 fn py_detach_blocking<T, F>(py: Python<'_>, f: F) -> T
 where
@@ -1801,6 +1803,30 @@ impl RAGFSBindingClient {
         })
     }
 
+    /// List changed files under directories between two commits.
+    #[pyo3(signature = (**kwargs))]
+    fn git_diff_paths(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Vec<(String, String)>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let empty = PyDict::new(py);
+        let kw = kwargs.unwrap_or(&empty);
+        let req = git::parse_diff_paths_request(kw)?;
+        let resp = py_detach_blocking(py, move || {
+            self.rt
+                .block_on(svc.diff_paths(&req.account, req.base.as_deref(), &req.head, &req.paths))
+        })
+        .map_err(|e| git::map_git_error(py, e))?;
+        Ok(resp
+            .into_iter()
+            .map(|(path, change)| (path, change.to_string()))
+            .collect())
+    }
+
     /// Walk snapshot history, optionally filtered to commits touching paths.
     #[pyo3(signature = (**kwargs))]
     fn git_log(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Py<PyAny>> {
@@ -2659,6 +2685,36 @@ impl RAGFSBindingClient {
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
     }
 
+    /// Acquire a batch on Tokio; the Python adapter settles cancellation before releasing it.
+    #[pyo3(signature = (ctx, requests, timeout_secs=0.0, owner_lease_ref=None))]
+    fn pathlock_acquire_batch_async<'py>(
+        &self,
+        py: Python<'py>,
+        ctx: Option<HashMap<String, String>>,
+        requests: Vec<HashMap<String, String>>,
+        timeout_secs: f64,
+        owner_lease_ref: Option<Py<PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let fs_ctx = build_fs_context(ctx);
+        let timeout = validate_timeout_secs(timeout_secs)?;
+        let owner = extract_optional_owned_lease_ref(py, owner_lease_ref.as_ref())?;
+        let requests = parse_pathlock_request_batch(&requests)?;
+        let manager = self.clone_pathlock_manager();
+        let task = self.rt.spawn(FS_CTX.scope(fs_ctx, async move {
+            let capability = owner
+                .as_ref()
+                .map(|(lease_ref, ownership_ref)| (lease_ref.as_str(), ownership_ref.as_str()));
+            manager.acquire_batch(&requests, timeout, capability).await
+        }));
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lease = task
+                .await
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+                .map_err(pathlock_err_to_py)?;
+            Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+        })
+    }
+
     /// Create a borrowed view of an owned lease.
     #[pyo3(signature = (ctx, owned_lease_ref))]
     fn pathlock_as_borrowed(
@@ -3035,6 +3091,8 @@ impl RAGFSBindingClient {
 #[pymodule]
 fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RAGFSBindingClient>()?;
+    m.add_class::<privacy::PyPrivacyMatcher>()?;
+    m.add_class::<privacy_extractor::PyPrivacyExtractor>()?;
     m.add_function(wrap_pyfunction!(reopen_tracing_file, m)?)?;
 
     // Import the Python business exception so native code raises the same type
@@ -3469,7 +3527,8 @@ mod tests {
         )
         .unwrap();
 
-        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap();
+        let cache_config =
+            cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap();
         let stack_config = cache_config.stack_config().unwrap();
 
         assert!(cache_config.runtime_enabled);
@@ -3668,7 +3727,8 @@ mod tests {
             )
             .unwrap();
 
-            let error = cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap_err();
+            let error =
+                cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap_err();
 
             assert!(error.contains(field));
             fs::remove_file(path).unwrap();

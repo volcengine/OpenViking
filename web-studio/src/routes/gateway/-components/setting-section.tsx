@@ -18,12 +18,17 @@ import {
 } from '#/components/ui/collapsible'
 import { Switch } from '#/components/ui/switch'
 
+import type { DocsSection } from '../-lib/client-guides'
+import { DocsLink } from './docs-link'
+
 type SettingSectionProps = {
   /** Anchor id for in-page navigation. */
   id?: string
   icon?: React.ReactNode
   title: string
   description?: React.ReactNode
+  /** Docs section explaining these settings, linked after the description. */
+  docs?: DocsSection
   /** State of the header switch; omit for a section without one. */
   checked?: boolean
   onCheckedChange?: (checked: boolean) => void
@@ -53,6 +58,7 @@ export function SettingSection({
   icon,
   title,
   description,
+  docs,
   checked,
   onCheckedChange,
   switchDisabled,
@@ -78,6 +84,12 @@ export function SettingSection({
         {description ? (
           <CardDescription className="max-w-2xl leading-6">
             {description}
+            {docs ? (
+              <>
+                {' '}
+                <DocsLink section={docs} variant="text" />
+              </>
+            ) : null}
           </CardDescription>
         ) : null}
         {checked !== undefined ? (

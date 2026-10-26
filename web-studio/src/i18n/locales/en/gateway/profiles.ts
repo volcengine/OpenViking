@@ -66,6 +66,11 @@ const profiles = {
     placeholder: 'e.g. Coding',
     description: 'Shown when you choose a profile for a gateway key.',
   },
+  clientOverrides: {
+    label: 'Let clients override settings',
+    description:
+      'Clients can change any setting below for a new conversation with the X-OpenViking-Context header, including budgets and tools that change data. Turn this off for a profile that must stay as saved.',
+  },
   recall: {
     title: 'Recall memory',
     description:

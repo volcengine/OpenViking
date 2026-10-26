@@ -1,5 +1,7 @@
+import { resolveApiKeyAuth, createApiKeyHeaders } from '#/lib/connection/auth'
+import type { ApiKeyAuth } from '#/lib/connection/auth'
 import axios from 'axios'
-import type { ServerMode } from '#/hooks/use-server-mode'
+import type { ServerMode } from '#/lib/connection/health'
 
 import { createClient } from '#/gen/ov-client/client'
 import {
@@ -88,6 +90,9 @@ export type StudioConnectionProbe = {
 }
 
 export type ProbeConnectionInput = {
+  apiKeyAuth?: ApiKeyAuth
+  skipAdmin?: boolean
+  dataRootUri?: string
   accountId: string
   adminApiKey: string
   apiKey: string
@@ -167,8 +172,9 @@ function createProbeClient(baseUrl: string) {
 function setApiKeyHeader(
   headers: Record<string, string>,
   apiKey: string,
+  auth: ApiKeyAuth = 'header',
 ): void {
-  setOptionalHeader(headers, 'X-API-Key', apiKey)
+  Object.assign(headers, createApiKeyHeaders(apiKey, auth))
 }
 
 function probeError(error: unknown): CapabilityProbeResult {
@@ -278,7 +284,11 @@ async function probeDataAccess(
 
   const client = createProbeClient(input.baseUrl)
   const headers: Record<string, string> = {}
-  setApiKeyHeader(headers, apiKey)
+  setApiKeyHeader(
+    headers,
+    input.apiKey || (input.serverMode === 'trusted' ? input.adminApiKey : ''),
+    input.apiKeyAuth ?? resolveApiKeyAuth(input.baseUrl),
+  )
 
   if (input.serverMode === 'trusted') {
     setOptionalHeader(headers, 'X-OpenViking-Account', input.accountId)
@@ -291,7 +301,7 @@ async function probeDataAccess(
       params: {
         node_limit: 1,
         output: 'agent',
-        uri: 'viking://',
+        uri: input.dataRootUri ?? 'viking://',
       },
     })
     return {
@@ -307,7 +317,9 @@ export async function probeStudioConnection(
   input: ProbeConnectionInput,
 ): Promise<StudioConnectionProbe> {
   const [admin, data] = await Promise.all([
-    probeAdminAccess(input),
+    input.skipAdmin
+      ? Promise.resolve({ state: 'skipped' as const })
+      : probeAdminAccess(input),
     probeDataAccess(input),
   ])
   return { admin, data }
@@ -384,6 +396,23 @@ export async function fetchAdminUsers(
       path: {
         account_id: accountId,
       },
+    }),
+  )
+  return result
+    .map((item) => normalizeUser(accountId, item))
+    .filter((item): item is AdminUser => Boolean(item))
+}
+
+/** List selectable identities without returning their API keys to the wizard. */
+export async function fetchAdminUserDirectory(
+  connection: AdminConnection,
+  accountId: string,
+): Promise<AdminUser[]> {
+  const result = await getOvResult<unknown[]>(
+    createAdminClient(connection).get({
+      url: '/api/v1/admin/accounts/{account_id}/users',
+      path: { account_id: accountId },
+      query: { include_credentials: false },
     }),
   )
   return result

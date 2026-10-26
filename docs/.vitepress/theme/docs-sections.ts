@@ -33,7 +33,8 @@ export const sections: DocSection[] = [
         p('agent-integrations/01-overview'),
         p('workflows/01-overview'),
         p('context-compilation/01-overview'),
-        p('guides/17-vikingbot')
+        p('guides/17-vikingbot'),
+        p('guides/15-gateway')
       ]),
       g('Learn, deploy and troubleshoot', '深入与排障', [
         p('concepts/00-overview'),
@@ -56,7 +57,8 @@ export const sections: DocSection[] = [
       g('Processing and memory', '处理与记忆', [
         p('concepts/06-extraction'),
         p('concepts/07-retrieval'),
-        p('concepts/08-session')
+        p('concepts/08-session'),
+        p('concepts/17-rule-scenarios')
       ]),
       g('Architecture and reliability', '架构与可靠性', [
         p('concepts/01-architecture'),
@@ -110,13 +112,60 @@ export const sections: DocSection[] = [
         p('agent-integrations/18-plugin-development'),
         p('guides/working-memory-default-off')
       ]),
-      g('OpenViking Gateway', 'OpenViking 网关', [
-        p('guides/15-gateway'),
-        p('guides/22-gateway-operations')
-      ]),
       g('VikingBot', 'VikingBot', [
         p('guides/17-vikingbot'),
         p('guides/12-vikingbot-metrics-validation')
+      ])
+    ],
+    nextSteps: [
+      g('Clients without a plugin', '没有插件的客户端', [
+        p('guides/15-gateway')
+      ])
+    ]
+  },
+  // The entry page and the deployment page keep their guides/ paths so released Studio builds,
+  // the Helm README and openviking_gateway/config.py keep linking to them; every other gateway
+  // page lives in gateway/. Ownership does not depend on file location (see the top of this file).
+  {
+    id: 'gateway', en: 'Gateway', zh: '网关',
+    enNote: 'Give any API-key client memory through one proxy, then manage and run it.', zhNote: '用一个代理为 API Key 客户端接入记忆，并管理与运维。',
+    entry: 'guides/15-gateway', aliases: [],
+    groups: [
+      g('Understand the gateway', '了解网关', [
+        p('guides/15-gateway'),
+        p('gateway/01-how-it-works')
+      ]),
+      g('Get started', '上手与接入', [
+        p('gateway/02-quickstart'),
+        p('gateway/03-connect-clients')
+      ]),
+      g('Memory and tools', '记忆与工具', [
+        p('gateway/04-openviking-tools'),
+        p('gateway/05-long-conversations')
+      ]),
+      g('Manage in Studio', '在 Studio 中管理', [
+        p('gateway/06-manage-in-studio'),
+        p('gateway/07-upstreams'),
+        p('gateway/08-context-profiles'),
+        p('gateway/09-gateway-keys'),
+        p('gateway/10-overview-and-requests')
+      ]),
+      g('Deploy and operate', '部署与运维', [
+        p('guides/22-gateway-operations'),
+        p('gateway/11-security-and-data')
+      ]),
+      g('Troubleshoot and look up', '排障与参考', [
+        p('gateway/12-troubleshooting'),
+        p('gateway/13-configuration')
+      ])
+    ],
+    nextSteps: [
+      g('Related docs', '相关文档', [
+        p('api/25-gateway'),
+        p('guides/04-authentication'),
+        p('guides/12-public-access'),
+        p('guides/06-mcp-integration'),
+        p('agent-integrations/01-overview')
       ])
     ]
   },
@@ -128,7 +177,11 @@ export const sections: DocSection[] = [
       g('Choose a workflow', '选择开发任务', [
         p('workflows/01-overview')
       ]),
+      g('Rule validation (Beta)', '规则校验（Beta）', [
+        p('workflows/02-rule-validation')
+      ]),
       g('Manage context', '组织与维护上下文', [
+        p('guides/23-data-organize'),
         p('guides/18-openviking-assets'),
         p('guides/09-ovpack'),
         p('guides/15-snapshot'),
@@ -204,6 +257,9 @@ export const sections: DocSection[] = [
         p('api/16-memory'),
         p('api/04-skills'),
         p('api/19-agent-evolution')
+      ]),
+      g('Rules (Beta)', '规则（Beta）', [
+        p('api/26-rules')
       ]),
       g('Data and extension APIs', '数据与扩展 API', [
         p('api/11-snapshot'),

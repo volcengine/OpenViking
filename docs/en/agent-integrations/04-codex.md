@@ -81,7 +81,6 @@ The plugin handles memory at these Codex lifecycle events:
 | `Stop` | Append new conversation turns to the OpenViking session. |
 | `PreCompact` | Capture remaining turns and commit the complete transcript before compaction. |
 | `SessionEnd` | Commit the session on graceful exit for subsequent memory extraction. |
-| `PreToolUse` (`Bash`) | Detect `viking://` URIs in shell commands and suggest the OpenViking MCP tools. The command still runs; the model can ignore the notice when the URI is intentional data, such as an `ov` argument. |
 
 Starting a new session also sweeps orphaned sessions from earlier runs once their idle TTL has expired.
 

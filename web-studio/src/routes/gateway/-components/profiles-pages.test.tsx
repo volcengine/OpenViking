@@ -28,6 +28,7 @@ import type {
   Profile,
   ProfileSettings,
 } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import { PROFILE_DEFAULTS, WRITE_TOOLS } from '../-lib/profile-schema'
 import { parseProfileEditorSearch } from '../-lib/search'
 import { ProfilesPage } from './profiles-page'
@@ -49,6 +50,10 @@ const translate = vi.hoisted(
       ? `${key} ${JSON.stringify(values)}`
       : key,
 )
+
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
 
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
@@ -190,6 +195,12 @@ const saveButton = () =>
   })
 const nameInput = () =>
   screen.getByLabelText<HTMLInputElement>('profiles.name.label')
+/** Hrefs of every link with this text (Base UI gives button links the button role). */
+const hrefsOf = (text: string) =>
+  screen
+    .getAllByText(text)
+    .map((node) => node.closest('a')?.getAttribute('href'))
+
 const sectionSwitch = (section: string) =>
   screen.getByRole('switch', { name: `profiles.${section}.title` })
 /** A tool checkbox's accessible name starts with the tool name; its description follows. */
@@ -250,6 +261,7 @@ describe('profile list', () => {
       chatCard.getByText('profiles.summary.compactionOn {"percent":"90%"}'),
     ).toBeTruthy()
     expect(chatCard.getByText('profiles.unused')).toBeTruthy()
+    expect(hrefsOf('docs.link')).toEqual([gatewayDocsUrl('profiles', 'en')])
   })
 
   it('keeps tool counts unknown until the catalog loads', async () => {
@@ -308,6 +320,24 @@ describe('profile list', () => {
         'profiles.toast.deleted {"name":"Chat"}',
       ),
     )
+  })
+
+  it('does not count OpenViking API keys as users of the default profile', async () => {
+    api.listProfiles.mockResolvedValue([{ ...coding, id: 'default' }])
+    // As the server lists them: no binding of their own.
+    api.listKeys.mockResolvedValue([
+      { ...key('k3', ''), source: 'openviking', upstream_ids: [] },
+    ])
+    renderAt('/gateway/profiles')
+    await screen.findByRole('link', { name: 'Coding' })
+
+    const codingCard = within(card('Coding'))
+    expect(codingCard.getByText('profiles.unused')).toBeTruthy()
+    expect(
+      codingCard.getByRole<HTMLButtonElement>('button', {
+        name: 'actions.delete',
+      }).disabled,
+    ).toBe(false)
   })
 
   it('creates a profile with the recommended settings in one click', async () => {
@@ -373,6 +403,20 @@ describe('profile editor', () => {
   it('hides settings of switched-off sections and switches long-conversation features on their own', async () => {
     renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
+    // Every section links its docs, switched on or not, and so do the
+    // client override and experimental agent-managed windows settings.
+    expect(hrefsOf('docs.learnMore')).toEqual(
+      (
+        [
+          'clientOverrides',
+          'recall',
+          'capture',
+          'longConversations',
+          'agentWindows',
+          'tools',
+        ] as const
+      ).map((section) => gatewayDocsUrl(section, 'en')),
+    )
 
     expect(
       screen.queryByLabelText('profiles.recall.maxTokens.label'),
@@ -662,6 +706,30 @@ describe('profile editor', () => {
     expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
       recall: false,
       show_recall: true,
+    })
+  })
+
+  it('lets clients override settings by default and keeps the switch on reset', async () => {
+    // Profiles saved before the switch existed lack the field; the gateway treats it as on.
+    const { client_overrides: _, ...legacy } = chat
+    api.listProfiles.mockResolvedValue([legacy as Profile])
+    renderAt('/gateway/profiles/p2')
+    await screen.findByDisplayValue('Chat')
+    const overrides = () =>
+      screen.getByRole('switch', { name: 'profiles.clientOverrides.label' })
+    expect(overrides().getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(overrides())
+    fireEvent.click(screen.getByRole('button', { name: 'actions.more' }))
+    fireEvent.click(
+      await screen.findByRole('menuitem', { name: 'profiles.actions.reset' }),
+    )
+    expect(overrides().getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
+    expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
+      client_overrides: false,
     })
   })
 

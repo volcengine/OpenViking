@@ -131,6 +131,7 @@ interface MessageListProps {
   messages: Message[]
   streaming?: {
     parts?: MessagePart[]
+    insertIndex?: number
     iteration: number
   }
   onResourceClick?: (uri: string) => void
@@ -143,55 +144,55 @@ export function MessageList({
   streaming,
 }: MessageListProps) {
   const isExpanded = layout === 'expanded'
-  const safeMessages = groupMessages([
-    ...(Array.isArray(messages) ? messages : []),
-    ...(streaming
-      ? [
-          {
-            id: '__streaming__',
-            role: 'assistant' as const,
-            parts: streaming.parts ?? [],
-            created_at: new Date().toISOString(),
-          },
-        ]
-      : []),
-  ])
-  const streamingGroup =
-    streaming && safeMessages.at(-1)?.role === 'assistant'
-      ? safeMessages.pop()
-      : undefined
+  const baseMessages = Array.isArray(messages) ? messages : []
+  const insertIndex = streaming
+    ? Math.min(
+        streaming.insertIndex ?? baseMessages.length,
+        baseMessages.length,
+      )
+    : baseMessages.length
+  const beforeMessages = groupMessages(baseMessages.slice(0, insertIndex))
+  const afterMessages = streaming
+    ? groupMessages(baseMessages.slice(insertIndex))
+    : []
+  const safeMessages = streaming ? beforeMessages : groupMessages(baseMessages)
+
+  const renderMessages = (items: Message[]) =>
+    items.map((msg, idx) => {
+      const prev = idx > 0 ? items[idx - 1] : null
+      const sameRole =
+        prev?.role === msg.role &&
+        (!prev.turn_id || !msg.turn_id || prev.turn_id === msg.turn_id)
+      return msg.role === 'user' ? (
+        <UserMessage
+          key={msg.id}
+          message={msg}
+          compact={sameRole}
+          expanded={isExpanded}
+        />
+      ) : (
+        <AssistantMessage
+          key={msg.id}
+          message={msg}
+          compact={sameRole}
+          expanded={isExpanded}
+          onResourceClick={onResourceClick}
+        />
+      )
+    })
+
   return (
     <>
-      {safeMessages.map((msg, idx) => {
-        const prev = idx > 0 ? safeMessages[idx - 1] : null
-        const sameRole =
-          prev?.role === msg.role &&
-          (!prev.turn_id || !msg.turn_id || prev.turn_id === msg.turn_id)
-        return msg.role === 'user' ? (
-          <UserMessage
-            key={msg.id}
-            message={msg}
-            compact={sameRole}
-            expanded={isExpanded}
-          />
-        ) : (
-          <AssistantMessage
-            key={msg.id}
-            message={msg}
-            compact={sameRole}
-            expanded={isExpanded}
-            onResourceClick={onResourceClick}
-          />
-        )
-      })}
+      {renderMessages(safeMessages)}
       {streaming && (
         <StreamingAssistantMessage
           {...streaming}
-          parts={streamingGroup?.parts ?? streaming.parts}
+          parts={streaming.parts}
           expanded={isExpanded}
           onResourceClick={onResourceClick}
         />
       )}
+      {streaming && renderMessages(afterMessages)}
     </>
   )
 }

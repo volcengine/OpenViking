@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from openviking.models.model_error import model_error_boundary
 from openviking.models.network import (
     create_optional_async_httpx_client,
     create_optional_sync_httpx_client,
@@ -188,6 +189,9 @@ class OpenAIVLM(VLMBase):
             max_tokens_param = "max_tokens"
             kwargs["temperature"] = self.temperature
 
+        if kwargs.get("tools") and self.provider != "openai-codex":
+            if re.match(r"gpt-(?:5\.[456]|6-(?:sol|luna))(?:-|$)", kwargs["model"].lower()):
+                kwargs["reasoning_effort"] = "none"
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
             kwargs[max_tokens_param] = effective_max_tokens
@@ -287,10 +291,10 @@ class OpenAIVLM(VLMBase):
             "model": model,
             "messages": kwargs_messages,
         }
-        self._apply_completion_params(kwargs, effective_thinking, max_tokens=max_tokens)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        self._apply_completion_params(kwargs, effective_thinking, max_tokens=max_tokens)
         return kwargs
 
     def _build_vision_kwargs(
@@ -318,10 +322,10 @@ class OpenAIVLM(VLMBase):
             "model": model,
             "messages": kwargs_messages,
         }
-        self._apply_completion_params(kwargs, effective_thinking)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        self._apply_completion_params(kwargs, effective_thinking)
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
@@ -334,6 +338,7 @@ class OpenAIVLM(VLMBase):
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
+    @model_error_boundary
     def get_completion(
         self,
         prompt: str = "",
@@ -358,6 +363,7 @@ class OpenAIVLM(VLMBase):
 
         return _call()
 
+    @model_error_boundary
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -380,7 +386,10 @@ class OpenAIVLM(VLMBase):
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
-                return self._build_vlm_response(response, has_tools=True)
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return await self._extract_completion_content_async(response, elapsed)
 
         # 用 tracer.info 打印请求（人类可读格式）
@@ -442,6 +451,7 @@ class OpenAIVLM(VLMBase):
             }
         return {"type": "image_url", "image_url": {"url": image}}
 
+    @model_error_boundary
     def get_vision_completion(
         self,
         prompt: str = "",
@@ -469,6 +479,7 @@ class OpenAIVLM(VLMBase):
 
         return _call()
 
+    @model_error_boundary
     async def get_vision_completion_async(
         self,
         prompt: str = "",

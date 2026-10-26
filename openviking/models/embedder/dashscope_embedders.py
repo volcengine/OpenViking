@@ -17,6 +17,7 @@ from openviking.models.embedder.base import (
     EmbedResult,
     truncate_and_normalize,
 )
+from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
@@ -225,6 +226,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed
     # ------------------------------------------------------------------
 
+    @model_error_boundary
     def embed(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
         if isinstance(text, list):
             contents = self._to_dashscope_contents(text)
@@ -256,6 +258,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_async
     # ------------------------------------------------------------------
 
+    @model_error_boundary
     async def embed_async(self, text: EmbeddingInput, is_query: bool = False) -> EmbedResult:
         if isinstance(text, list):
             contents = self._to_dashscope_contents(text)
@@ -291,6 +294,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     # embed_content — multimodal content (text + image URLs)
     # ------------------------------------------------------------------
 
+    @model_error_boundary
     def embed_content(
         self, contents: List[Dict[str, str]], *, enable_fusion: Optional[bool] = None
     ) -> EmbedResult:
@@ -326,6 +330,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"DashScope content embedding failed: {e}") from e
 
+    @model_error_boundary
     async def embed_content_async(
         self, contents: List[Dict[str, str]], *, enable_fusion: Optional[bool] = None
     ) -> EmbedResult:

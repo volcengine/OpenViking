@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Test doubles for file-backed account-store tests."""
 
+import asyncio
 import threading
 import time
 import uuid
@@ -47,17 +48,19 @@ class InMemoryAGFS:
     def ensure_parent_dirs(self, path: str, ctx=None) -> None:
         del path, ctx
 
-    def pathlock_acquire_exact(
+    async def pathlock_acquire_batch_async(
         self,
         ctx,
-        path: str,
+        requests,
         timeout_secs: float = 0.0,
         owner_lease_ref=None,
     ) -> dict:
         del ctx, owner_lease_ref
+        (request,) = requests
+        path = request["path"]
         with self._guard:
             lock = self._locks.setdefault(path, threading.Lock())
-        if not lock.acquire(timeout=timeout_secs):
+        if not await asyncio.to_thread(lock.acquire, timeout=timeout_secs):
             raise TimeoutError(f"timed out acquiring account store lock: {path}")
         lease_ref = uuid.uuid4().hex
         with self._guard:

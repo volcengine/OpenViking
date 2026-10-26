@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from openviking.config.vlm import VLMResolver
@@ -60,6 +60,7 @@ class TrajectoryAnalyzerContext:
     inject_evaluation_feedback: bool = True
     include_session_skills: bool = False
     source_archive_uri: str = ""
+    case_candidates: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -87,10 +88,11 @@ class TrajectoryRolloutAnalyzer:
             raise ValueError("TrajectoryAnalyzerContext.request_context is required")
 
         evaluation = await self._evaluate_rollout(rollout, context)
+        feedback_injected = evaluation is not None and context.inject_evaluation_feedback
         extraction_messages = _messages_with_evaluation_feedback(
             rollout.messages,
             evaluation=evaluation,
-            enabled=evaluation is not None and context.inject_evaluation_feedback,
+            enabled=feedback_injected,
         )
         result = await self.extract_trajectory_memories(
             messages=extraction_messages,
@@ -100,6 +102,9 @@ class TrajectoryRolloutAnalyzer:
             include_session_skills=context.include_session_skills,
             case_name=getattr(rollout.case, "name", ""),
             source_archive_uri=context.source_archive_uri,
+            case_candidates=context.case_candidates,
+            # Only feedback present in the extraction input changes trajectory identity.
+            extraction_scope=extraction_messages[-1].content if feedback_injected else "",
         )
         contexts = list((result or {}).get("contexts", []))
         skill_gradients = list((result or {}).get("skill_gradients", []))
@@ -149,6 +154,8 @@ class TrajectoryRolloutAnalyzer:
         include_session_skills: bool = False,
         case_name: str = "",
         source_archive_uri: str = "",
+        case_candidates: list[dict[str, Any]] | None = None,
+        extraction_scope: str = "",
     ) -> dict[str, list[Any]]:
         """Extract trajectory and/or reusable skill operations from rollout messages.
 
@@ -168,8 +175,7 @@ class TrajectoryRolloutAnalyzer:
         if self.vlm is None:
             if self.vlm_resolver is None:
                 raise RuntimeError(
-                    "TrajectoryRolloutAnalyzer requires a VLM resolver "
-                    "for account-owned work"
+                    "TrajectoryRolloutAnalyzer requires a VLM resolver for account-owned work"
                 )
             vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
 
@@ -179,6 +185,9 @@ class TrajectoryRolloutAnalyzer:
             include_trajectories=include_trajectories,
             include_session_skills=include_session_skills,
             vlm_config=vlm_config,
+            source_archive_uri=source_archive_uri,
+            case_candidates=case_candidates,
+            extraction_scope=extraction_scope,
         )
         consumed_experience_uris = collect_read_experience_uris(messages, ctx=ctx)
         phase_result = await self._run_trajectory_extract_phase(
@@ -270,7 +279,11 @@ class TrajectoryRolloutAnalyzer:
                 ctx=ctx,
             )
 
-            _ensure_trajectory_case_name(traj_ops, case_name=case_name)
+            _bind_trajectory_cases(
+                traj_ops,
+                case_name=case_name,
+                case_candidates=provider.case_candidates,
+            )
             _apply_trajectory_source_archive_uri(traj_ops, source_archive_uri)
 
             memory_result = MemoryUpdateResult()
@@ -412,16 +425,37 @@ def _evaluation_from_trajectories(trajectories: list[Trajectory]) -> RubricEvalu
     )
 
 
-def _ensure_trajectory_case_name(operations: ResolvedOperations, *, case_name: str) -> None:
-    case_name = str(case_name or "").strip()
-    if not case_name:
-        return
+def _bind_trajectory_cases(
+    operations: ResolvedOperations,
+    *,
+    case_name: str,
+    case_candidates: list[dict[str, Any]],
+) -> None:
+    cases_by_id = {case["id"]: case for case in case_candidates}
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != _TRAJECTORY_MEMORY_TYPE:
             continue
-        fields = getattr(op, "memory_fields", None)
-        if isinstance(fields, dict):
-            fields["case_name"] = case_name
+        fields = op.memory_fields
+        related_ids = fields.pop("related_case_ids", None) or []
+        if not case_candidates:
+            if case_name:
+                fields["case_name"] = case_name
+            continue
+        if len(case_candidates) == 1:
+            related_ids = list(cases_by_id)
+            fields["case_name"] = case_candidates[0]["name"]
+        else:
+            fields.pop("case_name", None)
+        unknown_ids = set(related_ids) - cases_by_id.keys()
+        if unknown_ids:
+            logger.warning("Ignoring unknown trajectory case IDs: %s", sorted(unknown_ids))
+        fields["case_uris"] = list(
+            dict.fromkeys(
+                cases_by_id[case_id]["uri"]
+                for case_id in related_ids
+                if case_id in cases_by_id and cases_by_id[case_id]["uri"]
+            )
+        )
 
 
 def _apply_trajectory_source_archive_uri(

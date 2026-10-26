@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
@@ -127,10 +127,26 @@ export function useVikingFilePreview(
 
 export function useInvalidateVikingFs() {
   const queryClient = useQueryClient()
+  const invalidateAll = useCallback(
+    () =>
+      queryClient.invalidateQueries({
+        predicate: ({ queryKey }) =>
+          queryKey[0] === 'viking-fs-ls' ||
+          queryKey[0] === 'viking-fs-tree' ||
+          queryKey[0] === 'viking-fs-stat',
+      }),
+    [queryClient],
+  )
+  const invalidatePreview = useCallback(
+    (uri?: string) =>
+      queryClient.invalidateQueries({
+        queryKey: uri ? ['viking-file-read', uri] : ['viking-file-read'],
+      }),
+    [queryClient],
+  )
 
   return {
-    invalidateAll: () =>
-      queryClient.invalidateQueries({ queryKey: ['viking-fs'] }),
+    invalidateAll,
     invalidateList: (uri?: string) =>
       queryClient.invalidateQueries({
         queryKey: uri
@@ -143,10 +159,7 @@ export function useInvalidateVikingFs() {
           ? ['viking-fs-tree', normalizeDirUri(uri)]
           : ['viking-fs-tree'],
       }),
-    invalidatePreview: (uri?: string) =>
-      queryClient.invalidateQueries({
-        queryKey: uri ? ['viking-file-read', uri] : ['viking-file-read'],
-      }),
+    invalidatePreview,
   }
 }
 

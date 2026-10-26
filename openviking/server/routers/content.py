@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
-from typing import Literal
+from typing import Literal, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -19,6 +19,7 @@ from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import (
+    get_download_request_context,
     get_request_context,
     require_role,
 )
@@ -50,6 +51,8 @@ class WriteContentRequest(BaseModel):
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
+    # Who made the edit; versions of Compile outputs record it (console edit = manual).
+    edit_source: Literal["manual", "agent", "compile"] = "agent"
 
 
 class BatchWriteOperation(BaseModel):
@@ -81,7 +84,10 @@ class BatchWriteRequest(BaseModel):
     telemetry: TelemetryRequest = False
     # Preserve conflicting target files and return their URI/reason while writing other files.
     skip_conflicts: bool = False
+    # Save content without semantic or vector work; the caller schedules processing.
+    defer_processing: bool = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    edit_source: Literal["manual", "agent", "compile"] = "agent"
 
 
 class SetTagsRequest(BaseModel):
@@ -202,10 +208,20 @@ async def overview(
 
 @router.get("/download")
 async def download(
-    uri: str = Query(..., description="Viking URI"),
-    _ctx: RequestContext = Depends(get_request_context),
+    request: Request,
+    uri: Optional[str] = Query(None, description="Viking URI"),
+    _ctx: RequestContext = Depends(get_download_request_context),
 ):
-    """Download file as raw bytes (for images, binaries, etc.)."""
+    """Download file as raw bytes (for images, binaries, etc.).
+
+    A signed ``?token=`` from the MCP ``download`` tool serves only the URI bound to the
+    token; any ``uri`` query parameter is ignored on that path.
+    """
+    signed_uri = getattr(request.state, "signed_download_uri", None)
+    if signed_uri is not None:
+        uri = signed_uri
+    if not uri:
+        raise HTTPException(status_code=400, detail="uri is required")
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
@@ -255,6 +271,7 @@ async def write(
             tags=request.tags,
             tag_mode=request.tag_mode,
             acl=request.acl,
+            edit_source=request.edit_source,
         ),
     )
     return Response(
@@ -286,7 +303,9 @@ async def batch_write(
             ctx=_ctx,
             wait=request.wait,
             skip_conflicts=request.skip_conflicts,
+            defer_processing=request.defer_processing,
             processing_mode=request.processing_mode,
+            edit_source=request.edit_source,
         ),
     )
     return Response(

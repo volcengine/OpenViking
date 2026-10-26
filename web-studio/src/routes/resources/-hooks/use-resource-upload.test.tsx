@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -8,8 +9,10 @@ import {
   waitFor,
 } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { toast } from 'sonner'
 
 import i18n from '#/i18n'
+import type * as OvClientModule from '#/lib/ov-client'
 import {
   ResourceUploadProvider,
   useResourceUpload,
@@ -20,7 +23,8 @@ const apiMocks = vi.hoisted(() => ({
   postResources: vi.fn(),
 }))
 
-vi.mock('#/lib/ov-client', () => ({
+vi.mock('#/lib/ov-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof OvClientModule>()),
   getOvResult: async (value: unknown) => value,
   getTasks: apiMocks.getTasks,
   isOvClientError: () => false,
@@ -35,6 +39,16 @@ vi.mock('sonner', () => ({
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+})
+
+it('does not load upload tasks when the workbench only supports reads', async () => {
+  render(
+    <ResourceUploadProvider enabled={false}>
+      <span data-testid="read-only" />
+    </ResourceUploadProvider>,
+  )
+  await screen.findByTestId('read-only')
+  expect(apiMocks.getTasks).not.toHaveBeenCalled()
 })
 
 function UploadHarness({
@@ -77,6 +91,60 @@ function UploadHarness({
 }
 
 describe('ResourceUploadProvider remote completion', () => {
+  it.each(['resolve', 'reject'] as const)(
+    'stops remote notifications after unmount when the request later %ss',
+    async (outcome) => {
+      let resolveImport!: (result: { status: string; root_uri: string }) => void
+      let rejectImport!: (error: Error) => void
+      apiMocks.getTasks.mockResolvedValue([])
+      apiMocks.postResources.mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveImport = resolve
+            rejectImport = reject
+          }),
+      )
+      const onAccepted = vi.fn()
+      const onCompleted = vi.fn()
+      const onFailed = vi.fn()
+      const { unmount } = render(
+        <ResourceUploadProvider>
+          <UploadHarness
+            onAccepted={onAccepted}
+            onCompleted={onCompleted}
+            onFailed={onFailed}
+          />
+        </ResourceUploadProvider>,
+      )
+
+      fireEvent.click(screen.getByTestId('start'))
+      await waitFor(() => expect(apiMocks.postResources).toHaveBeenCalledOnce())
+      const signal = apiMocks.postResources.mock.calls[0][0]
+        .signal as AbortSignal
+      expect(signal.aborted).toBe(false)
+      unmount()
+      expect(signal.aborted).toBe(true)
+
+      await act(async () => {
+        if (outcome === 'resolve') {
+          resolveImport({
+            status: 'success',
+            root_uri: 'viking://resources/OpenViking',
+          })
+        } else {
+          rejectImport(new Error('Late import failure'))
+        }
+      })
+
+      expect(onAccepted).not.toHaveBeenCalled()
+      expect(onCompleted).not.toHaveBeenCalled()
+      expect(onFailed).not.toHaveBeenCalled()
+      expect(toast.success).not.toHaveBeenCalled()
+      expect(toast.error).not.toHaveBeenCalled()
+      expect(apiMocks.getTasks).toHaveBeenCalledOnce()
+    },
+  )
+
   it('notifies after submission and again after the background task completes', async () => {
     let taskStatus = 'processing'
     apiMocks.getTasks.mockImplementation(() => [

@@ -1,4 +1,4 @@
-import type * as React from 'react'
+import * as React from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   ArrowRightIcon,
@@ -17,16 +17,23 @@ import {
   CardHeader,
   CardTitle,
 } from '#/components/ui/card'
+import { useAppConnection } from '#/hooks/use-app-connection'
 import { cn } from '#/lib/utils'
 
+import type { IssuedKey, KeyRequest, Upstream } from '../-lib/api'
+import { quickPlan } from '../-lib/quick-start'
 import { NEW_ID } from '../-lib/search'
 import {
+  useConnectionInfo,
   useGateway,
   useKeys,
   useProfiles,
   useUpstreams,
 } from '../-lib/use-gateway'
 import { ManagementUnlockButton } from './access-notices'
+import { KeysIssueDialog } from './keys-issue-dialog'
+import { KeysSecretDialog } from './keys-secret-dialog'
+import { OverviewQuickStart } from './overview-quick-start'
 import { RecommendedProfileButton } from './recommended-profile-button'
 
 type StepState = 'done' | 'current' | 'todo'
@@ -96,17 +103,45 @@ function SetupStep({
   )
 }
 
+type QuickIssued = {
+  issued: IssuedKey
+  profileName?: string
+  upstreams: Upstream[]
+}
+
 /**
  * Checklist from an empty gateway to the first request: add an upstream,
  * create a context profile (one click with recommended settings), issue a
- * key, connect a client. A step is done once its list is non-empty.
+ * key, connect a client. A step is done once its list is non-empty. Before
+ * the first key, quick mode does the first three steps in one click.
  */
 export function OverviewSetup() {
   const { t } = useTranslation('gateway')
-  const { readOnly } = useGateway()
+  const { access, readOnly } = useGateway()
+  const { isGatewayHost } = useAppConnection()
   const upstreams = useUpstreams()
   const profiles = useProfiles()
   const keys = useKeys()
+  const connectionInfo = useConnectionInfo()
+  const plan = quickPlan({
+    keys: keys.data,
+    upstreams: upstreams.data,
+    profiles: profiles.data,
+    access,
+    readOnly,
+    gatewayHost: isGatewayHost,
+  })
+  // Dialogs live here: the quick-mode card goes away once a key exists.
+  const [issueDefaults, setIssueDefaults] = React.useState<KeyRequest | null>(
+    null,
+  )
+  const [issueSession, setIssueSession] = React.useState(0)
+  const [issued, setIssued] = React.useState<QuickIssued | null>(null)
+  const [secretOpen, setSecretOpen] = React.useState(false)
+  const showSecret = (next: QuickIssued) => {
+    setIssued(next)
+    setSecretOpen(true)
+  }
 
   const counts = [upstreams.data, profiles.data, keys.data].map(
     (list) => list?.length,
@@ -122,8 +157,9 @@ export function OverviewSetup() {
         : index === current
           ? 'current'
           : 'todo'
+  // Quick mode, when offered, holds the only primary button.
   const variantOf = (index: number) =>
-    index === current ? 'default' : 'outline'
+    index === current && !plan.shown ? 'default' : 'outline'
   const [upstreamCount = 0, profileCount = 0, keyCount = 0] = counts
   // Upstreams imported from the server's VLM settings carry a `vlm-` id.
   const importedCount =
@@ -167,7 +203,26 @@ export function OverviewSetup() {
           </CardAction>
         ) : null}
       </CardHeader>
-      <CardContent>
+      <CardContent className="grid gap-4">
+        {plan.shown ? (
+          <>
+            <OverviewQuickStart
+              plan={plan}
+              onIssued={(key, profileName, list) =>
+                showSecret({ issued: key, profileName, upstreams: list })
+              }
+              onPickUser={(request) => {
+                setIssueSession((session) => session + 1)
+                setIssueDefaults(request)
+              }}
+            />
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="h-px flex-1 bg-border" />
+              {t('overview.quick.divider')}
+              <span className="h-px flex-1 bg-border" />
+            </div>
+          </>
+        ) : null}
         <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <SetupStep
             number={1}
@@ -334,6 +389,35 @@ export function OverviewSetup() {
           </SetupStep>
         </ol>
       </CardContent>
+      <KeysIssueDialog
+        key={issueSession}
+        open={issueDefaults !== null}
+        onOpenChange={(open) => {
+          if (!open) setIssueDefaults(null)
+        }}
+        profiles={profiles.data ?? []}
+        upstreams={upstreams.data ?? []}
+        defaults={issueDefaults ?? undefined}
+        onIssued={(key) => {
+          setIssueDefaults(null)
+          showSecret({
+            issued: key,
+            profileName: profiles.data?.find(
+              (profile) => profile.id === key.policy_id,
+            )?.name,
+            upstreams: upstreams.data ?? [],
+          })
+        }}
+      />
+      <KeysSecretDialog
+        open={secretOpen}
+        issued={issued?.issued ?? null}
+        baseUrl={connectionInfo.data?.base_url ?? ''}
+        profileName={issued?.profileName}
+        upstreams={issued?.upstreams ?? []}
+        onDone={() => setSecretOpen(false)}
+        onClosed={() => setIssued(null)}
+      />
     </Card>
   )
 }

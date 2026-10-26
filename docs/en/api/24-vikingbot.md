@@ -179,6 +179,67 @@ curl -X POST http://localhost:1933/bot/v1/feedback \
 
 A missing target response returns `404`. Rating feedback without `feedback_score` returns a request validation error.
 
+### interrupt_session()
+
+Interrupt an active or queued Bot session. OpenViking forwards the authenticated
+Account and User identity to the local VikingBot Gateway.
+
+```http
+POST /bot/v1/sessions/{session_id}/interrupt
+```
+
+**HTTP API**
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/sessions/session-id/interrupt \
+  -H "X-API-Key: your-key"
+```
+
+**Response Example**
+
+The response body is forwarded from VikingBot. A typical response is:
+
+```json
+{
+  "interrupted": true
+}
+```
+
+### steer_session()
+
+Append user input to an active streaming Bot session. OpenViking strips any
+client-supplied `openviking_connection` and attaches the authenticated
+OpenViking connection before forwarding the request.
+
+```http
+POST /bot/v1/sessions/{session_id}/steer
+Content-Type: application/json
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `message` | string | Yes | Additional user input for the active session |
+| `openviking_connection` | object | No | Ignored when supplied by the client; OpenViking attaches the authenticated connection |
+
+**HTTP API**
+
+```bash
+curl -X POST http://localhost:1933/bot/v1/sessions/session-id/steer \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"message":"Continue with the next step"}'
+```
+
+**Response Example**
+
+The response body is forwarded from VikingBot. A typical response is:
+
+```json
+{
+  "accepted": true
+}
+```
+
 ## Client Scope
 
 The standard OpenViking Python, TypeScript, and Go SDKs do not currently wrap the Bot proxy. Chat is available through the `ov` CLI and HTTP. The VikingBot Gateway also exposes Session and Channel APIs; see the [VikingBot documentation](https://github.com/volcengine/OpenViking/blob/main/bot/README.md#http-api).

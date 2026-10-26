@@ -16,11 +16,14 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 | **OpenCode** | [OpenCode 插件](./10-opencode.md) — MCP 工具 + 生命周期 hooks，覆盖仓库上下文、自动召回与捕获 |
 | **pi** | [pi Coding Agent 扩展](./11-pi.md) — 原生扩展，自动召回、逐轮捕获、阈值 commit，并把服务端的 MCP 工具注册为 pi 原生工具 |
 | **LangChain / LangGraph** | [LangChain 和 LangGraph](./07-langchain-langgraph.md) — retriever、tools、context backend、store 和 middleware |
+| **VikingBot** | [VikingBot 安装与配置](../guides/17-vikingbot.md) — 内置 Agent，提供 `openviking_rule_search` 规则搜索工具（Beta） |
 | **多个本地开发 Agent / 希望使用桌面界面** | [OpenViking Helper](./14-openviking-helper.md) — 可视化完成 Agent 接入、会话分析和记忆管理 |
 | **任意支持 Agent Plugins 1.0 的客户端** | [Agent Plugins 1.0 插件包](./15-agent-plugins.md) — 一个可移植的包：`openviking-memory` 技能 + OpenViking MCP 工具 |
 | **Manus / Claude Desktop / ChatGPT / 其他 MCP 客户端** | [MCP 客户端](./06-mcp-clients.md) — 任何兼容 MCP 的客户端直接对接内置 `/mcp` 端点 |
 | **聊天客户端 / SDK 与 API 应用 / 其他没有插件的客户端** | [OpenViking 网关](../guides/15-gateway.md) — 能填 Base URL 和 API Key 的客户端都能接入网关，由网关召回记忆、保存对话，客户端里不用装任何东西 |
-| **ZCode / AstrBot / …** | [社区插件](./08-community-plugins.md) — 社区维护的各运行时集成 |
+| **ZCode / CodeBuddy Code / AstrBot / …** | [社区插件](./08-community-plugins.md) — 社区维护的各运行时集成 |
+
+Claude Code、Codex、OpenCode、pi、DSH 等 Agent 既能用自己的插件，也能接入 OpenViking 网关。两者怎么选，见[网关还是插件](../guides/15-gateway.md#gateway-or-plugin)。
 
 ## 横向对比各集成能力
 

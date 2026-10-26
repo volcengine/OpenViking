@@ -6,22 +6,20 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { fetchFsStat } from '#/routes/resources/-lib/api'
 import { parentUri } from '#/lib/viking-uri'
 import { cn } from '#/lib/utils'
-import { fetchCompileSkills } from '../-lib/api'
+import { skillGuide, useCompileSkills } from '../-lib/skills'
 
 export const contextName = (uri: string) =>
   uri.split('/').filter(Boolean).pop() || uri
 
 export function useCompileSkillName() {
-  const { identityScopeKey } = useAppConnection()
-  const { data } = useQuery({
-    queryKey: ['compile-skills', identityScopeKey],
-    queryFn: ({ signal }) => fetchCompileSkills(signal),
-    staleTime: 30_000,
-  })
-  return (uri: string) =>
-    data?.find(
-      (skill) => skill.uri.replace(/\/$/, '') === uri.replace(/\/$/, ''),
-    )?.name || contextName(uri)
+  const { t } = useTranslation('compile')
+  const { data } = useCompileSkills()
+  return (uri: string) => {
+    const skill = data.find(
+      (item) => item.uri.replace(/\/$/, '') === uri.replace(/\/$/, ''),
+    )
+    return skill ? skillGuide(skill, t)?.name || skill.name : contextName(uri)
+  }
 }
 
 export function ContextLink({

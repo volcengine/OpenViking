@@ -133,6 +133,49 @@ describe('MessageList reasoning', () => {
   })
 })
 
+describe('MessageList streaming insert position', () => {
+  it('renders streaming assistant before later user messages', () => {
+    const { container } = render(
+      <MessageList
+        messages={[
+          {
+            id: 'main-input',
+            role: 'user',
+            parts: [{ type: 'text', text: 'A' }],
+            created_at: '2026-09-13T00:00:00Z',
+          },
+          {
+            id: 'accepted-input-b',
+            role: 'user',
+            parts: [{ type: 'text', text: 'B' }],
+            created_at: '2026-09-13T00:00:01Z',
+          },
+          {
+            id: 'accepted-input-c',
+            role: 'user',
+            parts: [{ type: 'text', text: 'C' }],
+            created_at: '2026-09-13T00:00:02Z',
+          },
+        ]}
+        streaming={{
+          iteration: 1,
+          parts: [{ type: 'text', text: 'answer still streaming' }],
+          insertIndex: 1,
+        }}
+      />,
+    )
+
+    const text = container.textContent
+    expect(text.indexOf('A')).toBeLessThan(
+      text.indexOf('answer still streaming'),
+    )
+    expect(text.indexOf('answer still streaming')).toBeLessThan(
+      text.indexOf('B'),
+    )
+    expect(text.indexOf('B')).toBeLessThan(text.indexOf('C'))
+  })
+})
+
 describe('MessageList images', () => {
   it('renders an image using the server message format', () => {
     const { container } = render(

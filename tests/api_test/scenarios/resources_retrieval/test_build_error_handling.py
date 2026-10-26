@@ -131,7 +131,7 @@ class TestBuildErrorHandling:
             cleanup_temp_dir(temp_dir)
 
     def test_error_corrupted_zip(self, api_client):
-        """TC-E16 损坏的ZIP文件：验证伪造 .zip 文件回退或报错且不崩溃"""
+        """TC-E16 损坏的ZIP文件：返回明确的参数错误。"""
         random_id = str(uuid.uuid4())[:8]
 
         temp_dir = tempfile.mkdtemp()
@@ -141,10 +141,11 @@ class TestBuildErrorHandling:
 
         try:
             response = api_client.add_resource(path=zip_path, wait=True)
-            assert response.status_code == 500, f"损坏ZIP应返回 500, 实际: {response.status_code}"
+            assert response.status_code == 400, response.text
 
             data = response.json()
             assert data.get("status") == "error", f"损坏ZIP应返回 error, 实际: {data.get('status')}"
+            assert data["error"]["code"] == "INVALID_ARGUMENT"
 
             print("✓ TC-E16 损坏的ZIP文件处理通过")
         finally:

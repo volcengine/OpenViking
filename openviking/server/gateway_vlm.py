@@ -68,11 +68,22 @@ def vlm_upstreams(config: VLMConfig) -> dict:
         headers = dict(settings.get("extra_headers") or {})
         route = model.lower()
         protocol = "chat"
+        exact = False
         reason = None
         if provider == "openai-codex":
             reason = "openai_codex"
         elif provider == "azure" or (provider == "litellm" and route.startswith("azure/")):
-            reason = "azure"
+            from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
+
+            if provider == "litellm":
+                model = model.split("/", 1)[1]
+                reason = None if base else "litellm_no_api_base"
+            version = settings.get("api_version") or DEFAULT_AZURE_API_VERSION
+            base = (
+                f"{base.rstrip('/')}/openai/deployments/{model}/chat/completions"
+                f"?api-version={version}"
+            )
+            exact = True
         elif provider == "volcengine":
             from openviking.models.vlm.backends.volcengine_vlm import DEFAULT_VOLCENGINE_API_BASE
 
@@ -122,6 +133,8 @@ def vlm_upstreams(config: VLMConfig) -> dict:
                 "api_key": api_key,
                 "headers": headers,
                 "models": [model] if model else [],
+                "append_endpoint_path": not exact,
+                "key_header": "api-key" if exact else "authorization",
                 "vendor": _vendor(base),
                 "coding_plan": bool(re.search(r"(^|/)(coding|plan)(/|$)", urlsplit(base).path)),
             }

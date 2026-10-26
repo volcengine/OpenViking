@@ -15,18 +15,48 @@ export type ResourceRef = {
 }
 
 export type TerminalEntry = {
+  backgroundTaskCompletedBody?: string
+  backgroundTaskNotify?: boolean
+  backgroundTaskFallbackUri?: string
+  backgroundTaskSource?: string
+  createdAt?: number
   compileTaskId?: string
+  resourceTaskId?: string
   compileForm?: boolean
   id: string
   kind: 'command' | 'error' | 'info' | 'success'
   title: string
   body?: string
+  details?: Array<{ label: string; value: string; uri?: string }>
   refs?: ResourceRef[]
 }
 
 export type TerminalCommandGroup = 'core' | 'filesystem' | 'search' | 'status'
 
 export type TerminalCommandParameterKey =
+  | 'compileFrom'
+  | 'compileTo'
+  | 'compileSkill'
+  | 'skillSource'
+  | 'skillScope'
+  | 'skillParent'
+  | 'resourceSource'
+  | 'resourceTo'
+  | 'resourceParent'
+  | 'resourceReason'
+  | 'resourceArgs'
+  | 'writeContent'
+  | 'writeMode'
+  | 'writeWait'
+  | 'nodeLimit'
+  | 'threshold'
+  | 'searchSessionId'
+  | 'pattern'
+  | 'ignoreCase'
+  | 'taskAction'
+  | 'taskId'
+  | 'memoryContent'
+  | 'memorySessionId'
   | 'archiveId'
   | 'contextChars'
   | 'keepRecent'

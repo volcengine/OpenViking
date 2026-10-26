@@ -8,6 +8,7 @@ import httpx
 import requests
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
@@ -112,7 +113,12 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             # Check for business error code
             base_resp = data.get("base_resp", {})
             if base_resp.get("status_code") != 0:
-                raise RuntimeError(f"MiniMax API error: {base_resp.get('status_msg')}")
+                raise ModelError(
+                    ModelErrorKind.UNKNOWN,
+                    f"MiniMax API error: {base_resp.get('status_msg')}",
+                    provider="minimax",
+                    code=str(base_resp.get("status_code")),
+                )
 
             vectors = data.get("vectors", [])
             if not vectors:
@@ -120,6 +126,8 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
             return vectors
 
+        except ModelError:
+            raise
         except requests.exceptions.RequestException as e:
             raise RuntimeError(f"MiniMax network error: {str(e)}") from e
         except Exception as e:
@@ -169,18 +177,26 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
             base_resp = data.get("base_resp", {})
             if base_resp.get("status_code") != 0:
-                raise RuntimeError(f"MiniMax API error: {base_resp.get('status_msg')}")
+                raise ModelError(
+                    ModelErrorKind.UNKNOWN,
+                    f"MiniMax API error: {base_resp.get('status_msg')}",
+                    provider="minimax",
+                    code=str(base_resp.get("status_code")),
+                )
 
             vectors = data.get("vectors", [])
             if not vectors:
                 raise RuntimeError("MiniMax API returned empty vectors")
 
             return vectors
+        except ModelError:
+            raise
         except httpx.HTTPError as e:
             raise RuntimeError(f"MiniMax network error: {str(e)}") from e
         except Exception as e:
             raise RuntimeError(f"MiniMax embedding failed: {str(e)}") from e
 
+    @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text"""
         vectors = self._run_once(
@@ -199,6 +215,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         )
         return result
 
+    @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
             vectors = await self._call_api_async([text], is_query=is_query)

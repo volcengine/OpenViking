@@ -1,6 +1,10 @@
 import pytest
 from vikingbot.openviking_mount.ov_server import VikingClient
 
+from openviking.server.identity import RequestContext, Role
+from openviking.server.routers.sessions import _part_request_to_part
+from openviking_cli.session.user_id import UserIdentifier
+
 TELEGRAM_ALICE_PEER_ID = "ext-dGVsZWdyYW06YWxpY2U"
 
 
@@ -74,6 +78,39 @@ def test_normalize_session_messages_emits_tools_before_final_assistant_text():
         "parts": [{"type": "text", "text": "final answer"}],
         "created_at": "2026-07-13T12:00:00Z",
     }
+
+
+@pytest.mark.parametrize("tool_source", ["tools_used", "agent_turns"])
+@pytest.mark.parametrize(
+    ("role", "user_id"),
+    [
+        (Role.ROOT, "default"),
+        (Role.ROOT, "alice"),
+        (Role.ADMIN, "alice"),
+        (Role.USER, "alice"),
+    ],
+)
+def test_normalized_tool_uri_resolves_for_request_identity(tool_source, role, user_id):
+    client = _client()
+    session_id = "cli__default__scope%3Achat~fad617e2e9b49123"
+    tool = {
+        "tool_call_id": "call-1",
+        "tool_name": "openviking_memory_commit",
+        "args": {},
+        "result": "committed",
+    }
+    message = {"role": "assistant"}
+    if tool_source == "agent_turns":
+        message["agent_turns"] = [{"tool_calls": [tool]}]
+    else:
+        message["tools_used"] = [tool]
+
+    normalized = client._normalize_session_messages([message], session_id=session_id)
+    ctx = RequestContext(user=UserIdentifier(account_id="acct", user_id=user_id), role=role)
+
+    part = _part_request_to_part(normalized[0]["parts"][0], ctx)
+
+    assert part.tool_uri == f"viking://user/{user_id}/sessions/{session_id}/tools/call-1"
 
 
 def test_normalize_session_messages_preserves_assistant_turn_tool_relationship():

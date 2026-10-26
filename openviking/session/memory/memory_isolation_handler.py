@@ -211,6 +211,10 @@ class MemoryIsolationHandler:
         ]
         return list(dict.fromkeys(targets))
 
+    def has_writable_message_target(self) -> bool:
+        """Whether any message in the current window resolves to a writable owner."""
+        return bool(self._target_ids_in_messages())
+
     def _range_is_fully_in_bounds(self, ranges: Any) -> bool:
         parts = str(ranges).split(",")
         if not parts or any(not part.strip() for part in parts):

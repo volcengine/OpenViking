@@ -23,6 +23,7 @@ const activity = {
       shortcut: '⌘ N 新建会话',
     },
     chat: {
+      emptyReadDescription: '当前会话暂无消息。',
       historyLoadFailed: '会话记录加载失败：{{error}}',
       sendFailed: '消息发送失败：{{error}}',
       copy: '复制',
@@ -167,6 +168,7 @@ const activity = {
         agent: 'Agent 的能力、工具和经验',
         user: '用户个性化记忆',
         resources: 'Agent 可引用的外部资源',
+        system: '系统内置资源',
       },
     },
     agent: {
@@ -210,7 +212,7 @@ const activity = {
       noHistory: '暂无命令历史',
       welcomeTitle: '终端已连接文件系统',
       welcomeBody:
-        '可执行 /status、/ls、/search、/read、/add-resource。/search 默认全局检索，可通过 --scope . 使用当前目录，或通过 --scope viking://resources/... 指定目录。',
+        '可执行 /status、/ls、/find、/search、/read、/write、/add-resource。搜索时可用 --uri viking://resources/... 限定目录。',
       scopeLabel: '目录：{{uri}}',
       globalScope: '全局',
       opened: '已打开资源',
@@ -218,9 +220,24 @@ const activity = {
       onlineBody: 'OpenViking API 正常响应，根目录下发现 {{count}} 个节点。',
       lsBody: '{{uri}} 下共展示 {{count}} 个节点。',
       fileEmpty: '文件为空，已在中间预览区打开。',
-      searchUsage: '用法：{{name}} 查询词 [--scope .|viking://resources/...]',
+      searchUsage: '用法：{{name}} 查询词 [--uri viking://resources/...]',
       searchScopeLine: '搜索范围：{{scope}}',
+      patternUsage:
+        '用法：{{name}} <模式> [--uri viking://...] [--node-limit 数量]',
+      patternHits: '在 {{uri}} 中找到 {{count}} 项。',
       helpParameters: '参数',
+      parameterName: '参数',
+      parameterRequired: '必填',
+      parameterDescription: '说明',
+      parameterDefault: '默认值',
+      parameterTypes: {
+        Text: '文本',
+        URI: 'URI',
+        Number: '数字',
+        Boolean: '布尔值',
+      },
+      yes: '是',
+      no: '否',
       helpExamples: '示例',
       helpSubcommands: '子命令',
       noParameters: '无参数',
@@ -228,11 +245,26 @@ const activity = {
       readUsage: '用法：/read viking://resources/...',
       enterUri: '请输入 viking:// URI',
       hits: '命中资源 {{resources}} 条、记忆 {{memories}} 条、技能 {{skills}} 条。',
-      addResourceBody:
-        '已打开添加资源弹窗。提交后左侧目录会刷新，也可以用 /ls 或 /search 继续定位新内容。',
-      addResourceTitle: '添加资源',
+      resourceProcessing: '任务已提交，正在处理。任务 ID：{{taskId}}',
+      resourceCompleted: '导入完成，已打开 {{uri}}。',
+      resourceFailed: '资源导入未成功。',
+      resourceTaskFailed: '导入失败：{{reason}}\n任务 ID：{{taskId}}',
+      backgroundTaskFailed: '任务失败：{{reason}}\n任务 ID：{{taskId}}',
+      resourceStillProcessing:
+        '任务仍在处理，请到任务中心查看。任务 ID：{{taskId}}',
+      viewResourceTask: '查看任务状态',
+      taskCompleted: '任务完成',
+      taskCompletedHint: '任务已完成，可点击查看结果。',
+      viewResult: '查看结果',
+      taskDetails: {
+        taskId: 'Task ID:',
+        rootUri: 'Root URI:',
+        uri: 'URI:',
+        name: 'Name:',
+        auxiliaryFiles: 'Auxiliary files:',
+      },
       sessionUsage:
-        '用法：/session [current|list|create|switch|get|context|messages|archive|commit|extract|message|tool-results|tool-result|tool-search|delete] ...',
+        '用法：/session [current|list|create|switch|get|context|messages|archive|commit|message|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: '用法：/session delete <session_id>',
       sessionMissing:
         '当前没有会话，请先打开 Agent 面板创建会话，或指定 session_id。',
@@ -242,29 +274,62 @@ const activity = {
       sessionSwitchedBody: '已切换到会话：{{id}}',
       sessionDeletedBody: '已删除会话：{{id}}',
       sessionMessageAddedBody: '已向会话 {{id}} 添加消息。',
-      unknownCommand:
-        '未知命令。可用命令：/status、/ls、/search、/find、/read、/session、/add-resource。',
+      unknownCommand: '未知命令。输入 / 可浏览可用命令。',
+      addMemoryUsage: '用法：/add-memory "记忆内容" [--session-id <会话 ID>]',
+      addMemorySubmitted: '会话已提交，记忆正在后台提取。',
+      memoryCompleted: '会话 {{id}} 的后台处理已完成。',
+      skillCompleted: 'Skill 处理完成；可在「技能」页面查看。',
+      addSkillUsage:
+        '用法：/add-skill <Git URL> [-p viking://agent/skills]。本地文件请到「技能」页面上传。',
+      addResourceUsage:
+        '用法：/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>] [--reason <说明>]。可视化上传请点击文件系统上方的「添加资源」。',
+      writeUsage:
+        '用法：/write <URI> --content "文本" [--mode replace|append|create] [--wait]',
+      waitUsage: '用法：/wait（当前开源 API 不接收超时参数）',
+      addSkillSubmitted: 'Skill 已提交处理；可在「技能」页面查看。',
       commandFailed: '命令失败',
       running: '正在执行命令...',
       placeholder: '输入 CLI 命令，例如 /status',
+      inputHint: '输入 / 查看全部指令 · ↑↓ 选择 · Enter 补全',
       suggestionsTitle: '命令建议',
       suggestionsHint: '↑↓ 选择 · Tab 补全 · Enter 执行',
+      paletteGroups: {
+        core: '核心流程',
+        filesystem: '文件系统',
+        search: '搜索与上下文',
+        status: '配置与状态',
+        history: '历史命令',
+        resource: '资源路径',
+        subcommand: '会话命令',
+      },
       quickStart: {
         title: '快速开始',
+        heading: 'OpenViking CLI',
+        description: 'CLI 直接操作上下文',
         addResource: {
           title: '添加资源',
           command: '/add-resource',
           code: '导入文档或文件到 viking://resources',
         },
+        addSkill: {
+          title: '添加 Skill',
+          command: '/add-skill',
+          code: '输入 Git 地址，将 Skill 添加到个人或共享目录',
+        },
         addMemory: {
           title: '添加记忆',
-          command: '通过 Agent 会话提取记忆',
-          code: '在 Agent 面板发送消息，然后提交会话',
+          command: '/add-memory',
+          code: '输入记忆内容；可选指定已有会话 ID',
         },
         find: {
           title: '查找相关上下文',
-          command: '/find openviking 价值',
+          command: 'ov find "OpenViking 有什么价值？"',
           code: '在当前范围内搜索资源、记忆和技能',
+        },
+        compile: {
+          title: '编译素材',
+          command: '/compile',
+          code: '选择素材目录、输出目录和 Skill',
         },
       },
       commandGroups: {
@@ -276,19 +341,109 @@ const activity = {
         history: '历史记录',
       },
       commandParameters: {
+        compileFrom: {
+          name: '--from <素材目录>',
+          description: '必填。需要编译的 viking:// 素材路径，可重复填写。',
+        },
+        compileTo: {
+          name: '--to <输出目录>',
+          description: '必填。编译结果保存到这个 viking:// 目录。',
+        },
+        compileSkill: {
+          name: '--skill <Skill URI>',
+          description: '必填。用于组织素材的已安装 Skill。',
+        },
+        skillSource: {
+          name: '<Git URL>',
+          description:
+            '必填。Git 仓库或含 SKILL.md 的 GitHub 子目录；本地文件请到技能页面上传。',
+        },
+        skillScope: {
+          name: '--scope user|agent',
+          description: '可选。默认添加为个人 Skill；agent 为账号共享 Skill。',
+        },
+        skillParent: {
+          name: '-p <URI>',
+          description: '可选。Skill 的目标根目录，默认 viking://~/skills。',
+        },
+        resourceSource: {
+          name: '<URL>',
+          description: '可选。远程 URL 直接导入；省略则打开本地上传表单。',
+        },
+        resourceTo: {
+          name: '--to <URI>',
+          description: '可选。完整目标 URI；不能与 --parent 同用。',
+        },
+        resourceParent: {
+          name: '--parent <URI>',
+          description: '可选。资源父目录 URI；不能与 --to 同用。',
+        },
+        resourceReason: {
+          name: '--reason <说明>',
+          description: '可选。说明此次导入的用途。',
+        },
+        resourceArgs: {
+          name: '--args <JSON>',
+          description: '可选。解析器参数，例如 Git 的 {"branch":"main"}。',
+        },
+        writeContent: {
+          name: '--content <文本>',
+          description: '必填。写入的文本，包含空格时请用引号包裹。',
+        },
+        writeMode: {
+          name: '--mode <模式>',
+          description: '可选。replace、append 或 create；默认 replace。',
+        },
+        writeWait: {
+          name: '--wait',
+          description: '可选。等待服务端处理完成。',
+        },
+        nodeLimit: {
+          name: '--node-limit <n>',
+          description: '可选。最多返回的结果数，默认 10；模式搜索默认 256。',
+        },
+        threshold: {
+          name: '--threshold <分数>',
+          description: '可选。仅返回达到最低分数的结果。',
+        },
+        searchSessionId: {
+          name: '--session-id <id>',
+          description: '可选。将检索关联到指定会话。',
+        },
+        pattern: {
+          name: '<模式>',
+          description: '必填。grep 搜正文，glob 匹配路径。',
+        },
+        ignoreCase: {
+          name: '-i',
+          description: '可选。grep 匹配时忽略大小写。',
+        },
+        taskAction: {
+          name: 'list|status|cancel',
+          description: '必填。列出编译任务，或查询、取消任务。',
+        },
+        taskId: { name: '<task_id>', description: 'status 和 cancel 必填。' },
+        memoryContent: {
+          name: '<记忆内容>',
+          description: '必填。写入会话的文本；包含空格时请用引号包裹。',
+        },
+        memorySessionId: {
+          name: '--session-id <会话 ID>',
+          description: '可选。指定已有会话；省略时自动新建会话。',
+        },
         query: {
           name: '查询词',
           description: '要检索的关键词或语义问题。',
         },
         scope: {
-          name: '--scope <.|uri>',
+          name: '--uri <.|uri>',
           description:
             '可选。不填则全局搜索；传入 . 使用当前目录，传入 URI 使用指定目录。',
         },
         sessionAction: {
           name: '子命令',
           description:
-            'current、list、create、switch、get、context、messages、archive、commit、extract、message、tool-results、tool-result、tool-search、delete。',
+            'current、list、create、switch、get、context、messages、archive、commit、message、tool-results、tool-result、tool-search、delete。',
         },
         sessionId: {
           name: 'session_id',
@@ -345,6 +500,24 @@ const activity = {
         },
       },
       commandExamples: {
+        compile: {
+          default: {
+            code: '/compile --from viking://resources/source --to viking://resources/output --skill viking://~/skills/daily-report',
+            description: '用已安装的 Skill 编译指定素材目录',
+          },
+        },
+        addSkill: {
+          git: {
+            code: '/add-skill https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/daily-report',
+            description: '从 GitHub 子目录添加个人 Skill',
+          },
+        },
+        addMemory: {
+          default: {
+            code: '/add-memory "需要记住的内容"',
+            description: '新建会话并提取记忆',
+          },
+        },
         status: {
           default: {
             code: '/status',
@@ -367,11 +540,11 @@ const activity = {
             description: '全局语义检索',
           },
           current: {
-            code: '/search agent --scope .',
+            code: '/search agent --uri .',
             description: '使用当前高亮目录',
           },
           scoped: {
-            code: '/search agent --scope viking://resources/',
+            code: '/search agent --uri viking://resources/',
             description: '只在指定目录检索',
           },
         },
@@ -381,11 +554,11 @@ const activity = {
             description: '全局查找相关资源',
           },
           current: {
-            code: '/find agent --scope .',
+            code: '/find agent --uri .',
             description: '使用当前高亮目录',
           },
           scoped: {
-            code: '/find agent --scope viking://resources/',
+            code: '/find agent --uri viking://resources/',
             description: '只在指定目录查找',
           },
         },
@@ -400,6 +573,51 @@ const activity = {
             code: '/add-resource',
             description: '打开添加资源表单',
           },
+          remote: {
+            code: `ov add-resource https://github.com/volcengine/OpenViking --to viking://resources/openviking-repo --args '{"branch":"main"}'`,
+            description: '导入 OpenViking 仓库的 main 分支',
+          },
+        },
+        write: {
+          default: {
+            code: '/write viking://resources/notes.md --content "新内容"',
+            description: '替换文件内容',
+          },
+          append: {
+            code: '/write viking://resources/notes.md --content "补充内容" --append',
+            description: '追加到已有文件',
+          },
+        },
+        grep: {
+          default: {
+            code: '/grep "OpenViking"',
+            description: '在资源正文中查找文字',
+          },
+          scoped: {
+            code: '/grep "OpenViking" --uri viking://resources/',
+            description: '只在指定目录查找文字',
+          },
+        },
+        glob: {
+          default: {
+            code: '/glob "**/*.md"',
+            description: '按路径模式查找 Markdown 文件',
+          },
+          scoped: {
+            code: '/glob "**/*.md" --uri viking://resources/',
+            description: '在指定目录匹配路径',
+          },
+        },
+        task: {
+          list: {
+            code: '/task list --task-type compile',
+            description: '列出编译任务',
+          },
+          status: {
+            code: '/task status <task_id>',
+            description: '查询任务状态',
+          },
+          cancel: { code: '/task cancel <task_id>', description: '取消任务' },
         },
         session: {
           current: {
@@ -437,10 +655,6 @@ const activity = {
           commit: {
             code: '/session commit [session_id] --keep-recent 10',
             description: '归档并触发记忆提取',
-          },
-          extract: {
-            code: '/session extract [session_id]',
-            description: '从会话中提取记忆',
           },
           message: {
             code: '/session message [session_id] user hello',
@@ -522,43 +736,73 @@ const activity = {
         },
         ls: {
           description: '查看已有资源',
-          usage: '/ls [viking://resources/...]',
+          usage: '/ls [<URI>]',
         },
         search: {
           description: '语义检索上下文',
-          usage: '/search 查询词',
+          usage: '/search <查询词> [--uri <URI>] [--node-limit <n>]',
         },
         find: {
           description: '查找相关资源',
-          usage: '/find 查询词',
+          usage: '/find <查询词> [--uri <URI>] [--node-limit <n>]',
         },
         read: {
           description: '读取资源文件',
-          usage: '/read viking://resources/.../file.md',
+          usage: '/read <URI>',
+        },
+        compile: {
+          description: '使用 Skill 编译素材',
+          usage:
+            '/compile --from <素材目录> --to <输出目录> --skill <Skill URI>',
+        },
+        addSkill: {
+          description: '从 Git 地址添加 Skill',
+          usage: '/add-skill <Git URL> [-p <目标根目录>]',
+        },
+        addMemory: {
+          description: '向指定会话写入消息并提取记忆',
+          usage: '/add-memory "记忆内容" [--session-id <会话 ID>]',
         },
         addResource: {
           description: '添加外部资源',
-          usage: '/add-resource',
+          usage:
+            '/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>]',
+        },
+        write: {
+          description: '写入或追加资源文件',
+          usage: '/write <URI> --content <文本> [--mode replace|append|create]',
+        },
+        grep: {
+          description: '按正文模式查找资源',
+          usage: '/grep <模式> [--uri <URI>]',
+        },
+        glob: {
+          description: '按路径模式查找资源',
+          usage: '/glob <模式> [--uri <URI>]',
+        },
+        task: {
+          description: '查看和管理编译任务',
+          usage: '/task <list|status|cancel> [<任务 ID>]',
         },
         session: {
           description: '管理 Agent 会话',
-          usage: '/session 子命令',
+          usage: '/session <子命令>',
         },
         tree: {
           description: '展示目录树',
-          usage: '/tree [viking://resources/...]',
+          usage: '/tree [<URI>]',
         },
         stat: {
           description: '查看资源元信息',
-          usage: '/stat viking://resources/...',
+          usage: '/stat <URI>',
         },
         abstract: {
           description: '读取目录摘要',
-          usage: '/abstract viking://resources/...',
+          usage: '/abstract <URI>',
         },
         overview: {
           description: '读取目录概览',
-          usage: '/overview viking://resources/...',
+          usage: '/overview <URI>',
         },
         health: {
           description: '查看后端健康状态',
@@ -566,7 +810,7 @@ const activity = {
         },
         wait: {
           description: '等待服务就绪',
-          usage: '/wait [--timeout seconds]',
+          usage: '/wait',
         },
       },
     },

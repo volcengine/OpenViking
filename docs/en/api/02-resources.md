@@ -1,6 +1,6 @@
 # Resource Management
 
-Resources are external knowledge that agents can reference. This page covers resource import, scheduled updates, and temporary uploads. For package export and import, see [OVPack](14-ovpack.md).
+Resources are external knowledge that agents can reference. This page covers resource import, scheduled updates, and temporary uploads. See the [data organization guide](../guides/23-data-organize.md) for directory conventions and [OVPack](14-ovpack.md) for package export and import.
 
 ## Core Concepts
 
@@ -622,7 +622,7 @@ task_id      uuid-xxx
 | `errors` | array | List of errors encountered during processing |
 | `warnings` | array | Optional warnings, including partial processing or memory-linking failures |
 | `queue_status` | object | Queue summary when waiting synchronously or reading a completed task result; grouped by queue with `processed`, `requeue_count`, `error_count`, and `errors` |
-| `memory_linking` | object | Optional result of linking the resource URI to memories generated from `reason` |
+| `memory_linking` | object | Optional result of linking the resource URI to memories generated from `reason`. `status="accepted"` means the memory commit is queued, not finished: poll `commit_task_id` via `/api/v1/tasks/{task_id}` for its result |
 
 **Completed add-resource task result**
 

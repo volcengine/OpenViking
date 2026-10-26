@@ -12,9 +12,14 @@ from typing import Optional
 
 from fastapi import Request
 
-from openviking.core.identifiers import validate_account_id, validate_user_id
+from openviking.core.identifiers import (
+    validate_account_id,
+    validate_identifier_length,
+    validate_identifier_part,
+    validate_user_id,
+)
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.api_keys.legacy import validate_file_account_id
+from openviking.server.account_stores.file import validate_file_account_id
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager
@@ -22,6 +27,7 @@ from openviking_cli.exceptions import InvalidArgumentError, UnauthenticatedError
 from openviking_cli.utils import get_logger
 
 _TRUSTED_ROLE_HEADER = "X-OpenViking-Role"
+_TRUSTED_GROUPS_HEADER = "X-OpenViking-Groups"
 _TRUSTED_ASSERTABLE_ROLES = {
     Role.USER: Role.USER,
     Role.ADMIN: Role.ADMIN,
@@ -80,6 +86,24 @@ def _asserted_role_from_header(request: Request, *, allow_assertion: bool) -> Op
     if role not in _TRUSTED_ASSERTABLE_ROLES:
         raise InvalidArgumentError(f"{_TRUSTED_ROLE_HEADER} must be one of: user, admin.")
     return _TRUSTED_ASSERTABLE_ROLES[role]
+
+
+def _group_ids_from_header(request: Request) -> tuple[str, ...]:
+    raw_groups = request.headers.get(_TRUSTED_GROUPS_HEADER)
+    if raw_groups is None:
+        return ()
+    group_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_group_id in raw_groups.split(","):
+        group_id = raw_group_id.strip()
+        if not group_id:
+            continue
+        if error := validate_identifier_part(group_id, "group_id"):
+            raise InvalidArgumentError(error)
+        if group_id not in seen:
+            group_ids.append(group_id)
+            seen.add(group_id)
+    return tuple(group_ids)
 
 
 class TrustedAuthPlugin(AuthPlugin):
@@ -179,6 +203,7 @@ class TrustedAuthPlugin(AuthPlugin):
             role=trusted_role,
             account_id=effective_account_id,
             user_id=effective_user_id,
+            group_ids=_group_ids_from_header(request),
         )
         if (
             self.should_auto_register_trusted_identity(request)
@@ -204,6 +229,7 @@ class TrustedAuthPlugin(AuthPlugin):
             root_key=config.root_api_key,
             viking_fs=service.viking_fs,
             api_key_hashing_enabled=config.api_key_hashing_enabled,
+            service_name=app.state.service_name,
             account_store_provider=config.account_store.provider,
             account_store_params=config.account_store.params,
             account_store_watch_enabled=config.api_key_watch_enabled,
@@ -232,6 +258,8 @@ class TrustedAuthPlugin(AuthPlugin):
                 return
             if await manager.get_user(account_id, user_id) is not None:
                 return
+        if length_error := validate_identifier_length(user_id, "user_id"):
+            raise InvalidArgumentError(length_error)
         if user_id in self._in_flight.get(account_id, set()):
             return
         if user_id in self._pending.get(account_id, set()):

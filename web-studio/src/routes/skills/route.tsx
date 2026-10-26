@@ -6,6 +6,7 @@ import {
   ExternalLinkIcon,
   FileCode2Icon,
   LoaderCircleIcon,
+  PlusIcon,
   RefreshCwIcon,
   SparklesIcon,
   UserRoundIcon,
@@ -36,6 +37,7 @@ import {
   SkillScopeTabs,
   getSkillsForScope,
 } from './-components/skill-scope-tabs'
+import { AddSkillSheet } from './-components/add-skill-sheet'
 import type { SkillScope } from './-components/skill-scope-tabs'
 
 export const Route = createFileRoute('/skills')({
@@ -187,6 +189,7 @@ function SkillsRoute() {
   const [selectedSkill, setSelectedSkill] = React.useState<SkillItem | null>(
     null,
   )
+  const [addOpen, setAddOpen] = React.useState(false)
   const skillsQuery = useQuery({
     queryFn: fetchSkills,
     queryKey: ['skills', identityScopeKey],
@@ -194,6 +197,13 @@ function SkillsRoute() {
   })
   const skills = skillsQuery.data ?? []
   const [activeScope, setActiveScope] = React.useState<SkillScope>('user')
+  const onSkillAdded = React.useCallback(
+    (scope: SkillScope) => {
+      setActiveScope(scope)
+      void skillsQuery.refetch()
+    },
+    [skillsQuery.refetch],
+  )
   const visibleSkills = React.useMemo(
     () => getSkillsForScope(skills, activeScope),
     [activeScope, skills],
@@ -218,18 +228,24 @@ function SkillsRoute() {
             {t('description')}
           </p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={skillsQuery.isFetching}
-          onClick={() => void skillsQuery.refetch()}
-        >
-          <RefreshCwIcon
-            className={skillsQuery.isFetching ? 'animate-spin' : undefined}
-          />
-          {t('refresh')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
+            <PlusIcon />
+            {t('add.title')}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={skillsQuery.isFetching}
+            onClick={() => void skillsQuery.refetch()}
+          >
+            <RefreshCwIcon
+              className={skillsQuery.isFetching ? 'animate-spin' : undefined}
+            />
+            {t('refresh')}
+          </Button>
+        </div>
       </header>
 
       {skillsQuery.isLoading ? (
@@ -273,6 +289,10 @@ function SkillsRoute() {
               {t('emptyDescription')}
             </p>
           </div>
+          <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
+            <PlusIcon />
+            {t('add.title')}
+          </Button>
         </Card>
       ) : (
         <div className="grid gap-4">
@@ -364,6 +384,13 @@ function SkillsRoute() {
           </div>
         </div>
       )}
+
+      <AddSkillSheet
+        key={identityScopeKey}
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onAdded={onSkillAdded}
+      />
 
       <Sheet
         open={Boolean(selectedSkill)}

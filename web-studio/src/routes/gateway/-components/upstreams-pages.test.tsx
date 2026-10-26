@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GatewayError } from '../-lib/api'
 import type * as Api from '../-lib/api'
 import type { GatewayKey, Upstream, UpstreamInput } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import type { Translate } from '../-lib/localize'
 import { UPSTREAM_DEFAULTS } from '../-lib/upstream-schema'
 import { UpstreamEditor } from './upstreams-editor'
@@ -51,6 +52,10 @@ vi.mock('react-i18next', () => ({
   }),
 }))
 vi.mock('sonner', () => ({ toast }))
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
+
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
@@ -200,6 +205,12 @@ const rowOf = (name: string) => {
   return within(row)
 }
 
+/** Hrefs of every link with this text (Base UI gives button links the button role). */
+const hrefsOf = (text: string) =>
+  screen
+    .getAllByText(text)
+    .map((node) => node.closest('a')?.getAttribute('href'))
+
 beforeEach(() => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   for (const fn of [...Object.values(api), ...Object.values(toast)]) {
@@ -253,6 +264,7 @@ describe('UpstreamsPage', () => {
     expect(blocked.getByText('upstreams.credentials.keyMissing')).toBeTruthy()
     expect(blocked.getByText('upstreams.credentials.blocked')).toBeTruthy()
     expect(blocked.getByText('upstreams.notUsed')).toBeTruthy()
+    expect(hrefsOf('docs.link')).toEqual([gatewayDocsUrl('upstreams', 'en')])
   })
 
   it('explains an empty account', async () => {
@@ -324,17 +336,47 @@ describe('UpstreamsPage', () => {
   })
 
   it('shows the test result in the row and blocks tests without a stored key', async () => {
-    api.testUpstream.mockResolvedValue({ ok: true, status: 200 })
+    api.testUpstream.mockImplementation(
+      (_connection, _id, model: string | undefined) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          kind: model ? 'model' : 'connection',
+          reason: 'passed',
+        }),
+    )
+    // Stored before append_endpoint_path existed: the list returns no such field.
+    const { append_endpoint_path: _, ...legacy } = openai
+    api.listUpstreams.mockResolvedValue([legacy as Upstream, claude, ark])
     renderAt('/gateway/upstreams')
     await screen.findByText('OpenAI')
 
     fireEvent.click(
       rowOf('OpenAI').getByRole('button', { name: 'upstreams.test.action' }),
     )
+    await waitFor(() =>
+      expect(api.testUpstream).toHaveBeenCalledWith(expect.anything(), 'u1'),
+    )
+    await screen.findByText('upstreams.test.result.connected')
+    expect(hrefsOf('docs.learnMore')).toEqual([
+      gatewayDocsUrl('testUpstream', 'en'),
+    ])
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'upstreams.test.dialog.run',
+      }),
+    )
+    await waitFor(() =>
+      expect(api.testUpstream).toHaveBeenCalledWith(
+        expect.anything(),
+        'u1',
+        'gpt-5',
+      ),
+    )
     expect(
-      await rowOf('OpenAI').findByText('upstreams.test.result.ok'),
-    ).toBeTruthy()
-    expect(api.testUpstream.mock.lastCall?.[1]).toBe('u1')
+      (await screen.findAllByText('upstreams.test.result.ok')).length,
+    ).toBeGreaterThanOrEqual(1)
+    fireEvent.click(screen.getByRole('button', { name: 'actions.cancel' }))
 
     for (const name of ['Claude', 'Ark']) {
       const button = rowOf(name).getByRole('button', {
@@ -343,6 +385,114 @@ describe('UpstreamsPage', () => {
       expect(button.hasAttribute('disabled')).toBe(true)
     }
   })
+
+  it('tests a model directly on an exact endpoint', async () => {
+    api.testUpstream.mockResolvedValue({
+      ok: true,
+      status: 200,
+      kind: 'model',
+      reason: 'passed',
+    })
+    api.listUpstreams.mockResolvedValue([
+      { ...openai, append_endpoint_path: false },
+    ])
+    renderAt('/gateway/upstreams')
+    await screen.findByText('OpenAI')
+
+    fireEvent.click(
+      rowOf('OpenAI').getByRole('button', { name: 'upstreams.test.action' }),
+    )
+    await screen.findByText('upstreams.test.dialog.exactEndpoint')
+    expect(api.testUpstream).not.toHaveBeenCalled()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'upstreams.test.dialog.run' }),
+    )
+    await waitFor(() =>
+      expect(api.testUpstream).toHaveBeenCalledWith(
+        expect.anything(),
+        'u1',
+        'gpt-5',
+      ),
+    )
+  })
+
+  it('keeps model testing disabled when the connection test fails', async () => {
+    api.testUpstream.mockResolvedValue({
+      ok: false,
+      kind: 'connection',
+      reason: 'upstream_unavailable',
+    })
+    renderAt('/gateway/upstreams')
+    await screen.findByText('OpenAI')
+
+    fireEvent.click(
+      rowOf('OpenAI').getByRole('button', { name: 'upstreams.test.action' }),
+    )
+
+    await screen.findByText('upstreams.test.result.unreachable')
+    expect(
+      screen
+        .getByRole('button', { name: 'upstreams.test.dialog.run' })
+        .hasAttribute('disabled'),
+    ).toBe(true)
+    expect(api.testUpstream).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    [
+      '{"error":{"message":"Invalid API key"}}',
+      { error: { message: 'Invalid API key' } },
+    ],
+    [
+      '<html><head><title>Bad Gateway</title><style>body{color:red}</style></head><body><h1>502 Bad Gateway</h1><p>Upstream unavailable</p><script>alert(1)</script></body></html>',
+      {
+        title: 'Bad Gateway',
+        body: '502 Bad Gateway\nUpstream unavailable',
+      },
+    ],
+    ['upstream connection closed', 'upstream connection closed'],
+  ])(
+    'formats a failed upstream response for display',
+    async (body, readableBody) => {
+      const response = {
+        http_version: 'HTTP/1.1',
+        status: 401,
+        reason: 'Unauthorized',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      }
+      api.testUpstream
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          kind: 'connection',
+          reason: 'passed',
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+          kind: 'model',
+          reason: 'upstream_key_rejected',
+          response,
+        })
+      renderAt('/gateway/upstreams')
+      await screen.findByText('OpenAI')
+
+      fireEvent.click(
+        rowOf('OpenAI').getByRole('button', { name: 'upstreams.test.action' }),
+      )
+      await screen.findByText('upstreams.test.result.connected')
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'upstreams.test.dialog.run',
+        }),
+      )
+
+      const label = await screen.findByText('upstreams.test.dialog.response')
+      const text = label.parentElement?.querySelector('pre')?.textContent ?? ''
+      expect(JSON.parse(text)).toEqual({ ...response, body: readableBody })
+    },
+  )
 
   it('deletes an unused upstream after confirmation', async () => {
     api.deleteUpstream.mockResolvedValue({ deleted: true })
@@ -394,6 +544,12 @@ describe('UpstreamEditor', () => {
     expect(
       screen.getByText('https://api.openai.com/v1/chat/completions'),
     ).toBeTruthy()
+    // One docs link per section, after its description.
+    expect(hrefsOf('docs.learnMore')).toEqual(
+      (['endpoint', 'credentials', 'models', 'routing'] as const).map(
+        (section) => gatewayDocsUrl(section, 'en'),
+      ),
+    )
 
     const save = screen.getByRole('button', { name: 'actions.save' })
     expect(save.hasAttribute('disabled')).toBe(true)
@@ -418,6 +574,23 @@ describe('UpstreamEditor', () => {
     await waitFor(() =>
       expect(router.state.location.pathname).toBe('/gateway/upstreams'),
     )
+  })
+
+  it('can send requests to the exact base URL without a protocol path', async () => {
+    renderAt('/gateway/upstreams/u1')
+    await screen.findByLabelText('upstreams.form.name.label')
+    const toggle = screen.getByRole('switch', {
+      name: 'upstreams.form.appendEndpointPath.label',
+    })
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByText('https://api.openai.com/v1')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'actions.save' }))
+    await waitFor(() => expect(api.saveUpstream).toHaveBeenCalledTimes(1))
+    expect(lastSavedBody().append_endpoint_path).toBe(false)
   })
 
   it('asks for the API key and header values again after the address changes', async () => {
@@ -516,6 +689,50 @@ describe('UpstreamEditor', () => {
       protocol: 'chat',
       enabled: true,
       headers: {},
+    })
+  })
+
+  it('sends the key in the chosen header, or in the URL placeholder', async () => {
+    const azure =
+      'https://res.openai.azure.com/openai/deployments/dep/chat/completions?api-version=2024-10-21'
+    renderAt('/gateway/upstreams/new')
+    await screen.findByText('upstreams.editor.newTitle')
+    fireEvent.change(screen.getByLabelText('upstreams.form.name.label'), {
+      target: { value: 'Azure' },
+    })
+    const keyHeader = screen.getByRole('combobox', {
+      name: 'upstreams.form.keyHeader.label',
+    })
+    fireEvent.change(baseUrlInput(), {
+      target: { value: 'https://proxy.example.com/v1?key={api_key}' },
+    })
+    expect(keyHeader.textContent).toContain('upstreams.form.keyHeader.inUrl')
+    expect(keyHeader.hasAttribute('data-disabled')).toBe(true)
+
+    fireEvent.change(baseUrlInput(), { target: { value: azure } })
+    fireEvent.click(
+      screen.getByRole('switch', {
+        name: 'upstreams.form.appendEndpointPath.label',
+      }),
+    )
+    fireEvent.change(
+      screen.getByLabelText('upstreams.form.apiKey.label', { exact: false }),
+      { target: { value: 'azure-key' } },
+    )
+    fireEvent.click(keyHeader)
+    const option = await screen.findByRole('option', {
+      name: 'upstreams.form.keyHeader.apiKey',
+    })
+    fireEvent.mouseMove(option)
+    fireEvent.click(option)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'upstreams.editor.create' }),
+    )
+    await waitFor(() => expect(api.saveUpstream).toHaveBeenCalledTimes(1))
+    expect(lastSavedBody()).toMatchObject({
+      base_url: azure,
+      append_endpoint_path: false,
+      key_header: 'api-key',
     })
   })
 
@@ -738,17 +955,46 @@ describe('describeTest', () => {
 
   it.each([
     [{ ok: true, status: 200 }, 'success', 'upstreams.test.explain.ok'],
-    [{ ok: false, status: 401 }, 'danger', 'upstreams.test.explain.auth'],
-    [{ ok: true, status: 404 }, 'neutral', 'upstreams.test.explain.notFound'],
     [
-      { ok: true, status: 405, reason: 'models_unavailable' },
-      'neutral',
-      'upstreams.test.explain.notFound',
+      {
+        ok: true,
+        status: 200,
+        kind: 'connection' as const,
+        reason: 'passed',
+      },
+      'success',
+      'upstreams.test.explain.connected',
     ],
     [
-      { ok: true, status: 429, reason: 'rate_limited' },
+      {
+        ok: true,
+        status: 404,
+        kind: 'connection' as const,
+        reason: 'models_unavailable',
+      },
+      'neutral',
+      'upstreams.test.explain.connectionUnverified',
+    ],
+    [{ ok: false, status: 401 }, 'danger', 'upstreams.test.explain.auth'],
+    [
+      { ok: false, status: 429, reason: 'rate_limited' },
       'neutral',
       'upstreams.test.explain.rateLimited',
+    ],
+    [
+      {
+        ok: false,
+        status: 404,
+        reason: 'model_request_rejected',
+        model: 'missing',
+      },
+      'danger',
+      'upstreams.test.explain.requestRejected',
+    ],
+    [
+      { ok: false, status: 200, reason: 'invalid_response' },
+      'danger',
+      'upstreams.test.explain.invalidResponse',
     ],
     [
       { ok: false, status: 200, reason: 'upstream_key_rejected' },
@@ -801,13 +1047,8 @@ describe('upstream access and import', () => {
     })
   }
 
-  it('shows read-only list details and retains connection testing', async () => {
+  it('shows read-only list details without write actions or model tests', async () => {
     readOnly()
-    api.testUpstream.mockResolvedValue({
-      ok: true,
-      status: 404,
-      reason: 'models_unavailable',
-    })
     renderAt('/gateway/upstreams')
     await screen.findByText('OpenAI')
     expect(screen.queryByText('upstreams.add')).toBeNull()
@@ -818,12 +1059,11 @@ describe('upstream access and import', () => {
     expect(toggle.hasAttribute('data-disabled')).toBe(true)
     fireEvent.click(toggle)
     expect(api.saveUpstream).not.toHaveBeenCalled()
-    fireEvent.click(
-      rowOf('OpenAI').getByRole('button', { name: 'upstreams.test.action' }),
-    )
     expect(
-      await screen.findByText('upstreams.test.result.unverified'),
-    ).toBeTruthy()
+      rowOf('OpenAI').queryByRole('button', {
+        name: 'upstreams.test.action',
+      }),
+    ).toBeNull()
   })
 
   it('disables read-only editor controls, hides credentials, and tests outside the fieldset', async () => {
@@ -860,12 +1100,12 @@ describe('upstream access and import', () => {
       screen.getByLabelText<HTMLInputElement>('upstreams.form.name.label')
         .disabled,
     ).toBe(true)
-    const test = screen.getByRole('button', {
-      name: 'upstreams.test.connection',
-    })
-    expect(test.closest('fieldset')).toBeNull()
-    fireEvent.click(test)
-    await waitFor(() => expect(api.testUpstream).toHaveBeenCalledTimes(1))
+    expect(
+      screen.queryByRole('button', {
+        name: 'upstreams.test.connection',
+      }),
+    ).toBeNull()
+    expect(api.testUpstream).not.toHaveBeenCalled()
   })
 
   it('blocks the direct create URL for read-only users', async () => {
@@ -914,7 +1154,6 @@ describe('upstream access and import', () => {
       needs_confirmation: [{ id: 'vlm-coding', name: 'Coding account' }],
       skipped: [
         { id: 'oauth', reason: 'openai_codex' },
-        { id: 'azure', reason: 'azure' },
         { id: 'lite', reason: 'litellm_no_api_base' },
       ],
     })
@@ -932,12 +1171,13 @@ describe('upstream access and import', () => {
       screen.getByText('oauth: upstreams.import.reasons.openai_codex'),
     ).toBeTruthy()
     expect(
-      screen.getByText('azure: upstreams.import.reasons.azure'),
-    ).toBeTruthy()
-    expect(
       screen.getByText('lite: upstreams.import.reasons.litellm_no_api_base'),
     ).toBeTruthy()
     expect(screen.getByText('upstreams.import.repeat')).toBeTruthy()
+    // Skipped credentials link the import docs.
+    expect(hrefsOf('docs.learnMore')).toEqual([
+      gatewayDocsUrl('importModels', 'en'),
+    ])
     fireEvent.click(
       screen.getByRole('button', { name: 'upstreams.import.dismiss' }),
     )

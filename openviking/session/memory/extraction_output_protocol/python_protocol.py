@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 from typing import Any, get_args, get_origin
 
 from openviking.core.peer_id import safe_peer_id
-from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
+from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
+from openviking.session.memory.extraction_output_protocol import prompt_fragments as prompts
 from openviking.session.memory.extraction_output_protocol.base import (
     ExtractionOutputContext,
     ExtractionOutputProtocol,
@@ -71,68 +72,6 @@ _SAFE_STRING_METHODS = {
 # applied to the would-be result size before any allocation.
 _MAX_EXPRESSION_SIZE = 1_000_000
 _REPEATABLE_SEQUENCES = (str, bytes, list, tuple)
-_CONTRACT_PREAMBLE = (
-    "## Output Format: restricted Python memory SDK",
-    "Return only Python code, optionally wrapped in one ```python code fence.",
-    "The code is interpreted as a restricted DSL and cannot access Python modules, files, or the network.",
-    "The SDK is write-only. To inspect memories, call the native search/read tools before returning the program; never emit sdk.search(), sdk.read(), or sdk.existing() (only the system binds existing objects).",
-    "Never return memory content as bare Markdown; all changes must be arguments to SDK calls.",
-    "Existing objects shown by the system may use obj.update(field=value, ...) to set complete "
-    "scalar/immutable fields, obj.delete(replacement=None),",
-    "and, when links are enabled, obj.link(target, link_type='related_to', weight=0.5, match_text=None, description='').",
-    "To change an existing string field, edit it through the object's field attribute. Use the "
-    "real field name (e.g. content), NOT the literal word 'field':",
-    "  - obj.content.update(new_value): replace the whole field with a complete new string.",
-    "  - obj.content.edit(search=..., replace=...): replace one exact snippet in an editable string (merge_op=patch).",
-    "  - obj.content.drop(text=...): delete one exact snippet in an editable string (merge_op=patch).",
-    "edit()/drop() may be chained, e.g. obj.content.edit(search='a', replace='b').drop(text='c'); do not mix them with .update() in one chain.",
-    "A field attribute is a write handle only; you cannot read it as a string or call str methods on it.",
-    "Each search= (and drop text=) MUST be copied verbatim from the current field value shown in the object's sdk.existing(...) binding, and must occur exactly once. If the snippet appears more than once, include an adjacent unique line just before or after it so the match is unique. Never use text from the conversation or the new facts you intend to add as a search anchor; that text is not in the current content and the edit will fail.",
-    "edit()/drop() only work on an existing memory's editable string field (merge_op=patch); new memories from create/set must be given complete field values.",
-    "For existing editable strings (merge_op=patch), prefer the smallest unique edit()/drop(). Do not rewrite the entire field just to add or change a few facts; large full-content rewrites are more likely to be truncated or malformed. Use obj.content.update() only when most of such an editable string changes. For string fields marked [replace], always pass the complete new value to obj.content.update(), even for a small change; edit()/drop() are unavailable.",
-    'ALWAYS use a triple-quoted string ("""...""") for EVERY natural-language argument '
-    "(content, summary, goal, and every search=/replace=/text= snippet), even one-liners. "
-    "Prose frequently contains apostrophes (e.g. Evan's), quotes, colons, or dates that break "
-    'single- or double-quoted literals. Inside triple quotes, escape any literal """ and '
-    "backslash; never put a real newline inside a single- or double-quoted string.",
-    "Only keyword arguments are accepted by create, set, and obj.update(); a field's update() takes one positional string.",
-    "You may end the program with sdk.commit(); when present it must be the final call. If there are no changes, return only sdk.commit().",
-    "Use the system-provided existing-object variable names exactly as shown. When a newly "
-    "created memory must be referenced by delete(replacement=...) or link(...), assign the "
-    "create call to a variable first, for example: canonical = sdk.create_<type>(...); "
-    "duplicate_1.delete(replacement=canonical). Never recreate or rebind an existing object "
-    "with sdk.existing().",
-    "",
-    "Available write methods for this extraction:",
-)
-
-_LINK_RULES = (
-    "",
-    "## Link Rules",
-    "- Create links between memories when they have a meaningful and clear relationship "
-    "(e.g. an event mentioning a person/entity, a preference about a place/activity). "
-    "Do NOT force links between unrelated items.",
-    "- Use obj.link(target, link_type='related_to', match_text='<word>') as a standalone "
-    "statement after both objects exist.",
-    "- match_text must be a single exact word that appears in the source object's content. "
-    "It is where the link anchor is inserted. Choose the most specific identifying word "
-    "(e.g. a person's name, a place, an activity).",
-    "- link_type uses lowercase snake_case: related_to (default), belongs_to, "
-    "derived_from, caused_by, contradicts, evolved_from.",
-    "- For a newly created object, assign the create/set call to a variable first, then "
-    "call .link() on it (see the preamble); existing objects use their provided variable names.",
-    "- Links are optional; only create them when the relationship is explicit in the "
-    "conversation. Do not link every memory to every other memory.",
-    "",
-    "Example — linking a newly created memory to another new one and to an existing binding "
-    "(replace create_<type>/fields with methods and fields from the contract above):",
-    "```python",
-    "obj_a = sdk.create_<type_a>(...)  # a new memory, assigned to a variable",
-    "obj_b = sdk.create_<type_b>(...)  # another new memory",
-    'obj_a.link(obj_b, link_type="related_to", match_text="<word_in_obj_a>")',
-    'obj_a.link(existing_1, link_type="related_to", match_text="<word_in_obj_a>")',
-    "```",
-)
 
 
 @dataclass(slots=True)
@@ -171,17 +110,48 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         self._type_counts: dict[str, int] = {}
         self._context_counts: dict[str, int] = {}
         self._last_error_allows_tool_retry = False
+        self._inspection_tools: tuple[str, ...] = ()
+        self._supports_string_patch = False
+
+    def _capture_prompt_capabilities(self, context: ExtractionOutputContext) -> None:
+        """Keep retry guidance aligned even when parse runs without render_contract."""
+        self._inspection_tools = context.inspection_tools
+        self._supports_string_patch = context.supports_string_patch
 
     def render_contract(self, context: ExtractionOutputContext) -> str:
         _validate_alias_uniqueness(context.schemas)
-        lines = list(_CONTRACT_PREAMBLE)
-        for schema in context.schemas:
-            lines.extend(self._render_schema_contract(context, schema))
-        if not context.link_enabled:
-            lines.append("Links are disabled; obj.link(...) is unavailable.")
-        else:
-            lines.extend(_LINK_RULES)
-        return "\n".join(lines)
+        self._capture_prompt_capabilities(context)
+        schema_rules = (
+            line
+            for schema in context.schemas
+            for line in self._render_schema_contract(context, schema)
+        )
+        link_rules = (
+            prompts.PYTHON_LINK_RULES if context.link_enabled else prompts.PYTHON_LINKS_DISABLED
+        )
+        return "\n".join((*self._render_contract_preamble(context), *schema_rules, *link_rules))
+
+    @staticmethod
+    def _render_contract_preamble(context: ExtractionOutputContext) -> tuple[str, ...]:
+        if context.add_only:
+            return prompts.PYTHON_ADD_ONLY_PREAMBLE
+        inspection_rules = PythonExtractionOutputProtocol._render_inspection_rules(context)
+        patch_rules = prompts.PYTHON_PATCH_RULES if context.supports_string_patch else ()
+        return (
+            *prompts.PYTHON_UPSERT_PREAMBLE,
+            *inspection_rules,
+            *patch_rules,
+            *prompts.PYTHON_UPSERT_FOOTER,
+        )
+
+    @staticmethod
+    def _render_inspection_rules(context: ExtractionOutputContext) -> tuple[str, ...]:
+        if not context.inspection_tools:
+            return ()
+        return (
+            f"To inspect memories, call the available native {'/'.join(context.inspection_tools)} "
+            "tool before returning the program.",
+        )
 
     def _render_schema_contract(
         self, context: ExtractionOutputContext, schema: MemoryTypeSchema
@@ -202,6 +172,11 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             f"  - Identity fields (primary key): {identity_label}. Calls with identical "
             "identity field values address the same memory object.",
         ]
+        for memory_field in schema.fields:
+            if not memory_field.required:
+                lines.append(
+                    f"  - {_identifier_alias(memory_field.name)} is optional; may be omitted."
+                )
         operation_field = context.operations_model.model_fields.get(schema.memory_type)
         schema_description = getattr(operation_field, "description", None)
         if schema_description:
@@ -211,14 +186,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             lines.append("  - Memory type rules:\n" + str(schema_description).strip())
         if verb == "set":
             lines.extend(self._render_singleton_rules(context, schema, identity_fields))
-        merge_ops = {
-            field.name: (
-                "editable string: obj.field.edit/drop/update"
-                if field.merge_op == MergeOp.PATCH and field.field_type == FieldType.STRING
-                else field.merge_op.value
-            )
-            for field in schema.fields
-        }
+        merge_ops = {field.name: _field_write_mode(schema, field) for field in schema.fields}
         schema_fields = {field.name: field for field in schema.fields}
         for name, _type_name, description in fields:
             if name in merge_ops:
@@ -243,56 +211,69 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         identity_fields: tuple[str, ...],
     ) -> list[str]:
         type_alias = _identifier_alias(schema.memory_type)
-        lines = [
+        singleton_rule = (
             f"  - {type_alias} is a SINGLETON per identity: sdk.create_{type_alias}() "
             f"does not exist, and sdk.set_{type_alias}() must appear AT MOST ONCE for each "
             "identity in the whole program. Never call it twice for the same identity (e.g. the same "
             "peer_id). If several people or sections belong to one identity, put them all as separate "
             "H1 sections inside a SINGLE content argument of one call — different headings or person "
-            "names do NOT create separate identities. To change an already-shown existing object, "
-            "edit that object instead of calling set again."
+            "names do NOT create separate identities."
+        )
+        update_rule = (
+            "" if schema.operation_mode == "add_only" else prompts.PYTHON_SINGLETON_UPDATE_RULE
+        )
+        identity_rules = PythonExtractionOutputProtocol._render_singleton_identity_rules(
+            context, type_alias, identity_fields
+        )
+        return [f"{singleton_rule}{update_rule}", *identity_rules]
+
+    @staticmethod
+    def _render_singleton_identity_rules(
+        context: ExtractionOutputContext, type_alias: str, identity_fields: tuple[str, ...]
+    ) -> list[str]:
+        scope = context.role_scope
+        if scope is None or "peer_id" not in identity_fields:
+            return []
+        self_rules = (
+            [
+                f"  - Current self identity: exactly one sdk.set_{type_alias}() call "
+                "without peer_id; combine all content sections into its single content argument."
+            ]
+            if scope.user_ids
+            else []
+        )
+        peer_rules = [
+            f"  - Current identity peer_id={peer_id!r}: exactly one "
+            f"sdk.set_{type_alias}(peer_id={peer_id!r}, ...) call; combine every "
+            "person and section for this peer_id into that one content argument."
+            for peer_id in scope.peer_ids
         ]
-        if "peer_id" in identity_fields and context.role_scope is not None:
-            if context.role_scope.user_ids:
-                lines.append(
-                    f"  - Current self identity: exactly one sdk.set_{type_alias}() call "
-                    "without peer_id; combine all content sections into its single content argument."
-                )
-            for peer_id in context.role_scope.peer_ids:
-                lines.append(
-                    f"  - Current identity peer_id={peer_id!r}: exactly one "
-                    f"sdk.set_{type_alias}(peer_id={peer_id!r}, ...) call; combine every "
-                    "person and section for this peer_id into that one content argument."
-                )
-        return lines
+        return [*self_rules, *peer_rules]
 
     def render_reference_rules(self, context: ExtractionOutputContext) -> str:
-        del context
-        return """
-## Memory Object Rules
-- Update or delete an existing memory only through its system-provided bound object; never pass or construct a URI.
-- Create collection memories with listed sdk.create_<memory_type>(...) methods.
-- Set a single-file memory with its listed sdk.set_<memory_type>(...) method; each target scope has only one such object.
-- Existing-object immutable fields are preserved by the system. URI identity fields may be
-  updated when their schema allows it; changing one renames the memory object.
-- If a rename target already exists, do not rename over it. Read both objects, update the
-  canonical target with every distinct fact, then delete the source with replacement=target.
-- delete() removes the whole object; use obj.content.drop(text=...) (with the real field name) when only some content must go and the rest stays.
-- For canonical merges, use duplicate.delete(replacement=canonical); for pure deletes, call delete() without replacement.
-- delete(replacement=canonical) discards the duplicate's content entirely and keeps only the canonical. Before deleting a duplicate, first fold every distinct valid fact it holds into the canonical (e.g. canonical.content.edit(...)); merging or compacting must never drop a unique fact that only the duplicate recorded.
-"""
+        if context.add_only:
+            return prompts.PYTHON_ADD_ONLY_REFERENCE_RULES
+        removal_rule = (
+            prompts.PYTHON_PATCH_REMOVAL_RULE
+            if context.supports_string_patch
+            else prompts.PYTHON_FULL_REMOVAL_RULE
+        )
+        return "".join((prompts.PYTHON_UPSERT_REFERENCE_RULES, removal_rule))
 
     def parse(
         self, content: str, context: ExtractionOutputContext
     ) -> tuple[Any | None, str | None]:
         self._last_error_allows_tool_retry = False
+        self._capture_prompt_capabilities(context)
         try:
             code = _extract_python_code(content)
             compiler = _PythonProgramCompiler(context=context, protocol=self)
             operations = compiler.compile(code)
             return operations, None
         except ExtractionOutputProtocolError as exc:
-            self._last_error_allows_tool_retry = exc.allow_tool_retry
+            self._last_error_allows_tool_retry = exc.allow_tool_retry and bool(
+                self._inspection_tools
+            )
             return None, str(exc)
         except Exception as exc:
             return None, str(exc)
@@ -312,22 +293,29 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         quote_guidance = ""
         if error and "sdk.existing() is reserved" in error:
             binding_guidance = (
-                " Use the existing-object variable names already supplied by the system; do not "
-                "emit sdk.existing(). If a new object is the replacement, assign its create call "
+                " Use the object_name from the system-provided existing-memory context record "
+                "as an already-bound variable; do not declare it or emit sdk.existing(). "
+                "If a new object is the replacement, assign its create call "
                 "first, for example `canonical = sdk.create_<type>(...)`, then call "
                 "`duplicate_1.delete(replacement=canonical)`."
             )
         if error and _is_string_literal_syntax_error(error):
+            argument_examples = (
+                "content, summary, goal, and every search=/replace=/text= snippet"
+                if self._supports_string_patch
+                else "content, summary, goal"
+            )
             quote_guidance = (
                 " If the error is about a string literal, the offending line is shown above; a "
                 "quote or newline inside prose likely ended the string early. Rewrite every "
-                "natural-language argument (content, summary, goal, and every search=/replace=/"
-                'text= snippet) as a triple-quoted string ("""...""") so embedded quotes and '
+                f"natural-language argument ({argument_examples}) as a triple-quoted string "
+                '("""...""") so embedded quotes and '
                 "newlines stay inside the literal."
             )
         if self.keep_tools_enabled_after_parse_error(error):
             tool_guidance = (
-                " The memory SDK is write-only. Call the available native search/read tool now; "
+                " The memory SDK is write-only. Call the available native "
+                f"{'/'.join(self._inspection_tools)} tool now; "
                 "after its result is returned, update the system-provided object variable. "
                 "Do not emit sdk.search(), sdk.read(), or construct a memory URI in Python."
             )
@@ -355,11 +343,14 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         return (
             "An obj.field.edit()/drop() change could not be applied to the target memory object. "
             "The search= (and drop text=) must be copied verbatim from the current field value shown "
-            "in that object's sdk.existing(...) binding, and must occur exactly once. If it occurs "
+            "in that object's existing-memory context record, and must occur exactly once. "
+            "Decode JSON string escapes when copying the text. If it occurs "
             "more than once, include enough contiguous surrounding context to make it unique. Do not "
             "use text from the conversation or the new facts you intend to add as a search anchor. "
             "If you copy from numbered read output, exclude the `line_number<TAB>` prefix. If the "
             "change is too broad for a clean snippet, use obj.field.update(complete_new_value) instead. "
+            "For fields marked [replace], use obj.field.update(complete_new_value), including "
+            "all unchanged text. "
             "Regenerate the complete restricted Python SDK program, including previous successful "
             "operations and fixed failed operations. Output only Python code."
             "\n\nFailed edits:\n" + details
@@ -486,10 +477,9 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
     def _render_search_comment(
         context: ExtractionOutputContext, params: dict[str, Any], result: Any
     ) -> str:
-        # Search only returns URIs (no content), so it cannot become an
-        # sdk.existing() binding. Files actually read are bound separately as
-        # sdk.existing(); how to reach the rest depends on whether a read tool
-        # is available this run.
+        # Search only returns URIs, so it cannot register existing objects.
+        # Files actually read receive context records with bound object names;
+        # how to reach the rest depends on whether a read tool is available.
         uris = _search_result_uris(result)
         query = params.get("query")
         query_label = f" query={query!r}" if query else ""
@@ -500,7 +490,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             guidance = "read them with the read tool before updating them"
         else:
             guidance = (
-                "any you need to edit are already provided as sdk.existing bindings; "
+                "any you need to edit are already provided as existing-memory context records; "
                 "there is no read tool, so treat anything not shown above as new"
             )
         return f"# Search{query_label} found the following memory files; {guidance}:\n{listing}"
@@ -540,11 +530,15 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         content = fields.get("content")
         if isinstance(content, str) and every_line_has_line_numbers(content):
             fields["content"] = strip_line_numbers(content)
-        args = [f"memory_type={memory_type!r}"]
-        args.extend(f"{_identifier_alias(key)}={value!r}" for key, value in fields.items())
+        record = {
+            "object_name": name,
+            "memory_type": memory_type,
+            "fields": {_identifier_alias(key): value for key, value in fields.items()},
+        }
         binding = (
-            f"# Existing memory loaded by {source}; this binding is system-provided.\n"
-            f"{name} = sdk.existing({', '.join(args)})"
+            f"# Existing memory loaded by {source}; {name} is already bound. "
+            "Context data only; do not output this record.\n"
+            + json.dumps(record, ensure_ascii=False, indent=2)
         )
         if maintenance_notice is not None:
             binding += "\n# Memory maintenance notice: " + json.dumps(
@@ -926,7 +920,9 @@ class _PythonProgramCompiler:
                     f"field edits (obj.field.edit/drop) cannot be used when {action} a memory; "
                     "pass the complete field value",
                 )
-            missing_fields = [field.name for field in schema.fields if field.name not in kwargs]
+            missing_fields = [
+                field.name for field in schema.fields if field.required and field.name not in kwargs
+            ]
             if missing_fields:
                 self._error(
                     node,
@@ -1121,10 +1117,9 @@ class _PythonProgramCompiler:
             # Preserve established values, but allow filling a blank template field.
             return
         if handle.full_value is not _UNSET:
-            owner.fields[name] = handle.full_value
-            owner.changed_fields[name] = handle.full_value
+            self._set_changed_field(owner, name, handle.full_value, node)
             return
-        # Local edit chain: only valid for existing PATCH string fields.
+        # Replace strings still advertise update(), but accept an explicit edit at runtime.
         if not owner.existing:
             self._error(
                 node,
@@ -1132,18 +1127,14 @@ class _PythonProgramCompiler:
                 "this program has no prior content — pass the complete value to field.update()",
             )
         if field_schema is None or not (
-            field_schema.merge_op == MergeOp.PATCH and field_schema.field_type == FieldType.STRING
+            field_schema.merge_op in {MergeOp.PATCH, MergeOp.REPLACE}
+            and field_schema.field_type == FieldType.STRING
         ):
-            guidance = "edit()/drop() require an editable string (merge_op=patch)"
-            if field_schema is not None and (
-                field_schema.merge_op == MergeOp.REPLACE
-                and field_schema.field_type == FieldType.STRING
-            ):
-                guidance = (
-                    "merge_op=replace requires the complete new value, including unchanged text; "
-                    f'use `{owner.name}.{_identifier_alias(name)}.update("""complete new value""")`'
-                )
-            self._error(node, f"field {name!r} does not support edit()/drop(): {guidance}")
+            self._error(
+                node,
+                f"field {name!r} does not support edit()/drop(): "
+                "edit()/drop() require a string with merge_op=patch or replace",
+            )
         # Do NOT apply here. Store the edits as a StrPatch so python mode flows through
         # the same resolve_operations -> _validate_patch_operations -> patch-repair path
         # as json mode: a failed snippet is isolated to its own operation and gets the
@@ -1152,8 +1143,34 @@ class _PythonProgramCompiler:
         existing = owner.changed_fields.get(name)
         prior_blocks = existing.blocks if isinstance(existing, StrPatch) else []
         patch = StrPatch(blocks=[*prior_blocks, *handle.blocks])
-        owner.fields[name] = patch
-        owner.changed_fields[name] = patch
+        self._set_changed_field(owner, name, patch, node)
+
+    def _set_changed_field(
+        self, owner: _MemoryObject, name: str, value: Any, node: ast.AST
+    ) -> None:
+        field_schema = next(
+            (item for item in self.schemas[owner.memory_type].fields if item.name == name), None
+        )
+        previous = owner.changed_fields.get(name)
+        if (
+            owner.existing
+            and field_schema is not None
+            and field_schema.merge_op == MergeOp.REPLACE
+            and field_schema.field_type == FieldType.STRING
+            and (
+                isinstance(previous, str)
+                and isinstance(value, (StrPatch, dict))
+                or isinstance(previous, (StrPatch, dict))
+                and isinstance(value, str)
+            )
+        ):
+            self._error(
+                node,
+                f"replace field {name!r} cannot mix complete values and patches in one program; "
+                "use complete update() values or only edit()/drop() patches",
+            )
+        owner.fields[name] = value
+        owner.changed_fields[name] = value
 
     def _eval_keywords(
         self,
@@ -1207,8 +1224,7 @@ class _PythonProgramCompiler:
                 owner.changed_fields[name] = previous_delta + changes[name]
                 owner.fields[name] = value
                 continue
-            owner.fields[name] = value
-            owner.changed_fields[name] = value
+            self._set_changed_field(owner, name, value, node)
 
     def _build_operations(self) -> Any:
         payload: dict[str, Any] = {name: [] for name in self.context.operations_model.model_fields}
@@ -1578,12 +1594,23 @@ def _visible_memory_fields(
     return fields
 
 
+def _field_write_mode(schema: MemoryTypeSchema, memory_field: MemoryField) -> str:
+    """Describe only the string operations available for this schema field."""
+    if memory_field.field_type == FieldType.STRING:
+        if schema.operation_mode == "add_only":
+            return "complete string"
+        if memory_field.merge_op == MergeOp.PATCH:
+            return "editable string: obj.field.edit/drop/update"
+    return memory_field.merge_op.value
+
+
 def _field_type_name(field_type: FieldType) -> str:
     return {
         FieldType.STRING: "str",
         FieldType.INT64: "int",
         FieldType.FLOAT32: "float",
         FieldType.BOOL: "bool",
+        FieldType.STRING_LIST: "list[str]",
     }.get(field_type, "object")
 
 

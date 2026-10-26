@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import re
+
 from openviking.metrics.datasources.telemetry_bridge import TelemetryBridgeEventDataSource
 from openviking.metrics.global_api import init_metrics_from_server_config, shutdown_metrics
 from openviking.observability.events import try_publish_event
@@ -24,7 +26,8 @@ def test_queue_duration_event_is_wired_to_metrics_registry(registry, render_prom
             },
         )
         text = render_prometheus(registry)
-        labels = 'outcome="success",queue="SessionCommit"'
+        schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
+        labels = f'bucket_schema="{schema}",outcome="success",queue="SessionCommit"'
         assert f"openviking_queue_process_duration_seconds_count{{{labels}}} 1" in text
         assert f"openviking_queue_end_to_end_duration_seconds_count{{{labels}}} 1" in text
     finally:
@@ -87,9 +90,10 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
             'openviking_operation_requests_total{account_id="__unknown__",operation="resource.process",status="ok"} 1'
             in text
         )
-        assert (
-            'openviking_operation_duration_seconds_count{account_id="__unknown__",operation="resource.process",status="ok"} 1'
-            in text
+        assert re.search(
+            r'openviking_operation_duration_seconds_count\{account_id="__unknown__",'
+            r'bucket_schema="[0-9a-f]{16}",operation="resource.process",status="ok"\} 1',
+            text,
         )
         assert (
             'openviking_operation_tokens_total{account_id="__unknown__",operation="resource.process",stage="rerank",token_type="rerank"} 4'
@@ -132,9 +136,10 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
             'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="warning"} 1'
             in text
         )
-        assert (
-            'openviking_resource_wait_duration_seconds_count{account_id="__unknown__",operation="resource.process"} 1'
-            in text
+        assert re.search(
+            r'openviking_resource_wait_duration_seconds_count\{account_id="__unknown__",'
+            r'bucket_schema="[0-9a-f]{16}",operation="resource.process"\} 1',
+            text,
         )
     finally:
         shutdown_metrics(app=None)

@@ -31,7 +31,7 @@ const { health, saveConnection, navigate, connectionState } = vi.hoisted(
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ ...connectionState, saveConnection }),
 }))
-vi.mock('#/hooks/use-server-mode', async (importOriginal) => ({
+vi.mock('#/lib/connection/health', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   fetchServerHealth: health,
 }))

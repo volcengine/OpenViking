@@ -19,6 +19,7 @@ import {
 } from '../-lib/management-key'
 import { useGateway } from '../-lib/use-gateway'
 import { gatewayErrorMessage } from '../-lib/localize'
+import { DocsLink } from './docs-link'
 import { SettingField } from './setting-field'
 
 const MANAGEMENT_CONFIGS = [
@@ -42,14 +43,14 @@ export function ManagementKeyDialog() {
     return () => window.removeEventListener(MANAGEMENT_UNLOCK_EVENT, show)
   }, [])
   const unlock = useMutation({
-    mutationFn: () => getAccess({ ...connection, managementKey: key.trim() }),
+    mutationFn: (candidate: typeof connection) => getAccess(candidate),
     // Storing the key changes the query scope, so gateway data reloads with it.
-    onSuccess: (access) => {
+    onSuccess: (access, candidate) => {
       if (!access.can_write_objects) {
         setError(t('management.invalid'))
         return
       }
-      setManagementKey(connection.baseUrl, key.trim())
+      setManagementKey(candidate.baseUrl, candidate.managementKey ?? '')
       setOpen(false)
       setKey('')
       toast.success(t('management.unlocked'))
@@ -73,7 +74,8 @@ export function ManagementKeyDialog() {
           className="grid gap-4"
           onSubmit={(event) => {
             event.preventDefault()
-            if (key.trim() && !wrongKey) unlock.mutate()
+            if (key.trim() && !wrongKey)
+              unlock.mutate({ ...connection, managementKey: key.trim() })
           }}
         >
           <details className="text-sm">
@@ -90,7 +92,14 @@ export function ManagementKeyDialog() {
                 {t('management.environment')}{' '}
                 <code>OPENVIKING_GATEWAY_MANAGEMENT_KEY</code>
               </li>
+              <li>{t('management.studio')}</li>
               <li>{t('management.prefix')}</li>
+              <li>
+                {t('management.reset')}{' '}
+                <DocsLink section="lostManagementKey" variant="text">
+                  {t('management.resetDocs')}
+                </DocsLink>
+              </li>
             </ul>
           </details>
           <SettingField

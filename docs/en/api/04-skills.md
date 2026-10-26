@@ -396,8 +396,8 @@ require confirmation unless `--yes` is set.
 ov add-skill https://github.com/volcengine/OpenViking/tree/skills/llm-wiki
 
 # Inspect a local collection, then select skills to import
-ov add-skill ./examples/compile/ov-compile-skills --list
-ov add-skill ./examples/compile/ov-compile-skills --skill llm-wiki daily-report --yes
+ov add-skill ./openviking/system_assets/compile/example-skills --list
+ov add-skill ./openviking/system_assets/compile/example-skills --skill llm-wiki daily-report --yes
 
 # Add a skill from a local file or directory
 ov add-skill ./skills/search-web/SKILL.md

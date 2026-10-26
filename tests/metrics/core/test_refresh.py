@@ -7,8 +7,18 @@ import pytest
 
 from openviking.metrics.collectors.base import CollectorConfig, Refreshable
 from openviking.metrics.collectors.manager import CollectorManager, RefreshResult
+from openviking.metrics.core.base import MetricCollector
 from openviking.metrics.core.refresh import RefreshGate
 from openviking.metrics.core.registry import MetricRegistry
+
+
+class _RefreshableCollector(MetricCollector, Refreshable):
+    @classmethod
+    def kind(cls):
+        return "state"
+
+    def collector_name(self):
+        return "dummy"
 
 
 def test_refresh_gate_ttl():
@@ -42,7 +52,7 @@ async def test_collector_manager_requires_refreshable():
 
         def collect(self, registry) -> None:
             self.calls += 1
-            registry.counter("openviking_dummy_refresh_total").inc()
+            registry.inc_counter("openviking_dummy_refresh_total")
 
     mgr = CollectorManager()
     c = DummyCollector()
@@ -53,8 +63,7 @@ async def test_collector_manager_requires_refreshable():
 
 @pytest.mark.asyncio
 async def test_collector_manager_ttl_and_timeout():
-    class DummyCollector(Refreshable):
-        name = "dummy"
+    class DummyCollector(_RefreshableCollector):
         config = CollectorConfig(ttl_seconds=10.0, timeout_seconds=0.01)
 
         def __init__(self) -> None:
@@ -62,7 +71,7 @@ async def test_collector_manager_ttl_and_timeout():
 
         def collect(self, registry) -> None:
             self.calls += 1
-            registry.counter("openviking_dummy_refresh_total").inc()
+            registry.inc_counter("openviking_dummy_refresh_total")
 
     registry = MetricRegistry()
     mgr = CollectorManager()
@@ -82,8 +91,7 @@ async def test_collector_manager_ttl_and_timeout():
 
 @pytest.mark.asyncio
 async def test_collector_manager_swr_when_ttl_expired_and_has_last_success():
-    class DummyCollector(Refreshable):
-        name = "dummy"
+    class DummyCollector(_RefreshableCollector):
         config = CollectorConfig(ttl_seconds=1.0, timeout_seconds=0.5)
 
         def __init__(self) -> None:
@@ -113,8 +121,7 @@ async def test_collector_manager_swr_when_ttl_expired_and_has_last_success():
 
 @pytest.mark.asyncio
 async def test_collector_manager_deadline_exceeded_does_not_stick_inflight(monkeypatch):
-    class DummyCollector(Refreshable):
-        name = "dummy"
+    class DummyCollector(_RefreshableCollector):
         config = CollectorConfig(ttl_seconds=10.0, timeout_seconds=10.0)
 
         def collect(self, registry) -> None:

@@ -217,6 +217,7 @@ class MemoryField(BaseModel):
     description: str = Field("", description="Field description")
     merge_op: MergeOp = Field(MergeOp.PATCH, description="Merge strategy")
     init_value: Optional[str] = Field(None, description="Initial value for this field")
+    required: bool = Field(True, description="Required in complete Python SDK create/set calls")
 
 
 class MemoryTypeSchema(BaseModel):

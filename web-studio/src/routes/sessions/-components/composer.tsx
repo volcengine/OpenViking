@@ -33,7 +33,7 @@ export function Composer({
 
   const handleSend = useCallback(async () => {
     const trimmed = value.trim()
-    if (!trimmed || submittingRef.current || isStreaming) return
+    if (!trimmed || submittingRef.current) return
     submittingRef.current = true
     setIsSubmitting(true)
     try {
@@ -47,7 +47,7 @@ export function Composer({
       submittingRef.current = false
       setIsSubmitting(false)
     }
-  }, [value, onSend, isStreaming])
+  }, [value, onSend])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -56,10 +56,10 @@ export function Composer({
 
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
-        if (!isStreaming) handleSend()
+        void handleSend()
       }
     },
-    [isStreaming, handleSend],
+    [handleSend],
   )
 
   return (
@@ -96,11 +96,11 @@ export function Composer({
         />
         <div
           className={cn(
-            'flex items-center justify-end',
+            'flex items-center justify-end gap-2',
             isCompact ? 'px-2.5 pb-2' : 'px-3 pb-2.5',
           )}
         >
-          {isStreaming ? (
+          {isStreaming && (
             <button
               type="button"
               aria-label={t('chat.cancel')}
@@ -113,7 +113,8 @@ export function Composer({
             >
               <SquareIcon className="size-3.5" />
             </button>
-          ) : (
+          )}
+          {(!isStreaming || value.trim()) && (
             <button
               type="button"
               aria-label={t('chat.send')}

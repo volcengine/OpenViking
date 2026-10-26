@@ -390,11 +390,16 @@ impl HttpClient {
         tags: Vec<String>,
         tag_mode: &str,
         acl: Option<Value>,
+        edit_source: &str,
     ) -> Result<serde_json::Value> {
         let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
         add_resource_tag_fields(&mut body, &tags, tag_mode);
         if let Some(acl) = acl {
             body["acl"] = acl;
+        }
+        // Omit the default so the request stays valid for servers without edit_source.
+        if edit_source != "agent" {
+            body["edit_source"] = Value::from(edit_source);
         }
         self.post("/api/v1/content/write", &body).await
     }
@@ -1726,6 +1731,13 @@ impl HttpClient {
         self.get("/api/v1/privacy-configs", &[]).await
     }
 
+    pub async fn privacy_tree(&self, category: Option<&str>) -> Result<serde_json::Value> {
+        let params = category
+            .map(|value| vec![("category".to_string(), value.to_string())])
+            .unwrap_or_default();
+        self.get("/api/v1/privacy-configs/tree", &params).await
+    }
+
     pub async fn privacy_list_targets(&self, category: &str) -> Result<serde_json::Value> {
         let path = format!("/api/v1/privacy-configs/{}", category);
         self.get(&path, &[]).await
@@ -1740,6 +1752,41 @@ impl HttpClient {
         self.get(&path, &[]).await
     }
 
+    pub async fn privacy_get_field(
+        &self,
+        category: &str,
+        target_key: &str,
+        field: &str,
+        reveal: bool,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}/field", category, target_key);
+        let mut params = vec![("field".to_string(), field.to_string())];
+        if reveal {
+            params.push(("reveal".to_string(), "true".to_string()));
+        }
+        self.get(&path, &params).await
+    }
+
+    pub async fn privacy_list_fields(
+        &self,
+        category: &str,
+        target_key: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}/fields", category, target_key);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn privacy_resolve_selector(
+        &self,
+        selector: &str,
+    ) -> Result<serde_json::Value> {
+        self.post(
+            "/api/v1/privacy-configs/resolve",
+            &serde_json::json!({"selector": selector}),
+        )
+        .await
+    }
+
     pub async fn privacy_upsert(
         &self,
         category: &str,
@@ -1748,6 +1795,16 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
         self.post(&path, body).await
+    }
+
+    pub async fn privacy_patch(
+        &self,
+        category: &str,
+        target_key: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
+        self.patch(&path, body, &[]).await
     }
 
     pub async fn privacy_list_versions(
@@ -1787,6 +1844,44 @@ impl HttpClient {
         );
         let body = serde_json::json!({ "version": version });
         self.post(&path, &body).await
+    }
+
+    pub async fn privacy_delete(
+        &self,
+        category: &str,
+        target_key: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}", category, target_key);
+        self.delete(&path, &[]).await
+    }
+
+    pub async fn privacy_delete_field(
+        &self,
+        category: &str,
+        target_key: &str,
+        field: &str,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/privacy-configs/{}/{}/field", category, target_key);
+        self.delete(&path, &[("field".to_string(), field.to_string())])
+            .await
+    }
+
+    pub async fn privacy_delete_selector(
+        &self,
+        selector: &str,
+    ) -> Result<serde_json::Value> {
+        self.delete_with_body(
+            "/api/v1/privacy-configs/selector",
+            &serde_json::json!({"selector": selector}),
+        )
+        .await
+    }
+
+    pub async fn privacy_scan(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.post("/api/v1/privacy-configs/scan", body).await
     }
 
     // ============ Watch Management (RFC #2104) ============
@@ -1892,6 +1987,27 @@ impl HttpClient {
             params.push(("from".to_string(), from_ref.to_string()));
         }
         self.get("/api/v1/snapshot/diff", &params).await
+    }
+
+    /// Return one stable page of source-file changes; no base compares an empty tree.
+    pub async fn snapshot_diff_paths(
+        &self,
+        paths: &[String],
+        from_ref: Option<&str>,
+        to_ref: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Value> {
+        let mut params = vec![
+            ("to".to_string(), to_ref.to_string()),
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
+        params.extend(paths.iter().map(|path| ("paths".to_string(), path.clone())));
+        if let Some(from_ref) = from_ref {
+            params.push(("from".to_string(), from_ref.to_string()));
+        }
+        self.get("/api/v1/snapshot/diff-paths", &params).await
     }
 
     pub async fn snapshot_ignore_get(&self) -> Result<Value> {

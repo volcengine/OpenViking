@@ -139,7 +139,7 @@ class ModelUsageCollector(DomainStatsMetricCollector):
         The replacement deletes any prior series for the same `model_type`, ensuring only one of
         `valid="1"` or `valid="0"` remains visible at a time.
         """
-        registry.gauge_delete_matching(
+        registry.delete_matching(
             self.USAGE_AVAILABLE,
             match_labels={"model_type": str(model_type)},
         )

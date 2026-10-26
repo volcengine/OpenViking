@@ -65,6 +65,10 @@ class LockAcquisitionError(LockError):
     """Raised when lock acquisition fails."""
 
 
+class InvalidPathLockRequestError(ValueError):
+    """Raised when a native PathLock request or durable handoff is malformed."""
+
+
 class ResourceBusyError(LockError):
     """Raised when a resource is locked by an ongoing operation."""
 

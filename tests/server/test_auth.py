@@ -55,6 +55,7 @@ class _FakeAgfs:
         return "OK"
 
     def read(self, path: str, offset: int = 0, size: int = -1, stream: bool = False):
+        del stream
         if path not in self.files:
             raise FileNotFoundError(path)
         data = self.files[path]
@@ -1006,6 +1007,7 @@ async def test_trusted_identity_registration_batches_data_plane_identity(auth_se
     for restarted in (False, True):
         app = FastAPI()
         app.state.config = config
+        app.state.service_name = "openviking-server"
         plugin = TrustedAuthPlugin()
         await plugin.initialize(app, auth_service, config)
         try:
@@ -1043,6 +1045,7 @@ async def test_invalid_trusted_identity_does_not_block_later_registration(
     )
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     plugin = TrustedAuthPlugin()
     await plugin.initialize(app, auth_service, config)
     try:
@@ -1095,6 +1098,7 @@ async def test_trusted_identity_registration_skips_identity_loaded_from_registry
     config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     first_plugin = TrustedAuthPlugin()
     await first_plugin.initialize(app, auth_service, config)
     try:
@@ -1104,6 +1108,7 @@ async def test_trusted_identity_registration_skips_identity_loaded_from_registry
 
     restarted_app = FastAPI()
     restarted_app.state.config = config
+    restarted_app.state.service_name = "openviking-server"
     restarted_plugin = TrustedAuthPlugin()
     await restarted_plugin.initialize(restarted_app, auth_service, config)
     try:
@@ -1142,6 +1147,7 @@ async def test_trusted_registration_respects_configuration_and_route(auth_servic
     )
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     plugin = TrustedAuthPlugin()
     await plugin.initialize(app, auth_service, config)
     try:
@@ -1182,6 +1188,7 @@ async def test_trusted_identity_registration_retries_failed_batch_without_exceed
     )
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     plugin = TrustedAuthPlugin()
     await plugin.initialize(app, auth_service, config)
     try:

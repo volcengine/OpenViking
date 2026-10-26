@@ -5,7 +5,7 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.model_retry import effective_max_retries, retry_async, retry_sync
 from openviking_cli.utils import get_logger
 
 from .base import VLMBase, VLMResponse
@@ -59,9 +59,10 @@ class RetryVLM(VLMBase):
                 messages=messages,
                 **kwargs,
             ),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} VLM completion",
+            model_errors_only=True,
         )
 
     async def get_completion_async(
@@ -84,9 +85,10 @@ class RetryVLM(VLMBase):
                 max_tokens=max_tokens,
                 **kwargs,
             ),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} VLM async completion",
+            model_errors_only=True,
         )
 
     def get_vision_completion(
@@ -109,9 +111,10 @@ class RetryVLM(VLMBase):
                 messages=messages,
                 **kwargs,
             ),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} VLM vision completion",
+            model_errors_only=True,
         )
 
     async def get_vision_completion_async(
@@ -134,9 +137,10 @@ class RetryVLM(VLMBase):
                 messages=messages,
                 **kwargs,
             ),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} VLM async vision completion",
+            model_errors_only=True,
         )
 
     def supports_media(

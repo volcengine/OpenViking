@@ -1,6 +1,7 @@
 //! Lock observability metrics.
 
 use crate::lock::types::PathLockConflict;
+use crate::metrics::duration::DurationMetrics;
 
 /// Max number of recent conflicts retained for observability.
 const MAX_RECENT_CONFLICTS: usize = 32;
@@ -18,10 +19,8 @@ pub struct LockMetrics {
     pub stale_leases_released: usize,
     /// Cumulative count of stale cleanup failures.
     pub stale_cleanup_failures: usize,
-    /// Cumulative count of descendant scan operations.
-    pub descendant_scan_count: usize,
-    /// Total nanoseconds spent in descendant scans.
-    pub descendant_scan_duration_ns: u64,
+    /// SDK-owned descendant scan duration distribution.
+    pub(crate) descendant_scan: DurationMetrics,
     /// Total nanoseconds spent waiting for successfully acquired locks.
     pub wait_duration_ns: u64,
     /// Count of conflicts by type (exact/exact, tree/exact, etc.).

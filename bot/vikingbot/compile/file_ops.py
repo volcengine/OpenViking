@@ -20,7 +20,7 @@ from vikingbot.compile.renderer import (
     _split_frontmatter,
     validate_relative_file_path,
 )
-from vikingbot.compile.results import FileDraft, FileResponse, Group, InputReferenceError
+from vikingbot.compile.results import FileDraft, FileResponse, Group
 
 if TYPE_CHECKING:
     from vikingbot.compile.pipeline import Pipeline
@@ -147,19 +147,12 @@ async def load_old(runtime: Pipeline, path: str) -> str | bytes | None:
 
 
 def validate_files(runtime: Pipeline, response, group, records, old):
-    """Validate supplied lineage, output paths and revisions; unused inputs are allowed."""
-    supplied = {record.record_id for record in records}
+    """Check output paths, revisions and file bodies before staging."""
     paths = [f.path for f in response.files]
     if len(set(paths)) != len(paths):
         raise ValueError("A group cannot submit a path more than once")
     for draft in response.files:
         validate_relative_file_path(draft.path)
-        inputs = draft.inputs
-        if not inputs or len(inputs) != len(set(inputs)) or not set(inputs) <= supplied:
-            raise InputReferenceError(
-                "File inputs must be nonempty, unique supporting supplied record IDs: "
-                f"path={draft.path}; inputs={inputs}; unknown={sorted(set(inputs) - supplied)}"
-            )
         current = old.get(draft.path)
         if draft.content_ref is not None:
             raise ValueError(

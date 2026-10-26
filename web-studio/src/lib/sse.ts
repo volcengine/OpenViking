@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import {
   EventStreamContentType,
   fetchEventSource,
@@ -24,8 +25,8 @@ export class SseResponseError extends Error {
   constructor(response: Response, responseBody: string) {
     super(
       response.ok
-        ? `Expected ${EventStreamContentType} response`
-        : `SSE request failed (${response.status}): ${responseBody}`,
+        ? i18n.t('studio:errors.expectedEventStream', { contentType: EventStreamContentType })
+        : i18n.t('studio:errors.sseFailed', { status: response.status, detail: responseBody }),
     )
     this.name = 'SseResponseError'
     this.response = response

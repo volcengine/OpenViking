@@ -15,6 +15,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { toast } from 'sonner'
 import {
@@ -31,9 +32,20 @@ import {
 import i18n from '#/i18n'
 
 import { GatewayError } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import type * as Api from '../-lib/api'
-import type { LogRecord, Overview, Profile } from '../-lib/api'
+import type {
+  CacheAlerts,
+  CacheMiss,
+  GatewayAccess,
+  IssuedKey,
+  LogRecord,
+  Overview,
+  Profile,
+  Upstream,
+} from '../-lib/api'
 import { PROFILE_DEFAULTS } from '../-lib/profile-schema'
+import { UPSTREAM_DEFAULTS } from '../-lib/upstream-schema'
 import { OverviewPage } from './overview-page'
 
 const api = vi.hoisted(() => ({
@@ -44,6 +56,15 @@ const api = vi.hoisted(() => ({
   listProfiles: vi.fn(),
   listKeys: vi.fn(),
   saveProfile: vi.fn(),
+  importVlm: vi.fn(),
+  issueKey: vi.fn(),
+  listKeyUsers: vi.fn(),
+  getConnectionInfo: vi.fn(),
+}))
+const host = vi.hoisted(() => ({ serverMode: 'api_key', gatewayHost: false }))
+
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
 }))
 
 vi.mock('#/hooks/use-app-connection', () => ({
@@ -57,7 +78,8 @@ vi.mock('#/hooks/use-app-connection', () => ({
     },
     connectionRole: 'admin',
     isConnectionRoleLoading: false,
-    serverMode: 'api_key',
+    serverMode: host.serverMode,
+    isGatewayHost: host.gatewayHost,
   }),
 }))
 vi.mock('../-lib/api', async (importOriginal) => ({
@@ -93,6 +115,7 @@ const EMPTY_OVERVIEW: Overview = {
   capture_issues: { retrying: 0, paused: 0 },
   sample_limit: 10000,
   log_retention_days: 30,
+  cache_alerts: null,
 }
 
 const BUSY_OVERVIEW: Overview = {
@@ -121,6 +144,7 @@ const BUSY_OVERVIEW: Overview = {
   capture_issues: { retrying: 1, paused: 2 },
   sample_limit: 10000,
   log_retention_days: 7,
+  cache_alerts: null,
 }
 
 const LOGS: LogRecord[] = [
@@ -152,6 +176,34 @@ const LOGS: LogRecord[] = [
   },
 ]
 
+const UPSTREAMS = [
+  { id: 'u1', name: 'OpenAI production' },
+  { id: 'u2', name: 'Kimi relay' },
+] as Upstream[]
+
+function cacheMiss(fields: Partial<CacheMiss>): CacheMiss {
+  return {
+    upstream_id: 'u1',
+    model: 'gpt-5',
+    streak: 5,
+    last_at: NOW - 60,
+    ...fields,
+  }
+}
+
+function cacheMisses(
+  fields: Partial<NonNullable<CacheAlerts['misses']>>,
+): CacheAlerts['misses'] {
+  return {
+    conversations: 1,
+    streak: 5,
+    input_tokens: 50000,
+    no_writes: false,
+    recent: [cacheMiss({})],
+    ...fields,
+  }
+}
+
 /** Pages the overview links to; links only get an href for known routes. */
 const LINK_TARGETS = [
   '/gateway/upstreams',
@@ -166,6 +218,13 @@ const LINK_TARGETS = [
 /** Href of a button-styled link (Base UI gives those the button role). */
 function hrefOf(text: string) {
   return screen.getByText(text).closest('a')?.getAttribute('href')
+}
+
+/** Hrefs of every link with this text, in page order. */
+function hrefsOf(text: string) {
+  return screen
+    .getAllByText(text)
+    .map((node) => node.closest('a')?.getAttribute('href'))
 }
 
 function renderOverview() {
@@ -205,6 +264,12 @@ afterAll(async () => {
 beforeEach(() => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   for (const mock of Object.values(api)) mock.mockReset()
+  host.serverMode = 'api_key'
+  host.gatewayHost = false
+  api.getConnectionInfo.mockResolvedValue({
+    base_url: 'http://gateway.test:1933',
+    public_url_configured: true,
+  })
   api.getAccess.mockResolvedValue({
     managed: false,
     can_write_objects: true,
@@ -326,6 +391,13 @@ describe('OverviewPage', () => {
       '/gateway/requests?filter=issues',
       '/gateway/requests?filter=issues',
     ])
+    // Each problem links the docs section that troubleshoots it.
+    expect(hrefsOf('Troubleshooting')).toEqual([
+      gatewayDocsUrl('openvikingDegraded', 'en'),
+      gatewayDocsUrl('notSaved', 'en'),
+      gatewayDocsUrl('degradedRequests', 'en'),
+    ])
+    expect(hrefOf('Docs')).toBe(gatewayDocsUrl('overview', 'en'))
 
     const reasons = screen
       .getAllByText(/^(Upstream switched|OpenViking plugin in use)$/, {
@@ -347,12 +419,111 @@ describe('OverviewPage', () => {
     expect(screen.queryByText('Memory sync')).toBeNull()
     expect(screen.queryByText('Paused')).toBeNull()
     expect(screen.getByText('502')).toBeTruthy()
+    // No cache alerts, so no notice and no upstream list to load.
+    expect(screen.queryByText(/prompt cache|cache hits lately/)).toBeNull()
     expect(hrefOf('View all')).toBe('/gateway/requests')
     expect(
       screen.getByText(
         'Figures cover the latest 10,000 entries of the request log. Entries are kept for 7 days.',
       ),
     ).toBeTruthy()
+  })
+
+  it('warns about long conversations that keep missing the prompt cache', async () => {
+    api.getOverview.mockResolvedValue({
+      ...BUSY_OVERVIEW,
+      cache_alerts: {
+        misses: cacheMisses({
+          conversations: 25,
+          streak: 3,
+          input_tokens: 33950,
+          recent: [
+            cacheMiss({ model: 'claude-sonnet-4-5', streak: 7 }),
+            cacheMiss({ upstream_id: 'deadbeefcafe0001', streak: 5 }),
+            cacheMiss({ model: 'kimi-k2', streak: 9, last_at: NOW - 7200 }),
+          ],
+        }),
+        unreported: [],
+      },
+    })
+    api.listUpstreams.mockResolvedValue(UPSTREAMS)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        '25 long conversations keep missing the prompt cache',
+      ),
+    ).toBeTruthy()
+    // The summary speaks for every conversation, listed or not, rounded down.
+    expect(
+      screen.getByText(
+        /^Their last 3 model calls each sent at least 33K input tokens and got a 0% cache hit rate\./,
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(/^Compare with your provider's cache records\./),
+    ).toBeTruthy()
+    // The newest conversations, upstreams by name.
+    expect(screen.getByText('7 misses in a row')).toBeTruthy()
+    expect(screen.getByText('5 misses in a row')).toBeTruthy()
+    expect(screen.getByText('9 misses in a row')).toBeTruthy()
+    expect(screen.getAllByText('claude-sonnet-4-5').length).toBeGreaterThan(0)
+    expect(screen.getByText('2 hours ago')).toBeTruthy()
+    expect(await screen.findAllByText('OpenAI production')).toHaveLength(2)
+    expect(screen.getByText('deadbeef…').getAttribute('title')).toBe(
+      'deadbeefcafe0001',
+    )
+    expect(screen.queryByText(/cache hits lately/)).toBeNull()
+    expect(hrefsOf('Troubleshooting')).toContain(
+      gatewayDocsUrl('cacheHitRate', 'en'),
+    )
+  })
+
+  it('points Anthropic conversations that never write the cache at cache_control', async () => {
+    api.getOverview.mockResolvedValue({
+      ...BUSY_OVERVIEW,
+      cache_alerts: {
+        misses: cacheMisses({ streak: 3, no_writes: true }),
+        unreported: [],
+      },
+    })
+    api.listUpstreams.mockResolvedValue(UPSTREAMS)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        '1 long conversation keeps missing the prompt cache',
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(/^Its last 3 model calls each sent at least 50K/),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(/the client most likely doesn't set cache_control/),
+    ).toBeTruthy()
+    expect(screen.queryByText(/^Compare with your provider's/)).toBeNull()
+  })
+
+  it('lists every upstream that reports no cache hits in one note', async () => {
+    api.getOverview.mockResolvedValue({
+      ...BUSY_OVERVIEW,
+      cache_alerts: {
+        misses: null,
+        unreported: ['deadbeefcafe0001', 'u1', 'u2'],
+      },
+    })
+    api.listUpstreams.mockResolvedValue(UPSTREAMS)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        "deadbeef…, OpenAI production, Kimi relay haven't reported any cache hits lately",
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.getAllByText(/^Long conversations through them keep showing/),
+    ).toHaveLength(1)
+    expect(screen.queryByText(/prompt cache$/)).toBeNull()
   })
 
   it('shows the error with a retry when the overview fails', async () => {
@@ -386,14 +557,273 @@ describe('OverviewPage', () => {
     expect(api.saveProfile.mock.calls[0][2].name).toBe('默认')
     cleanup()
 
-    api.getOverview.mockResolvedValue(BUSY_OVERVIEW)
+    api.getOverview.mockResolvedValue({
+      ...BUSY_OVERVIEW,
+      cache_alerts: {
+        misses: cacheMisses({
+          streak: 6,
+          recent: [cacheMiss({ model: 'kimi-k2', streak: 6 })],
+        }),
+        unreported: ['u1'],
+      },
+    })
     api.listLogs.mockResolvedValue(LOGS)
+    api.listUpstreams.mockResolvedValue(UPSTREAMS)
     const busy = renderOverview()
     expect(await screen.findByText('claude-sonnet-4-5')).toBeTruthy()
     expect(screen.getByText('1,234 条新消息')).toBeTruthy()
+    expect(screen.getByText('有 1 段长对话连续没有命中提示词缓存')).toBeTruthy()
+    expect(screen.getByText('连续 6 次未命中')).toBeTruthy()
+    expect(
+      await screen.findByText('上游 OpenAI production 最近没有返回过缓存命中'),
+    ).toBeTruthy()
+    // Chinese has no singular form, so the copy reads right for any count.
+    expect(screen.getByText(/^相关长对话的缓存命中率一直是 0%/)).toBeTruthy()
     expect(busy.container.textContent).not.toMatch(
       /overview\.|enums\.|states\.|actions\./,
     )
     await i18n.changeLanguage('en')
+  })
+})
+
+const ARK: Upstream = {
+  ...UPSTREAM_DEFAULTS,
+  id: 'vlm-ark',
+  revision: 1,
+  name: 'vlm-ark',
+  protocol: 'chat',
+  base_url: 'https://ark.example.com/api/v3',
+  models: ['doubao-seed-1-6'],
+  has_api_key: true,
+}
+const CODING_PLAN: Upstream = {
+  ...ARK,
+  id: 'vlm-kimi',
+  name: 'vlm-kimi',
+  coding_plan: true,
+}
+const DEFAULT_PROFILE: Profile = {
+  ...PROFILE_DEFAULTS,
+  id: 'default',
+  revision: 1,
+}
+const ISSUED: IssuedKey = {
+  id: 'k1',
+  revision: 1,
+  name: 'Quick mode',
+  policy_id: 'default',
+  upstream_ids: ['vlm-ark'],
+  models: [],
+  user_id: 'default',
+  prefix: 'ovgw_quick12',
+  created_at: NOW,
+  key: 'ovgw_quickSecret',
+}
+const QUICK_REQUEST = {
+  name: 'Quick mode',
+  policy_id: 'default',
+  upstream_ids: ['vlm-ark'],
+  models: [],
+}
+const LOCKED: GatewayAccess = {
+  managed: true,
+  can_write_objects: false,
+  can_import_vlm: false,
+  can_issue_for_others: false,
+  role: 'user',
+  account_id: 'acme',
+  user_id: 'alice',
+  warnings: [],
+}
+
+const quickButton = () => screen.findByRole('button', { name: 'Get a key' })
+
+describe('OverviewPage quick mode', () => {
+  beforeEach(() => {
+    api.getOverview.mockResolvedValue(EMPTY_OVERVIEW)
+  })
+
+  it('issues a key with the seeded upstream and profile in one request', async () => {
+    host.serverMode = 'dev'
+    api.listUpstreams.mockResolvedValue([ARK])
+    api.listProfiles.mockResolvedValue([DEFAULT_PROFILE])
+    api.issueKey.mockResolvedValue(ISSUED)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        'Upstream: use vlm-ark (doubao-seed-1-6, Chat Completions)',
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText('Context profile: use “Default”')).toBeTruthy()
+    expect(screen.getByText('Or set up step by step')).toBeTruthy()
+    expect(hrefsOf('Learn more')).toContain(gatewayDocsUrl('quickMode', 'en'))
+    api.listKeys.mockResolvedValue([ISSUED])
+    fireEvent.click(await quickButton())
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('ovgw_quickSecret')).toBeTruthy()
+    expect(api.issueKey).toHaveBeenCalledTimes(1)
+    expect(api.issueKey.mock.calls[0][1]).toEqual(QUICK_REQUEST)
+    expect(api.importVlm).not.toHaveBeenCalled()
+    expect(api.saveProfile).not.toHaveBeenCalled()
+    // A chat-only key opens on the chat client, with the model filled in.
+    const snippet = within(dialog).getAllByText(/v1\/chat\/completions/)[0]
+    expect(snippet.textContent).toContain('doubao-seed-1-6')
+    expect(snippet.textContent).toContain('http://gateway.test:1933')
+
+    expect(await screen.findByText('3 of 4 done')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Get a key' })).toBeNull()
+    expect(screen.getByRole('dialog')).toBe(dialog)
+  })
+
+  it('imports, creates the default profile and issues; a retry skips the import', async () => {
+    let stored: Upstream[] = []
+    api.listUpstreams.mockImplementation(async () => stored)
+    api.importVlm.mockImplementation(async () => {
+      stored = [ARK]
+      return {
+        imported: [{ id: 'vlm-ark', name: 'vlm-ark' }],
+        needs_confirmation: [],
+        skipped: [],
+      }
+    })
+    api.saveProfile
+      .mockRejectedValueOnce(new GatewayError('Invalid', 422))
+      .mockResolvedValue(DEFAULT_PROFILE)
+    api.issueKey.mockResolvedValue(ISSUED)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        "Upstream: import the OpenViking server's model settings, reusing its API key and quota",
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(
+        'Context profile: create “Default” with the recommended settings',
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText('Key: issued for admin')).toBeTruthy()
+    fireEvent.click(await quickButton())
+    expect(
+      await screen.findByText(
+        'The gateway rejected these settings. Check the values and try again.',
+      ),
+    ).toBeTruthy()
+    expect(api.issueKey).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByText('ovgw_quickSecret')).toBeTruthy()
+    expect(api.importVlm).toHaveBeenCalledTimes(1)
+    expect(api.saveProfile).toHaveBeenCalledTimes(2)
+    const [, id, settings] = api.saveProfile.mock.calls[1]
+    expect(id).toBe('default')
+    expect(settings).toEqual(PROFILE_DEFAULTS)
+    expect(api.issueKey.mock.calls[0][1]).toEqual(QUICK_REQUEST)
+    const order = [api.importVlm, api.saveProfile, api.issueKey].map(
+      (mock) => mock.mock.invocationCallOrder[0],
+    )
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+  })
+
+  it('stops after an import that yields only an unconfirmed Coding Plan', async () => {
+    let stored: Upstream[] = []
+    api.listUpstreams.mockImplementation(async () => stored)
+    api.importVlm.mockImplementation(async () => {
+      stored = [CODING_PLAN]
+      return {
+        imported: [],
+        needs_confirmation: [{ id: 'vlm-kimi', name: 'vlm-kimi' }],
+        skipped: [],
+      }
+    })
+    renderOverview()
+
+    fireEvent.click(await quickButton())
+    expect(
+      await screen.findByText(/no model the gateway can relay directly/),
+    ).toBeTruthy()
+    const review = screen
+      .getAllByText('Review')
+      .map((node) => node.closest('a')?.getAttribute('href'))
+    expect(review).toContain('/gateway/upstreams/vlm-kimi')
+    expect(api.saveProfile).not.toHaveBeenCalled()
+    expect(api.issueKey).not.toHaveBeenCalled()
+  })
+
+  it('lets root pick the user in a prefilled issue dialog', async () => {
+    api.getAccess.mockResolvedValue({
+      managed: false,
+      can_write_objects: true,
+      can_import_vlm: true,
+      can_issue_for_others: true,
+      role: 'root',
+      account_id: 'acme',
+      user_id: 'admin',
+      warnings: [],
+    })
+    api.listUpstreams.mockResolvedValue([ARK, CODING_PLAN])
+    api.listProfiles.mockResolvedValue([DEFAULT_PROFILE])
+    api.listKeyUsers.mockResolvedValue([
+      { user_id: 'alice', role: 'user', api_key_available: true },
+    ])
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        'Key: choose the OpenViking user who owns it in the next step',
+      ),
+    ).toBeTruthy()
+    fireEvent.click(await quickButton())
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Issue a gateway key')).toBeTruthy()
+    expect(within(dialog).getByLabelText('Name')).toBe(
+      within(dialog).getByDisplayValue('Quick mode'),
+    )
+    expect(
+      within(dialog).getByRole('combobox', { name: 'Context profile' })
+        .textContent,
+    ).toContain('Default')
+    const checked = within(dialog)
+      .getAllByRole('checkbox')
+      .map((box) => box.getAttribute('aria-checked'))
+    expect(checked).toEqual(['true', 'false'])
+    expect(api.issueKey).not.toHaveBeenCalled()
+  })
+
+  it('issues while locked when an upstream and a profile exist', async () => {
+    api.getAccess.mockResolvedValue(LOCKED)
+    api.listUpstreams.mockResolvedValue([ARK])
+    api.listProfiles.mockResolvedValue([DEFAULT_PROFILE])
+    api.issueKey.mockResolvedValue({ ...ISSUED, user_id: 'alice' })
+    renderOverview()
+
+    fireEvent.click(await quickButton())
+    await waitFor(() => expect(api.issueKey).toHaveBeenCalledTimes(1))
+    expect(api.issueKey.mock.calls[0][1]).toEqual(QUICK_REQUEST)
+  })
+
+  it('offers unlocking while locked without a profile', async () => {
+    api.getAccess.mockResolvedValue(LOCKED)
+    api.listUpstreams.mockResolvedValue([ARK])
+    renderOverview()
+
+    const locked = await screen.findByText(
+      'Creating a context profile or importing models needs the gateway management key.',
+    )
+    expect(
+      within(locked.closest('section') as HTMLElement).getByRole('button'),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Get a key' })).toBeNull()
+  })
+
+  it('stays hidden on a standalone gateway that is locked without upstreams', async () => {
+    host.gatewayHost = true
+    api.getAccess.mockResolvedValue(LOCKED)
+    renderOverview()
+
+    expect(await screen.findByText('0 of 4 done')).toBeTruthy()
+    expect(screen.queryByText('Quick mode')).toBeNull()
   })
 })

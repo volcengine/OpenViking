@@ -32,6 +32,7 @@ import i18n from '#/i18n'
 
 import type * as Api from '../-lib/api'
 import type { GatewayKey, LogRecord, Upstream } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import { parseRequestsSearch } from '../-lib/search'
 import { RequestsPage } from './requests-page'
 
@@ -42,6 +43,10 @@ const api = vi.hoisted(() => ({
   resyncCapture: vi.fn(),
 }))
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
+
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
 
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
@@ -169,6 +174,13 @@ function rowOf(text: string) {
   return row
 }
 
+/** Hrefs of every link with this text, in page order. */
+function hrefsOf(text: string) {
+  return screen
+    .getAllByText(text)
+    .map((node) => node.closest('a')?.getAttribute('href'))
+}
+
 function expand(text: string) {
   fireEvent.click(
     within(rowOf(text)).getByRole('button', { name: 'Show details' }),
@@ -221,6 +233,7 @@ describe('RequestsPage', () => {
     expect(
       screen.getByText('Filters and search cover the latest 1,000 records.'),
     ).toBeTruthy()
+    expect(hrefsOf('Docs')).toEqual([gatewayDocsUrl('requests', 'en')])
   })
 
   it('shows a dash for requests that report no token usage', async () => {
@@ -337,6 +350,58 @@ describe('RequestsPage', () => {
         'The upstream answered with HTTP 502, and the client received this error.',
       ),
     ).toBeTruthy()
+    // Only the provider error links troubleshooting; the issue explains itself.
+    expect(hrefsOf('Troubleshooting')).toEqual([
+      gatewayDocsUrl('upstreamError', 'en'),
+    ])
+  })
+
+  it('links the docs for failed recalls and tools that were not offered', async () => {
+    api.listLogs.mockResolvedValue([
+      {
+        time: NOW - 30,
+        request_id: 'req-failed',
+        kind: 'user',
+        model: 'failed-model',
+        status: 200,
+        recall_reason: 'openviking_unavailable',
+        tool_skip_reason: 'tools_forced_choice',
+      },
+      {
+        time: NOW - 60,
+        request_id: 'req-budget',
+        kind: 'user',
+        model: 'budget-model',
+        status: 200,
+        recall_reason: 'budget',
+      },
+    ])
+    renderPage()
+    await screen.findByText('failed-model')
+    // Running out of budget is not a failure.
+    expect(
+      within(rowOf('failed-model')).getByText('Recall failed'),
+    ).toBeTruthy()
+    expect(
+      within(rowOf('budget-model')).queryByText('Recall failed'),
+    ).toBeNull()
+
+    expand('budget-model')
+    expect(
+      screen.getByText('Too little budget left to add memory'),
+    ).toBeTruthy()
+    expect(screen.queryByText('Troubleshooting')).toBeNull()
+
+    expand('failed-model')
+    expect(hrefsOf('Troubleshooting')).toEqual([
+      gatewayDocsUrl('noMemory', 'en'),
+    ])
+    expect(
+      screen.getByText('Not offered: The client required a specific tool'),
+    ).toBeTruthy()
+    expect(hrefsOf('Learn more')).toEqual([
+      gatewayDocsUrl('toolsNotOffered', 'en'),
+    ])
   })
 
   it('shows how full the context window was and what replaced earlier history', async () => {
@@ -391,6 +456,38 @@ describe('RequestsPage', () => {
     expect(
       screen.getByText('Told the model to start a new window now'),
     ).toBeTruthy()
+    expect(hrefsOf('Troubleshooting')).toEqual([
+      gatewayDocsUrl('contextLimit', 'en'),
+    ])
+  })
+
+  it('does not claim the full history was sent when the summary was kept', async () => {
+    api.listLogs.mockResolvedValue([
+      {
+        time: NOW - 30,
+        request_id: 'req-still-over',
+        kind: 'user',
+        model: 'still-over-model',
+        status: 200,
+        context_tokens: 190000,
+        context_window: 200000,
+        compaction_tokens: 2400,
+        compaction_ms: 8500,
+        compaction_failed: 'still_over_threshold',
+      },
+    ])
+    renderPage()
+    await screen.findByText('still-over-model')
+    expand('still-over-model')
+    expect(
+      screen.getByText(
+        'Summary kept, but usage is still at or above Compact at (still_over_threshold)',
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByText(/full history was sent/)).toBeNull()
+    expect(hrefsOf('Troubleshooting')).toEqual([
+      gatewayDocsUrl('contextLimit', 'en'),
+    ])
   })
 
   it('resyncs a conversation after confirmation', async () => {
@@ -433,6 +530,10 @@ describe('RequestsPage', () => {
         "The gateway key this conversation used has been revoked, so it can't be resynced.",
       ),
     ).toBeTruthy()
+    // Paused saving links the docs on saving states and resyncing.
+    expect(hrefsOf('Learn more')).toEqual([
+      gatewayDocsUrl('savingStatus', 'en'),
+    ])
   })
 
   it('pages through 25 records at a time', async () => {

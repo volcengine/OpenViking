@@ -33,6 +33,7 @@ This outline shows common top-level groups, not a runnable configuration. For a 
   "vlm": {},
   "query_planner": {},
   "rerank": {},
+  "rules": {},
   "retrieval": {},
   "storage": {},
   "server": {},
@@ -56,6 +57,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Model for retrieval intent analysis and recall rewriting. Falls back to `vlm` when omitted or empty; recall rewrite in `auto` mode requires a configured cluster `query_planner` or an account-level `query_planner` or `vlm` override |
 | `rerank` | object | disabled | Retrieval result reranking |
+| `rules` | object | empty config | Optional dedicated models for rule compilation and applicability matching |
 | `retrieval` | object | see below | Ranking and intent-analysis behavior |
 | `grep` | object | built-in defaults | Text search engine |
 | `glob` | object | built-in defaults | Path glob engine |
@@ -73,7 +75,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 | `log` | object | console | Log level, format, and file output |
 | `telemetry` | object | disabled | OpenTelemetry tracing |
 | `oauth` | object | disabled | MCP OAuth 2.1 |
-| `gateway` | object | disabled | OpenViking Gateway, the model API gateway that adds OpenViking memory to API-key clients. Unknown keys in this section are errors. See the [configuration reference](../guides/22-gateway-operations.md#configuration-reference) |
+| `gateway` | object | disabled | OpenViking Gateway, the model API gateway that adds OpenViking memory to API-key clients. Unknown keys in this section are errors. See the [configuration reference](../gateway/13-configuration.md#configuration-reference) |
 | `prompts` | object | built-in templates | Custom prompt template directory |
 | `ingest` | object | built-in defaults | Conversation-log ingestion |
 | `output_language_override` | string | `""` | Force summary/memory language; empty means auto-detect |
@@ -147,6 +149,96 @@ API-based `embedding`, `vlm`, `query_planner`, and `rerank` configurations reuse
 
 Changing the model or `dimension` can make existing vector collections incompatible and may require migration or reindexing.
 
+### `rules`
+
+Optional models and lifecycle settings for compiled Rules:
+
+```json
+{
+  "rules": {
+    "jev_rule_matcher": {
+      "provider": "typesafe",
+      "api_key": "${JEV_API_KEY}"
+    },
+    "compiler": {
+      "provider": "openai",
+      "model": "gpt-4o"
+    },
+    "compiler_context_window": 0
+  }
+}
+```
+
+| Field | Type / values | Default | Purpose |
+|---|---|---|---|
+| `jev_rule_matcher` | Jev Noul config / `null` | `null` | Jev Noul matcher for Scenario filtering and Rule applicability |
+| `compiler` | VLM config / `null` | `null` | Dedicated Rule compiler |
+| `compiler_context_window` | `0` or integer `>= 2048` | `0` | Compiler context window; `0` auto-detects with a conservative fallback |
+| `scenario_irrelevance_threshold` | number, `0.5`-`1.0` | `0.9` | Skip a Scenario only at or above this irrelevance probability |
+| `archived_retention_days` | integer, `>= 1` | `30` | Days before archived Rules are permanently removed |
+| `archived_cleanup_interval_seconds` | integer, `>= 60` | `2592000` | Archived-Rule cleanup interval |
+| `archived_cleanup_enabled` | boolean | `true` | Enable periodic archived-Rule cleanup |
+
+Rule compilation always calls the dedicated compiler, or the account VLM fallback,
+with `thinking=true`, overriding its configured default. Use a model that supports
+thinking mode, or compilation may fail.
+
+#### `rules.jev_rule_matcher`
+
+This block configures the independent Jev System One judgments used for Scenario
+filtering and Rule applicability. It does not configure retrieval reranking.
+
+| Field | Type / values | Default | Purpose |
+|---|---|---|---|
+| `provider` | `typesafe`, `vercel`, `openrouter`, `custom` | `typesafe` | Select endpoint and model defaults |
+| `api_key` | string | required | API key for the selected provider |
+| `api_base` | URL / `null` | provider default | Complete System One request URL; an explicit value is used unchanged |
+| `model` | string / `null` | provider default | Model name or endpoint ID; required for `custom` |
+| `timeout` | number | `30` | HTTP request timeout in seconds |
+| `extra_headers` | object / `null` | `null` | Additional HTTP request headers |
+| `log_payloads` | boolean | `false` | Log complete requests and responses; these may contain task and Rule content |
+
+| Provider | Default request URL | Default model | Notes |
+|---|---|---|---|
+| `typesafe` | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | Direct TypeSafe access |
+| `vercel` | `https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | Vercel AI Gateway TypeSafe-compatible API |
+| `openrouter` | `https://openrouter.ai/api/v1/systemone` | `jev-latest` | OpenRouter System One API |
+| `custom` | none | none | Requires both `api_base` and `model` |
+
+`api_base` and `model` override provider defaults independently. An explicit
+`api_base` is the complete POST URL and is never modified, including for `custom`.
+`extra_headers` extends provider headers and can override a provider default.
+Rule matching always uses independent Noul judgments, so it has no `mode`,
+`threshold`, or `max_input_tokens` setting. Configure Scenario filtering with
+`rules.scenario_irrelevance_threshold`; Rule applicability uses the threshold supplied
+as `rule_probability_threshold` in the Rule search request (default `0.65`).
+
+Rule status is `active`, `paused`, or `archived`. `PAUSE` suspends retrieval without
+expiry; `ARCHIVE` starts retention from `archived_at`. `RESTORE` reactivates a paused
+Rule. Compilation considers active and paused Rules; archived Rules are logically
+deleted, are not compiler candidates, and cannot be restored through Rule compilation.
+`ARCHIVE` requires explicit deletion, discard, or recycle-bin intent in the user's
+instruction; non-deletion deactivation requests use `PAUSE`.
+
+Rules live directly in `memories/rules/<scenario_id>/`: `abstract.md` stores Scenario
+metadata and `<atomic_id>.md` stores each Rule. See
+[Rules (Beta)](../concepts/17-rule-scenarios.md) for the storage format.
+
+When `jev_rule_matcher` is unconfigured, unavailable, fails, or returns invalid
+results, Scenario and Rule judgments pass the candidates without calling a VLM.
+Scenario diagnostics record `decision=pass`.
+Rules return `judge=pass`, a warning, and score `1.0` to pass the threshold; this score
+is not a model-estimated applicability probability. Agents still check applicability
+and exceptions against task facts. Compilation falls back from `compiler` to the
+account VLM. The former `rule_matcher` setting has been removed and is no longer read.
+
+Rule `applies_when` may be empty and defaults to an empty string. Empty means
+applicable in every situation unless `exception` holds. Candidates with neither an
+applicability condition nor an exception receive probability `1.0` directly.
+The Compiler prefers faithful, non-empty, decidable conditions derived from source
+objects, operations, prerequisites, and scenarios. It must not invent triggers or
+discard source restrictions. Empty does not mean unknown or inapplicable.
+
 ### `rerank`
 
 | Field | Type / values | Default | Purpose |
@@ -154,20 +246,21 @@ Changing the model or `dimension` can make existing vector collections incompati
 | `provider` | `vikingdb`, `cohere`, `openai`, `litellm`, `jev` / `null` | `null` | Rerank service; inferred from credentials when omitted |
 | `model` | string / `null` | `null` | OpenAI-compatible, LiteLLM, or Jev rerank model |
 | `mode` | `noul`, `choice`, or `null` | `noul` | Jev rerank mode; `null` also uses `noul` |
-| `threshold` | number | `0.1` | Minimum score considered relevant |
+| `threshold` | number | `0.1` | Minimum rerank score considered relevant; filters only model rerank scores, never vector scores, and a request `score_threshold` overrides it |
 | `max_input_tokens` | integer; `0` or `>= 128` | `0` | Maximum estimated tokens per query-document pair; `0` disables truncation |
 | `log_payloads` | boolean | `false` | Log complete rerank request and response payloads; may expose query and document content |
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
-`jev` supports direct TypeSafe access (`https://api.typesafe.ai`, model `jev-latest`) and Vercel AI Gateway's TypeSafe-compatible endpoint (`https://ai-gateway.vercel.sh/typesafe`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields; both speak the same protocol. Its default `noul` mode scores each candidate independently. The optional `choice` mode compares all candidates and returns relative probabilities; set `threshold` to `0` when using it. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
+`jev` supports direct TypeSafe access (`https://api.typesafe.ai/v1/systemone`, model `jev-latest`) and Vercel AI Gateway's TypeSafe-compatible endpoint (`https://ai-gateway.vercel.sh/typesafe/v1/systemone`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields; both speak the same protocol. For rerank, `api_base` may be either the service root or the complete System One URL; `/v1/systemone` is appended when absent. Its default `noul` mode scores each candidate independently. The optional `choice` mode compares all candidates and returns relative probabilities; set `threshold` to `0` when using it. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
 
 ## Retrieval Settings
 
 ```json
 {
   "retrieval": {
-    "enable_intent": true
+    "enable_intent": true,
+    "apply_rerank_to_context": false
   }
 }
 ```
@@ -177,8 +270,9 @@ Rerank has no separate `enabled` field. It becomes available when the required p
 | Field | Type / values | Default | Purpose |
 |---|---|---|---|
 | `enable_intent` | boolean | `true` | Run intent analysis/query planning when `session_id` is present |
+| `apply_rerank_to_context` | boolean | `false` | Rerank `search(mode="context")` candidates with the configured `rerank` model |
 
-Search and Find requests default to `limit: 10`; override the limit on each API or SDK request. `retrieval.enable_intent` controls LLM query planning for session-aware Search, while result reranking is enabled only when `rerank` has a usable provider configuration.
+Search and Find requests default to `limit: 10`; override the limit on each API or SDK request. `retrieval.enable_intent` controls LLM query planning for session-aware Search, while result reranking is enabled only when `rerank` has a usable provider configuration. Context mode recalls with Find's vector scores; with `retrieval.apply_rerank_to_context` and a usable `rerank`, it also reranks its merged candidates once against the original query and its expansions before quotas and the token budget apply, which adds one rerank call per request.
 
 ## Storage Settings
 
@@ -196,6 +290,9 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
     "parse_output": {
       "mode": "agfs"
     }
+  },
+  "parsers": {
+    "download_temp_dir": "/data/openviking/parser-tmp"
   }
 }
 ```
@@ -218,6 +315,14 @@ Remote backends also require endpoint, bucket/collection, credentials, and timeo
 The same worker must commit the required bytes to the formal resource tree before
 enqueueing downstream work. Artifacts are temporary and are removed after the
 content commit; provision `local_root` with enough space for concurrent imports.
+
+### `parsers`
+
+| Field | Type / common values | Default | Purpose |
+|---|---|---|---|
+| `download_temp_dir` | path or `null` | system temp directory | Temporary directory for built-in parser downloads, Git checkouts, and archive extraction |
+
+When configured, parsers create temporary directories with prefixes such as `ov_git_` and `ov_zip_` below this directory. When unset, the system temporary directory is used.
 
 ## Queue Worker Settings
 
@@ -313,7 +418,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `with_bot` | boolean | `false` | Enable the VikingBot API proxy |
 | `bot_api_url` | URL | `http://localhost:18790` | VikingBot OpenAPI endpoint |
 | `public_base_url` | URL / `null` | `null` | Externally visible base URL |
-| `upload_signed_ttl_seconds` | integer | `600` | Signed upload URL lifetime |
+| `upload_signed_ttl_seconds` | integer | `600` | Signed upload and download URL lifetime |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | Temporary upload storage |
 
 ### Encryption and API Key Hashing

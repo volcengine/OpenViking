@@ -6,6 +6,7 @@ import { Button } from '#/components/ui/button'
 import { cn } from '#/lib/utils'
 
 import type { GatewayKey, LogRecord, ResyncTarget, Upstream } from '../-lib/api'
+import type { DocsSection } from '../-lib/client-guides'
 import {
   EMPTY_VALUE,
   formatDateTime,
@@ -17,6 +18,7 @@ import {
 import {
   captureReasonLabel,
   degradationInfo,
+  keyName,
   recallReasonLabel,
   toolSkipReasonLabel,
   toolStopReasonLabel,
@@ -24,6 +26,7 @@ import {
 } from '../-lib/localize'
 import type { Translate } from '../-lib/localize'
 import { CopyButton } from './copy-button'
+import { DocsLink } from './docs-link'
 import { recallFailed } from './memory-cell'
 import { Notice } from './notice'
 import { CaptureStatusBadge, ProtocolBadge } from './status-badges'
@@ -81,21 +84,47 @@ function DetailItem({
   )
 }
 
+/** Docs link under a detail that may need explaining. */
+function DetailDocs({
+  section,
+  children,
+}: {
+  section: DocsSection
+  children?: React.ReactNode
+}) {
+  return (
+    <DocsLink section={section} variant="text" className="w-fit text-xs">
+      {children}
+    </DocsLink>
+  )
+}
+
 /** What went wrong with a request and what to do about it. */
 function Callout({
   tone,
   title,
   happened,
   action,
+  docs,
 }: {
   tone: 'warning' | 'danger'
   title?: string
   happened?: string
   action?: string
+  /** Troubleshooting section for this problem. */
+  docs?: DocsSection
 }) {
   const { t } = useTranslation('gateway')
   return (
-    <Notice tone={tone} title={title}>
+    <Notice
+      tone={tone}
+      title={title}
+      action={
+        docs ? (
+          <DocsLink section={docs}>{t('docs.troubleshoot')}</DocsLink>
+        ) : undefined
+      }
+    >
       <dl className="grid gap-x-4 gap-y-1.5 text-foreground sm:grid-cols-[8rem_minmax(0,1fr)]">
         {happened ? (
           <>
@@ -300,7 +329,9 @@ export function RequestDetails({
           <DetailItem label={t('requests.details.key')}>
             {gatewayKey ? (
               <span className="flex min-w-0 items-baseline gap-2">
-                <span className="truncate font-medium">{gatewayKey.name}</span>
+                <span className="truncate font-medium">
+                  {keyName(t, gatewayKey)}
+                </span>
                 <span className="font-mono text-xs text-muted-foreground">
                   {gatewayKey.prefix}…
                 </span>
@@ -367,6 +398,11 @@ export function RequestDetails({
                 {t('requests.memory.replayed', { count: record.replay_hits })}
               </span>
             ) : null}
+            {recallFailed(record) ? (
+              <DetailDocs section="noMemory">
+                {t('docs.troubleshoot')}
+              </DetailDocs>
+            ) : null}
           </DetailItem>
         ) : null}
         {hasContext ? (
@@ -395,11 +431,19 @@ export function RequestDetails({
               </span>
             ) : null}
             {record.compaction_failed ? (
-              <span className="text-amber-700 dark:text-amber-300">
-                {t('requests.details.compactionFailed', {
-                  reason: record.compaction_failed,
-                })}
-              </span>
+              <>
+                <span className="text-amber-700 dark:text-amber-300">
+                  {t(
+                    record.compaction_failed === 'still_over_threshold'
+                      ? 'requests.details.compactionStillOver'
+                      : 'requests.details.compactionFailed',
+                    { reason: record.compaction_failed },
+                  )}
+                </span>
+                <DetailDocs section="contextLimit">
+                  {t('docs.troubleshoot')}
+                </DetailDocs>
+              </>
             ) : null}
             {record.window ? (
               <span>
@@ -431,16 +475,23 @@ export function RequestDetails({
                 })}
               </span>
             ) : null}
+            {record.capture_status === 'retrying' ||
+            record.capture_status === 'paused' ? (
+              <DetailDocs section="savingStatus" />
+            ) : null}
           </DetailItem>
         ) : null}
         {hasTools ? (
           <DetailItem label={t('requests.details.tools')}>
             {record.tool_skip_reason ? (
-              <span>
-                {t('requests.details.toolsSkipped', {
-                  reason: toolSkipReasonLabel(t, record.tool_skip_reason),
-                })}
-              </span>
+              <>
+                <span>
+                  {t('requests.details.toolsSkipped', {
+                    reason: toolSkipReasonLabel(t, record.tool_skip_reason),
+                  })}
+                </span>
+                <DetailDocs section="toolsNotOffered" />
+              </>
             ) : null}
             {(record.hidden_rounds ?? 0) > 0 ? (
               <span className="tabular-nums">
@@ -458,6 +509,13 @@ export function RequestDetails({
             ) : null}
           </DetailItem>
         ) : null}
+        {record.context_override?.length ? (
+          <DetailItem label={t('requests.details.contextOverride')}>
+            <span className="font-mono text-xs">
+              {record.context_override.join(', ')}
+            </span>
+          </DetailItem>
+        ) : null}
       </dl>
       {degradation ? (
         <Callout
@@ -472,6 +530,7 @@ export function RequestDetails({
           tone="danger"
           happened={t('requests.details.httpError', { status: record.status })}
           action={t('requests.details.httpErrorAction')}
+          docs="upstreamError"
         />
       ) : null}
       {resync ? (

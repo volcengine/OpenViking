@@ -7,6 +7,35 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **Gateway deployment and behavior**:
+  - New standalone Helm chart, `deploy/helm/openviking-gateway`: one SQLite replica with a
+    PVC, or several replicas sharing Redis. Until a release includes these features, set
+    `image.tag` explicitly; see the [operations guide](../guides/22-gateway-operations.md#helm).
+  - New opt-in settings: `storage` (Redis), `management_api`, `openviking_keys`, `tenancy`,
+    `default_upstreams` and `default_profile`, `request_log_sink`, `capture_concurrency` and `keep_alive_seconds`.
+    SQLite remains the default storage.
+  - New `X-OpenViking-Upstream-URL` request header picks one of the allowed upstreams by its
+    Base URL; see [Pick the upstream per request](../gateway/07-upstreams.md#upstream-url-header).
+  - Behavior changes with no configuration change: standalone keep-alive rises from 5 to 75
+    seconds; a gateway bound to a public address waits and retries at startup while
+    OpenViking is unreachable or returns 5xx; idle SSE streams carry a comment heartbeat every
+    15 seconds; a request whose key OpenViking refuses with 402 or 403 is rejected instead of
+    forwarded; and an OpenViking 401 while saving, once `/health` also returns 401, pauses
+    saving with `gateway_key_revoked`.
+- **Volcengine KMS `key_file` (upgrade action)**: `encryption.volcengine_kms.key_file` now takes
+  effect for the server and the gateway; earlier releases ignored it and kept the root key at
+  `~/.openviking/openviking-volcengine-root-key.enc`. If you set `key_file`, move that file to
+  the configured path before upgrading. While the configured file is missing and the default
+  one exists, startup fails instead of creating a new root key.
+- **LangChain import migration (breaking change)**: The server no longer ships
+  `openviking.integrations.langchain` or its forwarding modules. Old imports fail
+  immediately; there is no deprecation period or compatibility stub. Install
+  `langchain-openviking` (or `pip install "langchain-openviking[langgraph]"` for
+  LangGraph) and replace the `openviking.integrations.langchain` prefix with
+  `langchain_openviking`, including submodule imports. For example, use
+  `from langchain_openviking import OpenVikingRetriever`. The maintained packages
+  and examples now live under `integrations/frameworks/`; package names and
+  canonical imports are unchanged. See the [migration guide](../agent-integrations/07-langchain-langgraph.md).
 - **Working Memory defaults off (behavior change)**: Commits continue to archive raw messages
   and extract long-term memories, but generate no WM/checkpoint summaries by default.
   Update installed agent plugins separately: automatic archive injection and takeover now

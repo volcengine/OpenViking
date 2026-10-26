@@ -164,9 +164,16 @@ class UserConfigDefaults(UserConfig):
     @field_validator("auto_commit_policy", mode="before")
     @classmethod
     def validate_auto_commit_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
-        from openviking.session.auto_commit_policy import AutoCommitPolicy
+        from openviking.session.auto_commit_policy import (
+            AutoCommitPolicy,
+            validate_idle_timeout_input,
+        )
 
-        return None if value is None else AutoCommitPolicy.from_dict(value).to_dict()
+        if value is None:
+            return None
+        if isinstance(value, dict) and "idle_timeout_seconds" in value:
+            validate_idle_timeout_input(value["idle_timeout_seconds"])
+        return AutoCommitPolicy.from_dict(value).to_dict()
 
 
 class MetricsAccountDimensionConfig(BaseModel):
@@ -313,8 +320,11 @@ class AccountStoreConfig(BaseModel):
     @classmethod
     def _validate_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if not normalized:
-            raise ValueError("account_store.provider must not be empty")
+        supported = {"file", "mysql", "redis_mysql"}
+        if normalized not in supported:
+            raise ValueError(
+                "account_store.provider must be one of: " + ", ".join(sorted(supported))
+            )
         return normalized
 
 

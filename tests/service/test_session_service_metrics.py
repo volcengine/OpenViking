@@ -57,7 +57,7 @@ async def test_commit_async_keeps_working_when_session_metrics_fail(
     def _boom(*_args, **_kwargs):
         raise RuntimeError("metrics failed")
 
-    monkeypatch.setattr(service, "get", AsyncMock(return_value=session))
+    monkeypatch.setattr(service, "open", AsyncMock(return_value=session))
     monkeypatch.setattr(SessionLifecycleDataSource, "record_lifecycle", staticmethod(_boom))
     monkeypatch.setattr(SessionLifecycleDataSource, "record_archive", staticmethod(_boom))
     monkeypatch.setattr(session_service_module.logger, "debug", debug)

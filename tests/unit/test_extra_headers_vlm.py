@@ -14,6 +14,7 @@ from openai import AsyncOpenAI, OpenAI
 from volcenginesdkarkruntime import Ark, AsyncArk
 from volcenginesdkarkruntime._exceptions import ArkAPIStatusError
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
     detect_provider_by_model,
@@ -349,17 +350,21 @@ class TestOpenAIVLMClientRetries:
         assert call_kwargs["max_retries"] == 0
 
     @pytest.mark.parametrize(
-        ("status_code", "message"),
+        ("status_code", "message", "expected_kind"),
         [
-            (400, "Total tokens of multi-modal content and text exceed max message tokens."),
-            (400, "The parameter model is invalid."),
-            (401, "Unauthorized"),
-            (503, "Service Unavailable"),
+            (
+                400,
+                "Total tokens of multi-modal content and text exceed max message tokens.",
+                ModelErrorKind.INVALID_REQUEST,
+            ),
+            (400, "The parameter model is invalid.", ModelErrorKind.INVALID_REQUEST),
+            (401, "Unauthorized", ModelErrorKind.AUTHENTICATION_ERROR),
+            (503, "Service Unavailable", ModelErrorKind.TRANSIENT_SERVICE_ERROR),
         ],
     )
     @patch("volcenginesdkarkruntime.AsyncArk")
     def test_volcengine_async_client_performs_single_request(
-        self, mock_async_ark_class, status_code, message
+        self, mock_async_ark_class, status_code, message, expected_kind
     ):
         error = ArkAPIStatusError(
             f"Error code: {status_code} - {message}",
@@ -382,10 +387,11 @@ class TestOpenAIVLMClientRetries:
             }
         )
 
-        with pytest.raises(ArkAPIStatusError) as raised:
+        with pytest.raises(ModelError) as raised:
             asyncio.run(vlm.get_completion_async("hello"))
 
-        assert raised.value is error
+        assert raised.value.kind == expected_kind
+        assert raised.value.__cause__ is error
         assert mock_client.chat.completions.create.await_count == 1
         call_kwargs = mock_async_ark_class.call_args.kwargs
         assert call_kwargs["timeout"] == 12.0

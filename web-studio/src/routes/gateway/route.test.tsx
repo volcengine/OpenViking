@@ -29,6 +29,10 @@ const api = vi.hoisted(() => ({
   getAccess: vi.fn(),
 }))
 
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
+
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {

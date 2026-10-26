@@ -719,6 +719,16 @@ class VolcengineKMSProvider(BaseProvider):
                 f"Failed to load existing root key from {self.key_file}. Cannot continue: {e}"
             )
 
+        # Releases before key_file was accepted ignored it and used the default path.
+        default_key_file = Path.home() / ".openviking" / self.ROOT_KEY_FILENAME
+        if default_key_file.exists():
+            raise ConfigError(
+                f"Root key file {self.key_file} does not exist, but {default_key_file} does. "
+                "Earlier releases ignored volcengine_kms.key_file and stored the root key at the "
+                f"default path; move it to {self.key_file}. If {default_key_file} belongs to "
+                "another deployment, generate this key on a host without it."
+            )
+
         # Generate new root key
         import secrets
 

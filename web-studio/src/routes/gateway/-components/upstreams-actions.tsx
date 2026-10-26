@@ -9,6 +9,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
+import { Input } from '#/components/ui/input'
+import { Label } from '#/components/ui/label'
 import { useMutation } from '@tanstack/react-query'
 import { LoaderCircleIcon, PlugZapIcon, Trash2Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -27,7 +29,8 @@ import { toastGatewayError } from '../-lib/error-toast'
 import { gatewayErrorMessage } from '../-lib/localize'
 import type { Translate } from '../-lib/localize'
 import { useGateway } from '../-lib/use-gateway'
-import { toUpstreamInput } from '../-lib/upstream-schema'
+import { servedModels, toUpstreamInput } from '../-lib/upstream-schema'
+import { DocsLink } from './docs-link'
 import { Notice } from './notice'
 import { ExplainedButton } from './explained-button'
 import { ToneBadge } from './status-badges'
@@ -48,6 +51,51 @@ type TestOutcome =
 
 type TestSummary = { tone: Tone; label: string; explanation: string }
 
+function TestExplanation({ text }: { text: string }) {
+  const [message, url] = text.split('\n', 2)
+  return (
+    <div className="grid min-w-0 gap-1 text-muted-foreground">
+      <p className="text-sm">{message}</p>
+      {url ? (
+        <p className="break-all font-mono text-xs leading-5">{url}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function readableResponse(
+  response: NonNullable<UpstreamTestResult['response']>,
+): string {
+  let body: unknown
+  try {
+    body = JSON.parse(response.body)
+  } catch {
+    body = response.body
+  }
+  if (
+    typeof body === 'string' &&
+    /<(?:!doctype|html|head|body|title|h[1-6]|p|pre|li|div|br)\b/i.test(body)
+  ) {
+    const document = new DOMParser().parseFromString(body, 'text/html')
+    document.querySelectorAll('script, style, noscript').forEach((node) => {
+      node.remove()
+    })
+    const sections = Array.from(
+      document.body.querySelectorAll('h1, h2, h3, p, li, pre'),
+    )
+      .map((node) => node.textContent)
+      .map((text) => text.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+    body = {
+      ...(document.title ? { title: document.title } : {}),
+      body: sections.length
+        ? sections.join('\n')
+        : document.body.textContent.replace(/\s+/g, ' ').trim(),
+    }
+  }
+  return JSON.stringify({ ...response, body }, null, 2)
+}
+
 /** Badge text and explanation for a finished connection test. */
 export function describeTest(t: Translate, outcome: TestOutcome): TestSummary {
   const { result } = outcome
@@ -59,23 +107,49 @@ export function describeTest(t: Translate, outcome: TestOutcome): TestSummary {
     }
   }
   const withUrl = (message: string) =>
-    result.url ? `${message} ${result.url}` : message
-  if (
-    result.reason === 'models_unavailable' ||
-    result.status === 404 ||
-    result.status === 405 ||
-    result.reason === 'rate_limited' ||
-    result.status === 429
-  ) {
+    result.url ? `${message}\n${result.url}` : message
+  if (result.ok) {
+    if (result.kind === 'connection') {
+      const unverified =
+        result.reason === 'models_unavailable' || result.reason === 'rate_limited'
+      return {
+        tone: unverified ? 'neutral' : 'success',
+        label: t(
+          unverified
+            ? 'upstreams.test.result.connectionUnverified'
+            : 'upstreams.test.result.connected',
+          { status: result.status },
+        ),
+        explanation: withUrl(
+          t(
+            unverified
+              ? 'upstreams.test.explain.connectionUnverified'
+              : 'upstreams.test.explain.connected',
+          ),
+        ),
+      }
+    }
+    return {
+      tone: 'success',
+      label: t('upstreams.test.result.ok', { status: result.status }),
+      explanation: t('upstreams.test.explain.ok'),
+    }
+  }
+  if (result.reason === 'rate_limited' || result.status === 429) {
     return {
       tone: 'neutral',
-      label: t('upstreams.test.result.unverified', { status: result.status }),
+      label: t('upstreams.test.result.failed', { status: result.status }),
+      explanation: withUrl(t('upstreams.test.explain.rateLimited')),
+    }
+  }
+  if (result.reason === 'model_request_rejected') {
+    return {
+      tone: 'danger',
+      label: t('upstreams.test.result.failed', { status: result.status }),
       explanation: withUrl(
-        t(
-          result.reason === 'rate_limited' || result.status === 429
-            ? 'upstreams.test.explain.rateLimited'
-            : 'upstreams.test.explain.notFound',
-        ),
+        t('upstreams.test.explain.requestRejected', {
+          status: result.status,
+        }),
       ),
     }
   }
@@ -86,6 +160,13 @@ export function describeTest(t: Translate, outcome: TestOutcome): TestSummary {
       explanation: t('errors.reasons.upstream_key_missing'),
     }
   }
+  if (result.reason === 'coding_plan_blocked') {
+    return {
+      tone: 'danger',
+      label: t('upstreams.credentials.blocked'),
+      explanation: t('upstreams.test.codingPlan'),
+    }
+  }
   if (result.status === undefined) {
     return {
       tone: 'danger',
@@ -94,14 +175,13 @@ export function describeTest(t: Translate, outcome: TestOutcome): TestSummary {
     }
   }
   const { status } = result
-  if (result.ok && result.reason !== 'upstream_key_rejected') {
+  if (result.reason === 'invalid_response') {
     return {
-      tone: 'success',
-      label: t('upstreams.test.result.ok', { status }),
-      explanation: t('upstreams.test.explain.ok'),
+      tone: 'danger',
+      label: t('upstreams.test.result.failed', { status }),
+      explanation: withUrl(t('upstreams.test.explain.invalidResponse')),
     }
   }
-  // 404 and 405 were answered above as reachable but unverified.
   const explanation =
     result.reason === 'upstream_key_rejected' ||
     status === 401 ||
@@ -133,18 +213,37 @@ export function UpstreamTest({
   note,
 }: UpstreamTestProps) {
   const { t } = useTranslation('gateway')
-  const { connection } = useGateway()
-  const test = useMutation<UpstreamTestResult, unknown>({
+  const { connection, readOnly } = useGateway()
+  const configuredModels = React.useMemo(
+    () => servedModels(upstream),
+    [upstream],
+  )
+  const [open, setOpen] = React.useState(false)
+  const [model, setModel] = React.useState(configuredModels[0] ?? '')
+  const inputId = React.useId()
+  const listId = `${inputId}-models`
+  const connectionTest = useMutation<UpstreamTestResult, unknown>({
     mutationFn: () => testUpstream(connection, upstream.id),
   })
+  const modelTest = useMutation<UpstreamTestResult, unknown, string>({
+    mutationFn: (selectedModel) =>
+      testUpstream(connection, upstream.id, selectedModel),
+  })
   const blocked = testBlockedReason(upstream)
+  // An exact endpoint has no model list; upstreams saved before the setting append the path.
+  const exact = upstream.append_endpoint_path === false
   const explanation = blocked
     ? t(`upstreams.test.${blocked}`)
     : [t('upstreams.test.hint'), note].filter(Boolean).join(' ')
-  const summary = test.isSuccess
-    ? describeTest(t, { result: test.data })
-    : test.isError
-      ? describeTest(t, { error: test.error })
+  const connectionSummary = connectionTest.isSuccess
+    ? describeTest(t, { result: connectionTest.data })
+    : connectionTest.isError
+      ? describeTest(t, { error: connectionTest.error })
+      : undefined
+  const modelSummary = modelTest.isSuccess
+    ? describeTest(t, { result: modelTest.data })
+    : modelTest.isError
+      ? describeTest(t, { error: modelTest.error })
       : undefined
   const label = t(
     variant === 'row' ? 'upstreams.test.action' : 'upstreams.test.connection',
@@ -152,19 +251,36 @@ export function UpstreamTest({
   // In the list, below `md`, the button shows only its icon and the result
   // only its dot; the text stays for screen readers.
   const compact = variant === 'row' ? 'max-md:sr-only' : undefined
+  if (readOnly) return null
+  const start = () => {
+    connectionTest.reset()
+    modelTest.reset()
+    setModel(configuredModels[0] ?? '')
+    setOpen(true)
+    if (!exact) connectionTest.mutate()
+  }
+  const submit = (event: React.SubmitEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const selectedModel = model.trim()
+    if (selectedModel) modelTest.mutate(selectedModel)
+  }
+  const pending = connectionTest.isPending || modelTest.isPending
+  const connected =
+    exact || (connectionTest.isSuccess && connectionTest.data.ok)
+  const modelBlocked = upstream.coding_plan && !upstream.allow_coding_plan
 
   return (
     <div className="flex items-center gap-2">
       <span aria-live="polite" className="contents">
-        {summary && !test.isPending ? (
+        {modelSummary && !pending ? (
           <ToneBadge
-            tone={summary.tone}
+            tone={modelSummary.tone}
             dot
-            title={summary.explanation}
+            title={modelSummary.explanation}
             className="max-w-48"
           >
             <span className={cn('min-w-0 truncate', compact)}>
-              {summary.label}
+              {modelSummary.label}
             </span>
           </ToneBadge>
         ) : null}
@@ -174,19 +290,144 @@ export function UpstreamTest({
         variant={variant === 'row' ? 'ghost' : 'outline'}
         size="sm"
         className={variant === 'row' ? 'h-8 px-2 text-xs' : undefined}
-        disabled={Boolean(blocked) || test.isPending}
+        disabled={Boolean(blocked) || pending}
         explanation={explanation}
-        onClick={() => test.mutate()}
+        onClick={start}
       >
-        {test.isPending ? (
-          <LoaderCircleIcon className="animate-spin" />
-        ) : (
-          <PlugZapIcon />
-        )}
-        <span className={compact}>
-          {test.isPending ? t('upstreams.test.running') : label}
-        </span>
+        <PlugZapIcon />
+        <span className={compact}>{label}</span>
       </ExplainedButton>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!pending) setOpen(next)
+        }}
+      >
+        <DialogContent
+          showCloseButton={!pending}
+          className="gap-5 sm:max-w-lg"
+        >
+          <DialogHeader className="min-w-0 pr-8">
+            <DialogTitle>
+              {t('upstreams.test.dialog.title', { name: upstream.name })}
+            </DialogTitle>
+            <DialogDescription>
+              {t('upstreams.test.dialog.description')}{' '}
+              <DocsLink section="testUpstream" variant="text" />
+            </DialogDescription>
+          </DialogHeader>
+          <form className="grid min-w-0 gap-5" onSubmit={submit}>
+            <div
+              className="grid min-w-0 gap-2 rounded-md border border-border p-3"
+              aria-live="polite"
+            >
+              <p className="text-xs font-medium">
+                {t('upstreams.test.dialog.connection')}
+              </p>
+              {exact ? (
+                <p className="text-sm text-muted-foreground">
+                  {t('upstreams.test.dialog.exactEndpoint')}
+                </p>
+              ) : connectionTest.isPending ? (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <LoaderCircleIcon className="size-4 animate-spin" />
+                  {t('upstreams.test.dialog.checkingConnection')}
+                </p>
+              ) : connectionSummary ? (
+                <div className="grid min-w-0 gap-1">
+                  <ToneBadge tone={connectionSummary.tone} dot>
+                    {connectionSummary.label}
+                  </ToneBadge>
+                  <TestExplanation text={connectionSummary.explanation} />
+                </div>
+              ) : null}
+            </div>
+            <div className="grid min-w-0 gap-2">
+              <Label htmlFor={inputId}>
+                {t('upstreams.test.dialog.model')}
+              </Label>
+              <Input
+                id={inputId}
+                list={configuredModels.length ? listId : undefined}
+                value={model}
+                required
+                autoComplete="off"
+                disabled={!connected || modelTest.isPending}
+                placeholder={t('upstreams.test.dialog.modelPlaceholder')}
+                onChange={(event) => {
+                  setModel(event.target.value)
+                  modelTest.reset()
+                }}
+              />
+              {configuredModels.length ? (
+                <datalist id={listId}>
+                  {configuredModels.map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                {modelBlocked
+                  ? t('upstreams.test.codingPlan')
+                  : t(
+                      configuredModels.length
+                        ? 'upstreams.test.dialog.configuredModel'
+                        : 'upstreams.test.dialog.unconfiguredModel',
+                    )}
+              </p>
+            </div>
+            {modelSummary && !modelTest.isPending ? (
+              <div
+                className="grid min-w-0 gap-3 rounded-md border border-border p-3"
+                aria-live="polite"
+              >
+                <ToneBadge tone={modelSummary.tone} dot>
+                  {modelSummary.label}
+                </ToneBadge>
+                <TestExplanation text={modelSummary.explanation} />
+                {!modelTest.data?.ok && modelTest.data?.response ? (
+                  <div className="grid gap-1">
+                    <p className="text-xs font-medium">
+                      {t('upstreams.test.dialog.response')}
+                    </p>
+                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted px-3 py-2 text-xs">
+                      {readableResponse(modelTest.data.response)}
+                    </pre>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={() => setOpen(false)}
+              >
+                {t('actions.cancel')}
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  !connected ||
+                  modelBlocked ||
+                  modelTest.isPending ||
+                  !model.trim()
+                }
+              >
+                {modelTest.isPending ? (
+                  <LoaderCircleIcon className="animate-spin" />
+                ) : (
+                  <PlugZapIcon />
+                )}
+                {modelTest.isPending
+                  ? t('upstreams.test.running')
+                  : t('upstreams.test.dialog.run')}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

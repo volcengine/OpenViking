@@ -7,6 +7,8 @@ from typing import Any, AsyncIterator, Callable, Literal
 
 import json_repair
 
+from openviking.models.model_error import ModelErrorKind
+
 
 @dataclass
 class ToolCallRequest:
@@ -27,6 +29,7 @@ class LLMResponse:
     finish_reason: str = "stop"
     usage: dict[str, int] = field(default_factory=dict)
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
+    error_kind: ModelErrorKind | None = None
 
     @property
     def has_tool_calls(self) -> bool:

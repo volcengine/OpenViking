@@ -20,8 +20,6 @@ const upstreams = {
         'The model configuration is invalid. Check the server settings and import again.',
       openai_codex:
         'Codex OAuth credentials refresh periodically and cannot be used long term by the gateway. Add an upstream manually.',
-      azure:
-        'Azure OpenAI requires an api-version parameter that the gateway does not support yet. Add an upstream manually.',
       litellm_no_api_base:
         'This LiteLLM credential has no api_base. Add api_base to the server configuration and import again.',
       litellm_unsupported_route:
@@ -80,30 +78,55 @@ const upstreams = {
   },
   test: {
     action: 'Test',
-    connection: 'Test connection',
+    connection: 'Test',
     running: 'Testing…',
-    hint: 'Asks the provider for its model list with the stored key and headers. This checks the address and the key, not the models or chat requests.',
+    hint: 'Checks the upstream connection, then lets you test a model.',
     savedOnly: 'Tests the saved settings. Save first to test your changes.',
     passthrough:
       'Each client sends its own key, so there is no stored key to test with.',
     noKey: 'Add an API key first.',
+    codingPlan:
+      'This Coding Plan has not been approved for model requests through the gateway.',
     result: {
-      unverified: 'Reachable, key unverified · {{status}}',
-      ok: 'Reachable · {{status}}',
+      connected: 'Connected · {{status}}',
+      connectionUnverified: 'Connected · {{status}}',
+      ok: 'Model works · {{status}}',
       failed: 'Failed · {{status}}',
       unreachable: 'Unreachable',
       error: "Couldn't test",
     },
     explain: {
-      ok: 'The provider accepted the key and returned its model list.',
+      connected: 'The provider accepted the key and returned its model list.',
+      connectionUnverified:
+        'The address is reachable, but the provider does not offer a model list, so the key is not verified. You can still test a model.',
+      ok: 'The selected model generated a reply.',
       auth: 'The provider rejected the API key or one of the headers.',
       rateLimited:
-        'The address is reachable, but the provider is rate limiting requests. The key has not been verified.',
-      notFound:
-        'The address is reachable, but the provider does not offer a model list. The API key has not been verified.',
+        'The provider rate limited the request, so model generation did not complete.',
+      requestRejected:
+        'The provider rejected the generation request (HTTP {{status}}). Check the model name, protocol and complete endpoint URL.',
+      invalidResponse:
+        'The provider returned a success status, but its response does not match the selected protocol.',
       status: 'The provider answered with HTTP {{status}}.',
       unreachable:
-        "The gateway couldn't connect within 10 seconds. Check the base URL and the network between the gateway and the provider.",
+        "The gateway couldn't connect or the request timed out. Check the base URL and the network between the gateway and the provider.",
+    },
+    dialog: {
+      title: 'Test “{{name}}”',
+      description:
+        'Checks the saved connection first, then sends one small non-streaming request to test the selected model.',
+      connection: 'Upstream connection',
+      checkingConnection: 'Checking connection…',
+      exactEndpoint:
+        'An exact endpoint has no model list to check. Test a model directly.',
+      model: 'Model',
+      modelPlaceholder: 'Enter a provider model name',
+      configuredModel:
+        'Choose a configured model or enter another provider model name.',
+      unconfiguredModel:
+        'This upstream allows any model. Enter a model name supported by the provider.',
+      response: 'Upstream response (JSON)',
+      run: 'Run test',
     },
   },
   delete: {
@@ -192,7 +215,7 @@ const upstreams = {
     baseUrl: {
       label: 'Base URL',
       description:
-        "Use base_url from the provider's SDK documentation. The gateway appends /chat/completions, /responses or /v1/messages. Add separate upstreams when a provider uses different base URLs for different protocols.",
+        "Use base_url from the provider's SDK documentation. The gateway appends /chat/completions, /responses or /v1/messages. Add separate upstreams when a provider uses different base URLs for different protocols. The URL may include a query; write the key as {api_key}.",
       preview: 'Requests go to',
       missingPath:
         'This provider needs a path in base_url. A domain alone sends requests to the wrong address.',
@@ -201,6 +224,18 @@ const upstreams = {
       removeVersion: 'Remove /v1',
       correctPath: 'Use {{url}}',
       useDefault: 'Use default',
+    },
+    appendEndpointPath: {
+      label: 'Append protocol endpoint path',
+      description:
+        'Adds the path for the selected protocol to the Base URL. Turn this off when the Base URL is already the complete request endpoint.',
+    },
+    keyHeader: {
+      label: 'Send the key as',
+      authorization: 'Authorization: Bearer',
+      apiKey: 'api-key header (Azure OpenAI)',
+      xApiKey: 'x-api-key header',
+      inUrl: 'In the URL ({api_key}); no auth header is sent',
     },
     authMode: {
       label: 'Who provides the API key',

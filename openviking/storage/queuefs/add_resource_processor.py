@@ -10,8 +10,13 @@ from typing import Any, Dict, Optional
 
 from openviking.observability.context import bind_execution_context
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import TaskPatch
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
-from openviking.service.task_work_index import bind_task_context, extract_task_metadata
+from openviking.service.task_work_index import (
+    bind_task_context_from_message,
+    extract_task_metadata,
+)
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
@@ -22,7 +27,6 @@ from openviking.telemetry import (
     resolve_telemetry,
     unregister_telemetry,
 )
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import record_resource_queue_metrics
 from openviking.utils.log_correlation import log_correlation
 from openviking_cli.exceptions import OpenVikingError
@@ -83,17 +87,19 @@ class AddResourceProcessor(DequeueHandlerBase):
         ctx: RequestContext,
     ) -> None:
         if msg.lock_handoff is not None:
+            lock_guard = PathLockGuard(self._viking_fs._async_agfs)
             try:
-                lock = await self._viking_fs._async_agfs.pathlock_adopt(msg.lock_handoff)
+                await lock_guard.adopt(msg.lock_handoff)
                 if msg.cleanup_empty_target_on_failure:
                     await self._resource_service._cleanup_reserved_target_if_empty(
                         root_uri=msg.root_uri,
                         ctx=ctx,
-                        resource_lock=lock,
+                        resource_lock=lock_guard.lease,
                     )
-                await self._viking_fs._async_agfs.pathlock_release(lock)
             except Exception as exc:
                 logger.warning("[AddResource] Failed to release cancelled lock handoff: %s", exc)
+            finally:
+                await lock_guard.close()
         with suppress(Exception):
             await self._cleanup_staged_source(msg, ctx)
         with suppress(Exception):
@@ -138,6 +144,10 @@ class AddResourceProcessor(DequeueHandlerBase):
         return True
 
     async def _process(self, msg: AddResourceMsg, data: Dict[str, Any]) -> ProcessResult:
+        with bind_task_context_from_message(data):
+            return await self._process_bound(msg, data)
+
+    async def _process_bound(self, msg: AddResourceMsg, data: Dict[str, Any]) -> ProcessResult:
         telemetry_id = msg.telemetry_id or ""
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
@@ -177,12 +187,15 @@ class AddResourceProcessor(DequeueHandlerBase):
             unregister_telemetry(telemetry_id)
             return ProcessResult.success()
 
-        metadata = extract_task_metadata(data)
         replay_result = getattr(task, "result", None)
         resource_lock = None
+        lock_guard = PathLockGuard(self._viking_fs._async_agfs)
         if replay_result is None:
             try:
-                resource_lock = await self._load_lock(msg, ctx)
+                await lock_guard.acquire(lambda: self._load_lock(msg, ctx))
+            except asyncio.CancelledError:
+                await lock_guard.close()
+                raise
             except Exception as exc:
                 if await self._requeue_lock_handoff(msg, exc):
                     return ProcessResult.requeued()
@@ -212,25 +225,19 @@ class AddResourceProcessor(DequeueHandlerBase):
             else:
                 telemetry_id = telemetry.telemetry_id
             register_telemetry(telemetry)
-        request_wait_tracker = get_request_wait_tracker()
-        request_wait_tracker.register_request(telemetry_id)
         current_stage = "queued"
 
         async def _set_stage(stage: str) -> None:
             nonlocal current_stage
             current_stage = stage
-            await tracker.update_stage(
+            await tracker.patch_task(
                 msg.task_id,
-                stage,
+                TaskPatch(stage=stage),
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
 
-        with (
-            bind_execution_context(),
-            bind_telemetry(telemetry),
-            bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id),
-        ):
+        with bind_execution_context(), bind_telemetry(telemetry):
             terminal = False
             try:
                 queue_message_id = str(data.get("id") or "")
@@ -251,16 +258,18 @@ class AddResourceProcessor(DequeueHandlerBase):
                         user_id=ctx.user.user_id,
                         stage="queued",
                     )
+                    task_auth = await tracker.get_task_auth(
+                        msg.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    resource_lock = lock_guard.detach()
                     result = await self._resource_service.execute_add_resource_job(
                         msg,
                         ctx=ctx,
                         resource_lock=resource_lock,
                         stage_callback=_set_stage,
-                        task_auth=await tracker.get_task_auth(
-                            msg.task_id,
-                            account_id=ctx.account_id,
-                            user_id=ctx.user.user_id,
-                        ),
+                        task_auth=task_auth,
                     )
                     if result.get("status") == "error":
                         errors = result.get("errors") or ["resource processing failed"]
@@ -277,13 +286,15 @@ class AddResourceProcessor(DequeueHandlerBase):
                             error,
                         )
                         code = result.get("code")
-                        failure_result = {"code": code} if isinstance(code, str) and code else None
+                        failure_result = {"code": code} if isinstance(code, str) and code else {}
+                        if isinstance(result.get("details"), dict):
+                            failure_result["details"] = result["details"]
                         await tracker.fail(
                             msg.task_id,
                             error,
                             account_id=ctx.account_id,
                             user_id=ctx.user.user_id,
-                            result=failure_result,
+                            result=failure_result or None,
                         )
                         await self._record_watch_execution(msg, "failed", error)
                         terminal = True
@@ -298,18 +309,24 @@ class AddResourceProcessor(DequeueHandlerBase):
                         )
                 else:
                     result = deepcopy(replay_result)
-                await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
-                result.setdefault(
-                    "queue_status", request_wait_tracker.build_queue_status(telemetry_id)
+                metadata = extract_task_metadata(data)
+                await tracker.wait_for_task_work(
+                    msg.task_id,
+                    exclude_work_id=metadata.work_id if metadata is not None else None,
                 )
+                work_summary = await tracker.get_work_summary(
+                    msg.task_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                result["queue_status"] = tracker.format_queue_status(work_summary)
                 if replay_result is None:
-                    result["context_count"] = request_wait_tracker.get_embedding_context_count(
-                        telemetry_id
-                    )
+                    result["context_count"] = work_summary.context_count
                 record_resource_queue_metrics(
                     telemetry=telemetry,
                     telemetry_id=telemetry_id,
                     root_uri=result.get("root_uri"),
+                    queue_timing=tracker.format_queue_timing(work_summary),
                 )
                 telemetry.set("resource.total.duration_ms", telemetry.elapsed_ms())
 
@@ -394,23 +411,29 @@ class AddResourceProcessor(DequeueHandlerBase):
                     str(exc) or type(exc).__name__,
                 )
                 failure_result = (
-                    {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else None
+                    {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else {}
                 )
+                if isinstance(exc, OpenVikingError) and isinstance(exc.details, dict):
+                    failure_result["details"] = exc.details
                 await tracker.fail(
                     msg.task_id,
                     str(exc),
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
-                    result=failure_result,
+                    result=failure_result or None,
                 )
                 terminal = True
                 return ProcessResult.failed(str(exc))
             finally:
-                request_wait_tracker.cleanup(telemetry_id)
                 unregister_telemetry(telemetry_id)
+                await lock_guard.close()
                 with suppress(Exception):
                     if resource_lock is not None:
-                        await self._viking_fs._async_agfs.pathlock_release(resource_lock)
+                        cleanup_guard = PathLockGuard(
+                            self._viking_fs._async_agfs,
+                            resource_lock,
+                        )
+                        await cleanup_guard.close()
                 if terminal:
                     with suppress(Exception):
                         await self._cleanup_staged_source(msg, ctx)

@@ -47,6 +47,7 @@ import { requestManagementUnlock } from '../-lib/management-key'
 import { NEW_ID } from '../-lib/search'
 import { servedModels } from '../-lib/upstream-schema'
 import { useGateway, useKeyUsers } from '../-lib/use-gateway'
+import { DocsLink } from './docs-link'
 import { SettingField } from './setting-field'
 import { ProtocolBadge, ToneBadge } from './status-badges'
 import { TagInput } from './tag-input'
@@ -145,6 +146,8 @@ type KeysIssueDialogProps = {
   upstreams: Upstream[]
   /** Receives the new key, whose secret is only available now. */
   onIssued: (issued: IssuedKey) => void
+  /** Initial name, profile, upstreams and models instead of an empty form. */
+  defaults?: Partial<Omit<KeyRequest, keyof KeyOwner>>
 }
 
 /**
@@ -159,6 +162,7 @@ export function KeysIssueDialog({
   profiles,
   upstreams,
   onIssued,
+  defaults,
 }: KeysIssueDialogProps) {
   const { t } = useTranslation('gateway')
   const {
@@ -181,6 +185,7 @@ export function KeysIssueDialog({
     policy_id: profiles.length === 1 ? profiles[0].id : '',
     upstream_ids: upstreams.length === 1 ? [upstreams[0].id] : [],
     models: [],
+    ...defaults,
   }))
   /** 'key' once the admin switches to pasting, or the server asks for it. */
   const [chosenMode, setChosenMode] = React.useState<'user' | 'key'>('user')
@@ -612,7 +617,12 @@ export function KeysIssueDialog({
             <Alert variant="destructive">
               <CircleAlertIcon />
               <AlertTitle>{t('keys.errors.title')}</AlertTitle>
-              <AlertDescription>{problem.message}</AlertDescription>
+              <AlertDescription>
+                {problem.message}{' '}
+                <DocsLink section="issueKeyFails" variant="text">
+                  {t('docs.troubleshoot')}
+                </DocsLink>
+              </AlertDescription>
             </Alert>
           ) : null}
         </form>

@@ -7,7 +7,8 @@ import pytest
 from pydantic import ValidationError
 
 from openviking.crypto import FileEncryptor
-from openviking_gateway import cli
+from openviking_gateway import cli, protocols
+from openviking_gateway.app import create_app
 from openviking_gateway.cli import load_config
 from openviking_gateway.client import VikingError
 from openviking_gateway.config import (
@@ -104,6 +105,34 @@ def test_embedded_environment_overrides_ov_conf(monkeypatch):
     assert config.storage_path == "/data/gateway"
     # A server whose ov.conf has no gateway section builds the default the same way.
     assert EmbeddedGatewayConfig().management_key == "e" * 32
+
+
+def test_client_rules_validation_and_environment(monkeypatch):
+    with pytest.raises(ValidationError, match="invalid regex"):
+        GatewayConfig(client_rules={"auxiliary_patterns": {"add": ["Summarize (this"]}})
+    with pytest.raises(ValidationError, match="tag names"):
+        GatewayConfig(client_rules={"noise_tags": {"add": ["a>b"]}})
+    with pytest.raises(ValidationError):
+        GatewayConfig(client_rules={"auxiliary_patterns": ["replaces the list"]})
+    rules = {"auxiliary_patterns": {"add": ["You are the Acme title writer"]}}
+    monkeypatch.setenv("OPENVIKING_GATEWAY_CLIENT_RULES", json.dumps(rules))
+    config = EmbeddedGatewayConfig.model_validate({"enabled": True})
+    assert config.client_rules.auxiliary_patterns.add == ["You are the Acme title writer"]
+
+
+def test_app_applies_client_rules_and_warns_about_stale_removals(tmp_path, caplog):
+    config = GatewayConfig(
+        storage_path=str(tmp_path),
+        client_rules={
+            "auxiliary_patterns": {"add": ["Acme title writer"], "remove": ["Old packaged rule"]}
+        },
+    )
+    try:
+        create_app(config, openviking_url="http://ov.test")
+        assert "Acme title writer" in protocols.AUXILIARY_PATTERNS
+        assert "auxiliary_patterns: Old packaged rule" in caplog.text
+    finally:
+        protocols.configure_rules()
 
 
 def test_standalone_config_file_and_env_precedence(tmp_path, monkeypatch):
@@ -280,3 +309,17 @@ def test_public_url_normalization():
     assert ipv6.openviking_url == "http://[::1]:1933"
     with pytest.raises(ValidationError):
         StandaloneGatewayConfig(openviking_url="http://localhost:99999")
+
+
+def test_mcp_file_links_default_environment_and_validation(monkeypatch):
+    assert GatewayConfig().mcp_file_links == "proxy"
+    assert EmbeddedGatewayConfig(mcp_file_links="direct").mcp_file_links == "direct"
+    monkeypatch.setenv("OPENVIKING_GATEWAY_MCP_FILE_LINKS", "direct")
+    config = StandaloneGatewayConfig(openviking_url="http://openviking:1933")
+    assert config.mcp_file_links == "direct"
+    monkeypatch.setenv("OPENVIKING_GATEWAY_MCP_FILE_LINKS", "public")
+    with pytest.raises(ValidationError):
+        GatewayConfig()
+    monkeypatch.delenv("OPENVIKING_GATEWAY_MCP_FILE_LINKS")
+    with pytest.raises(ValidationError):
+        GatewayConfig(mcp_file_links="public")

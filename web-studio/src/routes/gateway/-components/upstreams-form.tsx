@@ -24,6 +24,7 @@ import { cn } from '#/lib/utils'
 
 import type {
   AuthMode,
+  KeyHeader,
   Protocol,
   Upstream,
   UpstreamInput,
@@ -33,6 +34,8 @@ import { formatNumber } from '../-lib/format'
 import { protocolLabel, vendorLabel } from '../-lib/localize'
 import {
   ARK_VENDORS,
+  KEY_HEADERS,
+  KEY_PLACEHOLDER,
   PROTOCOLS,
   PROTOCOL_PATHS,
   UPSTREAM_DEFAULTS,
@@ -63,6 +66,13 @@ export type UpstreamField = keyof UpstreamInput
 
 /** Base URL placeholder for providers without a default, such as Generic. */
 const BASE_URL_EXAMPLE = 'https://api.example.com/v1'
+
+/** Translation key under `upstreams.form.keyHeader` of each header option. */
+const KEY_HEADER_LABELS: Record<KeyHeader, string> = {
+  authorization: 'authorization',
+  'api-key': 'apiKey',
+  'x-api-key': 'xApiKey',
+}
 
 /** Providers with a hint of their own under `upstreams.form.vendor.hints`. */
 const VENDOR_HINTS: Vendor[] = ['deepseek', 'ark', 'byteplus']
@@ -207,6 +217,7 @@ export function UpstreamForm({
   const preview = endpointPreview(draft)
   const defaultUrl = defaultBaseUrl(draft.vendor, draft.protocol)
   const keyStored = Boolean(stored?.has_api_key)
+  const keyInUrl = draft.base_url.includes(KEY_PLACEHOLDER)
   const vendorHint = VENDOR_HINTS.includes(draft.vendor)
     ? t(`upstreams.form.vendor.hints.${draft.vendor}`)
     : t('upstreams.form.vendor.description')
@@ -220,6 +231,9 @@ export function UpstreamForm({
   function switchEndpoint(vendor: Vendor, protocol: Protocol) {
     if (vendor !== draft.vendor) onChange('vendor', vendor)
     if (protocol !== draft.protocol) onChange('protocol', protocol)
+    if (vendor !== 'generic' && draft.key_header !== 'authorization') {
+      onChange('key_header', 'authorization')
+    }
     const baseUrl = baseUrlAfterSwitch(draft, vendor, protocol)
     if (baseUrl !== draft.base_url) onFill('base_url', baseUrl)
   }
@@ -230,6 +244,7 @@ export function UpstreamForm({
         icon={<GlobeIcon />}
         title={t('upstreams.sections.endpoint.title')}
         description={t('upstreams.sections.endpoint.description')}
+        docs="endpoint"
       >
         <SettingField
           label={t('upstreams.form.name.label')}
@@ -382,12 +397,22 @@ export function UpstreamForm({
             ) : null}
           </div>
         </SettingField>
+        <ToggleRow
+          id="upstream-append-endpoint-path"
+          label={t('upstreams.form.appendEndpointPath.label')}
+          description={t('upstreams.form.appendEndpointPath.description')}
+          checked={draft.append_endpoint_path}
+          onCheckedChange={(enabled) =>
+            onChange('append_endpoint_path', enabled)
+          }
+        />
       </SettingSection>
 
       <SettingSection
         icon={<KeyRoundIcon />}
         title={t('upstreams.sections.credentials.title')}
         description={t('upstreams.sections.credentials.description')}
+        docs="credentials"
       >
         {readOnly ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -435,6 +460,41 @@ export function UpstreamForm({
                 ))}
               </RadioGroup>
             </SettingField>
+            {draft.vendor === 'generic' ? (
+              <SettingField
+                label={t('upstreams.form.keyHeader.label')}
+                htmlFor="upstream-key-header"
+              >
+                <Select
+                  value={draft.key_header}
+                  disabled={keyInUrl}
+                  onValueChange={(value) => {
+                    const header = KEY_HEADERS.find((item) => item === value)
+                    if (header) onChange('key_header', header)
+                  }}
+                >
+                  <SelectTrigger
+                    id="upstream-key-header"
+                    className="w-full sm:w-96"
+                  >
+                    <SelectValue>
+                      {t(
+                        `upstreams.form.keyHeader.${keyInUrl ? 'inUrl' : KEY_HEADER_LABELS[draft.key_header]}`,
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {KEY_HEADERS.map((header) => (
+                      <SelectItem key={header} value={header}>
+                        {t(
+                          `upstreams.form.keyHeader.${KEY_HEADER_LABELS[header]}`,
+                        )}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SettingField>
+            ) : null}
             {draft.auth_mode === 'managed' ? (
               <SettingField
                 label={
@@ -531,6 +591,7 @@ export function UpstreamForm({
         icon={<BoxesIcon />}
         title={t('upstreams.sections.models.title')}
         description={t('upstreams.sections.models.description')}
+        docs="models"
       >
         <SettingField
           label={t('upstreams.form.models.label')}
@@ -580,6 +641,7 @@ export function UpstreamForm({
         icon={<RouteIcon />}
         title={t('upstreams.sections.routing.title')}
         description={t('upstreams.sections.routing.description')}
+        docs="routing"
       >
         <SettingField
           label={t('upstreams.form.priority.label')}

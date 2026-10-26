@@ -521,27 +521,61 @@ impl PathLockManager {
                         continue;
                     };
                     let lock_paths = entry.lease.lock_paths.clone();
-                    let mut all_ok = true;
+                    let pending_handoff = entry.pending_handoff;
+                    let mut any_ok = false;
+                    let mut released_handoff_paths = Vec::new();
                     for lp in &lock_paths {
                         match refresh_provider
                             .refresh_token(lp, &owner.owner_id, now_ns)
                             .await
                         {
                             Ok(true) => {
+                                any_ok = true;
                                 debug!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatically refreshed");
                             }
                             Ok(false) => {
-                                all_ok = false;
-                                warn!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatic refresh failed");
+                                if pending_handoff {
+                                    // A different process may have adopted and released this
+                                    // handoff. Its completed release makes the producer's
+                                    // local reference obsolete. Do not remove the provider
+                                    // token: another process may own it or have released it.
+                                    released_handoff_paths.push(lp.clone());
+                                } else {
+                                    warn!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatic refresh failed");
+                                }
                             }
                             Err(error) => {
-                                all_ok = false;
                                 warn!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, error = %error, "pathlock lease automatic refresh failed");
                             }
                         }
                     }
-                    if all_ok {
+                    if any_ok {
                         owner_registry.touch(&lease_ref);
+                    }
+                    for lock_path in released_handoff_paths {
+                        let is_last_path =
+                            owner_registry.entries.get(&lease_ref).is_some_and(|entry| {
+                                entry.lease.lock_paths.iter().all(|path| path == &lock_path)
+                            });
+                        if is_last_path {
+                            if let Err(error) = refresh_registry.unpublish(&lease_ref, &owner) {
+                                error!(
+                                    lease_ref = %lease_ref,
+                                    owner_id = %owner.owner_id,
+                                    error = %error,
+                                    "failed to forget released pathlock handoff"
+                                );
+                                continue;
+                            }
+                        }
+                        owner_registry.remove_path(&lease_ref, &lock_path);
+                        if is_last_path {
+                            debug!(
+                                lease_ref = %lease_ref,
+                                owner_id = %owner.owner_id,
+                                "forgot locally released pathlock handoff"
+                            );
+                        }
                     }
                 }
                 let stale_cutoff =
@@ -1259,11 +1293,8 @@ impl PathLockManager {
         let descendants = self.provider.scan_descendant_locks(path).await?;
         let now_ns = Self::now_ns();
 
-        let mut metrics = self.metrics.write().await;
-        metrics.descendant_scan_count += 1;
-        metrics.descendant_scan_duration_ns = metrics
-            .descendant_scan_duration_ns
-            .saturating_add(u64::try_from(scan_start.elapsed().as_nanos()).unwrap_or(u64::MAX));
+        let metrics = self.metrics.read().await;
+        metrics.descendant_scan.record(scan_start.elapsed(), &[]);
         drop(metrics);
         debug!(path = %path, descendant_count = descendants.len(), scan_ms = scan_start.elapsed().as_millis() as u64, "scanned descendant pathlock tokens");
 
@@ -1514,9 +1545,32 @@ impl PathLockManager {
             let released_kind = entry.lock_kinds.get(&lock_path).copied();
             let remaining_kind = owner_registry.strongest_kind_excluding(lease_ref, &lock_path);
 
-            let result = if ref_count == 1 {
-                Self::remove_owned_token_with(provider, &lock_path, &owner.owner_id).await
-            } else if released_kind == Some(PathLockKind::Tree)
+            if ref_count == 1 {
+                if owner_registry
+                    .entries
+                    .get(lease_ref)
+                    .is_some_and(|entry| entry.lease.lock_paths.iter().all(|p| p == &lock_path))
+                {
+                    lease_registry.unpublish(lease_ref, &owner)?;
+                }
+                owner_registry.remove_path(lease_ref, &lock_path);
+                match Self::remove_owned_token_with(provider, &lock_path, &owner.owner_id).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if first_error.is_none() {
+                            first_error = Some(Self::release_changed_error(&lock_path));
+                        }
+                    }
+                    Err(release_error) => {
+                        if first_error.is_none() {
+                            first_error = Some(release_error);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let result = if released_kind == Some(PathLockKind::Tree)
                 && remaining_kind == Some(PathLockKind::Exact)
             {
                 Self::downgrade_token_to_exact_with(provider, &lock_path, &owner.owner_id)
@@ -2710,6 +2764,99 @@ mod tests {
         assert_eq!(adopted.lease.owner_id, lease.lease.owner_id);
         // After adopt the new owner can operate the lease again.
         assert!(mgr.release(&adopted).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn pending_handoff_is_forgotten_after_cross_manager_release() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        fs.mkdir("/data/sub", 0o755).await.unwrap();
+        let provider = Arc::new(crate::lock::provider::MemoryPathLockProvider::new());
+        let config = PathLockConfig {
+            lock_expire_secs: 0.3,
+            ..PathLockConfig::default()
+        };
+        let producer = PathLockManager::new(fs.clone(), provider.clone(), config.clone());
+        let consumer = PathLockManager::new(fs, provider.clone(), config);
+        let lease = producer
+            .acquire_tree("/data/sub", Duration::ZERO, None)
+            .await
+            .unwrap();
+        let lock_path = lease.lease.lock_paths[0].clone();
+        let handoff = producer.to_handoff(&lease);
+        producer.handoff(&lease).await.unwrap();
+
+        let adopted = consumer.adopt(&handoff).await.unwrap();
+        consumer.release(&adopted).await.unwrap();
+
+        // The producer sees the consumer's release on its next renewal and
+        // drops only its local pending-handoff registration. The old stale-GC
+        // path would retain this entry for two lock-expiry periods.
+        tokio::time::timeout(Duration::from_millis(400), async {
+            loop {
+                if producer.observe().await.active_locks == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("producer must forget a released cross-manager handoff");
+        assert_eq!(provider.read_token(&lock_path).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn pending_handoff_keeps_unreleased_paths_refreshing() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        let provider = Arc::new(crate::lock::provider::MemoryPathLockProvider::new());
+        let config = PathLockConfig {
+            lock_expire_secs: 0.3,
+            ..PathLockConfig::default()
+        };
+        let producer = PathLockManager::new(fs.clone(), provider.clone(), config.clone());
+        let consumer = PathLockManager::new(fs, provider.clone(), config);
+        let lease = producer
+            .acquire_exact_batch(
+                &["/data/a".to_string(), "/data/b".to_string()],
+                Duration::ZERO,
+                None,
+            )
+            .await
+            .unwrap();
+        let first_lock_path = lease.lease.lock_paths[0].clone();
+        let second_lock_path = lease.lease.lock_paths[1].clone();
+        let handoff = producer.to_handoff(&lease);
+        producer.handoff(&lease).await.unwrap();
+
+        let adopted = consumer.adopt(&handoff).await.unwrap();
+        consumer
+            .release_selected(&adopted, &[first_lock_path.clone()])
+            .await
+            .unwrap();
+
+        // Wait beyond the producer stale-GC cutoff. The remaining path must
+        // retain the producer's local renewal state while the consumer holds it.
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert_eq!(producer.observe().await.active_locks, 1);
+        assert_eq!(provider.read_token(&first_lock_path).await.unwrap(), None);
+        assert!(provider
+            .read_token(&second_lock_path)
+            .await
+            .unwrap()
+            .is_some());
+
+        consumer.release(&adopted).await.unwrap();
+        tokio::time::timeout(Duration::from_millis(400), async {
+            loop {
+                if producer.observe().await.active_locks == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("producer must forget every released handoff path");
     }
 
     #[tokio::test]

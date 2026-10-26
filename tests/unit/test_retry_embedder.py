@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -15,7 +16,9 @@ from openviking.models.embedder.base import (
     SparseEmbedderBase,
 )
 from openviking.models.embedder.retry_embedder import RetryEmbedder
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm.token_usage import TokenUsageTracker
+from openviking.utils.model_retry import model_retry_scope
 from openviking_cli.utils.config.embedding_config import (
     EmbeddingConfig,
     EmbeddingCredential,
@@ -23,10 +26,14 @@ from openviking_cli.utils.config.embedding_config import (
 )
 
 
-class ProviderError(RuntimeError):
+class ProviderError(ModelError):
     def __init__(self, status_code: int):
-        super().__init__(f"HTTP {status_code}")
-        self.status_code = status_code
+        kinds = {
+            400: ModelErrorKind.INVALID_REQUEST,
+            401: ModelErrorKind.AUTHENTICATION_ERROR,
+            503: ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+        }
+        super().__init__(kinds[status_code], f"HTTP {status_code}", status_code=status_code)
 
 
 class FakeDenseEmbedder(DenseEmbedderBase):
@@ -124,15 +131,20 @@ def test_retry_embedder_does_not_retry_permanent_or_auth_errors(status_code):
     assert inner.calls == 1
 
 
-def test_retry_embedder_uses_max_retries_as_additional_attempts():
-    errors = [ProviderError(503) for _ in range(3)]
-    inner = FakeDenseEmbedder(errors, max_retries=2)
+def test_unknown_api_error_exhausts_retry_budget_without_credential_failover():
+    errors = [ModelError(ModelErrorKind.UNKNOWN, "unclassified API error") for _ in range(3)]
+    primary = FakeDenseEmbedder(errors, max_retries=2)
+    backup = FakeDenseEmbedder([[0.3, 0.4]], max_retries=2)
+    failover = FailoverEmbedder(
+        [RetryEmbedder(primary), RetryEmbedder(backup)], ["primary", "backup"]
+    )
 
-    with pytest.raises(ProviderError) as raised:
-        RetryEmbedder(inner).embed("query")
+    with pytest.raises(ModelError) as raised:
+        failover.embed("query")
 
     assert raised.value is errors[-1]
-    assert inner.calls == 3
+    assert primary.calls == 3
+    assert backup.calls == 0
 
 
 def test_retry_embedder_sparse_dimension_remains_unsupported():
@@ -144,8 +156,10 @@ def test_retry_embedder_sparse_dimension_remains_unsupported():
 
 
 @pytest.mark.asyncio
-async def test_retry_releases_semaphore_before_backoff(monkeypatch):
-    inner = FakeDenseEmbedder([ProviderError(503), [0.1, 0.2]], max_retries=1)
+async def test_scoped_failure_restores_retries_and_releases_semaphore(monkeypatch):
+    error = ProviderError(503)
+    inner = FakeDenseEmbedder([error, ProviderError(503), [0.1, 0.2]], max_retries=1)
+    embedder = RetryEmbedder(inner)
     semaphore = AsyncSemaphore(1)
     inner._account_semaphore = semaphore
     observed_values = []
@@ -155,10 +169,18 @@ async def test_retry_releases_semaphore_before_backoff(monkeypatch):
 
     monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", observe_backoff)
 
-    result = await RetryEmbedder(inner).embed_async("query")
+    async with model_retry_scope(0):
+        with pytest.raises(ProviderError) as raised:
+            await embedder.embed_async("query")
+    assert raised.value is error
+    assert inner.calls == 1
+    assert observed_values == []
+    assert semaphore._value == 1
+
+    result = await embedder.embed_async("query")
 
     assert result.dense_vector == [0.1, 0.2]
-    assert inner.calls == 2
+    assert inner.calls == 3
     assert observed_values == [1]
     assert semaphore._value == 1
 
@@ -193,15 +215,28 @@ async def test_composite_retries_only_failed_branch(monkeypatch):
         return None
 
     monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", no_sleep)
-    dense = FakeDenseEmbedder([[0.1, 0.2]])
+    dense = FakeDenseEmbedder([[0.1, 0.2], [0.3, 0.4]])
     sparse = FakeSparseEmbedder([ProviderError(503), {"term": 1.0}], max_retries=1)
+    monkeypatch.setattr(dense, "embed_async", AsyncMock(wraps=dense.embed_async))
+    monkeypatch.setattr(sparse, "embed_async", AsyncMock(wraps=sparse.embed_async))
     composite = CompositeHybridEmbedder(RetryEmbedder(dense), RetryEmbedder(sparse))
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}}
+    content = [{"type": "text", "text": "query"}, image]
 
-    result = await composite.embed_async("query")
+    result = await composite.embed_async(composite.prepare_embedding_input(content), is_query=True)
 
+    dense.embed_async.assert_awaited_once_with(content, is_query=True)
+    sparse.embed_async.assert_awaited_with("query", is_query=True)
     assert result.dense_vector == [0.1, 0.2]
     assert result.sparse_vector == {"term": 1.0}
     assert dense.calls == 1
+    assert sparse.calls == 2
+
+    # Removing text must skip sparse entirely, including its retry machinery.
+    image_result = await composite.embed_async([image], is_query=True)
+    assert image_result.dense_vector == [0.3, 0.4]
+    assert image_result.sparse_vector is None
+    assert dense.calls == 2
     assert sparse.calls == 2
 
 

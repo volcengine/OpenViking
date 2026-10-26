@@ -55,8 +55,11 @@ class SQLiteReplayStore:
         def replies():
             owners = {}
             with self.db.connect() as c:
+                # Without ANALYZE statistics SQLite prefers the covering primary key and
+                # scans every record of the scope.
                 for row in c.execute(
-                    "SELECT anchor,session FROM replay WHERE scope=? AND kind=? "
+                    "SELECT anchor,session FROM replay INDEXED BY replay_kinds "
+                    "WHERE scope=? AND kind=? "
                     "AND anchor IN (SELECT value FROM json_each(?))",
                     (scope, K.REPLY, orjson.dumps(anchors).decode()),
                 ):

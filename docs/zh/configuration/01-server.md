@@ -33,6 +33,7 @@ openviking-server --config /path/to/ov.conf
   "vlm": {},
   "query_planner": {},
   "rerank": {},
+  "rules": {},
   "retrieval": {},
   "storage": {},
   "server": {},
@@ -56,6 +57,7 @@ openviking-server --config /path/to/ov.conf
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
 | `query_planner` | object / `null` | `null` | 检索意图分析和召回改写使用的模型。未配置或为空时回退到 `vlm`；`auto` 模式的召回改写要求配置集群级 `query_planner`，或账户级 `query_planner` / `vlm` 覆盖项 |
 | `rerank` | object | disabled | 检索结果重排模型 |
+| `rules` | object | 空配置 | 规则编译和适用性判断使用的可选专用模型 |
 | `retrieval` | object | 见下表 | 检索排序和意图分析策略 |
 | `grep` | object | 内置默认值 | 文本搜索引擎配置 |
 | `glob` | object | 内置默认值 | 路径模式匹配引擎配置 |
@@ -73,7 +75,7 @@ openviking-server --config /path/to/ov.conf
 | `log` | object | 控制台日志 | 日志级别、格式和文件输出 |
 | `telemetry` | object | disabled | OpenTelemetry trace 上报 |
 | `oauth` | object | disabled | MCP OAuth 2.1 配置 |
-| `gateway` | object | disabled | OpenViking 网关配置，网关为使用 API Key 的模型客户端补充 OpenViking 记忆。这一部分的未知字段会直接报错，见[配置参考](../guides/22-gateway-operations.md#配置参考) |
+| `gateway` | object | disabled | OpenViking 网关配置，网关为使用 API Key 的模型客户端补充 OpenViking 记忆。这一部分的未知字段会直接报错，见[配置参考](../gateway/13-configuration.md#configuration-reference) |
 | `prompts` | object | 内置模板 | 自定义 Prompt 模板目录 |
 | `ingest` | object | 内置默认值 | 会话日志导入配置 |
 | `output_language_override` | string | `""` | 强制摘要和记忆输出语言；空值表示自动识别 |
@@ -147,6 +149,88 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 
 更换模型或 `dimension` 可能与已有向量集合不兼容，需要迁移或重建索引。
 
+### `rules`
+
+Compiled Rule 的可选模型与生命周期配置：
+
+```json
+{
+  "rules": {
+    "jev_rule_matcher": {
+      "provider": "typesafe",
+      "api_key": "${JEV_API_KEY}"
+    },
+    "compiler": {
+      "provider": "openai",
+      "model": "gpt-4o"
+    },
+    "compiler_context_window": 0
+  }
+}
+```
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+|---|---|---|---|
+| `jev_rule_matcher` | Jev Noul 配置 / `null` | `null` | Scenario 过滤和 Rule 适用性判断使用的 Jev Noul 模型 |
+| `compiler` | VLM 配置 / `null` | `null` | 专用 Rule Compiler |
+| `compiler_context_window` | `0` 或 integer `>= 2048` | `0` | Compiler 上下文窗口；`0` 表示自动探测并使用保守回退值 |
+| `scenario_irrelevance_threshold` | number，`0.5`-`1.0` | `0.9` | Scenario 无关概率达到该值时跳过 |
+| `archived_retention_days` | integer，`>= 1` | `30` | archived Rule 的物理删除保留天数 |
+| `archived_cleanup_interval_seconds` | integer，`>= 60` | `2592000` | archived Rule 清理周期 |
+| `archived_cleanup_enabled` | boolean | `true` | 是否定期清理 archived Rule |
+
+Rule 编译始终以 `thinking=true` 调用专用 Compiler 或回退的账户默认 VLM，
+并覆盖其配置默认值。请使用支持思考模式的模型，否则编译可能失败。
+
+#### `rules.jev_rule_matcher`
+
+该配置用于 Scenario 过滤和 Rule 适用性的独立 Jev System One 判断，不用于检索结果重排。
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+|---|---|---|---|
+| `provider` | `typesafe`、`vercel`、`openrouter`、`custom` | `typesafe` | 选择 endpoint 和 model 默认值 |
+| `api_key` | string | 必填 | 所选 provider 的 API Key |
+| `api_base` | URL / `null` | provider 默认值 | 完整的 System One 请求 URL；显式配置的值会原样使用 |
+| `model` | string / `null` | provider 默认值 | 模型名或 Endpoint ID；`custom` 必填 |
+| `timeout` | number | `30` | HTTP 请求超时秒数 |
+| `extra_headers` | object / `null` | `null` | 附加 HTTP 请求头 |
+| `log_payloads` | boolean | `false` | 是否记录完整请求和响应；日志可能包含任务与 Rule 内容 |
+
+| Provider | 默认请求 URL | 默认 model | 说明 |
+|---|---|---|---|
+| `typesafe` | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | TypeSafe 直连 |
+| `vercel` | `https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | Vercel AI Gateway 的 TypeSafe 兼容 API |
+| `openrouter` | `https://openrouter.ai/api/v1/systemone` | `jev-latest` | OpenRouter System One API |
+| `custom` | 无 | 无 | 必须同时配置 `api_base` 和 `model` |
+
+`api_base` 和 `model` 可分别覆盖 provider 默认值。显式配置的 `api_base` 是完整
+POST URL，任何 provider（包括 `custom`）都不会修改它或追加后缀。
+`extra_headers` 会扩展 provider 请求头，也可以覆盖默认请求头。Rule 匹配固定使用
+独立 Noul 判断，因此不再包含 `mode`、`threshold` 或 `max_input_tokens` 配置。
+Scenario 过滤阈值由 `rules.scenario_irrelevance_threshold` 配置；
+Rule 适用性使用 Rule 搜索请求中的 `rule_probability_threshold`（默认 `0.65`）。
+
+Rule 状态为 `active`、`paused`、`archived`。`PAUSE` 暂停检索但不设置清理期限；
+`ARCHIVE` 从 `archived_at` 开始计算保留期；`RESTORE` 将 paused Rule 恢复为
+active。编译候选只包含 active 和 paused Rule；archived Rule 视为逻辑删除，不是
+编译候选，也无法通过 Rule 编译恢复。`ARCHIVE` 必须由用户指令明确表达删除、丢弃
+或移入回收站；不包含删除语义的停用请求使用 `PAUSE`。
+
+Rule 按 Scenario 直接存放在 `memories/rules/<scenario_id>/`：`abstract.md`
+保存场景元信息，`<atomic_id>.md` 保存规则。存储格式见
+[规则（Beta）](../concepts/17-rule-scenarios.md)。
+
+`jev_rule_matcher` 未配置、不可用、调用失败或返回无效结果时，Scenario 和 Rule 判断
+直接放行，不调用 VLM。Scenario 诊断记录 `decision=pass`；Rule 返回 `judge=pass`
+和 warning，以 `1.0` 作为通过阈值的放行分数，
+该值不是模型评估的适用概率。Agent 仍需根据具体事实核验适用条件和例外。
+规则编译从 `compiler` 回退到账户默认 VLM。原 `rule_matcher` 配置已移除，不再读取。
+
+Rule 的 `applies_when` 可以为空，默认空值；为空时表示任何情况都适用，除非
+`exception` 条件成立。没有适用条件和例外的候选 Rule 适用概率直接取 `1.0`。
+Compiler 会优先忠实提炼原文中的对象、操作、前提和场景，尽量生成非空且可判定的
+`applies_when`，不得编造条件或丢弃原文已有的限制。空条件不表示未知或不适用。
+
 ### `rerank`
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
@@ -154,20 +238,21 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 | `provider` | `vikingdb`、`cohere`、`openai`、`litellm`、`jev` / `null` | `null` | Rerank 服务类型；省略时根据凭证字段推断 |
 | `model` | string / `null` | `null` | OpenAI 兼容、LiteLLM 或 Jev Rerank 模型 |
 | `mode` | `noul`、`choice` 或 `null` | `noul` | Jev Rerank 模式；`null` 同样使用 `noul` |
-| `threshold` | number | `0.1` | 判定结果相关的最低分数 |
+| `threshold` | number | `0.1` | 判定结果相关的最低 Rerank 分数；只过滤模型产出的 Rerank 分数，不过滤向量分数；请求中的 `score_threshold` 优先 |
 | `max_input_tokens` | integer；`0` 或 `>= 128` | `0` | 每个 query-document pair 的最大估算 token；`0` 表示不截断 |
 | `log_payloads` | boolean | `false` | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容 |
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
 
-`jev` 通过现有 `api_base` 和 `model` 字段同时支持 TypeSafe 直连（`https://api.typesafe.ai`，模型 `jev-latest`）和 Vercel AI Gateway 的 TypeSafe 兼容端点（`https://ai-gateway.vercel.sh/typesafe`，模型 `typesafe-ai/jev`），两者协议相同。默认 `noul` 模式独立评估每个候选；可选的 `choice` 模式横向比较所有候选并返回相对概率，使用时应将 `threshold` 设为 `0`。显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 和 `jev` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
+`jev` 通过现有 `api_base` 和 `model` 字段同时支持 TypeSafe 直连（`https://api.typesafe.ai/v1/systemone`，模型 `jev-latest`）和 Vercel AI Gateway 的 TypeSafe 兼容端点（`https://ai-gateway.vercel.sh/typesafe/v1/systemone`，模型 `typesafe-ai/jev`），两者协议相同。Rerank 的 `api_base` 可以是服务根地址或完整 System One URL；缺少 `/v1/systemone` 时会自动追加。默认 `noul` 模式独立评估每个候选；可选的 `choice` 模式横向比较所有候选并返回相对概率，使用时应将 `threshold` 设为 `0`。显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 和 `jev` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
 
 ## 检索配置
 
 ```json
 {
   "retrieval": {
-    "enable_intent": true
+    "enable_intent": true,
+    "apply_rerank_to_context": false
   }
 }
 ```
@@ -177,8 +262,9 @@ Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭�
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
 | `enable_intent` | boolean | `true` | 有 `session_id` 时是否进行意图分析和查询规划 |
+| `apply_rerank_to_context` | boolean | `false` | 是否用已配置的 `rerank` 模型重排 `search(mode="context")` 的候选 |
 
-Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK 请求中覆盖。`retrieval.enable_intent` 控制带 Session 的 Search 是否执行 LLM 查询规划；只有配置了可用的 `rerank` provider 时才会执行结果重排。
+Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK 请求中覆盖。`retrieval.enable_intent` 控制带 Session 的 Search 是否执行 LLM 查询规划；只有配置了可用的 `rerank` provider 时才会执行结果重排。Context 模式使用 Find 的向量分数召回；开启 `retrieval.apply_rerank_to_context` 且 `rerank` 可用时，会在配额和 token 预算之前，用原始查询及其扩展查询对合并后的候选统一重排一次，每个请求多一次 Rerank 调用。
 
 ## 存储配置
 
@@ -196,6 +282,9 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
     "parse_output": {
       "mode": "agfs"
     }
+  },
+  "parsers": {
+    "download_temp_dir": "/data/openviking/parser-tmp"
   }
 }
 ```
@@ -217,6 +306,14 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 `parse_output.mode=local` 可避免把 parser 中间产物写入共享 AGFS。当前 worker
 必须在下游任务入队前把所需字节提交到正式资源树。产物会在内容提交后清理；
 请为 `local_root` 预留足够空间以容纳并发导入。
+
+### `parsers`
+
+| 字段 | 类型 / 常用值 | 默认值 | 作用 |
+|---|---|---|---|
+| `download_temp_dir` | 路径或 `null` | 系统临时目录 | 内置 parser 下载文件、Git checkout 和压缩包解压使用的临时目录 |
+
+配置后，parser 会在该目录下创建带有 `ov_git_`、`ov_zip_` 等前缀的临时目录；未配置时继续使用系统临时目录。
 
 ## 队列 Worker 配置
 
@@ -312,7 +409,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `with_bot` | boolean | `false` | 是否启用 VikingBot API 代理 |
 | `bot_api_url` | URL | `http://localhost:18790` | VikingBot OpenAPI 地址 |
 | `public_base_url` | URL / `null` | `null` | 外部访问使用的服务基准地址 |
-| `upload_signed_ttl_seconds` | integer | `600` | 签名上传 URL 有效期 |
+| `upload_signed_ttl_seconds` | integer | `600` | 签名上传、下载 URL 有效期 |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | 临时上传存储模式 |
 
 ### 文件加密与 API Key 哈希

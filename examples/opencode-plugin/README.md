@@ -226,6 +226,7 @@ OpenCode sees the OpenViking MCP server as `openviking`, so tool names are names
 - `openviking_find`: fast semantic retrieval.
 - `openviking_remember`: store important facts or decisions for memory extraction.
 - `openviking_read`: read one or more `viking://` files.
+- `openviking_download`: get a one-time URL for fetching a file's original bytes with `curl`.
 - `openviking_list`: list a `viking://` directory.
 - `openviking_tree`: show a `viking://` directory tree.
 - `openviking_grep`: exact text or regex search.

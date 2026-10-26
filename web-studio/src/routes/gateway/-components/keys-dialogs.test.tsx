@@ -8,12 +8,14 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GatewayError } from '../-lib/api'
 import type * as Api from '../-lib/api'
 import type { IssuedKey, KeyUser, Profile, Upstream } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import type { Translate } from '../-lib/localize'
 import { PROFILE_DEFAULTS } from '../-lib/profile-schema'
 import { UPSTREAM_DEFAULTS } from '../-lib/upstream-schema'
@@ -44,6 +46,10 @@ vi.mock('react-i18next', () => ({
     i18n: { resolvedLanguage: 'en' },
   }),
 }))
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
+
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
@@ -239,7 +245,10 @@ describe('snippetModel', () => {
   })
 })
 
-function renderIssueDialog(upstreams: Upstream[] = [deepseek]) {
+function renderIssueDialog(
+  upstreams: Upstream[] = [deepseek],
+  defaults?: React.ComponentProps<typeof KeysIssueDialog>['defaults'],
+) {
   const onIssued = vi.fn()
   const onOpenChange = vi.fn()
   const client = new QueryClient({
@@ -253,6 +262,7 @@ function renderIssueDialog(upstreams: Upstream[] = [deepseek]) {
         profiles={[profile]}
         upstreams={upstreams}
         onIssued={onIssued}
+        defaults={defaults}
       />
     </QueryClientProvider>,
   )
@@ -619,6 +629,25 @@ describe('KeysIssueDialog', () => {
     })
   })
 
+  it('starts from the given defaults', async () => {
+    api.issueKey.mockResolvedValue({})
+    renderIssueDialog([deepseek, openai], {
+      name: 'Quick mode',
+      policy_id: 'p1',
+      upstream_ids: ['u2'],
+    })
+    await waitFor(() => expect(userPicker().textContent).toContain('alice'))
+    submit()
+
+    await waitFor(() =>
+      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), {
+        ...request,
+        name: 'Quick mode',
+        upstream_ids: ['u2'],
+      }),
+    )
+  })
+
   it('explains a rejected OpenViking key next to that field', async () => {
     api.issueKey.mockRejectedValue(
       new GatewayError(
@@ -694,6 +723,11 @@ describe('KeysIssueDialog', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('keys.errors.title')
     expect(alert.textContent).toContain('keys.errors.unavailable')
+    expect(
+      within(alert)
+        .getByRole('link', { name: 'docs.troubleshoot' })
+        .getAttribute('href'),
+    ).toBe(gatewayDocsUrl('issueKeyFails', 'en'))
   })
 })
 

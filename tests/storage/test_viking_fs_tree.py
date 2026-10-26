@@ -192,6 +192,7 @@ def patch_tree_env(
         ("resources", "/local/test_account", True),
         ("user", "/local/test_account", True),
         ("agent", "/local/test_account", True),
+        ("system", "/local/test_account", True),
         ("session", "/local/test_account", False),
         ("tasks", "/local/test_account", False),
         ("_system", "/local/test_account", False),

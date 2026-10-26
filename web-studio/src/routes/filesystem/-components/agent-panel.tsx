@@ -100,7 +100,7 @@ export function AgentPanel({
   const handleNewSession = useCallback(() => {
     if (isCreatingSession) return
     creationGenerationRef.current += 1
-    chat.abort()
+    chat.abort({ closeLocalStream: true, discardPartial: true })
     chat.setMessages([])
     creationStartedRef.current = false
     setSessionError(null)
@@ -114,7 +114,7 @@ export function AgentPanel({
   const handleSwitchSession = useCallback(
     (nextSessionId: string) => {
       creationGenerationRef.current += 1
-      chat.abort()
+      chat.abort({ closeLocalStream: true, discardPartial: true })
       creationStartedRef.current = false
       setSessionError(null)
       setIsCreatingSession(false)
@@ -146,6 +146,7 @@ export function AgentPanel({
     chat.streamingContent,
     chat.streamingReasoning,
     chat.streamingToolCalls,
+    chat.streamingInsertIndex,
   ])
 
   const send = useCallback(
@@ -173,7 +174,10 @@ export function AgentPanel({
           }
         }
       }
-      void chat.send(message)
+      const sending = chat.send(message)
+      if (chat.status === 'streaming') {
+        await sending
+      }
       return true
     },
     [chat, createSession, onSessionChange, persistedSessionId, sessionId],
@@ -200,6 +204,9 @@ export function AgentPanel({
         onNewSession={() => void handleNewSession()}
         onOpenHistory={() => setHistoryOpen(true)}
         sessionTitle={displayedSessionTitle}
+        showNewSession={Boolean(
+          persistedSessionId || chat.messages.length || sessionError,
+        )}
       />
       <div className="flex min-h-0 flex-1 flex-col">
         <div
@@ -244,6 +251,7 @@ export function AgentPanel({
                   ? {
                       iteration: chat.iteration,
                       parts: chat.streamingParts,
+                      insertIndex: chat.streamingInsertIndex,
                     }
                   : undefined
               }
@@ -331,7 +339,10 @@ export function AgentPanel({
                           )
                           if (session.session_id === sessionId) {
                             creationGenerationRef.current += 1
-                            chat.abort()
+                            chat.abort({
+                              closeLocalStream: true,
+                              discardPartial: true,
+                            })
                             chat.setMessages([])
                             creationStartedRef.current = false
                             setIsCreatingSession(false)
@@ -377,6 +388,7 @@ export function AgentToolbar({
   onNewSession,
   onOpenHistory,
   sessionTitle,
+  showNewSession,
 }: {
   container: HTMLDivElement | null
   historyLabel: string
@@ -385,6 +397,7 @@ export function AgentToolbar({
   onNewSession: () => void
   onOpenHistory: () => void
   sessionTitle: string
+  showNewSession: boolean
 }) {
   if (!container) return null
 
@@ -406,21 +419,24 @@ export function AgentToolbar({
       >
         <HistoryIcon className="size-3.5" />
       </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        className="size-7 shrink-0"
-        title={newSessionLabel}
-        disabled={isCreatingSession}
-        onClick={onNewSession}
-      >
-        {isCreatingSession ? (
-          <Loader2Icon className="size-3.5 animate-spin" />
-        ) : (
-          <SquarePenIcon className="size-3.5" />
-        )}
-      </Button>
+      {showNewSession ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7 shrink-0"
+          title={newSessionLabel}
+          aria-label={newSessionLabel}
+          disabled={isCreatingSession}
+          onClick={onNewSession}
+        >
+          {isCreatingSession ? (
+            <Loader2Icon className="size-3.5 animate-spin" />
+          ) : (
+            <SquarePenIcon className="size-3.5" />
+          )}
+        </Button>
+      ) : null}
     </>,
     container,
   )

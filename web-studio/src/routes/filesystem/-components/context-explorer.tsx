@@ -44,7 +44,7 @@ export function ContextExplorerHeader({
   hasTasks: boolean
   isRefreshing: boolean
   isRefreshingTasks: boolean
-  onAddResource: () => void
+  onAddResource?: () => void
   onOpenProcessingTasks: () => void
   onOpenSearch: () => void
   onRefresh: () => void
@@ -96,15 +96,6 @@ export function ContextExplorerHeader({
           type="button"
           size="icon-sm"
           variant="ghost"
-          title={t('explorer.addResource')}
-          onClick={onAddResource}
-        >
-          <PlusIcon className="size-4" />
-        </Button>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
           title={t('explorer.refresh')}
           onClick={onRefresh}
         >
@@ -113,6 +104,18 @@ export function ContextExplorerHeader({
           />
         </Button>
       </div>
+      {onAddResource ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-3 w-full justify-center gap-2"
+          onClick={onAddResource}
+        >
+          <PlusIcon className="size-4" />
+          {t('explorer.addResource')}
+        </Button>
+      ) : null}
     </div>
   )
 }
@@ -122,11 +125,13 @@ const NAMESPACE_DESCRIPTION_KEYS: Partial<
     string,
     | 'explorer.namespaces.agent'
     | 'explorer.namespaces.resources'
+    | 'explorer.namespaces.system'
     | 'explorer.namespaces.user'
   >
 > = {
   agent: 'explorer.namespaces.agent',
   resources: 'explorer.namespaces.resources',
+  system: 'explorer.namespaces.system',
   user: 'explorer.namespaces.user',
 } as const
 
@@ -143,6 +148,7 @@ export function ContextTree({
   onSelectDirectory,
   onSelectFile,
   selectedFileUri,
+  rootUri = ROOT_URI,
 }: {
   currentUri: string
   expandedKeys: Set<string>
@@ -150,9 +156,10 @@ export function ContextTree({
   onSelectDirectory: (entry: VikingFsEntry) => void
   onSelectFile: (entry: VikingFsEntry) => void
   selectedFileUri?: string | null
+  rootUri?: string
 }) {
   const { t } = useTranslation('filesystem')
-  const rootQuery = useVikingFsList(ROOT_URI, {
+  const rootQuery = useVikingFsList(rootUri, {
     output: 'agent',
     showAllHidden: true,
     nodeLimit: 200,

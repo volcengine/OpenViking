@@ -1,10 +1,13 @@
 """Identity, independent management authorization, and standalone hosting contracts."""
 
+import asyncio
+import json
+
 import httpx
 import pytest
 from aiohttp import web
 
-from openviking_gateway.app import create_app, seed_defaults
+from openviking_gateway.app import create_app, health_loop, seed_defaults
 from openviking_gateway.config import StandaloneGatewayConfig
 from openviking_gateway.standalone import check_openviking, create_standalone_app
 from openviking_gateway.storage import digest
@@ -310,13 +313,25 @@ async def test_data_catchall_is_narrow(running_gateway, path):
 @pytest.mark.parametrize(
     "status,body,ok,reason",
     [
-        (200, {"data": []}, True, "passed"),
-        (200, {"error": {"code": "bad"}}, False, "upstream_key_rejected"),
+        (
+            200,
+            {"choices": [{"message": {"role": "assistant", "content": "OK"}}]},
+            True,
+            "passed",
+        ),
+        (
+            200,
+            {"choices": [{"message": {"role": "assistant", "content": None}}]},
+            False,
+            "invalid_response",
+        ),
+        (200, {"error": {"code": "bad"}}, False, "invalid_response"),
         (401, {}, False, "upstream_key_rejected"),
         (403, {}, False, "upstream_key_rejected"),
-        (404, {}, True, "models_unavailable"),
-        (405, {}, True, "models_unavailable"),
-        (429, {}, True, "rate_limited"),
+        (400, {}, False, "model_request_rejected"),
+        (404, {}, False, "model_request_rejected"),
+        (405, {}, False, "model_request_rejected"),
+        (429, {}, False, "rate_limited"),
         (503, {}, False, "upstream_unavailable"),
     ],
 )
@@ -324,14 +339,198 @@ async def test_upstream_test_status_contract(running_gateway, status, body, ok, 
     app, client, admin, _, _, _ = running_gateway
 
     async def handler(request):
-        if request.path == "/v1/models":
+        if request.path == "/v1/chat/completions":
             return web.json_response(body, status=status)
 
     app.state.test_backend["handler"] = handler
-    result = (await client.post(P + "/upstreams/chat/test", headers=admin)).json()
+    result = (
+        await client.post(P + "/upstreams/chat/test", headers=admin, json={"model": "model"})
+    ).json()
     assert (
-        result["ok"] is ok and result["reason"] == reason and result["url"].endswith("/v1/models")
+        result["ok"] is ok
+        and result["kind"] == "model"
+        and result["reason"] == reason
+        and result["url"].endswith("/v1/chat/completions")
     )
+    if ok:
+        assert "response" not in result
+    else:
+        upstream_response = result["response"]
+        assert upstream_response["status"] == status
+        assert upstream_response["http_version"].startswith("HTTP/")
+        assert upstream_response["reason"]
+        assert any(name.lower() == "content-type" for name in upstream_response["headers"])
+        assert json.loads(upstream_response["body"]) == body
+
+
+@pytest.mark.parametrize(
+    "status,body,ok,reason",
+    [
+        (200, {"data": []}, True, "passed"),
+        (200, {"error": {"code": "bad"}}, False, "upstream_key_rejected"),
+        (401, {}, False, "upstream_key_rejected"),
+        (404, {}, True, "models_unavailable"),
+        (405, {}, True, "models_unavailable"),
+        (429, {}, True, "rate_limited"),
+        (503, {}, False, "upstream_unavailable"),
+    ],
+)
+async def test_upstream_connection_status_contract(running_gateway, status, body, ok, reason):
+    app, client, admin, _, _, _ = running_gateway
+    requests = []
+
+    async def handler(request):
+        if request.path == "/v1/models":
+            requests.append((request.method, await request.read()))
+            return web.json_response(body, status=status)
+
+    app.state.test_backend["handler"] = handler
+    result = (await client.post(P + "/upstreams/chat/test", headers=admin, json={})).json()
+
+    assert result["ok"] is ok
+    assert result["kind"] == "connection"
+    assert result["reason"] == reason
+    assert result["url"].endswith("/v1/models")
+    assert requests == [("GET", b"")]
+
+
+async def test_upstream_test_reads_chunked_response_to_eof(running_gateway):
+    app, client, admin, _, _, _ = running_gateway
+    body = json.dumps({"choices": [{"message": {"role": "assistant", "content": "OK"}}]}).encode()
+
+    async def handler(request):
+        if request.path == "/v1/chat/completions":
+            response = web.StreamResponse(headers={"Content-Type": "application/json"})
+            await response.prepare(request)
+            for start in range(0, len(body), 7):
+                await response.write(body[start : start + 7])
+                await asyncio.sleep(0)
+            await response.write_eof()
+            return response
+
+    app.state.test_backend["handler"] = handler
+    result = (
+        await client.post(P + "/upstreams/chat/test", headers=admin, json={"model": "model"})
+    ).json()
+
+    assert result["ok"] and result["reason"] == "passed"
+
+
+@pytest.mark.parametrize(
+    "protocol,path,input_field,limit_field",
+    [
+        ("chat", "/v1/chat/completions", "messages", "max_tokens"),
+        ("responses", "/v1/responses", "input", "max_output_tokens"),
+        ("anthropic", "/v1/messages", "messages", "max_tokens"),
+    ],
+)
+async def test_upstream_test_generates_with_protocol_and_alias(
+    running_gateway, protocol, path, input_field, limit_field
+):
+    app, client, admin, _, captured, _ = running_gateway
+    upstream = await app.state.management.get("tenant", "upstreams", protocol)
+    await app.state.management.save(
+        "tenant",
+        "upstreams",
+        protocol,
+        {**upstream, "aliases": {"client-model": "model"}},
+    )
+
+    result = (
+        await client.post(
+            P + f"/upstreams/{protocol}/test",
+            headers=admin,
+            json={"model": "client-model"},
+        )
+    ).json()
+
+    assert result["ok"] and result["reason"] == "passed"
+    sent_path, raw, headers = captured[-1]
+    payload = json.loads(raw)
+    assert sent_path == path
+    assert payload["model"] == "model"
+    assert input_field in payload and payload[limit_field] == 64
+    assert payload["stream"] is False
+    assert "reasoning" not in payload and "reasoning_effort" not in payload
+    assert headers["Authorization"] == "Bearer model-secret"
+    assert payload["tools"]
+    if protocol == "chat":
+        assert payload["tools"][0]["function"]["name"] == "openviking_find"
+        assert "parameters" in payload["tools"][0]["function"]
+    elif protocol == "responses":
+        assert payload["tools"][0]["name"] == "openviking_find"
+        assert "parameters" in payload["tools"][0]
+        assert "reasoning.encrypted_content" in payload["include"]
+    else:
+        assert payload["tools"][0]["name"] == "openviking_find"
+        assert "input_schema" in payload["tools"][0]
+    if protocol == "anthropic":
+        assert headers["anthropic-version"] == "2023-06-01"
+
+
+async def test_upstream_test_honors_exact_endpoint_url(running_gateway):
+    app, client, admin, _, captured, _ = running_gateway
+    upstream = await app.state.management.get("tenant", "upstreams", "chat")
+    await app.state.management.save(
+        "tenant",
+        "upstreams",
+        "chat",
+        {
+            **upstream,
+            "append_endpoint_path": False,
+            "allow_gateway_tools": False,
+            "headers": {
+                "X-Test-Header": "stored-value",
+                "content-type": "application/vnd.test+json",
+            },
+        },
+    )
+
+    result = (
+        await client.post(
+            P + "/upstreams/chat/test",
+            headers=admin,
+            json={"model": "model"},
+        )
+    ).json()
+
+    assert result["ok"] and result["url"].endswith("/v1")
+    assert captured[-1][0] == "/v1"
+    assert captured[-1][2]["X-Test-Header"] == "stored-value"
+    sent_headers = {name.lower(): value for name, value in captured[-1][2].items()}
+    assert sent_headers["content-type"] == "application/vnd.test+json"
+    assert "tools" not in json.loads(captured[-1][1])
+
+
+async def test_upstream_test_continues_without_unavailable_tools(running_gateway):
+    app, client, admin, _, captured, _ = running_gateway
+    app.state.test_backend["tools_status"] = {"admin-key": 503}
+
+    result = (
+        await client.post(
+            P + "/upstreams/chat/test",
+            headers=admin,
+            json={"model": "model"},
+        )
+    ).json()
+
+    assert result["ok"]
+    assert "tools" not in json.loads(captured[-1][1])
+
+
+async def test_upstream_test_requires_write_access(running_gateway):
+    app, client, admin, _, captured, _ = running_gateway
+    app.state.config.management_key = MANAGER[next(iter(MANAGER))]
+
+    response = await client.post(
+        P + "/upstreams/chat/test",
+        headers=admin,
+        json={"model": "model"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["reason"] == "management_key_required"
+    assert not [path for path, _, _ in captured if path.endswith("/chat/completions")]
 
 
 async def test_vlm_permissions_idempotency_and_confirmation(running_gateway):
@@ -552,23 +751,24 @@ async def test_connection_test_is_available_for_missing_key_and_blocked_plan(run
     upstream = await app.state.management.get("tenant", "upstreams", "chat")
     for change in ({"api_key": ""}, {"auth_mode": "passthrough"}):
         await app.state.management.save("tenant", "upstreams", "chat", {**upstream, **change})
-        response = await client.post(P + "/upstreams/chat/test", headers=admin)
+        response = await client.post(
+            P + "/upstreams/chat/test", headers=admin, json={"model": "model"}
+        )
         assert response.status_code == 200 and response.json()["reason"] == "upstream_key_missing"
-    assert not [path for path, _, _ in captured if path.endswith("/models")]
+    assert not [path for path, _, _ in captured if path.endswith("/chat/completions")]
     await app.state.management.save(
         "tenant", "upstreams", "chat", {**upstream, "coding_plan": True, "allow_coding_plan": False}
     )
-    response = await client.post(P + "/upstreams/chat/test", headers=admin)
-    assert response.status_code == 200 and response.json()["ok"]
+    response = await client.post(P + "/upstreams/chat/test", headers=admin, json={"model": "model"})
+    assert response.status_code == 200 and response.json()["reason"] == "coding_plan_blocked"
+    assert not [path for path, _, _ in captured if path.endswith("/chat/completions")]
 
 
-@pytest.mark.parametrize("mode", ["unavailable", "trusted", "unknown"])
+@pytest.mark.parametrize("mode", ["trusted", "unknown"])
 async def test_public_standalone_requires_confirmed_api_key_auth(tmp_path, monkeypatch, mode):
     from openviking_gateway.client import VikingClient, VikingError
 
     async def health(self, *args, **kwargs):
-        if mode == "unavailable":
-            raise VikingError("openviking_unavailable")
         if mode == "trusted":
             raise VikingError("trusted_mode_unsupported", 403)
         return {"status": "ok"}
@@ -800,39 +1000,59 @@ async def test_keys_are_immutable_and_errors_explain_themselves(running_gateway)
     }
 
 
-async def test_degraded_probe_backs_off_until_success(tmp_path, monkeypatch):
-    import asyncio
-    import time
+async def test_degraded_probe_backs_off_until_success():
     from types import SimpleNamespace
 
-    from openviking_gateway import app as module
-    from openviking_gateway.client import VikingClient, VikingError
-    from openviking_gateway.config import GatewayConfig
+    from openviking_gateway.client import VikingError
 
-    clock, probes, results = [0.0], [], [False, False, True, False, False, False, False]
+    delays, results = [], [False, False, True, False, False, False, False]
 
-    def monotonic():
-        clock[0] += 0.125
-        return clock[0]
-
-    async def health(self, *args, **kwargs):
-        probes.append(clock[0])
-        if results and not results.pop(0):
+    async def health(**kwargs):
+        if not results.pop(0):
             raise VikingError("openviking_unavailable")
         return {"status": "ok"}
 
-    async def once():
-        await asyncio.sleep(0)
-        return True
+    async def sleep(delay):
+        delays.append(delay)
+        if not results:
+            raise asyncio.CancelledError
 
-    monkeypatch.setattr(VikingClient, "health", health)
-    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=monotonic, time=time.time))
-    config = GatewayConfig(storage_path=str(tmp_path), health_interval_seconds=4)
-    app = create_app(config, openviking_url="http://unused")
-    async with app.router.lifespan_context(app):
-        app.state.worker.once = once
-        while results:
-            await asyncio.sleep(0)
-    gaps = [round(b - a) for a, b in zip(probes, probes[1:], strict=False)]
+    app = SimpleNamespace(state=SimpleNamespace(viking=SimpleNamespace(health=health)))
+    with pytest.raises(asyncio.CancelledError):
+        await health_loop(app, 4, sleep)
     # Every second until OV first answers; later outages back off 1, 2, 4 capped at the interval.
-    assert gaps[:6] == [1, 1, 4, 1, 2, 4]
+    assert delays == [1, 1, 4, 1, 2, 4, 4]
+
+
+async def test_upstream_test_fills_url_key_and_reaches_exact_endpoints(running_gateway):
+    app, client, admin, _, captured, _ = running_gateway
+    upstream = await app.state.management.get("tenant", "upstreams", "chat")
+    stored = upstream["base_url"] + "?tenant=a&key={api_key}"
+    await app.state.management.save("tenant", "upstreams", "chat", {**upstream, "base_url": stored})
+    seen = []
+
+    async def handler(request):
+        if request.path.startswith("/v1/"):
+            seen.append((request.method, request.path, request.query_string, dict(request.headers)))
+
+    app.state.test_backend["handler"] = handler
+    result = (await client.post(P + "/upstreams/chat/test", headers=admin, json={})).json()
+    assert result["ok"] and result["url"] == upstream["base_url"] + "/models?tenant=a&key={api_key}"
+    assert seen[-1][2] == "tenant=a&key=model-secret" and "Authorization" not in seen[-1][3]
+
+    endpoint = upstream["base_url"] + "/chat/completions?api-version=1"
+    exact = {**upstream, "base_url": endpoint, "append_endpoint_path": False}
+    await app.state.management.save("tenant", "upstreams", "chat", exact)
+    before = len(captured)
+    result = (await client.post(P + "/upstreams/chat/test", headers=admin, json={})).json()
+    assert result == {
+        "ok": False,
+        "reason": "exact_endpoint_untestable",
+        "url": endpoint,
+        "kind": "connection",
+    }
+    assert len(captured) == before
+    model = {"model": "model"}
+    result = (await client.post(P + "/upstreams/chat/test", headers=admin, json=model)).json()
+    assert result["kind"] == "model" and result["url"] == endpoint
+    assert seen[-1][:3] == ("POST", "/v1/chat/completions", "api-version=1")

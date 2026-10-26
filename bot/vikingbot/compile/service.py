@@ -34,6 +34,7 @@ from vikingbot.agent.loop import (
     _PlainTextDelivered,
 )
 from vikingbot.agent.subagent import SubagentManager
+from vikingbot.agent.tools.base import ToolContext
 from vikingbot.agent.tools.compile import (
     CompileChildTool,
     CompileSpawnTool,
@@ -57,6 +58,7 @@ from vikingbot.compile.models import (
     CompileResult,
     CompileTask,
     SanitizedCompileRequest,
+    has_directory_plan,
     utc_now,
 )
 from vikingbot.compile.ops import finalize as finalize_op
@@ -80,6 +82,7 @@ from vikingbot.sandbox.base import SandboxBackend as WorkspaceSandbox
 _COMPILE_CORE_TOOLS = ("read_file", "write_file", "edit_file", "list_dir", "exec")
 _COMPILE_READ_TOOLS = (
     "openviking_multi_read",
+    "openviking_diff_paths",
     "openviking_list",
     "openviking_grep",
     "openviking_search",
@@ -193,11 +196,7 @@ class CompileCapabilities:
 
 
 class _CompileProvider(LLMProvider):
-    """Share model-call capacity across Compile tasks, including streams and compaction.
-
-    A slot covers a complete model response and is released on failure or cancellation.
-    Workspace tools and waits do not hold slots. The underlying provider owns retries.
-    """
+    """Share model-call capacity across Compile tasks."""
 
     def __init__(self, provider: LLMProvider, slots: asyncio.Semaphore):
         super().__init__()
@@ -205,12 +204,12 @@ class _CompileProvider(LLMProvider):
         self._slots = slots
 
     async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
-        """Forward one non-streaming request under the shared capacity limit."""
+        """Forward a request under the shared capacity limit."""
         async with self._slots:
             return await self._provider.chat(*args, **kwargs)
 
     async def chat_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[LLMStreamEvent]:
-        """Hold capacity until the response stream finishes or its consumer closes it."""
+        """Hold capacity until the stream closes."""
         async with self._slots:
             async with aclosing(self._provider.chat_stream(*args, **kwargs)) as stream:
                 async for event in stream:
@@ -246,7 +245,7 @@ class BotCompileService:
         )
         self._semaphore = asyncio.Semaphore(self.limits.concurrent_tasks)
         self._model_slots = asyncio.Semaphore(model_concurrency)
-        self._target_locks: dict[str, tuple[asyncio.Lock, int]] = {}
+        self._target_locks: dict[tuple[str, str], tuple[asyncio.Lock, int]] = {}
         self._target_locks_guard = asyncio.Lock()
         self._admission_guard = asyncio.Lock()
         self._admitted_tasks = 0
@@ -315,6 +314,11 @@ class BotCompileService:
                     stage="queued",
                 )
             connection = connection or {}
+            account_id = connection.get("account_id")
+            if self._openviking_auth_mode() != "dev" and not (account_id or "").strip():
+                raise CompileFailure(
+                    "UNAUTHENTICATED", "Compile requires account_id.", stage="queued"
+                )
             normalized_request = await self._normalize_request(request, connection=connection)
             task_id = task_id or "cmp_" + uuid.uuid4().hex
             now = utc_now()
@@ -498,12 +502,52 @@ class BotCompileService:
         connection: Mapping[str, Any],
     ) -> SanitizedCompileRequest:
         args = request.args or {}
-        if args.keys() - {"last_compile_time", "wiki_links"}:
+        if args.keys() - {"last_compile_time", "wiki_links", "changes"}:
             raise CompileFailure(
                 "INVALID_ARGUMENT",
                 "VikingBot Compile does not implement provider-specific args.",
                 stage="queued",
             )
+        changes = args.get("changes")
+        if changes is not None:
+            valid = (
+                has_directory_plan(changes)
+                and "base" in changes
+                and "head" in changes
+                and all(
+                    isinstance(changes[key], list)
+                    and all(isinstance(uri, str) and uri.strip() for uri in changes[key])
+                    for key in ("diff_dirs", "full_dirs")
+                )
+            )
+            valid = valid and all(
+                changes.get(key) is None
+                or isinstance(changes[key], str)
+                and bool(changes[key].strip())
+                for key in ("base", "head")
+            )
+            execution = changes.get("execution") if isinstance(changes, dict) else None
+            valid = (
+                valid
+                and isinstance(execution, dict)
+                and execution.get("mode") in ("full", "incremental")
+            )
+            if not valid:
+                raise CompileFailure(
+                    "INVALID_ARGUMENT", "Invalid args.changes directory plan", stage="queued"
+                )
+            if changes["diff_dirs"] and (
+                not changes.get("base") or not changes.get("head") or execution["mode"] == "full"
+            ):
+                raise CompileFailure(
+                    "INVALID_ARGUMENT", "diff_dirs require incremental base/head", stage="queued"
+                )
+            if not changes.get("head") and execution["mode"] != "full":
+                raise CompileFailure(
+                    "INVALID_ARGUMENT",
+                    "Unavailable snapshots require full execution",
+                    stage="queued",
+                )
         wiki_links = args.get("wiki_links", False)
         if not isinstance(wiki_links, bool):
             raise CompileFailure(
@@ -525,6 +569,14 @@ class BotCompileService:
                 canonical = str(attrs.get("uri") or "").rstrip("/")
                 if canonical not in sources:
                     sources.append(canonical)
+            if changes is not None:
+                diff_dirs, full_dirs = changes["diff_dirs"], changes["full_dirs"]
+                if set(diff_dirs) & set(full_dirs) or set(diff_dirs + full_dirs) != set(sources):
+                    raise CompileFailure(
+                        "INVALID_ARGUMENT",
+                        "Directory plan must partition the canonical from list",
+                        stage="queued",
+                    )
             skill_uri = request.skill.strip().rstrip("/")
             if skill_uri.endswith("/SKILL.md"):
                 skill_uri = skill_uri[: -len("/SKILL.md")]
@@ -568,7 +620,8 @@ class BotCompileService:
                 "instruction": instruction or DEFAULT_COMPILE_INSTRUCTION,
                 "instruction_provided": bool(instruction),
                 "skill": canonical_skill,
-                "last_compile_time": cutoff,
+                "last_compile_time": None if changes is not None else cutoff,
+                "changes": changes,
                 "wiki_links": wiki_links,
             }
         )
@@ -625,26 +678,31 @@ class BotCompileService:
 
     @staticmethod
     def _skill_name_and_target(skill_uri: str) -> tuple[str, str]:
-        parts = uri_parts(skill_uri)
-        try:
-            index = parts.index("skills")
-        except ValueError as exc:
+        classification = classify_uri(skill_uri)
+        if not classification.is_skill:
             raise CompileFailure(
                 "SKILL_INVALID", "Skill URI is outside a skills namespace", stage="queued"
-            ) from exc
-        if len(parts) != index + 2:
+            )
+        if not classification.is_skill_root:
             raise CompileFailure(
                 "SKILL_INVALID", "Skill URI must identify one Skill root", stage="queued"
             )
-        return parts[-1], "viking://" + "/".join(parts[: index + 1])
+        assert classification.content_index is not None
+        parts = classification.parts
+        return (
+            parts[-1],
+            "viking://" + "/".join(parts[: classification.content_index + 1]),
+        )
 
-    async def _retain_target_lock(self, target: str) -> asyncio.Lock:
+    async def _retain_target_lock(self, target: tuple[str, str]) -> asyncio.Lock:
+        """Retain a task lock keyed by effective account and canonical target URI."""
         async with self._target_locks_guard:
             lock, references = self._target_locks.get(target, (asyncio.Lock(), 0))
             self._target_locks[target] = (lock, references + 1)
             return lock
 
-    async def _release_target_lock(self, target: str, lock: asyncio.Lock) -> None:
+    async def _release_target_lock(self, target: tuple[str, str], lock: asyncio.Lock) -> None:
+        """Remove an account-target lock after its last active or waiting task exits."""
         async with self._target_locks_guard:
             current, references = self._target_locks.get(target, (lock, 0))
             if current is not lock:
@@ -668,7 +726,11 @@ class BotCompileService:
         request: SanitizedCompileRequest,
         connection: dict[str, Any],
     ) -> None:
-        task_lock = await self._retain_target_lock(request.to)
+        account_id = (
+            "default" if self._openviking_auth_mode() == "dev" else connection["account_id"]
+        )
+        target = (account_id, request.to)
+        task_lock = await self._retain_target_lock(target)
         acquired = False
         try:
             await self._acquire_execution_slot(task_lock)
@@ -688,7 +750,7 @@ class BotCompileService:
             if acquired:
                 self._semaphore.release()
                 task_lock.release()
-            await self._release_target_lock(request.to, task_lock)
+            await self._release_target_lock(target, task_lock)
 
     async def _execute_task(
         self,
@@ -696,6 +758,14 @@ class BotCompileService:
         request: SanitizedCompileRequest,
         connection: dict[str, Any],
     ) -> None:
+        snapshot = (request.changes or {}).get("skill_snapshot")
+        if snapshot is not None:
+            if not isinstance(snapshot, dict) or snapshot.get("uri") != request.skill:
+                raise CompileFailure(
+                    "SKILL_INVALID", "Invalid Compile Skill snapshot", stage="agent"
+                )
+            # Task-local connection follows existing parent, child and tool client propagation.
+            connection = {**connection, "skill_snapshot": snapshot}
         target_type = classify_uri(request.to).context_type
         session_key = SessionKey(type="compile", channel_id=task_id, chat_id=task_id)
         task_config = self.config.model_copy(
@@ -730,11 +800,24 @@ class BotCompileService:
             client = await VikingClient.create(connection=connection, config=self.config)
             source_files = None
             source_request = request
-            if request.last_compile_time is not None:
+            execution = (request.changes or {}).get("execution") or {}
+            full_execution = execution.get("mode") == "full" or (
+                not execution and request.instruction_provided
+            )
+            directory_plan = has_directory_plan(request.changes)
+            if directory_plan and request.changes.get("head"):
+                pass
+            elif full_execution:
+                source_files = await self._list_source_files(
+                    client, request.from_, allow_empty=True
+                )
+                source_request = request.model_copy(update={"last_compile_time": None})
+            elif request.last_compile_time is not None:
                 source_files = await self._list_source_files(
                     client, request.from_, cutoff=request.last_compile_time
                 )
-                if not source_files:
+            if source_files is not None:
+                if not full_execution and not source_files and request.changes is None:
 
                     def complete_without_sources(task: CompileTask) -> None:
                         """Finish an incremental no-op without model calls or target writes."""
@@ -748,7 +831,7 @@ class BotCompileService:
 
                     await self.store.update(task_id, complete_without_sources)
                     return
-                source_request = request.model_copy(update={"from_": source_files})
+                source_request = source_request.model_copy(update={"from_": source_files})
             skill_text = await client.read_raw(f"{request.skill}/SKILL.md")
             if not skill_text.strip():
                 raise ValueError("Compile Skill is empty")
@@ -765,7 +848,7 @@ class BotCompileService:
                         fail_task=lambda failure: self._fail(task_id, failure),
                     )
                 )
-            if target_type in {"resource", "skill"}:
+            if target_type in {"resource", "skill"} or directory_plan:
                 focused_loop = None
 
                 async def run_focused_agent(*args, **kwargs):
@@ -794,6 +877,9 @@ class BotCompileService:
                     source_files=source_files,
                     usage=agent_usage,
                     agent_runner=run_focused_agent,
+                    tool_context=ToolContext(
+                        session_key=session_key, openviking_connection=connection
+                    ),
                 )
                 return
             source_roots = {
@@ -910,6 +996,8 @@ class BotCompileService:
                         root_uri=request.to,
                         operations=rendered.operations,
                         wait=False,
+                        defer_processing=True,
+                        edit_source="compile",
                     )
                 except OpenVikingError as exc:
                     if exc.code == "CONFLICT":
@@ -996,6 +1084,7 @@ class BotCompileService:
         source_files,
         usage,
         agent_runner=None,
+        tool_context=None,
         resume=False,
     ) -> bool:
         """Run the shared collection pipeline and publish through the target namespace API.
@@ -1018,6 +1107,12 @@ class BotCompileService:
             usage=usage,
         )
         pipeline.model.agent_runner = agent_runner
+        pipeline.tools = {
+            name: tool
+            for name in ("openviking_search", "openviking_multi_read", "openviking_diff_paths")
+            if (tool := self.agent_loop.tools.get(name)) is not None
+        }
+        pipeline.tool_context = tool_context
 
         def record_metrics(task):
             """Expose token totals and existing error summaries, without per-call counters."""
@@ -1033,11 +1128,14 @@ class BotCompileService:
             }
 
         await self._set_state(task_id, status="running", stage="pipeline")
-        ordered = (
-            source_files
-            if source_files is not None
-            else await self._list_source_files(client, request.from_)
-        )
+        directory_plan = has_directory_plan(request.changes)
+        ordered = []
+        if not (directory_plan and request.changes.get("head")):
+            ordered = (
+                source_files
+                if source_files is not None
+                else await self._list_source_files(client, request.from_)
+            )
         if not resume:
             await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
 
@@ -1087,7 +1185,7 @@ class BotCompileService:
             await self._set_state(task_id, status="committing", stage="writing")
             skill_target = classify_uri(request.to).context_type == "skill"
             result = {"created": [], "updated": [], "unchanged": []}
-            if skill_target:
+            if skill_target and not pipeline.noop:
                 result = await self._write_skill_bundle(
                     client=client, target_uri=request.to, rendered=rendered
                 )
@@ -1097,6 +1195,8 @@ class BotCompileService:
                     operations=rendered.operations,
                     wait=False,
                     skip_conflicts=True,
+                    defer_processing=True,
+                    edit_source="compile",
                 )
             conflicts = result.get("conflicts", [])
             for conflict in conflicts:
@@ -1134,7 +1234,7 @@ class BotCompileService:
                         ]
                     )
                 ),
-                page_count=len(set(rendered.wiki_uris) & set(published)),
+                page_count=len(set(published)),
                 link_count=rendered.link_count,
                 link_report=rendered.link_report,
                 warnings=pipeline.warnings,
@@ -1143,14 +1243,14 @@ class BotCompileService:
             def complete(task):
                 if task.status not in TERMINAL_STATUSES and task.status != "cancelling":
                     record_metrics(task)
-                    task.status = "completed" if published else "failed"
-                    task.stage = "completed" if published else "writing"
+                    task.status = "completed" if published or pipeline.noop else "failed"
+                    task.stage = "completed" if published or pipeline.noop else "writing"
                     task.result = compiled
                     task.error = (
                         CompileErrorInfo(
                             code="COMPILE_INCOMPLETE", message="No output was acknowledged."
                         )
-                        if not published
+                        if not published and not pipeline.noop
                         else None
                     )
 
@@ -1362,9 +1462,7 @@ class BotCompileService:
                     skill_name, str(skill_dir), target_uri=target_uri, wait=True
                 )
             else:
-                published = await client.add_skill(
-                    str(skill_dir), target_uri=target_uri, wait=True
-                )
+                published = await client.add_skill(str(skill_dir), target_uri=target_uri, wait=True)
             result["updated" if exists else "created"].append(
                 str(published.get("root_uri") or published.get("uri") or root_uri)
             )
@@ -1415,12 +1513,17 @@ class BotCompileService:
         return registry
 
     async def _list_source_files(
-        self, client: VikingClient, roots: list[str], *, cutoff: datetime | None = None
+        self,
+        client: VikingClient,
+        roots: list[str],
+        *,
+        cutoff: datetime | None = None,
+        allow_empty: bool = False,
     ) -> list[str]:
         """List unique sources, excluding files strictly older than the UTC cutoff.
 
         Unknown file times are retained; directory times never prune descendants.
-        Listing failures propagate. Empty sources raise only without a cutoff.
+        Full reprocessing allows empty roots; listing failures propagate.
         """
 
         async def inventory(root: str) -> list[dict[str, Any]]:
@@ -1465,7 +1568,7 @@ class BotCompileService:
                     except ValueError:
                         pass
                 files.add(uri)
-        if not files and cutoff is None:
+        if not files and cutoff is None and not allow_empty:
             raise ValueError("Compile sources contain no files")
         return sorted(files)
 

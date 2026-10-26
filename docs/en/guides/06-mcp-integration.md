@@ -124,17 +124,20 @@ Enable `oauth.enabled` on the server and configure HTTPS as described in the OAu
 
 The built-in MCP tools are listed below. Use the connected server's `tools/list` response to determine which tools are available:
 
+<div v-pre>
+
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `find` | Fast semantic retrieval without session context. `context_type="skill"` on its own switches to package-level skill retrieval: one hit per skill package, its URI pointing at that package's `SKILL.md` and its summary taken from the skill itself, even when an auxiliary file inside the package is what matched. Without `target_uri` it searches both your own skills and the account-shared `viking://agent/skills`. Mixing `skill` with another context type keeps the generic retrieval path | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional), `read_content` (optional — inline each hit's content), `events_time_decay_protection` (optional) |
 | `search` | Deep semantic retrieval; `mode="context"` assembles injection-ready context and replaces the former `recall` tool. `list` mode also returns one hit per skill package, its URI pointing at `SKILL.md` and its summary taken from the package itself, but `limit` applies before that merge, so a package matching in several files takes several slots and fewer than `limit` results come back | `query`, `mode` (`list` or `context`), `target_uri` (list mode only), `session_id` (optional), `limit`, `min_score`, `level` (list mode), `context_type` (optional), `events_time_decay_protection` (optional in both modes), plus context-mode `quotas`, `purpose`, `max_tokens`, `detail` or `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, scalar `other_peer_penalty` or `other_peer_penalties` by category, and `rewrite` (`off` or `auto`) |
-| `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block | `uris` (single string or array), `offset`, `limit` (text lines) |
+| `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block; use `download` for the original bytes | `uris` (single string or array), `offset`, `limit` (text lines) |
+| `download` | Return a short-lived, single-use URL for fetching the original bytes of one file (any type, including PDF, images, archives, audio and video) with `curl`; it does not return the content. Directories are not supported | `uri` |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive`, `offset`, `limit`, `sort_by`, `sort_order` (optional) |
 | `tree` | Show the recursive directory tree under a `viking://` URI, indented by depth — use when you need a full picture of the file tree (prefer `list` for a single level, `glob` for filename patterns) | `uri` (optional), `level_limit` (default 3), `node_limit` (default 1000), `offset`, `limit`, `include_abstract` (optional — also show each directory's summary; for a skill directory that is its name and description) |
 | `remember` | Submit messages for long-term memory extraction; returns the background extraction `task_id` right away | `messages` (list of `{role, content}`) |
 | `write` | Write text to a `viking://` file (create/overwrite/append). Parent directories are created automatically; use `read` first to see current content before overwriting, and prefer `edit` for changing part of an existing file. Skill packages are not maintained this way: the caller's own `skills/` subtree is refused, and a write under `viking://agent/skills` produces a plain file that skips skill installation — use `add_skill` | `uri`, `content`, `mode` (optional: `replace` default — overwrites or creates if missing; `append` — appends or creates if missing; `create` — compatibility alias for `replace`), `wait` (optional, block until re-indexed), `acl` (optional) |
 | `edit` | Replace an exact string with new text in an existing `viking://` file — for targeted changes instead of a full rewrite. The file is left unchanged if `old_string` is not found, or matches multiple times while `replace_all` is false. Editing a file inside a skill package does not re-run skill installation — use `add_skill` | `uri`, `old_string`, `new_string`, `replace_all` (optional), `wait` (optional, block until re-indexed) |
-| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `processing_mode` (optional: `semantic_and_vectors` default, or `vectors_only` to skip VLM semantic understanding and only vectorize current files), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `args` (optional parser-specific options, including `{"parse_mode":"no_split"}` to parse each source document into one Markdown body, `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or access/refresh tokens plus an optional `feishu_app_id` / `feishu_app_secret` pair for Feishu user-token watches), `acl` (optional) |
+| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `processing_mode` (optional: `semantic_and_vectors` default, or `vectors_only` to skip VLM semantic understanding and only vectorize current files), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `parent` (optional destination directory, created automatically), `tags` / `tag_mode` (optional retrieval tags), `args` (optional parser-specific options, including `{"parse_mode":"no_split"}` to parse each source document into one Markdown body, `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or access/refresh tokens plus an optional `feishu_app_id` / `feishu_app_secret` pair for Feishu user-token watches), `acl` (optional) |
 | `add_skill` | Create, install, or replace an agent skill. New skills pass the full SKILL.md text; Git and GitHub tree URLs install every skill in the source unless `skills` names some; a local SKILL.md, directory, or zip returns a signed upload URL like `add_resource` | `data` (SKILL.md text) or `path` (Git URL or local path), `skills` (optional), `target_uri` (optional; `viking://agent/skills` shares with the account), `list_only` (optional) |
 | `list_watches` | List watch tasks (auto-refresh subscriptions) visible to the current agent. Each entry shows target URI, refresh interval (minutes), active/paused status, and next scheduled execution time | none |
 | `cancel_watch` | Cancel (delete) a watch task by its target URI. To change the cadence or pause temporarily, cancel and re-add with a new `watch_interval` | `to_uri` (must match the watch task's `to` value, e.g. `viking://resources/...`) |
@@ -142,10 +145,15 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope), `node_limit` |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory). Deleting a skill directory this way leaves the skill's privacy configuration behind; remove a skill with `ov skills remove` or `DELETE /api/v1/skills/{name}` | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
+| `privacy_tree` | Check which credentials are saved; return active field metadata and references without values | `category` (optional) |
+| `privacy_resolve` | Turn a complete <code v-pre>{{ov_privacy:...}}</code> placeholder into one current field's actual value for immediate use | `reference` |
+| `privacy_upsert` | Save user-supplied credential fields with an atomic merge; return metadata and references without values | `category`, `target_key`, `values` |
 | `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true requires ADMIN/ROOT) |
 | `list_groups` | List group IDs in the caller's account without membership | None |
 | `get_acl` | Read direct, inherited and effective ACL; requires resource manage or account ADMIN | `uri` |
 | `set_acl` | Update a shared resource ACL; authorize against the permissions before the change | `uri`, `acl` |
+
+</div>
 
 To address your own workspace from an MCP tool, use the home alias `viking://~`. It
 expands to `viking://user/<current-user>` on every control plane (REST API, `ov` CLI,
@@ -165,11 +173,51 @@ user spaces, not a shortcut to yours. See
 
 > `processing_mode=vectors_only` skips the VLM semantic-understanding stage. It does not generate or refresh `.abstract.md` / `.overview.md`; it only vectorizes current non-hidden resource files, preserving any older semantic artifacts that already exist.
 
+### Using saved credentials from a skill
+
+If a SKILL.md, document or tool result contains an authentication placeholder such as:
+
+```text
+Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}
+```
+
+and the current task needs the credential, call `privacy_resolve` with the entire
+placeholder unchanged, excluding the surrounding `Authorization: Bearer` text:
+
+```json
+{
+  "name": "privacy_resolve",
+  "arguments": {
+    "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+  }
+}
+```
+
+These are the parameters for an MCP `tools/call` request. Use the returned `value`
+in the API's authentication field; the placeholder itself is not a working key.
+Resolution uses the current active version and rejects another owner's reference,
+even for administrators. Field-level Privacy URIs are also accepted. If you do not
+know the reference, call `privacy_tree`, optionally filtering by `category`.
+
+To save a PAT supplied by the user, call `privacy_upsert` with
+`category="credential"`, `target_key="github"` and `values={"pat":"<user-provided-token>"}`.
+It creates the target or merges the supplied fields, preserving other fields such
+as `username`. Changed values create and activate a version; this does not rotate
+credentials at the external provider. Its response describes only the updated
+fields, without echoing their values.
+
+Tree and resolve are marked read-only; upsert is marked as a potentially destructive
+write. Read-only does not mean non-sensitive: resolve returns plaintext to the MCP
+client and Agent context. Keep references in saved documents and memory, and do
+not echo resolved secrets in chat. Tree and upsert return no stored values.
+
 ### Resource permissions and sharing
 
 All account users may call `list_users` and `list_groups`; neither tool accepts a different account.
 The default output contains only user IDs and a matching total, or group IDs. Even administrators
-must explicitly set `include_credentials=true` to include available credentials. A USER requesting
+must explicitly set `include_credentials=true` to include credential fields: ROOT receives
+every available plaintext key in `api_key`; ADMIN receives its own plaintext key and masked
+`key_prefix` values for every other user. A USER requesting
 credentials receives `PERMISSION_DENIED`, even when the query matches no users. Trusted auth mode
 forbids credential disclosure. Group membership remains available through the admin API.
 
@@ -213,7 +261,7 @@ A client that can read the source bytes and send a multipart HTTP request can up
 
 #### When you must set `OPENVIKING_PUBLIC_BASE_URL`
 
-The upload URL the tool returns is resolved server-side in this order:
+The upload URL that `add_resource` and `add_skill` return, and the download URL that `download` returns, are resolved server-side in this order:
 
 1. Environment variable `OPENVIKING_PUBLIC_BASE_URL`
 2. `server.public_base_url` in `ov.conf`
@@ -237,6 +285,14 @@ services:
     environment:
       OPENVIKING_PUBLIC_BASE_URL: "https://ov.your-domain.com"
 ```
+
+### Downloading original files
+
+`read` returns text, or native image and audio content for small media files. To get the original bytes of any file, such as a PDF, an archive, a video, or a large image, call `download` with the file's `uri`. The tool checks that the file exists and that the caller can read it, then returns a `curl -fL -o <local path> <url>` command. The URL points at `GET /api/v1/content/download` and embeds a one-shot token (10-minute TTL by default, set by the same `upload_signed_ttl_seconds` as uploads), so no API key is needed.
+
+The token is bound to the caller's identity and to that one file; a token request ignores any `uri` query parameter. Access is checked again when the file is fetched, so revoking access after the link is issued also blocks the download. Role handling matches uploads: in `api_key` mode the fetch is rejected if the user no longer exists, the identity is being deleted, or the role has been downgraded. A failed or repeated fetch needs a new link from `download`. Requests that carry an API key keep the normal path, so `ov get` is unchanged.
+
+The download URL uses the same base-URL resolution as the upload URL above. Behind a reverse proxy, set `OPENVIKING_PUBLIC_BASE_URL` and make sure the proxy forwards `/api/v1/*` to the server, not only `/mcp`.
 
 ## Troubleshooting
 

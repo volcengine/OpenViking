@@ -7,7 +7,7 @@ import math
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -43,6 +43,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
+    ResourceExhaustedError,
 )
 from openviking_cli.utils.uri import VikingURI
 
@@ -219,6 +220,8 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
         auto_pathlock: bool = True,
+        *,
+        no_vector: bool = False,
     ) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index.
 
@@ -228,6 +231,11 @@ class _OpsMixin:
         Acquires a path lock, deletes VectorDB records, then FS files.
         Raises ResourceBusyError when the target is locked by an ongoing
         operation (e.g. semantic processing).
+
+        Set ``no_vector`` only when the caller guarantees the target subtree
+        has no vector/context records. This skips vector cleanup and directory traversal
+        unless descendant ACL checks require it. Namespace permission checks
+        and path locking still apply.
 
         When ``auto_pathlock`` is False and no outer ``lease_ref`` is supplied,
         the VikingFS-level tree/exact lease is skipped and the underlying AGFS
@@ -272,6 +280,8 @@ class _OpsMixin:
                 raise
             if recursive:
                 await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
+            if no_vector:
+                return {"estimated_deleted_count": 0}
             # Path does not exist: clean up any orphan index records and return
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
@@ -305,22 +315,29 @@ class _OpsMixin:
                 raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
         try:
+            check_descendant_acl = (
+                is_dir
+                and (not no_vector or is_acl_uri(target_uri))
+                and await self._acl_enabled(ctx)
+            )
             uris_to_delete = (
                 await self._collect_uris(
                     path,
                     recursive,
                     ctx=ctx,
-                    strict=is_dir and await self._acl_enabled(ctx),
+                    strict=check_descendant_acl,
                 )
-                if is_dir
+                if is_dir and (not no_vector or check_descendant_acl)
                 else []
             )
             uris_to_delete.append(target_uri)
             if is_dir:
                 await self._ensure_access_many(uris_to_delete, ctx, action=AclAction.MANAGE)
-            real_ctx = self._ctx_or_default(ctx)
-            estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            estimated_count = 0
+            if not no_vector:
+                real_ctx = self._ctx_or_default(ctx)
+                estimated_count = await _estimate_deleted_count(path, real_ctx)
+                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             try:
                 result = await self._async_agfs.rm(
                     path,
@@ -387,8 +404,11 @@ class _OpsMixin:
         recursive: bool = False,
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
+        *,
+        maintain_vectors: bool = True,
+        copy_semantic_sidecars: bool = True,
     ) -> Dict[str, Any]:
-        """Copy a file or directory together with its vector records."""
+        """Copy a file or directory, optionally including semantic state."""
         old_uri = self._normalize_transfer_uri(old_uri)
         new_uri = self._normalize_transfer_uri(new_uri)
         await self._ensure_copy_source_access(old_uri, recursive=recursive, ctx=ctx)
@@ -450,23 +470,26 @@ class _OpsMixin:
                 is_dir=is_dir,
                 ctx=ctx,
                 lease_ref=lease,
+                copy_semantic_sidecars=copy_semantic_sidecars,
             )
-            try:
-                vector_result = await self._copy_vector_store_uris(
-                    old_uri,
-                    new_uri,
-                    recursive=is_dir,
-                    ctx=ctx,
-                    **({"source_uris": source_uris} if is_dir else {}),
-                )
-            except Exception:
+            vector_result = None
+            if maintain_vectors:
                 try:
-                    await self._cleanup_transfer_target(
-                        new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                    vector_result = await self._copy_vector_store_uris(
+                        old_uri,
+                        new_uri,
+                        recursive=is_dir,
+                        ctx=ctx,
+                        **({"source_uris": source_uris} if is_dir else {}),
                     )
                 except Exception:
-                    logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
-                raise
+                    try:
+                        await self._cleanup_transfer_target(
+                            new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                        )
+                    except Exception:
+                        logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
+                    raise
             result: Dict[str, Any] = {
                 "operation_id": operation_id,
                 "operation": "copy",
@@ -646,6 +669,7 @@ class _OpsMixin:
         is_dir: bool,
         ctx: Optional[RequestContext],
         lease_ref: Dict[str, Any],
+        copy_semantic_sidecars: bool = True,
     ) -> int:
         if is_dir:
             return await self._copy_directory_under_tree_locks(
@@ -655,6 +679,7 @@ class _OpsMixin:
                 new_uri=new_uri,
                 ctx=ctx,
                 lease_ref=lease_ref,
+                copy_semantic_sidecars=copy_semantic_sidecars,
             )
 
         await self._async_agfs.cp(
@@ -685,6 +710,9 @@ class _OpsMixin:
         new_uri: str,
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
+        *,
+        vector_mode: Literal["transfer", "delete_source", "none"] = "transfer",
+        copy_semantic_sidecars: bool = True,
     ) -> Dict[str, Any]:
         """Move file/directory while extending an optional outer pathlock lease.
 
@@ -784,6 +812,7 @@ class _OpsMixin:
                         is_temp=is_temp,
                         ctx=ctx,
                         lease_ref=lease,
+                        copy_semantic_sidecars=copy_semantic_sidecars,
                     )
                     or 0
                 )
@@ -801,18 +830,24 @@ class _OpsMixin:
                         )
                 raise
 
-            # Update VectorDB URIs (on failure, clean up the copy)
+            # Update or remove source VectorDB records before deleting the source.
             vector_transfer_completed = False
             try:
-                vector_result = await self._update_vector_store_uris(
-                    old_uri,
-                    new_uri,
-                    recursive=is_dir,
-                    ctx=ctx,
-                    **({"source_uris": uris_to_move} if is_dir else {}),
-                )
-                vector_transfer_completed = True
-                if acl_manager is not None and new_acl_scope:
+                vector_result = None
+                if vector_mode == "transfer":
+                    vector_result = await self._update_vector_store_uris(
+                        old_uri,
+                        new_uri,
+                        recursive=is_dir,
+                        ctx=ctx,
+                        **({"source_uris": uris_to_move} if is_dir else {}),
+                    )
+                    vector_transfer_completed = True
+                elif vector_mode == "delete_source":
+                    await self._delete_from_vector_store(uris_to_move, ctx=ctx)
+                elif vector_mode != "none":
+                    raise ValueError(f"unsupported move vector mode: {vector_mode}")
+                if vector_mode == "transfer" and acl_manager is not None and new_acl_scope:
                     await acl_manager.refresh_context_subtree(
                         new_uri,
                         self._ctx_or_default(ctx),
@@ -885,6 +920,7 @@ class _OpsMixin:
         is_temp: bool,
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
+        copy_semantic_sidecars: bool = True,
     ) -> int:
         """Copy source to destination for mv without deleting source."""
         del is_temp
@@ -898,6 +934,7 @@ class _OpsMixin:
             is_dir=is_dir,
             ctx=ctx,
             lease_ref=lease_ref,
+            copy_semantic_sidecars=copy_semantic_sidecars,
         )
 
     async def _copy_directory_under_tree_locks(
@@ -910,6 +947,7 @@ class _OpsMixin:
         lease_ref: Dict[str, Any] | None,
         transfer_source_uri: str | None = None,
         transfer_target_uri: str | None = None,
+        copy_semantic_sidecars: bool = True,
     ) -> int:
         """Copy a directory under the operation's source and target Tree leases.
 
@@ -962,9 +1000,12 @@ class _OpsMixin:
                     lease_ref=lease_ref,
                     transfer_source_uri=transfer_source_uri,
                     transfer_target_uri=transfer_target_uri,
+                    copy_semantic_sidecars=copy_semantic_sidecars,
                 )
             else:
                 if name in ABSTRACT_OVERVIEW_FILENAMES:
+                    if not copy_semantic_sidecars:
+                        continue
                     raw = await self._async_agfs.cat(old_child, fs_ctx=fs_ctx)
                     level = (
                         ContextLevel.ABSTRACT if name == ".abstract.md" else ContextLevel.OVERVIEW
@@ -1072,6 +1113,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         skip_count: bool = False,
         include_lock_status: bool = False,
+        include_vector_fields: bool = True,
     ) -> Dict[str, Any]:
         """
         File/directory information.
@@ -1143,10 +1185,10 @@ class _OpsMixin:
             # Add deterministic vector record id for files (level 2).
             # This matches the ID used in VikingDB so callers can cross-reference
             # vector records without an extra lookup.
-            if not result.get("isDir", False):
+            if include_vector_fields and not result.get("isDir", False):
                 result["id"] = vector_record_id(real_ctx.account_id, uri, level=2)
             # Add count for directories if vector store available
-            if not skip_count and result.get("isDir", False):
+            if include_vector_fields and not skip_count and result.get("isDir", False):
                 try:
                     vector_store = self._get_vector_store()
                     if vector_store:
@@ -1189,6 +1231,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         extra_fields: Optional[List[str]] = None,
         tag_filter: Optional[Dict[str, Any]] = None,
+        force_fs: bool = False,
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive.
 
@@ -1215,17 +1258,18 @@ class _OpsMixin:
                 return {"matches": [], "count": 0}
             raise NotFoundError(uri, "directory")
 
-        remote_result = await self._try_glob_vikingdb(
-            pattern=pattern,
-            uri=uri,
-            node_limit=node_limit,
-            return_entries=return_entries,
-            extra_fields=aug_fields,
-            tag_filter=tag_filter,
-            ctx=real_ctx,
-        )
-        if remote_result is not None:
-            return remote_result
+        if not force_fs:
+            remote_result = await self._try_glob_vikingdb(
+                pattern=pattern,
+                uri=uri,
+                node_limit=node_limit,
+                return_entries=return_entries,
+                extra_fields=aug_fields,
+                tag_filter=tag_filter,
+                ctx=real_ctx,
+            )
+            if remote_result is not None:
+                return remote_result
 
         # Tag filtering happens in FSService on the local fallback path. Fetch
         # all matches so an early filesystem limit cannot discard later tagged
@@ -1978,6 +2022,21 @@ class _OpsMixin:
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
 
         if isinstance(content, str):
+            sanitizer = getattr(self, "_privacy_sanitizer", None)
+            if sanitizer is not None and ctx is not None:
+                result = await sanitizer.sanitize(content, ctx=ctx, uri=uri)
+                if result.ambiguous_references:
+                    raise InvalidArgumentError(
+                        "Content contains a Privacy value mapped to multiple fields; "
+                        "insert the intended owner-bound reference explicitly",
+                        details={
+                            "uri": uri,
+                            "candidate_references": [
+                                list(candidates) for candidates in result.ambiguous_references
+                            ],
+                        },
+                    )
+                content = result.content
             content = content.encode("utf-8")
 
         await self._async_agfs.write(
@@ -2055,8 +2114,11 @@ class _OpsMixin:
         self,
         uri: str,
         ctx: Optional[RequestContext] = None,
+        max_bytes: Optional[int] = None,
     ) -> bytes:
         """Read single binary file. Accepts a Viking URI or a 32-char hex vector record id."""
+        if max_bytes is not None and max_bytes < 0:
+            raise InvalidArgumentError("max_bytes must be non-negative")
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
         await self._ensure_access(uri, ctx)
@@ -2080,8 +2142,31 @@ class _OpsMixin:
                 f"Cannot read directory as file: {uri}",
                 details={"resource": uri, "expected": "file", "actual": "directory"},
             )
+        if max_bytes is not None:
+            size = stat.get("size") if isinstance(stat, dict) else None
+            if isinstance(size, int) and size > max_bytes:
+                raise ResourceExhaustedError(
+                    "File exceeds the configured read size limit",
+                    details={
+                        "uri": uri,
+                        "reason": "read_limit_exceeded",
+                        "size_bytes": size,
+                        "max_bytes": max_bytes,
+                    },
+                )
         try:
-            raw = self._handle_agfs_read(await self._async_agfs.read(path))
+            read_size = -1 if max_bytes is None else max_bytes + 1
+            raw = self._handle_agfs_read(await self._async_agfs.read(path, size=read_size))
+            if max_bytes is not None and len(raw) > max_bytes:
+                raise ResourceExhaustedError(
+                    "File exceeds the configured read size limit",
+                    details={
+                        "uri": uri,
+                        "reason": "read_limit_exceeded",
+                        "size_bytes": len(raw),
+                        "max_bytes": max_bytes,
+                    },
+                )
             return raw
         except Exception as exc:
             if is_not_found_error(exc):

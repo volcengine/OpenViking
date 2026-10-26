@@ -17,12 +17,6 @@ from openviking.models.embedder.retry_embedder import RetryEmbedder
 from openviking.models.vlm.token_usage import TokenUsageTracker
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool
 from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
-from openviking.utils.model_retry import (
-    ERROR_CLASS_AUTH,
-    ERROR_CLASS_INPUT_TOO_LARGE,
-    ERROR_CLASS_PERMANENT,
-    classify_api_error,
-)
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -260,16 +254,7 @@ class AccountEmbeddingProvider:
                         f"got {len(result.dense_vector)}"
                     )
         except Exception as exc:
-            # The breaker is shared by every call on this account, so only
-            # provider-health failures may trip it. Request-level rejections
-            # (400 / input too large) are specific to one input, and auth
-            # errors are surfaced per call instead.
-            if classify_api_error(exc) not in {
-                ERROR_CLASS_AUTH,
-                ERROR_CLASS_INPUT_TOO_LARGE,
-                ERROR_CLASS_PERMANENT,
-            }:
-                resource.breaker.record_failure(exc)
+            resource.breaker.record_failure(exc)
             raise
         resource.breaker.record_success()
         return result

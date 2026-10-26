@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { useChat } from '#/lib/sessions/use-chat'
 import {
@@ -32,6 +33,8 @@ export function Thread(props: ThreadProps) {
 
 function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const { t } = useTranslation('sessions')
+  const service = useStudioService()
+  const canChat = service.ready && service.provider === 'opensource'
   const { identityScopeKey } = useAppConnection()
   const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
@@ -66,7 +69,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
 
   const handleSend = useCallback(
     async (message: string) => {
-      if (!message.trim() || creating.current) return false
+      if (!canChat || !message.trim() || creating.current) return false
       if (!persisted.current) {
         creating.current = true
         setCreationError(undefined)
@@ -85,10 +88,13 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
           creating.current = false
         }
       }
-      void chat.send(message)
+      const sending = chat.send(message)
+      if (chat.status === 'streaming') {
+        await sending
+      }
       return true
     },
-    [chat, createSession, sessionId, onPersisted],
+    [canChat, chat, createSession, sessionId, onPersisted],
   )
 
   // ---- Auto-scroll ----
@@ -110,7 +116,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
     scrollRafRef.current = requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     })
-  }, [chat.messages.length, chat.streamingParts])
+  }, [chat.messages.length, chat.streamingParts, chat.streamingInsertIndex])
 
   const [showBackground, setShowBackground] = useState(false)
 
@@ -129,7 +135,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const isEmpty = chat.messages.length === 0 && !isStreaming
 
   return (
-    <div className="relative flex h-full flex-col">
+    <div className="relative flex h-full min-h-0 flex-1 flex-col">
       {/* PixelBlast background — deferred until idle */}
       {showBackground && isEmpty && (
         <div className="pointer-events-none absolute inset-0 z-0 opacity-40">
@@ -151,7 +157,9 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
             ? t('threadList.newSession')
             : title || sessionId}
         </h2>
-        <MemoryImpact session={session} />
+        {service.provider === 'opensource' ? (
+          <MemoryImpact session={session} />
+        ) : null}
       </div>
 
       <div
@@ -168,7 +176,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
             {t('chat.historyLoadFailed', { error: historyError.message })}
           </div>
         ) : isEmpty ? (
-          <ThreadEmpty />
+          <ThreadEmpty canChat={canChat} />
         ) : (
           <MessageList
             messages={chat.messages}
@@ -176,6 +184,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
               isStreaming
                 ? {
                     parts: chat.streamingParts,
+                    insertIndex: chat.streamingInsertIndex,
                     iteration: chat.iteration,
                   }
                 : undefined
@@ -193,18 +202,20 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
           {t('chat.sendFailed', { error: creationError || chat.error })}
         </div>
       )}
-      <div className="relative z-10">
-        <Composer
-          onSend={handleSend}
-          onCancel={chat.abort}
-          isStreaming={isStreaming}
-        />
-      </div>
+      {canChat ? (
+        <div className="relative z-10">
+          <Composer
+            onSend={handleSend}
+            onCancel={chat.abort}
+            isStreaming={isStreaming}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
 
-function ThreadEmpty() {
+function ThreadEmpty({ canChat }: { canChat: boolean }) {
   const { t } = useTranslation('sessions')
 
   return (
@@ -217,7 +228,7 @@ function ThreadEmpty() {
           {PRODUCT_NAME}
         </h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          {t('chat.emptyDescription')}
+          {t(canChat ? 'chat.emptyDescription' : 'chat.emptyReadDescription')}
         </p>
       </div>
     </div>

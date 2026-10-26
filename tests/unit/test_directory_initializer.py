@@ -1,4 +1,5 @@
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -132,6 +133,26 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
     }
     assert count == len(expected_uris)
     assert set(viking_fs.contexts) == expected_uris
+
+
+@pytest.mark.asyncio
+async def test_system_assets_sync_only_for_account_initialization():
+    synchronizer = SimpleNamespace(sync=AsyncMock())
+    initializer = DirectoryInitializer(
+        _FakeVikingDB(),
+        viking_fs=_FakeVikingFS(),
+        system_asset_synchronizer=synchronizer,
+    )
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
+
+    await initializer.initialize_account_workspace(ctx, sync_system_assets=False)
+    synchronizer.sync.assert_not_awaited()
+
+    await initializer.initialize_account_workspace(ctx)
+    await initializer.initialize_account_directories(ctx)
+    await initializer.initialize_user_directories(ctx)
+
+    assert synchronizer.sync.await_args_list == [call(ctx), call(ctx)]
 
 
 def test_preset_directory_uris_cover_seeded_directories_only():

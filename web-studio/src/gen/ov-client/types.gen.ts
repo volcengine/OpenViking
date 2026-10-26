@@ -3196,54 +3196,6 @@ export type PostSessionIdCommitResponses = {
     200: unknown;
 };
 
-export type PostSessionIdExtractData = {
-    body?: never;
-    headers?: {
-        /**
-         * X-Api-Key
-         */
-        'x-api-key'?: string | null;
-        /**
-         * Authorization
-         */
-        authorization?: string | null;
-        /**
-         * X-Openviking-Account
-         */
-        'X-OpenViking-Account'?: string | null;
-        /**
-         * X-Openviking-User
-         */
-        'X-OpenViking-User'?: string | null;
-    };
-    path: {
-        /**
-         * Session Id
-         *
-         * Session ID
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/api/v1/sessions/{session_id}/extract';
-};
-
-export type PostSessionIdExtractErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostSessionIdExtractError = PostSessionIdExtractErrors[keyof PostSessionIdExtractErrors];
-
-export type PostSessionIdExtractResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
 export type PostSessionIdMessagesData = {
     body: AddMessageRequest;
     headers?: {

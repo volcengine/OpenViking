@@ -3,6 +3,7 @@
 """API key operations over a complete account store."""
 
 import base64
+import hashlib
 import hmac
 import secrets
 from typing import Optional, Tuple
@@ -10,12 +11,10 @@ from typing import Optional, Tuple
 from typing_extensions import deprecated
 
 from openviking.server.account_stores.base import AccountStore
-from openviking.server.api_keys.legacy import (
-    derive_seeded_api_key_secret,
-)
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking_cli.exceptions import (
     FailedPreconditionError,
+    InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
 )
@@ -48,11 +47,27 @@ def parse_api_key(api_key: str) -> Tuple[str, str, str]:
     )
 
 
+def derive_seeded_api_key_secret(user_id: str, seed: str) -> str:
+    if not isinstance(seed, str) or seed == "":
+        raise InvalidArgumentError("seed must not be empty")
+    return hashlib.sha256(f"{user_id}\0{seed}".encode("utf-8")).hexdigest()
+
+
 def generate_api_key(account_id: str, user_id: str, seed: Optional[str] = None) -> str:
     secret = (
         derive_seeded_api_key_secret(user_id, seed) if seed is not None else secrets.token_hex(32)
     )
     return ".".join(map(_encode_segment, (account_id, user_id, secret)))
+
+
+def mask_api_key(api_key: str) -> str:
+    """Mask every secret character except the last four; fully hide malformed keys."""
+    if not is_new_format_key(api_key):
+        return "*" * len(api_key)
+    account, user, secret = api_key.split(".")
+    visible_length = 4 if len(secret) > 4 else 0
+    hidden_length = len(secret) - visible_length
+    return f"{account}.{user}.{'*' * hidden_length}{secret[hidden_length:]}"
 
 
 class APIKeyManager:
@@ -120,13 +135,12 @@ class APIKeyManager:
         )
 
     async def _verify_key(self, key: str):
-        account_id = None
-        user_id = None
-        if is_new_format_key(key):
-            try:
-                account_id, user_id, _ = parse_api_key(key)
-            except (ValueError, UnicodeError):
-                raise UnauthenticatedError("Invalid API key") from None
+        if not is_new_format_key(key):
+            raise UnauthenticatedError("Invalid API key")
+        try:
+            account_id, user_id, _ = parse_api_key(key)
+        except (ValueError, UnicodeError):
+            raise UnauthenticatedError("Invalid API key") from None
         binding = await self._store.verify_api_key(
             key, account_id_hint=account_id, user_id_hint=user_id
         )
@@ -218,6 +232,9 @@ class APIKeyManager:
     async def get_user(self, account_id, user_id):
         return await self._store.get_user(account_id, user_id)
 
+    async def get_user_membership(self, account_id, user_id):
+        return await self._store.get_user_membership(account_id, user_id)
+
     @deprecated(
         "get_user_for_management is a FileStore compatibility path and will be removed.",
         category=None,
@@ -230,6 +247,11 @@ class APIKeyManager:
 
     async def list_users_page(self, account_id, **filters):
         expose_key = filters.pop("expose_key", True)
+        mask_keys = filters.pop("mask_keys", False)
+        # The masked view still shows the caller's own stored key in plaintext,
+        # but only when account and user match the key's embedded identity.
+        viewer_account_id = filters.pop("viewer_account_id", None)
+        viewer_user_id = filters.pop("viewer_user_id", None)
         store_filters = {
             name: filters[name]
             for name in (
@@ -250,7 +272,39 @@ class APIKeyManager:
             for user in page["users"]:
                 user.pop("api_key", None)
                 user.pop("key_prefix", None)
+        elif mask_keys:
+            for user in page["users"]:
+                if api_key := user.pop("api_key", None):
+                    if self._is_viewer_own_key(
+                        api_key,
+                        account_id,
+                        user.get("user_id"),
+                        viewer_account_id,
+                        viewer_user_id,
+                    ):
+                        user["api_key"] = api_key
+                    else:
+                        user["key_prefix"] = mask_api_key(api_key)
         return page
+
+    @staticmethod
+    def _is_viewer_own_key(
+        api_key,
+        account_id,
+        row_user_id,
+        viewer_account_id,
+        viewer_user_id,
+    ) -> bool:
+        """Strict account/user match between the caller and a listed key."""
+        if not viewer_account_id or not viewer_user_id:
+            return False
+        if account_id != viewer_account_id or row_user_id != viewer_user_id:
+            return False
+        try:
+            key_account_id, key_user_id, _ = parse_api_key(api_key)
+        except (ValueError, UnicodeError):
+            return False
+        return key_account_id == viewer_account_id and key_user_id == viewer_user_id
 
     async def has_user(self, account_id, user_id):
         return await self.get_user(account_id, user_id) is not None

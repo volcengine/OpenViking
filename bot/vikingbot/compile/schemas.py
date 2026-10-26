@@ -50,12 +50,6 @@ def result_schema(schema, data):
         ids = [item["record"] for item in data["records"]]
         result["properties"]["decisions"].update(minItems=len(ids), maxItems=len(ids))
         result["$defs"]["RouteDecision"]["properties"]["record"]["enum"] = ids
-    if issubclass(schema, FileResponse) and data.get("inputs"):
-        # Limit file lineage to supplied inputs without requiring exhaustive coverage.
-        ids = [item["id"] for item in data["inputs"]]
-        inputs = result["$defs"]["FileDraft"]["properties"]["inputs"]
-        inputs["items"]["enum"] = ids
-        inputs["uniqueItems"] = True
     if schema is FileResponse and "indexes" in data:
         paths = [item["group"]["path"] for item in data["indexes"]]
         result["properties"]["files"].update(minItems=len(paths), maxItems=len(paths))

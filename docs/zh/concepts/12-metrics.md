@@ -84,11 +84,11 @@ Collector 负责把输入转成指标语义：
 
 ### MetricRegistry
 
-MetricRegistry 是进程内的指标注册中心，用于保存当前指标值，并在导出时统一读取。
+MetricRegistry 保留 OpenViking 的指标名、标签约束和账户维度规则。单次事件的计数与耗时直接交给 OpenTelemetry SDK 累计；RAGFS 和状态采集器返回的累计值作为快照接入，不会重新作为事件计数。
 
 ### Exporter
 
-当前首个落地导出器是 Prometheus Exporter，用于把 registry 中的指标渲染成 Prometheus exposition 文本。
+`/metrics` 使用官方 Prometheus Python 客户端输出文本；OTLP HTTP/gRPC 使用 OpenTelemetry 官方导出器处理编码、发送和重试。现有 endpoint、headers、TLS 和上报周期配置保持不变。
 
 ## 使用方式
 
@@ -139,6 +139,31 @@ scrape_configs:
 
 下面列出 Collector 定义的代表性指标。某个指标是否出现，取决于功能是否启用、是否发生对应事件，以及 Collector 是否采集成功；未出现不能直接解释为数值为零。
 
+### 耗时分布与分位数
+
+业务打点只记录实际耗时和标签；Python 与 RAGFS 的耗时累计由各自的 OpenTelemetry SDK 完成。
+接入层统一配置默认统计范围，业务采集器无需维护桶边界。Python 从 0.01 秒、RAGFS 从 0.0001 秒起，
+按每个十倍数量级的 1、2、5 档覆盖到 5,000,000 秒（约 58 天），超出范围仍计入 `+Inf`。
+这里的范围不是任务超时；看板不应通过 `< 10` 或固定纵轴上限过滤慢请求。
+
+Prometheus 的 `_bucket`、`_count`、`_sum` 和 OTLP Histogram 都带有 `bucket_schema`，
+该标签由实际桶边界计算，采集器不能自行设置。**聚合分位数时必须保留 `bucket_schema`**，避免滚动升级时把
+新旧分桶混算。没有该标签的旧数据会形成独立的一组；其已经合并到最后一桶的细节无法恢复。
+
+```promql
+histogram_quantile(0.99,
+  sum by (le, bucket_schema, operation) (
+    rate(openviking_operation_duration_seconds_bucket[5m])
+  )
+)
+```
+
+P95 将 `0.99` 改为 `0.95`。平均耗时使用同一组 `operation, bucket_schema` 的
+`rate(_sum) / rate(_count)`，仅在次数大于零时显示；没有完成记录时不能用零耗时代替。
+分位数仍是桶内插值估算，低流量或粗粒度桶内的结果不等于精确的单次请求耗时。
+默认每组 Python 耗时直方图输出 30 条 Prometheus 时序，RAGFS 输出 36 条；
+应将新增桶的采集和存储成本计入容量规划。
+
 ### 请求与操作
 
 | 指标族 | 类型 | 常见标签 | 含义 |
@@ -164,6 +189,7 @@ scrape_configs:
 | `openviking_retrieval_zero_result_total` | Counter | `account_id, context_type` | 检索零结果次数 |
 | `openviking_retrieval_rerank_used_total` | Counter | `account_id` | 检索中使用 rerank 的次数 |
 | `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | 检索 rerank 回退次数 |
+| `openviking_resource_imports_total` | Counter | `account_id, pipeline, source_type` | 已受理的资源导入任务数；Connector 导入使用 `pipeline="connector"`，`source_type` 为 `repository` 或 `document` |
 | `openviking_resource_stage_total` | Counter | `account_id, stage, status` | 资源导入各阶段执行次数 |
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | 资源导入阶段耗时分布 |
 | `openviking_resource_wait_duration_seconds` | Histogram | `account_id, operation` | 资源导入等待耗时分布（例如队列等待） |
@@ -205,6 +231,7 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 | `openviking_vlm_tokens_input_total` | Counter | `account_id, provider, model_name` | VLM 输入 token |
 | `openviking_vlm_tokens_output_total` | Counter | `account_id, provider, model_name` | VLM 输出 token |
 | `openviking_vlm_tokens_total` | Counter | `account_id, provider, model_name` | VLM 总 token |
+| `openviking_vlm_ingestion_tokens_total` | Counter | `account_id, source_type` | 资源导入阶段 VLM 总 token，`source_type` 区分 `repository` / `document` |
 | `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name` | VLM 调用耗时分布 |
 | `openviking_embedding_requests_total` | Counter | `account_id, status` | embedding 请求数 |
 | `openviking_embedding_latency_seconds` | Histogram | `account_id, status` | embedding 耗时分布 |
@@ -214,6 +241,7 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 | `openviking_embedding_tokens_input_total` | Counter | `account_id, provider, model_name` | embedding 输入 token（per-call 聚合） |
 | `openviking_embedding_tokens_output_total` | Counter | `account_id, provider, model_name` | embedding 输出 token（per-call 聚合；若长期为 0 可能不出现） |
 | `openviking_embedding_tokens_total` | Counter | `account_id, provider, model_name` | embedding 总 token（per-call 聚合） |
+| `openviking_embedding_ingestion_tokens_total` | Counter | `account_id, source_type` | 资源导入阶段 embedding 总 token，`source_type` 区分 `repository` / `document` |
 | `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name` | rerank provider 调用次数（per-call） |
 | `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name` | rerank provider 调用耗时分布（per-call） |
 | `openviking_rerank_tokens_input_total` | Counter | `account_id, provider, model_name` | rerank 输入 token（per-call 聚合） |
@@ -253,6 +281,7 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 | `openviking_lock_stale_leases_released_total` | Counter | 无 | 已释放的过期租约数 |
 | `openviking_lock_descendant_scans_total` | Counter | 无 | 已完成的后代锁扫描次数 |
 | `openviking_lock_descendant_scan_duration_seconds_total` | Counter | 无 | 后代锁扫描累计耗时 |
+| `openviking_lock_descendant_scan_duration_seconds` | Histogram | `bucket_schema` | 已完成后代锁扫描的耗时分布，可计算平均、P95 和 P99 |
 
 队列耗时指标中的 `outcome` 可取 `success`、`failed`、`requeued`、`cancelled`、`exception`。其中 `failed` 表示 handler 返回了可确认的失败结果，`exception` 表示处理过程抛出异常，当前消息不会 ACK。
 
@@ -298,7 +327,8 @@ RAGFS 通过一次原生 `metrics()` 调用读取文件系统、Cache、multi-ba
 这些指标不带 `mount` 和 `account_id` 标签。未启用 Cache 或 multi-backend
 时，不生成对应指标族。`status` 为 `success` 或 `error`。
 `exists=false` 计为成功；`replace` 使用 `rename` 操作标签。
-Histogram 包含全部操作结果，有限桶边界范围为 0.0001 至 10 秒。
+Histogram 包含全部操作结果，使用 Rust OpenTelemetry SDK 统计；输出边界和计数直接来自 SDK。
+尚未发生的操作不导出空直方图，避免为每个插件和操作持续发布无样本的长尾桶；原有操作计数器保留。
 Python `get_stats()` 保留原有微秒字段。
 
 protocol 指标始终包含闭集中的两条 series。任何 protocol、account 或 segment

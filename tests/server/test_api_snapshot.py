@@ -195,9 +195,7 @@ async def client_with_resource_and_blob(client_with_resource, service):
 async def test_restore_acl_and_reindex_identity(client_with_resource, service, monkeypatch):
     _, _root = client_with_resource
     admin = RequestContext(user=service.user, role=Role.ADMIN)
-    await service.runtime_config_manager.patch_account(
-        admin.account_id, {"acl": {"enabled": True}}
-    )
+    await service.runtime_config_manager.patch_account(admin.account_id, {"acl": {"enabled": True}})
     writer = RequestContext(
         user=UserIdentifier(admin.account_id, "snapshot_writer"),
         role=Role.USER,
@@ -277,6 +275,10 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
             reindex_contexts.append(ctx)
             return {"ok": True}
 
+        async def execute_in_current_task(self, *, uri, mode, ctx):
+            reindex_contexts.append(ctx)
+            return {"ok": True}
+
         async def reindex_directory_marker(self, *, dir_uri, level, ctx):
             reindex_contexts.append(ctx)
 
@@ -311,7 +313,9 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
 
 async def test_show_commit_metadata(client_with_resource):
     client, _ = client_with_resource
-    commit = (await client.post("/api/v1/snapshot/commit", json={"message": "meta"})).json()["result"]
+    commit = (await client.post("/api/v1/snapshot/commit", json={"message": "meta"})).json()[
+        "result"
+    ]
     resp = await client.get(
         "/api/v1/snapshot/show",
         params={"target_ref": commit["commit_oid"]},
@@ -366,10 +370,15 @@ async def test_show_blob_can_hide_memory_fields(snapshot_router_client, monkeypa
 
 async def test_show_path_not_found_returns_404(client_with_resource):
     client, _ = client_with_resource
-    commit = (await client.post("/api/v1/snapshot/commit", json={"message": "for 404"})).json()["result"]
+    commit = (await client.post("/api/v1/snapshot/commit", json={"message": "for 404"})).json()[
+        "result"
+    ]
     resp = await client.get(
         "/api/v1/snapshot/show",
-        params={"target_ref": commit["commit_oid"], "path": "viking://resources/does_not_exist.txt"},
+        params={
+            "target_ref": commit["commit_oid"],
+            "path": "viking://resources/does_not_exist.txt",
+        },
     )
     assert resp.status_code == 404
     assert resp.json()["status"] == "error"
@@ -409,6 +418,15 @@ async def test_diff_returns_unified_diff_for_path(client_with_resource, service)
     assert result["change_type"] == "modified"
     assert "-old line" in result["diff_text"]
     assert "+new line" in result["diff_text"]
+
+    response = await client.get(
+        "/api/v1/snapshot/diff-paths",
+        params={"paths": "viking://resources", "from": from_commit, "to": to_commit, "limit": 1},
+    )
+    assert response.status_code == 200, response.text
+    page = response.json()["result"]
+    assert page["changes"] == [{"uri": path, "change_type": "modified"}]
+    assert page["total"] == 1 and page["has_more"] is False
 
 
 async def test_diff_supports_first_version_without_from_commit(client_with_resource, service):
@@ -541,7 +559,9 @@ async def test_diff_reports_unchanged_path(client_with_resource, service):
 # ---------------------------------------------------------------------------
 
 
-async def test_restore_apply_advances_head_with_forward_commit(client_with_resource_and_blob, service):
+async def test_restore_apply_advances_head_with_forward_commit(
+    client_with_resource_and_blob, service
+):
     """End-to-end restore (dry_run=False) over HTTP: verify forward-commit
     semantics — the new commit's parent is the previous HEAD, NOT the source
     commit, and the workspace bytes match the source.
@@ -595,7 +615,9 @@ async def test_restore_apply_advances_head_with_forward_commit(client_with_resou
     assert show_resp.content == v1_bytes
 
 
-async def test_restore_without_project_dir_restores_full_account_tree(client_with_resource_and_blob, service):
+async def test_restore_without_project_dir_restores_full_account_tree(
+    client_with_resource_and_blob, service
+):
     from openviking.server.identity import RequestContext, Role
     from openviking_cli.session.user_id import UserIdentifier
 
@@ -605,7 +627,9 @@ async def test_restore_without_project_dir_restores_full_account_tree(client_wit
 
     await service.viking_fs.write_file(blob_uri, b"v2 modified content\n", ctx=ctx)
     await service.viking_fs.write_file(extra_uri, b"new at v2\n", ctx=ctx)
-    c2_resp = await client.post("/api/v1/snapshot/commit", json={"message": "v2 full restore setup"})
+    c2_resp = await client.post(
+        "/api/v1/snapshot/commit", json={"message": "v2 full restore setup"}
+    )
     assert c2_resp.status_code == 200, c2_resp.text
     c2_oid = c2_resp.json()["result"]["commit_oid"]
 
@@ -635,7 +659,9 @@ async def test_restore_without_project_dir_restores_full_account_tree(client_wit
     assert missing_resp.status_code == 404
 
 
-async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob, service, monkeypatch):
+async def test_restore_apply_triggers_reindex_hook(
+    client_with_resource_and_blob, service, monkeypatch
+):
     """Verify the HTTP restore path actually invokes the vector-reindex
     scheduler — protects the chain router -> viking_fs.restore -> _schedule_vector_rebuild.
     """
@@ -646,6 +672,10 @@ async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob
 
     class _SpyExecutor:
         async def execute(self, *, uri, mode, wait, ctx):
+            calls.append(uri)
+            return {"ok": True}
+
+        async def execute_in_current_task(self, *, uri, mode, ctx):
             calls.append(uri)
             return {"ok": True}
 
@@ -670,6 +700,7 @@ async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob
     # The restore reindex now runs in a tracked background task; poll a little
     # to let start() + the gathered rebuild coroutines flush.
     import asyncio
+
     for _ in range(100):
         if calls:
             break
@@ -678,7 +709,9 @@ async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob
     assert calls, "expected at least one reindex call after restore apply"
 
 
-async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_blob, service, monkeypatch):
+async def test_restore_delete_removes_orphaned_vectors(
+    client_with_resource_and_blob, service, monkeypatch
+):
     """Restoring to a revision that predates a file must purge that file's
     vectors, not merely skip them.
 
@@ -694,6 +727,9 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
 
     class _SpyExecutor:
         async def execute(self, *, uri, mode, wait, ctx):
+            return {"ok": True}
+
+        async def execute_in_current_task(self, *, uri, mode, ctx):
             return {"ok": True}
 
         async def reindex_directory_marker(self, *, dir_uri, level, ctx):
@@ -724,6 +760,7 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
     assert restore_resp.json()["result"]["result"] == "applied"
 
     import asyncio
+
     for _ in range(100):
         if (new_uri, 2) in deleted_calls:
             break
@@ -734,8 +771,9 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
     )
 
 
-
-async def test_restore_concurrent_commit_returns_409(client_with_resource_and_blob, service, monkeypatch):
+async def test_restore_concurrent_commit_returns_409(
+    client_with_resource_and_blob, service, monkeypatch
+):
     """Force the underlying git CAS swap to raise GitConcurrentCommitError
     and verify the HTTP layer maps it to 409 with CONFLICT code.
     """

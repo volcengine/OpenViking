@@ -61,6 +61,7 @@ class VolcengineKMSEncryptionProviderConfig(BaseModel):
     region: str = Field(default="cn-beijing", description="Volcengine KMS region")
     access_key: Optional[str] = Field(default=None, description="Volcengine access key ID")
     secret_key: Optional[str] = Field(default=None, description="Volcengine secret access key")
+    key_file: Optional[str] = Field(default=None, description="Path to encrypted root key file")
 
 
 class APIKeyHashingConfig(BaseModel):

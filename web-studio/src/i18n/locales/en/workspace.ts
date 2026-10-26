@@ -4,17 +4,19 @@ const workspace = {
       agentIntegrations: 'Agent Integrations',
       beta: 'Beta',
       connection: 'Connection Settings',
-      gateway: 'OpenViking Gateway',
-      gatewayBeta: 'OpenViking Gateway · Beta',
+      gateway: 'Gateway',
+      gatewayBeta: 'Gateway · Beta',
       docs: 'Documentation',
       github: 'GitHub',
       sdkApi: 'SDK & API',
       users: 'Users & Permissions',
     },
     header: {
+      backToConfig: 'Back to workspace setup',
+      chooseWorkspace: 'Choose workspace',
       currentUser: {
-        account: 'Account',
-        accountSummary: 'Account · {{account}}',
+        account: 'Space',
+        accountSummary: 'Space · {{account}}',
         keyUnavailable: 'User key unavailable',
         loadingUsers: 'Loading users',
         loadUsersFailed: 'Failed to load users',
@@ -92,6 +94,7 @@ const workspace = {
     loading: 'Loading monitoring data...',
     loadFailed: 'Could not load monitoring data',
     health: {
+      unknown: 'No data',
       healthy: 'Healthy',
       unhealthy: 'Unhealthy',
     },
@@ -349,6 +352,34 @@ const workspace = {
     title: 'Skills',
     description:
       'View Agent skills available to the current user and workspace.',
+    add: {
+      title: 'Add Skill',
+      description:
+        'Import a SKILL.md for agents to find and read. Execution is controlled by the agent using it.',
+      scope: 'Add to',
+      scopeDescription: {
+        user: 'Available only to the current user',
+        agent: 'Shared with this account; requires permission',
+      },
+      content: 'SKILL.md content',
+      placeholder:
+        '---\nname: my-skill\ndescription: What this skill does\n---\n\n# My skill',
+      contentHint:
+        'Paste the complete content or select a local SKILL.md file. This imports one file only.',
+      upload: 'Choose SKILL.md',
+      removeFile: 'Remove file {{fileName}}',
+      warnings: 'Validation notes',
+      failed: 'Could not add Skill',
+      processingFailed: 'Background processing failed',
+      processing: 'Submitted and processing in the background',
+      completed: 'Skill added and processing completed',
+      taskId: 'Task ID',
+      close: 'Close',
+      another: 'Add another',
+      validating: 'Validating…',
+      adding: 'Submitting…',
+      submit: 'Add Skill',
+    },
     refresh: 'Refresh',
     loading: 'Loading skills...',
     empty: 'No skills available',
@@ -653,7 +684,35 @@ const workspace = {
     },
   },
   accountSwitcher: {
-    create: 'Create account',
+    accountsConnectFirst:
+      'Select a saved identity to connect to this service before browsing its accounts.',
+    accountsChecking: 'Checking account management access…',
+    accountsRootRequired:
+      'Configure a Root API Key in Connection Settings to browse and switch server accounts. Saved identities remain available in the adjacent tab.',
+    servicesSearch: 'Search services',
+    identitiesSearch: 'Search saved identities',
+    identities: 'Saved Identities',
+    connected: 'Connected',
+    noConnections: 'No matching services',
+    noIdentities: 'No saved identities for this service',
+    backToServices: 'Back to services',
+    accountSettings: 'Account Settings',
+    manageConnections: 'Manage Connections',
+    create: 'Add Account',
+    connections: {
+      add: 'Add Connection',
+      savedOnly: 'Connections saved in Connection Settings',
+      switch: 'Switch connection',
+      title: 'Saved connections',
+    },
+    serverAccountsTitle: 'Accounts',
+    provider: {
+      hosted: 'VolcEngine Hosted',
+      opensource: 'Open source',
+    },
+    hosted: {
+      currentWorkspace: 'Current space',
+    },
     dialog: {
       accountLabel: 'Account',
       accountPlaceholder: 'team-account',
@@ -865,6 +924,35 @@ const workspace = {
       dense: 'Dense',
       sparse: 'Sparse',
       hybrid: 'Hybrid',
+      connectionTest: {
+        action: 'Test connection',
+        testing: 'Testing…',
+        hint: 'Sends a small model request from the OpenViking server and may incur usage. Does not save the draft or switch running models.',
+        unsupported: 'Connection testing is unavailable for this provider.',
+        success: 'Connected: model returned a valid result ({{ms}} ms).',
+        network:
+          'The OpenViking server could not reach the model service. Check the URL, network or TLS.',
+        timeout:
+          'Test timed out after 25 seconds. Check the network and model response time.',
+        invalidResponse: 'The model service did not return a valid result.',
+        invalid_request: 'Invalid model configuration or request parameters.',
+        authentication_error:
+          'The model service rejected the API key. Check whether it is correct or expired.',
+        permission_denied: 'This key cannot access the selected model.',
+        rate_limit_error: 'Model service rate limit reached. Retry later.',
+        quota_exhausted:
+          'Model service quota exhausted. Check the plan or balance.',
+        model_not_found: 'Model or endpoint not found. Check the model ID.',
+        failed:
+          'Could not complete the test. Check the connection configuration and retry.',
+        input_too_large: 'The model service rejected the input size.',
+        content_safety:
+          'The model service content policy rejected the request.',
+      },
+      dragToReorder: 'Drag to reorder {{model}}',
+      dragHint: 'Drag to reorder, or use the up and down arrow keys.',
+      thinkingHint:
+        'Shared by all VLM models. Requires model/provider support; takes effect after saving and restarting.',
       priority: 'Order',
       preferred: 'Preferred',
       backup: 'Backup',

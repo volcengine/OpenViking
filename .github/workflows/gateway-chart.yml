@@ -1,0 +1,25 @@
+name: OpenViking Gateway Chart
+on:
+  pull_request:
+    paths:
+      - "deploy/helm/openviking-gateway/**"
+      - "Dockerfile"
+      - "openviking_gateway/**"
+      - "openviking_cli/utils/config/encryption_config.py"
+      - "openviking_cli/utils/config/agfs_config.py"
+      - "scripts/gateway_chart_check.py"
+      - ".github/workflows/gateway-chart.yml"
+  workflow_dispatch:
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: azure/setup-helm@v4.3.1
+        with:
+          version: v3.17.3
+      - run: pip install "pydantic>=2" "packaging>=24" "json-repair>=0.25" "loguru>=0.7" "aiohttp>=3.13.3" "orjson>=3.11.7" PyYAML
+      - run: PYTHONPATH=. python scripts/gateway_chart_check.py

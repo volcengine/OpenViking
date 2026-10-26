@@ -324,7 +324,9 @@ async def test_slow_init_does_not_block_health(monkeypatch):
 
 
 async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
-    """The auth plugin must publish its manager before deletion setup."""
+    """System assets reconcile after auth loading and before deletion setup."""
+
+    events = []
 
     class MockService:
         def __init__(self):
@@ -334,16 +336,27 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
 
         async def initialize(self):
             self._initialized = True
+            events.append("service")
 
         async def apply_agent_evolution_config(self):
-            pass
+            events.append("agent-evolution")
+
+        async def reconcile_system_assets(self, account_lister):
+            assert account_lister is manager
+            events.append("system-assets")
+            return 1
 
     manager = object()
-    setup = AsyncMock(return_value=None)
+
+    async def setup(**kwargs):
+        assert kwargs["manager"] is manager
+        events.append("deletion")
+
     monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
 
     async def initialize_plugin(app, service, config):
         app.state.api_key_manager = manager
+        events.append("auth")
 
     monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
 
@@ -355,4 +368,31 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
 
     assert service._initialized is True
     assert app.state.api_key_manager is manager
-    assert setup.await_args.kwargs["manager"] is manager
+    assert events == [
+        "service",
+        "agent-evolution",
+        "auth",
+        "system-assets",
+        "deletion",
+    ]
+
+
+async def test_initialize_runtime_state_skips_reconcile_without_account_manager(monkeypatch):
+    service = SimpleNamespace(
+        initialize=AsyncMock(),
+        apply_agent_evolution_config=AsyncMock(),
+        reconcile_system_assets=AsyncMock(),
+    )
+    setup = AsyncMock(return_value=None)
+    monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
+
+    async def initialize_plugin(app, service, config):
+        app.state.api_key_manager = None
+
+    monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
+
+    app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
+    await _initialize_runtime_state(app, service, ServerConfig())
+
+    service.reconcile_system_assets.assert_not_awaited()
+    assert setup.await_args.kwargs["manager"] is None

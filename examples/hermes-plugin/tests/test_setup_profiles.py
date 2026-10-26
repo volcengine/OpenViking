@@ -4,7 +4,7 @@ import copy
 from types import SimpleNamespace
 
 import pytest
-import yaml
+from hermes_cli.config import yaml
 
 
 def patch_menu(monkeypatch, select):

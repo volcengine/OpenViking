@@ -18,6 +18,7 @@ from openviking.storage.queuefs.queue_middleware import (
     AckContext,
     ClearContext,
     EnqueueContext,
+    EnqueueReceipt,
     ProcessContext,
     QueueMiddleware,
 )
@@ -171,10 +172,12 @@ class NamedQueue:
                 pass
             self._initialized = True
 
-    async def enqueue(self, data: Union[str, Dict[str, Any]]) -> str:
+    async def enqueue(self, data: Union[str, Dict[str, Any]]) -> EnqueueReceipt:
         """Send message to queue (enqueue)."""
         await self._ensure_initialized()
-        return await self._run_middleware("enqueue", EnqueueContext(self.name, data), self._enqueue)
+        ctx = EnqueueContext(self.name, data)
+        message_id = await self._run_middleware("enqueue", ctx, self._enqueue)
+        return EnqueueReceipt(message_id, ctx.work_id)
 
     async def _enqueue(self, ctx: EnqueueContext) -> str:
         data = json.dumps(ctx.payload) if isinstance(ctx.payload, dict) else ctx.payload

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import litellm
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils import get_logger
 
@@ -166,6 +167,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             completion_tokens=output_tokens,
         )
 
+    @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text via litellm.
 
@@ -199,6 +201,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"LiteLLM embedding failed: {e}") from e
 
+    @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
             kwargs = self._build_kwargs(is_query=is_query)

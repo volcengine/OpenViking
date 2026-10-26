@@ -56,6 +56,14 @@ class RetrievalConfig(BaseModel):
             "(same path as no-session search)."
         ),
     )
+    apply_rerank_to_context: bool = Field(
+        default=False,
+        description=(
+            "Whether search(mode='context') reranks its merged candidates with the configured "
+            "rerank model before quota allocation and budgeting. Needs a usable rerank "
+            "config; false keeps context mode on vector scores."
+        ),
+    )
     relation_expansion: RelationExpansionConfig = Field(
         default_factory=RelationExpansionConfig,
         description="Opt-in single-hop expansion along explicit resource links.",

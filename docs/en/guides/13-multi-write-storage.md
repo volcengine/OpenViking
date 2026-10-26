@@ -14,6 +14,7 @@ backups asynchronously. The primary is the only direct read source.
       "backups": {
         "initial_partitions": 16,
         "checkpoint_interval_secs": 86400,
+        "reconcile_existing_data": false,
         "provider": "filesystem",
         "items": [
           {
@@ -30,12 +31,13 @@ backups asynchronously. The primary is the only direct read source.
 }
 ```
 
-The three top-level V2 settings are:
+The top-level V2 settings are:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `initial_partitions` | `16` | Metadata partitions created for an account |
 | `checkpoint_interval_secs` | `86400` | Checkpoint discovery interval; minimum `60` |
+| `reconcile_existing_data` | `false` | Scan existing primary files and record them in V2 metadata |
 | `provider` | `"filesystem"` | Metadata segment provider: `filesystem` or `cache` |
 
 Each `items[]` entry needs `name`, `backend`, and backend-specific `params`.
@@ -71,8 +73,13 @@ supported in this release.
 ## First Enable And Rollback
 
 When `.multiwrite.json` is absent, the mount starts foreground V2 event
-submission and imports current primary files in the background. Extra old
-files on backups are not removed.
+submission and initializes V2 metadata. If `reconcile_existing_data=true`,
+startup also scans current primary files and records them in V2 metadata. Extra
+old files on backups are not removed.
+
+With the default `reconcile_existing_data=false`, files that already existed on
+the primary are not recorded as V2 write events. Use this only when backups are
+already aligned with the primary or historical backfill is intentionally skipped.
 
 Old multi-write protocols and old migration fields are rejected. Take a
 complete backup before enabling multi-write. Restore that backup before

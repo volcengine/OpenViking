@@ -306,13 +306,14 @@ Tool capture preserves structured tool parts with bounded inputs and outputs. Th
 
 The extension keeps no tool catalogue of its own. At session start it asks the server's `/mcp` endpoint for `tools/list` and registers one pi tool per descriptor it gets back, named `openviking_` + the server's own name, with the server's description and argument schema. A server that gains, drops or re-documents a tool changes pi's tool surface at the next session, with no extension release.
 
-Against a current server, that is these 15:
+Against a current server, that is these 16:
 
 | Tool                        | Description                                                             |
 |-----------------------------|-------------------------------------------------------------------------|
 | `openviking_find`           | Fast ranked retrieval across memories, resources and skills             |
 | `openviking_search`         | Deep retrieval with session context and intent analysis; `mode="context"` returns an assembled block |
 | `openviking_read`           | Read one or more `viking://` file URIs, with line-based `offset`/`limit` |
+| `openviking_download`       | Get a one-time URL for fetching a file's original bytes with `curl`     |
 | `openviking_list`           | List one sorted page under a `viking://` directory                      |
 | `openviking_tree`           | Show a recursive directory tree, optionally with abstracts              |
 | `openviking_remember`       | Submit messages for long-term memory extraction; returns the background extraction `task_id` right away |

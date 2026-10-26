@@ -176,11 +176,19 @@ it('quotes shell values only when needed', () => {
 })
 
 it('links the docs in the UI language', () => {
-  expect(gatewayDocsUrl('guide', 'en')).toBe(
-    'https://docs.openviking.ai/en/guides/15-gateway',
+  expect(gatewayDocsUrl('claudeCode', 'en')).toBe(
+    'https://docs.openviking.ai/en/gateway/03-connect-clients#claude-code',
   )
-  expect(gatewayDocsUrl('operations', 'zh-CN')).toBe(
-    'https://docs.openviking.ai/zh/guides/22-gateway-operations',
+  // Headings carry the same explicit id in every language.
+  expect(gatewayDocsUrl('cacheHitRate', 'zh-CN')).toBe(
+    'https://docs.openviking.ai/zh/gateway/12-troubleshooting#the-first-call-cache-hit-rate-dropped',
+  )
+  expect(gatewayDocsUrl('cacheHitRate')).toBe(
+    'https://docs.openviking.ai/en/gateway/12-troubleshooting#the-first-call-cache-hit-rate-dropped',
+  )
+  // The entry and deployment pages keep their guides/ paths.
+  expect(gatewayDocsUrl('enableGateway', 'zh')).toBe(
+    'https://docs.openviking.ai/zh/guides/22-gateway-operations#enable-it-in-the-server',
   )
 })
 

@@ -61,6 +61,25 @@ const overview = {
       action: '查看接入指南',
     },
   },
+  quick: {
+    title: '快速模式',
+    description: '跳过下面的步骤，一键拿到可以直接使用的网关密钥。',
+    upstreamImport:
+      '上游：导入 OpenViking 服务端的模型配置，沿用它的 API Key 和额度',
+    upstreamUse: '上游：使用 {{names}}（{{models}}，{{protocol}}）',
+    profileCreate: '上下文配置：用推荐设置新建“{{name}}”',
+    profileUse: '上下文配置：使用“{{name}}”',
+    keySelf: '密钥：为 {{user}} 签发',
+    keyPick: '密钥：下一步选择密钥归属的 OpenViking 用户',
+    action: '一键生成密钥',
+    running: '生成中…',
+    retry: '重试',
+    locked: '创建上下文配置或导入模型需要网关管理密钥。',
+    noUsable:
+      'OpenViking 的模型配置里没有网关能直接转发的模型。处理下面列出的问题，或者在第 1 步手动添加上游。',
+    keyName: '快速模式',
+    divider: '或者按步骤手动配置',
+  },
   kpi: {
     requests: {
       label: '请求数',
@@ -88,6 +107,29 @@ const overview = {
       footnote_other: '检索 {{number}} 次，平均 {{duration}}',
       none: '还没有召回',
     },
+  },
+  cacheMiss: {
+    title_one: '有 {{count}} 段长对话连续没有命中提示词缓存',
+    title_other: '有 {{count}} 段长对话连续没有命中提示词缓存',
+    description_one:
+      '最近连续 {{streak}} 次模型调用的输入都不少于 {{tokens}} Token，缓存命中率都是 0%。常见原因是请求开头的内容（系统提示词、工具定义）每次都在变，或者上游把请求分给了不同的账号或渠道。',
+    description_other:
+      '最近连续 {{streak}} 次模型调用的输入都不少于 {{tokens}} Token，缓存命中率都是 0%。常见原因是请求开头的内容（系统提示词、工具定义）每次都在变，或者上游把请求分给了不同的账号或渠道。',
+    action:
+      '对照服务商后台的缓存记录：那边有命中，说明上游没有把缓存用量传回网关；那边也没有，检查系统提示词里有没有时间这类每次都变的内容，以及中转服务是否在多个渠道之间轮换。',
+    noWrites:
+      '上游也没有写入缓存，客户端很可能没有在请求里设置 cache_control。对照服务商后台的缓存记录：那边有命中，说明上游没有把缓存用量传回网关。',
+    streak_one: '连续 {{count}} 次未命中',
+    streak_other: '连续 {{count}} 次未命中',
+  },
+  cacheUnreported: {
+    title_one: '上游 {{upstreams}} 最近没有返回过缓存命中',
+    title_other: '上游 {{upstreams}} 最近没有返回过缓存命中',
+    description_one:
+      '相关长对话的缓存命中率一直是 0%，统计时都按未命中计算。可能是服务商不支持提示词缓存、客户端没有开启缓存，或者中转服务没有把缓存用量传回网关。',
+    description_other:
+      '相关长对话的缓存命中率一直是 0%，统计时都按未命中计算。可能是服务商不支持提示词缓存、客户端没有开启缓存，或者中转服务没有把缓存用量传回网关。',
+    separator: '、',
   },
   openviking: {
     title: 'OpenViking',

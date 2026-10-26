@@ -675,8 +675,7 @@ def test_external_provider_does_not_cache_unbound_client_identity(external_provi
 def test_save_config_targets_explicit_home_and_restores_outer_scope(
     external_provider, tmp_path, monkeypatch
 ):
-    import yaml
-
+    from hermes_cli.config import yaml
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     _, provider, _, _ = external_provider("config-provider")

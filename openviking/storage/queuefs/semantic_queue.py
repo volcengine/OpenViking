@@ -42,9 +42,9 @@ class SemanticQueue(NamedQueue):
     def _memory_parent_semantic_key(msg: SemanticMsg) -> str:
         return f"{msg.account_id}|{msg.user_id}|{msg.peer_id}|{msg.uri}"
 
-    async def enqueue(self, msg: SemanticMsg) -> str:
+    async def enqueue(self, msg: SemanticMsg, *, deduplicate_memory: bool = True) -> str:
         """Serialize SemanticMsg object and store in queue."""
-        if msg.context_type == "memory" and not msg.coalesce_key:
+        if deduplicate_memory and msg.context_type == "memory" and not msg.coalesce_key:
             key = self._memory_parent_semantic_key(msg)
             now = time.monotonic()
             with self._memory_parent_semantic_lock:

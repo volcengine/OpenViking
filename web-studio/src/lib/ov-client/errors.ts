@@ -1,8 +1,8 @@
+import i18n from '#/i18n/core'
 import axios, { AxiosError } from 'axios'
 
 import type { OvClientErrorOptions, OvErrorEnvelope, OvResponse } from './types'
 
-const MISSING_API_KEY_HINT = ' Please go to Settings and set X-API-Key.'
 const MAX_ERROR_TEXT_LENGTH = 2000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -17,7 +17,7 @@ function truncateText(
   if (text.length <= maxLength) {
     return text
   }
-  return `${text.slice(0, maxLength)}\n... (truncated, ${text.length} chars total)`
+  return `${text.slice(0, maxLength)}\n${i18n.t('studio:errors.truncated', { count: text.length })}`
 }
 
 function withMissingApiKeyHint(code: string, message: string): string {
@@ -25,7 +25,7 @@ function withMissingApiKeyHint(code: string, message: string): string {
     code === 'UNAUTHENTICATED' &&
     message.toLowerCase().includes('missing api key')
   ) {
-    return `${message}${MISSING_API_KEY_HINT}`
+    return `${message} ${i18n.t('studio:errors.missingApiKeyHint')}`
   }
   return message
 }
@@ -99,7 +99,7 @@ export function normalizeOvClientError(error: unknown): OvClientError {
           details: envelope.error.details ?? envelope.error.detail,
           message:
             envelope.error.message ||
-            `Request failed with status ${statusCode ?? 'unknown'}`,
+            i18n.t('studio:errors.httpStatus', { status: statusCode ?? i18n.t('studio:errors.unknown') }),
           requestId: getRequestId(axiosError.response?.headers),
           responseBody: rawBody,
           statusCode,
@@ -133,7 +133,7 @@ export function normalizeOvClientError(error: unknown): OvClientError {
             : 'HTTP_ERROR',
         message:
           axiosError.message ||
-          `Request failed with status ${statusCode ?? 'unknown'}`,
+          i18n.t('studio:errors.httpStatus', { status: statusCode ?? i18n.t('studio:errors.unknown') }),
         requestId: getRequestId(axiosError.response?.headers),
         responseBody: rawBody,
         statusCode,
@@ -175,7 +175,7 @@ export function unwrapOvResponse<TResult>(response: unknown): TResult {
     throw new OvClientError({
       code: error?.code || 'ERROR',
       details: error?.details ?? error?.detail,
-      message: error?.message || 'OpenViking request failed',
+      message: error?.message || i18n.t('studio:errors.requestFailed'),
       requestId: getRequestId(response.headers),
       responseBody: payload,
       statusCode: response.status,
