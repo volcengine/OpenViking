@@ -31,9 +31,6 @@ jobs:
       with:
         toolchain: stable
     - name: Run unit and integration tests
-      # CLI help tests traverse the full Clap tree and need a larger thread stack.
-      env:
-        RUST_MIN_STACK: 16777216
       run: cargo test --locked -p ov_cli
 
   build:
