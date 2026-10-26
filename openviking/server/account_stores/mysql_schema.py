@@ -48,6 +48,12 @@ class Account(Base):
             "service_name",
             "deletion_task_id",
         ),
+        Index(
+            "ix_ov_accounts_account_created",
+            "service_name",
+            "created_at",
+            "account_id",
+        ),
         {"mysql_engine": "InnoDB", "mysql_charset": "utf8mb4"},
     )
 
@@ -102,6 +108,23 @@ class User(Base):
             "ix_ov_accounts_user_deletion",
             "service_name",
             "deletion_task_id",
+        ),
+        Index(
+            "ix_ov_accounts_user_active_created",
+            "service_name",
+            "account_pk",
+            "deletion_task_id",
+            "created_at",
+            "user_pk",
+        ),
+        Index(
+            "ix_ov_accounts_user_role_active_created",
+            "service_name",
+            "account_pk",
+            "role",
+            "deletion_task_id",
+            "created_at",
+            "user_pk",
         ),
         {"mysql_engine": "InnoDB", "mysql_charset": "utf8mb4"},
     )

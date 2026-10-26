@@ -12,7 +12,13 @@ import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from openviking.server.account_stores.mysql_schema import Account, Base, Credential, GroupMember
+from openviking.server.account_stores.mysql_schema import (
+    Account,
+    Base,
+    Credential,
+    GroupMember,
+    User,
+)
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.api_keys.legacy import FileStore
 from openviking.server.identity import Role
@@ -27,6 +33,35 @@ from tests.server.account_store_fakes import InMemoryAGFS
 
 def _file_store() -> FileStore:
     return FileStore(SimpleNamespace(agfs=InMemoryAGFS()))
+
+
+def test_mysql_account_schema_defines_management_list_indexes():
+    indexes = {
+        index.name: tuple(column.name for column in index.columns)
+        for table in (Account.__table__, User.__table__)
+        for index in table.indexes
+    }
+
+    assert indexes["ix_ov_accounts_account_created"] == (
+        "service_name",
+        "created_at",
+        "account_id",
+    )
+    assert indexes["ix_ov_accounts_user_active_created"] == (
+        "service_name",
+        "account_pk",
+        "deletion_task_id",
+        "created_at",
+        "user_pk",
+    )
+    assert indexes["ix_ov_accounts_user_role_active_created"] == (
+        "service_name",
+        "account_pk",
+        "role",
+        "deletion_task_id",
+        "created_at",
+        "user_pk",
+    )
 
 
 @pytest.mark.parametrize(

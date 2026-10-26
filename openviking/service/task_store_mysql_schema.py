@@ -8,8 +8,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.mysql import DOUBLE, JSON, VARBINARY
+from sqlalchemy import Boolean, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.mysql import DOUBLE, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # The longest derived name is ix_<prefix>_owner_internal_created (26 extra chars).
@@ -55,43 +55,75 @@ def make_task_store_models(table_prefix: str = "ov_tasks") -> TaskStoreModels:
         __tablename__ = table_prefix
         __table_args__ = (
             UniqueConstraint(
+                "service_name",
                 "active_business_key",
                 name=f"uq_{table_prefix}_active_business_key",
             ),
             Index(
                 f"ix_{table_prefix}_owner_created",
+                "service_name",
                 "account_id",
                 "user_id",
                 "created_at",
-                "task_id",
             ),
             Index(
                 f"ix_{table_prefix}_account_created",
+                "service_name",
                 "account_id",
                 "created_at",
                 "task_id",
             ),
             Index(
                 f"ix_{table_prefix}_created",
+                "service_name",
                 "created_at",
                 "task_id",
             ),
             Index(
-                f"ix_{table_prefix}_owner_status",
+                f"ix_{table_prefix}_owner",
+                "service_name",
                 "account_id",
                 "user_id",
-                "status",
             ),
             Index(
                 f"ix_{table_prefix}_owner_internal_created",
+                "service_name",
                 "account_id",
                 "user_id",
                 "is_internal",
                 "created_at",
-                "task_id",
+            ),
+            Index(
+                f"ix_{table_prefix}_acct_type_created",
+                "service_name",
+                "account_id",
+                "task_type",
+                "created_at",
+            ),
+            Index(
+                f"ix_{table_prefix}_acct_status_created",
+                "service_name",
+                "account_id",
+                "status",
+                "created_at",
+            ),
+            Index(
+                f"ix_{table_prefix}_acct_resource_created",
+                "service_name",
+                "account_id",
+                "resource_id_hash",
+                "created_at",
+            ),
+            Index(
+                f"ix_{table_prefix}_acct_internal_created",
+                "service_name",
+                "account_id",
+                "is_internal",
+                "created_at",
             ),
             Index(
                 f"ix_{table_prefix}_expiry",
+                "service_name",
                 "status",
                 "updated_at",
                 "task_id",
@@ -103,6 +135,9 @@ def make_task_store_models(table_prefix: str = "ov_tasks") -> TaskStoreModels:
             },
         )
 
+        service_name: Mapped[str] = mapped_column(
+            String(255, collation="utf8mb4_bin"), primary_key=True
+        )
         task_id: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"), primary_key=True)
         task_type: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"))
         status: Mapped[str] = mapped_column(String(16, collation="ascii_bin"))
@@ -110,6 +145,9 @@ def make_task_store_models(table_prefix: str = "ov_tasks") -> TaskStoreModels:
         updated_at: Mapped[float] = mapped_column(DOUBLE)
         resource_id: Mapped[Optional[str]] = mapped_column(
             Text(collation="utf8mb4_bin"), nullable=True
+        )
+        resource_id_hash: Mapped[Optional[str]] = mapped_column(
+            String(64, collation="ascii_bin"), nullable=True
         )
         account_id: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"))
         user_id: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"))
@@ -121,27 +159,36 @@ def make_task_store_models(table_prefix: str = "ov_tasks") -> TaskStoreModels:
         processing_seconds: Mapped[Optional[float]] = mapped_column(DOUBLE, nullable=True)
         reject_if_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
         is_internal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-        active_business_key: Mapped[Optional[bytes]] = mapped_column(VARBINARY(32), nullable=True)
+        active_business_key: Mapped[Optional[str]] = mapped_column(
+            String(64, collation="ascii_bin"), nullable=True
+        )
 
     class Work(Base):
         __tablename__ = work_table
         __table_args__ = (
+            ForeignKeyConstraint(
+                ["service_name", "task_id"],
+                [f"{table_prefix}.service_name", f"{table_prefix}.task_id"],
+                ondelete="CASCADE",
+                name=f"fk_{work_table}_task",
+            ),
             Index(
                 f"ix_{work_table}_state",
+                "service_name",
                 "task_id",
                 "state",
             ),
             Index(
                 f"ix_{work_table}_queue",
+                "service_name",
                 "task_id",
                 "queue_name",
-                "state",
             ),
             Index(
                 f"ix_{work_table}_owner",
+                "service_name",
                 "account_id",
                 "user_id",
-                "task_id",
             ),
             {
                 "mysql_engine": "InnoDB",
@@ -150,15 +197,10 @@ def make_task_store_models(table_prefix: str = "ov_tasks") -> TaskStoreModels:
             },
         )
 
-        task_id: Mapped[str] = mapped_column(
-            String(255, collation="utf8mb4_bin"),
-            ForeignKey(
-                f"{table_prefix}.task_id",
-                ondelete="CASCADE",
-                name=f"fk_{work_table}_task",
-            ),
-            primary_key=True,
+        service_name: Mapped[str] = mapped_column(
+            String(255, collation="utf8mb4_bin"), primary_key=True
         )
+        task_id: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"), primary_key=True)
         work_id: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"), primary_key=True)
         account_id: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"))
         user_id: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"))
@@ -176,6 +218,12 @@ def make_task_store_models(table_prefix: str = "ov_tasks") -> TaskStoreModels:
     class Event(Base):
         __tablename__ = event_table
         __table_args__ = (
+            ForeignKeyConstraint(
+                ["service_name", "task_id"],
+                [f"{table_prefix}.service_name", f"{table_prefix}.task_id"],
+                ondelete="CASCADE",
+                name=f"fk_{event_table}_task",
+            ),
             {
                 "mysql_engine": "InnoDB",
                 "mysql_charset": "utf8mb4",
@@ -183,15 +231,10 @@ def make_task_store_models(table_prefix: str = "ov_tasks") -> TaskStoreModels:
             },
         )
 
-        task_id: Mapped[str] = mapped_column(
-            String(255, collation="utf8mb4_bin"),
-            ForeignKey(
-                f"{table_prefix}.task_id",
-                ondelete="CASCADE",
-                name=f"fk_{event_table}_task",
-            ),
-            primary_key=True,
+        service_name: Mapped[str] = mapped_column(
+            String(255, collation="utf8mb4_bin"), primary_key=True
         )
+        task_id: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"), primary_key=True)
         seq: Mapped[int] = mapped_column(Integer, primary_key=True)
         recorded_at: Mapped[str] = mapped_column(String(64, collation="ascii_bin"))
         kind: Mapped[str] = mapped_column(String(64, collation="utf8mb4_bin"))

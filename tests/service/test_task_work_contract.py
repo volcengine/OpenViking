@@ -60,6 +60,107 @@ async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker
         await asyncio.gather(waiting, return_exceptions=True)
 
 
+def test_mysql_task_store_schema_uses_service_name_partition():
+    from openviking.service.task_store_mysql import MySQLTaskWorkStore
+    from openviking.service.task_store_mysql_schema import make_task_store_models
+
+    store = MySQLTaskWorkStore(
+        params={
+            "user": "openviking",
+            "password": "change-me",
+            "database": "openviking",
+            "service_name": "tenant-a",
+        }
+    )
+    assert store._service_name == "tenant-a"
+
+    override = MySQLTaskWorkStore(
+        params={
+            "user": "openviking",
+            "password": "change-me",
+            "database": "openviking",
+            "service_name": "tenant-a",
+        },
+        service_name="tenant-b",
+    )
+    assert override._service_name == "tenant-b"
+
+    models = make_task_store_models("ov_contract")
+    Task, Work, Event = models.Task, models.Work, models.Event
+
+    assert [column.name for column in Task.__table__.primary_key.columns] == [
+        "service_name",
+        "task_id",
+    ]
+    assert [column.name for column in Work.__table__.primary_key.columns] == [
+        "service_name",
+        "task_id",
+        "work_id",
+    ]
+    assert [column.name for column in Event.__table__.primary_key.columns] == [
+        "service_name",
+        "task_id",
+        "seq",
+    ]
+
+    task_uniques = {
+        constraint.name: [column.name for column in constraint.columns]
+        for constraint in Task.__table__.constraints
+        if constraint.name
+    }
+    assert task_uniques["uq_ov_contract_active_business_key"] == [
+        "service_name",
+        "active_business_key",
+    ]
+    task_indexes = {
+        index.name: [column.name for column in index.columns]
+        for index in Task.__table__.indexes
+    }
+    assert task_indexes["ix_ov_contract_owner_created"] == [
+        "service_name",
+        "account_id",
+        "user_id",
+        "created_at",
+    ]
+    assert task_indexes["ix_ov_contract_acct_type_created"] == [
+        "service_name",
+        "account_id",
+        "task_type",
+        "created_at",
+    ]
+    assert task_indexes["ix_ov_contract_acct_status_created"] == [
+        "service_name",
+        "account_id",
+        "status",
+        "created_at",
+    ]
+    assert task_indexes["ix_ov_contract_acct_resource_created"] == [
+        "service_name",
+        "account_id",
+        "resource_id_hash",
+        "created_at",
+    ]
+    assert task_indexes["ix_ov_contract_acct_internal_created"] == [
+        "service_name",
+        "account_id",
+        "is_internal",
+        "created_at",
+    ]
+    assert "resource_id_hash" in Task.__table__.columns
+
+    work_fks = {
+        constraint.name: (
+            [column.name for column in constraint.columns],
+            [element.column.name for element in constraint.elements],
+        )
+        for constraint in Work.__table__.foreign_key_constraints
+    }
+    assert work_fks["fk_ov_contract_works_task"] == (
+        ["service_name", "task_id"],
+        ["service_name", "task_id"],
+    )
+
+
 @pytest.mark.asyncio
 async def test_mysql_requeue_and_concurrent_completion_are_durable():
     raw = os.environ.get("OV_TEST_MYSQL")
@@ -72,16 +173,27 @@ async def test_mysql_requeue_and_concurrent_completion_are_durable():
     params = {**json.loads(raw), "table": f"ov_contract_{uuid4().hex[:12]}"}
     first = task_store_mysql.MySQLTaskWorkStore(params=params)
     second = task_store_mysql.MySQLTaskWorkStore(params=params)
+    isolated_store = task_store_mysql.MySQLTaskWorkStore(
+        params=params,
+        service_name="contract-isolated",
+    )
     admin = sqlalchemy.create_async_engine(first._url, **first._engine_options)
-    schema = Path(task_store_mysql.__file__).parent / "sql/task_store_init.sql"
+    sql_dir = Path(task_store_mysql.__file__).parent / "sql"
+    schema_files = [
+        sql_dir / "task_store_init.sql",
+        sql_dir / "changes/0001_task_store_service_name.sql",
+    ]
     writer, observer = TaskTracker(first), TaskTracker(second)
+    isolated = TaskTracker(isolated_store)
     try:
         async with admin.begin() as connection:
-            for statement in schema.read_text().replace("ov_tasks", params["table"]).split(";"):
-                if "CREATE TABLE" in statement:
-                    await connection.exec_driver_sql(statement)
+            for schema in schema_files:
+                for statement in schema.read_text().replace("ov_tasks", params["table"]).split(";"):
+                    if statement.strip():
+                        await connection.exec_driver_sql(statement)
         await first.load()
         await second.load()
+        await isolated_store.load()
         uri = "viking://resources/" + "/".join(["directory" * 4] * 8)
         candidates = await asyncio.gather(
             writer.create_if_no_running("content_write", uri, **OWNER),
@@ -91,6 +203,10 @@ async def test_mysql_requeue_and_concurrent_completion_are_durable():
         task_id = next(task.task_id for task in candidates if task is not None)
         assert await observer.get(task_id, account_id="other", user_id=OWNER["user_id"]) is None
         assert await observer.get(task_id, account_id=OWNER["account_id"], user_id="other") is None
+
+        isolated_task = await isolated.create_if_no_running("content_write", uri, **OWNER)
+        assert isolated_task is not None
+        assert await isolated.get(task_id, **OWNER) is None
 
         await writer.start(task_id, **OWNER)
         await writer.register_work(task_id, "semantic", "Semantic", **OWNER)
@@ -143,6 +259,7 @@ async def test_mysql_requeue_and_concurrent_completion_are_durable():
     finally:
         await first.close()
         await second.close()
+        await isolated_store.close()
         async with admin.begin() as connection:
             await connection.run_sync(first._models.Base.metadata.drop_all)
         await admin.dispose()
