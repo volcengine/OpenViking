@@ -24,6 +24,12 @@ _WINDOWS_RESERVED_STEMS = frozenset(
         "PRN",
         "AUX",
         "NUL",
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
         *(f"COM{index}" for index in range(1, 10)),
         *(f"LPT{index}" for index in range(1, 10)),
     }
