@@ -38,7 +38,10 @@ A2_URI = f"{ROOT}/a2.md"
 A2_BODY = "jwt notes."
 B2_BODY = "signature rotation."
 FILLERS = ["login filler" + " filler" * i + "." for i in range(8)]
-BODIES = [A_BODY, B_BODY, C_BODY, A2_BODY, B2_BODY, *FILLERS]
+OUT, OUT_BODY = "viking://resources/other/out.md", "signature outside."
+FILT, FILT_BODY = f"{ROOT}/untagged.md", "signature untagged."
+PRIV, PRIV_BODY = "viking://user/bob/resources/priv.md", "signature private."
+BODIES = [A_BODY, B_BODY, C_BODY, A2_BODY, B2_BODY, OUT_BODY, FILT_BODY, PRIV_BODY, *FILLERS]
 
 
 def _vector(text: str) -> list[float]:
@@ -396,3 +399,105 @@ async def test_links_survive_ovpack_export_and_import(make_service, tmp_path):
     assert _uris(result)[0] == restored
     assert B in _uris(result)
     assert result.resources[_uris(result).index(B)].related_from == restored
+
+
+class _CheckpointSpy:
+    """Records every call to the scoped vector search, the final eligibility checkpoint."""
+
+    def __init__(self, monkeypatch):
+        from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+
+        self.original = VikingVectorIndexBackend.search_in_tenant
+        self.calls = []
+        spy = self
+
+        async def search_in_tenant(backend, ctx, **kwargs):
+            rows = await spy.original(backend, ctx, **kwargs)
+            spy.calls.append((backend, ctx, kwargs, [row.get("uri") for row in rows]))
+            return rows
+
+        monkeypatch.setattr(VikingVectorIndexBackend, "search_in_tenant", search_in_tenant)
+
+    def reset(self):
+        self.calls.clear()
+
+    @staticmethod
+    def _scope(kwargs):
+        return {k: kwargs.get(k) for k in ("context_type", "target_directories", "level")}
+
+    async def eligible(self, links):
+        """Replay the linked-URI check with the scope the mode's own recall used."""
+        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+
+        backend, ctx, kwargs, _ = self.calls[0]
+        rows = await self.original(
+            backend,
+            ctx,
+            query_vector=kwargs["query_vector"],
+            sparse_query_vector=kwargs.get("sparse_query_vector"),
+            extra_filter=HierarchicalRetriever.linked_filter(kwargs.get("extra_filter"), links),
+            limit=50,
+            **self._scope(kwargs),
+        )
+        return {row["uri"] for row in rows if row.get("uri") in links}
+
+
+ELIGIBILITY_CASES = {
+    "unrestricted": ({}, {B, C, OUT, FILT}),
+    "target_scope": ({"target_uri": ROOT}, {B, C, FILT}),
+    "caller_filter": ({"tag_filter": True}, {B, C, OUT}),
+}
+
+
+@pytest.mark.parametrize("case", list(ELIGIBILITY_CASES))
+async def test_quick_and_thinking_share_one_eligibility_checkpoint(make_service, monkeypatch, case):
+    """#4645 review point 1: linked destinations are eligible in QUICK iff in THINKING.
+
+    Since the global-recall refactor both modes make one ``search_in_tenant``
+    call with identical scope (tenant/ACL, target, filter, level); only the
+    candidate count differs. Expansion runs only in reranked THINKING mode, so
+    QUICK eligibility is measured by replaying the linked-URI check through the
+    real checkpoint with QUICK's own recall scope, not by changing its ranking.
+    """
+    from openviking.utils.tags import build_search_tags_filter
+
+    options, expected = ELIGIBILITY_CASES[case]
+    kwargs = {"target_uri": options["target_uri"]} if "target_uri" in options else {}
+    if options.get("tag_filter"):
+        kwargs["filter"] = build_search_tags_filter(["team=kb"])
+    links = [B, C, OUT, FILT, PRIV]
+    tag = {"tags": ["team=kb"]}
+
+    service, _ = await make_service(enabled=True)
+    await _write(service, A, _doc(A_BODY, related=links), **tag)
+    await _write(service, B, B_BODY, **tag)
+    await _write(service, C, C_BODY, **tag)
+    await _write(service, OUT, OUT_BODY, **tag)
+    await _write(service, FILT, FILT_BODY)
+    bob = RequestContext(user=UserIdentifier("default", "bob"), role=Role.USER)
+    await _write(service, PRIV, PRIV_BODY, ctx=bob, **tag)
+    for i in range(8):
+        await _write(service, f"{ROOT}/f{i}.md", FILLERS[i], **tag)
+    spy = _CheckpointSpy(monkeypatch)
+
+    thinking = await _search(service, **kwargs)
+    thinking_scope = spy._scope(spy.calls[0][2]), spy.calls[0][2].get("extra_filter")
+    thinking_checked = {uri for *_, kw, uris in spy.calls[1:] for uri in uris}
+    thinking_eligible = await spy.eligible(links)
+
+    spy.reset()
+    quick = await service.search.find(QUERY, ctx=CTX, level=[2], limit=3, **kwargs)
+    quick_scope = spy._scope(spy.calls[0][2]), spy.calls[0][2].get("extra_filter")
+    assert len(spy.calls) == 1  # QUICK issues no expansion query
+    quick_eligible = await spy.eligible(links)
+
+    assert thinking_scope == quick_scope
+    assert thinking_eligible == quick_eligible == expected
+    # What THINKING actually fetched through a link, and what it returned, is eligible.
+    assert thinking_checked <= expected
+    assert {m.uri for m in thinking.resources if m.related_from} <= expected
+    assert all(m.related_from is None for m in quick.resources)
+    for result in (thinking, quick):
+        payload = str(result.to_dict())
+        assert PRIV not in payload and PRIV_BODY not in payload
+        assert not ({OUT, FILT, PRIV} - expected) & set(_uris(result))

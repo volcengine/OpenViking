@@ -126,7 +126,7 @@ When `retrieval.relation_expansion.enabled` is true and a query runs in THINKING
 3. Fetches the linked URIs through the same scoped search as ordinary retrieval (tenant and permission filter, `target_uri`, context type, `filter`, `level`), restricted to those exact URIs. A link never widens the search: a linked resource the caller could not have found is not returned, and nothing about it is reported.
 4. Reranks the linked candidates against the query, applies the same score threshold, and adds at most `max_added` of them to the pool, which is then ranked and cut to `limit` as usual.
 
-A link alone never admits a resource. QUICK mode, including `find()` and `mode="context"` assembly, is unchanged: there, linked candidates could only compete on the recall score that already ranked them out. Hits added through a link carry `related_from` (the seed URI) in JSON responses; it is not rendered into LLM-facing tool output. A link whose target has moved or been deleted is ignored.
+A link alone never admits a resource. QUICK mode, including `find()` and `mode="context"` assembly, is unchanged: there, linked candidates could only compete on the recall score that already ranked them out. Eligibility does not depend on the mode: QUICK and THINKING recall make the same scoped search (same tenant/permission, scope, filter, and level), and linked URIs are checked by that same search. Hits added through a link carry `related_from` (the seed URI) in JSON responses; it is not rendered into LLM-facing tool output. A link whose target has moved or been deleted is ignored.
 
 ## Retrieval Results
 

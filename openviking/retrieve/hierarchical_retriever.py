@@ -336,12 +336,9 @@ class HierarchicalRetriever:
         if not related_from:
             return []
 
-        targets: FilterExpr = Or([PathScope("uri", uri, depth=0) for uri in related_from])
-        if scope_dsl:
-            caller_filter = RawDSL(scope_dsl) if isinstance(scope_dsl, dict) else scope_dsl
-            targets = And([caller_filter, targets])
         best: Dict[str, Dict[str, Any]] = {}
-        for result in await search(targets, len(related_from)):
+        linked_filter = self.linked_filter(scope_dsl, list(related_from))
+        for result in await search(linked_filter, len(related_from)):
             uri = result.get("uri", "")
             if uri not in related_from:
                 continue
@@ -364,6 +361,21 @@ class HierarchicalRetriever:
         )[: config.max_added]
         telemetry.count("relation.added", len(added))
         return added
+
+    @staticmethod
+    def linked_filter(
+        scope_dsl: Optional[FilterExpr | Dict[str, Any]], uris: List[str]
+    ) -> FilterExpr:
+        """Caller filter narrowed to exact linked URIs.
+
+        It is passed as ``extra_filter`` to the same scoped search as ordinary
+        recall, so tenant/ACL, target scope, context type and level still apply.
+        """
+        exact: FilterExpr = Or([PathScope("uri", uri, depth=0) for uri in uris])
+        if not scope_dsl:
+            return exact
+        caller_filter = RawDSL(scope_dsl) if isinstance(scope_dsl, dict) else scope_dsl
+        return And([caller_filter, exact])
 
     def _resolve_threshold(self, threshold: Optional[float]) -> float:
         resolved = threshold if threshold is not None else self.threshold
