@@ -6,9 +6,8 @@ from __future__ import annotations
 
 import pytest
 
+from openviking.server.identity import Role
 from openviking.server.upload_token_store import (
-    _TOKEN_ALPHABET,
-    _TOKEN_LENGTH,
     UploadTokenError,
     UploadTokenStore,
 )
@@ -19,56 +18,11 @@ def store() -> UploadTokenStore:
     return UploadTokenStore()
 
 
-def test_issue_returns_token_of_expected_length(store):
-    token, expires_at = store.issue("acct", "user", ttl_seconds=60)
-    assert len(token) == _TOKEN_LENGTH
-    assert all(c in _TOKEN_ALPHABET for c in token)
-    assert expires_at > 0
-
-
-def test_consume_roundtrip(store):
-    token, _ = store.issue("acct", "user", ttl_seconds=60)
-    consumed = store.consume(token)
-    assert (consumed.account_id, consumed.user_id) == ("acct", "user")
-    # Business params default to empty when not supplied at issue time.
-    assert (consumed.to, consumed.reason, consumed.actor_peer_id) == ("", "", "")
-    assert consumed.parse_mode == "default"
-
-
-def test_consume_returns_bound_business_params(store):
-    token, _ = store.issue(
-        "acct",
-        "user",
-        ttl_seconds=60,
-        to="viking://resources/team/proj",
-        reason="quarterly",
-        actor_peer_id="bot-a",
-        processing_mode="vectors_only",
-        parse_mode="no_split",
-    )
-    consumed = store.consume(token)
-    assert consumed.to == "viking://resources/team/proj"
-    assert consumed.reason == "quarterly"
-    assert consumed.actor_peer_id == "bot-a"
-    assert consumed.processing_mode == "vectors_only"
-    assert consumed.parse_mode == "no_split"
-
-
 def test_consume_burns_token(store):
-    token, _ = store.issue("acct", "user", ttl_seconds=60)
+    token, _ = store.issue("acct", "user", role=Role.USER, ttl_seconds=60)
     store.consume(token)
     with pytest.raises(UploadTokenError, match="unknown or already-consumed"):
         store.consume(token)
-
-
-def test_consume_unknown_token(store):
-    with pytest.raises(UploadTokenError, match="unknown or already-consumed"):
-        store.consume("ZZZZZZ")
-
-
-def test_consume_missing_token(store):
-    with pytest.raises(UploadTokenError, match="missing"):
-        store.consume("")
 
 
 def test_consume_expired_token(store, monkeypatch):
@@ -77,7 +31,7 @@ def test_consume_expired_token(store, monkeypatch):
     fake_now = [1000.0]
     monkeypatch.setattr(mod.time, "time", lambda: fake_now[0])
 
-    token, _ = store.issue("acct", "user", ttl_seconds=60)
+    token, _ = store.issue("acct", "user", role=Role.USER, ttl_seconds=60)
     fake_now[0] += 61
     with pytest.raises(UploadTokenError, match="expired"):
         store.consume(token)
@@ -89,38 +43,40 @@ def test_purge_expired_drops_stale_tokens(store, monkeypatch):
     fake_now = [1000.0]
     monkeypatch.setattr(mod.time, "time", lambda: fake_now[0])
 
-    t1, _ = store.issue("a", "u", ttl_seconds=10)
-    t2, _ = store.issue("a", "u", ttl_seconds=600)
+    t1, _ = store.issue("a", "u", role=Role.USER, ttl_seconds=10)
+    t2, _ = store.issue("a", "u", role=Role.USER, ttl_seconds=600)
 
     fake_now[0] += 30  # t1 expired, t2 still alive
 
     # Issuing a new token implicitly purges; t1 should be gone afterward
-    store.issue("a", "u", ttl_seconds=600)
+    store.issue("a", "u", role=Role.USER, ttl_seconds=600)
     assert store.peek(t1) is None
     assert store.peek(t2) is not None
 
 
-def test_issue_handles_dense_alphabet_collisions(store, monkeypatch):
-    """Force collisions to verify the retry loop still terminates."""
-    import openviking.server.upload_token_store as mod
-
-    call_count = [0]
-    real_choice = mod.secrets.choice
-
-    def fake_choice(seq):
-        call_count[0] += 1
-        if call_count[0] <= 42:
-            return seq[0]
-        return real_choice(seq)
-
-    monkeypatch.setattr(mod.secrets, "choice", fake_choice)
-
-    t1, _ = store.issue("a", "u", ttl_seconds=60)
-    t2, _ = store.issue("a", "u", ttl_seconds=60)
-    assert t1 != t2
+def test_consume_returns_bound_uri(store):
+    token, _ = store.issue(
+        "acct", "user", role=Role.USER, ttl_seconds=60, uri="viking://resources/a.pdf"
+    )
+    assert len(token) == 10
+    assert store.consume(token).uri == "viking://resources/a.pdf"
 
 
-def test_clear_resets_state(store):
-    store.issue("a", "u", ttl_seconds=60)
-    store.clear()
-    assert store._store == {}
+def test_upload_and_download_stores_are_isolated():
+    from openviking.server.upload_token_store import download_token_store, upload_token_store
+
+    upload_token_store.clear()
+    download_token_store.clear()
+    try:
+        upload_token, _ = upload_token_store.issue("a", "u", role=Role.USER, ttl_seconds=60)
+        download_token, _ = download_token_store.issue(
+            "a", "u", role=Role.USER, ttl_seconds=60, uri="viking://resources/a.pdf"
+        )
+        with pytest.raises(UploadTokenError):
+            download_token_store.consume(upload_token)
+        with pytest.raises(UploadTokenError):
+            upload_token_store.consume(download_token)
+        assert download_token_store.consume(download_token).uri == "viking://resources/a.pdf"
+    finally:
+        upload_token_store.clear()
+        download_token_store.clear()

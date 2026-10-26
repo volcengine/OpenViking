@@ -189,7 +189,7 @@ def _list_non_overview_entries(
     uri: str,
 ) -> List[dict]:
     try:
-        entries = run_async(service.fs.ls(uri, ctx=ctx, simple=False)) or []
+        entries = run_async(service.fs.ls(uri, ctx=ctx, simple=False)).entries
     except Exception:
         return []
     _INTERNAL_SUFFIXES = (".overview.md", ".abstract.md")

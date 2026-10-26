@@ -37,14 +37,14 @@ export function DeleteAccountButton({
   const deleteAccount = useMutation({
     mutationFn: () => deleteAdminAccount(adminConnection, accountId),
     onError: (error) => toast.error(getErrorMessage(error)),
-    onSuccess: async () => {
+    onSuccess: async (taskId) => {
       let nextAccountId = ''
       try {
         const remainingAccounts = await fetchAdminAccounts(adminConnection)
         nextAccountId = remainingAccounts[0]?.accountId ?? ''
       } catch (error) {
         toast.warning(
-          t('toast.accountDeletedRecoveryFailed', {
+          t('toast.accountDeletionRecoveryFailed', {
             error: getErrorMessage(error),
           }),
         )
@@ -55,7 +55,7 @@ export function DeleteAccountButton({
       await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
       setOpen(false)
       setConfirmation('')
-      toast.success(t('toast.accountDeleted', { account: accountId }))
+      toast.success(t('toast.accountDeletionStarted', { account: accountId, taskId }))
 
       if (!nextAccountId) {
         openConnectionSettings()

@@ -22,7 +22,7 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
-from openviking.session.memory.utils.template_utils import TemplateUtils
+from openviking.session.memory.utils.description_template import render_description_template
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -91,15 +91,7 @@ class SchemaModelGenerator:
         self._operations_model: Optional[Type[BaseModel]] = None
 
     def _render_description(self, description: str) -> str:
-        if not description:
-            return description
-        if "{{" not in description and "{%" not in description and "{#" not in description:
-            return description
-        return TemplateUtils.render(
-            description,
-            self._template_context,
-            strip=False,
-        )
+        return render_description_template(description, self._template_context, strip=False)
 
     def _map_field_type(self, field_type: FieldType) -> Type[Any]:
         """Map YAML field type to Python type."""
@@ -153,25 +145,36 @@ class SchemaModelGenerator:
                 ),
             )
 
+        page_id_json_schema = {"type": "integer"}
+        page_id_description = "Temporary page_id for identifying the target memory item."
+        if memory_type.memory_type == "events" and memory_type.operation_mode == "add_only":
+            page_id_json_schema["minimum"] = 100
+            page_id_description = "Unique page_id for this new event; it MUST be at least 100."
+
         field_definitions["page_id"] = (
-            Annotated[int, WithJsonSchema({"type": "integer"})],
+            Annotated[int, WithJsonSchema(page_id_json_schema)],
             Field(
                 ...,
-                description="Temporary page_id for identifying the target memory item.",
+                description=page_id_description,
             ),
         )
 
-        immutable_field_names = []
+        identity_field_names = set(memory_type.identity_fields(include_peer_id=False))
+        required_on_create = [
+            field.name
+            for field in memory_type.fields
+            if field.merge_op == MergeOp.IMMUTABLE or field.name in identity_field_names
+        ]
 
         # Add business fields from schema
         for field in memory_type.fields:
             base_type = self._map_field_type(field.field_type)
             if field.merge_op == MergeOp.IMMUTABLE:
-                # Immutable fields: only base type, required
-                immutable_field_names.append(field.name)
+                # Existing updates may omit immutable fields. New objects are
+                # checked by the conditional validator below.
                 field_definitions[field.name] = (
-                    base_type,
-                    Field(..., description=self._render_description(field.description)),
+                    Optional[base_type],
+                    Field(None, description=self._render_description(field.description)),
                 )
             else:
                 # Mutable fields: Union[base_type, patch_type], optional
@@ -185,10 +188,57 @@ class SchemaModelGenerator:
                     Optional[union_type],
                     Field(None, description=desc),
                 )
-        # Create the model
+
+        replace_string_fields = [
+            field.name
+            for field in memory_type.fields
+            if field.merge_op == MergeOp.REPLACE and field.field_type == FieldType.STRING
+        ]
+
+        # New objects have no stored value on which to apply a string patch.
+        @model_validator(mode="before")
+        def validate_new_object_fields(cls, data):
+            del cls
+            if not isinstance(data, dict):
+                return data
+            try:
+                is_new = int(data.get("page_id")) >= 100
+            except (TypeError, ValueError):
+                return data
+            missing = [name for name in required_on_create if data.get(name) is None]
+            if is_new and missing:
+                raise ValueError("new memory item requires fields: " + ", ".join(missing))
+            if is_new:
+                invalid = [
+                    name
+                    for name in replace_string_fields
+                    if data.get(name) is not None and not isinstance(data[name], str)
+                ]
+                if invalid:
+                    raise ValueError(
+                        "new memory item requires a complete string for replace fields: "
+                        + ", ".join(invalid)
+                    )
+            return data
+
+        json_schema_extra = None
+        if required_on_create:
+            json_schema_extra = {
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {"page_id": {"minimum": 100}},
+                            "required": ["page_id"],
+                        },
+                        "then": {"required": required_on_create},
+                    }
+                ]
+            }
+
         model = create_model(
             model_name,
-            __config__=ConfigDict(extra="ignore"),
+            __config__=ConfigDict(extra="ignore", json_schema_extra=json_schema_extra),
+            __validators__={"validate_new_object_fields": validate_new_object_fields},
             **field_definitions,
         )
 
@@ -212,7 +262,9 @@ class SchemaModelGenerator:
             models[memory_type.memory_type] = self.create_flat_data_model(memory_type)
         return models
 
-    def create_structured_operations_model(self, role_scope: Optional[RoleScope] = None) -> Type[BaseModel]:
+    def create_structured_operations_model(
+        self, role_scope: Optional[RoleScope] = None
+    ) -> Type[BaseModel]:
         """
         Create a structured MemoryOperations model with type-safe write operations.
 
@@ -354,112 +406,3 @@ class SchemaModelGenerator:
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
-
-class SchemaPromptGenerator:
-    """
-    Prompt generator that incorporates schema information into LLM prompts.
-
-    Generates descriptive text about memory types and their fields
-    based on the YAML schema definitions.
-    """
-
-    def __init__(
-        self,
-        schemas: List[MemoryTypeSchema],
-        template_context: Optional[Dict[str, Any]] = None,
-    ):
-        if hasattr(schemas, "list_all"):
-            schemas = schemas.list_all()
-        self.schemas = schemas
-        self._template_context = dict(template_context or {})
-
-    def _render_description(self, description: str) -> str:
-        if not description:
-            return description
-        return TemplateUtils.render(description, self._template_context)
-
-    def generate_type_descriptions(self) -> str:
-        """
-        Generate descriptions of all memory types.
-
-        Returns:
-            Formatted string with all memory type descriptions
-        """
-        lines = ["## Available Memory Types"]
-
-        for mt in self.schemas:
-            lines.append(f"\n### {mt.memory_type}")
-            lines.append(f"{self._render_description(mt.description)}")
-
-            # Add URI format information
-            if mt.directory or mt.filename_template:
-                lines.append("\n**URI Format:**")
-                if mt.directory and mt.filename_template:
-                    lines.append(f"- URI: `{mt.directory}/{mt.filename_template}`")
-                elif mt.directory:
-                    lines.append(f"- Directory: `{mt.directory}`")
-                elif mt.filename_template:
-                    lines.append(f"- Filename: `{mt.filename_template}`")
-
-                # Add variable substitution info
-                lines.append("\n**Variable Substitution:**")
-                lines.append("- `{{ user_space }}` → 'default'")
-                if mt.fields:
-                    for field in mt.fields:
-                        lines.append(f"- `{{ {field.name} }}` → use value from fields")
-
-            if mt.fields:
-                lines.append("\n**Fields:**")
-                for field in mt.fields:
-                    lines.append(
-                        f"- `{field.name}` ({field.field_type.value}): {self._render_description(field.description)}"
-                    )
-
-        return "\n".join(lines)
-
-    def generate_field_descriptions(self, memory_type: str) -> Optional[str]:
-        """
-        Generate descriptions for a specific memory type's fields.
-
-        Args:
-            memory_type: The memory type to describe
-
-        Returns:
-            Formatted string with field descriptions, or None if not found
-        """
-        mt = next((s for s in self.schemas if s.memory_type == memory_type), None)
-        if not mt:
-            return None
-
-        lines = [f"### {mt.memory_type} Fields"]
-        for field in mt.fields:
-            lines.append(f"- `{field.name}`: {self._render_description(field.description)}")
-
-        return "\n".join(lines)
-
-    def get_full_prompt_context(self) -> Dict[str, Any]:
-        """
-        Get the full prompt context including all schema information.
-
-        Returns:
-            Dictionary with all prompt context components
-        """
-        return {
-            "type_descriptions": self.generate_type_descriptions(),
-            "memory_types": [
-                {
-                    "memory_type": mt.memory_type,
-                    "description": mt.description,
-                    "fields": [
-                        {
-                            "name": f.name,
-                            "type": f.field_type.value,
-                            "description": f.description,
-                            "merge_op": f.merge_op.value,
-                        }
-                        for f in mt.fields
-                    ],
-                }
-                for mt in self.schemas
-            ],
-        }

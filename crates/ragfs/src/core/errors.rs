@@ -56,6 +56,10 @@ pub enum Error {
     #[error("invalid operation: {0}")]
     InvalidOperation(String),
 
+    /// Operation is intentionally unsupported by the current protocol.
+    #[error("not supported: {0}")]
+    NotSupported(String),
+
     /// I/O error
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
@@ -91,6 +95,10 @@ pub enum Error {
     /// Non-blocking operation would block and should be retried by the caller
     #[error("operation would block: {0}")]
     WouldBlock(String),
+
+    /// Preserve acquisition failures so callers can distinguish contention from corruption.
+    #[error(transparent)]
+    PathLock(#[from] crate::lock::types::PathLockError),
 
     /// Multi-write synchronous fanout failed to reach the required acknowledgement quorum
     #[error(
@@ -184,6 +192,7 @@ impl Error {
             Self::IsADirectory(_) => "is_a_directory",
             Self::DirectoryNotEmpty(_) => "directory_not_empty",
             Self::InvalidOperation(_) => "invalid_operation",
+            Self::NotSupported(_) => "not_supported",
             Self::Io(_) => "io",
             Self::Plugin(_) => "plugin",
             Self::Config(_) => "config",
@@ -193,6 +202,7 @@ impl Error {
             Self::Network(_) => "network",
             Self::Timeout(_) => "timeout",
             Self::WouldBlock(_) => "would_block",
+            Self::PathLock(_) => "path_lock",
             Self::SyncWriteQuorum { .. } => "sync_write_quorum",
             Self::ContextMissing(_) => "context_missing",
             Self::Internal(_) => "internal",
@@ -202,6 +212,11 @@ impl Error {
     /// Create an InvalidOperation error
     pub fn invalid_operation(msg: impl Into<String>) -> Self {
         Self::InvalidOperation(msg.into())
+    }
+
+    /// Create a NotSupported error.
+    pub fn not_supported(msg: impl Into<String>) -> Self {
+        Self::NotSupported(msg.into())
     }
 }
 

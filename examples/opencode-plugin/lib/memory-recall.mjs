@@ -1,14 +1,14 @@
-import { buildRecallBlock } from "./shared/recall-core.mjs"
+import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs"
 import { isBypassed } from "./shared/session-model.mjs"
 import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createMemoryRecall({ config, sessionManager }) {
-  async function injectRelevantMemories(input, output) {
-    if (!config.autoRecall?.enabled) return
-    const query = extractCurrentUserText(output.parts ?? [])
+  async function buildRelevantMemories(input, parts) {
+    if (!isRecallEnabled(config)) return
+    const query = extractCurrentUserText(parts ?? [])
     if (!query) return
     if (query.length < config.minQueryLength) return
-    const sessionID = input.sessionID ?? output.message?.sessionID
+    const sessionID = input.sessionID
     if (isBypassed(config, {
       sessionId: sessionID,
       cwd: input.directory ?? input.cwd,
@@ -27,20 +27,27 @@ export function createMemoryRecall({ config, sessionManager }) {
       query,
       {
         actorPeerId: effectivePeerId(config),
+        legacyPeerId: config.effectivePeer?.legacyPeerId ?? "",
         // The mapped OV session is what turns on server-side query expansion
         // and the cross-turn dedup ledger.
         sessionId: sessionID ? sessionManager.getMappedSessionId(sessionID) : "",
         log: (stage, data) => log("DEBUG", "recall", stage, data),
       },
     )
-    if (!block) return
+    return block || undefined
+  }
 
-    if (prependSyntheticRecallPart(input, output, block)) {
+  async function injectRelevantMemories(input, output) {
+    const block = await buildRelevantMemories({
+      ...input,
+      sessionID: input.sessionID ?? output.message?.sessionID,
+    }, output.parts)
+    if (block && prependSyntheticRecallPart(input, output, block)) {
       log("INFO", "recall", "Injected OpenViking context")
     }
   }
 
-  return { injectRelevantMemories }
+  return { buildRelevantMemories, injectRelevantMemories }
 }
 
 export function extractCurrentUserText(parts) {
@@ -57,8 +64,10 @@ export function extractCurrentUserText(parts) {
 
 function prependSyntheticRecallPart(input, output, injection) {
   const sessionID = input.sessionID ?? output.message?.sessionID
-  const messageID = input.messageID ?? output.message?.id
-  if (!sessionID || !messageID) return false
+  // messageID is optional in opencode's chat.message API (messageID?: string).
+  // When absent, generate a fallback so recall context is always injected.
+  const messageID = input.messageID ?? output.message?.id ?? `ov-recall-${Date.now()}`
+  if (!sessionID) return false
 
   output.parts.unshift({
     id: `prt-ov-recall-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

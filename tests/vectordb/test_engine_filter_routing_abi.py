@@ -10,7 +10,7 @@ class _CurrentBackend:
     def __init__(self):
         self.calls = []
 
-    def _new_index_engine(self, path_or_json):
+    def _new_index_engine(self, path_or_json, normalize_vector=False):
         self.calls.append(("new", path_or_json))
         return "engine-handle"
 
@@ -33,7 +33,7 @@ class _LegacyBackend:
     def __init__(self):
         self.calls = []
 
-    def _new_index_engine(self, path_or_json):
+    def _new_index_engine(self, path_or_json, normalize_vector=False):
         return "legacy-handle"
 
     def _index_engine_evaluate_filter(self, handle, dsl):

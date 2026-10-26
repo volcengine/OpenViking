@@ -8,6 +8,8 @@ import asyncio
 from collections.abc import Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
+from openviking.service.task_tracker_concurrency import run_to_completion
+
 from .protocols import AGFSSyncClientProtocol
 
 _SYSTEM_ACCOUNT_ID = "_system"
@@ -29,6 +31,30 @@ def fs_ctx_from_agfs_path(path: str) -> Dict[str, str]:
 def _fs_ctx_or_default(path: str, fs_ctx: Dict[str, str] | None) -> Dict[str, str]:
     """Return explicit FsContext when present, otherwise derive it from path."""
     return fs_ctx if fs_ctx is not None else fs_ctx_from_agfs_path(path)
+
+
+def _fs_ctx_with_auto_pathlock(
+    path: str,
+    fs_ctx: Dict[str, str] | None,
+    auto_pathlock: bool,
+) -> Dict[str, str]:
+    """Return FsContext with optional auto PathLock bypass for unlocked calls.
+
+    Args:
+        path: AGFS path used to derive a default context when ``fs_ctx`` is absent.
+        fs_ctx: Optional caller-provided context.
+        auto_pathlock: Whether PathLockWrappedFS should acquire locks automatically.
+
+    Returns:
+        A copied FsContext. Existing ``lease_ref`` takes precedence and keeps wrapper
+        lease validation enabled; otherwise ``auto_pathlock=False`` disables auto-locking.
+    """
+    ctx = dict(_fs_ctx_or_default(path, fs_ctx))
+    if ctx.get("lease_ref"):
+        ctx.pop("disable_auto_pathlock", None)
+    elif not auto_pathlock:
+        ctx["disable_auto_pathlock"] = "true"
+    return ctx
 
 
 def local_account_id_from_agfs_path(path: str) -> str | None:
@@ -57,33 +83,46 @@ def ensure_same_encryption_account(src_path: str, dst_path: str) -> None:
 class AsyncAGFSClient:
     """Run blocking AGFS binding client operations off the event loop.
 
-    This is intentionally a thin adapter over the synchronous RAGFS binding
-    client (``RAGFSBindingClient``). If the binding later provides native async
-    methods, they can be swapped in here without changing storage and
-    transaction call sites.
+    This is a thin adapter over ``RAGFSBindingClient``. Blocking methods use a
+    worker thread; native async methods, currently PathLock acquisition, run
+    without occupying that shared executor.
     """
 
     def __init__(self, client: AGFSSyncClientProtocol):
         self._client = client
 
     async def run(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
-        """Run a sync client method in a worker thread, preserving ctx when supported."""
+        """Run a sync method off-thread, settling I/O before propagating cancellation."""
+        method = getattr(self._client, method_name)
         try:
-            return await asyncio.to_thread(getattr(self._client, method_name), *args, **kwargs)
+            return await run_to_completion(lambda: asyncio.to_thread(method, *args, **kwargs))
         except TypeError as exc:
             message = str(exc)
             if "ctx" not in kwargs or "unexpected keyword argument 'ctx'" not in message:
                 raise
-            legacy_kwargs = dict(kwargs)
-            legacy_kwargs.pop("ctx", None)
-            return await asyncio.to_thread(
-                getattr(self._client, method_name), *args, **legacy_kwargs
-            )
+            kwargs.pop("ctx")
+            return await run_to_completion(lambda: asyncio.to_thread(method, *args, **kwargs))
 
     async def ls(
-        self, path: str = "/", *, fs_ctx: Dict[str, str] | None = None
+        self,
+        path: str = "/",
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+        fs_ctx: Dict[str, str] | None = None,
     ) -> List[Dict[str, Any]]:
-        return await self.run("ls", path, ctx=_fs_ctx_or_default(path, fs_ctx))
+        """Return a sorted directory range."""
+        kwargs: Dict[str, Any] = {}
+        if offset:
+            kwargs["offset"] = offset
+        if limit is not None:
+            kwargs["limit"] = limit
+        if sort_by is not None:
+            kwargs["sort_by"] = sort_by
+            kwargs["sort_order"] = sort_order
+        return await self.run("ls", path, **kwargs, ctx=_fs_ctx_or_default(path, fs_ctx))
 
     async def read(
         self,
@@ -128,12 +167,17 @@ class AsyncAGFSClient:
         max_retries: int = 3,
         *,
         fs_ctx: Dict[str, str] | None = None,
+        auto_pathlock: bool = True,
     ) -> str:
+        """Write file content to AGFS.
+
+        1. Automatic PathLock is enabled by default to prevent data conflicts in concurrent scenarios.
+        2. If automatic PathLock is disabled, the caller must assess the possible data conflict risk.
+        """
+        ctx = _fs_ctx_with_auto_pathlock(path, fs_ctx, auto_pathlock)
         if max_retries == 3:
-            return await self.run("write", path, data, ctx=_fs_ctx_or_default(path, fs_ctx))
-        return await self.run(
-            "write", path, data, max_retries=max_retries, ctx=_fs_ctx_or_default(path, fs_ctx)
-        )
+            return await self.run("write", path, data, ctx=ctx)
+        return await self.run("write", path, data, max_retries=max_retries, ctx=ctx)
 
     async def mkdir(
         self, path: str, mode: str = "755", *, fs_ctx: Dict[str, str] | None = None
@@ -158,13 +202,24 @@ class AsyncAGFSClient:
         force: bool = True,
         *,
         fs_ctx: Dict[str, str] | None = None,
+        auto_pathlock: bool = True,
     ) -> Dict[str, Any]:
+        """Remove a file or directory from AGFS.
+
+        1. Automatic PathLock is enabled by default to prevent data conflicts in concurrent scenarios.
+        2. If automatic PathLock is disabled, the caller must assess the possible data conflict risk.
+        """
         kwargs: Dict[str, Any] = {}
         if recursive:
             kwargs["recursive"] = recursive
         if not force:
             kwargs["force"] = force
-        return await self.run("rm", path, **kwargs, ctx=_fs_ctx_or_default(path, fs_ctx))
+        return await self.run(
+            "rm",
+            path,
+            **kwargs,
+            ctx=_fs_ctx_with_auto_pathlock(path, fs_ctx, auto_pathlock),
+        )
 
     async def stat(
         self, path: str, *, fs_ctx: Dict[str, str] | None = None, bypass_cache: bool = False
@@ -177,10 +232,25 @@ class AsyncAGFSClient:
         return await self.run("stat", path, ctx=ctx)
 
     async def mv(
-        self, old_path: str, new_path: str, *, fs_ctx: Dict[str, str] | None = None
+        self,
+        old_path: str,
+        new_path: str,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+        auto_pathlock: bool = True,
     ) -> Dict[str, Any]:
+        """Move or rename a path inside AGFS.
+
+        1. Automatic PathLock is enabled by default to prevent data conflicts in concurrent scenarios.
+        2. If automatic PathLock is disabled, the caller must assess the possible data conflict risk.
+        """
         ensure_same_encryption_account(old_path, new_path)
-        return await self.run("mv", old_path, new_path, ctx=_fs_ctx_or_default(old_path, fs_ctx))
+        return await self.run(
+            "mv",
+            old_path,
+            new_path,
+            ctx=_fs_ctx_with_auto_pathlock(old_path, fs_ctx, auto_pathlock),
+        )
 
     async def cp(
         self,
@@ -189,17 +259,27 @@ class AsyncAGFSClient:
         recursive: bool = False,
         *,
         fs_ctx: Dict[str, str] | None = None,
+        auto_pathlock: bool = True,
+        allow_same_mount_fast_path: bool = False,
     ) -> Any:
-        """Copy a path within AGFS while preserving the caller's FsContext."""
+        """Copy a path within AGFS while preserving the caller's FsContext.
+
+        1. Automatic PathLock is enabled by default to prevent data conflicts in concurrent scenarios.
+        2. If automatic PathLock is disabled, the caller must assess the possible data conflict risk.
+        """
         from .helpers import cp
 
-        return await asyncio.to_thread(
-            cp,
-            self._client,
-            src_path,
-            dst_path,
-            recursive=recursive,
-            fs_ctx=_fs_ctx_or_default(src_path, fs_ctx),
+        return await run_to_completion(
+            lambda: asyncio.to_thread(
+                cp,
+                self._client,
+                src_path,
+                dst_path,
+                recursive=recursive,
+                stream=True,
+                fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock),
+                allow_same_mount_fast_path=allow_same_mount_fast_path,
+            )
         )
 
     async def grep(self, **kwargs: Any) -> Dict[str, Any]:
@@ -216,14 +296,29 @@ class AsyncAGFSClient:
         node_limit: int | None = None,
         level_limit: int | None = None,
         *,
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+        directories_only: bool = False,
         fs_ctx: Dict[str, str] | None = None,
     ) -> list[Dict[str, Any]]:
+        """Return a sorted range from a recursive directory traversal."""
+        kwargs: Dict[str, Any] = {
+            "show_hidden": show_hidden,
+            "node_limit": node_limit,
+            "level_limit": level_limit,
+        }
+        if directories_only:
+            kwargs["directories_only"] = True
+        if offset:
+            kwargs["offset"] = offset
+        if sort_by is not None:
+            kwargs["sort_by"] = sort_by
+            kwargs["sort_order"] = sort_order
         return await self.run(
             "tree_directory",
             path,
-            show_hidden=show_hidden,
-            node_limit=node_limit,
-            level_limit=level_limit,
+            **kwargs,
             ctx=_fs_ctx_or_default(path, fs_ctx),
         )
 
@@ -249,18 +344,6 @@ class AsyncAGFSClient:
             ctx=_fs_ctx_or_default(path, fs_ctx),
         )
 
-    async def system_sync_status(
-        self, path: str, *, fs_ctx: Dict[str, str] | None = None
-    ) -> Dict[str, Any]:
-        """Return multi-write sync status for a file or directory path."""
-        return await self.run("system_sync_status", path, ctx=_fs_ctx_or_default(path, fs_ctx))
-
-    async def system_sync_retry(
-        self, path: str, *, fs_ctx: Dict[str, str] | None = None
-    ) -> Dict[str, Any]:
-        """Retry pending multi-write sync work for a file or directory path."""
-        return await self.run("system_sync_retry", path, ctx=_fs_ctx_or_default(path, fs_ctx))
-
     # -- pathlock async wrappers ------------------------------------------------
 
     async def pathlock_acquire_exact(
@@ -272,12 +355,11 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire an exact lock on a single path."""
-        return await self.run(
-            "pathlock_acquire_exact",
-            _fs_ctx_or_default(path, fs_ctx),
-            path,
+        return await self.pathlock_acquire_batch(
+            [{"path": path, "kind": "exact"}],
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_exact_batch(
@@ -289,12 +371,11 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire exact locks on multiple paths."""
-        return await self.run(
-            "pathlock_acquire_exact_batch",
-            _fs_ctx_or_default(paths[0] if paths else "/", fs_ctx),
-            paths,
+        return await self.pathlock_acquire_batch(
+            [{"path": path, "kind": "exact"} for path in paths],
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_tree(
@@ -306,12 +387,11 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire a tree lock on a single path."""
-        return await self.run(
-            "pathlock_acquire_tree",
-            _fs_ctx_or_default(path, fs_ctx),
-            path,
+        return await self.pathlock_acquire_batch(
+            [{"path": path, "kind": "tree"}],
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_tree_batch(
@@ -323,12 +403,11 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire tree locks on multiple paths."""
-        return await self.run(
-            "pathlock_acquire_tree_batch",
-            _fs_ctx_or_default(paths[0] if paths else "/", fs_ctx),
-            paths,
+        return await self.pathlock_acquire_batch(
+            [{"path": path, "kind": "tree"} for path in paths],
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_exact_tree_batch(
@@ -341,14 +420,13 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire a mixed batch of exact and tree locks."""
-        first = exact_paths[0] if exact_paths else (tree_paths[0] if tree_paths else "/")
-        return await self.run(
-            "pathlock_acquire_exact_tree_batch",
-            _fs_ctx_or_default(first, fs_ctx),
-            exact_paths,
-            tree_paths,
+        requests = [{"path": path, "kind": "exact"} for path in exact_paths]
+        requests.extend({"path": path, "kind": "tree"} for path in tree_paths)
+        return await self.pathlock_acquire_batch(
+            requests,
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_batch(
@@ -368,14 +446,23 @@ class AsyncAGFSClient:
                 raise ValueError("pathlock request.path must be an absolute path")
             if request.get("kind") not in {"exact", "tree"}:
                 raise ValueError("pathlock request.kind must be 'exact' or 'tree'")
-        first = requests[0]["path"]
-        return await self.run(
-            "pathlock_acquire_batch",
-            _fs_ctx_or_default(first, fs_ctx),
-            requests,
-            timeout_secs,
-            owner_lease_ref,
+        fs_ctx = _fs_ctx_or_default(requests[0]["path"], fs_ctx)
+        future = asyncio.ensure_future(
+            self._client.pathlock_acquire_batch_async(
+                fs_ctx, requests, timeout_secs, owner_lease_ref
+            )
         )
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError as cancelled:
+
+            async def release_acquired() -> None:
+                await self.pathlock_release(await future, fs_ctx=fs_ctx)
+
+            try:
+                await run_to_completion(release_acquired)
+            finally:
+                raise cancelled
 
     async def pathlock_as_borrowed(
         self,

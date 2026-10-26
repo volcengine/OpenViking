@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createMemorySessionManager } from "../lib/memory-session.mjs"
+import { contextMessageEvents } from "../lib/v2-events.mjs"
 import { initLogger } from "../lib/utils.mjs"
 
 async function withTempDir(prefix, fn) {
@@ -64,6 +65,40 @@ function baseConfig(endpoint) {
     commitKeepRecentCount: 10,
   }
 }
+
+test("deferred startup loads local state without waiting for legacy migration", async () => {
+  await withTempDir("ov-oc-deferred-", async (dir) => {
+    let releaseCommit
+    let markCommitStarted
+    const commitStarted = new Promise((resolve) => { markCommitStarted = resolve })
+    const commitGate = new Promise((resolve) => { releaseCommit = resolve })
+    const server = createServer(async (req, res) => {
+      if (req.url?.endsWith("/commit")) {
+        markCommitStarted()
+        await commitGate
+      }
+      res.setHeader("Content-Type", "application/json")
+      res.end(JSON.stringify({ status: "ok", result: {} }))
+    })
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const legacyPath = join(dir, "openviking-session-map.json")
+    fs.writeFileSync(legacyPath, JSON.stringify({ sessions: { old: { ovSessionId: "legacy" } } }))
+    const manager = createMemorySessionManager({ config: baseConfig(`http://127.0.0.1:${server.address().port}`), pluginRoot: dir })
+    let initialized = false
+    const init = manager.init({ deferNetwork: true }).then(() => { initialized = true })
+    try {
+      await commitStarted
+      assert.equal(initialized, true, "activation must finish while legacy commit is still pending")
+      assert.equal(fs.existsSync(`${legacyPath}.migrated`), false)
+    } finally {
+      releaseCommit()
+      await init
+      await manager.waitForBackground()
+      await new Promise((resolve) => server.close(resolve))
+    }
+    assert.equal(fs.existsSync(`${legacyPath}.migrated`), true)
+  })
+})
 
 test("autoCapture=false prevents OpenCode messages from being captured", async () => {
   await withCaptureServer(async ({ endpoint, requests }) => {
@@ -132,6 +167,46 @@ test("autoCapture=false skips lifecycle commits but preserves explicit commits",
   })
 })
 
+test("a session first seen via message.updated keeps its own session id (#6222)", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+
+      await manager.init()
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-first",
+            sessionID: "oc-child",
+            parentID: "msg-parent",
+            role: "user",
+          },
+        },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-first",
+            messageID: "msg-first",
+            sessionID: "oc-child",
+            type: "text",
+            text: "A message event must not derive a session id from the parent message id.",
+          },
+        },
+      })
+
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-child" })
+
+      const addMessage = requests.find((request) => request.url?.endsWith("/messages/batch"))
+      assert.ok(addMessage, "message.updated should flush the captured message")
+      assert.equal(addMessage.url, "/api/v1/sessions/oc-oc-child/messages/batch")
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
 test("session.idle event flushes pending OpenCode capture", async () => {
   await withCaptureServer(async ({ endpoint, requests }) => {
     await withTempDir("ov-oc-session-", async (dir) => {
@@ -169,6 +244,51 @@ test("session.idle event flushes pending OpenCode capture", async () => {
       const body = JSON.parse(addMessage.body)
       assert.equal(body.messages[0].role, "user")
       assert.match(body.messages[0].content, /idle events must flush captures/)
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
+test("overlapping session.idle and dispose flushAll send each message once and commit after the batch", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      const sessionID = "oc-session-race"
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: sessionID } } })
+      for (const [index, role] of ["user", "assistant"].entries()) {
+        await manager.handleEvent({
+          type: "message.updated",
+          properties: { info: { id: `msg-race-${index}`, sessionID, role, finish: "stop" } },
+        })
+        await manager.handleEvent({
+          type: "message.part.updated",
+          properties: {
+            part: {
+              id: `part-race-${index}`,
+              messageID: `msg-race-${index}`,
+              sessionID,
+              type: "text",
+              text: `Race message ${index} must be stored exactly once.`,
+            },
+          },
+        })
+      }
+      requests.length = 0
+
+      await Promise.all([
+        manager.handleEvent({ type: "session.idle", sessionID }),
+        manager.flushAll({ commit: true }),
+      ])
+
+      const urls = requests.map((request) => `${request.method} ${request.url}`)
+      const batchIndexes = urls.flatMap((url, index) => (url.endsWith("/messages/batch") ? [index] : []))
+      assert.equal(batchIndexes.length, 1, `expected one batch, got: ${urls.join(", ")}`)
+      const body = JSON.parse(requests[batchIndexes[0]].body)
+      assert.equal(body.messages.length, 2)
+      const commitIndex = urls.findIndex((url) => url.endsWith("/commit"))
+      assert.ok(commitIndex > batchIndexes[0], `commit must follow the batch: ${urls.join(", ")}`)
       await manager.flushAll({ commit: false })
     })
   })
@@ -306,6 +426,169 @@ test("OpenCode tool parts preserve completed and error state fields", async () =
   })
 })
 
+test("captured message parts are not retained in the session state file", async () => {
+  await withCaptureServer(async ({ endpoint }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-state-retention" } } })
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-captured",
+            sessionID: "oc-state-retention",
+            role: "user",
+          },
+        },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-captured",
+            messageID: "msg-captured",
+            sessionID: "oc-state-retention",
+            type: "text",
+            text: "This payload was already sent and is not needed for a future flush.".repeat(20),
+          },
+        },
+      })
+
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-state-retention" })
+      await manager.flushAll({ commit: false })
+
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-pending",
+            sessionID: "oc-state-retention",
+            role: "user",
+          },
+        },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-pending",
+            messageID: "msg-pending",
+            sessionID: "oc-state-retention",
+            type: "text",
+            text: "This payload is still pending and must remain recoverable.",
+          },
+        },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 350))
+
+      const state = JSON.parse(await fs.promises.readFile(join(dir, "openviking-session-state.json"), "utf8"))
+      const persistedSession = Object.values(state.sessions)[0]
+      const persistedMessages = new Map(persistedSession.messages)
+      const capturedMessage = persistedMessages.get("msg-captured")
+      const pendingMessage = persistedMessages.get("msg-pending")
+      assert.equal(capturedMessage.captured, true)
+      assert.deepEqual(capturedMessage.parts, [])
+      assert.equal(pendingMessage.parts.length, 1)
+    })
+  })
+})
+
+test("startup prunes stale sessions with nothing pending and keeps the rest", async () => {
+  await withTempDir("ov-oc-state-prune-", async (dir) => {
+    const statePath = join(dir, "openviking-session-state.json")
+    const stale = Date.now() - 30 * 24 * 60 * 60 * 1000
+    const recent = Date.now() - 60 * 1000
+    const session = (lastActivityAt, messages) => ({
+      ovSessionId: "oc-x",
+      createdAt: lastActivityAt,
+      lastActivityAt,
+      messages,
+    })
+    const captured = ["msg-done", { role: "user", captured: true, parts: [] }]
+    const pending = ["msg-pending", { role: "user", captured: false, parts: [["part-1", { type: "text", text: "unsent" }]] }]
+    fs.writeFileSync(statePath, JSON.stringify({
+      version: 2,
+      sessions: {
+        "stale-done": session(stale, [captured]),
+        "stale-empty": session(stale, []),
+        "stale-pending": session(stale, [captured, pending]),
+        "recent-done": session(recent, [captured]),
+      },
+    }))
+
+    const manager = createMemorySessionManager({
+      config: { ...baseConfig("http://127.0.0.1:1"), autoCapture: false },
+      pluginRoot: dir,
+    })
+    await manager.init({ deferNetwork: true })
+
+    const data = JSON.parse(await fs.promises.readFile(statePath, "utf8"))
+    await manager.waitForBackground()
+    assert.deepEqual(Object.keys(data.sessions).sort(), ["recent-done", "stale-pending"])
+    assert.equal(new Map(data.sessions["stale-pending"].messages).get("msg-pending").parts.length, 1)
+  })
+})
+
+test("OpenCode capture filters sanitized text before sending", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-filters-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), captureFilters: ["k/approved/", "s/secret/[redacted]/g"] },
+        pluginRoot: dir,
+      })
+      await manager.init()
+      for (const [id, text] of [
+        ["removed", "<openviking-context>approved</openviking-context>Remember secret details."],
+        ["kept", "Remember approved secret details."],
+      ]) {
+        for (const event of contextMessageEvents("oc-filters", { id, type: "user", text })) {
+          await manager.handleEvent(event)
+        }
+      }
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-filters" })
+      const sent = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-filters/messages/batch")
+      assert.ok(sent)
+      assert.deepEqual(JSON.parse(sent.body).messages, [
+        { role: "user", content: "Remember approved [redacted] details." },
+      ])
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
+test("OpenCode caps mixed-message text and omits low-signal text", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-mixed-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      await manager.init()
+      for (const [id, text] of [["long", "x".repeat(40000)], ["ack", "ok"]]) {
+        const message = {
+          id, type: "assistant", content: [
+            { type: "text", text },
+            { type: "tool", id: `tool-${id}`, name: "lookup", state: {
+              status: "completed", input: { id }, content: [{ type: "text", text: "result" }],
+            } },
+          ],
+        }
+        for (const event of contextMessageEvents("oc-mixed", message)) await manager.handleEvent(event)
+      }
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-mixed" })
+      const sent = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-mixed/messages/batch")
+      assert.ok(sent)
+      const messages = JSON.parse(sent.body).messages
+      assert.equal(messages.length, 2)
+      assert.equal(messages[0].parts[0].type, "text")
+      assert.ok(messages[0].parts[0].text.length <= 24000)
+      assert.match(messages[0].parts[0].text, /\[truncated\]$/)
+      assert.equal(messages[0].parts[1].type, "tool")
+      assert.deepEqual(messages[1].parts.map((part) => part.type), ["tool"])
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
 test("concurrent saves never race the shared state file (#3877)", async (t) => {
   // Widen the race window: concurrent saveState() calls share the same
   // `${statePath}.tmp` temp file. A slow writeFile keeps the shared .tmp
@@ -406,8 +689,66 @@ test("explicit commit writes the response trace_id to the plugin log", async () 
       const result = await manager.commitSession("oc-explicit-trace")
       assert.equal(result.traceId, "trace-opencode-commit")
       assert.equal(requests[0].url, "/api/v1/sessions/oc-explicit-trace/commit")
+      assert.deepEqual(JSON.parse(requests[0].body), { keep_recent_count: 0 })
       const raw = await fs.promises.readFile(join(dir, "openviking-memory.log"), "utf8")
       assert.match(raw, /"trace_id":"trace-opencode-commit"/)
+    })
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test("commit of a session the server no longer has drops the stale local mapping", async () => {
+  const requests = []
+  const server = createServer(async (req, res) => {
+    let body = ""
+    req.setEncoding("utf8")
+    for await (const chunk of req) body += chunk
+    requests.push({ method: req.method, url: req.url, body })
+    res.setHeader("Content-Type", "application/json")
+    if (req.url === "/health") {
+      res.end(JSON.stringify({ status: "ok" }))
+    } else {
+      res.statusCode = 404
+      res.end(JSON.stringify({ status: "error", error: { code: "NOT_FOUND", message: "Session not found" } }))
+    }
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  try {
+    await withTempDir("ov-oc-session-stale-", async (dir) => {
+      const statePath = join(dir, "openviking-session-state.json")
+      // Recent activity keeps these out of the startup prune; only the server has lost them.
+      const now = Date.now()
+      const staleSession = (ovSessionId) => ({
+        ovSessionId,
+        createdAt: now,
+        lastActivityAt: now,
+        messages: [["msg-1", { role: "user", captured: true, parts: [] }]],
+      })
+      await fs.promises.writeFile(statePath, JSON.stringify({
+        version: 2,
+        sessions: {
+          "oc-stale-a": staleSession("oc-oc-stale-a"),
+          "oc-stale-b": staleSession("oc-oc-stale-b"),
+        },
+      }), "utf8")
+      const { port } = server.address()
+      const manager = createMemorySessionManager({ config: baseConfig(`http://127.0.0.1:${port}`), pluginRoot: dir })
+
+      await manager.init({ deferNetwork: true })
+      await manager.handleEvent({ type: "session.deleted", properties: { info: { id: "oc-stale-a" } } })
+      await manager.flushAll({ commit: true })
+      await manager.flushAll({ commit: true })
+      assert.deepEqual(await manager.commitSession("oc-oc-stale-c"), { status: "not_found" })
+
+      const commits = requests.filter((request) => request.url?.endsWith("/commit"))
+      assert.deepEqual(commits.map((request) => request.url), [
+        "/api/v1/sessions/oc-oc-stale-a/commit",
+        "/api/v1/sessions/oc-oc-stale-b/commit",
+        "/api/v1/sessions/oc-oc-stale-c/commit",
+      ])
+      const state = JSON.parse(await fs.promises.readFile(statePath, "utf8"))
+      assert.deepEqual(state.sessions, {})
     })
   } finally {
     await new Promise((resolve) => server.close(resolve))

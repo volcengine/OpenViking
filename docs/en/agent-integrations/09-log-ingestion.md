@@ -1,8 +1,8 @@
 # Import Local Agent Logs (openviking-server ingest)
 
-`openviking-server ingest` parses the conversation logs that AI coding / agent harnesses (Claude Code, Codex, OpenCode, Hermes, OpenClaw) already leave on your machine, then "replays" them through OpenViking's existing session pipeline (`create session → batch add messages → commit`, where commit triggers memory extraction). This turns both your historical and newly written conversations into long-term memory. It complements the per-harness memory plugins: a plugin captures **while a conversation is happening**, whereas this tool is for **importing existing logs** and **watching for new logs offline** — no plugin required and no change to the harness itself.
+`openviking-server ingest` reads local agent conversation logs, imports the messages into OpenViking sessions, and commits them for memory extraction. It supports one-time historical imports and ongoing log monitoring without changing the agent or installing a memory plugin.
 
-Key difference from the plugins: this tool is an OpenViking **client**. It runs where the logs live and points at a local or remote server via the SDK, and it is **off by default** — installing OpenViking does not silently scan your local files.
+Run it on the machine that holds the logs. It connects to a local or remote OpenViking server through the SDK. Ingestion is disabled by default, so installing OpenViking does not scan local logs; enable both the main switch and the configuration for each chosen agent.
 
 Source: [openviking/ingest](https://github.com/volcengine/OpenViking/tree/main/openviking/ingest)
 
@@ -20,14 +20,25 @@ The feature is doubly disabled and must be turned on explicitly:
 |---|---|---|---|
 | `claude_code` | Supported | `~/.claude/projects/*/*.jsonl` | append-only JSONL, byte-offset cursor |
 | `codex` | Supported | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | append-only JSONL |
+| `workbuddy` | Supported | `~/.workbuddy/projects/*/*.jsonl` | append-only JSONL; injects system reminders into user turns — the adapter strips them and keeps only `<user_query>` |
 | `hermes` | Supported | `~/.hermes/sessions/*.jsonl` | group-chat agent; user peer = original username |
 | `openclaw` | Supported | `~/.openclaw/agents/*/sessions/*.jsonl` | group-chat agent; user peer = original username |
 | `opencode` | Experimental | `~/.local/share/opencode/opencode.db` | SQLite, polled by `(time, id)`; the legacy file-store is not supported |
+| `mimo` | Experimental | `~/.local/share/mimocode/mimocode.db` | SQLite, polled by `(time, id)`; skips `part.synthetic` text and `agent_id != main` |
 | `cursor` | Deferred | `~/Library/Application Support/Cursor/User/**/state.vscdb` | undocumented, version-unstable KV blobs; not yet implemented |
 
 > "harness" (agent framework) here means a whole tool like Claude Code or Codex — distinct from OpenViking's "tool" (tool-call) concept.
 
 ## Enable in ov.conf
+
+Set these variables in the same shell that will run the ingest commands. This example targets a local dev server; for an authenticated server, replace the URL and use a tenant-bound user/admin API key:
+
+```bash
+export OPENVIKING_URL="http://localhost:1933"
+export OPENVIKING_API_KEY=""  # Local dev only; set a user/admin key for authenticated deployments.
+```
+
+The config loader expands these variables. Unset variables remain literal strings, so do not skip this step when using the placeholders below.
 
 Add an `ingest` section to `ov.conf`, listing the harnesses to import and their mode:
 
@@ -42,7 +53,9 @@ Add an `ingest` section to `ov.conf`, listing the harnesses to import and their 
     "harnesses": {
       "claude_code": { "enabled": true, "mode": "both" },
       "codex":       { "enabled": true, "mode": "backfill" },
+      "workbuddy":   { "enabled": true, "mode": "both" },
       "opencode":    { "enabled": false, "mode": "watch", "experimental": true },
+      "mimo":        { "enabled": false, "mode": "watch", "experimental": true },
       "hermes":      { "enabled": false, "mode": "both", "user_field": "sender" },
       "openclaw":    { "enabled": false, "mode": "both", "user_field": "sender" }
     }
@@ -85,7 +98,7 @@ openviking-server ingest run
 openviking-server ingest status
 ```
 
-`--reset` deletes and recreates the OV session before replaying. Without `--reset`, re-running is idempotent — the cursor store guarantees nothing is appended twice.
+`--reset` deletes and recreates the OV session before replaying; it does not remove memories already extracted from earlier imports. Normal reruns resume from the persisted cursor and reconcile interrupted batches against the server message count. Keep the cursor database, avoid simultaneous replay processes or other writers to imported sessions, and do not reuse one cursor database for a different server or user.
 
 ## peer_id
 
@@ -110,13 +123,13 @@ Each harness has a thin adapter that parses its logs into normalized messages an
 - **Backfill** enumerates every session, replays from the cursor to the end, then commits once per session.
 - **Watch** mirrors OpenViking's own `WatchScheduler`: it uses **interval polling** (not filesystem events) driven by durable cursors, so a missed tick, a sleep, or a restart just reads cursor→end on the next tick and self-heals. JSONL uses a byte-offset cursor (with partial-line / truncation / rotation handling); SQLite uses a `(time, id)` cursor read read-only (WAL-aware).
 
-Cursor state persists in `~/.openviking/ingest/state.db`, so both backfill and watch resume across restarts without re-ingesting.
+Cursor state persists in `~/.openviking/ingest/state.db`, so backfill and watch can resume after a restart under the same connection identity.
 
 ## Cost and privacy
 
 - Commit triggers memory extraction (an LLM call). Backfilling months of history at once can produce many calls — prefer `--dry-run` first, narrow with `--since`, and enable harnesses in batches.
 - Logs may contain sensitive content (credentials, file contents). Use this in a trusted deployment and confirm `server_url` points at the server you intend.
-- Tool-call inputs/outputs are dropped as low-value by default; only user / assistant text is ingested.
+- The default import keeps user/assistant text and drops tool-call inputs and outputs. Use a runtime plugin when you need structured tool capture.
 
 ## See also
 

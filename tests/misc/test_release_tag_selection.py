@@ -26,7 +26,7 @@ def test_python_sdk_versioning_uses_sdk_only_at_sign_tags() -> None:
 
 
 def test_build_support_versioning_uses_main_release_tags_only(monkeypatch) -> None:
-    from build_support import versioning
+    from scripts.build_support import versioning
 
     captured_kwargs = {}
     fake_setuptools_scm = ModuleType("setuptools_scm")
@@ -44,3 +44,23 @@ def test_build_support_versioning_uses_main_release_tags_only(monkeypatch) -> No
         captured_kwargs["git_describe_command"]
         == "git describe --dirty --tags --long --match v[0-9]*"
     )
+
+
+def test_release_build_pins_cli_and_wheel_to_git_version() -> None:
+    workflow = (ROOT / ".github/workflows/_build.yml").read_text()
+
+    resolve_command = (
+        "env -u OPENVIKING_VERSION "
+        "-u SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING "
+        "uv run --frozen python -c"
+    )
+    pretend_version_export = (
+        'echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$OPENVIKING_VERSION" '
+        '>> "$GITHUB_ENV"'
+    )
+
+    assert workflow.count(resolve_command) == 2
+    assert workflow.count(pretend_version_export) == 2
+    assert workflow.count('git describe --tags --exact-match "$GITHUB_SHA"') == 2
+    assert workflow.count("rm -f openviking/_version.py") == 2
+    assert workflow.count("rm -rf openviking.egg-info") == 2

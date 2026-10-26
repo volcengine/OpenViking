@@ -7,7 +7,7 @@ import tempfile
 import uuid
 
 import pytest
-from conftest import ov, ov_add_resource, ov_reindex, ov_write
+from conftest import ov, ov_add_resource, ov_reindex, ov_rm, ov_write
 
 pytestmark = pytest.mark.cli_remote
 
@@ -72,20 +72,23 @@ class TestContentWrite:
 
 
 class TestContentReindex:
-    def test_reindex(self, test_dir_uri):
-        reindex_pack = f"{test_dir_uri}/reindex_{uuid.uuid4().hex[:6]}"
+    def test_reindex(self):
+        reindex_pack = f"viking://~/resources/reindex_{uuid.uuid4().hex[:6]}"
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
             f.write("# Reindex Test\n\nThis is an independent resource for reindex testing.")
             temp_path = f.name
         try:
-            r = ov_add_resource(temp_path, reindex_pack)
-            assert r["exit_code"] == 0, f"add-resource for reindex failed: {r['stderr'][:300]}"
-        finally:
-            os.unlink(temp_path)
+            try:
+                r = ov_add_resource(temp_path, reindex_pack)
+                assert r["exit_code"] == 0, f"add-resource for reindex failed: {r['stderr'][:300]}"
+            finally:
+                os.unlink(temp_path)
 
-        r = ov_reindex(reindex_pack)
-        assert r["exit_code"] == 0, (
-            f"ov reindex should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-        )
-        data = r["json"]
-        assert data is not None and data.get("ok") is True, "Expected ok=true"
+            r = ov_reindex(reindex_pack)
+            assert r["exit_code"] == 0, (
+                f"ov reindex should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
+            )
+            data = r["json"]
+            assert data is not None and data.get("ok") is True, "Expected ok=true"
+        finally:
+            ov_rm(reindex_pack)

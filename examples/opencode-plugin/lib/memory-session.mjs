@@ -1,9 +1,9 @@
 import fs from "fs"
 import path from "path"
 import {
-  extractPartsFromPayload,
   extractTextFromPayload,
-  shouldCaptureText,
+  isCaptureEnabled,
+  shapeCapturePayload,
 } from "./shared/capture-utils.mjs"
 import {
   deriveHarnessSessionId,
@@ -25,11 +25,14 @@ import {
   safeStringify,
 } from "./utils.mjs"
 
+const STALE_SESSION_STATE_MS = 7 * 24 * 60 * 60 * 1000
+
 export function createMemorySessionManager({ config, pluginRoot }) {
   const sessions = new Map()
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
+  let initBackground = Promise.resolve()
   // Serialize saves: concurrent saveState() calls (a debounced save racing
   // with flushAll / flushSession / session deletion) all share the same
   // `${statePath}.tmp` temp file, so one rename can fail with ENOENT after
@@ -45,16 +48,24 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return run
   }
 
-  async function init() {
-    if (config.autoCapture) await migrateLegacySessionMap()
+  async function init({ deferNetwork = false } = {}) {
     await loadState()
-    const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
-    if (health.ok) {
+    initBackground = Promise.resolve().then(async () => {
+      if (isCaptureEnabled(config)) await migrateLegacySessionMap()
+      const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
+      if (!health.ok) return
       await replayPending(
         (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
         (stage, data) => log("DEBUG", "pending", stage, data),
       )
-    }
+    }).catch((error) => {
+      log("WARN", "pending", "Pending replay failed during initialization", { error: error?.message })
+    })
+    if (!deferNetwork) await initBackground
+  }
+
+  async function waitForBackground() {
+    await initBackground
   }
 
   async function loadState() {
@@ -68,10 +79,17 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         log("ERROR", "persistence", "Unsupported session map version", { version: data.version })
         return
       }
+      const staleBefore = Date.now() - STALE_SESSION_STATE_MS
+      let pruned = 0
       for (const [opencodeSessionId, persisted] of Object.entries(data.sessions ?? {})) {
+        if (isPrunable(persisted, staleBefore)) {
+          pruned += 1
+          continue
+        }
         sessions.set(opencodeSessionId, deserializeSessionState(persisted))
       }
-      log("INFO", "persistence", "Session state loaded", { count: sessions.size })
+      log("INFO", "persistence", "Session state loaded", { count: sessions.size, pruned })
+      if (pruned > 0) await enqueueSave()
     } catch (error) {
       log("ERROR", "persistence", "Failed to load session state", { error: error?.message })
       if (fs.existsSync(statePath)) {
@@ -116,10 +134,18 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         {
           role: message.role,
           captured: message.captured,
-          parts: Array.from(message.parts.entries()),
+          // Captured messages are never read by flushPendingMessages again; retain
+          // only their metadata so completed payloads cannot grow the state file.
+          parts: message.captured ? [] : Array.from(message.parts.entries()),
         },
       ])),
     }
+  }
+
+  // A stale session whose messages are all captured holds nothing left to send.
+  function isPrunable(persisted, staleBefore) {
+    if ((persisted.lastActivityAt ?? 0) >= staleBefore) return false
+    return (persisted.messages ?? []).every(([, message]) => message.captured)
   }
 
   function deserializeSessionState(persisted) {
@@ -157,9 +183,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       await handleSessionCompacted(event)
     } else if (event.type === "session.idle") {
       await handleSessionIdle(event)
-    } else if (event.type === "message.updated" && config.autoCapture) {
+    } else if (event.type === "message.updated" && isCaptureEnabled(config)) {
       await handleMessageUpdated(event)
-    } else if (event.type === "message.part.updated" && config.autoCapture) {
+    } else if (event.type === "message.part.updated" && isCaptureEnabled(config)) {
       await handleMessagePartUpdated(event)
     }
   }
@@ -264,8 +290,18 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       clearTimeout(saveTimer)
       saveTimer = null
     }
+    // Do not abort the whole dispose flush when one session fails (e.g. server
+    // already GC'd a stale session). Continue so later sessions still commit.
+    // See https://github.com/volcengine/OpenViking/issues/4490
     for (const sessionId of sessions.keys()) {
-      await flushSession(sessionId, { commit, reason: "flushAll" })
+      try {
+        await flushSession(sessionId, { commit, reason: "flushAll" })
+      } catch (err) {
+        console.warn(
+          `[opencode-plugin] flushAll skipped session ${sessionId}:`,
+          err?.message || err,
+        )
+      }
     }
     await enqueueSave()
   }
@@ -275,14 +311,24 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     const state = sessions.get(opencodeSessionId)
     if (!state) return false
 
-    const added = await flushPendingMessages(opencodeSessionId, state)
-    if (commit && config.autoCapture) {
-      await commitOvSession(state.ovSessionId, { force: true, reason })
-    } else if (added > 0) {
-      await maybeCommitByThreshold(state)
-    }
-    await enqueueSave()
-    return true
+    // Overlapping flushes of one session (e.g. session.idle and dispose) must
+    // not send the same pending messages twice.
+    const run = (state.flushChain ?? Promise.resolve()).then(async () => {
+      const added = await flushPendingMessages(opencodeSessionId, state)
+      if (commit && isCaptureEnabled(config)) {
+        const result = await commitOvSession(state.ovSessionId, { force: true, reason })
+        // Server lost the session (reset/reinstall); drop the stale mapping.
+        if (result.status === "not_found" && sessions.get(opencodeSessionId) === state) {
+          sessions.delete(opencodeSessionId)
+        }
+      } else if (added > 0) {
+        await maybeCommitByThreshold(state)
+      }
+      await enqueueSave()
+      return true
+    })
+    state.flushChain = run.catch(() => {})
+    return run
   }
 
   async function commitSession(sessionId, opencodeSessionId, abortSignal) {
@@ -295,6 +341,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   return {
     init,
+    waitForBackground,
     handleEvent,
     getMappedSessionId,
     commitSession,
@@ -303,7 +350,10 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   function createSessionState(opencodeSessionId, event = {}) {
-    const parentId = event?.properties?.info?.parentID ?? event?.properties?.parentID ?? event?.parentID ?? ""
+    const isSessionEvent = typeof event?.type === "string" && event.type.startsWith("session.")
+    const parentId = isSessionEvent
+      ? (event?.properties?.info?.parentID ?? event?.properties?.parentID ?? event?.parentID ?? "")
+      : ""
     const ovSessionId = parentId
       ? deriveHarnessSessionId("oc-", parentId, `subagent-${opencodeSessionId}`)
       : deriveHarnessSessionId("oc-", opencodeSessionId)
@@ -360,25 +410,24 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!role) return null
     if (role === "assistant" && !config.captureAssistantTurns) return null
 
-    const rawText = partsRaw
-      .map((part) => extractTextFromPayload(part, { toolMaxChars: config.captureToolMaxChars }))
-      .filter(Boolean)
-      .join("\n\n")
-    const captureParts = partsRaw.flatMap((part) => extractPartsFromPayload(part, {
-      toolMaxChars: config.captureToolMaxChars,
-    }))
-    const decision = shouldCaptureText(rawText, role, config)
-    if (!decision.shouldCapture && captureParts.length === 0) return null
-    const body = captureParts.length > 0
-      ? { role, parts: captureParts }
-      : { role, content: decision.text }
+    const shaped = shapeCapturePayload({ role, content: partsRaw }, role, config)
+    const toolParts = shaped.parts.filter((part) => part.type !== "text")
+    if (shaped.dropped || (!shaped.text && toolParts.length === 0)) return null
+    const body = toolParts.length > 0
+      ? { role, parts: [
+        ...(shaped.text && shaped.parts.some((part) => part.type === "text")
+          ? [{ type: "text", text: shaped.text }]
+          : []),
+        ...toolParts,
+      ] }
+      : { role, content: shaped.text }
     const peerId = effectivePeerId(config)
     if (peerId) body.peer_id = peerId
     return body
   }
 
   async function flushPendingMessages(opencodeSessionId, state) {
-    if (!config.autoCapture) return 0
+    if (!isCaptureEnabled(config)) return 0
     const toSend = []
     for (const [messageId, message] of state.messages.entries()) {
       if (message.captured) continue
@@ -445,7 +494,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
-    const body = { keep_recent_count: config.commitKeepRecentCount }
+    const body = { keep_recent_count: 0 }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -472,6 +521,14 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         status: res.status,
       })
       return { status: "queued" }
+    }
+    if (res.status === 404) {
+      log("WARN", "session", "OpenViking session not found", {
+        openviking_session: ovSessionId,
+        reason,
+        trace_id: res.traceId,
+      })
+      return { status: "not_found" }
     }
     log("ERROR", "session", "Failed to commit OpenViking session", {
       openviking_session: ovSessionId,

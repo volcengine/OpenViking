@@ -86,28 +86,32 @@ def _raise_legacy_exception(error: Dict[str, Any]) -> None:
     exc_class = ERROR_CODE_TO_EXCEPTION.get(code, OpenVikingError)
 
     if exc_class == OpenVikingError:
-        raise exc_class(message, code=code, details=details)
-    if exc_class in (
+        exception = exc_class(message, code=code, details=details)
+    elif exc_class in (
         InvalidArgumentError,
         FailedPreconditionError,
         ResourceExhaustedError,
         AbortedError,
         UnimplementedError,
     ):
-        raise exc_class(message, details=details)
-    if exc_class == InvalidURIError:
+        exception = exc_class(message, details=details)
+    elif exc_class == InvalidURIError:
         uri = details.get("uri", "") if details else ""
         reason = details.get("reason", "") if details else ""
-        raise exc_class(uri, reason)
-    if exc_class == NotFoundError:
+        exception = exc_class(uri, reason)
+    elif exc_class == NotFoundError:
         resource = details.get("resource", "") if details else ""
         resource_type = details.get("type", "resource") if details else "resource"
-        raise exc_class(resource, resource_type)
-    if exc_class == AlreadyExistsError:
+        exception = exc_class(resource, resource_type)
+    elif exc_class == AlreadyExistsError:
         resource = details.get("resource", "") if details else ""
         resource_type = details.get("type", "resource") if details else "resource"
-        raise exc_class(resource, resource_type)
-    raise exc_class(message)
+        exception = exc_class(resource, resource_type)
+    else:
+        exception = exc_class(message)
+    if details is not None:
+        exception.details.update(details)
+    raise exception
 
 
 class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
@@ -133,76 +137,12 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
             if len(args) <= timeout_index and not _timeout_configured_outside_call():
                 kwargs["timeout"] = 180.0
         super().__init__(*args, **kwargs)
-
-    async def initialize(self) -> None:
-        # The upstream SDK uses httpx defaults (max_connections=100). High-parallel
-        # tau2 rollouts can exceed that from one shared client and hit PoolTimeout
-        # while waiting for a free connection, so raise the pool ceiling.
-        headers: Dict[str, str] = {}
-        if getattr(self, "_api_key", None):
-            headers["X-API-Key"] = self._api_key
-        if getattr(self, "_account", None):
-            headers["X-OpenViking-Account"] = self._account
-        if getattr(self, "_user_id", None):
-            headers["X-OpenViking-User"] = self._user_id
-        if getattr(self, "_actor_peer_id", None):
-            headers["X-OpenViking-Actor-Peer"] = self._actor_peer_id
-        headers.update(getattr(self, "_extra_headers", {}) or {})
-
-        max_connections = 512
-        max_keepalive = 128
-        self._http = httpx.AsyncClient(
-            base_url=self._url,
-            headers=headers,
-            timeout=self._timeout,
-            params={"profile": "1"} if self._profile_enabled else None,
-            limits=httpx.Limits(
-                max_connections=max_connections,
-                max_keepalive_connections=max_keepalive,
-            ),
-        )
-        observer_cls = getattr(import_openviking_sdk().client, "_HTTPObserver", None)
-        if observer_cls is not None:
-            self._observer = observer_cls(self)
+        # High-parallel tau2 rollouts can exceed httpx defaults from one shared
+        # client and hit PoolTimeout while waiting for a free connection.
+        self._http_limits = httpx.Limits(max_connections=512, max_keepalive_connections=128)
 
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         _raise_legacy_exception(error)
-
-    async def add_message(
-        self,
-        session_id: str,
-        role: str,
-        content: str | None = None,
-        parts: list[dict] | None = None,
-        created_at: str | None = None,
-        peer_id: str | None = None,
-        telemetry: Any = False,
-        turn_id: str | None = None,
-        message_kind: str | None = None,
-        source_message_ids: list[str] | None = None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"role": role}
-        if parts is not None:
-            payload["parts"] = parts
-        elif content is not None:
-            payload["content"] = content
-        else:
-            raise ValueError("Either content or parts must be provided")
-        optional = {
-            "created_at": created_at,
-            "peer_id": peer_id,
-            "turn_id": turn_id,
-            "message_kind": message_kind,
-            "source_message_ids": source_message_ids,
-        }
-        payload.update({key: value for key, value in optional.items() if value is not None})
-        if telemetry is not False:
-            payload["telemetry"] = telemetry
-        session_path = self._path_segment(session_id)
-        response = await self._request(
-            "POST", f"/api/v1/sessions/{session_path}/messages", json=payload
-        )
-        return self._handle_response_data(response).get("result", {})
 
     async def update_session_config(
         self,
@@ -233,6 +173,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
         telemetry: Any = False,
         *,
         keep_recent_count: int = 0,
+        enable_working_memory: bool | None = None,
         retention_mode: str | None = None,
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
@@ -245,6 +186,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
             "telemetry": telemetry,
         }
         optional = {
+            "enable_working_memory": enable_working_memory,
             "retention_mode": retention_mode,
             "keep_recent_turn_count": keep_recent_turn_count,
             "retained_message_token_budget": retained_message_token_budget,
@@ -266,34 +208,6 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._async_client = AsyncHTTPClient(*args, **kwargs)
-
-    def add_message(
-        self,
-        session_id: str,
-        role: str,
-        content: str | None = None,
-        parts: list[dict] | None = None,
-        created_at: str | None = None,
-        peer_id: str | None = None,
-        telemetry: Any = False,
-        turn_id: str | None = None,
-        message_kind: str | None = None,
-        source_message_ids: list[str] | None = None,
-    ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.add_message(
-                session_id,
-                role,
-                content=content,
-                parts=parts,
-                created_at=created_at,
-                peer_id=peer_id,
-                telemetry=telemetry,
-                turn_id=turn_id,
-                message_kind=message_kind,
-                source_message_ids=source_message_ids,
-            )
-        )
 
     def update_session_config(
         self,
@@ -317,6 +231,7 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
         telemetry: Any = False,
         *,
         keep_recent_count: int = 0,
+        enable_working_memory: bool | None = None,
         retention_mode: str | None = None,
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
@@ -328,6 +243,7 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
                 session_id,
                 telemetry=telemetry,
                 keep_recent_count=keep_recent_count,
+                enable_working_memory=enable_working_memory,
                 retention_mode=retention_mode,
                 keep_recent_turn_count=keep_recent_turn_count,
                 retained_message_token_budget=retained_message_token_budget,

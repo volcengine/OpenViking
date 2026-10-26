@@ -1,27 +1,66 @@
 ## Step 1: Install
 
-Copy the API key:
+1. Install the OpenViking plugin:
 
-{{OPENVIKING_API_KEY_BLOCK}}
+   ```bash
+   openclaw plugins install clawhub:@openviking/openclaw-plugin
+   ```
 
-```bash
-openclaw plugins install clawhub:@openviking/openclaw-plugin
-openclaw openviking setup --base-url {{OPENVIKING_BASE_URL}} --api-key <API-key>
-openclaw gateway restart
-```
+2. Run the setup wizard. Enter `{{OPENVIKING_BASE_URL}}` as the service URL and the API key provided on this page:
+
+   ```bash
+   openclaw openviking setup
+   ```
+
+   Or configure it in one step, with the key in `OPENVIKING_API_KEY`:
+
+   ```bash
+   openclaw openviking setup --base-url {{OPENVIKING_BASE_URL}} --api-key "$OPENVIKING_API_KEY"
+   ```
+
+3. Configure `peer_role`: `peer_role` identifies the type of conversation participant. It is not a permission role. `assistant` represents agents, tools, or models; `sender` represents message senders (the legacy value `person` remains an alias). After the setup above, `peer_role` defaults to `none`. To change `peer_role`, run:
+
+   ```bash
+   openclaw openviking setup --reconfigure
+   ```
+
+4. Restart the Gateway to apply the configuration:
+
+   ```bash
+   openclaw gateway restart
+   ```
 
 ## Step 2: Verify
 
-```bash
-openclaw openviking status
-```
+1. Check the integration status in your terminal:
+
+   ```bash
+   openclaw openviking status
+   ```
+
+2. A result similar to the following means the integration is successful:
+
+   ```text
+   🦣 OpenViking Plugin Status
+
+     Status: Configured
+     mode:      remote
+     baseUrl:   `https://api.vikingdb.cn-beijing.volces.com/openviking`
+     apiKey:    set
+     peer_role: none
+     accountId: not set
+     userId:    not set
+     slot:      active
+
+     ✓ Server reachable (version: v0.x.xx.x)
+   ```
 
 ## Troubleshoot
 
 | Problem | Fix |
 |---|---|
 | Plugin not active | Re-run Install, then `openclaw gateway restart` |
-| 401 / 403 | Paste the API key again |
+| 401 / 403 | Refresh credentials |
 
 ## Reference
 

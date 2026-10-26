@@ -1,28 +1,29 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tests for APIKeyManager (openviking/server/api_keys.py)."""
+"""Public account and credential contracts through APIKeyManager."""
 
 import asyncio
 import hashlib
 import uuid
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 
-from openviking.pyagfs.exceptions import AGFSNotFoundError
+from openviking.pyagfs import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.api_keys.legacy import ACCOUNTS_PATH
 from openviking.server.identity import Role
-from openviking.service.core import OpenVikingService
+from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
 )
-from openviking_cli.session.user_id import UserIdentifier
+from tests.server.account_store_fakes import InMemoryAGFS
 
 
 def _uid() -> str:
@@ -37,23 +38,23 @@ def _seed_secret(user_id: str, seed: str) -> str:
 ROOT_KEY = "test-root-key-abcdef1234567890abcdef1234567890"
 
 
-@pytest_asyncio.fixture(scope="function")
-async def manager_service(temp_dir):
-    """OpenVikingService for APIKeyManager tests."""
-    svc = OpenVikingService(
-        path=str(temp_dir / "mgr_data"), user=UserIdentifier.the_default_user("mgr_user")
-    )
-    await svc.initialize()
-    yield svc
-    await svc.close()
+@pytest.fixture
+def manager_service():
+    return SimpleNamespace(viking_fs=SimpleNamespace(agfs=InMemoryAGFS()))
 
 
 @pytest_asyncio.fixture(scope="function")
 async def manager(manager_service):
     """Fresh APIKeyManager instance, loaded."""
-    mgr = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    mgr = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr.load()
-    return mgr
+    yield mgr
+    await mgr.close()
+
+
+async def _list_users(manager, account_id, **filters):
+    page = await manager.list_users_page(account_id, **filters)
+    return page["users"]
 
 
 # ---- Root key tests ----
@@ -61,22 +62,17 @@ async def manager(manager_service):
 
 async def test_resolve_root_key(manager: APIKeyManager):
     """Root key should resolve to ROOT role."""
-    identity = manager.resolve(ROOT_KEY)
+    identity = await manager.resolve_identity(ROOT_KEY)
     assert identity.role == Role.ROOT
     assert identity.account_id is None
     assert identity.user_id is None
 
 
-async def test_resolve_wrong_key_raises(manager: APIKeyManager):
+@pytest.mark.parametrize("key", ["wrong-key", ""])
+async def test_resolve_invalid_key_raises(manager: APIKeyManager, key):
     """Invalid key should raise UnauthenticatedError."""
     with pytest.raises(UnauthenticatedError):
-        manager.resolve("wrong-key")
-
-
-async def test_resolve_empty_key_raises(manager: APIKeyManager):
-    """Empty key should raise UnauthenticatedError."""
-    with pytest.raises(UnauthenticatedError):
-        manager.resolve("")
+        await manager.resolve_identity(key)
 
 
 # ---- Account lifecycle tests ----
@@ -84,17 +80,19 @@ async def test_resolve_empty_key_raises(manager: APIKeyManager):
 
 async def test_create_account(manager: APIKeyManager):
     """create_account should create workspace + first admin user."""
+    from openviking.server.api_keys import parse_api_key
+
     acct = _uid()
     key = await manager.create_account(acct, "alice")
-    assert isinstance(key, str)
-    # New format: base64url(account_id).base64url(user_id).base64url(secret)
-    # Length varies based on account_id and user_id, but should have two dots
-    assert key.count(".") == 2
+    account_id, user_id, secret = parse_api_key(key)
+    assert (account_id, user_id) == (acct, "alice")
+    assert secret
 
-    identity = manager.resolve(key)
+    identity = await manager.resolve_identity(key)
     assert identity.role == Role.ADMIN
     assert identity.account_id == acct
     assert identity.user_id == "alice"
+    assert await manager.get_registered_user_role(acct, "alice") == Role.ADMIN
 
 
 async def test_create_duplicate_account_raises(manager: APIKeyManager):
@@ -105,40 +103,189 @@ async def test_create_duplicate_account_raises(manager: APIKeyManager):
         await manager.create_account(acct, "bob")
 
 
-async def test_create_account_rolls_back_when_user_persistence_fails(
-    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+async def test_ensure_trusted_identities_creates_missing_users_once(
+    manager: APIKeyManager,
 ):
-    """create_account should not leave partial in-memory state after a write failure."""
+    """Trusted identity batches add only missing users and never mint keys."""
+    acme = _uid()
+    globex = _uid()
+
+    result = await manager.ensure_trusted_identities({acme: {"alice", "bob"}, globex: {"eve"}})
+
+    assert result == {"created_accounts": 2, "created_users": 3}
+    assert await manager.get_registered_user_role(acme, "alice") == Role.USER
+    assert await _list_users(manager, acme, expose_key=True) == [
+        {"user_id": "alice", "role": "user"},
+        {"user_id": "bob", "role": "user"},
+    ]
+
+    repeat = await manager.ensure_trusted_identities({acme: {"alice", "bob"}, globex: {"eve"}})
+
+    assert repeat == {"created_accounts": 0, "created_users": 0}
+
+
+async def test_management_writer_preserves_a_trusted_identity_from_another_instance(
+    manager: APIKeyManager, manager_service
+):
+    """A stale manager write must merge, rather than replace, a trusted registry update."""
     acct = _uid()
-    original_save_users_json = manager._legacy._save_users_json
+    await manager.create_account(acct, "admin")
 
-    async def _fail_save_users_json(account_id: str) -> None:
-        if account_id == acct:
-            raise AGFSNotFoundError(account_id)
-        await original_save_users_json(account_id)
+    replica = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
 
-    monkeypatch.setattr(manager._legacy, "_save_users_json", _fail_save_users_json)
+    await manager.ensure_trusted_identities({acct: {"trusted-user"}})
+    assert await replica.has_user(acct, "trusted-user") is False
 
-    with pytest.raises(AGFSNotFoundError):
-        await manager.create_account(acct, "alice")
+    await replica.register_user(acct, "managed-user")
 
-    assert acct not in manager._legacy._accounts
+    verifier = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert {item["user_id"] for item in await _list_users(verifier, acct)} == {
+        "admin",
+        "trusted-user",
+        "managed-user",
+    }
 
-    monkeypatch.setattr(manager._legacy, "_save_users_json", original_save_users_json)
-    retry_key = await manager.create_account(acct, "alice")
-    assert manager.resolve(retry_key).account_id == acct
+
+async def test_concurrent_management_registration_of_same_user_rejects_second_writer(
+    manager: APIKeyManager, manager_service
+):
+    """The second stale instance must not replace the first user's key."""
+    acct = _uid()
+    await manager.create_account(acct, "admin")
+    replica = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+
+    first_key = await manager.register_user(acct, "alice")
+
+    with pytest.raises(AlreadyExistsError):
+        await replica.register_user(acct, "alice")
+
+    verifier = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert (await verifier.resolve_identity(first_key)).user_id == "alice"
+
+
+async def test_management_registration_does_not_replace_a_trusted_user(
+    manager: APIKeyManager, manager_service
+):
+    """A stale management writer must reject an identity created by trusted flush."""
+    acct = _uid()
+    await manager.create_account(acct, "admin")
+    replica = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+
+    await manager.ensure_trusted_identities({acct: {"alice"}})
+
+    with pytest.raises(AlreadyExistsError):
+        await replica.register_user(acct, "alice")
+
+    verifier = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert await _list_users(verifier, acct, expose_key=False) == [
+        {"user_id": "admin", "role": "admin"},
+        {"user_id": "alice", "role": "user"},
+    ]
+
+
+async def test_management_account_writer_preserves_a_trusted_account_from_another_instance(
+    manager: APIKeyManager, manager_service
+):
+    """A stale account write must retain accounts registered by another instance."""
+    replica = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+    trusted_account = _uid()
+    managed_account = _uid()
+
+    await manager.ensure_trusted_identities({trusted_account: {"trusted-user"}})
+    await replica.create_account(managed_account, "managed-admin")
+
+    verifier = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert {item["account_id"] for item in await verifier.list_accounts()} >= {
+        trusted_account,
+        managed_account,
+    }
+
+
+async def test_concurrent_management_creation_of_same_account_rejects_second_writer(
+    manager: APIKeyManager, manager_service
+):
+    """A stale instance cannot create a second admin for an existing account."""
+    replica = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+    account_id = _uid()
+
+    first_key = await manager.create_account(account_id, "alice")
+
+    with pytest.raises(AlreadyExistsError):
+        await replica.create_account(account_id, "bob")
+
+    verifier = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert (await verifier.resolve_identity(first_key)).user_id == "alice"
+    assert await _list_users(verifier, account_id, expose_key=False) == [
+        {"user_id": "alice", "role": "admin"}
+    ]
 
 
 async def test_delete_account(manager: APIKeyManager):
-    """Deleting account should invalidate all its user keys."""
+    """The durable account fence revokes keys until its owner finishes."""
+    from openviking_cli.exceptions import FailedPreconditionError
+
     acct = _uid()
     key = await manager.create_account(acct, "alice")
-    identity = manager.resolve(key)
-    assert identity.account_id == acct
+    assert (await manager.resolve_identity(key)).account_id == acct
+    deletion, created = await manager.begin_deletion(
+        acct, None, task_id="delete-account-1", owner_account_id="_system", owner_user_id="root"
+    )
+    assert created
+    with pytest.raises(UnauthenticatedError, match="Invalid API key"):
+        await manager.resolve_identity(key)
+    assert await manager.get_user_key_fingerprint(acct, "alice") is None
+    with pytest.raises(AlreadyExistsError):
+        await manager.create_account(acct, "bob")
+    with pytest.raises(FailedPreconditionError):
+        await manager.register_user(acct, "bob")
+    with pytest.raises(FailedPreconditionError):
+        await manager.regenerate_key(acct, "alice")
+    await manager.ensure_trusted_identities({acct: {"trusted-user"}})
+    assert not await manager.has_user(acct, "trusted-user")
+
+    assert await manager.get_deletion(acct) == deletion
+    with pytest.raises(UnauthenticatedError, match="Invalid API key"):
+        await manager.resolve_identity(key)
+    assert await manager.finish_deletion(acct, None, "stale-task") is False
+    replacement = await manager.replace_deletion_task(
+        acct,
+        None,
+        expected_task_id="delete-account-1",
+        task_id="delete-account-2",
+        owner_account_id="_system",
+        owner_user_id="root",
+    )
+    assert replacement["task_id"] == "delete-account-2"
+    assert await manager.finish_deletion(acct, None, "delete-account-1") is False
+    assert await manager.finish_deletion(acct, None, "delete-account-2") is True
+    assert not await manager.has_user(acct, "alice")
+    assert await manager.get_deletion(acct) is None
+
+
+async def test_recreated_account_does_not_restore_deleted_users(manager: APIKeyManager):
+    """A same-name account starts with only its newly created admin."""
+    acct = _uid()
+    old_key = await manager.create_account(acct, "old-admin")
 
     await manager.delete_account(acct)
+    new_key = await manager.create_account(acct, "new-admin")
+
     with pytest.raises(UnauthenticatedError):
-        manager.resolve(key)
+        await manager.resolve_identity(old_key)
+    assert (await manager.resolve_identity(new_key)).user_id == "new-admin"
+    assert await _list_users(manager, acct, expose_key=False) == [
+        {"user_id": "new-admin", "role": "admin"}
+    ]
 
 
 async def test_delete_nonexistent_account_raises(manager: APIKeyManager):
@@ -149,8 +296,53 @@ async def test_delete_nonexistent_account_raises(manager: APIKeyManager):
 
 async def test_default_account_exists(manager: APIKeyManager):
     """Default account should be created on load."""
-    accounts = manager.get_accounts()
+    accounts = await manager.list_accounts()
     assert any(a["account_id"] == "default" for a in accounts)
+
+
+@pytest.mark.parametrize("operation", ["create", "delete", "trusted"])
+async def test_account_mutation_preserves_registry_when_baseline_is_missing(
+    manager: APIKeyManager, manager_service, monkeypatch: pytest.MonkeyPatch, operation: str
+):
+    survivor = _uid()
+    key = await manager.create_account(survivor, "alice")
+    target = _uid()
+    if operation == "delete":
+        await manager.create_account(target, "bob")
+    agfs = manager_service.viking_fs.agfs
+    read = agfs.read
+
+    def missing_registry(path, *args, **kwargs):
+        if path == "/local/_system/accounts.json":
+            raise AGFSNotFoundError("injected missing registry read")
+        return read(path, *args, **kwargs)
+
+    async def mutate():
+        if operation == "create":
+            return await manager.create_account(target, "bob")
+        if operation == "delete":
+            return await manager.delete_account(target)
+        return await manager.ensure_trusted_identities({target: {"bob"}})
+
+    with monkeypatch.context() as patch:
+        patch.setattr(agfs, "read", missing_registry)
+        with pytest.raises(FailedPreconditionError, match="Account registry"):
+            await mutate()
+    assert (await manager.resolve_identity(key)).account_id == survivor
+
+    # Check durable state both after failure and after a successful retry.
+    for retried in (False, True):
+        if retried:
+            await mutate()
+        verifier = build_api_key_manager(ROOT_KEY, manager_service.viking_fs)
+        await verifier.load()
+        try:
+            assert (await verifier.resolve_identity(key)).account_id == survivor
+            target_exists = (operation == "delete") != retried
+            assert await verifier.has_user(target, "bob") == target_exists
+            assert (await verifier.get_account(target) is not None) == target_exists
+        finally:
+            await verifier.close()
 
 
 # ---- User lifecycle tests ----
@@ -158,66 +350,18 @@ async def test_default_account_exists(manager: APIKeyManager):
 
 async def test_register_user(manager: APIKeyManager):
     """register_user should create a user with given role."""
+    from openviking.server.api_keys import parse_api_key
+
     acct = _uid()
     await manager.create_account(acct, "alice")
     key = await manager.register_user(acct, "bob", "user")
+    assert parse_api_key(key)[:2] == (acct, "bob")
 
-    identity = manager.resolve(key)
+    identity = await manager.resolve_identity(key)
     assert identity.role == Role.USER
     assert identity.account_id == acct
     assert identity.user_id == "bob"
-
-
-async def test_concurrent_registry_writes_wait_for_locks(manager: APIKeyManager):
-    first_account = _uid()
-    second_account = _uid()
-    accounts_block = asyncio.Event()
-    original_acquire = manager._legacy._async_agfs.pathlock_acquire_exact
-
-    async def blocked_acquire(path, timeout_secs=10.0, owner_lease_ref=None, *, fs_ctx=None):
-        del owner_lease_ref, fs_ctx
-        if path == ACCOUNTS_PATH:
-            await accounts_block.wait()
-        return await original_acquire(path, timeout_secs=timeout_secs)
-
-    manager._legacy._async_agfs.pathlock_acquire_exact = blocked_acquire
-
-    account_tasks = [
-        asyncio.create_task(manager.create_account(first_account, "alice")),
-        asyncio.create_task(manager.create_account(second_account, "bob")),
-    ]
-    await asyncio.sleep(0.05)
-    assert all(not task.done() for task in account_tasks)
-
-    accounts_block.set()
-    await asyncio.gather(*account_tasks)
-    accounts = await manager._read_json(ACCOUNTS_PATH)
-    assert {first_account, second_account} <= set(accounts["accounts"])
-
-    users_path = f"/local/{first_account}/_system/users.json"
-    users_block = asyncio.Event()
-
-    async def blocked_users_acquire(path, timeout_secs=10.0, owner_lease_ref=None, *, fs_ctx=None):
-        del owner_lease_ref, fs_ctx
-        if path == users_path:
-            await users_block.wait()
-        return await original_acquire(path, timeout_secs=timeout_secs)
-
-    manager._legacy._async_agfs.pathlock_acquire_exact = blocked_users_acquire
-
-    user_tasks = [
-        asyncio.create_task(manager.register_user(first_account, "bob")),
-        asyncio.create_task(manager.register_user(first_account, "carol")),
-    ]
-    await asyncio.sleep(0.05)
-    assert all(not task.done() for task in user_tasks)
-
-    users_block.set()
-    await asyncio.gather(*user_tasks)
-    users = await manager._read_json(users_path)
-    assert set(users["users"]) == {"alice", "bob", "carol"}
-
-    manager._legacy._async_agfs.pathlock_acquire_exact = original_acquire
+    assert await manager.get_registered_user_role(acct, "bob") == Role.USER
 
 
 async def test_register_duplicate_user_raises(manager: APIKeyManager):
@@ -241,7 +385,7 @@ async def test_user_deletion_fence_revokes_key_and_rejects_stale_finish(
     await manager.create_account(acct, "alice")
     bob_key = await manager.register_user(acct, "bob", "user")
 
-    deletion, created = await manager.begin_user_deletion(
+    deletion, created = await manager.begin_deletion(
         acct,
         "bob",
         task_id="delete-1",
@@ -251,19 +395,46 @@ async def test_user_deletion_fence_revokes_key_and_rejects_stale_finish(
 
     assert created is True
     assert deletion["task_id"] == "delete-1"
-    assert manager.is_user_deleting(acct, "bob")
-    with pytest.raises(UnauthenticatedError):
-        manager.resolve(bob_key)
+    assert await manager.get_deletion(acct, "bob") == deletion
+    with pytest.raises(UnauthenticatedError, match="Invalid API key"):
+        await manager.resolve_identity(bob_key)
     with pytest.raises(AlreadyExistsError):
         await manager.register_user(acct, "bob", "user")
-    assert await manager.finish_user_deletion(acct, "bob", "stale") is False
-    assert manager.has_user(acct, "bob")
-    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is True
-    assert not manager.has_user(acct, "bob")
+    assert await manager.finish_deletion(acct, "bob", "stale") is False
+    assert await manager.has_user(acct, "bob")
+    assert await manager.finish_deletion(acct, "bob", "delete-1") is True
+    assert not await manager.has_user(acct, "bob")
 
     new_key = await manager.register_user(acct, "bob", "user")
-    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is False
-    assert manager.resolve(new_key).user_id == "bob"
+    assert await manager.finish_deletion(acct, "bob", "delete-1") is False
+    assert (await manager.resolve_identity(new_key)).user_id == "bob"
+
+
+async def test_account_deletion_fence_overrides_user_deletion_fence(manager: APIKeyManager):
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    await manager.register_user(acct, "bob")
+    user_deletion, user_created = await manager.begin_deletion(
+        acct,
+        "bob",
+        task_id="delete-user",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+    account_deletion, account_created = await manager.begin_deletion(
+        acct,
+        None,
+        task_id="delete-account",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+
+    assert user_created
+    assert account_created
+    assert user_deletion["task_id"] == "delete-user"
+    assert await manager.get_deletion(acct, "bob") == account_deletion
+
+
 async def test_regenerate_key(manager: APIKeyManager):
     """Regenerating key should invalidate old key and return new valid key."""
     acct = _uid()
@@ -275,10 +446,10 @@ async def test_regenerate_key(manager: APIKeyManager):
 
     # Old key invalid
     with pytest.raises(UnauthenticatedError):
-        manager.resolve(old_key)
+        await manager.resolve_identity(old_key)
 
     # New key valid
-    identity = manager.resolve(new_key)
+    identity = await manager.resolve_identity(new_key)
     assert identity.user_id == "bob"
     assert identity.account_id == acct
 
@@ -289,32 +460,32 @@ async def test_get_user_key_fingerprint_changes_on_rotation(manager: APIKeyManag
     await manager.create_account(acct, "alice")
     await manager.register_user(acct, "bob", "user")
 
-    fp1 = manager.get_user_key_fingerprint(acct, "bob")
+    fp1 = await manager.get_user_key_fingerprint(acct, "bob")
     assert fp1 is not None
     assert len(fp1) == 64  # sha256 hex
 
     # Same call should be deterministic.
-    assert manager.get_user_key_fingerprint(acct, "bob") == fp1
+    assert await manager.get_user_key_fingerprint(acct, "bob") == fp1
 
     # Rotation flips the stored value → fp must change.
     await manager.regenerate_key(acct, "bob")
-    fp2 = manager.get_user_key_fingerprint(acct, "bob")
+    fp2 = await manager.get_user_key_fingerprint(acct, "bob")
     assert fp2 is not None
     assert fp2 != fp1
 
     # Deletion fence immediately removes the fingerprint.
-    await manager.begin_user_deletion(
+    await manager.begin_deletion(
         acct,
         "bob",
         task_id="delete-1",
         owner_account_id=acct,
         owner_user_id="alice",
     )
-    assert manager.get_user_key_fingerprint(acct, "bob") is None
+    assert await manager.get_user_key_fingerprint(acct, "bob") is None
 
 
 async def test_get_user_key_fingerprint_unknown_returns_none(manager: APIKeyManager):
-    assert manager.get_user_key_fingerprint("nope", "nobody") is None
+    assert await manager.get_user_key_fingerprint("nope", "nobody") is None
 
 
 async def test_set_role(manager: APIKeyManager):
@@ -323,23 +494,23 @@ async def test_set_role(manager: APIKeyManager):
     await manager.create_account(acct, "alice")
     bob_key = await manager.register_user(acct, "bob", "user")
 
-    assert manager.resolve(bob_key).role == Role.USER
+    assert (await manager.resolve_identity(bob_key)).role == Role.USER
 
     await manager.set_role(acct, "bob", "admin")
-    assert manager.resolve(bob_key).role == Role.ADMIN
+    assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
 
     with pytest.raises(PermissionDeniedError, match="server.root_api_key"):
         await manager.set_role(acct, "bob", Role.ROOT)
-    assert manager.resolve(bob_key).role == Role.ADMIN
+    assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
 
 
 async def test_get_users(manager: APIKeyManager):
-    """get_users should list all users in an account."""
+    """list_users should list all users in an account."""
     acct = _uid()
     await manager.create_account(acct, "alice")
     await manager.register_user(acct, "bob", "user")
 
-    users = manager.get_users(acct)
+    users = await _list_users(manager, acct)
     user_ids = {u["user_id"] for u in users}
     assert user_ids == {"alice", "bob"}
 
@@ -347,310 +518,157 @@ async def test_get_users(manager: APIKeyManager):
     assert roles["alice"] == "admin"
     assert roles["bob"] == "user"
 
-    await manager.begin_user_deletion(
+    await manager.begin_deletion(
         acct,
         "bob",
         task_id="delete-bob",
         owner_account_id=acct,
         owner_user_id="alice",
     )
-    users = manager.get_users(acct)
+    users = await _list_users(manager, acct)
     assert {u["user_id"] for u in users} == {"alice"}
 
 
-# ---- Persistence tests ----
+async def test_get_users_name_filter(manager: APIKeyManager):
+    """list_users name_filter uses fnmatch wildcard matching against user IDs."""
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    await manager.register_user(acct, "alan", "user")
+    await manager.register_user(acct, "bob", "user")
+
+    # Wildcard substring match
+    matched = {u["user_id"] for u in await _list_users(manager, acct, name_filter="al*")}
+    assert matched == {"alice", "alan"}
+
+    # Exact match (no wildcard) only hits the literal ID
+    assert {u["user_id"] for u in await _list_users(manager, acct, name_filter="alice")} == {
+        "alice"
+    }
+
+    # No match
+    assert await _list_users(manager, acct, name_filter="zzz*") == []
+
+    # No filter returns all
+    assert {u["user_id"] for u in await _list_users(manager, acct)} == {"alice", "alan", "bob"}
 
 
-async def test_persistence_across_reload(manager_service):
-    """Keys should survive manager reload from AGFS."""
-    mgr1 = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+async def test_get_accounts_filter(manager: APIKeyManager):
+    """list_accounts supports fnmatch name_filter, mirroring list_users."""
+    prefix = f"acme_{uuid.uuid4().hex[:8]}"
+    first = f"{prefix}_alpha"
+    second = f"{prefix}_beta"
+    other = f"other_{uuid.uuid4().hex[:8]}"
+    await manager.create_account(first, "u1")
+    await manager.create_account(second, "u2")
+    await manager.create_account(other, "u3")
+
+    # Wildcard match returns only the two prefixed accounts
+    matched = {a["account_id"] for a in await manager.list_accounts(name_filter=f"{prefix}*")}
+    assert matched == {first, second}
+
+    # Exact match (no wildcard) hits a single account
+    assert {a["account_id"] for a in await manager.list_accounts(name_filter=first)} == {first}
+
+    # No filter returns all accounts (including the default one)
+    all_ids = {a["account_id"] for a in await manager.list_accounts()}
+    assert {first, second, other} <= all_ids
+
+
+async def test_get_users_pagination_and_ordering(manager: APIKeyManager):
+    """list_users returns users in creation order and honors limit/page."""
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    # Register out of alphabetical order; creation order is alice, dave, bob, carol.
+    await manager.register_user(acct, "dave", "user")
+    await manager.register_user(acct, "bob", "user")
+    await manager.register_user(acct, "carol", "user")
+
+    # No limit -> all users, in creation order.
+    ids = [u["user_id"] for u in await _list_users(manager, acct)]
+    assert ids == ["alice", "dave", "bob", "carol"]
+
+    # First page of 2 (creation order).
+    page1 = [u["user_id"] for u in await _list_users(manager, acct, limit=2, page=1)]
+    assert page1 == ["alice", "dave"]
+
+    # Second page of 2 (creation order).
+    page2 = [u["user_id"] for u in await _list_users(manager, acct, limit=2, page=2)]
+    assert page2 == ["bob", "carol"]
+
+    # Page past the end is empty.
+    assert await _list_users(manager, acct, limit=2, page=3) == []
+
+
+async def test_get_accounts_pagination_and_ordering(manager: APIKeyManager):
+    """list_accounts returns accounts in creation order and honors limit/page."""
+    prefix = f"page_{uuid.uuid4().hex[:8]}"
+    # Creation order matches this list.
+    ids = [f"{prefix}_{suffix}" for suffix in ("delta", "alpha", "charlie", "bravo")]
+    for account_id in ids:
+        await manager.create_account(account_id, "u")
+
+    # No limit -> all matches, in creation order.
+    got = [a["account_id"] for a in await manager.list_accounts(name_filter=f"{prefix}*")]
+    assert got == ids
+
+    # First page of 2 (creation order).
+    page1 = [
+        a["account_id"]
+        for a in await manager.list_accounts(name_filter=f"{prefix}*", limit=2, page=1)
+    ]
+    assert page1 == ids[:2]
+
+    # Second page of 2 (creation order).
+    page2 = [
+        a["account_id"]
+        for a in await manager.list_accounts(name_filter=f"{prefix}*", limit=2, page=2)
+    ]
+    assert page2 == ids[2:]
+
+    # Page past the end is empty.
+    assert await manager.list_accounts(name_filter=f"{prefix}*", limit=2, page=3) == []
+
+
+async def test_user_and_group_persistence_across_reload(manager_service):
+    """Reload preserves keys/groups, while user deletion removes membership."""
+    mgr1 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr1.load()
 
     acct = _uid()
     key = await mgr1.create_account(acct, "alice")
+    await mgr1.register_user(acct, "bob")
+    created_group = await mgr1.create_group(acct, "engineering")
+    assert created_group == {"group_id": "engineering", "member_count": 0}
+    group_id = created_group["group_id"]
+    assert await mgr1.add_group_member(acct, group_id, "bob") is True
+    assert await mgr1.add_group_member(acct, group_id, "bob") is True
+    assert await mgr1.get_group_members(acct, group_id) == ["bob"]
 
-    # Create new manager instance and reload
-    mgr2 = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    mgr2 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr2.load()
 
-    identity = mgr2.resolve(key)
+    identity = await mgr2.resolve_identity(key)
     assert identity.account_id == acct
     assert identity.user_id == "alice"
     assert identity.role == Role.ADMIN
+    assert await mgr2.get_user_group_ids(acct, "bob") == (group_id,)
 
-
-async def test_legacy_account_without_settings_loads_without_namespace_settings(manager_service):
-    """Legacy accounts no longer create account settings during load."""
-    acct = _uid()
-    created_at = "2026-04-16T00:00:00+00:00"
-
-    seed_mgr = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await seed_mgr._write_json(
-        "/local/_system/accounts.json", {"accounts": {acct: {"created_at": created_at}}}
+    await mgr2.begin_deletion(
+        acct,
+        "bob",
+        task_id="delete-bob",
+        owner_account_id=acct,
+        owner_user_id="alice",
     )
-    await seed_mgr._write_json(
-        f"/local/{acct}/_system/users.json",
-        {"users": {"alice": {"role": "admin", "key": "legacy-key-alice"}}},
-    )
+    await mgr2.finish_deletion(acct, "bob", "delete-bob")
 
-    mgr = APIKeyManager(
-        root_key=ROOT_KEY,
-        viking_fs=manager_service.viking_fs,
-    )
-    await mgr.load()
-
-    identity = mgr.resolve("legacy-key-alice")
-    assert identity.account_id == acct
-    assert identity.user_id == "alice"
-
-    settings = await mgr._read_json(f"/local/{acct}/_system/setting.json")
-    assert settings is None
-
-
-# ---- Argon2id hashing tests ----
-
-
-async def test_create_account_with_argon2id_hashing_enabled(manager_service):
-    """create_account with api_key_hashing_enabled=True should create hashed keys."""
-    acct = _uid()
-    mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
-    )
-    await mgr.load()
-
-    key = await mgr.create_account(acct, "alice")
-    stored_hash = _get_stored_hash(mgr, acct, "alice")
-
-    _print_api_key_info("创建账号", acct, "alice", key, stored_hash)
-
-    assert isinstance(key, str)
-    assert key.count(".") == 2  # New format has two dots
-    _assert_argon2_hash(stored_hash)
-
-    identity = mgr.resolve(key)
-    assert identity.role == Role.ADMIN
-    assert identity.account_id == acct
-    assert identity.user_id == "alice"
-
-
-async def test_register_user_with_argon2id_hashing_enabled(manager_service):
-    """register_user with api_key_hashing_enabled=True should create hashed keys."""
-    acct = _uid()
-    mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
-    )
-    await mgr.load()
-
-    await mgr.create_account(acct, "alice")
-    key = await mgr.register_user(acct, "bob", "user")
-    stored_hash = _get_stored_hash(mgr, acct, "bob")
-
-    _print_api_key_info("注册用户", acct, "bob", key, stored_hash, role="user")
-    _assert_argon2_hash(stored_hash)
-
-    identity = mgr.resolve(key)
-    assert identity.role == Role.USER
-    assert identity.account_id == acct
-    assert identity.user_id == "bob"
-
-
-async def test_regenerate_key_with_argon2id_hashing_enabled(manager_service):
-    """regenerate_key with api_key_hashing_enabled=True should create new hashed key."""
-    acct = _uid()
-    mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
-    )
-    await mgr.load()
-
-    await mgr.create_account(acct, "alice")
-    old_key = await mgr.register_user(acct, "bob", "user")
-    old_stored_hash = _get_stored_hash(mgr, acct, "bob")
-
-    new_key = await mgr.regenerate_key(acct, "bob")
-    new_stored_hash = _get_stored_hash(mgr, acct, "bob")
-
-    _print_key_regeneration_info(
-        "重新生成密钥", acct, "bob", old_key, old_stored_hash, new_key, new_stored_hash
-    )
-
-    assert new_key != old_key
-    assert new_stored_hash != old_stored_hash
-    _assert_argon2_hash(new_stored_hash)
-
-    # Old key invalid
-    with pytest.raises(UnauthenticatedError):
-        mgr.resolve(old_key)
-
-    # New key valid
-    identity = mgr.resolve(new_key)
-    assert identity.user_id == "bob"
-    assert identity.account_id == acct
-
-
-async def test_migrate_plaintext_keys_to_argon2id_hashing(manager_service):
-    """Keys created with api_key_hashing disabled should be migrated when api_key_hashing is enabled."""
-    acct = _uid()
-
-    # First, create a key with api_key_hashing disabled
-    mgr1 = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
-    )
-    await mgr1.load()
-    key = await mgr1.create_account(acct, "alice")
-
-    # Now, reload with api_key_hashing enabled - should migrate the key
-    mgr2 = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
-    )
-    await mgr2.load()
-
-    # Key should still work
-    identity = mgr2.resolve(key)
-    assert identity.account_id == acct
-    assert identity.user_id == "alice"
-
-
-async def test_persistence_with_argon2id_hashing_enabled(manager_service):
-    """Hashed keys should survive manager reload from AGFS."""
-    mgr1 = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
-    )
-    await mgr1.load()
-
-    acct = _uid()
-    key = await mgr1.create_account(acct, "alice")
-    stored_hash1 = _get_stored_hash(mgr1, acct, "alice")
-
-    _print_api_key_info("持久化验证", acct, "alice", key, stored_hash1)
-    print("正在重新加载管理器...\n")
-
-    # Create new manager instance and reload
-    mgr2 = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
-    )
-    await mgr2.load()
-
-    stored_hash2 = _get_stored_hash(mgr2, acct, "alice")
-
-    print(f"\n{'=' * 80}")
-    print("[持久化验证 - 重新加载后]")
-    print(f"重新加载后存储的 Argon2id 哈希值: {stored_hash2}")
-    print(f"哈希值一致: {stored_hash1 == stored_hash2}")
-    print(f"{'=' * 80}\n")
-
-    assert stored_hash1 == stored_hash2
-    _assert_argon2_hash(stored_hash2)
-
-    identity = mgr2.resolve(key)
-    assert identity.account_id == acct
-    assert identity.user_id == "alice"
-    assert identity.role == Role.ADMIN
-
-
-def _print_api_key_info(
-    test_name: str,
-    account_id: str,
-    user_id: str,
-    original_key: str,
-    stored_hash: str,
-    role: str = None,
-) -> None:
-    """打印 API Key 相关信息的辅助函数。"""
-    print(f"\n{'=' * 80}")
-    print(f"[加密测试 - {test_name}]")
-    print(f"账号ID: {account_id}")
-    print(f"用户名: {user_id}")
-    if role:
-        print(f"角色: {role}")
-    print(f"原始 API Key (返回给用户): {original_key}")
-    print(f"存储的 Argon2id 哈希值: {stored_hash}")
-    print(f"原始 Key 长度: {len(original_key)}")
-    print(f"哈希值长度: {len(stored_hash)}")
-    print(f"{'=' * 80}\n")
-
-
-def _print_key_regeneration_info(
-    test_name: str,
-    account_id: str,
-    user_id: str,
-    old_key: str,
-    old_hash: str,
-    new_key: str,
-    new_hash: str,
-) -> None:
-    """打印密钥重新生成信息的辅助函数。"""
-    print(f"\n{'=' * 80}")
-    print(f"[加密测试 - {test_name}]")
-    print(f"账号ID: {account_id}")
-    print(f"用户名: {user_id}")
-    print(f"旧原始 API Key: {old_key}")
-    print(f"旧存储的 Argon2id 哈希值: {old_hash}")
-    print(f"新原始 API Key: {new_key}")
-    print(f"新存储的 Argon2id 哈希值: {new_hash}")
-    print(f"密钥已更换: {new_key != old_key}")
-    print(f"哈希已更换: {new_hash != old_hash}")
-    print(f"{'=' * 80}\n")
-
-
-def _assert_argon2_hash(stored_hash: str) -> None:
-    """验证存储的哈希值是有效的 Argon2id 格式。"""
-    assert stored_hash.startswith("$argon2"), "哈希值必须是 Argon2id 格式"
-
-
-def _get_stored_hash(mgr: APIKeyManager, account_id: str, user_id: str) -> str:
-    """从管理器中获取用户存储的哈希值。"""
-    account_info = mgr._accounts.get(account_id)
-    assert account_info is not None, f"账号 {account_id} 不存在"
-    assert user_id in account_info.users, f"用户 {user_id} 不存在"
-    return account_info.users[user_id]["key"]
+    mgr3 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await mgr3.load()
+    assert await mgr3.get_user_group_ids(acct, "bob") == ()
+    assert await mgr3.get_group_members(acct, group_id) == []
 
 
 # ---- New format API Key tests ----
-
-
-async def test_new_format_key_generation(manager: APIKeyManager):
-    """Test that new keys are generated in the new format with three segments."""
-    from openviking.server.api_keys import is_new_format_key, parse_api_key
-
-    acct = _uid()
-    key = await manager.create_account(acct, "alice")
-
-    # Verify new format
-    assert is_new_format_key(key)
-    assert key.count(".") == 2
-
-    # Verify we can parse identity directly from the key
-    account_id, user_id, secret = parse_api_key(key)
-    assert account_id == acct
-    assert user_id == "alice"
-    assert len(secret) > 0
-
-
-async def test_new_format_key_resolve_fast_path(manager: APIKeyManager):
-    """Test that new format keys use the fast decode path without prefix lookup."""
-    acct = _uid()
-    key = await manager.create_account(acct, "alice")
-
-    # Resolve should work and return correct identity
-    identity = manager.resolve(key)
-    assert identity.role == Role.ADMIN
-    assert identity.account_id == acct
-    assert identity.user_id == "alice"
-
-
-async def test_register_user_generates_new_format(manager: APIKeyManager):
-    """Test that register_user generates keys in new format."""
-    from openviking.server.api_keys import is_new_format_key
-
-    acct = _uid()
-    await manager.create_account(acct, "alice")
-    key = await manager.register_user(acct, "bob", "user")
-
-    assert is_new_format_key(key)
-    identity = manager.resolve(key)
-    assert identity.role == Role.USER
-    assert identity.account_id == acct
-    assert identity.user_id == "bob"
 
 
 async def test_seeded_new_format_keys_are_predictable(manager: APIKeyManager):
@@ -688,161 +706,14 @@ async def test_seeded_register_and_regenerate_key(manager: APIKeyManager):
     assert new_key != old_key
 
     with pytest.raises(UnauthenticatedError):
-        manager.resolve(old_key)
-    assert manager.resolve(new_key).user_id == "bob"
+        await manager.resolve_identity(old_key)
+    assert (await manager.resolve_identity(new_key)).user_id == "bob"
 
 
 async def test_seed_must_not_be_empty(manager: APIKeyManager):
     acct = _uid()
     with pytest.raises(InvalidArgumentError):
         await manager.create_account(acct, "alice", seed="")
-
-
-async def test_seeded_key_with_hashing_enabled(manager_service):
-    from openviking.server.api_keys import parse_api_key
-
-    acct = _uid()
-    mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
-    )
-    await mgr.load()
-
-    key = await mgr.create_account(acct, "alice", seed="seeded-secret")
-    _, _, secret = parse_api_key(key)
-    assert secret == _seed_secret("alice", "seeded-secret")
-
-    stored_hash = _get_stored_hash(mgr, acct, "alice")
-    _assert_argon2_hash(stored_hash)
-    assert stored_hash != key
-    assert mgr.resolve(key).user_id == "alice"
-
-
-async def test_regenerate_key_upgrades_to_new_format(manager_service):
-    """Test that regenerate_key upgrades legacy keys to new format."""
-    from openviking.server.api_keys import LegacyAPIKeyManager, is_new_format_key
-
-    acct = _uid()
-
-    # First create a legacy key using LegacyAPIKeyManager
-    legacy_mgr = LegacyAPIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
-    )
-    await legacy_mgr.load()
-    legacy_key = await legacy_mgr.create_account(acct, "alice")
-    assert not is_new_format_key(legacy_key)
-    assert len(legacy_key) == 64
-
-    # Now load with NewAPIKeyManager and regenerate
-    new_mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
-    )
-    await new_mgr.load()
-
-    # Legacy key should still work
-    identity = new_mgr.resolve(legacy_key)
-    assert identity.user_id == "alice"
-
-    # Regenerate should give a new format key
-    new_key = await new_mgr.regenerate_key(acct, "alice")
-    assert is_new_format_key(new_key)
-    assert new_key != legacy_key
-
-    # Old key should no longer work
-    from openviking_cli.exceptions import UnauthenticatedError
-
-    with pytest.raises(UnauthenticatedError):
-        new_mgr.resolve(legacy_key)
-
-    # New key should work
-    identity2 = new_mgr.resolve(new_key)
-    assert identity2.user_id == "alice"
-    assert identity2.account_id == acct
-
-
-async def test_mixed_key_formats(manager_service):
-    """Test that both legacy and new format keys can coexist."""
-    from openviking.server.api_keys import APIKeyManager, LegacyAPIKeyManager, is_new_format_key
-
-    acct = _uid()
-
-    # Create account with legacy manager
-    legacy_mgr = LegacyAPIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
-    )
-    await legacy_mgr.load()
-    legacy_key = await legacy_mgr.create_account(acct, "alice")
-    assert not is_new_format_key(legacy_key)
-
-    # Add another user with new format using NewAPIKeyManager
-    new_mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=False
-    )
-    await new_mgr.load()
-    new_key = await new_mgr.register_user(acct, "bob", "user")
-    assert is_new_format_key(new_key)
-
-    # Both keys should work
-    identity1 = new_mgr.resolve(legacy_key)
-    assert identity1.user_id == "alice"
-
-    identity2 = new_mgr.resolve(new_key)
-    assert identity2.user_id == "bob"
-
-
-async def test_new_format_with_encryption(manager_service):
-    """Test new format key generation and verification with encryption enabled."""
-    from openviking.server.api_keys import is_new_format_key
-
-    acct = _uid()
-    mgr = APIKeyManager(
-        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
-    )
-    await mgr.load()
-
-    key = await mgr.create_account(acct, "alice")
-    assert is_new_format_key(key)
-
-    stored_hash = _get_stored_hash(mgr, acct, "alice")
-    _assert_argon2_hash(stored_hash)
-
-    # Key should still resolve correctly
-    identity = mgr.resolve(key)
-    assert identity.user_id == "alice"
-    assert identity.account_id == acct
-
-
-async def test_parse_api_key_edge_cases():
-    """Test parse_api_key with various edge cases."""
-    # Test with simple ASCII values
-    # First generate some test keys using the utility functions
-    from openviking.server.api_keys import generate_api_key, is_new_format_key, parse_api_key
-
-    key = generate_api_key("test-account", "test-user")
-    assert is_new_format_key(key)
-
-    account_id, user_id, secret = parse_api_key(key)
-    assert account_id == "test-account"
-    assert user_id == "test-user"
-    assert len(secret) == 64  # 32 bytes as hex
-
-
-async def test_encode_decode_roundtrip():
-    """Test that encode and decode operations are inverses."""
-    from openviking.server.api_keys.new import _decode_segment, _encode_segment
-
-    test_cases = [
-        "simple",
-        "with-hyphens",
-        "with_underscores",
-        "with@special!chars",
-        "acme_12345678",  # Typical account format from _uid()
-        "user.name+tag@domain.com",
-    ]
-
-    for test_str in test_cases:
-        encoded = _encode_segment(test_str)
-        decoded = _decode_segment(encoded)
-        assert decoded == test_str, f"Failed for: {test_str}"
 
 
 async def test_is_new_format_key_validation():
@@ -865,245 +736,107 @@ async def test_is_new_format_key_validation():
     assert not is_new_format_key("too.many.parts.here")
 
 
-# ---- get_user_role / legacy public API parity ----
+# ---- Registered user role ----
 
 
-async def test_get_user_role_returns_admin_for_account_admin(manager: APIKeyManager):
-    """get_user_role must return ADMIN for the account's first admin user.
-
-    Trusted mode (openviking/server/auth.py) calls this method to resolve the
-    effective role when X-OpenViking-Account / X-OpenViking-User headers are
-    present. Must not raise AttributeError on the default APIKeyManager.
-    """
+async def test_get_registered_user_role_returns_none_when_user_missing(manager: APIKeyManager):
     acct = _uid()
     await manager.create_account(acct, "admin_user")
-    assert manager.get_user_role(acct, "admin_user") == Role.ADMIN
+    assert await manager.get_registered_user_role(acct, "nobody") is None
+    assert await manager.get_registered_user_role("no_such_account", "no_such_user") is None
 
 
-async def test_get_user_role_returns_user_for_registered_user(manager: APIKeyManager):
-    acct = _uid()
-    await manager.create_account(acct, "admin_user")
-    await manager.register_user(acct, "regular_user", "user")
-    assert manager.get_user_role(acct, "regular_user") == Role.USER
+# ---- Read-replica refresh contract ----
 
 
-async def test_get_user_role_defaults_to_user_when_user_missing(manager: APIKeyManager):
-    """Missing user should default to Role.USER, matching legacy behavior."""
-    acct = _uid()
-    await manager.create_account(acct, "admin_user")
-    assert manager.get_user_role(acct, "nobody") == Role.USER
-
-
-async def test_get_user_role_defaults_to_user_when_account_missing(manager: APIKeyManager):
-    """Missing account should default to Role.USER, matching legacy behavior."""
-    assert manager.get_user_role("no_such_account", "no_such_user") == Role.USER
-
-
-def test_new_api_key_manager_public_api_parity_with_legacy():
-    """NewAPIKeyManager must expose every public method LegacyAPIKeyManager does.
-
-    PR #1686 wrapped LegacyAPIKeyManager in a NewAPIKeyManager that forwards
-    methods by hand rather than inheriting. A missing proxy (e.g. get_user_role)
-    becomes a latent AttributeError at runtime. This test enforces parity on the
-    public surface so future wrappers can't silently regress the contract.
-    """
-    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
-    from openviking.server.api_keys.new import NewAPIKeyManager
-
-    def _public_methods(cls) -> set:
-        return {
-            name for name in dir(cls) if not name.startswith("_") and callable(getattr(cls, name))
-        }
-
-    legacy_public = _public_methods(LegacyAPIKeyManager)
-    new_public = _public_methods(NewAPIKeyManager)
-    missing = legacy_public - new_public
-    assert not missing, (
-        f"NewAPIKeyManager is missing public methods present on "
-        f"LegacyAPIKeyManager: {sorted(missing)}"
+async def test_explicit_fresh_list_bypasses_watcher_interval(manager_service):
+    writer = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    reader = build_api_key_manager(
+        root_key=ROOT_KEY,
+        viking_fs=manager_service.viking_fs,
+        account_store_watch_enabled=True,
+        account_store_watch_interval_seconds=300,
     )
-
-
-# ---- Read-only reload / change-signature tests ----
-#
-# Read replicas load the key store once at startup and never rewrite it. A user
-# registered / rotated / removed on the writer is therefore invisible to a
-# reader until it refreshes its in-memory index. reload() + compute_store_
-# signature() give the optional background watcher a read-only way to converge.
-
-
-async def test_reload_picks_up_user_registered_by_writer(manager_service):
-    """A reader's reload() should see a user the writer registered afterwards.
-
-    This reproduces the read-replica auth failure: two managers over the same
-    store, a user created via the "writer", initially rejected by the "reader",
-    then accepted after reload().
-    """
-    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await writer.load()
-    reader = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await reader.load()
+    acct = _uid()
+    try:
+        await writer.create_account(acct, "alice")
+        await writer.register_user(acct, "bob")
+
+        page = await reader.list_users_page(acct, limit=None, fresh=True)
+
+        assert {user["user_id"] for user in page["users"]} == {"alice", "bob"}
+    finally:
+        await reader.close()
+        await writer.close()
+
+
+async def test_watched_reader_accepts_user_registered_by_writer(manager_service):
+    writer = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
+    acct = _uid()
+    await writer.create_account(acct, "alice")
+    reader = build_api_key_manager(
+        root_key=ROOT_KEY,
+        viking_fs=manager_service.viking_fs,
+        account_store_watch_enabled=True,
+        account_store_watch_interval_seconds=0.01,
+    )
+    await reader.load()
+    await asyncio.sleep(0.03)
+    user_key = await writer.register_user(acct, "bob")
+
+    try:
+        for _ in range(100):
+            try:
+                identity = await reader.resolve_identity(user_key)
+                break
+            except UnauthenticatedError:
+                await asyncio.sleep(0.01)
+        else:
+            pytest.fail("watched reader did not observe the registered user")
+        assert (identity.account_id, identity.user_id) == (acct, "bob")
+    finally:
+        await reader.close()
+        await writer.close()
+
+
+async def test_watched_reader_rejects_user_removed_by_writer(manager_service):
+    writer = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
 
     acct = _uid()
     await writer.create_account(acct, "alice")
     user_key = await writer.register_user(acct, "bob")
 
-    # Reader has not refreshed yet: the new user's key is unknown.
-    with pytest.raises(UnauthenticatedError):
-        reader.resolve(user_key)
-
-    await reader.reload()
-
-    identity = reader.resolve(user_key)
-    assert identity.account_id == acct
-    assert identity.user_id == "bob"
-
-
-async def test_reload_reflects_removed_user(manager_service):
-    """reload() should drop a user the writer removed after the reader loaded."""
-    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await writer.load()
-
-    acct = _uid()
-    await writer.create_account(acct, "alice")
-    user_key = await writer.register_user(acct, "bob")
-
-    reader = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    reader = build_api_key_manager(
+        root_key=ROOT_KEY,
+        viking_fs=manager_service.viking_fs,
+        account_store_watch_enabled=True,
+        account_store_watch_interval_seconds=0.01,
+    )
     await reader.load()
-    # Reader accepts bob at first.
-    assert reader.resolve(user_key).user_id == "bob"
+    assert (await reader.resolve_identity(user_key)).user_id == "bob"
+    await asyncio.sleep(0.03)
 
-    await writer.begin_user_deletion(
+    await writer.begin_deletion(
         acct,
         "bob",
         task_id="delete-1",
         owner_account_id=acct,
         owner_user_id="alice",
     )
-    await writer.finish_user_deletion(acct, "bob", "delete-1")
-    await reader.reload()
-
-    with pytest.raises(UnauthenticatedError):
-        reader.resolve(user_key)
-
-
-async def test_reload_does_not_write_to_store(manager_service, monkeypatch):
-    """reload() must never persist: read replicas mount a read-only volume."""
-    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await writer.load()
-    acct = _uid()
-    await writer.create_account(acct, "alice")
-
-    reader = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await reader.load()
-
-    async def _fail_write_json(*args, **kwargs):
-        raise AssertionError("reload() must not write to the key store")
-
-    monkeypatch.setattr(reader._legacy, "_write_json", _fail_write_json)
-    monkeypatch.setattr(reader._legacy, "_save_accounts_json", _fail_write_json)
-    monkeypatch.setattr(reader._legacy, "_save_users_json", _fail_write_json)
-
-    # Must not raise: no write path should be exercised.
-    await reader.reload()
-
-
-async def test_reload_with_hashing_enabled_does_not_migrate(manager_service, monkeypatch):
-    """reload() with hashing on must index plaintext keys without migrating them.
-
-    load() migrates plaintext -> Argon2id (a write); reload() is read-only and
-    must skip that migration while still resolving the plaintext key.
-    """
-    acct = _uid()
-    seed_mgr = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await seed_mgr._write_json(
-        ACCOUNTS_PATH, {"accounts": {acct: {"created_at": "2026-04-16T00:00:00+00:00"}}}
-    )
-    await seed_mgr._write_json(
-        f"/local/{acct}/_system/users.json",
-        {"users": {"alice": {"role": "admin", "key": "legacy-plaintext-key-alice"}}},
-    )
-
-    reader = APIKeyManager(
-        root_key=ROOT_KEY,
-        viking_fs=manager_service.viking_fs,
-        api_key_hashing_enabled=True,
-    )
-
-    async def _fail_write_json(*args, **kwargs):
-        raise AssertionError("reload() must not migrate plaintext keys")
-
-    monkeypatch.setattr(reader._legacy, "_write_json", _fail_write_json)
-    monkeypatch.setattr(reader._legacy, "_save_users_json", _fail_write_json)
-
-    await reader.reload()
-
-    identity = reader.resolve("legacy-plaintext-key-alice")
-    assert identity.account_id == acct
-    assert identity.user_id == "alice"
-
-
-async def test_reload_tolerates_uninitialized_store(manager_service):
-    """reload() before the store exists must keep current state, not wipe it."""
-    reader = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    # Deliberately skip load(): accounts.json does not exist yet (reader started
-    # before the writer bootstrapped the store).
-    await reader.reload()
-    # Root key still resolves; no crash from a missing store.
-    assert reader.resolve(ROOT_KEY).role == Role.ROOT
-
-
-async def test_store_signature_changes_on_user_registration(manager_service):
-    """The change signature must move when users.json changes (not just accounts)."""
-    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await writer.load()
-    acct = _uid()
-    await writer.create_account(acct, "alice")
-
-    before = await writer.compute_store_signature()
-    await writer.register_user(acct, "bob")
-    after = await writer.compute_store_signature()
-
-    assert before != after
-
-
-async def test_store_signature_stable_without_changes(manager_service):
-    """Two consecutive signatures with no store change must be equal.
-
-    This is what lets the watcher skip a full reload on an unchanged store.
-    """
-    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await writer.load()
-    acct = _uid()
-    await writer.create_account(acct, "alice")
-
-    first = await writer.compute_store_signature()
-    second = await writer.compute_store_signature()
-    assert first == second
-
-
-async def test_store_signature_stats_bypass_cache(manager_service, monkeypatch):
-    """Signature stats must bypass plugin-local caches so S3 metadata stays fresh.
-
-    Without bypass_cache the S3FS sliding-TTL stat cache pins stale (size, modTime)
-    and the watcher never observes writer-side changes.
-    """
-    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await writer.load()
-    acct = _uid()
-    await writer.create_account(acct, "alice")
-
-    real_stat = writer._legacy._async_agfs.stat
-    seen_bypass: list = []
-
-    async def _spy_stat(path, *, fs_ctx=None, bypass_cache=False):
-        seen_bypass.append(bypass_cache)
-        return await real_stat(path, fs_ctx=fs_ctx, bypass_cache=bypass_cache)
-
-    monkeypatch.setattr(writer._legacy._async_agfs, "stat", _spy_stat)
-
-    await writer.compute_store_signature()
-
-    # accounts.json + one users.json were stat'd, all with bypass_cache=True.
-    assert seen_bypass
-    assert all(seen_bypass)
+    await writer.finish_deletion(acct, "bob", "delete-1")
+    try:
+        for _ in range(100):
+            try:
+                await reader.resolve_identity(user_key)
+            except UnauthenticatedError:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("watched reader did not observe the removed user")
+    finally:
+        await reader.close()
+        await writer.close()

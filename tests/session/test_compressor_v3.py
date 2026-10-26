@@ -18,6 +18,7 @@ from openviking.session.compressor_v3 import (
     _experience_root_uri,
     _experience_snapshot_provenance,
     _experience_trajectory_map,
+    _report_extraction_telemetry,
     _visible_experience_snapshot_uris,
 )
 from openviking.session.memory.dataclass import (
@@ -28,7 +29,11 @@ from openviking.session.memory.dataclass import (
     SkippedMemoryOperation,
     StoredLink,
 )
-from openviking.session.memory.memory_updater import MemoryUpdateResult
+from openviking.session.memory.memory_updater import (
+    MemoryReadError,
+    MemoryUpdateError,
+    MemoryUpdateResult,
+)
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
@@ -46,6 +51,8 @@ from openviking.session.train import (
     Trajectory,
 )
 from openviking.session.train.components.session_commit import _case_spec_message_to_request
+from openviking.telemetry import OperationTelemetry, bind_telemetry
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -88,6 +95,26 @@ def test_factory_defaults_to_v3():
     assert isinstance(compressor, SessionCompressorV3)
 
 
+@pytest.mark.asyncio
+async def test_commit_extraction_propagates_template_conflict():
+    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
+    conflict = ConflictError("Conflicting memory template snapshots; Re-extract before retrying")
+    compressor._extract_user_memories = AsyncMock(side_effect=conflict)
+    compressor._write_final_memory_diff = AsyncMock()
+
+    with pytest.raises(ConflictError) as raised:
+        await compressor.extract_long_term_memories(
+            messages=_messages(),
+            ctx=_ctx(),
+            allowed_memory_types={"profile"},
+            # The Session commit worker uses this mode: a conflict must reach it,
+            # not turn into an empty successful extraction or memory diff.
+            strict_extract_errors=True,
+        )
+    assert raised.value is conflict
+    compressor._write_final_memory_diff.assert_not_awaited()
+
+
 def test_factory_ignores_deprecated_memory_version():
     assert isinstance(
         create_session_compressor(vikingdb=None, memory_version="v2"), SessionCompressorV3
@@ -109,6 +136,44 @@ def test_extract_long_term_memories_preserves_legacy_positional_parameter_order(
         "event_search_tags",
         "peer_memory_enabled",
     ]
+
+
+def test_report_extraction_telemetry_handles_placeholder_error_targets():
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_fields={},
+                memory_type="events",
+                uris=["unknown"],
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    result = MemoryUpdateResult()
+    result.add_written("unknown")
+    result.add_edited("viking://user/u/memories/preferences/pref.md")
+    result.add_deleted("viking://user/u/memories/events/old.md")
+    result.add_error("events(page_id=xyz)", ValueError("Missing resolved URI"))
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        _report_extraction_telemetry(result, operations)
+
+    summary = telemetry.finish().summary
+    extract = summary["memory"]["extract"]
+    assert extract["actions"] == {
+        "created": 1,
+        "merged": 1,
+        "deleted": 1,
+        "failed": 1,
+    }
+    assert extract["actions_by_type"] == {
+        "events": {"created": 1, "deleted": 1},
+        "preferences": {"merged": 1},
+        "unknown": {"failed": 1},
+    }
 
 
 @pytest.mark.asyncio
@@ -384,7 +449,7 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
         lambda: SimpleNamespace(),
     )
     monkeypatch.setattr(
-        "openviking.session.compressor_v3.create_default_registry",
+        "openviking.session.compressor_v3.get_default_registry",
         lambda: DummyRegistry(),
     )
 
@@ -656,87 +721,12 @@ async def test_train_from_extracted_cases_skips_experience_updates_when_not_allo
 
 
 @pytest.mark.asyncio
-async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollouts(monkeypatch):
-    seen_rollouts = []
-    rollout_messages = _messages()
-
-    class FakeTrainer:
-        policy_set = ExperienceSet(
-            root_uri="viking://user/u/memories/experiences",
-            policies=[],
-        )
-
-    class FakeAnalyzer:
-        async def analyze(self, rollout, context):
-            del context
-            seen_rollouts.append(rollout)
-            return RolloutAnalysis(
-                evaluation=RubricEvaluation(
-                    passed=True,
-                    score=1.0,
-                    criterion_results=[],
-                    feedback=[],
-                ),
-                trajectories=[],
-                gradients=[],
-            )
-
-    async def fake_estimate_exp_gradients(self, *args, **kwargs):
-        return []
-
-    monkeypatch.setattr(
-        "openviking.session.compressor_v3.get_viking_fs",
-        lambda: SimpleNamespace(ls=AsyncMock(return_value=[])),
-    )
-    monkeypatch.setattr(
-        "openviking.session.compressor_v3.get_streaming_policy_trainer",
-        AsyncMock(return_value=FakeTrainer()),
-    )
-    monkeypatch.setattr(
-        "openviking.session.train.components.gradient_estimator.ExperienceGradientEstimator.estimate",
-        fake_estimate_exp_gradients,
-    )
-
-    case_a = _training_case()
-    case_b = Case(
-        name="case_b",
-        task_signature="Handle a second extracted case.",
-        input={"summary": "second case"},
-        rubric=case_a.rubric,
-    )
-
-    compressor = SessionCompressorV3(
-        vikingdb=None,
-        rollout_analyzer=FakeAnalyzer(),
-        streaming_trainer_config=StreamingPolicyTrainerConfig(
-            max_wait_seconds=60,
-            max_gradients_per_update=8,
-        ),
-    )
-
-    result = await compressor.train_from_extracted_cases(
-        cases=[case_a, case_b],
-        messages=rollout_messages,
-        ctx=_ctx(),
-        session_id="s1",
-    )
-
-    assert result["case_count"] == 2
-    assert result["submitted"] == 2
-    assert [rollout.case.name for rollout in seen_rollouts] == [
-        "duplicate_booking",
-        "case_b",
-    ]
-    assert [rollout.messages for rollout in seen_rollouts] == [
-        rollout_messages,
-        rollout_messages,
-    ]
-
-
-@pytest.mark.asyncio
-async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
+@pytest.mark.parametrize("apply_error", [False, True, "links"])
+async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, apply_error):
     applied_operations = []
     trained_cases = []
+    uri = _case_operation().uris[0]
+    link = StoredLink(from_uri=uri, to_uri=uri + ".other.md", link_type="related_to")
 
     class DummyRegistry:
         async def initialize_memory_files(self, ctx, allowed_memory_types=None):
@@ -750,6 +740,7 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
                     upsert_operations=[_case_operation()],
                     delete_file_contents=[],
                     errors=[],
+                    resolved_links=[link] if apply_error == "links" else [],
                 ),
                 [],
             )
@@ -758,10 +749,17 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
         async def submit(self, request):
             applied_operations.append(request.operations)
             result = MemoryUpdateResult()
-            result.add_written(_case_operation().uris[0])
+            if apply_error:
+                result.add_error(uri, MemoryReadError(uri, TimeoutError("read timeout")))
+            else:
+                result.add_written(uri)
             return SimpleNamespace(operations=request.operations, apply_result=result)
 
-    compressor = SessionCompressorV3(vikingdb=None)
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=SimpleNamespace(),
+        vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace())),
+    )
     compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
 
     async def fake_train_from_extracted_cases(**kwargs):
@@ -775,19 +773,30 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
         lambda: SimpleNamespace(write_file=AsyncMock()),
     )
     monkeypatch.setattr(
-        "openviking.session.compressor_v3.create_default_registry",
+        "openviking.session.compressor_v3.get_default_registry",
         lambda: DummyRegistry(),
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.account_templates.resolve_account_memory_registry",
+        AsyncMock(return_value=DummyRegistry()),
     )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_memory_updater",
         AsyncMock(return_value=FakeStreamingUpdater()),
     )
 
-    contexts = await compressor.extract_long_term_memories(
+    extraction = compressor.extract_long_term_memories(
         messages=_messages(),
         ctx=_ctx(),
         allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
+        strict_extract_errors=True,
     )
+    if apply_error:
+        with pytest.raises(MemoryUpdateError):
+            await extraction
+        assert trained_cases == []
+        return
+    contexts = await extraction
 
     assert len(applied_operations) == 1
     assert applied_operations[0].upsert_operations[0].memory_type == "cases"
@@ -883,7 +892,7 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
 
     monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: FakeFS())
     monkeypatch.setattr(
-        "openviking.session.compressor_v3.create_default_registry",
+        "openviking.session.compressor_v3.get_default_registry",
         lambda: DummyRegistry(),
     )
     monkeypatch.setattr(

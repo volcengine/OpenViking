@@ -7,9 +7,11 @@ Tests the python binding mode of VikingFS which directly uses AGFS implementatio
 without HTTP server.
 """
 
+import asyncio
 import os
 import shutil
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -44,6 +46,55 @@ async def viking_fs_binding_instance():
 class TestVikingFSBindingLocal:
     """Test VikingFS operations with binding mode (local backend)."""
 
+    async def test_native_metrics_and_legacy_stats(self, viking_fs_binding_instance):
+        """Use the binding fixture to check flat metrics and legacy stats; return None."""
+        client = viking_fs_binding_instance._async_agfs
+        metrics = await client.run("metrics")
+        shapes = {
+            "counter": {"value", "scale"},
+            "gauge": {"value"},
+            "histogram": {"bucket_bounds", "bucket_counts", "count", "sum", "scale"},
+        }
+        assert {m["type"] for m in metrics} == set(shapes)
+        for metric in metrics:
+            assert set(metric) == {"name", "labels", "type"} | shapes[metric["type"]]
+            assert not metric["name"].startswith("openviking_")
+            assert set(metric["labels"]) <= {
+                "plugin",
+                "operation",
+                "status",
+                "kind",
+                "result",
+                "source",
+                "event",
+                "route",
+            }
+            if metric["type"] == "histogram":
+                assert len(metric["bucket_counts"]) == len(metric["bucket_bounds"]) + 1 == 12
+                assert sum(metric["bucket_counts"]) == metric["count"]
+                assert metric["scale"] == 1e-9 and type(metric["sum"]) is int
+            else:
+                assert type(metric["value"]) is (int if metric["type"] == "counter" else float)
+        all_stats = await client.run("get_stats")
+        assert set(all_stats) == {"mounts"} and all_stats["mounts"]
+        scoped = await client.run("get_stats", path=all_stats["mounts"][0]["path"])
+        for mount in [*all_stats["mounts"], scoped]:
+            assert set(mount) == {"path", "plugin", "stats"}
+            for stats in mount["stats"]["operations"].values():
+                assert set(stats) == {
+                    "count",
+                    "total_time_us",
+                    "min_time_us",
+                    "max_time_us",
+                    "avg_time_us",
+                }
+                assert all(
+                    type(value) is (float if key == "avg_time_us" else int)
+                    for key, value in stats.items()
+                )
+                if stats["count"] == 0:
+                    assert stats["min_time_us"] == 2**64 - 1 and stats["avg_time_us"] == 0.0
+
     async def test_file_operations(self, viking_fs_binding_instance):
         """Test VikingFS file operations: read, write, ls, stat."""
         vfs = viking_fs_binding_instance
@@ -61,9 +112,23 @@ class TestVikingFSBindingLocal:
         entries = await vfs.ls("viking://temp/")
         assert any(e["name"] == test_filename for e in entries)
 
+        page_dir_uri = f"viking://temp/page_{uuid.uuid4().hex}/"
+        await vfs.mkdir(page_dir_uri)
+        for name in ("a.txt", "b.txt", "c.txt"):
+            await vfs.write(f"{page_dir_uri}{name}", name)
+        page = await vfs.ls(
+            page_dir_uri,
+            output="original",
+            node_limit=1,
+            offset=1,
+            sort_by="name",
+        )
+        assert [entry["name"] for entry in page] == ["b.txt"]
+
         read_data = await vfs.read(test_uri)
         assert read_data.decode("utf-8") == test_content
 
+        await vfs.rm(page_dir_uri, recursive=True)
         await vfs.rm(test_uri)
 
     async def test_directory_operations(self, viking_fs_binding_instance):
@@ -83,9 +148,17 @@ class TestVikingFSBindingLocal:
 
         file_uri = f"{test_dir_uri}inner.txt"
         await vfs.write(file_uri, "inner content")
+        await vfs.write(f"{test_dir_uri}z.txt", "second")
 
         sub_entries = await vfs.ls(test_dir_uri)
         assert any(e["name"] == "inner.txt" for e in sub_entries)
+        tree_page = await vfs.tree(
+            test_dir_uri,
+            output="original",
+            node_limit=1,
+            offset=1,
+        )
+        assert [entry["name"] for entry in tree_page] == ["z.txt"]
 
         await vfs.rm(test_dir_uri, recursive=True)
 
@@ -127,6 +200,31 @@ class TestVikingFSBindingLocal:
                 if await vfs.exists(uri):
                     stat_info = await vfs.stat(uri)
                     await vfs.rm(uri, recursive=bool(stat_info.get("isDir")))
+
+    async def test_recursive_cp_uses_parent_tree_batch_lease(
+        self,
+        viking_fs_binding_instance,
+    ):
+        """A batch lease on distinct parents must cover all recursive copy operations."""
+        vfs = viking_fs_binding_instance
+        unique = uuid.uuid4().hex
+        source_uri = f"viking://temp/cp_source_{unique}"
+        target_uri = f"viking://resources/cp_target_{unique}"
+
+        try:
+            await vfs.mkdir("viking://resources/", exist_ok=True)
+            await vfs.mkdir(source_uri)
+            await vfs.mkdir(f"{source_uri}/empty")
+            await vfs.write(f"{source_uri}/data.bin", b"\x00\xff")
+
+            await vfs.cp(source_uri, target_uri, recursive=True)
+
+            assert (await vfs.stat(f"{target_uri}/empty"))["isDir"] is True
+            assert await vfs.read(f"{target_uri}/data.bin") == b"\x00\xff"
+        finally:
+            for uri in (source_uri, target_uri):
+                if await vfs.exists(uri):
+                    await vfs.rm(uri, recursive=True)
 
     async def test_borrowed_pathlock_cannot_release_via_raw_ref(self, viking_fs_binding_instance):
         """Reject borrowed lifecycle control through typed and raw lease refs."""
@@ -183,22 +281,23 @@ class TestVikingFSBindingLocal:
                 await vfs._async_agfs.pathlock_release(adopted)
             await vfs._async_agfs.pathlock_release(owned)
 
-    @pytest.mark.parametrize(
-        "requests",
-        [
-            [],
-            [{"kind": "exact"}],
-            [{"path": "", "kind": "exact"}],
-            [{"path": "relative", "kind": "tree"}],
-            [{"path": "/local/default/temp/file", "kind": "other"}],
-        ],
-    )
-    async def test_pathlock_batch_rejects_invalid_requests(
-        self, viking_fs_binding_instance, requests
-    ):
-        """Reject malformed pathlock requests without applying defaults."""
-        with pytest.raises(ValueError):
-            await viking_fs_binding_instance._async_agfs.pathlock_acquire_batch(requests)
+    async def test_pathlock_wait_and_cancel_release_resources(self, viking_fs_binding_instance):
+        """Lock waits leave storage responsive; cancelled acquisitions release their lease."""
+        client = viking_fs_binding_instance._async_agfs
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        path = f"/local/default/temp/wait_{uuid.uuid4().hex}"
+        owner = await client.pathlock_acquire_exact(path)
+        waiter = asyncio.create_task(client.pathlock_acquire_exact(path, timeout_secs=2))
+        try:
+            await asyncio.sleep(0.01)
+            await asyncio.wait_for(client.stat("/local"), timeout=0.5)
+        finally:
+            waiter.cancel()
+            await client.pathlock_release(owner)
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+        lease = await client.pathlock_acquire_exact(path)
+        await client.pathlock_release(lease)
 
     async def test_tree_operations(self, viking_fs_binding_instance):
         """Test VikingFS tree operations."""

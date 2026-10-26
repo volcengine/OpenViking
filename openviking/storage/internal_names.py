@@ -15,13 +15,25 @@ MULTIWRITE_INTERNAL_FILE_NAMES = frozenset(
     }
 )
 
-STORAGE_INTERNAL_ENTRY_NAMES = frozenset(
-    {
-        "_system",
-        "tasks",
-        *MULTIWRITE_INTERNAL_FILE_NAMES,
-    }
-)
+
+def is_storage_internal_name(name: str) -> bool:
+    """Return whether ``name`` is multi-write metadata owned by the storage layer.
+
+    Mirrors ``is_hidden_internal_name`` in ``crates/ragfs/src/core/internal_names.rs``:
+    the directory lock, exact (sidecar) locks, redirect and sync-log files that RAGFS
+    keeps next to user content in any directory. Such an entry is hidden from every
+    listing and must never be created, written, copied or moved by a user.
+
+    The account-root internal directories (``/local/{account}/_system`` and
+    ``/local/{account}/tasks``) are deliberately not part of this predicate: root
+    listings use ``VikingURI.LISTABLE_SCOPES`` as a whitelist, and below the root a
+    user directory that happens to be called ``tasks`` or ``_system`` is ordinary
+    content.
+    """
+    return name in MULTIWRITE_INTERNAL_FILE_NAMES or name.startswith(
+        MULTIWRITE_EXACT_LOCK_FILE_PREFIX
+    )
+
 
 WEBDAV_RESERVED_FILENAMES = frozenset(
     {

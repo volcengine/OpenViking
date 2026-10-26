@@ -9,6 +9,7 @@ import importlib
 from .base import CollectionAdapter
 from .http_adapter import HttpCollectionAdapter
 from .local_adapter import CuVSCollectionAdapter, LocalCollectionAdapter
+from .opengauss_adapter import OpenGaussCollectionAdapter
 from .vikingdb_private_adapter import VikingDBPrivateCollectionAdapter
 from .volcengine_adapter import VolcengineCollectionAdapter
 
@@ -18,6 +19,7 @@ _ADAPTER_REGISTRY: dict[str, type[CollectionAdapter]] = {
     "http": HttpCollectionAdapter,
     "volcengine": VolcengineCollectionAdapter,
     "vikingdb": VikingDBPrivateCollectionAdapter,
+    "opengauss": OpenGaussCollectionAdapter,
 }
 
 
@@ -43,4 +45,6 @@ def create_collection_adapter(config) -> CollectionAdapter:
             f"Vector backend {backend} is not supported. "
             f"Available backends: {sorted(_ADAPTER_REGISTRY)}"
         )
-    return adapter_cls.from_config(config)
+    adapter = adapter_cls.from_config(config)
+    adapter._dimension = config.dimension
+    return adapter

@@ -3,11 +3,46 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+> Release entries describe behavior at that version, including commands and defaults that may since have changed. Use the current [deployment guide](../guides/03-deployment.md) for installation. Before any historical upgrade step that clears a workspace, stop writes and make a restorable backup; never apply those cleanup instructions to an unrelated upgrade.
+
 ## Unreleased
 
+- **LangChain import migration (breaking change)**: The server no longer ships
+  `openviking.integrations.langchain` or its forwarding modules. Old imports fail
+  immediately; there is no deprecation period or compatibility stub. Install
+  `langchain-openviking` (or `pip install "langchain-openviking[langgraph]"` for
+  LangGraph) and replace the `openviking.integrations.langchain` prefix with
+  `langchain_openviking`, including submodule imports. For example, use
+  `from langchain_openviking import OpenVikingRetriever`. The maintained packages
+  and examples now live under `integrations/frameworks/`; package names and
+  canonical imports are unchanged. See the [migration guide](../agent-integrations/07-langchain-langgraph.md).
+- **Working Memory defaults off (behavior change)**: Commits continue to archive raw messages
+  and extract long-term memories, but generate no WM/checkpoint summaries by default.
+  Update installed agent plugins separately: automatic archive injection and takeover now
+  default off, and host history/compaction stays in use. VikingBot retains OV-managed
+  context and compaction and explicitly requests WM on session-context commits.
+  The old serializer omitted WM=true,
+  so previously saved policies without that field now become false even if true was once
+  chosen explicitly. Already-queued legacy tasks retain their submission-time semantics.
+  A new per-commit `enable_working_memory` boolean can opt in without replacing other
+  policy fields. Completed WM-off archives remain readable as raw messages with empty
+  summary fields. See the [upgrade guide](../guides/working-memory-default-off.md), including
+  handoffs for old conversations that no longer have complete host history.
+- **Watch API migration (breaking change)**: Re-importing with `watch_interval > 0`
+  no longer updates or reactivates an existing Watch. Native Watches retain exclusive
+  ownership while paused, and incompatible target reuse returns `409 Conflict`.
+  Replace scripts that re-import to update a Watch with `PATCH /api/v1/watches/{task_id}`
+  (use `is_active: true` to resume), or delete the old Watch before creating its replacement.
+  Connector Watches may share targets; repeating the same source and target creates a new
+  independent Watch, so retries are not idempotent. Use task IDs to manage shared targets;
+  URI lookups with multiple accessible Watches return 409. One-off Connector imports
+  (`watch_interval <= 0`) leave existing Watches untouched; pause or delete them through
+  the watches API. See [resource task management](../api/02-resources.md#task-management-operations).
 - **Session policy compatibility**: String `"false"` memory-policy switches now disable
   extraction correctly. Existing boolean-like values remain temporarily compatible and
   emit deprecation warnings; use JSON booleans for new configurations.
+- **Workspace peer derivation**: The coding-agent plugins now derive a workspace's peer from git instead of from the working directory. The new default, `peer.source: "git"`, uses the repository's normalized `origin` URL (`github.com-volcengine-openviking`), falling back to the repository root path, so every clone, worktree, and subdirectory of one repository shares a single peer while a fork keeps its own. A directory that is not a git repository now gets no peer at all, and what is remembered there goes to the user-level space instead of a fresh namespace per folder. Give such a directory a memory of its own by creating `.openviking/config.json` with `{"version": 1, "peer": {"id": "my-project"}}`. No migration is required: the previous cwd-derived id can always be recomputed locally, and the default `peer_scope: "all"` recall already sweeps every peer, so memories written under it keep coming back (with `peer_scope: "actor"`, the Claude Code, Codex, OpenCode, and DSH plugins query that id as well). Set `peer.source: "cwd"` — or `OPENVIKING_PEER_SOURCE=cwd` — to keep the old behavior.
+- **Pi extension tool surface (breaking change)**: The pi extension 0.4.0 replaces its seven hand-written `viking_*` REST tools with the server's own MCP tools through the official MCP client, so the tool list now follows whatever the server's `tools/list` returns instead of a catalogue shipped with the extension. Every tool is `openviking_` plus the server's name (`viking_search` → `openviking_search`), with no alias period, and pi matches `--tools` and `--exclude-tools` entries by exact name, so an allowlist that still says `viking_search` loses that tool silently and has to be renamed by hand. The tools now behave as they do on every other MCP harness: `remember` commits a session of its own rather than appending to the live pi session, `read` returns text with line-based pagination (the `level="abstract"` and `level="overview"` tiers are gone — `openviking_search(mode="context", detail="overview")` is the substitute), `forget` deletes the URI it is handed, and `add_resource` answers a local path with a one-time upload URL to POST the file to. A root api key is refused on `/mcp` with 403 and now leaves the session with no tools at all, where before the tools registered and every call came back empty; create a user or admin key for it. The shared `mcpEnabled: false` switch now takes effect for pi as well, and tools turned off that way are not reported as a failure. Recall, session capture, and context takeover keep working in all of these cases, and no other harness is affected. The extension README's [Upgrading from 0.3.x](https://github.com/volcengine/OpenViking/blob/main/examples/pi-coding-agent-extension/README.md#upgrading-from-03x) has the full list.
 - **External peer identity migration**: Mixed-script log-ingestion identities now use
   lossless `ext-<base64>` ids. The `ext-` namespace is reserved, so ASCII identities that
   would otherwise enter it are encoded as well. Older lossy peer directories are not read
@@ -216,7 +251,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 - **Request-scoped HTTP profiling**: Servers can enable `server.profile_enabled`; requests with `profile=1` then run `cProfile` for only that HTTP request and append `profile` lines to JSON responses. The `ov` CLI can enable and display this with `--profile`.
 - **Batch Session message ingestion**: Added `POST /api/v1/sessions/{session_id}/messages/batch` plus Python HTTP client and Session wrapper support via `batch_add_messages` (up to 100 messages per request), reducing HTTP round trips for LangChain/LangGraph-style integrations.
 - **Memory embedding templates**: Memory schemas now support a top-level `embedding_template`, replacing field-level `searchable` flags. The built-in `entities`, `events`, and `preferences` templates include key fields plus final content in embedding input.
-- **Semantic indexing reliability**: Resource processing now syncs temp source trees into the target before running the semantic DAG (diff results use target URIs); stale semantic lock handoffs can be recovered by reacquiring tree locks, and lock acquisition failures requeue work instead of tripping the API circuit breaker.
+- **Semantic indexing reliability**: Resource processing now syncs temp source trees into the target before running the semantic tree (diff results use target URIs); stale semantic lock handoffs can be recovered by reacquiring tree locks, and lock acquisition failures requeue work instead of tripping the API circuit breaker.
 - **Embedding input guardrails**: Embedding queue input is truncated according to `embedding.max_input_tokens`, and oversized-input errors are classified as `input_too_large` to avoid repeated retries for unrecoverable payloads.
 
 ### Upgrade Notes

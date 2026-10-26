@@ -62,6 +62,22 @@ async def mock_viking_fs(temp_storage: Path) -> MockVikingFS:
     return MockVikingFS(root_path=str(temp_storage))
 
 
+@pytest_asyncio.fixture
+async def watch_manager(mock_viking_fs: MockVikingFS) -> WatchManager:
+    """Create an initialized WatchManager with isolated storage."""
+    manager = WatchManager(viking_fs=mock_viking_fs)
+    await manager.initialize()
+    return manager
+
+
+@pytest_asyncio.fixture
+async def watch_manager_no_fs() -> WatchManager:
+    """Create an initialized in-memory WatchManager."""
+    manager = WatchManager(viking_fs=None)
+    await manager.initialize()
+    return manager
+
+
 class TestWatchTask:
     """Tests for WatchTask data model."""
 
@@ -70,6 +86,7 @@ class TestWatchTask:
         task = WatchTask(path="/test/path")
 
         assert task.path == "/test/path"
+        assert task.source_type is None
         assert task.task_id is not None
         assert task.to_uri is None
         assert task.parent_uri is None
@@ -88,6 +105,7 @@ class TestWatchTask:
         task = WatchTask(
             task_id="test-task-id",
             path="/test/path",
+            source_type="feishu_project",
             to_uri="viking://resources/test",
             parent_uri="viking://resources",
             reason="Test reason",
@@ -102,6 +120,7 @@ class TestWatchTask:
 
         assert task.task_id == "test-task-id"
         assert task.path == "/test/path"
+        assert task.source_type == "feishu_project"
         assert task.to_uri == "viking://resources/test"
         assert task.parent_uri == "viking://resources"
         assert task.reason == "Test reason"
@@ -118,6 +137,7 @@ class TestWatchTask:
         task = WatchTask(
             task_id="test-id",
             path="/test/path",
+            source_type="url",
             to_uri="viking://test",
             auth_state={
                 "provider": "feishu",
@@ -132,6 +152,7 @@ class TestWatchTask:
 
         assert data["task_id"] == "test-id"
         assert data["path"] == "/test/path"
+        assert data["source_type"] == "url"
         assert data["to_uri"] == "viking://test"
         assert data["created_at"] == now.isoformat()
         assert data["is_active"] is True
@@ -144,6 +165,7 @@ class TestWatchTask:
         data = {
             "task_id": "test-id",
             "path": "/test/path",
+            "source_type": "git",
             "to_uri": "viking://test",
             "parent_uri": "viking://parent",
             "reason": "Test",
@@ -160,6 +182,7 @@ class TestWatchTask:
 
         assert task.task_id == "test-id"
         assert task.path == "/test/path"
+        assert task.source_type == "git"
         assert task.to_uri == "viking://test"
         assert task.watch_interval == 45.0
         assert task.processing_mode == "vectors_only"
@@ -172,6 +195,7 @@ class TestWatchTask:
 
         assert task.processing_mode == "semantic_and_vectors"
         assert task.to_is_directory is None
+        assert task.source_type is None
 
     def test_calculate_next_execution_time(self):
         """Test calculating next execution time."""
@@ -223,6 +247,29 @@ class TestWatchManager:
         assert task.watch_interval == 30.0
         assert task.is_active is True
         assert task.next_execution_time is not None
+
+    @pytest.mark.asyncio
+    async def test_create_inactive_task_has_no_next_execution(self, watch_manager: WatchManager):
+        task = await watch_manager.create_task(
+            path="/test/path",
+            to_uri="viking://resources/paused",
+            watch_interval=30.0,
+            is_active=False,
+        )
+
+        assert task.is_active is False
+        assert task.next_execution_time is None
+        assert task in await watch_manager.get_all_tasks(
+            TEST_ACCOUNT_ID,
+            TEST_USER_ID,
+            TEST_ROLE,
+        )
+        assert task not in await watch_manager.get_all_tasks(
+            TEST_ACCOUNT_ID,
+            TEST_USER_ID,
+            TEST_ROLE,
+            active_only=True,
+        )
 
     @pytest.mark.asyncio
     async def test_deactivate_tasks_under_uri_internal_matches_subtree(
@@ -333,6 +380,58 @@ class TestWatchManager:
         assert "auth_state" not in loaded.to_dict()
 
     @pytest.mark.asyncio
+    async def test_connector_states_persisted_and_hidden_from_public_dict(
+        self, mock_viking_fs: MockVikingFS
+    ):
+        manager1 = WatchManager(viking_fs=mock_viking_fs)
+        await manager1.initialize()
+        states = {"documents": {"cursor": {"sync_checkpoint": "2026-09-01T00:00:00+00:00"}}}
+        task = await manager1.create_task(
+            path="tos://bucket/docs/",
+            source_type="tos",
+            to_uri="viking://resources/imports",
+            watch_interval=30.0,
+            auth_state={"provider": "connector_encrypted", "ciphertext": "encrypted"},
+            connector_states=states,
+        )
+
+        manager2 = WatchManager(viking_fs=mock_viking_fs)
+        await manager2.initialize()
+        loaded = await manager2.get_task(task.task_id)
+
+        assert loaded is not None
+        assert loaded.connector_states == states
+        assert "connector_states" not in loaded.to_dict()
+
+    @pytest.mark.asyncio
+    async def test_execution_result_is_persisted_and_public(self, mock_viking_fs: MockVikingFS):
+        manager1 = WatchManager(viking_fs=mock_viking_fs)
+        await manager1.initialize()
+        task = await manager1.create_task(
+            path="tos://bucket/docs/",
+            to_uri="viking://resources/imports",
+            watch_interval=30.0,
+        )
+
+        await manager1.record_execution(
+            task.task_id,
+            status="failed",
+            execution_task_id="ingest-task-1",
+            error="pull failed with Bearer secret-token",
+        )
+
+        manager2 = WatchManager(viking_fs=mock_viking_fs)
+        await manager2.initialize()
+        loaded = await manager2.get_task(task.task_id)
+
+        assert loaded is not None
+        assert loaded.last_task_id == "ingest-task-1"
+        assert loaded.last_status == "failed"
+        assert loaded.last_error == "pull failed with Bearer [REDACTED]"
+        assert loaded.last_execution_time is not None
+        assert loaded.to_dict()["last_error"] == loaded.last_error
+
+    @pytest.mark.asyncio
     async def test_create_task_without_path_raises(self, watch_manager: WatchManager):
         """Test that creating a task without path raises error."""
         with pytest.raises(ValueError, match="Path is required"):
@@ -346,7 +445,7 @@ class TestWatchManager:
             to_uri="viking://resources/test",
         )
 
-        with pytest.raises(ConflictError, match="already used by another task"):
+        with pytest.raises(ConflictError, match="already being monitored"):
             await watch_manager.create_task(
                 path="/test/path2",
                 to_uri="viking://resources/test",
@@ -399,7 +498,7 @@ class TestWatchManager:
             to_uri="viking://resources/test2",
         )
 
-        with pytest.raises(ConflictError, match="already used by another task"):
+        with pytest.raises(ConflictError, match="already being monitored"):
             await watch_manager.update_task(
                 task_id=task2.task_id,
                 account_id=TEST_ACCOUNT_ID,
@@ -478,6 +577,7 @@ class TestWatchManager:
         )
 
         assert len(tasks) == 3
+        assert [task.path for task in tasks] == ["/test/path3", "/test/path2", "/test/path1"]
 
     @pytest.mark.asyncio
     async def test_get_all_tasks_active_only(self, watch_manager: WatchManager):
@@ -502,6 +602,41 @@ class TestWatchManager:
 
         assert len(tasks) == 1
         assert tasks[0].is_active is True
+
+    @pytest.mark.asyncio
+    async def test_get_all_tasks_admin_scoped_to_own_tasks(
+        self, watch_manager: WatchManager
+    ):
+        """ADMIN is scoped to its own tasks; ROOT still sees the whole account."""
+        await watch_manager.create_task(path="/test/alice1", user_id="alice")
+        await watch_manager.create_task(path="/test/bob1", user_id="bob")
+        await watch_manager.create_task(path="/test/alice2", user_id="alice")
+
+        # ROOT keeps the system-wide view.
+        all_tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID, user_id="root", role="root"
+        )
+        assert len(all_tasks) == 3
+
+        # ADMIN no longer sees the whole account — only its own tasks.
+        alice_tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID, user_id="alice", role="admin"
+        )
+        assert {task.user_id for task in alice_tasks} == {"alice"}
+        assert len(alice_tasks) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_all_tasks_isolates_same_account_users(
+        self, watch_manager: WatchManager
+    ):
+        """Same account, different user_id → each caller sees only its own tasks."""
+        await watch_manager.create_task(path="/test/alice1", user_id="alice")
+        await watch_manager.create_task(path="/test/bob1", user_id="bob")
+
+        bob_tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID, user_id="bob", role="user"
+        )
+        assert {task.user_id for task in bob_tasks} == {"bob"}
 
     @pytest.mark.asyncio
     async def test_get_task_by_uri(self, watch_manager: WatchManager):
@@ -596,6 +731,7 @@ class TestWatchManagerPersistence:
 
         task = await manager1.create_task(
             path="/test/path",
+            source_type="local",
             to_uri="viking://resources/test",
             reason="Test task",
             watch_interval=45.0,
@@ -609,6 +745,7 @@ class TestWatchManagerPersistence:
 
         assert loaded_task is not None
         assert loaded_task.path == "/test/path"
+        assert loaded_task.source_type == "local"
         assert loaded_task.to_uri == "viking://resources/test"
         assert loaded_task.reason == "Test task"
         assert loaded_task.watch_interval == 45.0
@@ -744,7 +881,9 @@ class TestWatchManagerConcurrency:
                 to_uri=f"viking://resources/test{index}",
             )
 
-        tasks = await asyncio.gather(*[create_task(i) for i in range(10)])
+        tasks = await asyncio.gather(
+            *[asyncio.to_thread(lambda i=i: asyncio.run(create_task(i))) for i in range(10)]
+        )
 
         assert len(tasks) == 10
         assert len({task.task_id for task in tasks}) == 10
@@ -758,25 +897,155 @@ class TestWatchManagerConcurrency:
 
     @pytest.mark.asyncio
     async def test_concurrent_read_write(self, watch_manager: WatchManager):
-        """Test concurrent read and write operations."""
+        """A background result must preserve a concurrent HTTP pause, including on disk."""
         task = await watch_manager.create_task(path="/test/path")
 
-        async def update_task(index: int):
+        async def pause_task():
             await watch_manager.update_task(
                 task_id=task.task_id,
                 account_id=TEST_ACCOUNT_ID,
                 user_id=TEST_USER_ID,
                 role=TEST_ROLE,
-                reason=f"Update {index}",
+                is_active=False,
             )
 
-        async def read_task():
-            return await watch_manager.get_task(task.task_id)
-
-        operations = [update_task(i) for i in range(5)] + [read_task() for _ in range(5)]
-        results = await asyncio.gather(*operations, return_exceptions=True)
-
-        assert all(not isinstance(r, Exception) for r in results)
-
-        final_task = await watch_manager.get_task(task.task_id)
+        await asyncio.gather(
+            pause_task(),
+            asyncio.to_thread(
+                lambda: asyncio.run(
+                    watch_manager.record_execution(task.task_id, status="completed")
+                )
+            ),
+        )
+        restored = WatchManager(viking_fs=watch_manager._viking_fs)
+        await restored.initialize()
+        final_task = await restored.get_task(task.task_id)
         assert final_task is not None
+        assert final_task.is_active is False
+        assert final_task.last_status == "completed"
+        assert final_task.next_execution_time is None
+
+
+_CONNECTOR_AUTH = {"provider": "connector_encrypted", "ciphertext": "unused"}
+
+
+class TestSharedConnectorTargets:
+    """Connector watches may share a target; native watches are exclusive."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("with_connector", [False, True])
+    @pytest.mark.parametrize("operation", ["create", "update", "rewrite"])
+    async def test_missing_indexed_task_blocks_target_sharing(
+        self, watch_manager_no_fs: WatchManager, with_connector: bool, operation: str
+    ):
+        manager = watch_manager_no_fs
+        target = "viking://resources/shared"
+        source = "viking://resources/source"
+        if with_connector:
+            await manager.create_task(
+                path="tos://bucket/existing/", to_uri=target, auth_state=dict(_CONNECTOR_AUTH)
+            )
+        moving = await manager.create_task(
+            path="tos://bucket/moving/", to_uri=source, auth_state=dict(_CONNECTOR_AUTH)
+        )
+        manager._index_add(TEST_ACCOUNT_ID, target, "missing-task")
+        original_index = {key: set(ids) for key, ids in manager._uri_to_task.items()}
+        original_tasks = set(manager._tasks)
+
+        with pytest.raises(ConflictError, match="already being monitored"):
+            if operation == "create":
+                await manager.create_task(
+                    path="tos://bucket/new/", to_uri=target, auth_state=dict(_CONNECTOR_AUTH)
+                )
+            elif operation == "update":
+                await manager.update_task(
+                    moving.task_id, TEST_ACCOUNT_ID, TEST_USER_ID, TEST_ROLE, to_uri=target
+                )
+            else:
+                await manager.rewrite_target_prefix_internal(source, target, TEST_ACCOUNT_ID)
+
+        assert manager._uri_to_task == original_index
+        assert set(manager._tasks) == original_tasks
+        assert moving.to_uri == source
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("user_id", "role", "visible_indexes"),
+        [
+            ("carol", "user", ()),
+            ("bob", "user", (2,)),
+            ("alice", "user", (0, 1)),
+            ("bob", "admin", (2,)),
+            ("bob", "root", (0, 1, 2)),
+        ],
+    )
+    async def test_uri_lookup_only_considers_visible_tasks(
+        self, watch_manager_no_fs: WatchManager, user_id, role, visible_indexes
+    ):
+        manager = watch_manager_no_fs
+        to_uri = "viking://resources/shared"
+        tasks = []
+        for index, owner in enumerate(("alice", "alice", "bob")):
+            tasks.append(
+                await manager.create_task(
+                    path=f"tos://bucket/{index}/",
+                    user_id=owner,
+                    to_uri=to_uri,
+                    auth_state=dict(_CONNECTOR_AUTH),
+                )
+            )
+
+        if len(visible_indexes) > 1:
+            with pytest.raises(
+                ConflictError, match=f"has {len(visible_indexes)} watch tasks"
+            ) as exc_info:
+                await manager.get_task_by_uri(to_uri, TEST_ACCOUNT_ID, user_id, role)
+            for index, task in enumerate(tasks):
+                assert (task.task_id in str(exc_info.value)) == (index in visible_indexes)
+        else:
+            task = await manager.get_task_by_uri(to_uri, TEST_ACCOUNT_ID, user_id, role)
+            assert task is (tasks[visible_indexes[0]] if visible_indexes else None)
+
+    @pytest.mark.asyncio
+    async def test_connector_watches_coexist_and_native_is_refused(
+        self, watch_manager: WatchManager
+    ):
+        to_uri = "viking://resources/shared"
+        first = await watch_manager.create_task(
+            path="tos://bucket/a/",
+            to_uri=to_uri,
+            watch_interval=5,
+            auth_state=dict(_CONNECTOR_AUTH),
+        )
+        second = await watch_manager.create_task(
+            path="tos://bucket/b/",
+            to_uri=to_uri,
+            watch_interval=5,
+            auth_state=dict(_CONNECTOR_AUTH),
+        )
+        assert first.task_id != second.task_id
+
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await watch_manager.create_task(path="/local/doc", to_uri=to_uri, watch_interval=5)
+
+        # Removing one Connector watch keeps the other addressable by URI again.
+        await watch_manager.delete_task(
+            first.task_id, account_id="default", user_id="default", role="user"
+        )
+        remaining = await watch_manager.get_task_by_uri(
+            to_uri, account_id="default", user_id="default", role="user"
+        )
+        assert remaining is not None
+        assert remaining.task_id == second.task_id
+
+    @pytest.mark.asyncio
+    async def test_native_watch_blocks_connector_watch(self, watch_manager: WatchManager):
+        to_uri = "viking://resources/native"
+        await watch_manager.create_task(path="/local/doc", to_uri=to_uri, watch_interval=5)
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await watch_manager.create_task(
+                path="tos://bucket/a/",
+                to_uri=to_uri,
+                watch_interval=5,
+                auth_state=dict(_CONNECTOR_AUTH),
+            )

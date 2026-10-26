@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
-from typing import Literal
+from typing import Literal, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
@@ -19,6 +19,7 @@ from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import (
+    get_download_request_context,
     get_request_context,
     require_role,
 )
@@ -27,8 +28,10 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
+from openviking.storage.acl import AclSpec
+from openviking.storage.vector_ids import is_vector_record_id
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -43,9 +46,13 @@ class WriteContentRequest(BaseModel):
     content: str
     mode: str = "replace"
     wait: bool = False
-    timeout: float | None = None
     telemetry: TelemetryRequest = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    tags: list[str] | None = None
+    tag_mode: Literal["replace", "append", "clear"] = "replace"
+    acl: AclSpec | None = None
+    # Who made the edit; versions of Compile outputs record it (console edit = manual).
+    edit_source: Literal["manual", "agent", "compile"] = "agent"
 
 
 class BatchWriteOperation(BaseModel):
@@ -55,6 +62,11 @@ class BatchWriteOperation(BaseModel):
     content: str | None = None
     content_base64: str | None = None
     mode: Literal["replace", "append", "create", "upsert"] = "replace"
+    # Optional byte revision, checked under the existing file locks before any writes.
+    expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    tags: list[str] | None = None
+    tag_mode: Literal["replace", "append", "clear"] = "replace"
+    acl: AclSpec | None = None
 
     @model_validator(mode="after")
     def validate_content_shape(self) -> "BatchWriteOperation":
@@ -69,8 +81,13 @@ class BatchWriteRequest(BaseModel):
     root_uri: str
     operations: list[BatchWriteOperation]
     wait: bool = True
-    timeout: float | None = None
     telemetry: TelemetryRequest = False
+    # Preserve conflicting target files and return their URI/reason while writing other files.
+    skip_conflicts: bool = False
+    # Save content without semantic or vector work; the caller schedules processing.
+    defer_processing: bool = False
+    processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
+    edit_source: Literal["manual", "agent", "compile"] = "agent"
 
 
 class SetTagsRequest(BaseModel):
@@ -79,19 +96,17 @@ class SetTagsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str
-    tags: list[str]
+    tags: list[str] | None = None
     mode: str = "replace"
     recursive: bool = False
     telemetry: TelemetryRequest = False
 
 
 class ReindexRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     uri: str
     mode: str = "vectors_only"
+    force: bool = False
     wait: bool = True
-    dry_run: bool = False
     recursive: bool = True
     tags: list[str] | None = None
     tag_mode: str = "replace"
@@ -129,12 +144,17 @@ async def read(
 ):
     """Read file content (L2)."""
     service = get_service()
-    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
+    # If the argument is a raw 32-hex vector record id, skip URI validation
+    # (id lookup + access check happens inside VikingFS.read_file).
+    if is_vector_record_id(uri):
+        resolved = uri
+    else:
+        resolved = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         if raw:
-            result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+            result = await service.fs.read(resolved, ctx=_ctx, offset=offset, limit=limit)
         else:
-            result = await service.fs.read_visible(uri, ctx=_ctx, offset=offset, limit=limit)
+            result = await service.fs.read_visible(resolved, ctx=_ctx, offset=offset, limit=limit)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -188,10 +208,20 @@ async def overview(
 
 @router.get("/download")
 async def download(
-    uri: str = Query(..., description="Viking URI"),
-    _ctx: RequestContext = Depends(get_request_context),
+    request: Request,
+    uri: Optional[str] = Query(None, description="Viking URI"),
+    _ctx: RequestContext = Depends(get_download_request_context),
 ):
-    """Download file as raw bytes (for images, binaries, etc.)."""
+    """Download file as raw bytes (for images, binaries, etc.).
+
+    A signed ``?token=`` from the MCP ``download`` tool serves only the URI bound to the
+    token; any ``uri`` query parameter is ignored on that path.
+    """
+    signed_uri = getattr(request.state, "signed_download_uri", None)
+    if signed_uri is not None:
+        uri = signed_uri
+    if not uri:
+        raise HTTPException(status_code=400, detail="uri is required")
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
@@ -207,7 +237,7 @@ async def download(
     # Try to get filename from stat
     filename = "download"
     try:
-        stat = await service.fs.stat(uri, ctx=_ctx)
+        stat = await service.fs.stat(uri, ctx=_ctx, skip_count=True)
         if stat and "name" in stat:
             filename = stat["name"]
     except Exception:
@@ -237,8 +267,11 @@ async def write(
             ctx=_ctx,
             mode=request.mode,
             wait=request.wait,
-            timeout=request.timeout,
             processing_mode=request.processing_mode,
+            tags=request.tags,
+            tag_mode=request.tag_mode,
+            acl=request.acl,
+            edit_source=request.edit_source,
         ),
     )
     return Response(
@@ -269,7 +302,10 @@ async def batch_write(
             operations=operations,
             ctx=_ctx,
             wait=request.wait,
-            timeout=request.timeout,
+            skip_conflicts=request.skip_conflicts,
+            defer_processing=request.defer_processing,
+            processing_mode=request.processing_mode,
+            edit_source=request.edit_source,
         ),
     )
     return Response(
@@ -287,12 +323,13 @@ async def set_tags(
     """Set explicit k=v retrieval tags metadata for a file or directory."""
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
+    tags = [] if request.mode == "clear" else request.tags or []
     execution = await run_operation(
         operation="content.set_tags",
         telemetry=request.telemetry,
         fn=lambda: service.fs.set_tags(
             uri=uri,
-            tags=request.tags,
+            tags=tags,
             mode=request.mode,
             recursive=request.recursive,
             ctx=_ctx,
@@ -311,8 +348,6 @@ async def reindex(
     ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
-    if body.dry_run and body.mode != "prune_orphans":
-        raise InvalidArgumentError("dry_run is only supported for prune_orphans reindex mode.")
     uri = validate_request_viking_uri(resolve_path_variables(body.uri), ctx)
     uri = _authorize_reindex_uri(uri, ctx)
     service = get_service()
@@ -320,12 +355,13 @@ async def reindex(
         "uri": uri,
         "mode": body.mode,
         "wait": body.wait,
-        "dry_run": body.dry_run,
         "ctx": ctx,
     }
+    if body.force:
+        reindex_kwargs["force"] = True
     if not body.recursive:
         reindex_kwargs["recursive"] = False
-    if body.tags is not None:
+    if body.tags is not None or body.tag_mode == "clear":
         reindex_kwargs["tags"] = body.tags
         reindex_kwargs["tag_mode"] = body.tag_mode
     result = await service.reindex(

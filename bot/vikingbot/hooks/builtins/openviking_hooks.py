@@ -142,12 +142,22 @@ class OpenVikingCompactHook(Hook):
             admin_commit_result = await client.commit_session(
                 session_id=session_id,
                 keep_recent_count=0,
+                # VikingBot uses OV history even when the server defaults WM off.
+                enable_working_memory=True,
                 retention_mode="turn_budget",
                 keep_recent_turn_count=keep_recent_turn_count,
                 retained_message_token_budget=retained_message_token_budget,
                 min_raw_tail_steps=min_raw_tail_steps,
                 user_id=session_user_id,
             )
+            confirmed = admin_commit_result.get("effective_enable_working_memory") is True
+            state["working_memory_confirmed"] = confirmed
+            if not confirmed:
+                # The caller only clears local messages after a successful sync.
+                raise RuntimeError(
+                    "OpenViking did not confirm Working Memory generation; "
+                    "session history was kept. Upgrade the server and retry."
+                )
             logger.info(
                 f"[HOOK] Committed session {session_id} for user {session_user_id or 'current'}"
             )
@@ -409,12 +419,13 @@ class OpenVikingPostCallHook(Hook):
         )
         if is_skill_read:
             if result and not isinstance(result, Exception):
-                match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
+                result_text = str(result)
+                match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result_text, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
                     if skill_name == "experience_loader":
                         return {"tool_name": tool_name, "params": params, "result": result}
-                    desc_match = re.search(r"^description:\s*(.+)$", result, re.MULTILINE)
+                    desc_match = re.search(r"^description:\s*(.+)$", result_text, re.MULTILINE)
                     skill_query = desc_match.group(1).strip() if desc_match else skill_name
 
                     exp_memory = await self._search_skill_experiences(
@@ -424,7 +435,7 @@ class OpenVikingPostCallHook(Hook):
                         openviking_connection=context.openviking_connection,
                     )
                     if exp_memory:
-                        result = f"{result}\n\n---\n## Related Experiences\n{exp_memory}"
+                        result = f"{result_text}\n\n---\n## Related Experiences\n{exp_memory}"
 
         return {"tool_name": tool_name, "params": params, "result": result}
 

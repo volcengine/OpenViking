@@ -13,7 +13,7 @@ from openviking.parse.directory_scan import (
     scan_directory,
 )
 from openviking.parse.registry import ParserRegistry
-from openviking_cli.exceptions import UnsupportedDirectoryFilesError
+from openviking_cli.exceptions import InvalidArgumentError, UnsupportedDirectoryFilesError
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -107,10 +107,14 @@ class TestScanDirectoryTraversal:
         assert not any("node_modules" in p for p in rel_paths)
 
     def test_skips_dot_files_and_empty(self, tmp_tree: Path, registry: ParserRegistry) -> None:
+        (tmp_tree / "application.properties").write_bytes(b"\n")
+        (tmp_tree / "blank.txt").write_bytes(b" \t\r\n")
         result: DirectoryScanResult = scan_directory(tmp_tree, registry=registry, strict=False)
         all_rel = [f.rel_path for f in result.processable + result.unsupported]
         assert ".hidden" not in all_rel
         assert "empty.txt" not in all_rel
+        assert "application.properties" not in all_rel
+        assert "blank.txt" not in all_rel
         assert any("empty" in s or "dot" in s for s in result.skipped)
 
 
@@ -135,7 +139,7 @@ class TestScanDirectoryClassification:
         assert "readme.md" in processable_rel
         assert "doc.html" in processable_rel
         assert "note.txt" in processable_rel
-        # Word, Excel, EPub, PowerPoint, Zip parsers
+        # AnyDoc Office/EPUB and Zip parsers
         assert "report.docx" in processable_rel
         assert "data.xlsx" in processable_rel
         assert "book.epub" in processable_rel
@@ -293,6 +297,58 @@ class TestScanDirectoryEdgeCases:
         assert len(all_p) == len(result.processable)
         for cf in all_p:
             assert cf.classification == CLASS_PROCESSABLE
+
+
+class TestDirectorySafetyLimits:
+    """Directory scans must fail before processing unbounded input trees."""
+
+    def test_rejects_too_many_files(self, tmp_path: Path, registry: ParserRegistry) -> None:
+        for index in range(3):
+            (tmp_path / f"{index}.txt").write_text("x", encoding="utf-8")
+
+        with pytest.raises(InvalidArgumentError, match="file count exceeds"):
+            scan_directory(tmp_path, registry=registry, max_files=2)
+
+    def test_additional_parser_marks_file_processable(
+        self, tmp_path: Path, registry: ParserRegistry
+    ) -> None:
+        (tmp_path / "large.external").write_bytes(b"12345")
+
+        result = scan_directory(
+            tmp_path,
+            registry=registry,
+            strict=True,
+            additional_can_process=lambda path: path.suffix == ".external",
+        )
+
+        assert [item.rel_path for item in result.processable] == ["large.external"]
+
+    def test_rejects_excessive_depth(self, tmp_path: Path, registry: ParserRegistry) -> None:
+        nested = tmp_path / "level-1" / "level-2"
+        nested.mkdir(parents=True)
+        (nested / "deep.txt").write_text("deep", encoding="utf-8")
+
+        with pytest.raises(InvalidArgumentError, match="depth exceeds") as exc_info:
+            scan_directory(tmp_path, registry=registry, max_depth=1)
+
+        assert "path=level-1/level-2" in str(exc_info.value)
+        assert str(tmp_path) not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "limit_name",
+        [
+            "max_files",
+            "max_depth",
+        ],
+    )
+    def test_rejects_non_positive_limit(
+        self,
+        tmp_path: Path,
+        registry: ParserRegistry,
+        limit_name: str,
+    ) -> None:
+        with pytest.raises(InvalidArgumentError, match=limit_name):
+            scan_directory(tmp_path, registry=registry, **{limit_name: 0})
 
 
 # ---------------------------------------------------------------------------

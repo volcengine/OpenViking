@@ -12,10 +12,10 @@
  *      OPENVIKING_PROFILE_TOKEN_BUDGET (default 10000 tokens, CJK-aware).
  *
  *   2. Archive injection (resume/compact only): OV's persistent session's
- *      latest_archive_overview + pre-archive abstracts, fetched at
- *      OPENVIKING_RESUME_CONTEXT_BUDGET tokens. For "compact" this is OV's
- *      canonical long-term record alongside CC's own compact summary; for
- *      "resume" it re-hydrates context lost when CC restarted.
+ *      latest_archive_overview, fetched at OPENVIKING_RESUME_CONTEXT_BUDGET
+ *      tokens. For "compact" this is OV's canonical long-term record alongside
+ *      CC's own compact summary; for "resume" it supplements the history restored by CC.
+ *      This optional injection is disabled by default.
  *
  * The composed payload is mirrored to ~/.openviking/last_inject.md for audit.
  */
@@ -29,22 +29,26 @@ import { createLogger } from "./debug-log.mjs";
 import {
   deriveOvSessionId,
   getSessionContext,
-  isBypassed,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { replayPending } from "./lib/pending-queue.mjs";
-import { buildProfileBlock, estimateTokens } from "./lib/profile-inject.mjs";
-import { writeJsonState } from "./lib/state.mjs";
+import {
+  buildProfileBlock,
+  estimateTokens,
+  isRepeatInjection,
+  truncateToBytes,
+} from "./lib/profile-inject.mjs";
+import { statePath, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
+import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
   process.exit(0);
 }
 
-const cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
-const fetchJSON = makeFetchJSON(cfg);
+const fetchJSON = makeFetchJSON(loadConfig());
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -65,29 +69,25 @@ function approve(additionalContext) {
  * Build the inner <session-archive> block from session context.
  * Returns null when there is no archive content yet.
  */
-function formatArchiveSection(sessionCtx) {
+function formatArchiveSection(sessionCtx, ovSessionId, maxBytes = 0) {
   if (!sessionCtx || typeof sessionCtx !== "object") return null;
-  const overview = (sessionCtx.latest_archive_overview || "").trim();
+  let overview = (sessionCtx.latest_archive_overview || "").trim();
   if (!overview) return null;
+  const truncated = truncateToBytes(overview, maxBytes);
+  if (truncated !== overview) {
+    overview = `${truncated}\nMore detail: read viking://~/sessions/${ovSessionId}/history/ with the OpenViking MCP read tool.`;
+  }
 
-  const abstracts = Array.isArray(sessionCtx.pre_archive_abstracts)
-    ? sessionCtx.pre_archive_abstracts.filter((a) => typeof a === "string" && a.trim())
-    : [];
-
-  const lines = [
+  return [
     "<session-archive>",
     `  <archive-overview>${overview}</archive-overview>`,
-  ];
-  for (const abs of abstracts.slice(0, 5)) {
-    lines.push(`  <archive-abstract>${abs.trim()}</archive-abstract>`);
-  }
-  lines.push("</session-archive>");
-  return lines.join("\n");
+    "</session-archive>",
+  ].join("\n");
 }
 
 function writeLastInject(content) {
   try {
-    const path = join(homedir(), ".openviking", "last_inject.md");
+    const path = join(process.env.OPENVIKING_HOME || join(homedir(), ".openviking"), "last_inject.md");
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content, "utf-8");
   } catch {
@@ -95,33 +95,22 @@ function writeLastInject(content) {
   }
 }
 
-async function main() {
-  let input = {};
-  try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    input = JSON.parse(Buffer.concat(chunks).toString() || "{}");
-  } catch { /* best effort */ }
-
+runHookStage({
+  loadConfig,
+  input: { tolerant: true },
+  envelope: approve,
+  onSkip: (reason) => log("skip", { reason }),
+}, async ({ cfg, input, cwd, sessionId }) => {
   const source = input.source || "startup";
-  const sessionId = input.session_id;
-  const cwd = input.cwd;
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", { source, sessionId, peerSource: effectivePeer.source });
 
-  if (isBypassed(cfg, { sessionId, cwd })) {
-    log("skip", { reason: "bypass_session_pattern" });
-    approve();
-    return;
-  }
-
   const willInjectProfile = !cfg.noAutoInject;
-  const willInjectArchive = (source === "resume" || source === "compact") && !!sessionId;
+  const willInjectArchive = cfg.resumeArchiveInject && (source === "resume" || source === "compact") && !!sessionId;
 
   const health = await fetchJSON("/health");
   if (!health.ok) {
     logError("health_check", "server unreachable");
-    approve();
     return;
   }
 
@@ -139,27 +128,42 @@ async function main() {
 
   if (!willInjectProfile && !willInjectArchive) {
     log("skip", { reason: "no_injection_planned", source, noAutoInject: cfg.noAutoInject });
-    approve();
     return;
   }
 
-  // 1. Profile injection — every source unless explicitly disabled.
+  // 1. Archive injection — resume/compact only, requires session_id. Under a
+  // byte cap it takes up to half, and the profile gets the rest.
+  const maxBytes = cfg.sessionStartMaxBytes || 0;
+  let archiveSection = null;
+  let ovSessionId = null;
+  if (willInjectArchive) {
+    ovSessionId = deriveOvSessionId(sessionId);
+    const sessionCtx = await getSessionContext(fetchJSON, ovSessionId, cfg.resumeContextBudget);
+    archiveSection = formatArchiveSection(sessionCtx, ovSessionId, Math.floor(maxBytes / 2));
+  }
+
+  // 2. Profile injection — every source unless explicitly disabled. A resumed
+  // session already holds the earlier block, so an unchanged one is skipped.
   let profile = null;
   if (!cfg.noAutoInject) {
     try {
-      profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, effectivePeer.peerId);
+      const profileMaxBytes = maxBytes > 0
+        ? Math.max(1, maxBytes - Buffer.byteLength(archiveSection || "", "utf8") - 100)
+        : 0;
+      profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, effectivePeer.peerId, {
+        ...cfg,
+        sessionStartMaxBytes: profileMaxBytes,
+      });
+      if (profile?.block && sessionId) {
+        const repeat = isRepeatInjection(statePath("profile-injections.json"), sessionId, profile.block);
+        if (repeat && source === "resume") {
+          log("profile_inject_skipped", { reason: "unchanged since last injection", source });
+          profile = null;
+        }
+      }
     } catch (err) {
       logError("profile_inject", err);
     }
-  }
-
-  // 2. Archive injection — resume/compact only, requires session_id.
-  let archiveSection = null;
-  let ovSessionId = null;
-  if ((source === "resume" || source === "compact") && sessionId) {
-    ovSessionId = deriveOvSessionId(sessionId);
-    const sessionCtx = await getSessionContext(fetchJSON, ovSessionId, cfg.resumeContextBudget);
-    archiveSection = formatArchiveSection(sessionCtx);
   }
 
   // One-shot signal for the statusline (preserved from prior behavior:
@@ -181,7 +185,6 @@ async function main() {
 
   if (sections.length === 0) {
     log("no_inject", { source, profile: !!profile, archive: !!archiveSection });
-    approve();
     return;
   }
 
@@ -191,7 +194,7 @@ async function main() {
   if (cfg.debug) {
     process.stderr.write(
       `[ov] session-start injected ~${composed.length} chars / ~${estimateTokens(composed)} tokens` +
-      (profile ? ` (profile=${profile.profileChars} chars, prefs=${profile.prefCount}${profile.droppedPref ? `(+${profile.droppedPref} dropped)` : ""}, entities=${profile.entCount}${profile.droppedEnt ? `(+${profile.droppedEnt} dropped)` : ""})` : "") +
+      (profile ? ` (profile=${profile.profileChars} chars, prefs=${profile.prefCount}${profile.droppedPref ? `(+${profile.droppedPref} dropped)` : ""}, entities=${profile.entCount}${profile.droppedEnt ? `(+${profile.droppedEnt} dropped)` : ""}, skills=${profile.skillCount}${profile.droppedSkill ? `(+${profile.droppedSkill} dropped)` : ""})` : "") +
       (archiveSection ? " +archive" : "") +
       "\n",
     );
@@ -211,7 +214,5 @@ async function main() {
     },
     archive: Boolean(archiveSection),
   });
-  approve(composed);
-}
-
-main().catch((err) => { logError("uncaught", err); approve(); });
+  return composed;
+}).catch((err) => { logError("uncaught", err); approve(); });

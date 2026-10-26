@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -113,10 +116,6 @@ func queryBool(values url.Values, key string, value bool) {
 
 func queryInt(values url.Values, key string, value int) {
 	values.Set(key, strconv.Itoa(value))
-}
-
-func queryFloat(values url.Values, key string, value float64) {
-	values.Set(key, strconv.FormatFloat(value, 'f', -1, 64))
 }
 
 func normalizeTarget(target any) any {

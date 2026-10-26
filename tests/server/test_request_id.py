@@ -6,18 +6,20 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
+import weakref
 from types import SimpleNamespace
 from uuid import UUID
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from openviking.metrics.datasources import HttpRequestLifecycleDataSource
 from openviking.observability.context import get_root_observability_context
 from openviking.observability.http_observability_middleware import (
-    create_http_observability_middleware,
+    HTTPObservabilityMiddleware,
 )
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
@@ -35,12 +37,7 @@ class _CaptureHandler(logging.Handler):
 
 def _make_test_app() -> FastAPI:
     app = FastAPI()
-    observability_middleware = create_http_observability_middleware()
-
-    @app.middleware("http")
-    async def add_observability(request, call_next):
-        return await observability_middleware(request, call_next)
-
+    app.add_middleware(HTTPObservabilityMiddleware)
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -62,19 +59,33 @@ def _assert_generated_request_id(value: str) -> None:
     assert UUID(value).version == 4
 
 
-async def test_client_request_id_is_returned_and_reused_by_observability() -> None:
+async def test_request_context_is_reused_and_released_after_response() -> None:
     app = _make_test_app()
+    payload_refs = []
+
+    class RequestPayload:
+        pass
 
     @app.get("/items/{item_id}")
-    async def item(item_id: str):
+    async def item(item_id: str, request: Request):
+        request.state.payload = RequestPayload()
+        payload_refs.append(weakref.ref(request.state.payload))
         root = get_root_observability_context()
         return {"item_id": item_id, "observability_request_id": root.request_id}
 
-    response = await _request(
-        app,
-        "/items/42",
-        headers={REQUEST_ID_HEADER: "resource-import-20260728-001"},
-    )
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        response = await _request(
+            app,
+            "/items/42",
+            headers={REQUEST_ID_HEADER: "resource-import-20260728-001"},
+        )
+        assert get_root_observability_context() is None
+        assert payload_refs[0]() is None
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
     assert response.status_code == 200
     assert response.headers[REQUEST_ID_HEADER] == "resource-import-20260728-001"
@@ -99,7 +110,7 @@ async def test_missing_request_id_generates_uuid_for_health_and_cors_exposes_it(
     assert REQUEST_ID_HEADER.lower() in response.headers["Access-Control-Expose-Headers"].lower()
 
 
-async def test_invalid_request_ids_are_rejected_without_logging_raw_values() -> None:
+async def test_invalid_request_ids_are_replaced_without_logging_raw_values() -> None:
     app = _make_test_app()
     records: list[logging.LogRecord] = []
     server_logger = logging.getLogger("openviking")
@@ -117,16 +128,32 @@ async def test_invalid_request_ids_are_rejected_without_logging_raw_values() -> 
     finally:
         server_logger.removeHandler(handler)
 
-    assert all(response.status_code == 400 for response in responses)
-    assert all(response.json()["error"]["code"] == "INVALID_ARGUMENT" for response in responses)
+    assert all(response.status_code == 404 for response in responses)
     for response in responses:
         _assert_generated_request_id(response.headers[REQUEST_ID_HEADER])
     completion_records = [
         record for record in records if record.name == "openviking.observability.http"
     ]
     assert all(record.request_id for record in completion_records)
-    rendered = "\n".join(record.getMessage() for record in completion_records)
+    rendered = "\n".join(record.getMessage() for record in records)
     assert all(raw not in rendered for raw in ("contains spaces", "x" * 129, "first", "second"))
+
+
+async def test_request_id_with_slash_suffix_is_accepted_verbatim() -> None:
+    app = _make_test_app()
+
+    @app.get("/items/{item_id}")
+    async def item(item_id: str):
+        return {"item_id": item_id}
+
+    response = await _request(
+        app,
+        "/items/42",
+        headers={REQUEST_ID_HEADER: "4257d51f-61c7-49d4-b78d-773e19a2c461/g6hr"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers[REQUEST_ID_HEADER] == "4257d51f-61c7-49d4-b78d-773e19a2c461/g6hr"
 
 
 async def test_unhandled_500_keeps_request_id_for_log_and_response(monkeypatch) -> None:

@@ -51,9 +51,10 @@ class TestBuildErrorHandling:
             assert (
                 "resolve" in error_msg
                 or "hostname" in error_msg
+                or "host does not exist" in error_msg
                 or "dns" in error_msg
                 or "error" in error_msg
-            ), f"DNS失败错误信息应包含 resolve/hostname/dns/error, 实际: {error_msg}"
+            ), f"DNS失败错误信息应包含 resolve/hostname/host does not exist/dns/error, 实际: {error_msg}"
             print("✓ TC-E08 DNS解析失败处理通过(返回error)")
             return
 
@@ -130,7 +131,7 @@ class TestBuildErrorHandling:
             cleanup_temp_dir(temp_dir)
 
     def test_error_corrupted_zip(self, api_client):
-        """TC-E16 损坏的ZIP文件：验证伪造 .zip 文件回退或报错且不崩溃"""
+        """TC-E16 损坏的ZIP文件：返回明确的参数错误。"""
         random_id = str(uuid.uuid4())[:8]
 
         temp_dir = tempfile.mkdtemp()
@@ -140,10 +141,11 @@ class TestBuildErrorHandling:
 
         try:
             response = api_client.add_resource(path=zip_path, wait=True)
-            assert response.status_code == 500, f"损坏ZIP应返回 500, 实际: {response.status_code}"
+            assert response.status_code == 400, response.text
 
             data = response.json()
             assert data.get("status") == "error", f"损坏ZIP应返回 error, 实际: {data.get('status')}"
+            assert data["error"]["code"] == "INVALID_ARGUMENT"
 
             print("✓ TC-E16 损坏的ZIP文件处理通过")
         finally:

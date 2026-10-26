@@ -55,6 +55,16 @@ test("marketplace package ships the canonical Experience skill", () => {
   );
 });
 
+test("marketplace package ships the canonical OpenViking skills skill", () => {
+  const packaged = join(pluginDir, "skills", "openviking-skills", "SKILL.md");
+  assert.ok(existsSync(packaged), "Claude plugin must package the openviking-skills skill");
+  assert.equal(
+    readFileSync(packaged, "utf-8"),
+    readFileSync(join(repoRoot, "examples", "skills", "openviking-skills", "SKILL.md"), "utf-8"),
+    "packaged skill must stay byte-identical to examples/skills/openviking-skills",
+  );
+});
+
 test("Claude .mcp.json starts the stdio MCP proxy", () => {
   const mcp = readJson(join(pluginDir, ".mcp.json"));
   const server = mcp.openviking;
@@ -79,15 +89,24 @@ test("Claude hooks include optional skill experience PostToolUse Read hook", () 
   execFileSync("node", ["--check", join(pluginDir, "scripts", "skill-experience.mjs")], { stdio: "pipe" });
 });
 
-test("Claude hooks include PreToolUse URI guard for filesystem tools", () => {
+test("Claude hooks include PreToolUse URI guard for file and shell tools", () => {
   const hooks = readJson(join(pluginDir, "hooks", "hooks.json"));
   const preToolUse = hooks.hooks?.PreToolUse;
   assert.ok(Array.isArray(preToolUse), "hooks.json must define PreToolUse hooks");
-  const guardHook = preToolUse.find((entry) => entry?.matcher === "Read|Glob|Grep");
-  assert.ok(guardHook, "PreToolUse must guard Read|Glob|Grep");
+  const guardHook = preToolUse.find((entry) => entry?.matcher === "Read|Glob|Grep|Edit|Write|Bash");
+  assert.ok(guardHook, "PreToolUse must guard Read|Glob|Grep|Edit|Write|Bash");
   assert.equal(
     guardHook.hooks?.[0]?.command,
     "node ${CLAUDE_PLUGIN_ROOT}/scripts/uri-guard.mjs",
   );
   execFileSync("node", ["--check", join(pluginDir, "scripts", "uri-guard.mjs")], { stdio: "pipe" });
+});
+
+test("Claude plugin ships the memory doctor skill and script", () => {
+  const skill = join(pluginDir, "skills", "ov-memory-doctor", "SKILL.md");
+  assert.ok(existsSync(skill), "missing skills/ov-memory-doctor/SKILL.md");
+  assert.match(readFileSync(skill, "utf-8"), /node \$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/ov-memory-doctor\.mjs/);
+  assert.ok(existsSync(join(pluginDir, "skills", "ov-memory-doctor", "reference.md")));
+  execFileSync("node", ["--check", join(pluginDir, "scripts", "ov-memory-doctor.mjs")], { stdio: "pipe" });
+  execFileSync("node", ["--check", join(pluginDir, "scripts", "shared", "doctor-core.mjs")], { stdio: "pipe" });
 });

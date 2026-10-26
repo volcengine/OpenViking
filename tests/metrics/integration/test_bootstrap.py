@@ -28,7 +28,7 @@ def test_create_default_collector_manager_registers_expected_collectors_in_order
         "TaskTrackerCollector",
         "ObserverHealthCollector",
         "ObserverStateCollector",
-        "LockCollector",
+        "RagfsMetricCollector",
         "VikingDBCollector",
         "ModelUsageCollector",
         "ServiceProbeCollector",
@@ -59,7 +59,7 @@ def test_create_default_collector_manager_registers_feedback_collector_when_bot_
         "FeedbackCollector",
         "ObserverHealthCollector",
         "ObserverStateCollector",
-        "LockCollector",
+        "RagfsMetricCollector",
         "VikingDBCollector",
         "ModelUsageCollector",
         "ServiceProbeCollector",
@@ -99,7 +99,7 @@ def test_create_default_collector_manager_propagates_construction_failures(monke
 def test_optional_cache_datasource_instrumentation_is_wired_into_key_call_sites():
     project_root = Path(__file__).resolve().parents[3]
     targets = [
-        project_root / "openviking" / "storage" / "queuefs" / "semantic_dag.py",
+        project_root / "openviking" / "storage" / "queuefs" / "semantic_executor.py",
         project_root / "openviking" / "storage" / "queuefs" / "semantic_processor.py",
         project_root / "openviking" / "session" / "memory" / "extract_loop.py",
     ]
@@ -118,6 +118,7 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
     configure_metric_account_dimension(
         enabled=True,
         metric_allowlist={
+            ResourceIngestionCollector.IMPORTS_TOTAL,
             ResourceIngestionCollector.STAGE_TOTAL,
             ResourceIngestionCollector.STAGE_DURATION_SECONDS,
             ResourceIngestionCollector.WAIT_DURATION_SECONDS,
@@ -130,6 +131,11 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
 
     monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_emit), raising=False)
 
+    ResourceIngestionEventDataSource.record_import(
+        pipeline="connector",
+        source_type="repository",
+        account_id="acct-resource",
+    )
     ResourceIngestionEventDataSource.record_stage(stage="parse", status="ok", duration_seconds=0.01)
     ResourceIngestionEventDataSource.record_stage(
         stage="parse", status="error", duration_seconds=0.02
@@ -150,6 +156,10 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
     )
 
     text = PrometheusExporter(registry=registry).render()
+    assert (
+        'openviking_resource_imports_total{account_id="acct-resource",'
+        'pipeline="connector",source_type="repository"} 1'
+    ) in text
     assert (
         'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="ok"} 1'
         in text

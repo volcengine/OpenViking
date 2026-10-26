@@ -9,6 +9,7 @@ import math
 import random
 import uuid
 from abc import ABC, abstractmethod
+from tempfile import TemporaryFile
 from typing import Any, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
@@ -28,17 +29,17 @@ from openviking.storage.expr import (
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME
 
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# VikingDB text field byte limit
+# VikingDB field byte limits
 # ---------------------------------------------------------------------------
-# VikingDB rejects upsert when any text field exceeds this byte length.
+# VikingDB string fields use a uint16 byte length, while text fields allow 1 MiB.
 # Truncation is applied at a valid UTF-8 character boundary so that
 # multi-byte sequences are never split in the middle.
+VIKINGDB_STRING_FIELD_BYTE_LIMIT: int = 64 * 1024
 VIKINGDB_TEXT_FIELD_BYTE_LIMIT: int = 1024 * 1024
 
 
@@ -101,11 +102,15 @@ class CollectionAdapter(ABC):
     mode: str
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
-    # Text fields subject to byte-limit truncation before upsert.
-    _TRUNCATABLE_TEXT_FIELDS: tuple[str, ...] = ("content", "abstract")
+    # Only derived fields may be shortened silently. An oversized abstract is
+    # stored as a prefix, so an exact-match filter using the original full
+    # abstract will not match the stored value.
+    _TRUNCATABLE_STRING_FIELDS: tuple[str, ...] = ("abstract",)
+    _TRUNCATABLE_TEXT_FIELDS: tuple[str, ...] = ("content",)
 
-    # Per-backend byte limit for text fields.  ``None`` means no truncation.
-    # Subclasses backed by VikingDB should set this to ``VIKINGDB_TEXT_FIELD_BYTE_LIMIT``.
+    # Per-backend byte limits. ``None`` means no truncation. VikingDB-backed
+    # adapters set both limits; local adapters keep the complete values.
+    _STRING_FIELD_BYTE_LIMIT: int | None = None
     _TEXT_FIELD_BYTE_LIMIT: int | None = None
 
     # Whether this backend actually stores the ``content`` (full text) field.
@@ -119,6 +124,7 @@ class CollectionAdapter(ABC):
         self._collection_name = collection_name
         self._index_name = index_name
         self._collection: Optional[Collection] = None
+        self._dimension = 0
 
     @property
     def collection_name(self) -> str:
@@ -280,6 +286,11 @@ class CollectionAdapter(ABC):
                 value = normalized.get(field)
                 if isinstance(value, str):
                     normalized[field] = _truncate_text_field(value, self._TEXT_FIELD_BYTE_LIMIT)
+        if self._STRING_FIELD_BYTE_LIMIT is not None:
+            for field in self._TRUNCATABLE_STRING_FIELDS:
+                value = normalized.get(field)
+                if isinstance(value, str):
+                    normalized[field] = _truncate_text_field(value, self._STRING_FIELD_BYTE_LIMIT)
         return normalized
 
     @staticmethod
@@ -473,7 +484,37 @@ class CollectionAdapter(ABC):
         output_fields: Optional[list[str]] = None,
         order_by: Optional[str] = None,
         order_desc: bool = False,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
+        decay_request = (advance or {}).get("time_decay")
+        if decay_request is not None and self.mode != "opengauss":
+            from openviking.utils.time_decay import (
+                build_time_decay_fusion_spec,
+                build_time_decay_post_process_ops,
+            )
+            from openviking.utils.time_utils import parse_iso_datetime
+
+            protection = decay_request["protection"]
+            origin = parse_iso_datetime(decay_request["origin"])
+            if self.mode in {"local", "cuvs", "http"}:
+                spec = build_time_decay_fusion_spec(protection=protection, origin=origin)
+                advance = {
+                    "time_decay": {
+                        "field": spec.field,
+                        "origin_ms": spec.origin_ms,
+                        "offset_ms": spec.offset_ms,
+                        "scale_ms": spec.scale_ms,
+                        "decay": spec.decay,
+                    }
+                }
+            elif self.mode in {"vikingdb", "volcengine"}:
+                advance = {
+                    "post_process_ops": build_time_decay_post_process_ops(
+                        protection=protection, origin=origin
+                    )
+                }
+            else:
+                raise NotImplementedError(f"Time decay is not supported by {self.mode}")
         coll = self.get_collection()
         vectordb_filter = self._compile_filter(filter)
 
@@ -486,6 +527,8 @@ class CollectionAdapter(ABC):
                 offset=offset,
                 filters=vectordb_filter,
                 output_fields=output_fields,
+                advance=advance,
+                return_detail_info=decay_request is not None,
             )
         elif order_by:
             result = coll.search_by_scalar(
@@ -500,7 +543,18 @@ class CollectionAdapter(ABC):
         else:
             # Approximate random sampling with a client-generated random
             # vector so every backend behaves consistently.
-            dim = get_openviking_config().embedding.dimension
+            dim = self._dimension
+            if dim <= 0:
+                dim = next(
+                    (
+                        field["Dim"]
+                        for field in coll.get_meta_data().get("Fields", [])
+                        if field.get("FieldName") == "vector"
+                    ),
+                    0,
+                )
+            if dim <= 0:
+                raise ValueError("Vector collection dimension is unavailable")
             random_vector = [random.uniform(-1, 1) for _ in range(dim)]
             result = coll.search_by_vector(
                 index_name=self._index_name,
@@ -516,6 +570,38 @@ class CollectionAdapter(ABC):
             record = dict(item.fields) if item.fields else {}
             record["id"] = item.id
             record["_score"] = _normalize_result_score(item.score)
+            if item.origin_score is not None:
+                record["_origin_score"] = _normalize_result_score(item.origin_score)
+            if item.addition_score is not None:
+                record["_time_score"] = _normalize_result_score(item.addition_score)
+            record = self._normalize_record_for_read(record)
+            records.append(record)
+        return records
+
+    def search_by_random(
+        self,
+        *,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: int = 10,
+        offset: int = 0,
+        output_fields: Optional[list[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+    ) -> list[Dict[str, Any]]:
+        coll = self.get_collection()
+        result = coll.search_by_random(
+            index_name=self._index_name,
+            limit=limit,
+            offset=offset,
+            filters=self._compile_filter(filter),
+            output_fields=output_fields,
+            advance=advance,
+        )
+
+        records: list[Dict[str, Any]] = []
+        for item in result.data:
+            record = dict(item.fields) if item.fields else {}
+            record["id"] = item.id
+            record["_score"] = _normalize_result_score(item.score)
             record = self._normalize_record_for_read(record)
             records.append(record)
         return records
@@ -525,28 +611,39 @@ class CollectionAdapter(ABC):
         *,
         ids: Optional[list[str]] = None,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
-        limit: int = 100000,
     ) -> int:
+        """Submit IDs for deletion in batches, without waiting for index visibility."""
         coll = self.get_collection()
-        delete_ids = list(ids or [])
-        if not delete_ids and filter is not None:
-            matched = self.query(
-                filter=filter,
-                limit=limit,
-                output_fields=["id"],
-            )
-            delete_ids = [record["id"] for record in matched if record.get("id")]
-
-        if not delete_ids:
+        batch_size = self._DATA_BATCH_SIZE or 100
+        if ids is not None:
+            for start in range(0, len(ids), batch_size):
+                coll.delete_data(ids[start : start + batch_size])
+            return len(ids)
+        if filter is None:
             return 0
 
-        batch_size = self._DATA_BATCH_SIZE
-        if batch_size and len(delete_ids) > batch_size:
-            for i in range(0, len(delete_ids), batch_size):
-                coll.delete_data(delete_ids[i : i + batch_size])
-        else:
-            coll.delete_data(delete_ids)
-        return len(delete_ids)
+        # Enumerate before deleting so our own deletes cannot shift offset pages.
+        # Spool only IDs to disk to keep memory bounded for large accounts.
+        with TemporaryFile(mode="w+t", encoding="utf-8") as pending_ids:
+            offset = 0
+            while True:
+                matched = self.query(
+                    filter=filter,
+                    limit=batch_size,
+                    offset=offset,
+                    output_fields=["id"],
+                    order_by="updated_at",
+                    order_desc=False,
+                )
+                if not matched:
+                    break
+                pending_ids.write(json.dumps([record["id"] for record in matched]) + "\n")
+                offset += len(matched)
+
+            pending_ids.seek(0)
+            for batch in pending_ids:
+                coll.delete_data(json.loads(batch))
+            return offset
 
     @staticmethod
     def _coerce_int(value: Any) -> Optional[int]:
@@ -583,7 +680,20 @@ class CollectionAdapter(ABC):
         if parsed_total is not None:
             return parsed_total
 
-        return 0
+        raise RuntimeError("Vector backend returned an invalid count result")
+
+    def strict_count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
+        """Count records and reject responses without an explicit total."""
+        coll = self.get_collection()
+        result = coll.aggregate_data(
+            index_name=self._index_name,
+            op="count",
+            filters=self._compile_filter(filter),
+        )
+        parsed_total = self._extract_count_total(result.agg)
+        if parsed_total is None:
+            raise RuntimeError("Vector backend returned an invalid count response")
+        return parsed_total
 
     def search_by_keywords(
         self,
@@ -593,6 +703,8 @@ class CollectionAdapter(ABC):
         offset: int = 0,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         output_fields: Optional[list[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[list[str]] = None,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         compiled_filter = self._compile_filter(filter)
@@ -609,6 +721,8 @@ class CollectionAdapter(ABC):
             index_name=self._index_name,
             keywords=keywords,
             query=query,
+            mode=mode,
+            fields=fields,
             limit=limit,
             offset=offset,
             filters=compiled_filter,

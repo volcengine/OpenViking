@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from openviking.parse.parsers.code.ast import SkeletonExtractionResult
 from openviking.parse.parsers.constants import (
     FILE_TYPE_CODE,
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
 )
-from openviking.parse.parsers.code.ast import SkeletonExtractionResult
 from openviking.parse.parsers.media.utils import get_media_type
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
@@ -24,6 +24,15 @@ def _config(vlm_available: bool = True):
     config.vlm.is_available.return_value = vlm_available
     config.vlm.get_completion_async = AsyncMock(return_value="LLM summary")
     return config
+
+
+class _TestVLMResolver:
+    def __init__(self, vlm):
+        self._vlm = vlm
+
+    async def get_vlm(self, account_id):
+        del account_id
+        return self._vlm
 
 
 async def _generate(extraction=None, vlm_available=True):
@@ -50,14 +59,18 @@ async def _generate(extraction=None, vlm_available=True):
 
     with patches[0], patches[1]:
         if extraction is None:
-            result = await SemanticProcessor()._generate_text_summary(
+            result = await SemanticProcessor(
+                vlm_resolver=_TestVLMResolver(config.vlm)
+            )._generate_text_summary(
                 "viking://resources/sample.py",
                 "sample.py",
                 asyncio.Semaphore(1),
             )
         else:
             with patches[2]:
-                result = await SemanticProcessor()._generate_text_summary(
+                result = await SemanticProcessor(
+                    vlm_resolver=_TestVLMResolver(config.vlm)
+                )._generate_text_summary(
                     "viking://resources/sample.py",
                     "sample.py",
                     asyncio.Semaphore(1),

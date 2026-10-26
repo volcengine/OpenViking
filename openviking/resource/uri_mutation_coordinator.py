@@ -3,6 +3,8 @@
 """Process-local coordination for operations that depend on stable URI scopes."""
 
 import asyncio
+import threading
+from concurrent.futures import Future
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional, Sequence
@@ -46,7 +48,8 @@ class UriMutationCoordinator:
     """Coordinate stable URI access and URI mutations within one process."""
 
     def __init__(self) -> None:
-        self._condition = asyncio.Condition()
+        self._lock = threading.Lock()
+        self._waiters: set[Future[None]] = set()
         self._active_accesses: list[_UriLease] = []
         self._active_mutations: list[_UriLease] = []
 
@@ -79,19 +82,31 @@ class UriMutationCoordinator:
             await self._release(lease, mutation=True)
 
     async def _acquire(self, lease: _UriLease, *, mutation: bool) -> None:
-        async with self._condition:
-            while self._has_blocker(lease, mutation=mutation):
-                await self._condition.wait()
-            self._active_leases(mutation=mutation).append(lease)
+        while True:
+            with self._lock:
+                if not self._has_blocker(lease, mutation=mutation):
+                    self._active_leases(mutation=mutation).append(lease)
+                    return
+                waiter: Future[None] = Future()
+                self._waiters.add(waiter)
+            try:
+                await asyncio.wrap_future(waiter)
+            finally:
+                with self._lock:
+                    self._waiters.discard(waiter)
 
     async def _release(self, lease: _UriLease, *, mutation: bool) -> None:
-        async with self._condition:
+        with self._lock:
             active = self._active_leases(mutation=mutation)
             for index, current in enumerate(active):
                 if current is lease:
                     del active[index]
                     break
-            self._condition.notify_all()
+            waiters = self._waiters
+            self._waiters = set()
+        for waiter in waiters:
+            if waiter.set_running_or_notify_cancel():
+                waiter.set_result(None)
 
     def _has_blocker(self, lease: _UriLease, *, mutation: bool) -> bool:
         if any(lease.overlaps(active) for active in self._active_mutations):

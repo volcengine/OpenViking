@@ -10,9 +10,10 @@ include setup.py
 include Cargo.toml
 include Cargo.lock
 graft crates/ragfs
-graft crates/ragfs-cache-redis
 graft crates/ragfs-python
 recursive-include openviking *.yaml
+recursive-include openviking/scheduling/expiry *.lua
+recursive-include openviking_gateway *.json
 
 # sdist should be source-only: never ship runtime binaries from working tree
 prune openviking/bin

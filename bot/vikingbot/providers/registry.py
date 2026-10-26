@@ -1,10 +1,6 @@
 """
-Provider Registry — single source of truth for LLM provider metadata.
-
-Adding a new provider:
-  1. Add a ProviderSpec to PROVIDERS below.
-  2. Add a field to ProvidersConfig in config/schema.py.
-  Done. Env vars, prefixing, config matching, status display all derive from here.
+Bot provider metadata used for history formatting and configuration helpers.
+Model backend registration and request routing are owned by OpenViking VLM.
 
 Order matters — it controls match priority and fallback. Gateways first.
 Every entry writes out all fields so you can copy-paste as a template.
@@ -26,10 +22,10 @@ class ProviderSpec:
     """
 
     # identity
-    name: str  # config field name, e.g. "dashscope"
+    name: str  # provider identifier, e.g. "dashscope"
     keywords: tuple[str, ...]  # model-name keywords for matching (lowercase)
     env_key: str  # LiteLLM env var, e.g. "DASHSCOPE_API_KEY"
-    display_name: str = ""  # shown in `vikingbot status`
+    display_name: str = ""  # human-readable provider label
 
     # model prefixing
     litellm_prefix: str = ""  # "dashscope" → model becomes "dashscope/{model}"
@@ -52,7 +48,9 @@ class ProviderSpec:
     model_overrides: tuple[tuple[str, dict[str, Any]], ...] = ()
 
     # Provider-specific way to request reasoning/thinking, if supported by the protocol.
-    thinking_param: str = ""  # volcengine_thinking | dashscope_enable_thinking | openai_reasoning_effort
+    thinking_param: str = (
+        ""  # volcengine_thinking | dashscope_enable_thinking | openai_reasoning_effort
+    )
 
     @property
     def label(self) -> str:

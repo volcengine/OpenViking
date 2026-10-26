@@ -14,6 +14,16 @@ on:
       - '.github/workflows/_docs.yml'
       - '.github/workflows/_docs-deploy.yml'
       - '.github/workflows/docs.yml'
+      # The deploy also publishes the plugin downloads under /dl.
+      - 'examples/.claude-plugin/**'
+      - 'examples/.agents/**'
+      - 'examples/claude-code-memory-plugin/**'
+      - 'examples/codex-memory-plugin/**'
+      - 'examples/agent-hook-plugin/**'
+      - 'examples/opencode-plugin/**'
+      - 'examples/pi-coding-agent-extension/**'
+      - 'examples/memory-plugin-shared/**'
+      - '.github/scripts/**'
   workflow_dispatch:
 
 permissions:

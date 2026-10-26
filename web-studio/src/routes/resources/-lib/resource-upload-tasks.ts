@@ -83,8 +83,13 @@ function toUploadStatus(
   return 'processing'
 }
 
+function isGenericServerTaskError(error: string): boolean {
+  return error.trim().toLowerCase() === 'resource processing failed'
+}
+
 function mergeServerTask(
   record: TaskRecord,
+  fallbackMessages: { failed: string; cancelled: string },
   existing?: ResourceUploadTask,
 ): ResourceUploadTask {
   const status = toUploadStatus(record.status)
@@ -98,6 +103,38 @@ function mergeServerTask(
       : getServerTaskName(record)
   const isFinished =
     status === 'success' || status === 'failed' || status === 'cancelled'
+  const hasErrorStatus = status === 'failed' || status === 'cancelled'
+  const recordErrorDetail =
+    hasErrorStatus && typeof record.error === 'string' && record.error.trim()
+      ? record.error.trim()
+      : null
+  const recordError =
+    recordErrorDetail && !isGenericServerTaskError(recordErrorDetail)
+      ? recordErrorDetail
+      : null
+  const existingError =
+    hasErrorStatus &&
+    existing?.errorMessage &&
+    existing.errorMessageOrigin !== 'fallback'
+      ? existing.errorMessage
+      : null
+  const fallbackError =
+    status === 'failed'
+      ? fallbackMessages.failed
+      : status === 'cancelled'
+        ? fallbackMessages.cancelled
+        : null
+  const errorMessage = recordError || existingError || fallbackError
+  const errorMessageOrigin = recordError
+    ? 'server'
+    : existingError
+      ? existing?.errorMessageOrigin
+      : fallbackError
+        ? 'fallback'
+        : undefined
+  const errorDetail = hasErrorStatus
+    ? (recordError ?? existing?.errorDetail ?? recordErrorDetail)
+    : null
 
   return {
     id: existing?.id ?? `server-${record.task_id}`,
@@ -114,12 +151,9 @@ function mergeServerTask(
       status === 'failed'
         ? (existing?.errorCode ?? 'SERVER_TASK_FAILED')
         : null,
-    errorMessage:
-      status === 'failed'
-        ? record.error || existing?.errorMessage || 'Processing failed'
-        : status === 'cancelled'
-          ? record.error || 'Processing cancelled'
-          : null,
+    errorDetail,
+    errorMessage,
+    errorMessageOrigin,
     rootUri,
   }
 }
@@ -127,6 +161,7 @@ function mergeServerTask(
 export function mergeServerTasks(
   previous: ResourceUploadTask[],
   serverTasks: TaskRecord[],
+  fallbackMessages: { failed: string; cancelled: string },
 ): ResourceUploadTask[] {
   const previousByServerId = new Map<string, ResourceUploadTask>()
   for (const task of previous) {
@@ -142,7 +177,7 @@ export function mergeServerTasks(
     if (existing) {
       consumedLocalIds.add(existing.id)
     }
-    return mergeServerTask(record, existing)
+    return mergeServerTask(record, fallbackMessages, existing)
   })
 
   for (const task of previous) {

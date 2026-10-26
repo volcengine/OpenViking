@@ -1,6 +1,6 @@
 # 示例：LLM Wiki
 
-把一批异构来源编译成一套 Karpathy 风格、有出处、互相链接的 **LLM Wiki**：每一页有明确的检索目的，开头一句话直给结论，术语统一，关系显式，证据紧贴结论，并由一个 `index.md` 做导航入口。
+将不同来源的材料整理成 Karpathy 风格的 LLM Wiki，即互相链接的 Markdown 知识库。每页围绕一个实体、概念或问题，先给结论，再列出处；`index.md` 提供导航。
 
 这套 Skill 会按页面的检索目的挑选最合适的页面类型：
 
@@ -11,11 +11,13 @@
 | `method` | 有前置条件、有序步骤、可验证结果的可复用流程 |
 | `comparison` | 在明确维度上对两个及以上对象做并排评估 |
 | `analysis` | 围绕一个问题的跨来源结论 |
-| `summary` | 单一来源的忠实数字化摘要（仅当 `--reason` 明确要求时才生成） |
+| `summary` | 单一来源的忠实数字化摘要（仅当 `--instruction` 明确要求时才生成） |
 
-默认以 `entity` 和 `concept` 为主，其余类型只在满足各自的严格判定时才提升。产物是一个**知识库**，不是逐文档的摘要拼盘。
+默认生成 `entity` 和 `concept` 页面，其他类型按 Skill 中的条件生成。多个来源中的相关内容会合并到同一主题下。
 
-Skill 源码：[examples/compile/ov-compile-skills/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/llm-wiki) · 可视化脚本：[examples/compile/graph-show/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki)
+Skill 源码：[openviking/system_assets/compile/example-skills/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/llm-wiki) · 可视化脚本：[examples/compile/graph-show/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki)
+
+先确认[前置条件](01-overview.md#前置条件)，并在 OpenViking 仓库根目录运行以下命令。来源目录需替换为自己的资料目录。
 
 ## 第一步：准备来源
 
@@ -28,7 +30,7 @@ ov add-resource ./my-research --to viking://resources/research --wait
 # 或者写入单个文件
 ov mkdir viking://resources/research
 ov write viking://resources/research/notes.md \
-  --from-file ./notes.md --mode create --wait
+  --from-file ./notes.md --mode create
 ```
 
 确认来源已就位：
@@ -39,17 +41,17 @@ ov ls -r viking://resources/research
 
 ## 第二步：添加 Skill
 
-把 LLM Wiki 的 Skill 装进服务。默认落到你的用户私有 skills 命名空间；想让团队共用就用 `-p viking://agent/skills`：
+本例将 Skill 安装到共享目录 `viking://agent/skills`，与后面的编译命令保持一致。省略 `-p` 会安装到用户私有目录，此时应把 `--skill` 改为安装返回的 URI：
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/llm-wiki --wait
+ov add-skill openviking/system_assets/compile/example-skills/llm-wiki -p viking://agent/skills --wait
 ```
 
 查看装好的 Skill URI：
 
 ```bash
 ov skills list
-# → viking://agent/skills/llm-wiki  （或 viking://user/<你>/skills/llm-wiki）
+# → viking://agent/skills/llm-wiki
 ```
 
 ## 第三步：执行编译
@@ -59,20 +61,19 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
-  --reason "面向团队检索整理成 Wiki，保留每条结论的出处" \
-  --wait
+  --instruction "面向团队检索整理成 Wiki，保留每条结论的出处"
 ```
 
 - `--from` 可以重复或用逗号分隔，一次传多个来源。
 - `--to` 目录不存在时会自动创建。
-- 想要机器可读结果加 `-o json`；不想阻塞终端就去掉 `--wait`，用返回的 `task_id` 轮询：
+- 想要机器可读结果加 `-o json`；命令会立即返回 `task_id`，用它查询或取消任务：
 
 ```bash
 ov task status cmp_01abc      # 查看进度与最终结果
 ov task cancel cmp_01abc      # 协作式取消
 ```
 
-## 第四步：看看产物
+## 第四步：查看产物
 
 编译完成后目标目录里就是一套 Markdown 知识库。先看导航页，再按需钻进去：
 
@@ -128,4 +129,4 @@ python examples/compile/graph-show/llm-wiki/wiki_graph.py \
 
 - [上下文编译概览](./01-overview.md)
 - [Knowledge Graph 示例](./03-knowledge-graph.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

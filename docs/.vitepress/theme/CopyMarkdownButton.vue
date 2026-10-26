@@ -2,6 +2,7 @@
 import { useData, withBase } from 'vitepress'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { hasPageLlmsTxt } from './llms-txt'
+import { trackEvent } from './track'
 
 const { frontmatter, page } = useData()
 
@@ -33,9 +34,10 @@ const items = computed(() => {
 })
 
 async function copyToClipboard() {
-  const md: string = frontmatter.value._rawMarkdown ?? ''
+  const md = decodeURIComponent(frontmatter.value._rawMarkdownEncoded ?? '')
   if (!md) return
   await navigator.clipboard.writeText(md)
+  trackEvent('copy-markdown')
   copied.value = true
   setTimeout(() => { copied.value = false }, 2000)
 }

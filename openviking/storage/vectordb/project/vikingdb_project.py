@@ -44,6 +44,10 @@ class VikingDBProject:
         self.CollectionClass = load_collection_class(self.collection_class_path)
         self.collection_args = collection_args or {}
 
+        # One long-lived client shared by all metadata calls so its pooled
+        # keep-alive session is reused instead of rebuilt per request.
+        self._client = VikingDBClient(self.host, self.headers)
+
         logger.info(
             f"Initialized VikingDB project: {project_name} with host {host} and collection class {collection_class_path}"
         )
@@ -54,18 +58,16 @@ class VikingDBProject:
 
     def has_collection(self, collection_name: str) -> bool:
         """Check if collection exists by calling API"""
-        client = VikingDBClient(self.host, self.headers)
         path, method = VIKINGDB_APIS["GetVikingdbCollection"]
         data = {"ProjectName": self.project_name, "CollectionName": collection_name}
-        response = client.do_req(method, path=path, req_body=data)
+        response = self._client.do_req(method, path=path, req_body=data)
         return response.status_code == 200
 
     def get_collection(self, collection_name: str) -> Optional[Collection]:
         """Get collection by name by calling API"""
-        client = VikingDBClient(self.host, self.headers)
         path, method = VIKINGDB_APIS["GetVikingdbCollection"]
         data = {"ProjectName": self.project_name, "CollectionName": collection_name}
-        response = client.do_req(method, path=path, req_body=data)
+        response = self._client.do_req(method, path=path, req_body=data)
         if response.status_code != 200:
             return None
 
@@ -91,10 +93,9 @@ class VikingDBProject:
 
     def _get_collections(self) -> List[str]:
         """List all collection names from server"""
-        client = VikingDBClient(self.host, self.headers)
         path, method = VIKINGDB_APIS["ListVikingdbCollection"]
         data = {"ProjectName": self.project_name}
-        response = client.do_req(method, path=path, req_body=data)
+        response = self._client.do_req(method, path=path, req_body=data)
         if response.status_code != 200:
             logger.error(f"List collections failed: {response.text}")
             return []

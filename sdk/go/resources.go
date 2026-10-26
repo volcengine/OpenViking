@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -29,7 +32,6 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 	setString(payload, "ignore_dirs", opts.IgnoreDirs)
 	setString(payload, "include", opts.Include)
 	setString(payload, "exclude", opts.Exclude)
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	if opts.PreserveStructure != nil {
 		payload["preserve_structure"] = *opts.PreserveStructure
 	}
@@ -43,8 +45,13 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 	if len(opts.Args) > 0 {
 		payload["args"] = opts.Args
 	}
-	if opts.Tags != nil {
-		payload["tags"] = opts.Tags
+	if opts.ACL != nil {
+		payload["acl"] = opts.ACL
+	}
+	if opts.Tags != nil || opts.TagMode == "clear" {
+		if opts.Tags != nil {
+			payload["tags"] = opts.Tags
+		}
 		if opts.TagMode != "" {
 			payload["tag_mode"] = opts.TagMode
 		}

@@ -20,9 +20,16 @@ def _cfg(**kwargs):
 
 
 def test_embedding_text_source_validation_accepts_supported_values():
-    for value in ["summary_first", "summary_only", "content_only"]:
+    for value in ["summary_first", "content_only"]:
         cfg = _cfg(text_source=value)
         assert cfg.text_source == value
+
+
+def test_embedding_legacy_summary_only_normalizes_and_round_trips(caplog):
+    cfg = _cfg(text_source="summary_only")
+    assert cfg.text_source == "summary_first"
+    assert "summary_only is deprecated" in caplog.text
+    assert EmbeddingConfig.model_validate_json(cfg.model_dump_json()).text_source == "summary_first"
 
 
 def test_embedding_text_source_defaults_to_content_only():

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 "use client"
 
 import * as React from "react"
@@ -47,6 +48,7 @@ function DialogContent({
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
 }) {
+  const { t } = useTranslation('common')
   return (
     <DialogPortal>
       <DialogOverlay />
@@ -72,7 +74,7 @@ function DialogContent({
           >
             <XIcon
             />
-            <span className="sr-only">Close</span>
+            <span className="sr-only">{t('ui.close')}</span>
           </DialogPrimitive.Close>
         )}
       </DialogPrimitive.Popup>
@@ -98,6 +100,7 @@ function DialogFooter({
 }: React.ComponentProps<"div"> & {
   showCloseButton?: boolean
 }) {
+  const { t } = useTranslation('common')
   return (
     <div
       data-slot="dialog-footer"
@@ -110,7 +113,7 @@ function DialogFooter({
       {children}
       {showCloseButton && (
         <DialogPrimitive.Close render={<Button variant="outline" />}>
-          Close
+          {t('ui.close')}
         </DialogPrimitive.Close>
       )}
     </div>

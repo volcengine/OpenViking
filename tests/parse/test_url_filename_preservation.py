@@ -59,6 +59,20 @@ class TestURLTypeDetectorCodeExtensions:
         self.detector = URLTypeDetector()
 
     @pytest.mark.asyncio
+    async def test_extensionless_html_detected_from_head(self, monkeypatch):
+        _patch_httpx_client(
+            monkeypatch,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=b"<html><h1>Page</h1></html>",
+            fail_head=False,
+        )
+
+        url_type, meta = await self.detector.detect("https://example.com/article?id=123")
+
+        assert url_type == URLType.WEBPAGE
+        assert meta["detected_by"] == "media_type"
+
+    @pytest.mark.asyncio
     async def test_py_extension_detected(self):
         url = "https://example.com/path/schemas.py"
         url_type, meta = await self.detector.detect(url)
@@ -426,7 +440,7 @@ def _patch_httpx_client(
         async def __aexit__(self, *_args):
             return False
 
-        async def head(self, _url):
+        async def head(self, _url, headers=None):
             if fail_head:
                 raise RuntimeError("SignatureDoesNotMatch")
             return FakeResponse(response_head_headers, b"", head_status_code)

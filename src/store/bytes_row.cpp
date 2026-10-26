@@ -77,6 +77,15 @@ Schema::Schema(const std::vector<FieldDef>& fields) {
     meta.offset = current_offset;
     meta.id = field.id;
     meta.default_value = field.default_value;
+    meta.legacy_data_type = field.legacy_data_type.value_or(field.data_type);
+    if (meta.legacy_data_type != meta.data_type) {
+      // STRING -> TEXT preserves the fixed-region offset layout.
+      if (meta.legacy_data_type != FieldType::STRING ||
+          meta.data_type != FieldType::TEXT) {
+        throw std::invalid_argument("Only STRING to TEXT migration is supported");
+      }
+      has_legacy_fields_ = true;
+    }
 
     field_metas_[field.name] = meta;
     field_orders_[field.id] = meta;
@@ -205,9 +214,14 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
   }
 
   // Allocate buffer
-  std::string buffer;
-  buffer.resize(variable_region_offset);
-  char* ptr = &buffer[0];
+  // Include the version in the original allocation; offsets remain relative
+  // to the row body so legacy and current schemas share the fixed layout.
+  const size_t header_size =
+      schema_->has_legacy_fields() ? VERSIONED_ROW_HEADER.size() : 0;
+  std::string buffer(variable_region_offset + header_size, '\0');
+  if (header_size != 0)
+    std::memcpy(buffer.data(), VERSIONED_ROW_HEADER.data(), header_size);
+  char* ptr = buffer.data() + header_size;
 
   // Write header (field count)
   // Be careful with alignment if we were doing raw casting, but we use memcpy
@@ -333,8 +347,17 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
   return buffer;
 }
 
-Value BytesRow::deserialize_field(const std::string& serialized_data,
+Value BytesRow::deserialize_field(std::string_view serialized_data,
                                   const std::string& field_name) const {
+  bool legacy = schema_->has_legacy_fields();
+  if (legacy && !serialized_data.empty() && serialized_data[0] == '\0') {
+    if (serialized_data.size() <= VERSIONED_ROW_HEADER.size() ||
+        serialized_data.substr(0, VERSIONED_ROW_HEADER.size()) != VERSIONED_ROW_HEADER) {
+      throw std::invalid_argument("Invalid or unsupported bytes_row record version");
+    }
+    serialized_data.remove_prefix(VERSIONED_ROW_HEADER.size());
+    legacy = false;
+  }
   const FieldMeta* meta_ptr = schema_->get_field_meta(field_name);
   if (!meta_ptr)
     return std::monostate{};
@@ -354,7 +377,7 @@ Value BytesRow::deserialize_field(const std::string& serialized_data,
 
   const char* field_ptr = ptr + meta.offset;
 
-  switch (meta.data_type) {
+  switch (legacy ? meta.legacy_data_type : meta.data_type) {
     case FieldType::INT64: {
       int64_t v;
       std::memcpy(&v, field_ptr, sizeof(v));
@@ -526,7 +549,7 @@ Value BytesRow::deserialize_field(const std::string& serialized_data,
 }
 
 std::map<std::string, Value> BytesRow::deserialize(
-    const std::string& serialized_data) const {
+    std::string_view serialized_data) const {
   std::map<std::string, Value> result;
   const auto& order = schema_->get_field_order();
   for (const auto& meta : order) {

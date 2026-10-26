@@ -2,9 +2,14 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { useChat } from '#/lib/sessions/use-chat'
-import { useSession, useSessionMessages } from '#/lib/sessions/use-sessions'
+import {
+  useCreateSession,
+  useSession,
+  useSessionMessages,
+} from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { MessageList } from './message-list'
 import { MemoryImpact } from './memory-impact'
@@ -15,15 +20,43 @@ const PRODUCT_NAME = 'OpenViking'
 
 interface ThreadProps {
   sessionId: string
+  draft?: boolean
+  onPersisted?: () => void
 }
 
-export function Thread({ sessionId }: ThreadProps) {
+export function Thread(props: ThreadProps) {
+  const { identityScopeKey } = useAppConnection()
+  return (
+    <SessionThread key={`${identityScopeKey}:${props.sessionId}`} {...props} />
+  )
+}
+
+function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
+  const { t } = useTranslation('sessions')
+  const service = useStudioService()
+  const canChat = service.ready && service.provider === 'opensource'
   const { identityScopeKey } = useAppConnection()
   const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
 
-  const { data: session } = useSession(sessionId)
-  const { data: historyMessages } = useSessionMessages(sessionId)
+  const [historyId] = useState(draft ? undefined : sessionId)
+  const persisted = useRef(!draft)
+  const creating = useRef(false)
+  const mounted = useRef(false)
+  const [creationError, setCreationError] = useState<string>()
+  const createSession = useCreateSession()
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const { data: session } = useSession(historyId)
+  const {
+    data: historyMessages,
+    isPending: historyLoading,
+    error: historyError,
+  } = useSessionMessages(historyId)
 
   const chat = useChat({
     identityScopeKey,
@@ -35,10 +68,33 @@ export function Thread({ sessionId }: ThreadProps) {
   const isStreaming = chat.status === 'streaming'
 
   const handleSend = useCallback(
-    (message: string) => {
-      if (message.trim()) chat.send(message)
+    async (message: string) => {
+      if (!canChat || !message.trim() || creating.current) return false
+      if (!persisted.current) {
+        creating.current = true
+        setCreationError(undefined)
+        try {
+          await createSession.mutateAsync(sessionId)
+          onPersisted?.()
+          if (!mounted.current) return false
+          persisted.current = true
+        } catch (error) {
+          if (mounted.current)
+            setCreationError(
+              error instanceof Error ? error.message : String(error),
+            )
+          return false
+        } finally {
+          creating.current = false
+        }
+      }
+      const sending = chat.send(message)
+      if (chat.status === 'streaming') {
+        await sending
+      }
+      return true
     },
-    [chat],
+    [canChat, chat, createSession, sessionId, onPersisted],
   )
 
   // ---- Auto-scroll ----
@@ -60,7 +116,7 @@ export function Thread({ sessionId }: ThreadProps) {
     scrollRafRef.current = requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     })
-  }, [chat.messages.length, chat.streamingParts])
+  }, [chat.messages.length, chat.streamingParts, chat.streamingInsertIndex])
 
   const [showBackground, setShowBackground] = useState(false)
 
@@ -79,9 +135,9 @@ export function Thread({ sessionId }: ThreadProps) {
   const isEmpty = chat.messages.length === 0 && !isStreaming
 
   return (
-    <div className="relative flex h-full flex-col">
+    <div className="relative flex h-full min-h-0 flex-1 flex-col">
       {/* PixelBlast background — deferred until idle */}
-      {showBackground && (
+      {showBackground && isEmpty && (
         <div className="pointer-events-none absolute inset-0 z-0 opacity-40">
           <Suspense fallback={null}>
             <PixelBlast
@@ -97,18 +153,30 @@ export function Thread({ sessionId }: ThreadProps) {
 
       <div className="relative z-10 flex h-12 items-center justify-between gap-4 border-b border-border/50 bg-background/95 px-6">
         <h2 className="truncate text-sm font-medium text-foreground">
-          {title || sessionId}
+          {draft && title === sessionId
+            ? t('threadList.newSession')
+            : title || sessionId}
         </h2>
-        <MemoryImpact session={session} />
+        {service.provider === 'opensource' ? (
+          <MemoryImpact session={session} />
+        ) : null}
       </div>
 
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto px-4 pt-12 pb-24"
+        className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto px-4 pt-6 pb-6"
       >
-        {isEmpty ? (
-          <ThreadEmpty />
+        {historyId && historyLoading ? (
+          <div role="status" className="py-6 text-sm text-muted-foreground">
+            {t('threadList.loading')}
+          </div>
+        ) : historyError ? (
+          <div role="alert" className="py-6 text-sm text-destructive">
+            {t('chat.historyLoadFailed', { error: historyError.message })}
+          </div>
+        ) : isEmpty ? (
+          <ThreadEmpty canChat={canChat} />
         ) : (
           <MessageList
             messages={chat.messages}
@@ -116,6 +184,7 @@ export function Thread({ sessionId }: ThreadProps) {
               isStreaming
                 ? {
                     parts: chat.streamingParts,
+                    insertIndex: chat.streamingInsertIndex,
                     iteration: chat.iteration,
                   }
                 : undefined
@@ -125,18 +194,28 @@ export function Thread({ sessionId }: ThreadProps) {
         <div ref={bottomRef} />
       </div>
 
-      <div className="relative z-10">
-        <Composer
-          onSend={handleSend}
-          onCancel={chat.abort}
-          isStreaming={isStreaming}
-        />
-      </div>
+      {(creationError || chat.error) && (
+        <div
+          role="alert"
+          className="relative z-10 mx-auto w-full max-w-4xl px-4 py-2 text-sm text-destructive"
+        >
+          {t('chat.sendFailed', { error: creationError || chat.error })}
+        </div>
+      )}
+      {canChat ? (
+        <div className="relative z-10">
+          <Composer
+            onSend={handleSend}
+            onCancel={chat.abort}
+            isStreaming={isStreaming}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
 
-function ThreadEmpty() {
+function ThreadEmpty({ canChat }: { canChat: boolean }) {
   const { t } = useTranslation('sessions')
 
   return (
@@ -149,7 +228,7 @@ function ThreadEmpty() {
           {PRODUCT_NAME}
         </h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          {t('chat.emptyDescription')}
+          {t(canChat ? 'chat.emptyDescription' : 'chat.emptyReadDescription')}
         </p>
       </div>
     </div>

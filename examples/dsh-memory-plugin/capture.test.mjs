@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captureEvent, promptText } from "./capture.mjs";
+import {
+  captureEvent,
+  isOpenVikingPluginMessage,
+  OPENVIKING_PLUGIN_KIND,
+  pluginMessage,
+  promptText,
+} from "./capture.mjs";
 
 const CONFIG = {
   captureAssistantTurns: true,
@@ -10,6 +16,27 @@ const CONFIG = {
   captureMode: "semantic",
   peerId: "workspace-a",
 };
+
+test("emits producer-owned kinds and filters namespaced plugin injections", () => {
+  const injected = pluginMessage("recalled context", { form: "recall" });
+  assert.equal(injected.source.kind, OPENVIKING_PLUGIN_KIND);
+  assert.equal(isOpenVikingPluginMessage(injected), true);
+
+  assert.equal(captureEvent({
+    type: "user/message",
+    data: injected,
+  }, CONFIG), null);
+  for (const kind of ["plugin:time-context", "time-context"]) {
+    assert.equal(captureEvent({
+      type: "user/message",
+      data: {
+        role: "user",
+        content: [{ type: "text", text: "Time sampled while preparing turn 3" }],
+        source: { kind, form: "snapshot" },
+      },
+    }, CONFIG), null, kind);
+  }
+});
 
 test("captures DSH message events without recapturing injected context", () => {
   const user = captureEvent({
@@ -25,6 +52,15 @@ test("captures DSH message events without recapturing injected context", () => {
     parts: [{ type: "text", text: "Remember that deployment uses blue." }],
     peer_id: "workspace-a",
   });
+
+  const legacyUser = captureEvent({
+    type: "user/message",
+    data: {
+      role: "user",
+      content: [{ type: "text", text: "Legacy hosts may omit source metadata." }],
+    },
+  }, CONFIG);
+  assert.equal(legacyUser?.parts?.[0]?.text, "Legacy hosts may omit source metadata.");
 
   const injected = captureEvent({
     type: "user/message",
@@ -47,6 +83,23 @@ test("captures DSH message events without recapturing injected context", () => {
     },
   }, CONFIG);
   assert.equal(otherPlugin, null);
+});
+
+test("DSH capture applies rules after removing injected context", () => {
+  const event = {
+    type: "user/message",
+    data: {
+      role: "user",
+      content: [{ type: "text", text: "<openviking-context>approved</openviking-context>Remember private details." }],
+      source: { kind: "user" },
+    },
+  };
+  assert.equal(captureEvent(event, { ...CONFIG, captureFilters: ["k/approved/"] }), null);
+  assert.deepEqual(captureEvent(event, { ...CONFIG, captureFilters: ["d/approved/"] }), {
+    role: "user",
+    parts: [{ type: "text", text: "Remember private details." }],
+    peer_id: "workspace-a",
+  });
 });
 
 test("preserves DSH tool call identity in captured tool results", () => {
@@ -77,6 +130,34 @@ test("preserves DSH tool call identity in captured tool results", () => {
   assert.equal(captured.parts[0].tool_name, "bash");
   assert.match(captured.parts[0].tool_output, /workspace/);
   assert.equal(names.size, 0);
+});
+
+test("marks DSH tool-result errors with the error status", () => {
+  const names = new Map();
+  captureEvent({
+    type: "tool/call",
+    data: { callId: "call-err", name: "bash", arguments: "{\"command\":\"df\"}" },
+  }, CONFIG, names);
+
+  const captured = captureEvent({
+    type: "tool/result",
+    data: {
+      message: {
+        role: "user",
+        content: [{
+          type: "tool-result",
+          toolCallId: "call-err",
+          content: [{ type: "text", text: "bash: df: command not found" }],
+          isError: true,
+        }],
+        source: { kind: "tool", callId: "call-err" },
+      },
+    },
+  }, CONFIG, names);
+
+  assert.equal(captured.role, "user");
+  assert.equal(captured.parts[0].type, "tool");
+  assert.equal(captured.parts[0].tool_status, "error");
 });
 
 test("does not retain tool call names when tool-result capture is disabled", () => {
@@ -120,7 +201,7 @@ test("preserves DSH event time so identical offline messages do not deduplicate"
   assert.equal(captured.created_at, "2026-08-14T04:20:34.567Z");
 });
 
-test("builds recall queries from current input while excluding its own context", () => {
+test("builds recall queries from user input only, excluding injected context", () => {
   assert.equal(promptText([
     {
       role: "user",
@@ -135,7 +216,43 @@ test("builds recall queries from current input while excluding its own context",
     {
       role: "user",
       content: [{ type: "text", text: "background job completed" }],
-      source: { kind: "plugin", plugin: "job-controller", form: "notice", summary: "done" },
+      source: { kind: "plugin:job-controller", form: "notice", summary: "done" },
     },
-  ]), "Current question\n\nbackground job completed");
+    {
+      role: "user",
+      content: [{ type: "text", text: "Current time: 2026-10-05 21:20" }],
+      source: { kind: "time-context" },
+    },
+  ]), "Current question");
+
+  // A batch made only of injected context has no user query, so recall is skipped.
+  assert.equal(promptText([
+    {
+      role: "user",
+      content: [{ type: "text", text: "Current time: 2026-10-05 21:20" }],
+      source: { kind: "time-context" },
+    },
+    {
+      role: "user",
+      content: [{ type: "text", text: "background job completed" }],
+      source: { kind: "plugin:job-controller", form: "notice", summary: "done" },
+    },
+  ]), "");
+
+  assert.equal(promptText([
+    { role: "user", content: [{ type: "text", text: "legacy untagged input" }] },
+  ]), "legacy untagged input");
+
+  assert.equal(promptText([
+    {
+      role: "user",
+      content: [{ type: "text", text: "Current question" }],
+      source: { kind: "user" },
+    },
+    {
+      role: "user",
+      content: [{ type: "text", text: "new recall" }],
+      source: { kind: OPENVIKING_PLUGIN_KIND },
+    },
+  ]), "Current question");
 });

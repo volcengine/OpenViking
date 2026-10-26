@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
+from openviking.session.auto_commit_policy import validate_idle_timeout_input
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.image_search import is_viking_uri
 from openviking_cli.utils import get_logger
@@ -78,9 +79,9 @@ PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 class AutoCommitPolicyRequest(BaseModel):
     """Session-level auto-commit policy overrides.
 
-    All fields are optional. Bounds are not enforced here: ``AutoCommitPolicy``
-    clamps every value into ``[0, max]`` so clamping lives in one place across
-    the HTTP, SDK, and CLI entrypoints.
+    All fields are optional. ``idle_timeout_seconds`` validates its write-time
+    minimum here so legacy stored policies remain readable. Other bounds are
+    clamped by ``AutoCommitPolicy``.
     """
 
     pending_token_threshold: Optional[int] = None
@@ -90,6 +91,11 @@ class AutoCommitPolicyRequest(BaseModel):
     min_commit_interval_seconds: Optional[int] = None
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("idle_timeout_seconds")
+    @classmethod
+    def validate_idle_timeout_seconds(cls, value: Optional[int]) -> Optional[int]:
+        return None if value is None else validate_idle_timeout_input(value)
 
     @model_validator(mode="after")
     def reject_explicit_null_fields(self) -> "AutoCommitPolicyRequest":
@@ -164,13 +170,6 @@ class BatchAddMessageRequest(BaseModel):
 
     messages: List[AddMessageRequest] = Field(..., max_length=100)
     telemetry: TelemetryRequest = False
-
-
-class UsedRequest(BaseModel):
-    """Request model for recording usage."""
-
-    contexts: Optional[List[str]] = None
-    skill: Optional[Dict[str, Any]] = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -373,8 +372,8 @@ async def get_session(
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     result["auto_commit_policy"] = service.sessions.effective_auto_commit_policy(session)
     result.pop("event_search_tags", None)
-    result["memory_extraction_config"] = (
-        service.sessions.effective_memory_extraction_config(session)
+    result["memory_extraction_config"] = service.sessions.effective_memory_extraction_config(
+        session
     )
     return Response(status="ok", result=result)
 
@@ -407,9 +406,7 @@ async def update_session_config(
     from openviking_cli.exceptions import NotFoundError
 
     service = get_service()
-    event_tags = _event_tags_from_extraction_config(
-        request.memory_extraction_config
-    )
+    event_tags = _event_tags_from_extraction_config(request.memory_extraction_config)
     update_auto_commit_policy = "auto_commit_policy" in request.model_fields_set
     auto_commit_policy = (
         request.auto_commit_policy.model_dump(exclude_none=True)
@@ -441,9 +438,9 @@ async def update_session_config(
         )
     except NotFoundError:
         return error_response("NOT_FOUND", f"Session {session_id} not found")
-    return Response(
-        status="ok", result=execution.result, telemetry=execution.telemetry
-    ).model_dump(exclude_none=True)
+    return Response(status="ok", result=execution.result, telemetry=execution.telemetry).model_dump(
+        exclude_none=True
+    )
 
 
 @router.get("/{session_id}/tool-results")
@@ -455,7 +452,7 @@ async def list_tool_results(
 ):
     """List externalized tool results for a session."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.list_tool_results(tool_name=tool_name, limit=limit)
     return Response(status="ok", result=_to_jsonable(result))
 
@@ -477,7 +474,7 @@ async def read_tool_result(
             details={"field": "limit", "value": limit},
         )
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.read_tool_result(
         tool_result_id,
         offset=offset,
@@ -498,7 +495,7 @@ async def search_tool_result(
 ):
     """Search within an externalized tool result."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.search_tool_result(
         tool_result_id,
         query=q,
@@ -538,13 +535,11 @@ async def get_session_archive(
     from openviking_cli.exceptions import NotFoundError
 
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     try:
         result = await session.get_session_archive(archive_id)
     except NotFoundError:
-        return error_response(
-            code="NOT_FOUND", message=f"Archive {archive_id} not found"
-        )
+        return error_response(code="NOT_FOUND", message=f"Archive {archive_id} not found")
     return Response(status="ok", result=_to_jsonable(result))
 
 
@@ -598,6 +593,15 @@ class CommitRequest(BaseModel):
     behavior.
     """
 
+    enable_working_memory: Optional[StrictBool] = Field(
+        default=None,
+        description="Override only Working Memory generation for this commit; null inherits policy.",
+    )
+    reset_context: bool = Field(
+        default=False,
+        strict=True,
+        description="Append an empty archive boundary after archiving all messages; keep session ID.",
+    )
     keep_recent_count: int = Field(
         default=0,
         ge=0,
@@ -643,6 +647,8 @@ class CommitRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_turn_retention_opt_in(self) -> "CommitRequest":
+        if self.reset_context and (self.keep_recent_count != 0 or self.retention_mode is not None):
+            raise ValueError("reset_context requires keep_recent_count=0 and no retention_mode")
         if self.retention_mode is None and any(
             value is not None
             for value in (
@@ -672,6 +678,7 @@ async def commit_session(
     service = get_service()
     commit_kwargs: Dict[str, Any] = {"keep_recent_count": body.keep_recent_count}
     optional_retention = {
+        "enable_working_memory": body.enable_working_memory,
         "retention_mode": body.retention_mode,
         "keep_recent_turn_count": body.keep_recent_turn_count,
         "retained_message_token_budget": body.retained_message_token_budget,
@@ -680,6 +687,8 @@ async def commit_session(
     commit_kwargs.update(
         {key: value for key, value in optional_retention.items() if value is not None}
     )
+    if body.reset_context:
+        commit_kwargs["reset_context"] = True
     event_tags = _commit_event_tags(body.extraction_metadata)
     if event_tags is not None:
         commit_kwargs["event_tags"] = event_tags
@@ -697,17 +706,6 @@ async def commit_session(
         result=execution.result,
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
-
-
-@router.post("/{session_id}/extract")
-async def extract_session(
-    session_id: str = Path(..., description="Session ID"),
-    _ctx: RequestContext = Depends(get_session_request_context),
-):
-    """Extract memories from a session."""
-    service = get_service()
-    result = await service.sessions.extract(session_id, _ctx)
-    return Response(status="ok", result=_to_jsonable(result))
 
 
 @router.post("/{session_id}/messages")
@@ -734,7 +732,7 @@ async def add_message(
     service = get_service()
 
     async def _add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         parts = _resolve_message_parts(request, _ctx)
 
         specs = [
@@ -789,7 +787,7 @@ async def batch_add_messages(
     service = get_service()
 
     async def _batch_add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         specs = []
         for msg_request in request.messages:
             parts = _resolve_message_parts(msg_request, _ctx)
@@ -830,40 +828,3 @@ async def batch_add_messages(
         fn=_batch_add,
     )
     return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
-
-
-@router.post("/{session_id}/used")
-async def record_used(
-    request: UsedRequest,
-    session_id: str = Path(..., description="Session ID"),
-    _ctx: RequestContext = Depends(get_session_request_context),
-):
-    """Record actually used contexts and skills in a session."""
-    service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
-
-    # Resolve path variables in contexts
-    resolved_contexts = None
-    if request.contexts is not None:
-        resolved_contexts = [
-            validate_request_viking_uri(resolve_path_variables(uri), _ctx)
-            for uri in request.contexts
-        ]
-
-    # Resolve path variables in skill URI if present
-    resolved_skill = request.skill
-    if resolved_skill is not None and "uri" in resolved_skill:
-        resolved_skill = dict(resolved_skill)
-        resolved_skill["uri"] = validate_request_viking_uri(
-            resolve_path_variables(resolved_skill["uri"]), _ctx
-        )
-
-    session.used(contexts=resolved_contexts, skill=resolved_skill)
-    return Response(
-        status="ok",
-        result={
-            "session_id": session_id,
-            "contexts_used": session.stats.contexts_used,
-            "skills_used": session.stats.skills_used,
-        },
-    )

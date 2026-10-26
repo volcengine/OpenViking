@@ -150,16 +150,45 @@ async def test_ov_add_resource_posts_resources(client: httpx.AsyncClient) -> Non
     assert '"wait":true' in raw.replace(" ", "")
 
 
-@respx.mock
-async def test_ov_session_status_gets_session(client: httpx.AsyncClient) -> None:
-    route = respx.get("http://ov.test/api/v1/sessions/sess-42").mock(
-        return_value=httpx.Response(200, json={"status": "ok", "result": {"session_id": "sess-42"}})
+@pytest.mark.parametrize(
+    ("session_id", "expected_status"),
+    [
+        ("sess-42", 200),
+        ("release.v1_42", 200),
+        ("会话-42", 200),
+        ("", 422),
+        (".", 422),
+        ("..", 422),
+        ("../admin/accounts", 422),
+        (r"..\admin\accounts", 422),
+        ("%2e%2e%2fadmin%2faccounts", 422),
+        ("sess-42?auto_create=true", 422),
+        ("sess-42#fragment", 422),
+        ("sess-42\n", 422),
+    ],
+)
+@respx.mock(assert_all_called=False)
+async def test_ov_session_status_gets_session(
+    client: httpx.AsyncClient,
+    session_id: str,
+    expected_status: int,
+    respx_mock: respx.MockRouter,
+) -> None:
+    route = respx_mock.get().mock(
+        return_value=httpx.Response(
+            200, json={"status": "ok", "result": {"session_id": session_id}}
+        )
     )
-    resp = await client.post("/tools/ov_session_status", json={"session_id": "sess-42"})
-    assert resp.status_code == 200
+    resp = await client.post("/tools/ov_session_status", json={"session_id": session_id})
+    assert resp.status_code == expected_status
+    if expected_status == 422:
+        assert not route.called
+        return
     sent = route.calls.last.request
     _assert_headers(sent)
-    assert sent.url.path == "/api/v1/sessions/sess-42"
+    assert sent.url.path == f"/api/v1/sessions/{session_id}"
+    assert sent.url.query == b""
+    assert sent.url.fragment == ""
 
 
 @respx.mock

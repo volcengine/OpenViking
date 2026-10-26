@@ -2035,6 +2035,13 @@ class CuVSDenseIndex:
                 assert results is not None
                 request.future.set_result(results[index])
 
+    def _score_from_distance(self, distance: float) -> float:
+        if self.distance == "l2":
+            return 1.0 - distance
+        if self.normalize_vectors:
+            return min(1.0, max(0.0, (distance + 1.0) / 2.0))
+        return distance
+
     def _dispatch_micro_batch(self, requests: List[_CuVSMicroBatchRequest]) -> None:
         runnable = [
             request for request in requests if request.future.set_running_or_notify_cancel()
@@ -2108,7 +2115,7 @@ class CuVSDenseIndex:
                     if offset < 0 or offset >= len(request_snapshot.labels):
                         continue
                     labels.append(request_snapshot.labels[offset])
-                    scores.append(1.0 - distance if self.distance == "l2" else distance)
+                    scores.append(self._score_from_distance(distance))
                 results.append((labels, scores))
         except BaseException as exc:
             error = exc
@@ -2475,7 +2482,7 @@ class CuVSDenseIndex:
                 if offset < 0 or offset >= len(snapshot.labels):
                     continue
                 labels.append(snapshot.labels[offset])
-                scores.append(1.0 - distance if self.distance == "l2" else distance)
+                scores.append(self._score_from_distance(distance))
         finally:
             try:
                 # A concurrent rebuild can remove the index/cache's owning

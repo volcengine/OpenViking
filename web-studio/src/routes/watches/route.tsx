@@ -48,6 +48,7 @@ import {
   TableRow,
 } from '#/components/ui/table'
 import { Switch } from '#/components/ui/switch'
+import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   AddResourceForm,
@@ -102,8 +103,10 @@ function WatchesRoute() {
 }
 
 export function WatchManagementPage() {
-  const { i18n, t } = useTranslation('watchesPage')
+  const { i18n, t } = useTranslation(['watchesPage', 'studio'])
   const { identityScopeKey } = useAppConnection()
+  const { provider } = useStudioService()
+  const readOnly = provider !== 'opensource'
   const queryClient = useQueryClient()
   const [addOpen, setAddOpen] = React.useState(false)
   const [isCreatingWatch, setIsCreatingWatch] = React.useState(false)
@@ -346,7 +349,7 @@ export function WatchManagementPage() {
             {t('title')}
           </h1>
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            {t('description')}
+            {t(readOnly ? 'studio:watchesReadDescription' : 'description')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -362,15 +365,17 @@ export function WatchManagementPage() {
             />
             {t('refresh')}
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={isCreatingWatch}
-            onClick={() => setAddOpen(true)}
-          >
-            <PlusIcon />
-            {t(isCreatingWatch ? 'adding' : 'add')}
-          </Button>
+          {!readOnly ? (
+            <Button
+              type="button"
+              size="sm"
+              disabled={isCreatingWatch}
+              onClick={() => setAddOpen(true)}
+            >
+              <PlusIcon />
+              {t(isCreatingWatch ? 'adding' : 'add')}
+            </Button>
+          ) : null}
         </div>
       </header>
 
@@ -406,7 +411,7 @@ export function WatchManagementPage() {
           <PageState icon={<Clock3Icon />}>
             <span>{t('empty')}</span>
             <span className="text-xs text-muted-foreground">
-              {t('emptyDescription')}
+              {t(readOnly ? 'studio:watchesReadEmpty' : 'emptyDescription')}
             </span>
           </PageState>
         ) : (
@@ -458,22 +463,24 @@ export function WatchManagementPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <Switch
-                          size="sm"
-                          checked={watch.isActive}
-                          disabled={updateMutation.isPending}
-                          aria-label={t(
-                            watch.isActive
-                              ? 'actions.disable'
-                              : 'actions.enable',
-                          )}
-                          onCheckedChange={(checked) =>
-                            updateMutation.mutate({
-                              input: { isActive: checked },
-                              taskId: watch.taskId,
-                            })
-                          }
-                        />
+                        {!readOnly ? (
+                          <Switch
+                            size="sm"
+                            checked={watch.isActive}
+                            disabled={updateMutation.isPending}
+                            aria-label={t(
+                              watch.isActive
+                                ? 'actions.disable'
+                                : 'actions.enable',
+                            )}
+                            onCheckedChange={(checked) =>
+                              updateMutation.mutate({
+                                input: { isActive: checked },
+                                taskId: watch.taskId,
+                              })
+                            }
+                          />
+                        ) : null}
                         <span className="text-xs text-muted-foreground">
                           {t(
                             watch.isActive
@@ -492,71 +499,82 @@ export function WatchManagementPage() {
                     <TableCell className="text-xs text-muted-foreground">
                       {formatTime(watch.nextExecutionTime)}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      <div className="flex flex-wrap justify-end gap-1">
-                        <ActionButton
-                          label={t(
-                            isSyncing ? 'actions.syncing' : 'actions.trigger',
-                          )}
-                          disabled={
-                            !watch.isActive ||
-                            triggerMutation.isPending ||
-                            pendingSync !== null
-                          }
-                          onClick={() =>
-                            triggerMutation.mutate({
-                              baselineExecutionTime: watch.lastExecutionTime,
-                              taskId: watch.taskId,
-                              toUri: watch.toUri,
-                            })
-                          }
-                        >
-                          <RotateCwIcon
-                            className={isSyncing ? 'animate-spin' : undefined}
-                          />
-                        </ActionButton>
-                        <ActionButton
-                          label={t('actions.edit')}
-                          disabled={updateMutation.isPending}
-                          onClick={() => setEditingWatch(watch)}
-                        >
-                          <PencilIcon />
-                        </ActionButton>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 px-2 text-xs"
-                                aria-label={t('actions.more')}
-                                title={t('actions.more')}
-                              />
+                    {!readOnly ? (
+                      <TableCell className="whitespace-nowrap">
+                        <div className="flex flex-wrap justify-end gap-1">
+                          <ActionButton
+                            label={t(
+                              isSyncing ? 'actions.syncing' : 'actions.trigger',
+                            )}
+                            disabled={
+                              !watch.isActive ||
+                              triggerMutation.isPending ||
+                              pendingSync !== null
+                            }
+                            onClick={() =>
+                              triggerMutation.mutate({
+                                baselineExecutionTime: watch.lastExecutionTime,
+                                taskId: watch.taskId,
+                                toUri: watch.toUri,
+                              })
                             }
                           >
-                            <EllipsisIcon />
-                            <span>{t('actions.more')}</span>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={() => setHistoryWatch(watch)}
+                            <RotateCwIcon
+                              className={isSyncing ? 'animate-spin' : undefined}
+                            />
+                          </ActionButton>
+                          <ActionButton
+                            label={t('actions.edit')}
+                            disabled={updateMutation.isPending}
+                            onClick={() => setEditingWatch(watch)}
+                          >
+                            <PencilIcon />
+                          </ActionButton>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              render={
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-8 px-2 text-xs"
+                                  aria-label={t('actions.more')}
+                                  title={t('actions.more')}
+                                />
+                              }
                             >
-                              <HistoryIcon />
-                              {t('actions.history')}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              variant="destructive"
-                              disabled={deleteMutation.isPending}
-                              onClick={() => setDeletingWatch(watch)}
-                            >
-                              <Trash2Icon />
-                              {t('actions.delete')}
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </TableCell>
+                              <EllipsisIcon />
+                              <span>{t('actions.more')}</span>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => setHistoryWatch(watch)}
+                              >
+                                <HistoryIcon />
+                                {t('actions.history')}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                variant="destructive"
+                                disabled={deleteMutation.isPending}
+                                onClick={() => setDeletingWatch(watch)}
+                              >
+                                <Trash2Icon />
+                                {t('actions.delete')}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </TableCell>
+                    ) : (
+                      <TableCell className="text-right">
+                        <ActionButton
+                          label={t('actions.history')}
+                          onClick={() => setHistoryWatch(watch)}
+                        >
+                          <HistoryIcon />
+                        </ActionButton>
+                      </TableCell>
+                    )}
                   </TableRow>
                 )
               })}
@@ -631,11 +649,11 @@ export function WatchManagementPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteMutation.isPending}>
+            <AlertDialogCancel disabled={readOnly || deleteMutation.isPending}>
               {t('cancel')}
             </AlertDialogCancel>
             <AlertDialogAction
-              disabled={deleteMutation.isPending}
+              disabled={readOnly || deleteMutation.isPending}
               onClick={(event) => {
                 event.preventDefault()
                 if (deletingWatch) {

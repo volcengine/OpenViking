@@ -50,7 +50,7 @@ def test_build_docker_workflow_does_not_force_zero_version_on_main_builds():
 
     assert "fetch-depth: 0" in workflow
     assert "id: openviking-version" in workflow
-    assert "from build_support.versioning import resolve_openviking_version" in workflow
+    assert "from scripts.build_support.versioning import resolve_openviking_version" in workflow
     assert "OPENVIKING_VERSION=${{ steps.openviking-version.outputs.version }}" in workflow
     assert zero_build_arg not in workflow
     assert "fallback to 0.0.0" not in workflow

@@ -36,10 +36,10 @@ class UsageAuditRuntime:
     api_service: UsageAuditQueryService
     shutdown_flush_timeout_seconds: float
 
-    async def delete_user_data(self, *, account_id: str, user_id: str) -> dict[str, int]:
-        """Drain accepted events before purging one user's projections."""
+    async def delete_data(self, *, account_id: str, user_id: str | None = None) -> dict[str, int]:
+        """Drain accepted events before purging one account/user scope's projections."""
         await self.worker.flush()
-        return await self.store.delete_user_data(account_id=account_id, user_id=user_id)
+        return await self.store.delete_data(account_id=account_id, user_id=user_id)
 
 
 def _resolve_sqlite_path(config: ServerConfig) -> Path:

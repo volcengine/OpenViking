@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createConnectionError,
+  createConnectionHealthHeaders,
   createManagementAccountConnection,
   createIdentityScopeKey,
   createConnectionRoleProbeKey,
@@ -11,9 +13,28 @@ import {
   synchronizeConnectionRuntime,
   synchronizeResolvedDataIdentity,
 } from './use-app-connection'
+import i18n from '#/i18n'
 import { ovClient } from '#/lib/ov-client'
 
 const acceptClientError = () => true
+
+describe('createConnectionError', () => {
+  it('reads the active locale when the asynchronous error is created', async () => {
+    const originalLanguage = i18n.resolvedLanguage || i18n.language
+    try {
+      await i18n.changeLanguage('en')
+      const english = createConnectionError('credentialMismatch').message
+
+      await i18n.changeLanguage('zh-CN')
+      const chinese = createConnectionError('credentialMismatch').message
+
+      expect(chinese).toBe('所选凭证与目标账号和用户不匹配。')
+      expect(chinese).not.toBe(english)
+    } finally {
+      await i18n.changeLanguage(originalLanguage)
+    }
+  })
+})
 
 describe('createConnectionRoleProbeKey', () => {
   it('matches the connection produced by an internal identity synchronization', () => {
@@ -229,6 +250,22 @@ describe('createManagementAccountConnection', () => {
   })
 })
 
+it('preserves a root login key and caller identity when selecting a gateway account', () => {
+  const connection = {
+    accountId: 'account-a',
+    userId: 'root',
+    apiKey: 'root-login-key',
+    adminApiKey: '',
+    baseUrl: 'http://localhost:1935',
+  }
+  expect(
+    createManagementAccountConnection(connection, ' account-b ', true),
+  ).toEqual({
+    ...connection,
+    accountId: 'account-b',
+  })
+})
+
 describe('synchronizeConnectionRuntime', () => {
   it('updates the imperative client before React state consumers remount', () => {
     const next = synchronizeConnectionRuntime(
@@ -243,6 +280,7 @@ describe('synchronizeConnectionRuntime', () => {
     )
 
     expect(next).toEqual({
+      serviceSelection: 'auto',
       accountId: 'account-b',
       adminApiKey: 'root-key',
       apiKey: 'account-b-user-key',
@@ -255,6 +293,25 @@ describe('synchronizeConnectionRuntime', () => {
       apiKey: 'account-b-user-key',
       identityHeaders: false,
       userId: 'bob',
+    })
+  })
+
+  it('passes the selected identity to a keyless development service', () => {
+    synchronizeConnectionRuntime(
+      {
+        serviceSelection: 'opensource',
+        accountId: 'work-memory',
+        userId: 'alice',
+        apiKey: '',
+        adminApiKey: '',
+        baseUrl: 'http://127.0.0.1:1933',
+      },
+      'dev',
+    )
+    expect(ovClient.getConnection()).toMatchObject({
+      accountId: 'work-memory',
+      userId: 'alice',
+      identityHeaders: true,
     })
   })
 })
@@ -274,33 +331,39 @@ describe('resolveConnectionRoleProbeState', () => {
     })
   })
 
-  it('keeps non-dev no-key connections unknown without probing', () => {
-    expect(
-      resolveConnectionRoleProbeState({
-        apiKey: '',
-        baseUrl: 'http://localhost:3000',
-        serverMode: 'api_key',
-      }),
-    ).toEqual({
-      isLoading: false,
-      role: 'unknown',
-      shouldProbe: false,
-    })
-  })
+  it.each(['api_key', 'trusted'] as const)(
+    'keeps non-dev no-key connections unknown without probing: %s',
+    (serverMode) => {
+      expect(
+        resolveConnectionRoleProbeState({
+          apiKey: '',
+          baseUrl: 'http://localhost:3000',
+          serverMode,
+        }),
+      ).toEqual({
+        isLoading: false,
+        role: 'unknown',
+        shouldProbe: false,
+      })
+    },
+  )
 
-  it('probes non-dev keyed connections through /health', () => {
-    expect(
-      resolveConnectionRoleProbeState({
-        apiKey: 'root-key',
-        baseUrl: 'http://localhost:3000',
-        serverMode: 'api_key',
-      }),
-    ).toEqual({
-      isLoading: true,
-      role: 'unknown',
-      shouldProbe: true,
-    })
-  })
+  it.each(['api_key', 'trusted'] as const)(
+    'probes non-dev keyed connections through /health: %s',
+    (serverMode) => {
+      expect(
+        resolveConnectionRoleProbeState({
+          apiKey: 'root-key',
+          baseUrl: 'http://localhost:3000',
+          serverMode,
+        }),
+      ).toEqual({
+        isLoading: true,
+        role: 'unknown',
+        shouldProbe: true,
+      })
+    },
+  )
 })
 
 describe('shouldRedirectToLoginOnApiError', () => {
@@ -334,4 +397,63 @@ describe('shouldRedirectToLoginOnApiError', () => {
       ),
     ).toBe(false)
   })
+})
+
+describe('connection credential planes', () => {
+  it('uses the hosted data credential even when a source control credential remains configured', () => {
+    const connection = {
+      baseUrl: 'https://api.vikingdb.cn-beijing.volces.com/openviking',
+      apiKey: 'user-key',
+      adminApiKey: 'expired-control-key',
+      accountId: 'old-account',
+      userId: 'old-user',
+    }
+    expect(createConnectionHealthHeaders(connection, 'data')).toEqual({
+      Authorization: 'Bearer user-key',
+    })
+    expect(createConnectionHealthHeaders(connection, 'control')).toEqual({
+      Authorization: 'Bearer user-key',
+    })
+    expect(
+      createConnectionHealthHeaders({ ...connection, apiKey: '' }, 'data'),
+    ).toEqual({})
+  })
+  it('drops identity assertions when a custom domain is explicitly selected as hosted', () => {
+    const connection = {
+      baseUrl: 'https://proxy.example/openviking',
+      serviceSelection: 'volcengine' as const,
+      apiKey: 'user-key',
+      adminApiKey: '',
+      accountId: 'old-account',
+      userId: 'old-user',
+    }
+    expect(createConnectionHealthHeaders(connection, 'data')).toEqual({
+      Authorization: 'Bearer user-key',
+    })
+    expect(
+      createConnectionHealthHeaders(
+        { ...connection, serviceSelection: 'opensource' },
+        'data',
+      ),
+    ).toMatchObject({
+      'X-OpenViking-Account': 'old-account',
+      'X-OpenViking-User': 'old-user',
+    })
+  })
+})
+
+it('does not synchronize a control-key placeholder into the selected data user', () => {
+  expect(
+    synchronizeResolvedDataIdentity(
+      {
+        serviceSelection: 'opensource',
+        baseUrl: 'https://service.test',
+        apiKey: '',
+        adminApiKey: 'admin-key',
+        accountId: 'tenant',
+        userId: 'alice',
+      },
+      { role: 'admin', accountId: 'tenant', userId: 'default' },
+    ),
+  ).toBeNull()
 })

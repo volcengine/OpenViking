@@ -1,0 +1,52 @@
+{
+  "hosts": [
+    {
+      "id": "dsh",
+      "name": "DeepSeek Harness",
+      "plugin": "examples/dsh-memory-plugin",
+      "probe": "@deepseek-ai/dsh",
+      "tags": [
+        "latest",
+        "next",
+        "alpha"
+      ],
+      "packages": "^@deepseek-ai/dsh(-.+)?$",
+      "includePrerelease": true,
+      "tests": "*.test.mjs",
+      "skipTests": [
+        "bundle.test.mjs"
+      ],
+      "smoke": [
+        {
+          "run": [
+            "npm",
+            "install",
+            "--no-audit",
+            "--no-fund",
+            "@deepseek-ai/dsh@{version}"
+          ]
+        },
+        {
+          "run": [
+            "./node_modules/.bin/dsh",
+            "plugin",
+            "--profile",
+            "web",
+            "add",
+            "{tarball}"
+          ]
+        },
+        {
+          "run": [
+            "./node_modules/.bin/dsh",
+            "--profile",
+            "web",
+            "--dump-config"
+          ],
+          "expect": "^- id: openviking-memory-runtime$"
+        }
+      ],
+      "notes": "DSH checks @deepseek-ai/dsh-* peers at plugin load with prereleases included. bundle.test.mjs asserts the dev pins stay at the tested minimum, which this check replaces on purpose. The smoke steps install that dsh release, add the packed bundle to a profile, and require the composed profile to include the bundle; DSH refuses to add a bundle whose peers reject the release, so the add step fails first."
+    }
+  ]
+}

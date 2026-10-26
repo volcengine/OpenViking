@@ -31,12 +31,17 @@
 
 #[cfg(feature = "cache")]
 pub mod cache;
+#[cfg(feature = "cache")]
+pub mod cache_runtime;
 pub mod core;
 pub mod crypto;
-pub mod lock;
-pub mod multibackend;
 pub mod git;
+pub mod lock;
+pub mod metrics;
+pub mod multibackend;
 pub mod plugins;
+pub mod privacy_extractor;
+pub mod privacy_matcher;
 pub mod shape;
 
 // Re-export core types for convenience

@@ -17,13 +17,13 @@ from .embedding import EmbeddingCollector
 from .encryption import EncryptionCollector
 from .encryption_probe import EncryptionProbeCollector
 from .feedback import FeedbackCollector
-from .lock import LockCollector
 from .manager import CollectorManager, RefreshResult
 from .model_provider_probe import ModelProviderProbeCollector
 from .model_usage import ModelUsageCollector
 from .observer_health import ObserverHealthCollector
 from .observer_state import ObserverStateCollector
-from .queue import QueueCollector
+from .queue import QueueCollector, QueueDurationCollector
+from .ragfs import RagfsMetricCollector
 from .rerank import RerankCollector
 from .retrieval import RetrievalCollector
 from .retrieval_backend_probe import RetrievalBackendProbeCollector
@@ -47,8 +47,9 @@ __all__ = [
     "EncryptionCollector",
     "FeedbackCollector",
     "QueueCollector",
+    "QueueDurationCollector",
     "RerankCollector",
-    "LockCollector",
+    "RagfsMetricCollector",
     "VikingDBCollector",
     "ObserverHealthCollector",
     "TaskTrackerCollector",

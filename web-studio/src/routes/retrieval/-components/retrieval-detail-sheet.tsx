@@ -114,13 +114,13 @@ export function RetrievalDetailSheet({
                   rel="noreferrer noopener"
                   search={resourceSearch}
                   target="_blank"
-                  to="/playground"
+                  to="/filesystem"
                 />
               }
               size="sm"
               variant="outline"
             >
-              {t('detail.openPlayground')}
+              {t('detail.openFilesystem')}
               <ExternalLink className="size-3.5" />
             </Button>
           ) : null}

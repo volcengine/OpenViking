@@ -40,7 +40,7 @@ export function TokenTrendPanel({
     <Panel>
       <SectionHeading
         action={
-          <span className="rounded-full border border-[oklch(0.68_0.12_232/0.2)] bg-background/70 px-3 py-1 text-xs tabular-nums text-muted-foreground shadow-xs dark:bg-white/[0.06]">
+          <span className="pt-1 text-xs tabular-nums text-muted-foreground">
             {rangeLabel}
           </span>
         }

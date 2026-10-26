@@ -64,7 +64,7 @@ Core config lives under `plugins.entries.openviking.config`:
 |---|---:|---|
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP endpoint. Can also come from `OPENVIKING_BASE_URL` / `OPENVIKING_URL`. |
 | `apiKey` | empty | Optional API key. Can also come from `OPENVIKING_API_KEY`. |
-| `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
+| `peer_role` | `none` | Memory scope: `none` (shared `viking://user/<user_id>/memories`), `assistant` (assistant-attributed memory under `.../peers/<assistant_id>/memories`), or `sender` (sender-attributed memory under `.../peers/<sender_id>/memories`). Legacy `person` is accepted as `sender`. |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. |
 | `accountId` / `userId` | empty | Advanced tenant identity headers for root-key or trusted deployments. |
 | `targetUri` | `viking://~/memories` | Default search scope for legacy targeted memory search. |
@@ -95,7 +95,7 @@ openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
 Useful variants:
 
 ```bash
-openclaw openviking setup --base-url <URL> --api-key <KEY> --peer-prefix openclaw-prod --json
+openclaw openviking setup --base-url <URL> --api-key <KEY> --peer-role assistant --peer-prefix openclaw-prod --json
 openclaw openviking setup --base-url <URL> --api-key <ROOT_KEY> --account-id <ACCOUNT_ID> --user-id <USER_ID> --json
 openclaw openviking setup --base-url <URL> --api-key <KEY> --recall-target-types resource --json
 openclaw openviking setup --base-url <URL> --api-key <KEY> --allow-offline --json
@@ -190,7 +190,6 @@ This agent tool is disabled by default. Prefer manual `/add-resource` for resour
 | `reason` | No | Reason/note for import. |
 | `instruction` | No | Processing instruction for semantic extraction. |
 | `wait` | No | Wait for processing completion. |
-| `timeout` | No | Timeout in seconds when `wait=true`. |
 
 The current OpenClaw tool exposes the parameters above. The underlying client also supports server-facing resource options such as `strict`, `ignore_dirs`, `include`, `exclude`, and `preserve_structure` for command/internal paths; do not pass them to the tool unless the registered schema exposes them.
 
@@ -203,7 +202,6 @@ Import Agent Skills into `viking://~/skills/...`.
 | `source` | No | Local `SKILL.md` path or skill directory. Exactly one of `source` or `data` is required. |
 | `data` | No | Raw `SKILL.md` content or an MCP tool dict. Exactly one of `source` or `data` is required. |
 | `wait` | No | Wait for processing completion. |
-| `timeout` | No | Timeout in seconds when `wait=true`. |
 
 Agent Skill best practice: a skill should have precise frontmatter (`name`, trigger-oriented `description`, useful `tags`), clear scope boundaries, explicit “when not to use” guidance if needed, and executable steps with concrete parameters. Keep secrets out of skill content.
 
@@ -258,7 +256,7 @@ The plugin refuses to read/search a tool-result ref from another session.
 
 ```text
 /add-resource ./README.md --to viking://resources/openviking-readme --wait
-/add-skill ./skills/install-openviking-memory --wait --timeout=30
+/add-skill ./skills/install-openviking-memory --wait
 /ov-search "OpenViking install" --uri viking://resources/openviking-readme --limit=5
 /ov-recall-trace --turn latest --source auto_recall --include-content
 ```

@@ -8,14 +8,16 @@ worker binds the committing account/user (so tokens are not attributed to
 "__unknown__") and resets the context afterwards.
 """
 
-import asyncio
-import concurrent.futures
 import json
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from openviking.observability.context import get_root_observability_context
 from openviking.server.identity import RequestContext, Role
 from openviking.session.session import Session
+from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -29,9 +31,6 @@ class _FakeSession:
     async def exists(self) -> bool:
         return True
 
-    async def load(self) -> None:
-        return None
-
     async def resume_queued_commit(self, msg) -> bool:
         root = get_root_observability_context()
         self._captured["account_id"] = root.account_id if root else None
@@ -39,32 +38,15 @@ class _FakeSession:
         return self._processed
 
 
-class _FakeSessionService:
-    def __init__(self, captured: dict, processed: bool = True) -> None:
-        self._captured = captured
-        self._processed = processed
-
-    def session(self, ctx, session_id, session_uri=None):
-        return _FakeSession(self._captured, self._processed)
-
-
 class _MemoryVikingFS:
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
 
-    async def stat(self, uri, ctx=None):
+    async def stat(self, uri, ctx=None, skip_count=False):
         return {"path": uri}
 
     async def write_file(self, uri, content, ctx=None, lease_ref=None):
         self.files[uri] = content
-
-
-class _SingleSessionService:
-    def __init__(self, session: Session) -> None:
-        self._session = session
-
-    def session(self, ctx, session_id, session_uri=None):
-        return self._session
 
 
 def _make_msg() -> SessionCommitMsg:
@@ -77,18 +59,27 @@ def _make_msg() -> SessionCommitMsg:
     )
 
 
-async def test_process_binds_committing_identity_to_root_context():
+async def test_process_binds_committing_identity_to_root_context(monkeypatch):
     captured: dict = {}
-    processor = SessionCommitProcessor(
-        _FakeSessionService(captured),
-        asyncio.get_running_loop(),
+    session = _FakeSession(captured)
+    processor = SessionCommitProcessor(SimpleNamespace(session=Mock(return_value=session)))
+    tracker = SimpleNamespace(create=AsyncMock(side_effect=OSError("store unavailable")))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.get_task_tracker", lambda: tracker
     )
-    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-
-    await processor._process(_make_msg(), ctx)
-
-    assert captured["account_id"] == "acme"
-    assert captured["user_id"] == "alice"
+    message = {"data": _make_msg().to_dict()}
+    with pytest.raises(OSError, match="store unavailable"):
+        await processor.on_dequeue(message)
+    tracker.create.side_effect = None
+    original_resume = session.resume_queued_commit
+    session.resume_queued_commit = AsyncMock(side_effect=ValueError("invalid archive message"))
+    result = await processor.on_dequeue(message)
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == "invalid archive message"
+    session.resume_queued_commit = original_resume
+    assert (await processor.on_dequeue(message)).outcome is ProcessOutcome.SUCCESS
+    assert captured == {"account_id": "acme", "user_id": "alice"}
+    assert get_root_observability_context() is None
 
 
 async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypatch):
@@ -99,8 +90,7 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
             queued.append((queue_name, data))
 
     processor = SessionCommitProcessor(
-        _FakeSessionService({}, processed=False),
-        asyncio.get_running_loop(),
+        SimpleNamespace(session=Mock(return_value=_FakeSession({}, processed=False))),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
@@ -108,13 +98,14 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
     )
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-    await processor._process(_make_msg(), ctx)
+    result = await processor._process(_make_msg(), ctx)
 
+    assert result is False
     assert queued == [("SessionCommit", _make_msg().to_dict())]
     assert get_root_observability_context() is None
 
 
-async def test_cancelled_queued_commit_writes_terminal_marker_before_success(monkeypatch):
+async def test_cancelled_queued_commit_writes_terminal_marker_before_returning():
     msg = _make_msg()
     viking_fs = _MemoryVikingFS()
     session = Session(
@@ -123,38 +114,13 @@ async def test_cancelled_queued_commit_writes_terminal_marker_before_success(mon
         session_uri=msg.session_uri,
     )
     processor = SessionCommitProcessor(
-        _SingleSessionService(session),
-        asyncio.get_running_loop(),
+        SimpleNamespace(session=Mock(return_value=session)),
     )
     marker_uri = f"{msg.archive_uri}/.failed.json"
-    on_success = Mock(side_effect=lambda: viking_fs.files[marker_uri])
-    processor.set_callbacks(on_success, Mock(), Mock())
 
-    def run_on_current_loop(coro, _loop):
-        task = asyncio.create_task(coro)
-        future: concurrent.futures.Future[None] = concurrent.futures.Future()
+    result = await processor.on_cancelled({"data": json.dumps(msg.to_dict())})
 
-        def complete(completed: asyncio.Task) -> None:
-            if completed.cancelled():
-                future.cancel()
-                return
-            error = completed.exception()
-            if error is not None:
-                future.set_exception(error)
-            else:
-                future.set_result(completed.result())
-
-        task.add_done_callback(complete)
-        return future
-
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.session_commit_processor.asyncio.run_coroutine_threadsafe",
-        run_on_current_loop,
-    )
-
-    await processor.on_cancelled({"data": json.dumps(msg.to_dict())})
-
+    assert result.outcome is ProcessOutcome.CANCELLED
     marker = json.loads(viking_fs.files[marker_uri])
     assert marker["stage"] == "cancelled"
     assert marker["error"] == "session commit cancelled"
-    on_success.assert_called_once_with()

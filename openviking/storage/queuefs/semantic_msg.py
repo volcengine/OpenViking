@@ -5,9 +5,10 @@
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
+from openviking.storage.context_update_plan import SemanticPlan
 from openviking.utils.ingest_options import IngestOptions
 
 
@@ -37,7 +38,7 @@ class SemanticMsg:
                    enqueue them for processing (bottom-up order).
                    When False, only the specified directory will be processed.
         use_hierarchical_aggregation: Route memory directories through the
-                   shared directory DAG instead of the specialized flat memory
+                   shared semantic tree instead of the specialized flat memory
                    update path.
         propagate_to_parent: Whether a completed directory refresh may enqueue
                    a freshness refresh for its parent.
@@ -47,19 +48,23 @@ class SemanticMsg:
     uri: str  # Directory URI
     context_type: str  # resource, memory, skill, session
     status: str = "pending"  # pending/processing/completed
-    timestamp: int = int(datetime.now().timestamp())
+    timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
+    queue_enqueued_at: float = 0.0
+    failure_requeue_count: int = 0
     recursive: bool = True  # Whether to recursively process subdirectories
     account_id: str = "default"
     user_id: str = "default"
+    group_ids: List[str] = field(default_factory=list)
     peer_id: str = "default"
     role: str = "root"
     # Additional flags
     skip_vectorization: bool = False
     telemetry_id: str = ""
+    task_id: str = ""
+    _task_work_id: str = ""
     target_uri: str = ""
     lock_handoff: Optional[Dict[str, Any]] = None
     is_code_repo: bool = False
-    target_preexisting: Optional[bool] = None
     ingest_options: IngestOptions = field(default_factory=IngestOptions)
     coalesce_key: str = ""
     coalesce_version: int = 0
@@ -71,6 +76,17 @@ class SemanticMsg:
     aggregate_directory: bool = True
     use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
+    copy_source_uri: str = ""
+    # Per-file md5 of final stored bytes, keyed by target URI. Supplied by the
+    # local incremental apply so the tree executor's re-vectorization writes a fresh
+    # fingerprint; empty for all other flows.
+    file_md5s: Dict[str, str] = field(default_factory=dict)
+    artifact_ref: Optional[Dict[str, Any]] = None
+    artifact_files: List[str] = field(default_factory=list)
+    file_abstracts: Dict[str, str] = field(default_factory=dict)
+    file_vector_actions: Dict[str, str] = field(default_factory=dict)
+    file_ingest_options: Dict[str, IngestOptions] = field(default_factory=dict)
+    plan: Optional[SemanticPlan] = None
 
     def __init__(
         self,
@@ -79,14 +95,16 @@ class SemanticMsg:
         recursive: bool = True,
         account_id: str = "default",
         user_id: str = "default",
+        group_ids: Optional[Sequence[str]] = None,
         peer_id: str = "default",
         role: str = "root",
         skip_vectorization: bool = False,
         telemetry_id: str = "",
+        task_id: str = "",
+        _task_work_id: str = "",
         target_uri: str = "",
         lock_handoff: Optional[Dict[str, Any]] = None,
         is_code_repo: bool = False,
-        target_preexisting: Optional[bool] = None,
         ingest_options: IngestOptions | Dict[str, Any] | None = None,
         coalesce_key: str = "",
         coalesce_version: int = 0,
@@ -96,21 +114,36 @@ class SemanticMsg:
         aggregate_directory: bool = True,
         use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
+        copy_source_uri: str = "",
+        file_md5s: Optional[Dict[str, str]] = None,
+        artifact_ref: Optional[Dict[str, Any]] = None,
+        artifact_files: Optional[List[str]] = None,
+        file_abstracts: Optional[Dict[str, str]] = None,
+        file_vector_actions: Optional[Dict[str, str]] = None,
+        file_ingest_options: Optional[Dict[str, IngestOptions | Dict[str, Any]]] = None,
+        plan: SemanticPlan | Dict[str, Any] | None = None,
+        queue_enqueued_at: float = 0.0,
+        failure_requeue_count: int = 0,
     ):
         self.id = str(uuid4())
+        self.timestamp = int(datetime.now().timestamp())
+        self.queue_enqueued_at = max(float(queue_enqueued_at or 0.0), 0.0)
+        self.failure_requeue_count = max(int(failure_requeue_count or 0), 0)
         self.uri = uri
         self.context_type = context_type
         self.recursive = recursive
         self.account_id = account_id
         self.user_id = user_id
+        self.group_ids = list(group_ids or [])
         self.peer_id = peer_id
         self.role = role
         self.skip_vectorization = skip_vectorization
         self.telemetry_id = telemetry_id
+        self.task_id = task_id
+        self._task_work_id = _task_work_id
         self.target_uri = target_uri
         self.lock_handoff = lock_handoff
         self.is_code_repo = is_code_repo
-        self.target_preexisting = target_preexisting
         self.ingest_options = IngestOptions.from_value(ingest_options)
         self.coalesce_key = coalesce_key
         self.coalesce_version = coalesce_version
@@ -120,11 +153,38 @@ class SemanticMsg:
         self.aggregate_directory = bool(aggregate_directory)
         self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
+        self.copy_source_uri = copy_source_uri
+        self.file_md5s = dict(file_md5s or {})
+        self.artifact_ref = dict(artifact_ref) if artifact_ref else None
+        self.artifact_files = list(artifact_files or [])
+        self.file_abstracts = dict(file_abstracts or {})
+        self.file_vector_actions = {}
+        for uri, action in (file_vector_actions or {}).items():
+            normalized_action = str(action)
+            if normalized_action not in {"upsert", "merge"}:
+                raise ValueError(f"unsupported file vector action: {normalized_action}")
+            self.file_vector_actions[str(uri)] = normalized_action
+        self.file_ingest_options = {
+            str(uri): IngestOptions.from_value(options)
+            for uri, options in (file_ingest_options or {}).items()
+        }
+        self.plan = (
+            plan
+            if isinstance(plan, SemanticPlan)
+            else SemanticPlan.from_dict(plan)
+            if isinstance(plan, dict)
+            else None
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
         data = asdict(self)
         data["ingest_options"] = self.ingest_options.to_dict()
+        data["file_ingest_options"] = {
+            uri: options.to_dict() for uri, options in self.file_ingest_options.items()
+        }
+        if self.plan is not None:
+            data["plan"] = self.plan.to_dict()
         return data
 
     def to_json(self) -> str:
@@ -139,6 +199,7 @@ class SemanticMsg:
 
         uri = data.get("uri")
         context_type = data.get("context_type")
+        account_id = data.get("account_id")
 
         if not uri or not context_type:
             missing = []
@@ -147,21 +208,25 @@ class SemanticMsg:
             if not context_type:
                 missing.append("context_type")
             raise ValueError(f"Missing required fields: {missing}")
+        if not isinstance(account_id, str) or not account_id.strip():
+            raise ValueError("Missing required fields: ['account_id']")
 
         obj = cls(
             uri=uri,
             context_type=context_type,
             recursive=data.get("recursive", True),
-            account_id=data.get("account_id", "default"),
+            account_id=account_id,
             user_id=data.get("user_id", "default"),
+            group_ids=data.get("group_ids") if isinstance(data.get("group_ids"), list) else None,
             peer_id=data.get("peer_id", "default"),
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
             telemetry_id=data.get("telemetry_id", ""),
+            task_id=data.get("task_id", ""),
+            _task_work_id=data.get("_task_work_id", ""),
             target_uri=data.get("target_uri", ""),
             lock_handoff=data.get("lock_handoff"),
             is_code_repo=data.get("is_code_repo", False),
-            target_preexisting=data.get("target_preexisting"),
             ingest_options=(
                 data.get("ingest_options")
                 or {
@@ -177,6 +242,30 @@ class SemanticMsg:
             aggregate_directory=data.get("aggregate_directory", True),
             use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),
+            copy_source_uri=data.get("copy_source_uri", ""),
+            file_md5s=(data.get("file_md5s") if isinstance(data.get("file_md5s"), dict) else None),
+            artifact_ref=(
+                data.get("artifact_ref") if isinstance(data.get("artifact_ref"), dict) else None
+            ),
+            artifact_files=(
+                data.get("artifact_files") if isinstance(data.get("artifact_files"), list) else None
+            ),
+            file_abstracts=(
+                data.get("file_abstracts") if isinstance(data.get("file_abstracts"), dict) else None
+            ),
+            file_vector_actions=(
+                data.get("file_vector_actions")
+                if isinstance(data.get("file_vector_actions"), dict)
+                else None
+            ),
+            file_ingest_options=(
+                data.get("file_ingest_options")
+                if isinstance(data.get("file_ingest_options"), dict)
+                else None
+            ),
+            plan=data.get("plan") if isinstance(data.get("plan"), dict) else None,
+            queue_enqueued_at=data.get("queue_enqueued_at", 0.0),
+            failure_requeue_count=data.get("failure_requeue_count", 0),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

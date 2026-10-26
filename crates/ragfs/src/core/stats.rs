@@ -92,50 +92,67 @@ impl FsOperation {
     }
 }
 
+/// Inclusive upper bounds for operation duration buckets, in nanoseconds.
+pub const DURATION_BUCKET_BOUNDS_NS: [u64; 11] = [
+    100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000,
+    100_000_000, 500_000_000, 1_000_000_000, 5_000_000_000, 10_000_000_000,
+];
+
 /// Statistics for a single operation type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationStats {
     /// Number of times the operation was called
     pub count: u64,
-    /// Total time spent on this operation (microseconds)
-    pub total_time_us: u64,
-    /// Minimum time spent (microseconds)
-    pub min_time_us: u64,
-    /// Maximum time spent (microseconds)
-    pub max_time_us: u64,
+    /// Number of successful operations.
+    pub success_count: u64,
+    /// Number of failed operations.
+    pub error_count: u64,
+    /// Total time spent on this operation (nanoseconds).
+    pub total_time_ns: u64,
+    /// Minimum time spent (nanoseconds); u64::MAX when count is zero.
+    pub min_time_ns: u64,
+    /// Maximum time spent (nanoseconds).
+    pub max_time_ns: u64,
+    /// Noncumulative duration counts; the last bucket holds overflow samples.
+    pub duration_bucket_counts: [u64; 12],
 }
 
 impl Default for OperationStats {
+    /// Return empty statistics with no inputs and an unset minimum duration.
     fn default() -> Self {
         Self {
             count: 0,
-            total_time_us: 0,
-            min_time_us: u64::MAX,
-            max_time_us: 0,
+            success_count: 0,
+            error_count: 0,
+            total_time_ns: 0,
+            min_time_ns: u64::MAX,
+            max_time_ns: 0,
+            duration_bucket_counts: [0; 12],
         }
     }
 }
 
 impl OperationStats {
-    /// Record an operation duration
-    pub fn record(&mut self, duration: Duration) {
-        let us = duration.as_micros() as u64;
-        self.count += 1;
-        self.total_time_us += us;
-        if us < self.min_time_us {
-            self.min_time_us = us;
-        }
-        if us > self.max_time_us {
-            self.max_time_us = us;
-        }
+    /// Record the supplied duration and success flag, updating totals in place.
+    pub fn record(&mut self, duration: Duration, success: bool) {
+        let ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
+        self.count = self.count.saturating_add(1);
+        let outcome = if success { &mut self.success_count } else { &mut self.error_count };
+        *outcome = outcome.saturating_add(1);
+        self.total_time_ns = self.total_time_ns.saturating_add(ns);
+        self.min_time_ns = self.min_time_ns.min(ns);
+        self.max_time_ns = self.max_time_ns.max(ns);
+        let bucket = DURATION_BUCKET_BOUNDS_NS.partition_point(|bound| *bound < ns);
+        self.duration_bucket_counts[bucket] =
+            self.duration_bucket_counts[bucket].saturating_add(1);
     }
 
-    /// Get average time per operation (microseconds)
-    pub fn avg_time_us(&self) -> f64 {
+    /// Return this operation's average nanoseconds, or zero when no samples exist.
+    pub fn avg_time_ns(&self) -> f64 {
         if self.count == 0 {
             0.0
         } else {
-            self.total_time_us as f64 / self.count as f64
+            self.total_time_ns as f64 / self.count as f64
         }
     }
 }
@@ -193,10 +210,10 @@ impl StatsCollector {
         }
     }
 
-    /// Record an operation
-    pub async fn record(&self, op: FsOperation, duration: Duration) {
+    /// Record the supplied operation, duration, and success flag; return unit.
+    pub async fn record(&self, op: FsOperation, duration: Duration, success: bool) {
         let mut stats = self.stats.write().await;
-        stats.operations.entry(op).or_default().record(duration);
+        stats.operations.entry(op).or_default().record(duration, success);
     }
 
     /// Get a snapshot of current statistics
@@ -228,9 +245,9 @@ impl OperationTimer {
         }
     }
 
-    /// Finish the timer and record the duration
-    pub async fn finish(self) {
+    /// Consume this timer and record elapsed time with the supplied outcome; return unit.
+    pub async fn finish(self, success: bool) {
         let duration = self.start.elapsed();
-        self.collector.record(self.op, duration).await;
+        self.collector.record(self.op, duration, success).await;
     }
 }

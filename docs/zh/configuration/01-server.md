@@ -1,4 +1,4 @@
-# 服务端配置
+# 服务端配置字段
 
 首次配置建议使用 `openviking-server init`，保存后运行 `openviking-server doctor`。
 
@@ -17,7 +17,15 @@ openviking-server --config /path/to/ov.conf
 
 服务端启动时读取配置。修改模型、检索、存储或 `server` 配置后，需要重启服务；重启后建议运行 `openviking-server doctor`。
 
+通过单 worker 的 `openviking-server` 启动时，Studio 的「服务端配置」页面提供「保存并重启」。重启能力和实例标识复用现有 ROOT 配置读取接口（`GET /api/v1/admin/configuration?source=file`）返回；只有 ROOT 可以请求重启（`POST /api/v1/admin/restart`，请求体为 `{"revision":"<已保存文件的版本>"}`）。服务校验当前文件和版本后返回 HTTP 202，等待现有请求结束，停止其管理的 Bot，再使用原解释器、启动参数、环境变量和工作目录替换当前进程。页面确认新的服务实例恢复后才显示成功。单独点击「保存配置」仍只保存文件。
+
+多 worker 或嵌入式 ASGI 启动不支持页面重启，需要通过部署平台重启。配置通过校验后，外部依赖仍可能导致启动失败。如果修改了地址、端口或 ROOT 凭证，请更新 Studio 连接设置。账号和集群覆盖配置仍优先于文件默认配置。
+
+配置含环境变量引用时，Studio 表单只读，请使用文件模式编辑原文。带引号或未带引号的引用、转义和格式按提交内容保存。Windows `%VAR%` 引用和美元/百分号字面值（包括 `\u0024`、`\u0025`）也使用文件模式，避免表单序列化引入新的引用。
+
 ## 配置结构
+
+下面只展示常用顶层分组，不是可直接运行的完整配置。首次启动可从本页的[最小示例](#最小示例)开始，填写实际模型与凭据；后续示例中的片段应合并到同一个 `ov.conf`。
 
 ```json
 {
@@ -36,7 +44,7 @@ openviking-server --config /path/to/ov.conf
 }
 ```
 
-未配置的可选模块使用默认值。`ov.conf` 不允许未知字段，字段名写错时服务端会拒绝加载。
+未配置的可选模块使用默认值。`ov.conf` 及账户配置会忽略未知字段（`gateway` 部分除外），兼容旧版本遗留配置；已知字段仍校验类型和取值。字段名拼写错误也会被忽略，但服务端会输出 WARNING，逐项列出未被采用的字段。
 
 ## 顶层配置
 
@@ -46,10 +54,11 @@ openviking-server --config /path/to/ov.conf
 | `default_user` | string | `"default"` | Service context 使用的默认用户 |
 | `embedding` | object | 内置本地 Dense 模型 | 向量化模型和稀疏/混合检索配置；默认使用 `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
-| `query_planner` | object / `null` | `null` | 检索意图分析模型；未配置时回退到 `vlm` |
+| `query_planner` | object / `null` | `null` | 检索意图分析和召回改写使用的模型。未配置或为空时回退到 `vlm`；`auto` 模式的召回改写要求配置集群级 `query_planner`，或账户级 `query_planner` / `vlm` 覆盖项 |
 | `rerank` | object | disabled | 检索结果重排模型 |
 | `retrieval` | object | 见下表 | 检索排序和意图分析策略 |
 | `grep` | object | 内置默认值 | 文本搜索引擎配置 |
+| `glob` | object | 内置默认值 | 路径模式匹配引擎配置 |
 | `storage` | object | 本地存储 | 工作目录、文件系统和向量数据库 |
 | `queue_workers` | object | 见下表 | QueueFS 消费 worker 的运行时并发配置 |
 | `server` | object | 本地开发模式 | HTTP 服务、鉴权、上传和可观测性 |
@@ -57,12 +66,14 @@ openviking-server --config /path/to/ov.conf
 | `parsers` | object | 各解析器默认值 | PDF、代码、图片、音视频等解析行为 |
 | `semantic` | object | 内置默认值 | abstract 和 overview 的生成限制 |
 | `parser_api` | object | disabled | 第三方文件解析 API |
+| `compile_api` | object | disabled | 外部 Compile 任务 API |
 | `connector` | object | disabled | 外部 Connector 数据导入服务 |
 | `encryption` | object | disabled | 文件和敏感字段加密 |
 | `git` | object | local | 版本管理后端，可使用 `local` 或 `s3` |
 | `log` | object | 控制台日志 | 日志级别、格式和文件输出 |
 | `telemetry` | object | disabled | OpenTelemetry trace 上报 |
 | `oauth` | object | disabled | MCP OAuth 2.1 配置 |
+| `gateway` | object | disabled | OpenViking 网关配置，网关为使用 API Key 的模型客户端补充 OpenViking 记忆。这一部分的未知字段会直接报错，见[配置参考](../gateway/13-configuration.md#configuration-reference) |
 | `prompts` | object | 内置模板 | 自定义 Prompt 模板目录 |
 | `ingest` | object | 内置默认值 | 会话日志导入配置 |
 | `output_language_override` | string | `""` | 强制摘要和记忆输出语言；空值表示自动识别 |
@@ -140,20 +151,22 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
-| `provider` | `vikingdb`、`cohere`、`openai`、`litellm` / `null` | `null` | Rerank 服务类型；省略时根据凭证字段推断 |
-| `model` | string / `null` | `null` | OpenAI 兼容或 LiteLLM Rerank 模型 |
+| `provider` | `vikingdb`、`cohere`、`openai`、`litellm`、`jev` / `null` | `null` | Rerank 服务类型；省略时根据凭证字段推断 |
+| `model` | string / `null` | `null` | OpenAI 兼容、LiteLLM 或 Jev Rerank 模型 |
+| `mode` | `noul`、`choice` 或 `null` | `noul` | Jev Rerank 模式；`null` 同样使用 `noul` |
 | `threshold` | number | `0.1` | 判定结果相关的最低分数 |
 | `max_input_tokens` | integer；`0` 或 `>= 128` | `0` | 每个 query-document pair 的最大估算 token；`0` 表示不截断 |
+| `log_payloads` | boolean | `false` | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容 |
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
+
+`jev` 通过现有 `api_base` 和 `model` 字段同时支持 TypeSafe 直连（`https://api.typesafe.ai`，模型 `jev-latest`）和 Vercel AI Gateway 的 TypeSafe 兼容端点（`https://ai-gateway.vercel.sh/typesafe`，模型 `typesafe-ai/jev`），两者协议相同。默认 `noul` 模式独立评估每个候选；可选的 `choice` 模式横向比较所有候选并返回相对概率，使用时应将 `threshold` 设为 `0`。显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 和 `jev` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
 
 ## 检索配置
 
 ```json
 {
   "retrieval": {
-    "hotness_alpha": 0,
-    "score_propagation_alpha": 1,
     "enable_intent": true
   }
 }
@@ -163,8 +176,6 @@ Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭�
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
-| `hotness_alpha` | number，`0`–`1` | `0` | 热度分数权重；`0` 表示关闭热度加权 |
-| `score_propagation_alpha` | number，`0`–`1` | `1` | 层级检索时子结果自身分数的权重 |
 | `enable_intent` | boolean | `true` | 有 `session_id` 时是否进行意图分析和查询规划 |
 
 Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK 请求中覆盖。`retrieval.enable_intent` 控制带 Session 的 Search 是否执行 LLM 查询规划；只有配置了可用的 `rerank` provider 时才会执行结果重排。
@@ -181,7 +192,13 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
     },
     "vectordb": {
       "backend": "local"
+    },
+    "parse_output": {
+      "mode": "agfs"
     }
+  },
+  "parsers": {
+    "download_temp_dir": "/data/openviking/parser-tmp"
   }
 }
 ```
@@ -194,9 +211,23 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
+| `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
+| `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
 
 远程存储后端还需要配置 endpoint、bucket/collection、鉴权和超时等字段。完整后端示例见[配置指南](../guides/01-configuration.md#storage)。
+
+`parse_output.mode=local` 可避免把 parser 中间产物写入共享 AGFS。当前 worker
+必须在下游任务入队前把所需字节提交到正式资源树。产物会在内容提交后清理；
+请为 `local_root` 预留足够空间以容纳并发导入。
+
+### `parsers`
+
+| 字段 | 类型 / 常用值 | 默认值 | 作用 |
+|---|---|---|---|
+| `download_temp_dir` | 路径或 `null` | 系统临时目录 | 内置 parser 下载文件、Git checkout 和压缩包解压使用的临时目录 |
+
+配置后，parser 会在该目录下创建带有 `ov_git_`、`ov_zip_` 等前缀的临时目录；未配置时继续使用系统临时目录。
 
 ## 队列 Worker 配置
 
@@ -213,9 +244,18 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | 同时消费的完整 AddResource 作业数，必须大于 `0`；修改后需重启服务 |
+| `file_operation_concurrency` | integer | `16` | 单个 AddResource 作业内文件级提交和 fallback 比较操作的最大并发数，必须大于 `0`；修改后需重启服务 |
 | `file_vectorization_concurrency` | integer | `8` | 当目录 AddResource 使用 `processing_mode="vectors_only"` 时，单个作业内并发读取、准备并入队的文件数，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
 
-`max_concurrent` 控制相互独立的 AddResource 作业并发，`file_vectorization_concurrency` 控制单个 vectors-only 目录作业内的文件并发。该配置不影响单文件资源或 `semantic_and_vectors` 处理。
+`max_concurrent` 控制相互独立的 AddResource 作业并发，`file_operation_concurrency` 控制单个 AddResource 作业内文件提交和 fallback 比较操作的并发，`file_vectorization_concurrency` 控制单个 vectors-only 目录作业内的文件并发。
+
+### `queue_workers.reindex`
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | 同时消费的完整 Reindex root 作业数，必须大于 `0`；修改后需重启服务 |
+
+该配置限制相互独立的异步 reindex 请求并发。URI 范围重叠的请求仍由 path lock 保护；VLM 和 embedding 仍分别遵守各自的并发限制。
 
 ### `queue_workers.session_commit`
 
@@ -223,13 +263,30 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---:|---|
 | `max_concurrent` | integer | `8` | 同时消费的 SessionCommit 作业数，必须大于 `0`；修改后需重启服务 |
 
+### `queue_workers.external_task`
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---:|---|
+| `max_concurrent` | integer | `10` | 同时消费的外部异步任务数，必须大于 `0`；修改后需重启服务 |
+
+## Compile API 配置
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---:|---|
+| `base_url` | string | `""` | 外部服务地址，必须包含 `http://` 或 `https://`；非空即启用外部 Compile |
+| `gateway_token` | string | `""` | OV 调用 Compile Gateway 使用的可选服务凭证 |
+| `http_timeout_seconds` | number | `10` | 单次 HTTP 请求超时 |
+| `poll_interval_ms` | integer | `30000` | 外部任务状态轮询间隔 |
+
+配置 `base_url` 后，OV 通过 `X-API-Key` 传递当前用户的 OV API Key；仅在配置 `gateway_token` 时发送 `X-Gateway-Token`。
+
 ## Reindex 配置
 
 ### `reindex`
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
-| `file_vectorization_concurrency` | integer | `8` | 单个 `vectors_only` reindex 任务内并发读取、准备并入队的文件数，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
+| `file_vectorization_concurrency` | integer | `8` | 单个 resource/skill reindex 任务内并发读取、计算指纹和准备文件的数量，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
 
 ## HTTP 服务配置
 
@@ -239,6 +296,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
     "host": "127.0.0.1",
     "port": 1933,
     "workers": 1,
+    "executor_threads": 0,
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -256,6 +314,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `host` | IP / hostname | `"127.0.0.1"` | HTTP 监听地址 |
 | `port` | integer | `1933` | HTTP 监听端口 |
 | `workers` | integer | `1` | 服务进程数量 |
+| `executor_threads` | 非负整数 | `0` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
 | `timeout_keep_alive` | integer（秒） | `5` | 空闲 HTTP keep-alive 超时；应调大到超过上游空闲连接寿命 |
 | `auth_mode` | `dev`、`api_key`、`trusted` / `null` | `null` | 鉴权模式；空值根据 `root_api_key` 自动判断 |
 | `root_api_key` | string / `null` | `null` | Root API Key；配置后默认启用 `api_key` 模式 |
@@ -264,7 +323,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `with_bot` | boolean | `false` | 是否启用 VikingBot API 代理 |
 | `bot_api_url` | URL | `http://localhost:18790` | VikingBot OpenAPI 地址 |
 | `public_base_url` | URL / `null` | `null` | 外部访问使用的服务基准地址 |
-| `upload_signed_ttl_seconds` | integer | `600` | 签名上传 URL 有效期 |
+| `upload_signed_ttl_seconds` | integer | `600` | 签名上传、下载 URL 有效期 |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | 临时上传存储模式 |
 
 ### 文件加密与 API Key 哈希
@@ -308,9 +367,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false,
-    "v2_lock_retry_interval_seconds": 0.2,
-    "v2_lock_max_retries": 0
+    "link_enabled": false
   }
 }
 ```
@@ -319,15 +376,15 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
-| `custom_templates_dir` | path | `""` | 附加的自定义记忆模板目录 |
+| `custom_templates_dir` | path | `""` | 自定义记忆模板目录；同名 `memory_type` 覆盖已加载模板 |
 | `experimental_memory_switch` | boolean | `false` | 是否启用实验性记忆模板 |
 | `eager_prefetch` | boolean | `true` | 是否在抽取前预取并读取记忆内容 |
 | `prefetch_search_topn` | integer，`>= 1` | `5` | 预取时读取的检索结果数量 |
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |
-| `v2_lock_retry_interval_seconds` | number，`>= 0` | `0.2` | 记忆锁获取失败后的重试间隔 |
-| `v2_lock_max_retries` | integer，`>= 0` | `0` | 最大重试次数；`0` 表示不限次数 |
+
+自动提交还需要单独设置策略：记忆抽取开关不会让会话自动提交。详见[配置指南](../guides/01-configuration.md)的 `memory.session_auto_commit` 和[会话 API](../api/05-sessions.md)。模板目录的加载顺序和生效方式见 [Prompt 指南](../guides/10-prompt-guide.md)。
 
 ## 解析器配置
 
@@ -347,10 +404,17 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "audio": {},
     "video": {},
     "markdown": {},
-    "excel": {},
+    "anydoc": {
+      "enabled": true
+    },
     "html": {},
     "text": {},
-    "directory": {},
+    "directory": {
+      "preserve_structure": true,
+      "max_files": null,
+      "max_depth": 10,
+      "max_concurrent": 4
+    },
     "feishu": {
       "domain": "https://open.feishu.cn",
       "max_rows_per_sheet": 1000,
@@ -362,6 +426,22 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 }
 ```
 
+`parsers.directory.max_files` 默认是 `null`，表示不限文件数；
+设为正整数可限制单次目录导入的文件数。
+
+`parsers.directory.max_concurrent` 由服务事件循环中的所有目录导入共享。默认值为
+`4` 时，单个目录可以并发执行 4 个 Understanding 任务；多个目录同时导入时，合计仍最多
+执行 4 个。
+
+启用 Understanding 目录路由时，`max_files` 和 `max_depth` 才约束目录导入。每次
+`DirectoryParser` 扫描会在提交该层 Understanding 请求前独立应用限制；嵌套 ZIP 会启动
+新的目录扫描，不与外层共享文件数量和深度预算。关闭 Understanding 时，OpenViking
+原生目录解析不应用这两个限制。
+
+客户端导入本地目录时，完整目录 ZIP 受 `/resources/temp_upload` 上传大小限制。ZIP
+解压后，`DirectoryParser` 不再设置统一的单文件字节限制；每个入选文件遵循对应内置
+Parser 或 Understanding API 后端自身的限制和上传行为。
+
 | 配置项 | 作用 |
 |---|---|
 | `pdf` | PDF 文本、图片和版面解析 |
@@ -369,7 +449,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | `image` | 图片理解和 OCR |
 | `audio`、`video` | 音视频内容解析 |
 | `markdown`、`html`、`text` | 文本文档分段 |
-| `excel` | Excel 工作表解析与分段 |
+| `anydoc` | Office 和 EPUB 转换；`enabled=false` 时拒绝这些格式 |
 | `directory` | 目录扫描和忽略规则 |
 | `feishu` | 飞书文档访问与解析 |
 | `webfeed` | Sitemap、RSS 和 Atom 导入 |

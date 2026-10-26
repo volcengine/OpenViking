@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,7 @@ from openviking.message import Message, TextPart
 from openviking.session.memory.dataclass import StoredLink
 from openviking.session.train import (
     Case,
+    CriterionResult,
     Experience,
     ExperienceSet,
     ListCaseLoader,
@@ -1206,8 +1208,8 @@ class FakeSessionCommitClient:
         self.committed_sessions = []
         self.task_poll_counts = {}
 
-    async def create_session(self, *, session_id, memory_policy=None):
-        self.created_sessions.append((session_id, memory_policy))
+    async def create_session(self, session_id=None, options=None):
+        self.created_sessions.append((session_id, options))
 
     async def batch_add_messages(self, session_id, messages):
         self.messages.setdefault(session_id, []).extend(messages)
@@ -1228,6 +1230,9 @@ class FakeSessionCommitClient:
 @pytest.mark.asyncio
 async def test_session_commit_policy_trainer_records_commit_trace_id():
     from openviking.session.train import SessionCommitPolicyTrainer
+    from openviking.session.train.components.rollout_artifact_recorder import (
+        _build_commit_messages,
+    )
 
     client = FakeSessionCommitClient()
     trainer = SessionCommitPolicyTrainer(
@@ -1244,6 +1249,40 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
         evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
         metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
     )
+    report = {
+        "reward": 1.0,
+        "action_checks": [
+            {"action": {"name": "cancel", "arguments": {"id": "r1"}}, "action_match": True}
+        ],
+        "db_check": {"db_match": True},
+        "info": {"note": "reservation cancelled"},
+    }
+    raw_report = json.dumps(report)
+    rollout.evaluation.metadata["evaluation_result"] = report
+    rollout.evaluation.feedback = [raw_report, "Distinct evaluator feedback."]
+    rollout.evaluation.criterion_results = [
+        CriterionResult(
+            criterion_name="tau2_reward",
+            passed=True,
+            score=1.0,
+            feedback=[raw_report, "Action verified."],
+            evidence=[json.dumps(report, indent=2), "Independent evidence."],
+        )
+    ]
+    rollout.messages.append(
+        Message(
+            id="tau2-reward",
+            role="user",
+            parts=[
+                TextPart(
+                    text=f"task_success: True\ntask_reward: 1.0\nevaluation report: {raw_report}"
+                )
+            ],
+        )
+    )
+    for message in rollout.messages:
+        message.created_at = "2026-10-12T12:00:00+00:00"
+    original = copy.deepcopy(rollout)
 
     result = await trainer.train_rollouts([rollout], _policy_set())
 
@@ -1257,11 +1296,35 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
         (
             commit_result["session_id"],
             {
-                "memory_types": ["cases", "trajectories", "experiences"],
-                "working_memory": {"enabled": False},
+                "memory_policy": {
+                    "memory_types": ["cases", "trajectories", "experiences"],
+                    "working_memory": {"enabled": False},
+                }
             },
         )
     ]
+    submitted = client.messages[commit_result["session_id"]]
+    assert submitted == _build_commit_messages(rollout)
+    assert len(submitted) == 3  # CaseSpec, conversation, one OutcomeEvaluation.
+    payload = json.loads(
+        submitted[-1]["parts"][0]["text"].split("```json\n", 1)[1].rsplit("```", 1)[0]
+    )["evaluation"]
+    assert payload["metadata"]["evaluation_result"] == report
+    assert payload["feedback"] == ["Distinct evaluator feedback."]
+    assert payload["criterion_results"][0]["feedback"] == ["Action verified."]
+    assert payload["criterion_results"][0]["evidence"] == [
+        "Independent evidence.",
+        "See evaluation.metadata.evaluation_result.",
+    ]
+    assert rollout == original
+
+    # Additional information is not a duplicate: keep the complete reward
+    # message rather than dropping details not present in the canonical report.
+    rollout.messages[-1].parts[0].text += "\nAdditional failure detail."
+    assert (
+        _build_commit_messages(rollout)[-2]["parts"][0]["text"]
+        == rollout.messages[-1].parts[0].text
+    )
 
 
 @pytest.mark.asyncio

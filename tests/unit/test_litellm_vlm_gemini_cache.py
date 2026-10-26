@@ -68,3 +68,23 @@ class TestGeminiCacheControlStripping:
             tools=tools,
         )
         assert kwargs["messages"] == [sentinel]
+
+    def test_empty_assistant_turn_stays_removed_for_gemini_with_tools(self):
+        # The Gemini cache_control strip must run on the already-sanitized
+        # messages, not the raw input, so a structurally empty assistant turn
+        # removed by sanitize_openai_messages is not reintroduced.
+        vlm = _vlm("gemini-3.1-flash-lite-preview")
+        messages = [
+            {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "again"},
+        ]
+        tools = [{"type": "function", "function": {"name": "read", "parameters": {}}}]
+        kwargs = vlm._build_kwargs(
+            model="gemini/gemini-3.1-flash-lite-preview",
+            messages=messages,
+            tools=tools,
+        )
+        assert all(not (m["role"] == "assistant" and not m["content"]) for m in kwargs["messages"])
+        assert [m["role"] for m in kwargs["messages"]] == ["user", "user"]
+        assert all("cache_control" not in m for m in kwargs["messages"])

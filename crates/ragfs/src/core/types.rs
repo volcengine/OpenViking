@@ -8,6 +8,59 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+/// Supported directory listing sort fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListSortBy {
+    /// Sort entries by name.
+    Name,
+    /// Sort entries by modification time.
+    Mtime,
+}
+
+/// Supported directory listing sort directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrder {
+    /// Sort values in ascending order.
+    Asc,
+    /// Sort values in descending order.
+    Desc,
+}
+
+/// Options for a grep operation.
+#[derive(Debug, Clone, Copy)]
+pub struct GrepOptions<'a> {
+    /// Whether to search recursively in subdirectories.
+    pub recursive: bool,
+    /// Whether matching is case-insensitive.
+    pub case_insensitive: bool,
+    /// Maximum number of matches to return.
+    pub node_limit: Option<usize>,
+    /// Optional path prefix to exclude.
+    pub exclude_path: Option<&'a str>,
+    /// Optional maximum depth relative to the query root.
+    pub level_limit: Option<usize>,
+    /// Number of lines to include before each match.
+    pub before_context: usize,
+    /// Number of lines to include after each match.
+    pub after_context: usize,
+}
+
+impl Default for GrepOptions<'_> {
+    fn default() -> Self {
+        Self {
+            recursive: false,
+            case_insensitive: false,
+            node_limit: None,
+            exclude_path: None,
+            level_limit: None,
+            before_context: 0,
+            after_context: 0,
+        }
+    }
+}
+
 /// Grep match result
 ///
 /// Represents a single match found during a grep operation.
@@ -21,6 +74,62 @@ pub struct GrepMatch {
 
     /// Content of the matched line
     pub content: String,
+
+    /// Lines immediately before the match
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_context: Option<Vec<GrepContextLine>>,
+
+    /// Lines immediately after the match
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_context: Option<Vec<GrepContextLine>>,
+}
+
+/// One line included as grep context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrepContextLine {
+    /// Line number (1-based)
+    pub line: u64,
+
+    /// Line content
+    pub content: String,
+}
+
+impl GrepMatch {
+    /// Build a grep match and slice optional context from already-read lines.
+    pub fn from_lines(
+        file: String,
+        lines: &[&str],
+        line_index: usize,
+        before_context: usize,
+        after_context: usize,
+    ) -> Self {
+        let before = (before_context > 0).then(|| {
+            let start = line_index.saturating_sub(before_context);
+            (start..line_index)
+                .map(|index| GrepContextLine {
+                    line: (index + 1) as u64,
+                    content: lines[index].to_string(),
+                })
+                .collect()
+        });
+        let after = (after_context > 0).then(|| {
+            let end = lines.len().min(line_index + after_context + 1);
+            (line_index + 1..end)
+                .map(|index| GrepContextLine {
+                    line: (index + 1) as u64,
+                    content: lines[index].to_string(),
+                })
+                .collect()
+        });
+
+        Self {
+            file,
+            line: (line_index + 1) as u64,
+            content: lines[line_index].to_string(),
+            before_context: before,
+            after_context: after,
+        }
+    }
 }
 
 /// Grep operation result
@@ -110,6 +219,8 @@ impl GrepResult {
             file,
             line,
             content,
+            before_context: None,
+            after_context: None,
         });
         self.count += 1;
     }
@@ -286,10 +397,6 @@ pub struct PluginConfig {
     /// Primary encryption enabled (follows global, not independently configurable)
     #[serde(default)]
     pub primary_encryption_enabled: bool,
-
-    /// Primary redirect policies
-    #[serde(default)]
-    pub primary_redirects: Vec<RedirectPolicy>,
 }
 
 impl Default for PluginConfig {
@@ -302,7 +409,6 @@ impl Default for PluginConfig {
             backups: None,
             server_encryption_enabled: false,
             primary_encryption_enabled: false,
-            primary_redirects: Vec::new(),
         }
     }
 }
@@ -333,8 +439,6 @@ impl PluginConfig {
             Self::take_bool_with_default("server_encryption_enabled", &mut params, false)?;
         let primary_encryption_enabled =
             Self::take_bool_with_default("primary_encryption_enabled", &mut params, false)?;
-        let primary_redirects =
-            Self::take_json_with_default("primary_redirects", &mut params, Vec::new())?;
 
         Ok(Self {
             name: name.into(),
@@ -343,7 +447,6 @@ impl PluginConfig {
             backups,
             server_encryption_enabled,
             primary_encryption_enabled,
-            primary_redirects,
         })
     }
 
@@ -383,15 +486,6 @@ impl PluginConfig {
                 Self::config_value_kind(&other)
             ))),
         }
-    }
-
-    /// Remove one optional JSON config value and fall back to the provided default.
-    fn take_json_with_default<T: DeserializeOwned>(
-        field_name: &str,
-        params: &mut HashMap<String, ConfigValue>,
-        default: T,
-    ) -> crate::core::Result<T> {
-        Ok(Self::take_optional_json(field_name, params)?.unwrap_or(default))
     }
 
     /// Return a human-readable config value kind for error messages.
@@ -464,33 +558,37 @@ impl ConfigValue {
 
 /// Multi-write backends container configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BackendsConfig {
-    /// Sync type: "sync" or "async", default async
-    #[serde(default = "default_sync_type")]
-    pub sync_type: String,
-    /// Minimum backup ack count for sync mode
-    pub write_ack_count: Option<usize>,
-    /// Timeout for waiting backup ack in sync mode (ms)
-    pub write_ack_timeout_ms: Option<u64>,
-    /// Max concurrent async writes
-    pub write_concurrency: Option<usize>,
-    /// Retry loop interval in milliseconds
-    pub retry_interval_ms: Option<u64>,
-    /// Base backoff in milliseconds for retry attempts
-    pub retry_backoff_base_ms: Option<u64>,
-    /// Maximum retry attempts per file/target in one round
-    pub retry_max_retries_per_round: Option<usize>,
-    /// Failure threshold before quarantining one file/target pair
-    pub retry_quarantine_after_failures: Option<u32>,
-    /// Deprecated no-op retained for config compatibility.
-    #[serde(default)]
-    pub read_probe_cache_ttl_ms: Option<u64>,
+    /// OpenViking instance name used by cache-backed metadata.
+    pub service_name: String,
+    /// Initial number of metadata partitions.
+    #[serde(default = "default_initial_partitions")]
+    pub initial_partitions: u32,
+    /// Checkpoint interval in seconds.
+    #[serde(default = "default_checkpoint_interval_secs")]
+    pub checkpoint_interval_secs: u64,
+    /// Metadata storage provider.
+    #[serde(default = "default_backups_provider")]
+    pub provider: String,
     /// Backup items
+    #[serde(default)]
     pub items: Vec<BackendItemConfig>,
 }
 
-fn default_sync_type() -> String {
-    "async".to_string()
+/// Return the default metadata partition count.
+fn default_initial_partitions() -> u32 {
+    16
+}
+
+/// Return the default checkpoint interval in seconds.
+fn default_checkpoint_interval_secs() -> u64 {
+    86_400
+}
+
+/// Return the default metadata provider.
+fn default_backups_provider() -> String {
+    "filesystem".to_string()
 }
 
 /// Single backup backend item configuration
@@ -503,23 +601,8 @@ pub struct BackendItemConfig {
     /// Plugin-specific params (nested JSON)
     #[serde(default)]
     pub params: serde_json::Value,
-    /// Timeout in seconds
-    pub timeout: Option<u64>,
     /// Encryption config for this backup
     pub encryption: Option<EncryptionConfig>,
-    /// Operations this backup participates in
-    pub operations: Option<Vec<OperationItemConfig>>,
-    /// Exclude policies
-    pub excludes: Option<Vec<RedirectPolicy>>,
-}
-
-/// Per-operation priority config
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OperationItemConfig {
-    /// Operation type: "read" | "write"
-    pub operation: String,
-    /// Priority (smaller = higher priority)
-    pub priority: u32,
 }
 
 /// Encryption on/off config for a backend
@@ -529,211 +612,6 @@ pub struct EncryptionConfig {
     pub enabled: bool,
 }
 
-/// Redirect / exclude policy (shared trait)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum RedirectPolicy {
-    /// Redirect/exclude files exceeding a size threshold
-    #[serde(rename = "FileOverSizePolicy")]
-    FileOverSizePolicy {
-        /// Max file size in MB
-        max_size_mb: u64,
-        /// Target backend names (redirect only)
-        target: Option<Vec<String>>,
-    },
-    /// Redirect/exclude files matching extension patterns
-    #[serde(rename = "FileExtensionPolicy")]
-    FileExtensionPolicy {
-        /// Regex patterns for file extensions
-        extensions: Vec<String>,
-        /// Target backend names (redirect only)
-        target: Option<Vec<String>>,
-    },
-}
-
-/// Strongly typed multi-write operation stored in `.sync_log.json`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type")]
-pub enum SyncOp {
-    /// Create an empty file.
-    Create,
-    /// Synchronize file content by copying the current primary state to the backup.
-    SyncFile {
-        /// File size used by retry/exclude policy decisions.
-        size: u64,
-    },
-    /// Create a directory.
-    Mkdir {
-        /// Directory mode.
-        mode: u32,
-    },
-    /// Change file mode.
-    Chmod {
-        /// File mode.
-        mode: u32,
-    },
-    /// Remove one file.
-    Remove,
-    /// Remove a file tree.
-    RemoveAll,
-    /// Rename to another path.
-    Rename {
-        /// Rename target path.
-        to: String,
-    },
-}
-
-/// Per-backend sync state
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct BackendSyncState {
-    /// Acknowledged sequence number
-    pub acked_seq: u64,
-    /// Consecutive retry failures for the current operation.
-    #[serde(default)]
-    pub retry_failures: u32,
-    /// Whether this backend/path pair is quarantined for manual intervention.
-    #[serde(default)]
-    pub quarantined: bool,
-}
-
-impl BackendSyncState {
-    /// Create an acknowledged backend sync state.
-    pub fn acked(acked_seq: u64) -> Self {
-        Self {
-            acked_seq,
-            retry_failures: 0,
-            quarantined: false,
-        }
-    }
-
-    /// Mark this backend as acknowledged and clear retry state.
-    pub fn mark_acked(&mut self, acked_seq: u64) {
-        self.acked_seq = acked_seq;
-        self.retry_failures = 0;
-        self.quarantined = false;
-    }
-
-    /// Record one retry failure and quarantine after the configured threshold.
-    pub fn mark_retry_failed(&mut self, quarantine_after_failures: u32) {
-        self.retry_failures = self.retry_failures.saturating_add(1);
-        if self.retry_failures >= quarantine_after_failures {
-            self.quarantined = true;
-        }
-    }
-}
-
-/// Sync log entry for a single file path.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SyncLogEntry {
-    /// Latest monotonic sequence number.
-    pub latest_seq: u64,
-    /// Whether the primary backend has durably completed this operation.
-    #[serde(default = "default_primary_committed")]
-    pub primary_committed: bool,
-    /// Strongly typed operation payload.
-    pub op: SyncOp,
-    /// Per-backend acked sequence numbers.
-    pub backends: std::collections::HashMap<String, BackendSyncState>,
-}
-
-fn default_primary_committed() -> bool {
-    true
-}
-
-impl SyncLogEntry {
-    /// Create a new prepared sync log entry for a sequenced operation.
-    pub fn new(latest_seq: u64, op: SyncOp) -> Self {
-        Self {
-            latest_seq,
-            primary_committed: false,
-            op,
-            backends: std::collections::HashMap::new(),
-        }
-    }
-
-    /// Create a committed sync log entry for an operation already applied on primary.
-    pub fn committed(latest_seq: u64, op: SyncOp) -> Self {
-        Self {
-            latest_seq,
-            primary_committed: true,
-            op,
-            backends: std::collections::HashMap::new(),
-        }
-    }
-
-    /// Mark this entry as committed on primary.
-    pub fn mark_primary_committed(&mut self) {
-        self.primary_committed = true;
-    }
-
-    /// Return whether this entry is committed on primary.
-    pub fn is_primary_committed(&self) -> bool {
-        self.primary_committed
-    }
-
-    /// Return the backend sync state if present.
-    pub fn backend_state(&self, backend_name: &str) -> Option<&BackendSyncState> {
-        self.backends.get(backend_name)
-    }
-
-    /// Return the acknowledged sequence for a backend, or 0 if unknown.
-    pub fn acked_seq(&self, backend_name: &str) -> u64 {
-        self.backend_state(backend_name)
-            .map(|state| state.acked_seq)
-            .unwrap_or(0)
-    }
-
-    /// Return whether the backend is quarantined.
-    pub fn is_quarantined(&self, backend_name: &str) -> bool {
-        self.backend_state(backend_name)
-            .map(|state| state.quarantined)
-            .unwrap_or(false)
-    }
-
-    /// Return whether the backend has acknowledged the latest operation.
-    pub fn is_in_sync(&self, backend_name: &str) -> bool {
-        self.acked_seq(backend_name) >= self.latest_seq
-    }
-}
-
-/// Sync log file content
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct SyncLogMeta {
-    /// File entries keyed by file name (current directory)
-    pub entries: std::collections::HashMap<String, SyncLogEntry>,
-}
-
-/// Redirect metadata file content
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RedirectMeta {
-    /// Schema version
-    #[serde(default = "default_redirect_version")]
-    pub version: u32,
-    /// Redirect entries keyed by file name
-    #[serde(default)]
-    pub entries: std::collections::HashMap<String, RedirectEntry>,
-}
-
-fn default_redirect_version() -> u32 {
-    1
-}
-
-impl Default for RedirectMeta {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            entries: HashMap::new(),
-        }
-    }
-}
-
-/// Single redirect entry
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RedirectEntry {
-    /// Target backend names
-    pub targets: Vec<String>,
-}
-
 /// Backend role
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendRole {
@@ -741,15 +619,6 @@ pub enum BackendRole {
     Primary,
     /// Backup backend (replica)
     Backup,
-}
-
-/// Sync type enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SyncType {
-    /// Synchronous: wait for backup ack before returning
-    Sync,
-    /// Asynchronous: return after primary write, sync in background
-    Async,
 }
 
 /// Custom serde module for SystemTime
@@ -812,21 +681,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_log_entry_legacy_payload_defaults_primary_committed_true() {
-        let entry: SyncLogEntry = serde_json::from_value(serde_json::json!({
-            "latest_seq": 7,
-            "op": {
-                "type": "Create"
-            },
-            "backends": {}
-        }))
-        .unwrap();
-
-        assert!(entry.is_primary_committed());
-        assert_eq!(entry.latest_seq, 7);
-    }
-
-    #[test]
     fn test_plugin_config_from_raw_parts_handles_multiwrite_shapes() {
         let mut valid_params = HashMap::new();
         valid_params.insert(
@@ -836,6 +690,7 @@ mod tests {
         valid_params.insert(
             "backups".to_string(),
             ConfigValue::Json(serde_json::json!({
+                "service_name": "mw-prod",
                 "items": [{"name": "backup1", "backend": "memory"}]
             })),
         );
@@ -847,22 +702,11 @@ mod tests {
             "primary_encryption_enabled".to_string(),
             ConfigValue::Bool(true),
         );
-        valid_params.insert(
-            "primary_redirects".to_string(),
-            ConfigValue::Json(serde_json::json!([
-                {
-                    "type": "FileExtensionPolicy",
-                    "extensions": [".bin"],
-                    "target": ["backup1"]
-                }
-            ])),
-        );
-
         let config = PluginConfig::from_raw_parts("localfs", "/local", valid_params).unwrap();
-        assert!(config.backups.is_some());
+        let backups = config.backups.as_ref().unwrap();
+        assert_eq!(backups.service_name, "mw-prod");
         assert!(config.server_encryption_enabled);
         assert!(config.primary_encryption_enabled);
-        assert_eq!(config.primary_redirects.len(), 1);
         assert_eq!(
             config.params.get("root_path"),
             Some(&ConfigValue::String("/tmp/data".to_string()))
@@ -870,15 +714,24 @@ mod tests {
         assert!(!config.params.contains_key("backups"));
         assert!(!config.params.contains_key("server_encryption_enabled"));
         assert!(!config.params.contains_key("primary_encryption_enabled"));
-        assert!(!config.params.contains_key("primary_redirects"));
 
         for (params, expected_message) in [
             (
                 HashMap::from([(
                     "backups".to_string(),
-                    ConfigValue::Json(serde_json::json!({"items": "invalid"})),
+                    ConfigValue::Json(serde_json::json!({
+                        "service_name": "mw-prod",
+                        "items": "invalid"
+                    })),
                 )]),
                 "invalid 'backups'",
+            ),
+            (
+                HashMap::from([(
+                    "backups".to_string(),
+                    ConfigValue::Json(serde_json::json!({"items": []})),
+                )]),
+                "service_name",
             ),
             (
                 HashMap::from([(

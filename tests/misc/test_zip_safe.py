@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import stat
+import struct
 import zipfile
 from pathlib import Path
 
@@ -37,6 +38,28 @@ def _make_zip_with_raw_info(entries: list[tuple[zipfile.ZipInfo, str]]) -> bytes
         for info, content in entries:
             zf.writestr(info, content)
     return buf.getvalue()
+
+
+def _clear_utf8_filename_flags(data: bytes) -> bytes:
+    """Clear bit 11 in every local and central-directory file header."""
+    patched = bytearray(data)
+    header_specs = (
+        (b"PK\x03\x04", 6),
+        (b"PK\x01\x02", 8),
+    )
+    for signature, flag_offset in header_specs:
+        cursor = 0
+        matched = 0
+        while True:
+            header_offset = data.find(signature, cursor)
+            if header_offset < 0:
+                break
+            flags = struct.unpack_from("<H", patched, header_offset + flag_offset)[0]
+            struct.pack_into("<H", patched, header_offset + flag_offset, flags & ~0x800)
+            matched += 1
+            cursor = header_offset + len(signature)
+        assert matched > 0, f"ZIP header not found: {signature!r}"
+    return bytes(patched)
 
 
 def _assert_no_escape(tmp_path: Path, dest_dir: Path) -> None:
@@ -85,7 +108,13 @@ class TestContainsCommonMojibake:
     """Verify mojibake pattern detection."""
 
     def test_detects_greek_chars(self) -> None:
-        assert _contains_common_mojibake("Î±Î²") is True  # Greek alpha, beta
+        mojibake = "αβ".encode("utf-8").decode("cp437")
+        assert _contains_common_mojibake(mojibake) is True
+
+    def test_detects_cp437_micro_sign_from_cjk_utf8(self) -> None:
+        mojibake = "怀".encode("utf-8").decode("cp437")
+        assert mojibake == "µÇÇ"
+        assert _contains_common_mojibake(mojibake) is True
 
     def test_detects_math_operators(self) -> None:
         assert _contains_common_mojibake("\u2200x") is True  # for-all
@@ -127,48 +156,41 @@ class TestNormalizeZipFilenames:
             normalize_zip_filenames(zf)
             assert zf.infolist()[0].filename == "readme.txt"
 
-    def test_repairs_cjk_filename_from_cp437_mojibake(self) -> None:
+    @pytest.mark.parametrize("cjk_name", ["测试文件.txt", "怀.txt"])
+    def test_repairs_cjk_filename_from_cp437_mojibake(
+        self,
+        cjk_name: str,
+        tmp_path: Path,
+    ) -> None:
         """Simulate a CJK filename stored without UTF-8 flag.
 
         The zip module reads it via cp437 producing mojibake.
         normalize_zip_filenames should re-decode from cp437 -> UTF-8.
         """
-        # Create a zip with raw bytes: write CJK UTF-8 bytes as the filename
-        # but do NOT set the UTF-8 flag, so Python's zipfile reads it as cp437.
-        cjk_name = "测试文件.txt"
-        utf8_bytes = cjk_name.encode("utf-8")
-
+        # Python correctly sets bit 11 for non-ASCII names. Patch both copies
+        # of the flag to reproduce an archive that stored UTF-8 bytes but
+        # forgot to declare their encoding.
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
-            info = zipfile.ZipInfo(cjk_name)
-            info.flag_bits = 0  # no UTF-8 flag
-            zf.writestr(info, "content")
-        # Manually patch the raw zip to remove UTF-8 flag
-        # (Python's ZipFile may set it automatically for non-ASCII)
-        # The flag_bits field is at offset 6 in the local file header
-        # This is complex; instead test the logic paths individually
-        # by directly calling with a pre-mangled ZipInfo
-        buf2 = io.BytesIO()
-        with zipfile.ZipFile(buf2, "w") as zf:
-            # Encode filename as cp437 representation of the UTF-8 bytes
-            try:
-                cp437_name = utf8_bytes.decode("cp437")
-            except UnicodeDecodeError:
-                pytest.skip("Cannot represent CJK UTF-8 bytes in cp437")
-            info = zipfile.ZipInfo(cp437_name)
-            info.flag_bits = 0
-            zf.writestr(info, "content")
-        buf2.seek(0)
-        with zipfile.ZipFile(buf2, "r") as zf:
+            zf.writestr(cjk_name, "content")
+        malformed_zip = _clear_utf8_filename_flags(buf.getvalue())
+        cp437_name = cjk_name.encode("utf-8").decode("cp437")
+
+        with zipfile.ZipFile(io.BytesIO(malformed_zip), "r") as zf:
             member = zf.infolist()[0]
-            # Before normalization, filename should be the mojibake
+            assert member.flag_bits & 0x800 == 0
             assert member.filename == cp437_name
             normalize_zip_filenames(zf)
-            # After normalization, the name should be repaired to CJK
             repaired = zf.infolist()[0]
             assert repaired.filename == cjk_name, (
                 f"Expected filename to be repaired to {cjk_name!r}, got {repaired.filename!r}"
             )
+            assert zf.read(repaired) == b"content"
+
+        extract_dir = tmp_path / "repaired"
+        with zipfile.ZipFile(io.BytesIO(malformed_zip), "r") as zf:
+            safe_extract_zip(zf, extract_dir)
+        assert (extract_dir / cjk_name).read_bytes() == b"content"
 
 
 # ── safe_extract_zip ─────────────────────────────────────────────────────────

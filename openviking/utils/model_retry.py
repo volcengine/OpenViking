@@ -6,13 +6,44 @@ import random
 import re
 import threading
 import time
-from typing import Awaitable, Callable, TypeVar
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from typing import AsyncIterator, Awaitable, Callable, TypeVar
 
-from openviking.utils.exceptions import AllCredentialsFailedError
+from openviking.models.model_error import (
+    ModelErrorKind,
+    model_error_from_exception,
+    model_error_kind,
+)
+from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+_max_retries_override: ContextVar[int | None] = ContextVar(
+    "model_max_retries_override",
+    default=None,
+)
+
+
+@asynccontextmanager
+async def model_retry_scope(max_retries: int) -> AsyncIterator[None]:
+    """Temporarily override model retries for the current async context."""
+    if max_retries < 0:
+        raise ValueError("max_retries must be non-negative")
+    token = _max_retries_override.set(max_retries)
+    try:
+        yield
+    finally:
+        _max_retries_override.reset(token)
+
+
+def effective_max_retries(configured_max_retries: int) -> int:
+    """Return the request override when set, otherwise the configured value."""
+    override = _max_retries_override.get()
+    return configured_max_retries if override is None else override
+
 
 # Error classification categories returned by classify_api_error()
 ERROR_CLASS_PERMANENT = "permanent"  # request-level 4xx (e.g. 400 invalid parameter)
@@ -23,14 +54,68 @@ ERROR_CLASS_QUOTA_EXCEEDED = "quota_exceeded"
 ERROR_CLASS_TRANSIENT = "transient"
 ERROR_CLASS_UNKNOWN = "unknown"
 
+_METRIC_ERROR_CODE_MAX_LENGTH = 64
+
+
+def _normalize_metric_error_code(value: object) -> str | None:
+    """Return a bounded structured error code suitable for a metric label."""
+    if value is None:
+        return None
+    if isinstance(value, int) and 100 <= value <= 599:
+        return str(value)
+    if not isinstance(value, str):
+        return None
+    code = value.strip()
+    if not code or len(code) > _METRIC_ERROR_CODE_MAX_LENGTH:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", code):
+        return None
+    return code
+
+
+def extract_metric_error_code(error: BaseException) -> str:
+    """Extract a low-cardinality provider error code for model-call metrics.
+
+    Structured HTTP/SDK error codes are preferred over message parsing.  Free-form
+    provider messages and request IDs are intentionally never used as metric labels.
+    """
+    error_chain = _iter_exception_chain(error)
+    for exc in error_chain:
+        for attr in ("status_code", "error_code", "code"):
+            normalized = _normalize_metric_error_code(getattr(exc, attr, None))
+            if normalized is not None:
+                return normalized
+
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            candidates = [body.get("status_code"), body.get("error_code"), body.get("code")]
+            nested = body.get("error")
+            if isinstance(nested, dict):
+                candidates.extend(
+                    [nested.get("status_code"), nested.get("error_code"), nested.get("code")]
+                )
+            for value in candidates:
+                normalized = _normalize_metric_error_code(value)
+                if normalized is not None:
+                    return normalized
+
+    if any(isinstance(exc, TimeoutError) for exc in error_chain):
+        return "timeout"
+    if any(isinstance(exc, ConnectionError) for exc in error_chain):
+        return "connection_error"
+    return "unknown"
+
+
 INPUT_TOO_LARGE_PATTERNS = (
     "413",
     "payload too large",
     "request entity too large",
     "content too large",
     "contextwindowexceeded",
+    "context_length_exceeded",
     "context window exceeded",
     "maximum context length",
+    "exceed max message tokens",
     "max input tokens",
     "too many input tokens",
     "input length exceeds",
@@ -38,6 +123,13 @@ INPUT_TOO_LARGE_PATTERNS = (
     "exceeds the max input length",
     "is too large to process",
     "expected maxlength",
+    # SiliconFlow reports an oversized embedding input as a generic 400 whose
+    # payload carries code 20015 ("The parameter is invalid") with no size
+    # keyword in the message. Match the structured code field (both the dict
+    # repr and the JSON string form) so the message is skipped instead of
+    # arming the circuit breaker for the whole queue (#4676).
+    "code': 20015",
+    'code": 20015',
 )
 
 PERMANENT_API_ERROR_PATTERNS = ("400",)
@@ -72,7 +164,13 @@ QUOTA_EXCEEDED_PATTERNS = (
     "usage quota",
 )
 
-_PERMANENT_IO_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)
+_PERMANENT_IO_ERRORS = (
+    FileNotFoundError,
+    PermissionError,
+    IsADirectoryError,
+    NotADirectoryError,
+    AGFSNotADirectoryError,
+)
 
 TRANSIENT_API_ERROR_PATTERNS = (
     "429",
@@ -84,6 +182,8 @@ TRANSIENT_API_ERROR_PATTERNS = (
     "ratelimit",
     "requestbursttoofast",
     "timeout",
+    # Ark / OpenAI SDK read timeouts say "Request timed out."
+    "timed out",
     "connectionerror",
     "connection refused",
     "connection reset",
@@ -149,19 +249,9 @@ def classify_api_error(error: Exception) -> str:
     - ``quota_exceeded`` is checked before ``transient`` because quota errors
       typically include "429" / "TooManyRequests" which would otherwise match
       the transient category.
-    - an aggregated ``AllCredentialsFailedError`` is classified from its
-      per-credential classes, not its concatenated message.
+    Structured model errors are intentionally handled by their callers using
+    ``ModelErrorKind`` and are not collapsed into this legacy string taxonomy.
     """
-    if isinstance(error, AllCredentialsFailedError):
-        classes = [ec for (_cid, ec, _exc, _idx) in error.errors if ec]
-        if ERROR_CLASS_TRANSIENT in classes:
-            return ERROR_CLASS_TRANSIENT
-        if ERROR_CLASS_QUOTA_EXCEEDED in classes:
-            return ERROR_CLASS_QUOTA_EXCEEDED
-        if classes and all(ec == ERROR_CLASS_AUTH for ec in classes):
-            return ERROR_CLASS_AUTH
-        return ERROR_CLASS_UNKNOWN
-
     for exc in (error, getattr(error, "__cause__", None)):
         if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
             return ERROR_CLASS_PERMANENT
@@ -208,6 +298,12 @@ def classify_api_error(error: Exception) -> str:
             if pattern in text_lower:
                 return ERROR_CLASS_QUOTA_EXCEEDED
 
+    # Bare timeouts often carry no message; asyncio.TimeoutError is a distinct
+    # class on Python 3.10.
+    for exc in (error, error.__cause__):
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            return ERROR_CLASS_TRANSIENT
+
     for text in texts:
         text_lower = text.lower()
         text_compact = text_lower.replace(" ", "")
@@ -220,6 +316,14 @@ def classify_api_error(error: Exception) -> str:
 
 def is_retryable_api_error(error: Exception) -> bool:
     """Return True if the error should be retried."""
+    kind = model_error_kind(error)
+    if kind is not None:
+        return kind in {
+            ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+            ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+            ModelErrorKind.RATE_LIMIT_ERROR,
+            ModelErrorKind.UNKNOWN,
+        }
     return classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
 
@@ -325,6 +429,28 @@ def _compute_delay(
     return delay
 
 
+def _retry_limit(
+    error: Exception,
+    *,
+    max_retries: int,
+    is_retryable: Callable[[Exception], bool],
+    model_errors_only: bool,
+) -> int:
+    model_error = model_error_from_exception(error)
+    if model_error is not None:
+        if model_error.kind in {
+            ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+            ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+            ModelErrorKind.RATE_LIMIT_ERROR,
+            ModelErrorKind.UNKNOWN,
+        }:
+            return max_retries
+        return 0
+    if model_errors_only:
+        return 0
+    return max_retries if is_retryable(error) else 0
+
+
 def retry_sync(
     func: Callable[[], T],
     *,
@@ -335,6 +461,7 @@ def retry_sync(
     is_retryable: Callable[[Exception], bool] = is_retryable_api_error,
     logger=None,
     operation_name: str = "operation",
+    model_errors_only: bool = False,
 ) -> T:
     """Retry a sync function on known transient errors."""
     attempt = 0
@@ -343,7 +470,13 @@ def retry_sync(
         try:
             return func()
         except Exception as e:
-            if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
+            retry_limit = _retry_limit(
+                e,
+                max_retries=max_retries,
+                is_retryable=is_retryable,
+                model_errors_only=model_errors_only,
+            )
+            if attempt >= retry_limit:
                 raise
 
             delay = _compute_delay(
@@ -357,7 +490,7 @@ def retry_sync(
                     "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",
                     operation_name,
                     attempt + 1,
-                    max_retries,
+                    retry_limit,
                     e,
                     delay,
                 )
@@ -375,6 +508,7 @@ async def retry_async(
     is_retryable: Callable[[Exception], bool] = is_retryable_api_error,
     logger=None,
     operation_name: str = "operation",
+    model_errors_only: bool = False,
 ) -> T:
     """Retry an async function on known transient errors."""
     attempt = 0
@@ -383,7 +517,13 @@ async def retry_async(
         try:
             return await func()
         except Exception as e:
-            if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
+            retry_limit = _retry_limit(
+                e,
+                max_retries=max_retries,
+                is_retryable=is_retryable,
+                model_errors_only=model_errors_only,
+            )
+            if attempt >= retry_limit:
                 raise
 
             delay = _compute_delay(
@@ -397,7 +537,7 @@ async def retry_async(
                     "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",
                     operation_name,
                     attempt + 1,
-                    max_retries,
+                    retry_limit,
                     e,
                     delay,
                 )
@@ -408,8 +548,8 @@ async def retry_async(
 class PrimaryBackupSwitcher:
     """Thread-safe primary/backup switcher with automatic failback logic.
 
-    When an error of type ERROR_CLASS_PERMANENT or ERROR_CLASS_QUOTA_EXCEEDED occurs,
-    switches to backup immediately. Then, after either:
+    When a credential- or provider-specific model error occurs, switches to
+    backup immediately. Then, after either:
     - 10 minutes have passed, OR
     - 200 requests have been made to backup
     it will attempt to failback to primary. If failback fails, it switches back
@@ -467,18 +607,29 @@ class PrimaryBackupSwitcher:
     def record_primary_failure(self, error: Exception) -> bool:
         """Record a primary failure. Returns True if should switch to backup.
 
-        Switches to backup immediately for ERROR_CLASS_PERMANENT,
-        ERROR_CLASS_AUTH or ERROR_CLASS_QUOTA_EXCEEDED.
+        Request-specific errors and unknown failures do not switch models.
         """
-        error_class = classify_api_error(error)
-        if error_class in (
-            ERROR_CLASS_PERMANENT,
-            ERROR_CLASS_AUTH,
-            ERROR_CLASS_QUOTA_EXCEEDED,
-        ):
+        kind = model_error_kind(error)
+        should_switch = kind in {
+            ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+            ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+            ModelErrorKind.RATE_LIMIT_ERROR,
+            ModelErrorKind.AUTHENTICATION_ERROR,
+            ModelErrorKind.PERMISSION_DENIED,
+            ModelErrorKind.QUOTA_EXHAUSTED,
+            ModelErrorKind.MODEL_NOT_FOUND,
+        }
+        if kind is None:
+            should_switch = classify_api_error(error) in {
+                ERROR_CLASS_PERMANENT,
+                ERROR_CLASS_AUTH,
+                ERROR_CLASS_QUOTA_EXCEEDED,
+            }
+        if should_switch:
             with self._lock:
                 if not self._using_backup:
-                    logger.warning(f"Primary failed with {error_class}, switching to backup")
+                    label = kind.value if kind is not None else classify_api_error(error)
+                    logger.warning("Primary failed with %s, switching to backup", label)
                     self._using_backup = True
                 # Always reset timer and counter when we fail (whether initial fail or failback fail)
                 self._switch_to_backup_time = time.monotonic()
@@ -502,8 +653,7 @@ class PrimaryBackupSwitcher:
 class OrderedCredentialSwitcher:
     """Thread-safe ordered N-credential switcher with hierarchical failback.
 
-    Supports ordered failover across multiple credentials. When a credential fails
-    with quota_exceeded or permanent error, it advances to the next credential.
+    Supports ordered failover across multiple credentials.
     After failback thresholds are met, it attempts to move back to a higher-priority
     credential (one step at a time, not all the way back to index 0).
 
@@ -524,17 +674,8 @@ class OrderedCredentialSwitcher:
             failback_request_count: Number of requests after which to attempt failback
 
         Note:
-            Failure handling is driven by the error class (see
-            ``classify_api_error``):
-
-            - request-level errors (``permanent`` 400 / ``input_too_large`` /
-              ``content_safety``) fail fast: the same request fails on every
-              credential of the same model, so switching is useless.
-            - credential-level ``auth`` errors (401/403) advance to the next
-              credential in multi-credential mode; the last (or single)
-              credential fails fast.
-            - ``quota_exceeded`` (and ``transient`` once its retries are
-              exhausted) and ``unknown`` advance to the next credential.
+            Request-specific and unknown model errors fail fast. Credential,
+            model-routing, quota, and exhausted transient failures advance.
         """
         if n < 1:
             raise ValueError("Number of credentials must be >= 1")
@@ -598,18 +739,19 @@ class OrderedCredentialSwitcher:
                 self._active_request_count += 1
 
     @staticmethod
-    def is_fail_fast(error_class: str) -> bool:
+    def is_fail_fast(kind: ModelErrorKind | None) -> bool:
         """Whether an error is request-level and must not try other credentials.
 
-        Request-level errors (400 parameter error, input too large, content
-        safety) fail on every credential of the same model, so the caller should
-        re-raise immediately instead of cycling through credentials.
+        Unknown failures remain within the retry layer and never expand into a
+        credential or model failover.
         """
-        return error_class in (
-            ERROR_CLASS_PERMANENT,
-            ERROR_CLASS_INPUT_TOO_LARGE,
-            ERROR_CLASS_CONTENT_SAFETY,
-        )
+        return kind is None or kind in {
+            ModelErrorKind.UNSUPPORTED,
+            ModelErrorKind.INVALID_REQUEST,
+            ModelErrorKind.INPUT_TOO_LARGE,
+            ModelErrorKind.CONTENT_SAFETY,
+            ModelErrorKind.UNKNOWN,
+        }
 
     def commit_success(self, idx: int) -> None:
         """Record that credential ``idx`` successfully served a request.

@@ -2,23 +2,30 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Bootstrap script for OpenViking HTTP Server."""
 
-import asyncio
 import argparse
+import asyncio
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
+import tempfile
+import threading
 import time
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from types import FrameType
+from typing import Iterator, NoReturn, Optional
 
 import uvicorn
 
 from openviking.server.app import (
     WORKER_BOT_API_URL_ENV,
+    WORKER_HOST_ENV,
+    WORKER_PORT_ENV,
     WORKER_WITH_BOT_ENV,
     create_app,
 )
@@ -38,6 +45,30 @@ from openviking_cli.utils.logger import configure_uvicorn_logging
 class BotProcess:
     process: subprocess.Popen
     log_file: Optional[object] = None
+
+
+@dataclass
+class ExpiryPublisherProcess:
+    process: subprocess.Popen
+    stopping: threading.Event = field(default_factory=threading.Event)
+    monitor_thread: Optional[threading.Thread] = None
+
+
+def _raise_sigterm_as_system_exit(signum: int, _frame: FrameType | None) -> NoReturn:
+    raise SystemExit(128 + signum)
+
+
+@contextmanager
+def _sigterm_runs_finally() -> Iterator[None]:
+    """Make Uvicorn's replayed SIGTERM unwind through managed-process cleanup."""
+    if os.name == "nt" or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.signal(signal.SIGTERM, _raise_sigterm_as_system_exit)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _get_version() -> str:
@@ -128,7 +159,114 @@ def _resolve_cli_config_for_bot(config_path: Optional[str]) -> Optional[str]:
     return None
 
 
+def _wait_for_expiry_publisher_ready(
+    process: subprocess.Popen,
+    status_path: Path,
+    *,
+    timeout_seconds: float = 60.0,
+) -> None:
+    started = time.monotonic()
+    while time.monotonic() - started < timeout_seconds:
+        returncode = process.poll()
+        if returncode is not None:
+            raise RuntimeError(f"Expiry publisher exited before becoming ready (code {returncode})")
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            status = {}
+        if status.get("status") == "failed":
+            raise RuntimeError(status.get("error") or "Expiry publisher initialization failed")
+        if status.get("status") == "ready":
+            return
+        time.sleep(0.1)
+    raise TimeoutError("Expiry publisher readiness timed out")
+
+
+def _monitor_expiry_publisher(managed: ExpiryPublisherProcess) -> None:
+    returncode = managed.process.wait()
+    if managed.stopping.is_set():
+        return
+    print(
+        f"Error: managed expiry publisher exited unexpectedly (code {returncode}); "
+        "stopping OpenViking server.",
+        file=sys.stderr,
+    )
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _start_expiry_publisher(config_path: Path) -> ExpiryPublisherProcess:
+    startup_directory = tempfile.TemporaryDirectory(prefix="openviking-expiry-startup-")
+    status_path = Path(startup_directory.name) / "status.json"
+    process: subprocess.Popen | None = None
+    try:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "openviking_cli.expiry_bootstrap",
+                "--config",
+                str(config_path),
+                "--startup-status",
+                str(status_path),
+            ],
+            env=os.environ.copy(),
+            start_new_session=os.name != "nt",
+            creationflags=(
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+            ),
+        )
+        _wait_for_expiry_publisher_ready(process, status_path)
+        managed = ExpiryPublisherProcess(process)
+        managed.monitor_thread = threading.Thread(
+            target=_monitor_expiry_publisher,
+            args=(managed,),
+            name="openviking-expiry-publisher-monitor",
+            daemon=True,
+        )
+        managed.monitor_thread.start()
+        print(f"Expiry publisher started (PID: {process.pid})")
+        return managed
+    except BaseException:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        raise
+    finally:
+        startup_directory.cleanup()
+
+
+def _stop_expiry_publisher(managed: ExpiryPublisherProcess) -> None:
+    managed.stopping.set()
+    process = managed.process
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    if managed.monitor_thread is not None:
+        managed.monitor_thread.join(timeout=1)
+
+
 def main():
+    """Run the CLI with one recovery attempt for remote restart startup failures."""
+    from openviking.server.restart import RestartRecovery
+
+    recovery = RestartRecovery()
+    try:
+        _main(recovery)
+    except (Exception, SystemExit) as exc:
+        if not isinstance(exc, SystemExit) or exc.code not in (None, 0):
+            recovery.rollback()
+        raise
+
+
+def _main(recovery):
     """Main entry point for openviking-server command."""
     parser = argparse.ArgumentParser(
         description="OpenViking HTTP Server",
@@ -207,6 +345,8 @@ def main():
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
     # Load server config from ov.conf
+    resolved_config_path: Path | None = None
+    ov_config = None
     try:
         resolved_config_path = resolve_config_path(
             args.config,
@@ -214,9 +354,21 @@ def main():
             DEFAULT_OV_CONF,
         )
         config = load_server_config(args.config)
-        OpenVikingConfigSingleton.initialize(config_path=args.config)
+        ov_config = OpenVikingConfigSingleton.initialize(config_path=args.config)
     except (FileNotFoundError, ValueError) as e:
-        print(e, file=sys.stderr)
+        if isinstance(e, ValueError):
+            print(
+                f"Failed to load OpenViking server configuration from {resolved_config_path}:\n{e}",
+                file=sys.stderr,
+            )
+            print(
+                "\nValidate the configuration with:\n"
+                "  openviking-server doctor\n\n"
+                "See examples/ov.conf.example for supported fields.",
+                file=sys.stderr,
+            )
+        else:
+            print(e, file=sys.stderr)
         sys.exit(1)
 
     # Configure logging early so that all subsequent steps have proper logging
@@ -225,6 +377,7 @@ def main():
     # 🔍 Authentication health check - CRITICAL: will exit if check fails
     try:
         from openviking.server.auth.health_check import run_startup_health_check_or_exit
+
         asyncio.run(run_startup_health_check_or_exit(config))
     except Exception as e:
         # Don't fail startup if health check itself has issues
@@ -235,7 +388,8 @@ def main():
     try:
         from openviking_cli.utils.ollama import detect_ollama_in_config, ensure_ollama_for_server
 
-        ov_config = OpenVikingConfigSingleton.get_instance()
+        if ov_config is None:
+            ov_config = OpenVikingConfigSingleton.get_instance()
         uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
         if uses_ollama:
             result = ensure_ollama_for_server(ollama_host, ollama_port)
@@ -262,8 +416,15 @@ def main():
     if args.with_bot:
         config.with_bot = True
 
+    if recovery.pending and config.workers > 1:
+        raise ValueError("Remote restart recovery requires a single worker")
+
     bot_process: Optional[BotProcess] = None
     if config.with_bot:
+        import secrets
+
+        # Shared only by this server and its managed child, never returned to Studio.
+        os.environ["OPENVIKING_BOT_STUDIO_TOKEN"] = secrets.token_urlsafe(32)
         bot_port = args.bot_port
         config.bot_api_url = f"http://{VIKINGBOT_DEFAULT_HOST}:{bot_port}"
         _abort_if_port_in_use(bot_port, "vikingbot gateway")
@@ -293,46 +454,98 @@ def main():
             )
             sys.exit(1)
 
-    # Create and run server app
-    app = create_app(
-        config,
-        config_path=(
-            str(resolved_config_path) if resolved_config_path is not None else args.config
-        ),
-    )
-    workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
-    print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
-
+    expiry_publisher_process: Optional[ExpiryPublisherProcess] = None
+    restart_requested = False
     try:
-        workers = config.workers
-        if workers > 1:
-            # Multi-worker mode requires an import string so each worker
-            # can independently import the application.  We stash the
-            # resolved config path in an env-var so that the factory can
-            # pick it up (ServerConfig already reads OPENVIKING_CONFIG_FILE).
-            os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
-            os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
-            uvicorn.run(
-                "openviking.server.app:create_worker_app",
-                factory=True,
-                host=config.host,
-                port=config.port,
-                workers=workers,
-                timeout_keep_alive=config.timeout_keep_alive,
-                log_config=None,
+        with _sigterm_runs_finally():
+            idle = getattr(getattr(ov_config, "memory", None), "session_auto_commit", None)
+            compile_api = getattr(ov_config, "compile_api", None)
+            expiry = getattr(ov_config, "expiry", None)
+            uses_redis = (idle is not None and idle.enabled and idle.idle_backend == "redis") or (
+                compile_api is not None and compile_api.scheduler_enabled
             )
-        else:
-            uvicorn.run(
-                app,
-                host=config.host,
-                port=config.port,
-                timeout_keep_alive=config.timeout_keep_alive,
-                log_config=None,
+            if uses_redis and expiry is not None and expiry.publisher_separate_process:
+                if resolved_config_path is None:
+                    raise RuntimeError(
+                        "Cannot start expiry publisher without a resolved ov.conf path"
+                    )
+                expiry_publisher_process = _start_expiry_publisher(resolved_config_path)
+
+            # Create and run server app only after managed dependencies are ready.
+            app = create_app(
+                config,
+                server_overrides={
+                    key: getattr(config, key)
+                    for key in ("host", "port", "workers", "with_bot")
+                    if getattr(args, key) is not None and (key != "with_bot" or args.with_bot)
+                },
+                config_path=(
+                    str(resolved_config_path) if resolved_config_path is not None else args.config
+                ),
             )
+            workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
+            print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
+
+            workers = config.workers
+            if workers > 1:
+                # Multi-worker mode requires an import string so each worker
+                # can independently import the application.  We stash the
+                # resolved config path in an env-var so that the factory can
+                # pick it up (ServerConfig already reads OPENVIKING_CONFIG_FILE).
+                os.environ[WORKER_HOST_ENV] = config.host or ""
+                os.environ[WORKER_PORT_ENV] = str(config.port)
+                os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
+                os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
+                uvicorn.run(
+                    "openviking.server.app:create_worker_app",
+                    factory=True,
+                    host=config.host,
+                    port=config.port,
+                    workers=workers,
+                    timeout_keep_alive=config.timeout_keep_alive,
+                    log_config=None,
+                )
+            else:
+                restart_requested = _run_restartable_server(
+                    app,
+                    recovery=recovery,
+                    host=config.host,
+                    port=config.port,
+                    timeout_keep_alive=config.timeout_keep_alive,
+                    log_config=None,
+                )
     finally:
-        # Cleanup vikingbot process on shutdown
+        if expiry_publisher_process is not None:
+            _stop_expiry_publisher(expiry_publisher_process)
         if bot_process is not None:
             _stop_vikingbot_gateway(bot_process)
+    if restart_requested:
+        # Preserve the interpreter, CLI arguments, cwd and environment. Replacing
+        # this process also keeps its PID and relationship to systemd/Docker.
+        if resolved_config_path is not None:
+            os.environ[OPENVIKING_CONFIG_ENV] = str(resolved_config_path)
+        os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+
+
+def _run_restartable_server(app, recovery=None, **kwargs) -> bool:
+    from openviking.server.restart import RestartController
+
+    server = uvicorn.Server(uvicorn.Config(app, **kwargs))
+    controller = RestartController(lambda: setattr(server, "should_exit", True), recovery)
+    app.state.restart_controller = controller
+    if recovery is not None:
+        startup = server.startup
+
+        async def startup_with_recovery(*args, **kwargs):
+            await startup(*args, **kwargs)
+            if server.started:
+                recovery.ready()
+
+        server.startup = startup_with_recovery
+    server.run()
+    if recovery is not None and recovery.pending:
+        raise RuntimeError("Server failed to complete startup")
+    return controller.requested
 
 
 def _handle_vikingbot_failure(output: str, returncode: int) -> None:
@@ -352,6 +565,30 @@ def _handle_vikingbot_failure(output: str, returncode: int) -> None:
 
     if output:
         print(f"\nDetailed error:\n{output}", file=sys.stderr)
+
+
+def _wait_for_bot_ready(process, status_path: Path) -> None:
+    """A running child is not ready until its sandbox and HTTP server are ready."""
+    started = time.monotonic()
+    timeout = 900
+    while time.monotonic() - started < timeout:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"VikingBot exited before becoming ready (code {process.returncode})."
+            )
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            status = {}
+        # The per-launch status path identifies this gateway. Windows launchers
+        # can have a different PID from the Python process reporting readiness.
+        timeout = max(timeout, int(status.get("timeout", timeout)))
+        if status.get("status") == "failed":
+            raise RuntimeError(status.get("error") or "VikingBot initialization failed")
+        if status.get("status") == "ready":
+            return
+        time.sleep(0.1)
+    raise TimeoutError("VikingBot readiness timed out; check Docker/image pulls and the Bot log.")
 
 
 def _start_vikingbot_gateway(
@@ -386,11 +623,14 @@ def _start_vikingbot_gateway(
         return None
 
     vikingbot_cmd.extend(["--host", VIKINGBOT_DEFAULT_HOST, "--port", str(port)])
+    resolved_config = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    if resolved_config is not None:
+        vikingbot_cmd.extend(["--config", str(resolved_config)])
 
     # Prepare logging
     log_file = None
-    stdout_handler = subprocess.PIPE
-    stderr_handler = subprocess.PIPE
+    stdout_handler = None
+    stderr_handler = None
     log_file_path = None
 
     if enable_logging:
@@ -407,13 +647,18 @@ def _start_vikingbot_gateway(
             if log_file:
                 log_file.close()
                 log_file = None
-            stdout_handler = subprocess.PIPE
-            stderr_handler = subprocess.PIPE
+            stdout_handler = None
+            stderr_handler = None
 
+    # Keep the handshake outside the sandbox workspace and unique to this child.
+    startup_directory = tempfile.TemporaryDirectory(prefix="vikingbot-startup-")
+    status_path = Path(startup_directory.name) / "status.json"
+    process = None
     # Start vikingbot gateway process
     try:
         # Set environment to ensure it uses the same Python environment
         env = os.environ.copy()
+        env["VIKINGBOT_STARTUP_STATUS"] = str(status_path)
         cli_config_path = _resolve_cli_config_for_bot(config_path)
         if cli_config_path is not None:
             env[OPENVIKING_CLI_CONFIG_ENV] = cli_config_path
@@ -427,32 +672,36 @@ def _start_vikingbot_gateway(
             stderr=stderr_handler,
             text=True,
             env=env,
+            # Parent handles terminal signals and then shuts Gateway down once.
+            # Avoid Ctrl+C cancelling child cleanup before its sandbox is released.
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
 
-        # Wait a moment to check if it started successfully
-        time.sleep(2)
-        if process.poll() is not None:
-            # Process exited early
-            if log_file:
-                log_file.close()
-                if log_file_path:
-                    with open(log_file_path, "r") as f:
-                        output = f.read()
-                    _handle_vikingbot_failure(output, process.returncode)
-            else:
-                stdout, stderr = process.communicate(timeout=1)
-                _handle_vikingbot_failure(stderr, process.returncode)
-            sys.exit(1)
+        _wait_for_bot_ready(process, status_path)
 
         print(f"Vikingbot gateway started (PID: {process.pid})")
 
         return BotProcess(process=process, log_file=log_file)
 
-    except Exception as e:
+    except BaseException as e:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
         if log_file:
             log_file.close()
-        print(f"Warning: Failed to start vikingbot gateway: {e}")
+        print(f"Failed to start vikingbot gateway: {e}")
+        if log_file_path:
+            print(f"VikingBot startup details: {log_file_path}")
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            raise
         return None
+    finally:
+        startup_directory.cleanup()
 
 
 def _stop_vikingbot_gateway(bot_process: BotProcess) -> None:
@@ -466,7 +715,7 @@ def _stop_vikingbot_gateway(bot_process: BotProcess) -> None:
         # Try graceful termination first
         bot_process.process.terminate()
         try:
-            bot_process.process.wait(timeout=5)
+            bot_process.process.wait(timeout=30)
             print("Vikingbot gateway stopped gracefully.")
         except subprocess.TimeoutExpired:
             # Force kill if it doesn't stop in time

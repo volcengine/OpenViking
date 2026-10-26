@@ -2,6 +2,8 @@
 
 任务 API 用于跟踪资源导入、会话提交、索引维护和快照恢复等异步操作。
 
+推荐先提交操作、保存返回的 `task_id`，再通过独立请求查询状态。收到任务 ID 只表示任务已提交；状态为 `completed` 才表示处理成功。`pending`、`running`、`cancelling` 都不是终态。停止轮询不会取消后台任务。
+
 ## API 参考
 
 ### get_task()
@@ -30,6 +32,7 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | task_id | str | 是 | - | 后台 API 返回的任务 ID |
+| include_events | bool | 否 | false | 在 HTTP 响应中包含持久化的执行事件 |
 
 #### 3. 使用示例
 
@@ -47,14 +50,29 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
 **Python SDK**
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+import time
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+from openviking_sdk import SyncHTTPClient
 
-task = await client.get_task(task_id="uuid-xxx")
-print(f"Status: {task['status']}")
-await client.close()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
+
+try:
+    submitted = client.add_resource("https://example.com/guide.md")
+    task_id = submitted["task_id"]
+    print(f"Import task: {task_id}")
+    while True:
+        task = client.get_task(task_id)
+        if task is None:
+            raise RuntimeError(f"Task {task_id} is no longer available")
+        if task["status"] == "completed":
+            break
+        if task["status"] in {"failed", "cancelled"}:
+            raise RuntimeError(f"Import task {task_id}: {task['status']} ({task.get('error')})")
+        time.sleep(2)
+    print(task["result"])
+finally:
+    client.close()
 ```
 
 **TypeScript SDK**
@@ -98,6 +116,48 @@ ov task status uuid-xxx
 
 `stage` 可以为 `null`。Git 仓库资源导入任务可能报告 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue`；其他任务类型可能将其留空。实时队列计数不会出现在任务状态中；需要实时数量时使用 observer queue，任务完成后可读取 `result.queue_status`。
 
+**执行事件记录（HTTP）**
+
+请求 `GET /api/v1/tasks/{task_id}?include_events=true`，即可获得额外的 `result.execution_events` 字段。默认详情响应和任务列表不包含此字段。事件沿用任务记录的权限和保留策略。
+
+```json
+{
+  "items": [
+    {
+      "seq": 1,
+      "recorded_at": "2026-09-09T01:00:00.123456+00:00",
+      "kind": "created",
+      "status": "pending",
+      "stage": null,
+      "operation": null,
+      "error": null
+    }
+  ],
+  "dropped_count": 0,
+  "started_mid_task": false
+}
+```
+
+| 事件类型 | 记录的事实 |
+|----------|------------|
+| `created` | TaskTracker 创建了任务记录 |
+| `status_changed` | TaskTracker 接受了新的任务状态，包括取消过程和终态 |
+| `stage_changed` | 执行路径在任务活跃期间上报了不同的阶段 |
+| `error_recorded` | TaskTracker 接受了任务的首个脱敏错误 |
+| `waiting_for_descendants` | 等待路径发现任务仍有未结束的队列工作，已排除自身 work ID |
+
+`recorded_at` 是 TaskTracker 记录事件的 UTC 时间，不是浏览器轮询时间，也不一定是底层异常发生的时间。事件与任务状态在同一次写入成功后才对外发布。`seq` 确定任务内的事件顺序，即使多个事件时间相同也不会混淆。`stage` 表示任务最后上报的阶段；并行工作可能在其他阶段产生错误。`operation` 存在时标识上报事件的工作项。错误沿用现有脱敏和长度限制；这里不包含完整组件日志或 Python 堆栈。
+
+每个任务最多保留 64 条事件，序列化事件数据不超过 32 KiB。超限时优先删除较早事件，`dropped_count` 记录删除数量，保留事件的序号不重置。事件随任务过期清理。旧任务返回 `execution_events: null`；若旧的活跃任务后来产生事件，则 `started_mid_task` 为 true，不会重建此前的历史。旧版本服务即使收到参数也可能不返回该字段。Studio 会说明这些情况，并保留任务元数据、结果和错误展示。
+
+::: details 扩展事件与版本回滚兼容性
+
+扩展执行事件时，在 `openviking/service/task_events.py` 注册事件类型、补充 Studio 翻译，然后在实际执行点调用 `await tracker.record_event(task_id, kind, account_id=..., user_id=..., operation=...)`。这个内部接口不修改任务状态或阶段，只接受有长度限制的操作标识，不接受任意日志内容。现有生命周期方法会自动记录它们接受的状态变化。
+
+持久化任务文件新增 `execution_events` 字段。回滚目标需要具备未知任务字段的保留能力（提交 `a5166386` 或之后的版本）；更早的读取实现可能拒绝这些文件。回滚期间也会停止上报事件，因此跨降级执行的任务历史可能不完整。
+
+:::
+
 **响应示例（完成）**
 
 ```json
@@ -117,7 +177,6 @@ ov task status uuid-xxx
         "entities": 1,
         "cases": 1
       },
-      "active_count_updated": 2,
       "token_usage": {
         "llm": {
           "prompt_tokens": 5200,
@@ -136,6 +195,8 @@ ov task status uuid-xxx
 }
 ```
 
+完成任务结果中的 `memories_extracted` 是本次提交各类别的提取数量；`token_usage` 通常是统计更新后的 session 累计用量。如果 Phase 2 无法读到有效的 session 元数据（临时存储错误会有限重试），提取仍可完成，保留 session 的 `.meta.json` 原样并记录统计失败日志。此时 `token_usage` 保持完整结构、所有计数返回 `0`，表示统计不可用，并不代表实际消耗为零。本次累计 token 和记忆数量不会自动补计，提取结果与遥测数据仍然保留。
+
 ---
 
 ### cancel_task()
@@ -148,6 +209,8 @@ ov task status uuid-xxx
 
 **支持的任务类型**：
 - `add_resource`
+- `add_skill`
+- `compile`
 - `session_commit`
 - `admin_reindex`
 - `snapshot_restore_reindex`
@@ -170,7 +233,7 @@ ov task status uuid-xxx
 **Python SDK**
 
 ```python
-task = await client.cancel_task(task_id="uuid-xxx")
+task = client.cancel_task(task_id="uuid-xxx")
 print(task["status"])
 ```
 
@@ -253,7 +316,15 @@ ov task cancel uuid-xxx
 | task_type | str | 否 | None | 按任务类型过滤，例如 `session_commit` |
 | status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`cancelling`、`completed`、`failed`、`cancelled` |
 | resource_id | str | 否 | None | 按资源 ID 过滤，例如会话 ID |
-| limit | int | 否 | 50 | 最多返回的任务条数 |
+| include_internal | bool | 否 | false | 是否包含 Connector 导入产生的内部子任务 |
+| limit | int | 否 | 50 | 每次最多返回的任务条数，范围 1～200 |
+| pagination | str | 否 | None | 仅 HTTP；传 `cursor` 后以分页对象返回 |
+| cursor | str | 否 | None | 仅 HTTP；上一页的 `next_cursor`，与 `pagination=cursor` 一起使用 |
+| q | str | 否 | None | 仅 HTTP cursor 模式；在 task ID 和 Compile 请求的 `skill`、`to`、`from` 中做不区分大小写的包含匹配 |
+
+使用 `pagination=cursor` 时，`result` 是包含 `items`、`has_more` 和 `next_cursor` 的对象，而不是数组。请求下一页时原样传入 `next_cursor`，并保持相同的过滤条件和身份。未使用 cursor 模式时，`q` 和 `cursor` 不影响结果。
+
+默认仅返回用户可见任务；排查 Connector 导入时可传 `include_internal=true` 查看其内部 `add_resource` 子任务。
 
 #### 3. 使用示例
 
@@ -271,19 +342,19 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 **Python SDK**
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
-tasks = await client.list_tasks(
+tasks = client.list_tasks(
     task_type="session_commit",
     status="running",
     limit=20,
 )
 for task in tasks:
     print(task["task_id"], task["status"])
-await client.close()
+client.close()
 ```
 
 **TypeScript SDK**

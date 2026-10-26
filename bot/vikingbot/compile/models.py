@@ -10,47 +10,44 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from openviking.session.memory.dataclass import WikiLink
 from vikingbot.channels.openapi_models import OpenVikingConnection
 
-DEFAULT_COMPILE_REASON = (
+DEFAULT_COMPILE_INSTRUCTION = (
     "Follow the loaded Skill's instructions to transform the provided source materials "
     "into the outputs required by the Skill."
 )
 COMPILE_STAGING_ROOT = "__compile_staging__"
-COMPILE_TARGET_CHECKOUT_ROOT = f"{COMPILE_STAGING_ROOT}/target_checkout"
-COMPILE_MATERIALIZED_ROOT = "compile_resources"
-COMPILE_MANIFEST_NAME = "_manifest.tsv"
+COMPILE_OUTPUT_ROOT = f"{COMPILE_STAGING_ROOT}/output"
+COMPILE_DRAFT_ROOT = f"{COMPILE_STAGING_ROOT}/drafts"
 OKF_VERSION = "0.1"
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 WikiLanguage = Literal["en", "zh-CN"]
 
 
 class CompileLimits(BaseModel):
+    """Bound task execution and source loading; output size is checked per submission."""
+
     model_config = ConfigDict(frozen=True)
 
-    source_roots: int = 16
-    source_catalog_entries: int = 200
-    source_files: int = 5000
-    source_total_bytes: int = 1024 * 1024 * 1024
-    target_total_bytes: int = 1024 * 1024 * 1024
-    skill_files: int = 128
-    skill_file_bytes: int = 8 * 1024 * 1024
-    skill_total_bytes: int = 32 * 1024 * 1024
-    target_inventory_entries: int = 2000
-    target_catalog_pages: int = 10
-    initial_prompt_chars: int = 300_000
-    agent_context_chars: int = 240_000
-    agent_iterations: int = 60
-    tool_uri_count: int = 32
-    tool_result_bytes: int = 1024 * 1024
-    tool_total_result_bytes: int = 8 * 1024 * 1024
-    output_pages: int = 128
-    output_files: int = 128
-    output_operations: int = 256
-    output_total_bytes: int = 4 * 1024 * 1024
+    # Soft request budget for prompt, input JSON, emit schema and estimated output space.
+    # Larger indivisible records may exceed it; this is not the model's token limit.
+    merge_input_chars: int = Field(default=60_000, ge=1)
+    # Source text plus repeated context per range/read batch, independent of request packing.
+    source_batch_chars: int = Field(default=40_000, ge=1)
+    agent_iterations: int = 120
+    # Per-transform model/tool rounds, including draft checks and submission; parent budget is separate.
+    subagent_iterations: int = Field(default=70, ge=1)
+    # Final delivery review has a task-wide model/tool-round budget, including submission.
+    final_review_iterations: int = Field(default=300, ge=1)
+    # Per-task Map workers, also used for Resource source subagents.
+    source_concurrency: int = Field(default=6, ge=1)
+    # Per-task Shuffle routing workers and embedding batches.
+    shuffle_concurrency: int = Field(default=6, ge=1)
+    # Maximum primary records per routing request, including retried records.
+    shuffle_batch_size: int = Field(default=4, ge=1, strict=True)
+    # Per-task Reduce workers, also used for consolidating same-path candidate files.
+    merge_concurrency: int = Field(default=10, ge=1)
     concurrent_tasks: int = 10
     accepted_tasks: int = 40
     accepted_tasks_per_principal: int = 10
-    queue_wait_seconds: float = 60 * 60
-    task_runtime_seconds: float = 60 * 60
     salvage_grace_seconds: float = 120
     cleanup_grace_seconds: float = 40
     terminal_task_retention_seconds: float = 24 * 60 * 60
@@ -62,15 +59,19 @@ class CompileRequest(BaseModel):
 
     from_: list[str] = Field(alias="from", min_length=1)
     to: str = Field(min_length=1)
-    reason: str | None = None
+    instruction: str | None = None
     skill: str = Field(min_length=1)
-    runtime_timeout_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        allow_inf_nan=False,
-    )
+    args: dict[str, Any] | None = None
     openviking_connection: OpenVikingConnection | None = None
     _principal_scope: str = PrivateAttr(default="local")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_reason(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "reason" in data:
+            data = dict(data)
+            data.setdefault("instruction", data.pop("reason"))
+        return data
 
 
 class SanitizedCompileRequest(BaseModel):
@@ -78,14 +79,20 @@ class SanitizedCompileRequest(BaseModel):
 
     from_: list[str] = Field(alias="from")
     to: str
-    reason: str
-    reason_provided: bool = False
+    instruction: str
+    instruction_provided: bool = False
     skill: str
-    runtime_timeout_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        allow_inf_nan=False,
-    )
+    # Inclusive source modification cutoff in UTC; None compiles all source files.
+    last_compile_time: datetime | None = None
+    # Kernel change plan for incremental Compile; supersedes last_compile_time.
+    changes: dict[str, Any] | None = None
+    # Rebuild resource index.md files from actual Markdown paths; preserve knowledge bodies.
+    wiki_links: bool = Field(default=False, strict=True)
+
+
+def has_directory_plan(changes: dict[str, Any] | None) -> bool:
+    """Identify directory-based task inputs; request normalization validates their contents."""
+    return isinstance(changes, dict) and "diff_dirs" in changes and "full_dirs" in changes
 
 
 class WikiPageDraft(BaseModel):
@@ -107,8 +114,8 @@ class WikiPageDraft(BaseModel):
     body_workspace_path: str | None = Field(
         default=None,
         description=(
-            f"Relative path under {COMPILE_TARGET_CHECKOUT_ROOT}/ for an editable "
-            "UTF-8 Markdown Wiki page in the target checkout."
+            f"Relative path under {COMPILE_OUTPUT_ROOT}/ for an editable "
+            "UTF-8 Markdown Wiki page in the output directory."
         ),
     )
     source_ids: list[str] = Field(
@@ -210,8 +217,12 @@ class CompileResult(BaseModel):
     created: list[str] = Field(default_factory=list)
     updated: list[str] = Field(default_factory=list)
     unchanged: list[str] = Field(default_factory=list)
+    # Skipped target-state conflicts, each containing uri, code and message; never delivered.
+    conflicts: list[dict[str, str]] = Field(default_factory=list)
     page_count: int = 0
     link_count: int = 0
+    # Path diagnostics are informational and never consume the agent repair budget.
+    link_report: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -233,6 +244,7 @@ class CompileTask(BaseModel):
     stage: str
     created_at: str
     updated_at: str
+    meta: dict[str, Any] = Field(default_factory=dict)
     result: CompileResult | None = None
     error: CompileErrorInfo | None = None
 
@@ -246,9 +258,20 @@ class CompileTask(BaseModel):
 class CompileAccepted(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    session_id: str
     task_id: str
     status: Literal["accepted"] = "accepted"
     to: str
+
+
+class CompileSessionRequest(BaseModel):
+    """Status or cancellation request scoped by the authenticated caller and session ID."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1)
+    # Original task args forwarded by OpenViking; optional and unused for session lookup.
+    args: dict[str, Any] | None = None
 
 
 class CompileFailure(RuntimeError):
@@ -270,8 +293,9 @@ __all__ = [
     "CompileLimits",
     "CompileRequest",
     "CompileResult",
+    "CompileSessionRequest",
     "CompileTask",
-    "DEFAULT_COMPILE_REASON",
+    "DEFAULT_COMPILE_INSTRUCTION",
     "OKF_VERSION",
     "SanitizedCompileRequest",
     "TERMINAL_STATUSES",

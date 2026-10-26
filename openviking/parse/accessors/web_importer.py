@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from openviking.parse.accessors.http_accessor import HTTPAccessor
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.parse.accessors.web_crawler import CrawlConfig, ScrapyWebCrawler
 from openviking.parse.accessors.web_feed_accessor import (
     FeedEntry,
@@ -20,7 +21,7 @@ from openviking.parse.accessors.web_feed_accessor import (
     _sanitize_filename,
     url_to_relpath,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import FailedPreconditionError, InvalidArgumentError
 
 DEPTH_UNLIMITED = -1
 MAX_PAGES_UNLIMITED = -1
@@ -93,9 +94,14 @@ class WebImporter:
         success_pages = self._dedupe_success_pages(crawl_result.pages)
         if not any(page.depth == 0 for page in success_pages):
             detail = self._entry_failure_detail(crawl_result.pages)
-            raise RuntimeError(_entry_failure_message(root_url, detail))
+            message = _entry_failure_message(root_url, detail)
+            if detail and "robots.txt" in detail.lower():
+                raise FailedPreconditionError(message)
+            raise RuntimeError(message)
 
-        temp_root = Path(tempfile.mkdtemp(prefix="ov_web_"))
+        temp_root = Path(
+            tempfile.mkdtemp(prefix="ov_web_", dir=get_parser_download_temp_dir())
+        )
         temp_dir = temp_root / _host_name(root_url)
         try:
             temp_dir.mkdir(parents=True, exist_ok=True)

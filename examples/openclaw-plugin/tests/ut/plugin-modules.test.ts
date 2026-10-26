@@ -25,10 +25,28 @@ import { registerOpenVikingLifecycleHooks } from "../../plugin/openviking-lifecy
 import { registerOpenVikingMemoryTools } from "../../plugin/openviking-memory-tools.js";
 import { registerOpenVikingMemoryRecallTools } from "../../plugin/openviking-memory-recall-tools.js";
 import { registerOpenVikingQueryTools } from "../../plugin/openviking-query-tools.js";
+import { createOpenVikingSessionRoutingRuntime } from "../../plugin/openviking-session-routing-runtime.js";
 import { registerOpenVikingRecallTraceTools } from "../../plugin/openviking-recall-trace-tools.js";
 import { registerOpenVikingToolResultTools } from "../../plugin/openviking-tool-result-tools.js";
 
 describe("plugin module seams", () => {
+  it("routes tools without a sender-scoped peer under peer_role=sender when the sender is missing", () => {
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const { resolvePluginSessionRouting } = createOpenVikingSessionRoutingRuntime({
+      peerRole: "sender",
+      peerPrefix: "default",
+      logFindRequests: false,
+      logger,
+    });
+
+    expect(resolvePluginSessionRouting({ sessionId: "session-1" }).actorPeerId).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("no sender identity"));
+
+    logger.warn.mockClear();
+    expect(resolvePluginSessionRouting({ sessionId: "session-1", requesterSenderId: "ou_01:abc" }).actorPeerId).toBe("ou_01_abc");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("registers only enabled OpenViking tools through the tool-registration seam", () => {
     const api = { registerTool: vi.fn() };
     const logger = { debug: vi.fn() };
@@ -359,7 +377,6 @@ describe("plugin module seams", () => {
       reason: "project docs",
       instruction: "extract API notes",
       wait: true,
-      timeout: 30,
     }, "agent-main")).resolves.toEqual({
       content: [{ type: "text", text: "Imported OpenViking resource. viking://resources/project-docs Warnings: kept existing metadata" }],
       details: {
@@ -376,14 +393,12 @@ describe("plugin module seams", () => {
       reason: "project docs",
       instruction: "extract API notes",
       wait: true,
-      timeout: 30,
     }, "agent-main");
 
     await expect(runtime.addSkillOpenViking({
       source: "./skills/debugger/SKILL.md",
       data: "skill body",
       wait: false,
-      timeout: 5,
     }, "agent-main")).resolves.toEqual({
       content: [{ type: "text", text: "Imported OpenViking skill (debugger). viking://user/skills/debugger" }],
       details: {
@@ -397,7 +412,6 @@ describe("plugin module seams", () => {
       path: "./skills/debugger/SKILL.md",
       data: "skill body",
       wait: false,
-      timeout: 5,
     }, "agent-main");
   });
 
@@ -468,7 +482,7 @@ describe("plugin module seams", () => {
 
   it("registers the context engine through a dedicated plugin module", () => {
     const engine = { id: "openviking", commitOVSession: vi.fn() };
-    const api = { registerContextEngine: vi.fn() };
+    const api = { runtime: { version: "2026.9.3" }, registerContextEngine: vi.fn() };
     const logger = { info: vi.fn(), warn: vi.fn() };
     const getClient = vi.fn();
     const resolveAgentId = vi.fn();
@@ -502,6 +516,7 @@ describe("plugin module seams", () => {
       id: "openviking",
       name: "OpenViking",
       version: "0.1.0",
+      hostVersion: "2026.9.3",
       cfg: { baseUrl: "http://127.0.0.1:1933" },
       logger,
       getClient,
@@ -676,7 +691,6 @@ describe("plugin module seams", () => {
       source: "https://example.com/docs",
       to: "viking://resources/docs",
       wait: true,
-      timeout: 30,
     });
     expect(addResource).toHaveBeenCalledWith({
       pathOrUrl: "https://example.com/docs",
@@ -685,7 +699,6 @@ describe("plugin module seams", () => {
       reason: undefined,
       instruction: undefined,
       wait: true,
-      timeout: 30,
     }, "agent-main");
     expect(resourceResult.content[0].text).toBe("Imported OpenViking resource. viking://resources/docs Warnings: warn");
     expect(resourceResult.details).toMatchObject({ action: "resource_imported", root_uri: "viking://resources/docs" });
@@ -697,7 +710,6 @@ describe("plugin module seams", () => {
       path: undefined,
       data: "name: demo\n",
       wait: undefined,
-      timeout: undefined,
     }, "agent-main");
     expect(skillResult.content[0].text).toBe("Imported OpenViking skill (demo). viking://user/skills/demo");
     expect(skillResult.details).toMatchObject({ action: "skill_imported", uri: "viking://user/skills/demo" });
@@ -816,7 +828,7 @@ describe("plugin module seams", () => {
       getClient: async () => ({ addSessionMessage, commitSession, deleteUri, find }),
       normalizeSessionId: (sessionId: string) => `normalized:${sessionId}`,
       createTempSessionId: () => "memory-store-temp",
-      peerRole: "person" as const,
+      peerRole: "sender" as const,
       resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "ou_01_abc" }),
       isBypassedSession: () => false,
       makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),

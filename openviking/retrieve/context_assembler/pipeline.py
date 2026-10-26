@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from openviking.models.embedder.base import query_embed_cache_scope
 from openviking.retrieve.context_assembler.budget import (
     oversized_abstract_needs_body,
     per_entry_cap,
@@ -31,6 +32,7 @@ from openviking.retrieve.context_assembler.render import render_context
 from openviking.retrieve.context_assembler.rewrite import rewrite_context, server_rewrite_enabled
 from openviking.retrieve.context_assembler.tiers import needs_content, prefetch_contents
 from openviking.server.identity import RequestContext
+from openviking.utils.time_decay import validate_event_time_decay_request
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -56,6 +58,13 @@ async def assemble_context(
     params: AssembleParams,
 ) -> AssembleResult:
     """Run the full assembly pipeline for one request."""
+    validate_event_time_decay_request(params.events_time_decay_protection)
+    if params.search_type == "keywords":
+        if params.image_url:
+            from openviking_cli.exceptions import InvalidArgumentError
+
+            raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
+        await service.search.ensure_keywords_search_supported(ctx)
     quotas = normalize_quotas(params.quotas, params.purpose)
     penalties = normalize_penalties(params.other_peer_penalty)
 
@@ -64,12 +73,31 @@ async def assemble_context(
     expansion_mode = params.query_expansion if intent_enabled else "off"
     needs_session = bool(params.session_id) and (expansion_mode == "auto" or params.dedup_turns > 0)
     session = await _load_session(service, ctx, params.session_id) if needs_session else None
+    resolver = getattr(service, "vlm_resolver", None)
 
-    queries, expansion_status = await expand_queries(
-        query=params.query,
-        session=session,
-        mode=expansion_mode,
-    )
+    if expansion_mode == "auto" and session is not None:
+        if resolver is None:
+            raise RuntimeError(
+                "Context assembly requires a VLM resolver for account-owned expansion"
+            )
+        try:
+            expansion_planner = await resolver.get_query_planner(ctx.account_id)
+        except Exception as exc:
+            logger.warning("Account expansion planner unavailable: %s", exc)
+            queries, expansion_status = [params.query], "failed"
+        else:
+            queries, expansion_status = await expand_queries(
+                query=params.query,
+                session=session,
+                mode=expansion_mode,
+                planner=expansion_planner,
+            )
+    else:
+        queries, expansion_status = await expand_queries(
+            query=params.query,
+            session=session,
+            mode=expansion_mode,
+        )
 
     ledger = await RecallLedger.load(
         service=service,
@@ -78,21 +106,28 @@ async def assemble_context(
         dedup_turns=params.dedup_turns,
     )
     cooled = ledger.cooled_uris() if ledger else set()
-    excluded = normalize_exclude_uris(params.exclude_uris) | cooled
+    excluded = normalize_exclude_uris(params.exclude_uris)
 
-    candidates, gather_stats = await gather_candidates(
-        service=service,
-        ctx=ctx,
-        queries=queries,
-        quotas=quotas,
-        limit=params.limit,
-        score_threshold=params.score_threshold,
-        filter=params.filter,
-        image_url=params.image_url,
-        peer_scope=params.peer_scope,
-        penalties=penalties,
-        excluded=excluded,
-    )
+    # The fan-out below embeds each planned query once per (query, target)
+    # find, so wrap it in the request-scoped query embedding cache: sibling
+    # finds share the first in-flight embed of each distinct query text.
+    async with query_embed_cache_scope():
+        candidates, gather_stats = await gather_candidates(
+            service=service,
+            ctx=ctx,
+            queries=queries,
+            quotas=quotas,
+            limit=params.limit,
+            score_threshold=params.score_threshold,
+            filter=params.filter,
+            image_url=params.image_url,
+            events_time_decay_protection=params.events_time_decay_protection,
+            search_type=params.search_type,
+            peer_scope=params.peer_scope,
+            penalties=penalties,
+            excluded=excluded,
+            cooled=cooled,
+        )
 
     # Read only the candidates whose planned tier actually needs a body: with
     # the default tiers that is the events bucket, not every hit.
@@ -119,13 +154,32 @@ async def assemble_context(
     digest = ""
     rewrite_status = "off"
     rewrite_usage: Optional[Dict[str, int]] = None
-    if plan.entries and server_rewrite_enabled(params.rewrite):
-        digest, rewrite_status, rewrite_usage = await rewrite_context(
-            query=params.query,
-            rendered=rendered or render_context(plan.entries),
-            max_bullets=params.rewrite_max_bullets,
-            valid_uris=[entry.uri for entry in plan.entries],
-        )
+    rewrite_enabled = server_rewrite_enabled(params.rewrite)
+    if params.rewrite == "auto" and resolver is not None:
+        try:
+            rewrite_enabled = await resolver.has_dedicated_query_planner(ctx.account_id)
+        except Exception as exc:
+            logger.warning("Account rewrite planner unavailable: %s", exc)
+            rewrite_enabled = False
+            rewrite_status = "failed"
+    if plan.entries and rewrite_enabled:
+        if resolver is None:
+            raise RuntimeError(
+                "Context assembly requires a VLM resolver for account-owned rewrite"
+            )
+        try:
+            planner = await resolver.get_query_planner(ctx.account_id)
+        except Exception as exc:
+            logger.warning("Account rewrite planner unavailable: %s", exc)
+            rewrite_status = "failed"
+        else:
+            digest, rewrite_status, rewrite_usage = await rewrite_context(
+                query=params.query,
+                rendered=rendered or render_context(plan.entries),
+                max_bullets=params.rewrite_max_bullets,
+                valid_uris=[entry.uri for entry in plan.entries],
+                planner=planner,
+            )
         if rewrite_status == "no_relevant":
             rendered = ""
 

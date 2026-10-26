@@ -1,16 +1,32 @@
-import { h } from 'vue'
-import DefaultTheme from 'vitepress/theme'
+import { docsLanguageEntry } from './language-entry.js'
+import { createLanguagePreference } from './language-preference.js'
+import { h, defineAsyncComponent, nextTick } from 'vue'
+import DefaultTheme, { VPButton } from 'vitepress/theme-without-fonts'
+import DocBreadcrumb from './components/DocBreadcrumb.vue'
+import AgentPrompt from './components/AgentPrompt.vue'
+import ArchitectureDiagram from './components/ArchitectureDiagram.vue'
+import IngestionPipelineDiagram from './components/IngestionPipelineDiagram.vue'
+import MemoryExtractionDiagram from './components/MemoryExtractionDiagram.vue'
+import PathLockDiagram from './components/PathLockDiagram.vue'
+import StorageLayersDiagram from './components/StorageLayersDiagram.vue'
+import VikingBotOverviewDiagram from './components/VikingBotOverviewDiagram.vue'
+import SidebarFooter from './components/SidebarFooter.vue'
+import NavScreenFooter from './components/NavScreenFooter.vue'
+import ThemeToggle from './components/ThemeToggle.vue'
+import LocaleSwitch from './components/LocaleSwitch.vue'
+import { withBase } from 'vitepress'
 import type { EnhanceAppContext } from 'vitepress'
 import CopyMarkdownButton from './CopyMarkdownButton.vue'
-import LlmsTxtLink from './LlmsTxtLink.vue'
 import OpenVikingSearch from './OpenVikingSearch.vue'
 import ApiExampleTabsEnhancer from './ApiExampleTabsEnhancer.vue'
 import { initVikingBotWidget, syncVikingBotLocale } from './vikingbot-widget'
-import { trackPageView } from './track'
+import { trackEvent, trackPageView } from './track'
+import { startDocsAttribution } from './attribution'
 import './custom.css'
+import './reading.css'
+import './header.css'
 
 type OpenVikingPreference = {
-  lang?: 'zh' | 'en'
   theme?: 'light' | 'dark'
 }
 
@@ -28,24 +44,17 @@ const MAIN_SITE_HOSTS = new Set([
   '127.0.0.1:8080'
 ])
 
-function normalizeLang(value: string | null): OpenVikingPreference['lang'] {
-  if (value === 'zh' || value === 'en') return value
-  return undefined
-}
-
 function normalizeTheme(value: string | null): OpenVikingPreference['theme'] {
   if (value === 'light' || value === 'dark') return value
   return undefined
 }
 
 function readStoredPreference(): OpenVikingPreference {
-  const rawPreference = sessionStorage.getItem(PREFERENCE_SESSION_KEY)
-  if (!rawPreference) return {}
-
   try {
+    const rawPreference = sessionStorage.getItem(PREFERENCE_SESSION_KEY)
+    if (!rawPreference) return {}
     const preference = JSON.parse(rawPreference) as OpenVikingPreference
     return {
-      lang: normalizeLang(preference.lang ?? null),
       theme: normalizeTheme(preference.theme ?? null)
     }
   } catch {
@@ -66,7 +75,9 @@ function cookieDomain() {
 }
 
 function readCookiePreference(): OpenVikingPreference {
-  const cookie = document.cookie
+  let cookies = ''
+  try { cookies = document.cookie } catch { return {} }
+  const cookie = cookies
     .split('; ')
     .find((item) => item.startsWith(`${PREFERENCE_COOKIE_KEY}=`))
 
@@ -76,7 +87,6 @@ function readCookiePreference(): OpenVikingPreference {
     const rawPreference = decodeURIComponent(cookie.slice(PREFERENCE_COOKIE_KEY.length + 1))
     const preference = JSON.parse(rawPreference) as OpenVikingPreference
     return {
-      lang: normalizeLang(preference.lang ?? null),
       theme: normalizeTheme(preference.theme ?? null)
     }
   } catch {
@@ -102,15 +112,14 @@ function mergePreferences(
   incoming: OpenVikingPreference
 ): OpenVikingPreference {
   return {
-    lang: incoming.lang ?? base.lang,
     theme: incoming.theme ?? base.theme
   }
 }
 
 function writeStoredPreference(preference: OpenVikingPreference) {
   const nextPreference = mergePreferences(readStoredPreference(), preference)
-  sessionStorage.setItem(PREFERENCE_SESSION_KEY, JSON.stringify(nextPreference))
-  writeCookiePreference(nextPreference)
+  try { sessionStorage.setItem(PREFERENCE_SESSION_KEY, JSON.stringify(nextPreference)) } catch { /* Optional theme persistence. */ }
+  try { writeCookiePreference(nextPreference) } catch { /* Optional theme persistence. */ }
 }
 
 function readTransferredPreference(): OpenVikingPreference {
@@ -122,7 +131,6 @@ function readTransferredPreference(): OpenVikingPreference {
       window.name.slice(PREFERENCE_TRANSFER_PREFIX.length)
     ) as OpenVikingPreference
     return {
-      lang: normalizeLang(preference.lang ?? null),
       theme: normalizeTheme(preference.theme ?? null)
     }
   } catch {
@@ -131,7 +139,7 @@ function readTransferredPreference(): OpenVikingPreference {
 }
 
 function writeTransferredPreference(preference: OpenVikingPreference) {
-  if (!preference.lang && !preference.theme) return
+  if (!preference.theme) return
 
   window.name = `${PREFERENCE_TRANSFER_PREFIX}${JSON.stringify(preference)}`
 }
@@ -145,29 +153,17 @@ function readPersistedPreference() {
 
 function applyPreference(preference: OpenVikingPreference) {
   const normalizedPreference: OpenVikingPreference = {
-    lang: normalizeLang(preference.lang ?? null),
     theme: normalizeTheme(preference.theme ?? null)
   }
 
-  if (normalizedPreference.lang || normalizedPreference.theme) {
+  if (normalizedPreference.theme) {
     writeStoredPreference(normalizedPreference)
     writeTransferredPreference(mergePreferences(readStoredPreference(), normalizedPreference))
   }
 
   if (normalizedPreference.theme) {
-    localStorage.setItem(VITEPRESS_THEME_KEY, normalizedPreference.theme)
+    try { localStorage.setItem(VITEPRESS_THEME_KEY, normalizedPreference.theme) } catch { /* Still apply the theme. */ }
     document.documentElement.classList.toggle('dark', normalizedPreference.theme === 'dark')
-  }
-
-  const lang = normalizedPreference.lang
-  if (!lang) return
-
-  const targetPath = resolveLocalizedPath(window.location.pathname, lang)
-  const targetUrl = `${targetPath}${window.location.search}${window.location.hash}`
-  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`
-
-  if (targetUrl !== currentUrl) {
-    window.location.replace(targetUrl)
   }
 }
 
@@ -177,54 +173,16 @@ function syncPreferenceFromPeerSite() {
   applyPreference(readPersistedPreference())
 }
 
-function resolveLocalizedPath(pathname: string, lang?: OpenVikingPreference['lang']) {
-  if (lang === 'zh') {
-    if (pathname.startsWith('/en/')) return pathname.replace(/^\/en\//, '/zh/')
-  }
-
-  if (lang === 'en') {
-    if (pathname.startsWith('/zh/')) return pathname.replace(/^\/zh\//, '/en/')
-  }
-
-  return pathname
-}
-
-function currentDocsLang(): OpenVikingPreference['lang'] {
-  if (window.location.pathname.startsWith('/zh/')) return 'zh'
-  if (window.location.pathname.startsWith('/en/')) return 'en'
-  return undefined
-}
-
 function currentDocsTheme(): OpenVikingPreference['theme'] {
   return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
 }
 
 function syncCurrentDocsPreference() {
   const preference = mergePreferences(readPersistedPreference(), {
-    lang: currentDocsLang(),
     theme: currentDocsTheme()
   })
   writeStoredPreference(preference)
   writeTransferredPreference(preference)
-}
-
-function patchHistoryForPreferenceSync() {
-  const originalPushState = window.history.pushState
-  const originalReplaceState = window.history.replaceState
-
-  window.history.pushState = function patchedPushState(...args) {
-    const result = originalPushState.apply(this, args)
-    window.setTimeout(syncCurrentDocsPreference)
-    return result
-  }
-
-  window.history.replaceState = function patchedReplaceState(...args) {
-    const result = originalReplaceState.apply(this, args)
-    window.setTimeout(syncCurrentDocsPreference)
-    return result
-  }
-
-  window.addEventListener('popstate', () => window.setTimeout(syncCurrentDocsPreference))
 }
 
 function watchThemePreference() {
@@ -235,7 +193,7 @@ function watchThemePreference() {
   })
 }
 
-function mainSiteUrlWithPreference(href: string) {
+function mainSiteUrlWithPreference(href: string, useLocalPreview = true) {
   const url = new URL(href, window.location.href)
   const isLocalDocs = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   const isMainSite = MAIN_SITE_HOSTS.has(url.host)
@@ -243,7 +201,7 @@ function mainSiteUrlWithPreference(href: string) {
   if (!isMainSite) return undefined
 
   if (
-    isLocalDocs &&
+    useLocalPreview && isLocalDocs &&
     ['www.openviking.ai', 'openviking.ai', 'www.openviking.net', 'openviking.net'].includes(
       url.hostname
     )
@@ -265,11 +223,10 @@ function syncPreferenceToMainSiteLinks() {
       const link = event.target instanceof Element ? event.target.closest('a') : null
       if (!link) return
 
-      const url = mainSiteUrlWithPreference(link.href)
+      const url = mainSiteUrlWithPreference(link.href, !link.closest('.ov-site-switcher'))
       if (!url) return
 
       const preference = mergePreferences(readPersistedPreference(), {
-        lang: currentDocsLang(),
         theme: currentDocsTheme()
       })
       writeStoredPreference(preference)
@@ -284,7 +241,6 @@ function syncPreferenceToMainSiteLinks() {
 function startPreferenceSync() {
   syncPreferenceFromPeerSite()
   syncCurrentDocsPreference()
-  patchHistoryForPreferenceSync()
   watchThemePreference()
   syncPreferenceToMainSiteLinks()
   window.addEventListener('pageshow', syncPreferenceFromPeerSite)
@@ -304,27 +260,56 @@ export default {
   extends: DefaultTheme,
   Layout() {
     return h(DefaultTheme.Layout, null, {
-      'doc-before': () => h('div', { class: 'doc-page-actions' }, [
-        h(LlmsTxtLink),
+      'doc-before': () => [h(DocBreadcrumb), h('div', { class: 'doc-page-actions' }, [
         h(CopyMarkdownButton)
-      ]),
+      ])],
+      'sidebar-nav-after': () => h(SidebarFooter),
       'doc-after': () => h(ApiExampleTabsEnhancer),
-      'nav-bar-content-before': () => h(OpenVikingSearch)
+      'nav-bar-content-after': () => [h(OpenVikingSearch), h(LocaleSwitch), h(ThemeToggle)],
+      'nav-screen-content-after': () => h(NavScreenFooter)
     })
   },
-  enhanceApp({ router }: EnhanceAppContext) {
+  enhanceApp({ app, router }: EnhanceAppContext) {
+    app.component('VPButton', VPButton)
+    app.component('AgentPrompt', AgentPrompt)
+    app.component('ArchitectureDiagram', ArchitectureDiagram)
+    app.component('IngestionPipelineDiagram', IngestionPipelineDiagram)
+    app.component('MemoryExtractionDiagram', MemoryExtractionDiagram)
+    app.component('PathLockDiagram', PathLockDiagram)
+    app.component('StorageLayersDiagram', StorageLayersDiagram)
+    app.component('VikingBotOverviewDiagram', VikingBotOverviewDiagram)
+    app.component('DocsHome', defineAsyncComponent(() => import('./components/DocsHome.vue')))
     if (import.meta.env.SSR || typeof window === 'undefined') return
 
+    const attribution = startDocsAttribution(withBase('/'))
+    import.meta.hot?.dispose(attribution.dispose)
+    const policy = createLanguagePreference()
+    const previousBeforeHook = router.onBeforeRouteChange
+    router.onBeforeRouteChange = async (to: string) => {
+      if (await previousBeforeHook?.(to) === false) return false
+      const languageTarget = docsLanguageEntry(new URL(to, location.href).href, withBase('/'), policy)
+      const target = attribution.routeTarget(languageTarget ?? to) ?? languageTarget
+      if (target) {
+        void router.go(target)
+        return false
+      }
+    }
     trackPageView(window.location.pathname)
+    document.addEventListener('click', (event) => {
+      const block = (event.target as Element).closest?.('.vp-doc div[class*="language-"] > button.copy')?.parentElement
+      if (!block) return
+      const language = [...block.classList].find(name => name.startsWith('language-'))?.slice('language-'.length) ?? ''
+      trackEvent('copy-code', { language })
+    })
     initVikingBotWidget()
 
     const previousHook = router.onAfterRouteChanged
     router.onAfterRouteChanged = (to: string) => {
       previousHook?.(to)
       trackPageView(to.split('?')[0].split('#')[0])
-      // <html lang> is rewritten by the router before this fires, so a locale
-      // switch re-mounts the widget in the language the reader just chose.
+      // Update the existing widget after VitePress applies the page language.
       syncVikingBotLocale()
+      void nextTick().then(attribution.refresh)
     }
   }
 }

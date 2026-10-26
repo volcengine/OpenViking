@@ -15,7 +15,6 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
-from openviking.utils.time_utils import get_current_timestamp
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -33,10 +32,13 @@ async def client(
     tracker = get_task_tracker()
     original_has_work = tracker.has_work
 
+    async def has_work(task_id, **kwargs):
+        return task_id in queued_commit_tasks or await original_has_work(task_id, **kwargs)
+
     monkeypatch.setattr(
         tracker,
         "has_work",
-        lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
+        has_work,
     )
 
     async def enqueue_with_session_commit_fallback(queue_name, data):
@@ -60,7 +62,6 @@ async def client(
                 ):
                     break
                 await asyncio.sleep(0)
-            await queued_session.load()
             try:
                 while not await queued_session.resume_queued_commit(message):
                     await asyncio.sleep(0)
@@ -74,38 +75,6 @@ async def client(
     yield partial(service.sessions.session, request_context)
     if commit_tasks:
         await asyncio.gather(*commit_tasks, return_exceptions=True)
-
-
-@pytest_asyncio.fixture(scope="function")
-async def client_with_resource_sync(
-    client,
-    service: OpenVikingService,
-    request_context: RequestContext,
-):
-    uri = "viking://resources/session-active-count.md"
-    timestamp = get_current_timestamp()
-    vector = service.vikingdb_manager.get_embedder().embed("active count test").dense_vector
-    await service.vikingdb_manager.upsert(
-        {
-            "uri": uri,
-            "parent_uri": "viking://resources",
-            "is_leaf": True,
-            "abstract": "Session active count test resource",
-            "context_type": "resource",
-            "category": "",
-            "created_at": timestamp,
-            "updated_at": timestamp,
-            "active_count": 0,
-            "vector": vector,
-            "meta": {},
-            "related_uri": [],
-            "account_id": request_context.account_id,
-            "owner_space": "",
-            "level": 2,
-        },
-        ctx=request_context,
-    )
-    return service, request_context, uri
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -164,3 +133,16 @@ async def session_with_tool_call(
     msg = session.add_message("assistant", [TextPart("Executing tool..."), tool_part])
 
     yield session, msg.id, tool_id
+
+
+@pytest_asyncio.fixture
+async def wm_session_with_messages(client, service, request_context, working_memory_policy):
+    session = await service.sessions.create(request_context, memory_policy=working_memory_policy)
+    for role, text in [
+        ("user", "Hello, this is a test message."),
+        ("assistant", "Hello! How can I help you today?"),
+        ("user", "I need help with testing."),
+        ("assistant", "I can help you with testing."),
+    ]:
+        await session.add_message_async(role, [TextPart(text)])
+    yield session

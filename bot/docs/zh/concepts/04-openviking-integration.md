@@ -7,6 +7,7 @@ OpenViking 是 VikingBot 的长期上下文层。VikingBot 自己负责实时对
 ```text
 OpenViking → VikingBot
   Resource：为任务提供知识与文件上下文
+  Skill：提供可检索的任务指令与配套资源
   Memory：提供当前用户/Peer 的 Profile、偏好、实体和事件
   Experience：提供 Agent 过去完成类似任务的方法
   Session：提供压缩历史和会话归档
@@ -154,6 +155,14 @@ OpenViking 工具通过 ToolContext 获得当前 actor peer 和 request-scoped c
 
 `openviking_add_resource` 是异步资源处理操作；`readonly` 模式不注册该工具。`openviking_memory_commit` 适用于用户明确要求“记住”某项信息的场景。
 
+## 使用远程 Skill
+
+先用 `ov add-skill ./skills/<name>/` 将 Skill 包上传到 Bot 所连接的 OpenViking 服务，并确认 Bot 当前身份有读取权限。当前渠道启用 `ov_tools_enable`、连接可用且 `openviking_multi_read` 未被禁用时，Bot 会根据用户问题检索远程 Skill 摘要。
+
+模型用 `openviking_multi_read` 读取选中的 `SKILL.md` URI 后，运行时自动校验并激活 Skill；也可以直接向 Bot 提供服务返回的 canonical `SKILL.md` URI。文本引用继续远程读取，脚本或工具需要本地文件时才下载包并改写路径。每条用户消息独立激活，执行副本在本 Turn 结束时清理。
+
+无需额外的 Remote Skill 开关或手工下载步骤。本地/远程使用示例、frontmatter 字段、工具权限和 `bot.remote_skills` 配置见 [Skills](./06-skills.md)。
+
 ## 本地 Session 与 OpenViking Session
 
 两类 Session 不应混淆：
@@ -287,6 +296,7 @@ Bot Chat 与 OpenViking API 因而可以通过同一个 Gateway 地址访问，�
 
 - [VikingBot 架构](./01-architecture.md)
 - [Agent 能力体系](./02-agent-capabilities.md)
+- [Skills](./06-skills.md)
 - [渠道、Gateway 与运行管理](./03-channels-and-gateway.md)
 - [OpenViking 架构](../../../../docs/zh/concepts/01-architecture.md)
 - [OpenViking 上下文类型](../../../../docs/zh/concepts/02-context-types.md)

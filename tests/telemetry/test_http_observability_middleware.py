@@ -27,10 +27,10 @@ class _DummySpanCM:
 
 def test_http_observability_middleware_updates_route_template_after_routing(monkeypatch) -> None:
     """
-    Ensure `http_route` is finalized after routing has occurred (post-call_next).
+    Ensure `http_route` is finalized after routing has occurred (before response headers).
 
     Starlette/FastAPI route matching happens downstream of middleware, so reading
-    `request.scope["route"]` before `call_next` may yield no route.
+    `request.scope["route"]` before routing may yield no route.
     """
     from openviking.observability import http_observability_middleware as mw_mod
 
@@ -60,12 +60,8 @@ def test_http_observability_middleware_updates_route_template_after_routing(monk
     monkeypatch.setattr(mw_mod, "create_root_span_attributes", _capture_create_root_span_attributes)
 
     app = FastAPI()
-    http_mw = mw_mod.create_http_observability_middleware()
-
-    @app.middleware("http")
-    async def _mw(request, call_next):
-        request.state.request_id = "test-request"
-        return await http_mw(request, call_next)
+    app.add_middleware(mw_mod.HTTPObservabilityMiddleware)
+    app.add_middleware(RequestIdMiddleware)
 
     @app.get("/hello")
     async def hello():
@@ -97,12 +93,7 @@ def test_http_observability_captures_public_error_without_reading_response_body(
     monkeypatch.setattr(mw_mod, "maybe_start_root_span", lambda *_: None)
 
     app = FastAPI()
-    http_mw = mw_mod.create_http_observability_middleware()
-
-    @app.middleware("http")
-    async def _mw(request, call_next):
-        return await http_mw(request, call_next)
-
+    app.add_middleware(mw_mod.HTTPObservabilityMiddleware)
     app.add_middleware(RequestIdMiddleware)
 
     @app.get("/invalid")
@@ -151,3 +142,36 @@ def test_http_observability_captures_public_error_without_reading_response_body(
     assert completed[2]["error_code"] == "PROCESSING_ERROR"
     assert completed[2]["error_message"] == "Resource processing failed"
     assert completed[2]["error_details"] == {"stage": "parse"}
+
+
+def test_route_template_keeps_mount_path_for_mounted_apps() -> None:
+    """A mounted sub-app (the embedded gateway) is labelled with its mount path, while
+    a root_path set before the server (a proxy prefix) stays out of the template."""
+    from openviking.observability.http_observability_middleware import scope_route_template
+
+    inner = FastAPI()
+
+    @inner.get("/admin/keys")
+    async def keys():
+        return {}
+
+    app = FastAPI()
+
+    @app.get("/health")
+    async def health():
+        return {}
+
+    seen = []
+
+    @app.middleware("http")
+    async def record(request, call_next):
+        response = await call_next(request)
+        seen.append(scope_route_template(request.scope))
+        return response
+
+    app.mount("/gateway", inner)
+    for root_path in ("", "/proxy"):
+        with TestClient(app, root_path=root_path) as client:
+            for path in ("/gateway/admin/keys", "/gateway/missing", "/health"):
+                client.get(root_path + path)
+    assert seen == ["/gateway/admin/keys", "/__unmatched__", "/health"] * 2

@@ -22,48 +22,50 @@ def _section(text: str, name: str) -> str:
     return match.group(1)
 
 
-def test_default_workspace_excludes_native_cache_providers():
+def test_workspace_uses_ragfs_runtime_and_one_python_binding_crate():
     manifest = _read(ROOT / "Cargo.toml")
     workspace = _section(manifest, "workspace")
     members = _array_items(workspace, "members")
-    excludes = _array_items(workspace, "exclude")
 
-    assert "crates/ragfs-cache-redis" in members
+    assert "crates/ragfs" in members
+    assert "crates/ragfs-python" in members
+    assert "crates/ragfs-cache-redis" not in members
+    assert "crates/ragfs-python-native" not in members
     assert "crates/ragfs-cache-mooncake" not in members
     assert "crates/ragfs-cache-yuanrong" not in members
     assert "crates/ragfs-cache-yuanrong-sys" not in members
 
-    assert "crates/ragfs-cache-mooncake" in excludes
-    assert "crates/ragfs-cache-yuanrong" in excludes
-    assert "crates/ragfs-cache-yuanrong-sys" in excludes
-    assert "crates/ragfs-python-native" in excludes
 
-
-def test_default_ragfs_python_manifest_depends_only_on_redis_provider():
+def test_ragfs_python_uses_the_runtime_embedded_in_ragfs():
     manifest = _read(ROOT / "crates/ragfs-python/Cargo.toml")
     features = _section(manifest, "features")
     dependencies = _section(manifest, "dependencies")
 
-    assert "cache-redis" in features
+    assert "cache-redis" not in features
     assert "mooncake-native" not in features
     assert "yuanrong-native" not in features
 
-    assert "ragfs-cache-redis" in dependencies
+    assert 'ragfs = { path = "../ragfs", features = ["cache"] }' in dependencies
+    assert "ragfs-cache-redis" not in dependencies
     assert "ragfs-cache-mooncake" not in dependencies
     assert "ragfs-cache-yuanrong" not in dependencies
 
 
-def test_native_ragfs_python_manifest_is_explicit_provider_entrypoint():
-    manifest = _read(ROOT / "crates/ragfs-python-native/Cargo.toml")
-    lib = _section(manifest, "lib")
-    features = _section(manifest, "features")
-    dependencies = _section(manifest, "dependencies")
+def test_legacy_provider_and_binding_manifests_are_removed():
+    assert not (ROOT / "crates/ragfs-cache-redis/Cargo.toml").exists()
+    assert not (ROOT / "crates/ragfs-cache-mooncake/Cargo.toml").exists()
+    assert not (ROOT / "crates/ragfs-cache-yuanrong/Cargo.toml").exists()
+    assert not (ROOT / "crates/ragfs-cache-yuanrong-sys/Cargo.toml").exists()
+    assert not (ROOT / "crates/ragfs-python-native/Cargo.toml").exists()
 
-    assert 'path = "../ragfs-python/src/lib.rs"' in lib
-    assert "cache-redis" in features
-    assert "mooncake-native" in features
-    assert "yuanrong-native" in features
 
-    assert "ragfs-cache-redis" in dependencies
-    assert "ragfs-cache-mooncake" in dependencies
-    assert "ragfs-cache-yuanrong" in dependencies
+def test_source_distribution_contains_only_active_ragfs_crates():
+    manifest = _read(ROOT / "MANIFEST.in")
+
+    assert "graft crates/ragfs\n" in manifest
+    assert "graft crates/ragfs-python\n" in manifest
+    assert "graft crates/ragfs-cache-redis" not in manifest
+    assert "graft crates/ragfs-cache-mooncake" not in manifest
+    assert "graft crates/ragfs-cache-yuanrong" not in manifest
+    assert "graft crates/ragfs-cache-yuanrong-sys" not in manifest
+    assert "graft crates/ragfs-python-native" not in manifest

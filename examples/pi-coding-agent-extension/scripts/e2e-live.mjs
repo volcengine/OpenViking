@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Live context-takeover e2e for the OpenViking pi extension.
+ * Live native-history / opt-in takeover e2e for the OpenViking pi extension.
  *
  * This is intentionally manual: it drives a real pi binary, a real
  * OpenViking server, and a real OpenAI-compatible LLM relay.
@@ -15,6 +15,7 @@
  *   E2E_LLM_BASE_URL       default https://super-relay.byted.org/v1
  *   E2E_LLM_MODEL          default model_api/experimental_0630
  *   E2E_LLM_API            pi provider api type; default openai-completions
+ *   E2E_TAKEOVER=1        exercise explicit OV takeover instead of native history
  *   E2E_KEEP_TMP=1         keep temp workspace on success
  */
 import { spawnSync } from "node:child_process";
@@ -33,6 +34,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Explicitly opt into the legacy takeover scenario; the default validates native history.
+const TAKEOVER = process.env.E2E_TAKEOVER === "1";
 const EXT_SRC = dirname(dirname(fileURLToPath(import.meta.url)));
 const OV_URL = process.env.OPENVIKING_URL;
 const OV_KEY = process.env.OPENVIKING_API_KEY;
@@ -107,30 +110,49 @@ writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTr
 
 function copyExtension() {
   for (const name of readdirSync(EXT_SRC)) {
-    if (name === "config.json") continue;
     const src = join(EXT_SRC, name);
     const dst = join(extDir, basename(name));
-    if (name.endsWith(".ts") || name === "README.md" || name === "DESIGN.md" || name === "TAKEOVER.md") {
+    if (name.endsWith(".ts") || ["README.md", "DESIGN.md", "package.json", "package-lock.json"].includes(name)) {
       copyFileSync(src, dst);
     } else if (["lib", "shared", "scripts"].includes(name)) {
       cpSync(src, dst, { recursive: true });
     }
   }
-  writeFileSync(join(extDir, "config.json"), JSON.stringify({
-    enabled: true,
-    syncTurns: true,
-    logLevel: "info",
-    takeover: {
-      enabled: true,
-      tokenThreshold: 600,
-      keepRecentTurns: 1,
-      overviewBudget: 3000,
-      overviewPollMs: 3000,
-      overviewPollMax: 30,
-    },
-  }, null, 2));
 }
 copyExtension();
+const install = spawnSync("npm", ["ci", "--omit=dev", "--ignore-scripts"], {
+  cwd: extDir,
+  timeout: 120_000,
+  encoding: "utf8",
+});
+if (install.status !== 0) {
+  console.error(`e2e: dependency install failed\n${install.stderr || install.stdout}`);
+  process.exit(2);
+}
+
+// The extension has no config file of its own; its knobs live in ovcli.conf's
+// plugin section like every other harness's.
+const OVCLI_CONF = join(agentDir, "ovcli.conf");
+writeFileSync(OVCLI_CONF, JSON.stringify({
+  url: OV_URL,
+  api_key: OV_KEY,
+  plugin: {
+    pi: {
+      enabled: true,
+      autoCapture: true,
+      logLevel: "info",
+      takeoverEnabled: TAKEOVER,
+      resumeArchiveInject: false,
+      commitTokenThreshold: 1000,
+      commitKeepRecentCount: 0,
+      takeoverTokenThreshold: 600,
+      takeoverKeepRecentTurns: 1,
+      takeoverOverviewBudget: 3000,
+      takeoverOverviewPollMs: 3000,
+      takeoverOverviewPollMax: 30,
+    },
+  },
+}, null, 2));
 
 const PAD1 = `PADDING-T1 ${"lorem ipsum dolor sit amet consectetur ".repeat(60)}`;
 const PAD2 = `PADDING-T2 ${"vestibulum ante ipsum primis in faucibus ".repeat(60)}`;
@@ -153,6 +175,7 @@ function runTurn(turn, prompt, extraArgs = []) {
       PI_CODING_AGENT_DIR: agentDir,
       OPENVIKING_URL: OV_URL,
       OPENVIKING_API_KEY: OV_KEY,
+      OPENVIKING_CLI_CONFIG_FILE: OVCLI_CONF,
       SUPER_RELAY_API_KEY: RELAY_KEY,
       OV_E2E_OUT: outDir,
       OV_E2E_TURN: String(turn),
@@ -191,9 +214,32 @@ function payloadsFor(turn) {
     .map((f) => readFileSync(join(outDir, f), "utf8"));
 }
 
+function toolUses(payloads) {
+  const uses = [];
+  for (const raw of payloads) {
+    try {
+      const payload = JSON.parse(raw);
+      for (const message of payload.messages ?? []) {
+        for (const part of Array.isArray(message.content) ? message.content : []) {
+          if (part?.type === "tool_use" && typeof part.name === "string") uses.push(part);
+        }
+      }
+    } catch {
+      // A malformed probe payload is caught by the missing-tool assertions.
+    }
+  }
+  return uses;
+}
+
 const t1 = runTurn(1, `Please remember: the release codename is ZEPHYR-9942. Just acknowledge briefly. ${PAD1}`);
 const t2 = runTurn(2, `Second note: the deploy window is Friday 03:00 UTC. Acknowledge briefly. ${PAD2}`, ["-c"]);
-const t3 = runTurn(3, "What is the release codename I told you earlier? Answer with just the codename.", ["-c"]);
+const t3 = runTurn(3, TAKEOVER ? [
+  "Recover the release codename from the archived capture.",
+  "You must first call the built-in bash tool with pwd.",
+  "Then follow the recovery hint in [OpenViking Session Context]: call openviking_list on the history URI,",
+  "then call openviking_read on the archive messages.jsonl with explicit offset and limit.",
+  "After those tool calls, answer with just the codename.",
+].join(" ") : "Use bash to run pwd, then recover the release codename from our earlier conversation. Answer with the codename.", ["-c"]);
 
 console.log("\ne2e: --- assertions ---");
 check(t1.status === 0 && t2.status === 0 && t3.status === 0, "all three pi runs exited 0");
@@ -202,35 +248,59 @@ const p3 = payloadsFor(3);
 check(p3.length > 0, `probe captured T3 provider payload (${p3.length} request(s))`);
 if (p3.length > 0) {
   const last = p3[p3.length - 1];
-  check(last.includes("[OpenViking Session Context]"), "T3 request contains the OV overview block");
-  // Match the full padded turn body, not the PADDING-T1 marker: the archive
-  // overview and recalled memories may legitimately quote the marker.
-  check(!last.includes(PAD1), "T3 request no longer contains the raw T1 turn body");
-  check(last.includes("PADDING-T2") || last.includes("codename"), "T3 request keeps recent live context");
+  const uses = toolUses(p3);
+  check(last.includes("[OpenViking Session Context]") === TAKEOVER, "OV summary injection matches explicit takeover mode");
+  if (TAKEOVER) {
+    // Match the full padded turn body, not the PADDING-T1 marker: the archive
+    // overview and recalled memories may legitimately quote the marker.
+    check(!last.includes(PAD1), "T3 request no longer contains the raw T1 turn body");
+    check(last.includes("PADDING-T2") || last.includes("codename"), "T3 request keeps recent live context");
+    check(uses.some((part) => part.name === "bash"), "T3 executed a built-in tool");
+    check(uses.some((part) => part.name === "openviking_list"), "T3 listed the archive history");
+    const reads = uses.filter((part) => part.name === "openviking_read");
+    check(reads.length > 0, "T3 read the archived capture");
+    check(reads.some((part) =>
+      Array.isArray(part.input?.uris) &&
+      Number.isFinite(part.input?.offset) &&
+      Number.isFinite(part.input?.limit)
+    ), "T3 used paginated archive read arguments");
+  } else {
+    check(last.includes("ZEPHYR-9942"), "native history retains the earlier fact");
+    check(uses.some((part) => part.name === "bash"), "T3 executed a built-in tool");
+  }
 }
 
-if (t3.out.includes("ZEPHYR-9942")) pass("model recovered the archived fact from the OV overview");
+if (t3.out.includes("ZEPHYR-9942")) pass(TAKEOVER ? "model recovered the archived fact from the OV overview" : "model retained the earlier conversation fact");
 else warn("model answer did not contain ZEPHYR-9942; inspect overview quality");
 
 const sessionIdFile = join(outDir, "session-id.txt");
 let ovSessionId = null;
+let archiveUri = null;
+const logPath = join(outDir, "takeover.log");
+let takeoverLog = "";
+if (existsSync(logPath)) {
+  takeoverLog = readFileSync(logPath, "utf8");
+  archiveUri = /boundary advanced[^\n]* via (viking:\/\/[^"\s]+)/.exec(takeoverLog)?.[1] ?? null;
+}
 if (existsSync(sessionIdFile)) {
   ovSessionId = `pi-${readFileSync(sessionIdFile, "utf8").trim()}`;
   const ctx = await ovFetch(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/context?token_budget=4000`);
   check(ctx.ok, `OV session ${ovSessionId} readable`);
   const result = ctx.body?.result ?? {};
-  const overview = (result.latest_archive_overview ?? "").trim();
-  check(overview.length > 0, "OV session has a non-empty archive overview");
   check((result.stats?.totalArchives ?? 0) >= 1, `OV session has >=1 archive (got ${result.stats?.totalArchives})`);
+  if (TAKEOVER) check(Boolean(archiveUri), "takeover log identifies the exact archive URI");
+  else check(!result.latest_archive_overview, "default commits do not produce a WM overview");
+  if (TAKEOVER && archiveUri) {
+    const overview = await ovFetch(`/api/v1/content/read?uri=${encodeURIComponent(`${archiveUri}/.overview.md`)}`);
+    check(overview.ok && String(overview.body?.result ?? "").trim().length > 0, "exact archive has a non-empty overview");
+  }
 } else {
   fail("probe did not record a pi session id");
 }
 
-const logPath = join(outDir, "takeover.log");
-if (existsSync(logPath)) {
-  const log = readFileSync(logPath, "utf8");
-  check(log.includes("boundary advanced"), "takeover log shows a boundary advance");
-  console.log(`\ne2e: takeover.log:\n${log.trim()}`);
+if (takeoverLog) {
+  check(takeoverLog.includes("boundary advanced") === TAKEOVER, "boundary advances only in explicit takeover mode");
+  console.log(`\ne2e: takeover.log:\n${takeoverLog.trim()}`);
 } else {
   warn("no takeover debug log written");
 }

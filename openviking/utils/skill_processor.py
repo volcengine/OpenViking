@@ -6,10 +6,12 @@ Skill Processor for OpenViking.
 Handles skill parsing, LLM generation, and storage operations.
 """
 
+import re
 import shutil
 import tempfile
 import time
 import zipfile
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,26 +19,25 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from openviking.core.context import Context, ContextType, Vectorize
+from openviking.config.vlm import VLMHandle, VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
-from openviking.core.namespace import canonical_user_root, user_space_fragment
+from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
-from openviking.privacy import (
-    UserPrivacyConfigService,
-    extract_skill_privacy_values,
-)
+from openviking.privacy.reference import parse_privacy_field_reference
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
+from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
-from openviking.storage.vikingdb_manager import VikingDBManager
-from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.viking_fs import VikingFS
-from openviking.telemetry import get_current_telemetry
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.storage.vikingdb_manager import VikingDBManager
+from openviking.telemetry import get_current_telemetry, register_telemetry
 from openviking.utils.path_safety import safe_join_viking_uri
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -94,7 +95,7 @@ class SkillProcessor:
 
     Workflow:
     1. Parse skill data (directory, file, string, or dict)
-    2. Generate L1 overview using VLM
+    2. Use skill metadata as L0 and skill instructions as L1
     3. Write skill content to VikingFS
     4. Write auxiliary files
     5. Index to vector store
@@ -104,10 +105,22 @@ class SkillProcessor:
         self,
         vikingdb: VikingDBManager,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        vlm_resolver: Optional[VLMResolver] = None,
+        privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ):
         """Initialize skill processor."""
+        if privacy_config_service is not None and vlm_resolver is None:
+            raise ValueError(
+                "SkillProcessor requires a VLM resolver when privacy extraction is enabled"
+            )
         self.vikingdb = vikingdb
         self._privacy_config_service = privacy_config_service
+        self._privacy_sanitizer = privacy_sanitizer or (
+            PrivacySanitizer(privacy_config_service)
+            if isinstance(privacy_config_service, UserPrivacyConfigService)
+            else None
+        )
+        self._vlm_resolver = vlm_resolver
 
     async def process_skill(
         self,
@@ -119,6 +132,10 @@ class SkillProcessor:
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
         target_uri: Optional[str] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        owner_lease_ref: Optional[Dict[str, Any]] = None,
+        lease_ref: Any = None,
+        on_package_written: Optional[Callable[[str, Any], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.
@@ -129,6 +146,8 @@ class SkillProcessor:
             user: Username for context
             target_uri: Optional root URI override (e.g. ``viking://agent/skills``).
                 When omitted, defaults to ``{user_root}/skills``.
+            on_package_written: Called with the package URI and lease before queue handoff;
+                failures abort processing while the package lease is still held.
 
         Returns:
             Processing result with status and metadata
@@ -155,6 +174,10 @@ class SkillProcessor:
             apply_privacy=apply_privacy,
             privacy_change_reason=privacy_change_reason,
             target_uri=target_uri,
+            source_metadata=source_metadata,
+            owner_lease_ref=owner_lease_ref,
+            lease_ref=lease_ref,
+            on_package_written=on_package_written,
         )
 
     async def process_prepared_skill(
@@ -166,90 +189,115 @@ class SkillProcessor:
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
         target_uri: Optional[str] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        owner_lease_ref: Optional[Dict[str, Any]] = None,
+        lease_ref: Any = None,
+        on_package_written: Optional[Callable[[str, Any], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
-        config = get_openviking_config()
+        """Store a prepared package and call on_package_written under its lease before indexing."""
         cleanup_path = preparation.cleanup_path
         skill_dict = preparation.skill_dict
         auxiliary_files = preparation.auxiliary_files
         base_path = preparation.base_path
         telemetry = get_current_telemetry()
+        lease = None
+        # Training supplies its enclosing tree lease. Acquire a separate package
+        # reference so background indexing never takes ownership of that lease.
+        if owner_lease_ref is None:
+            owner_lease_ref = lease_ref
         try:
+            effective_root_uri = self._resolve_skill_root_uri(ctx, target_uri)
+            skill_dir_uri = f"{effective_root_uri}/{skill_dict['name']}"
+
+            async def acquire_package_lock() -> None:
+                nonlocal lease
+                lease = await viking_fs._async_agfs.pathlock_acquire_tree(
+                    viking_fs._uri_to_path(skill_dir_uri, ctx=ctx),
+                    **({"owner_lease_ref": owner_lease_ref} if owner_lease_ref is not None else {}),
+                )
+
+            await run_to_completion(acquire_package_lock)
+
+            # Preparation above is read-only. A rejected package writer must
+            # not change its privacy config, and cancellation must let an
+            # in-flight config write finish before releasing the package lock.
             if apply_privacy:
-                skill_dict = await self.apply_skill_privacy(
-                    skill_dict,
-                    preparation.privacy_values,
-                    ctx,
-                    change_reason=privacy_change_reason,
-                    delete_if_empty=False,
+                skill_dict = await run_to_completion(
+                    lambda: self.apply_skill_privacy(
+                        skill_dict,
+                        preparation.privacy_values,
+                        ctx,
+                        change_reason=privacy_change_reason,
+                        delete_if_empty=False,
+                    )
                 )
             skill_abstract = self._build_skill_abstract(skill_dict)
 
-            effective_root_uri = self._resolve_skill_root_uri(ctx, target_uri)
-            context = Context(
-                uri=f"{effective_root_uri}/{skill_dict['name']}",
-                parent_uri=effective_root_uri,
-                is_leaf=False,
-                abstract=skill_abstract,
-                context_type=ContextType.SKILL.value,
-                user=ctx.user,
-                account_id=ctx.account_id,
-                owner_space=user_space_fragment(ctx),
-                meta={
-                    "name": skill_dict["name"],
-                    "description": skill_dict.get("description", ""),
-                    "allowed_tools": skill_dict.get("allowed_tools", []),
-                    "tags": skill_dict.get("tags", []),
-                    "source_path": skill_dict.get("source_path", ""),
-                },
-            )
-            context.set_vectorize(Vectorize(text=context.abstract))
-
-            overview_start = time.perf_counter()
-            overview = await self._generate_overview(skill_dict, config)
-            telemetry.set(
-                "skill.overview.duration_ms",
-                round((time.perf_counter() - overview_start) * 1000, 3),
-            )
-
-            skill_dir_uri = context.uri
-
             write_start = time.perf_counter()
-            await self._write_skill_content(
-                viking_fs=viking_fs,
-                skill_dict=skill_dict,
-                skill_dir_uri=skill_dir_uri,
-                abstract=skill_abstract,
-                overview=overview,
-                ctx=ctx,
+            await run_to_completion(
+                lambda: self._write_skill_content(
+                    viking_fs=viking_fs,
+                    skill_dict=skill_dict,
+                    skill_dir_uri=skill_dir_uri,
+                    abstract=skill_abstract,
+                    overview=skill_dict.get("content", ""),
+                    ctx=ctx,
+                    lease_ref=lease,
+                )
             )
 
-            await self._write_auxiliary_files(
-                viking_fs=viking_fs,
-                auxiliary_files=auxiliary_files,
-                base_path=base_path,
-                skill_dir_uri=skill_dir_uri,
-                ctx=ctx,
+            await run_to_completion(
+                lambda: self._write_auxiliary_files(
+                    viking_fs=viking_fs,
+                    auxiliary_files=auxiliary_files,
+                    base_path=base_path,
+                    skill_dir_uri=skill_dir_uri,
+                    ctx=ctx,
+                    lease_ref=lease,
+                )
             )
             telemetry.set(
                 "skill.write.duration_ms", round((time.perf_counter() - write_start) * 1000, 3)
             )
 
-            index_start = time.perf_counter()
-            await self._index_skill(
-                context=context,
-                skill_dir_uri=skill_dir_uri,
-            )
-            telemetry.set(
-                "skill.index.duration_ms", round((time.perf_counter() - index_start) * 1000, 3)
-            )
-            return {
+            result = {
                 "status": "success",
                 "root_uri": skill_dir_uri,
                 "uri": skill_dir_uri,
                 "name": skill_dict["name"],
                 "auxiliary_files": len(auxiliary_files),
             }
+            if source_metadata:
+                from openviking.server.skill_source_metadata import write_skill_source_metadata
+
+                await run_to_completion(
+                    lambda: write_skill_source_metadata(
+                        viking_fs, ctx, result, source_metadata, lease_ref=lease
+                    )
+                )
+            if on_package_written is not None:
+                await run_to_completion(lambda: on_package_written(skill_dir_uri, lease))
+            index_start = time.perf_counter()
+
+            async def enqueue_package() -> None:
+                nonlocal lease
+                await self._enqueue_skill_package(
+                    skill_dir_uri,
+                    viking_fs,
+                    ctx,
+                    lease,
+                    source_path=skill_dict.get("source_path", ""),
+                )
+                lease = None  # The semantic worker owns the handed-off lease.
+
+            await run_to_completion(enqueue_package)
+            telemetry.set(
+                "skill.index.duration_ms", round((time.perf_counter() - index_start) * 1000, 3)
+            )
+            return result
         finally:
+            if lease is not None:
+                await run_to_completion(lambda: viking_fs._async_agfs.pathlock_release(lease))
             if cleanup_path:
                 shutil.rmtree(cleanup_path, ignore_errors=True)
 
@@ -397,9 +445,7 @@ class SkillProcessor:
         return normalized
 
     @staticmethod
-    def _resolve_skill_root_uri(
-        ctx: RequestContext, target_uri: Optional[str]
-    ) -> str:
+    def _resolve_skill_root_uri(ctx: RequestContext, target_uri: Optional[str]) -> str:
         """Resolve the skill storage root URI.
 
         Defaults to the per-user private skills root.  Callers may pass
@@ -414,7 +460,7 @@ class SkillProcessor:
             if normalized == user_root.rstrip("/"):
                 return user_root
             raise InvalidArgumentError(
-                f"Unsupported skill root URI: {target_uri}",
+                f"Unsupported skill root URI: {target_uri}; use {user_root} or viking://agent/skills",
                 details={
                     "field": "target_uri",
                     "allowed": [
@@ -451,22 +497,88 @@ class SkillProcessor:
     async def prepare_skill_privacy(
         self, skill_dict: Dict[str, Any], ctx: RequestContext
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
-        del ctx
         if not self._privacy_config_service:
             return skill_dict, {}
 
+        skill_uri = f"{canonical_user_root(ctx)}/skills/{skill_dict.get('name', '')}/SKILL.md"
         content = skill_dict.get("content", "")
-        extraction_result = await extract_skill_privacy_values(
-            skill_name=skill_dict.get("name", ""),
-            skill_description=skill_dict.get("description", ""),
-            content=content,
+        sanitized_by_catalog = await self._sanitize_registered_privacy(
+            content,
+            ctx=ctx,
+            uri=skill_uri,
         )
+        description = skill_dict.get("description", "")
+        sanitized_description = await self._sanitize_registered_privacy(
+            description,
+            ctx=ctx,
+            uri=skill_uri,
+        )
+        prepared_skill = skill_dict
+        if sanitized_by_catalog != content or sanitized_description != description:
+            prepared_skill = deepcopy(skill_dict)
+            prepared_skill["content"] = sanitized_by_catalog
+            prepared_skill["description"] = sanitized_description
+        content = sanitized_by_catalog
+        extraction_kwargs = {
+            "skill_name": prepared_skill.get("name", ""),
+            "skill_description": prepared_skill.get("description", ""),
+            "content": content,
+        }
+        if self._vlm_resolver is None:
+            raise RuntimeError("SkillProcessor requires a VLM resolver for account-owned work")
+        extraction_kwargs["vlm"] = await self._vlm_resolver.get_vlm(ctx.account_id)
+        extraction_result = await extract_skill_privacy_values(**extraction_kwargs)
         if not extraction_result.values:
-            return skill_dict, {}
+            return prepared_skill, {}
 
-        sanitized = deepcopy(skill_dict)
+        sanitized = deepcopy(prepared_skill)
         sanitized["content"] = extraction_result.sanitized_content
         return sanitized, extraction_result.values
+
+    async def _sanitize_registered_privacy(
+        self,
+        content: str,
+        *,
+        ctx: RequestContext,
+        uri: str,
+    ) -> str:
+        if self._privacy_sanitizer is None or not content:
+            return content
+        result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
+        if result.ambiguous_references:
+            raise InvalidArgumentError(
+                "Skill content contains a Privacy value mapped to multiple fields; "
+                "insert the intended owner-bound reference explicitly",
+                details={
+                    "uri": uri,
+                    "candidate_references": [
+                        list(candidates) for candidates in result.ambiguous_references
+                    ],
+                },
+            )
+        return result.content
+
+    @staticmethod
+    def _referenced_privacy_fields(skill_dict: Dict[str, Any], ctx: RequestContext) -> set[str]:
+        """Find references to this Skill's own config without resolving secrets."""
+        skill_name = skill_dict["name"]
+        legacy_prefix = f"{{{{ov_privacy:skill:{skill_name}:"
+        fields: set[str] = set()
+        for text in (skill_dict.get("content", ""), skill_dict.get("description", "")):
+            for placeholder in re.findall(r"\{\{[^{}\r\n]*\}\}", text or ""):
+                reference = parse_privacy_field_reference(placeholder)
+                if reference is not None:
+                    if (
+                        reference.owner_user_id == ctx.user.user_id
+                        and reference.category == "skill"
+                        and reference.target_key == skill_name
+                    ):
+                        fields.add(reference.field)
+                elif placeholder.startswith(legacy_prefix):
+                    field_name = placeholder[len(legacy_prefix) : -2]
+                    if field_name and ":" not in field_name:
+                        fields.add(field_name)
+        return fields
 
     async def apply_skill_privacy(
         self,
@@ -476,11 +588,13 @@ class SkillProcessor:
         *,
         change_reason: str,
         delete_if_empty: bool,
+        owner_lease_ref: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not self._privacy_config_service:
             return skill_dict
 
-        if privacy_values:
+        referenced_fields = self._referenced_privacy_fields(skill_dict, ctx)
+        if privacy_values or referenced_fields:
             await self._privacy_config_service.upsert(
                 ctx=ctx,
                 category="skill",
@@ -488,11 +602,18 @@ class SkillProcessor:
                 values=privacy_values,
                 updated_by=ctx.user.user_id,
                 change_reason=change_reason,
+                **({"owner_lease_ref": owner_lease_ref} if owner_lease_ref is not None else {}),
+                **({"preserve_fields": referenced_fields} if referenced_fields else {}),
             )
             return skill_dict
 
         if delete_if_empty:
-            await self._privacy_config_service.delete(ctx, "skill", skill_dict["name"])
+            await self._privacy_config_service.delete(
+                ctx,
+                "skill",
+                skill_dict["name"],
+                **({"owner_lease_ref": owner_lease_ref} if owner_lease_ref is not None else {}),
+            )
         return skill_dict
 
     async def sanitize_skill_privacy(
@@ -517,7 +638,7 @@ class SkillProcessor:
             delete_if_empty=delete_if_empty,
         )
 
-    async def _generate_overview(self, skill_dict: Dict[str, Any], config) -> str:
+    async def _generate_overview(self, skill_dict: Dict[str, Any], vlm: VLMHandle) -> str:
         """Generate L1 overview using VLM."""
         from openviking.prompts import render_prompt
 
@@ -529,7 +650,7 @@ class SkillProcessor:
                 "skill_content": skill_dict.get("content", ""),
             },
         )
-        return await config.vlm.get_completion_async(prompt)
+        return await vlm.get_completion_async(prompt)
 
     async def _write_skill_content(
         self,
@@ -539,16 +660,42 @@ class SkillProcessor:
         abstract: str,
         overview: str,
         ctx: RequestContext,
+        lease_ref: Dict[str, Any],
     ):
         """Write main skill content to VikingFS."""
-        await viking_fs.write_context(
-            uri=skill_dir_uri,
-            content=SkillLoader.to_skill_md(skill_dict),
+        from openviking.storage.abstract_overview import write_abstract_overview
+
+        skill_md_uri = f"{skill_dir_uri}/SKILL.md"
+        serialized = await self._sanitize_registered_privacy(
+            SkillLoader.to_skill_md(skill_dict),
+            ctx=ctx,
+            uri=skill_md_uri,
+        )
+        abstract = await self._sanitize_registered_privacy(
+            abstract,
+            ctx=ctx,
+            uri=f"{skill_dir_uri}/.abstract.md",
+        )
+        overview = await self._sanitize_registered_privacy(
+            overview,
+            ctx=ctx,
+            uri=f"{skill_dir_uri}/.overview.md",
+        )
+        await viking_fs.write_file(
+            skill_md_uri,
+            serialized,
+            ctx=ctx,
+            lease_ref=lease_ref,
+        )
+        await write_abstract_overview(
+            viking_fs=viking_fs,
+            dir_uri=skill_dir_uri,
             abstract=abstract,
             overview=overview,
-            content_filename="SKILL.md",
-            is_leaf=False,
             ctx=ctx,
+            lock=lease_ref,
+            is_stale=lambda: False,
+            metadata={"generated_by": {"component": "SkillProcessor", "trigger": "skill_ingest"}},
         )
 
     async def _write_auxiliary_files(
@@ -558,6 +705,7 @@ class SkillProcessor:
         base_path: Optional[Path],
         skill_dir_uri: str,
         ctx: RequestContext,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ):
         """Write auxiliary files to VikingFS."""
         for aux_file in auxiliary_files:
@@ -576,27 +724,60 @@ class SkillProcessor:
                 is_text = False
 
             if is_text:
-                await viking_fs.write_file(aux_uri, file_bytes.decode("utf-8"), ctx=ctx)
+                text_content = await self._sanitize_registered_privacy(
+                    file_bytes.decode("utf-8"),
+                    ctx=ctx,
+                    uri=aux_uri,
+                )
+                await viking_fs.write_file(
+                    aux_uri,
+                    text_content,
+                    ctx=ctx,
+                    lease_ref=lease_ref,
+                )
             else:
-                await viking_fs.write_file_bytes(aux_uri, file_bytes, ctx=ctx)
-
-    async def _index_skill(self, context: Context, skill_dir_uri: str):
-        """Write skill directory vector via async queue as L0."""
-        context.uri = skill_dir_uri
-        context.is_leaf = False
-        context.level = 0
-
-        context.set_vectorize(Vectorize(text=context.abstract))
-        embedding_msg = EmbeddingMsgConverter.from_context(context)
-        if embedding_msg:
-            if embedding_msg.telemetry_id:
-                get_request_wait_tracker().register_embedding_root(
-                    embedding_msg.telemetry_id, embedding_msg.id
+                await viking_fs.write_file_bytes(
+                    aux_uri,
+                    file_bytes,
+                    ctx=ctx,
+                    lease_ref=lease_ref,
                 )
-            enqueued = await self.vikingdb.enqueue_embedding_msg(embedding_msg)
-            if not enqueued and embedding_msg.telemetry_id:
-                get_request_wait_tracker().mark_embedding_failed(
-                    embedding_msg.telemetry_id,
-                    embedding_msg.id,
-                    "embedding enqueue returned false",
-                )
+
+    async def _enqueue_skill_package(
+        self,
+        uri: str,
+        viking_fs: VikingFS,
+        ctx: RequestContext,
+        lease: Dict[str, Any],
+        *,
+        source_path: str = "",
+    ) -> None:
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.semantic_msg import SemanticMsg
+
+        telemetry = get_current_telemetry()
+        register_telemetry(telemetry)
+        lock_guard = PathLockGuard(viking_fs._async_agfs, lease)
+        msg = SemanticMsg(
+            uri=uri,
+            context_type="skill",
+            recursive=True,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            group_ids=ctx.group_ids,
+            role=str(ctx.role),
+            telemetry_id=telemetry.telemetry_id,
+            lock_handoff=await lock_guard.to_handoff(),
+            generation_trigger="skill_ingest",
+            propagate_to_parent=False,
+            source={"path": source_path},
+        )
+        try:
+            queue_manager = get_queue_manager()
+            queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+            await lock_guard.handoff_and_dispatch(msg.lock_handoff, lambda: queue.enqueue(msg))
+        except BaseException:
+            if lock_guard.lease is not None and lock_guard.lease is not lease:
+                lease.clear()
+                lease.update(lock_guard.lease)
+            raise

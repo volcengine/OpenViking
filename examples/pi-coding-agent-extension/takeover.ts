@@ -14,22 +14,29 @@ export function createTakeoverManager(opts: {
   return new TakeoverCore({
     config,
     io: {
-      flush: () => sync.flushForTakeover(),
-      commit: (commitOpts?: { queueOnFailure?: boolean; keepRecentCount?: number }) => sync.commit(commitOpts),
-      fetchOverview: async (tokenBudget?: number) => {
-        if (!sync.sessionId) return "";
-        const ctx = await client.getSessionContext(
-          sync.sessionId,
-          tokenBudget ?? config.takeoverOverviewBudget * 4,
-        );
-        return ctx?.latest_archive_overview ?? "";
-      },
+      // Deliver the branch, then confirm the queue is empty for this session.
+      syncBranch: (branch: any[]) => sync.syncBranch(branch),
+      flush: (budgetMs?: number) => sync.flushForTakeover(budgetMs),
+      commit: (commitOpts?: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean }) =>
+        sync.commit(commitOpts),
+      // Read the Working Memory of the exact archive this commit produced, not
+      // the session's newest `/context` overview — the latter can be an older
+      // archive this takeover did not create.
+      readArchiveOverview: (archiveUri: string, timeoutMs?: number) => client.readArchiveOverview(archiveUri, timeoutMs),
+      // Whether a still-unsummarized archive can get its summary at all.
+      archiveState: (archiveUri: string, timeoutMs?: number) => client.getArchiveState(archiveUri, timeoutMs),
+      // The exact server keep_recent_count for the retained tail (message count,
+      // not user-turn count): system, custom and filtered entries excluded.
+      captureCount: (branchSlice: any[]) => sync.captureCount(branchSlice),
       persistEntry: (customType: string, data: any) => {
         if (typeof pi?.appendEntry === "function") {
           pi.appendEntry(customType, data);
         }
       },
       getWatermark: () => sync.syncedCount,
+      droppedCount: () => sync.droppedCount,
+      lastCommitError: () => sync.lastCommitError,
+      availableTools: () => typeof pi?.getActiveTools === "function" ? pi.getActiveTools() : [],
       log: opts.log,
     },
   });

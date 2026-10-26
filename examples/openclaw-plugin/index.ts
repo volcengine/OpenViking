@@ -95,6 +95,7 @@ type ToolContext = {
 };
 
 type OpenClawPluginApi = {
+  runtime?: { version?: string };
   pluginConfig?: unknown;
   openVikingTransport?: HttpTransport;
   logger: PluginLogger;

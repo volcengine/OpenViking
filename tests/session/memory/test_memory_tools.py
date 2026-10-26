@@ -14,6 +14,7 @@ from openviking.session.memory.tools import (
     MemoryReadTool,
     MemorySearchTool,
     get_tool,
+    memory_maintenance_notice,
 )
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -104,6 +105,27 @@ class TestMemoryTools:
 
         assert called is True
         assert result["content"] == "1\tGina values emotional support with Jon."
+        assert "memory_maintenance_notice" not in result
+
+    def test_memory_maintenance_notice_is_conditional_and_explains_two_strategies(self):
+        assert memory_maintenance_notice("abcd", review_after_tokens=1) is None
+
+        notice = memory_maintenance_notice("abcde", review_after_tokens=1)
+
+        assert notice["maintenance_required"] is True
+        assert set(notice) == {"maintenance_required", "guidance"}
+        guidance = notice["guidance"]
+        assert "estimated at 2 tokens" in guidance
+        assert "above the 1-token readability target" in guidance
+        assert "maintenance is required" in guidance
+        assert "do not leave it as one broad oversized memory" in guidance
+        assert "split different behavioral choice dimensions" in guidance
+        assert "never invent multiple identities for one object" in guidance
+        assert "compact only duplicate wording" in guidance.lower()
+        assert "fact integrity takes priority" in guidance
+        assert "Preserve every distinct valid fact exactly once" in guidance
+        assert "only after every fact has one clear destination" in guidance
+        assert "Delete or replace the oversized source" in guidance
 
     @pytest.mark.asyncio
     async def test_read_tool_uses_offset_and_limit_for_visible_content(self):

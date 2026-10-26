@@ -3,17 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, BinaryIO, Dict, Literal, Protocol, overload, runtime_checkable
+from typing import Any, Awaitable, BinaryIO, Dict, Literal, Protocol, overload, runtime_checkable
 
 AGFSByteStream = Iterator[bytes]
 
 
 @runtime_checkable
 class AGFSSyncClientProtocol(Protocol):
-    """Minimal synchronous AGFS client contract used by OpenViking."""
+    """AGFS binding contract used by OpenViking."""
 
-    def ls(self, path: str = "/") -> list[Dict[str, Any]]:
-        """List directory entries under the given AGFS path."""
+    def ls(
+        self,
+        path: str = "/",
+        ctx: Dict[str, str] | None = None,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+    ) -> list[Dict[str, Any]]:
+        """List a sorted directory range."""
 
     @overload
     def read(
@@ -90,8 +99,14 @@ class AGFSSyncClientProtocol(Protocol):
         show_hidden: bool = False,
         node_limit: int | None = None,
         level_limit: int | None = None,
+        ctx: Dict[str, str] | None = None,
+        *,
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+        directories_only: bool = False,
     ) -> list[Dict[str, Any]]:
-        """Return a tree view for the given AGFS directory."""
+        """Return a sorted range from a directory tree."""
 
     def glob_directory(
         self,
@@ -104,8 +119,11 @@ class AGFSSyncClientProtocol(Protocol):
     ) -> Dict[str, Any]:
         """Return one page of flat glob matches for the given AGFS directory."""
 
-    def system_sync_status(self, path: str) -> Dict[str, Any]:
-        """Return multi-write sync status for a file or directory path."""
-
-    def system_sync_retry(self, path: str) -> Dict[str, Any]:
-        """Retry pending multi-write sync work for a file or directory path."""
+    def pathlock_acquire_batch_async(
+        self,
+        ctx: Dict[str, str],
+        requests: list[Dict[str, str]],
+        timeout_secs: float = 0.0,
+        owner_lease_ref: Dict[str, Any] | None = None,
+    ) -> Awaitable[Dict[str, Any]]:
+        """Acquire a PathLock batch without blocking a Python worker thread."""

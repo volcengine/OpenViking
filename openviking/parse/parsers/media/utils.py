@@ -3,6 +3,7 @@
 """Media-related utilities for OpenViking."""
 
 import asyncio
+import inspect
 import re
 import tempfile
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.core.path_variables import CalendarVariableProvider
 from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils.image_search import prepare_image_bytes_for_model
@@ -18,6 +20,7 @@ from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMHandle
     from openviking.server.identity import RequestContext
 
 from .constants import (
@@ -251,6 +254,8 @@ async def generate_image_summary(
     original_filename: str,
     llm_sem: Optional[asyncio.Semaphore] = None,
     ctx: Optional["RequestContext"] = None,
+    *,
+    vlm: "VLMHandle",
 ) -> Dict[str, Any]:
     """
     Generate summary for an image file using VLM.
@@ -264,9 +269,10 @@ async def generate_image_summary(
     Returns:
         Dictionary with "name" and "summary" keys
     """
+    if vlm is None:
+        raise ValueError("Image summary requires an explicitly resolved VLM")
     viking_fs = get_viking_fs()
     config = get_openviking_config()
-    vlm = config.vlm
     file_name = original_filename
 
     try:
@@ -330,6 +336,8 @@ async def generate_audio_summary(
     original_filename: str,
     llm_sem: Optional[asyncio.Semaphore] = None,
     ctx: Optional["RequestContext"] = None,
+    *,
+    vlm: "VLMHandle",
 ) -> Dict[str, Any]:
     """Generate a normalized semantic summary for an audio file.
 
@@ -348,6 +356,7 @@ async def generate_audio_summary(
         "audio",
         llm_sem=llm_sem,
         ctx=ctx,
+        vlm=vlm,
     )
 
 
@@ -356,6 +365,8 @@ async def generate_video_summary(
     original_filename: str,
     llm_sem: Optional[asyncio.Semaphore] = None,
     ctx: Optional["RequestContext"] = None,
+    *,
+    vlm: "VLMHandle",
 ) -> Dict[str, Any]:
     """Generate a normalized semantic summary for a video file.
 
@@ -374,6 +385,7 @@ async def generate_video_summary(
         "video",
         llm_sem=llm_sem,
         ctx=ctx,
+        vlm=vlm,
     )
 
 
@@ -413,19 +425,25 @@ async def _generate_media_summary(
     media_type: str,
     llm_sem: Optional[asyncio.Semaphore] = None,
     ctx: Optional["RequestContext"] = None,
+    *,
+    vlm: "VLMHandle",
 ) -> Dict[str, Any]:
+    if vlm is None:
+        raise ValueError(f"{media_type.title()} summary requires an explicitly resolved VLM")
     config = get_openviking_config()
-    vlm = config.vlm
     result = {"name": original_filename, "summary": ""}
 
     viking_fs = get_viking_fs()
-    stat = await viking_fs.stat(media_uri, ctx=ctx)
+    stat = await viking_fs.stat(media_uri, ctx=ctx, skip_count=True)
     size_bytes = int((stat or {}).get("size", 0))
-    if not vlm.supports_media(
+    supports_media = vlm.supports_media(
         media_type=media_type,
         filename=original_filename,
         size_bytes=size_bytes,
-    ):
+    )
+    if inspect.isawaitable(supports_media):
+        supports_media = await supports_media
+    if not supports_media:
         logger.info(
             "Skipping unsupported or disabled %s understanding input: %s",
             media_type,
@@ -446,6 +464,7 @@ async def _generate_media_summary(
         with tempfile.NamedTemporaryFile(
             suffix=Path(original_filename).suffix,
             delete=False,
+            dir=get_parser_download_temp_dir(),
         ) as temporary:
             temporary_path = Path(temporary.name)
 

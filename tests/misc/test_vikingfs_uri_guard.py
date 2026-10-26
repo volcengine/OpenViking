@@ -23,6 +23,7 @@ def _make_viking_fs() -> VikingFS:
     fs.rerank_config = None
     fs.grep_config = None
     fs.vector_store = None
+    fs.acl_manager = None
     fs._encryptor = None
     fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx_test", default=None)
     return fs
@@ -85,11 +86,13 @@ class TestVikingFSURITraversalGuard:
         fs.agfs.read.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_write_rejects_traversal_before_agfs_write(self) -> None:
+    async def test_write_rejects_unauthorized_paths_before_agfs_write(self) -> None:
         fs = _make_viking_fs()
 
         with pytest.raises(PermissionDeniedError, match="Unsafe URI"):
             await fs.write("viking://resources/../../_system/accounts.json", "pwned")
+        with pytest.raises(PermissionDeniedError, match="requires an administrator"):
+            await fs.write("viking://", "pwned", ctx=_user_ctx())
 
         fs.agfs.write.assert_not_called()
 
@@ -117,9 +120,7 @@ class TestVikingFSURITraversalGuard:
             "viking://agent/",
         ],
     )
-    async def test_rm_rejects_protected_namespace_roots_before_side_effects(
-        self, uri: str
-    ) -> None:
+    async def test_rm_rejects_protected_namespace_roots_before_side_effects(self, uri: str) -> None:
         fs = _make_viking_fs()
         fs._collect_uris = AsyncMock(return_value=[])
         fs._delete_from_vector_store = AsyncMock()
@@ -158,9 +159,7 @@ class TestVikingFSURITraversalGuard:
         fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
 
-    @pytest.mark.parametrize(
-        "uri", ["viking://user/alice", "viking://resources"]
-    )
+    @pytest.mark.parametrize("uri", ["viking://user/alice", "viking://resources"])
     @pytest.mark.asyncio
     async def test_rm_allows_maintenance_scope_roots_for_root(self, uri: str) -> None:
         fs = _make_viking_fs()
@@ -309,7 +308,7 @@ class TestVikingFSURITraversalGuard:
     async def test_grep_propagates_agfs_errors_instead_of_falling_back(self) -> None:
         fs = _make_viking_fs()
         fs._encryptor = None
-        fs._ensure_access = MagicMock()
+        fs._ensure_access = AsyncMock()
         fs._grep_with_agfs = AsyncMock(side_effect=AGFSInvalidOperationError("invalid regex"))
         fs._grep_encrypted = AsyncMock(
             return_value={"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
@@ -326,7 +325,7 @@ class TestVikingFSURITraversalGuard:
         """Query-root-relative grep matches should be reconstructed into the final Viking URI."""
         fs = _make_viking_fs()
         fs._encryptor = None
-        fs._ensure_access = MagicMock()
+        fs._ensure_access = AsyncMock()
         fs.agfs.grep = AsyncMock(
             return_value={
                 "matches": [
@@ -352,7 +351,7 @@ class TestVikingFSURITraversalGuard:
         """A '.' grep match should resolve back to the queried Viking URI itself."""
         fs = _make_viking_fs()
         fs._encryptor = None
-        fs._ensure_access = MagicMock()
+        fs._ensure_access = AsyncMock()
         fs.agfs.grep = AsyncMock(
             return_value={
                 "matches": [
@@ -385,3 +384,21 @@ class TestVikingFSURITraversalGuard:
         entries = await fs._ls_entries("/local/default")
 
         assert [entry["name"] for entry in entries] == ["resources"]
+
+    @pytest.mark.asyncio
+    async def test_ls_entries_below_root_keeps_reserved_root_names(self) -> None:
+        """A directory a user created and can stat must also show up in ls."""
+        fs = _make_viking_fs()
+        fs.agfs.ls.return_value = [
+            {"name": "tasks", "isDir": True},
+            {"name": "_system", "isDir": True},
+            {"name": "notes.md", "isDir": False},
+            {"name": ".path.ovlock", "isDir": False},
+            {"name": ".exact.ovlock.notes.md.0123abcd", "isDir": False},
+            {"name": ".redirect.json", "isDir": False},
+            {"name": ".sync_log.json", "isDir": False},
+        ]
+
+        entries = await fs._ls_entries("/local/default/resources/project")
+
+        assert [entry["name"] for entry in entries] == ["tasks", "_system", "notes.md"]

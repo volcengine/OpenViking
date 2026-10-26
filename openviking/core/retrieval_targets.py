@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 
 from openviking.core.namespace import (
+    AGENT_SKILLS_ROOT,
     canonical_user_root,
     is_hidden_by_actor_peer_view,
     uri_parts,
@@ -77,7 +78,7 @@ def default_target_directories(
             )
         return ["viking://resources", user_root]
     if context_type == ContextType.SKILL:
-        return _dedupe([*_default_skill_targets(ctx), *_default_agent_skill_targets()])
+        return _dedupe([*_default_skill_targets(ctx), AGENT_SKILLS_ROOT])
     if ctx.actor_peer_id:
         return _dedupe(["viking://resources", *_default_user_root_targets(ctx)])
     return [user_root, "viking://resources"]
@@ -102,10 +103,6 @@ def _target_directories_for_uri(
     if _is_current_user_root(target_uri, ctx):
         return _default_user_root_targets(ctx)
 
-    # New agent scope: direct access for agent/skills/, agent/endpoints/, etc.
-    if _is_agent_scope_uri(target_uri):
-        return [target_uri]
-
     peer_target = _resolve_peer_target(target_uri, ctx=ctx)
     if peer_target is not None:
         return peer_target
@@ -115,10 +112,6 @@ def _target_directories_for_uri(
             return [target_uri]
 
     return [target_uri]
-
-
-def _default_agent_skill_targets() -> List[str]:
-    return ["viking://agent/skills"]
 
 
 def _default_user_root_targets(ctx: RequestContext) -> List[str]:
@@ -147,10 +140,6 @@ def _actor_peer_targets(ctx: RequestContext) -> List[str]:
         f"{peer_root}/memories",
         f"{peer_root}/resources",
     ]
-def _is_agent_scope_uri(target_uri: str) -> bool:
-    parts = target_uri[len("viking://"):].strip("/").split("/")
-    return parts and parts[0] == "agent" and len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}
-
 
 
 def _resolve_peer_target(

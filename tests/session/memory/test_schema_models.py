@@ -16,7 +16,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
-    create_default_registry,
+    get_default_registry,
 )
 from openviking.session.memory.merge_op.base import FieldType, MergeOp
 from openviking.session.memory.schema_model_generator import (
@@ -83,7 +83,7 @@ class TestSchemaModelGenerator:
     @pytest.fixture
     def real_registry(self):
         """Create a registry with real schemas."""
-        return create_default_registry()
+        return get_default_registry()
 
 
     def test_peer_enabled_false_omits_peer_id_field(self):
@@ -270,6 +270,46 @@ class TestSchemaModelGenerator:
         schema = model.model_json_schema()
         assert "page_id" in schema["required"]
         assert schema["properties"]["page_id"]["description"] == (
+            "Temporary page_id for identifying the target memory item."
+        )
+
+    def test_event_page_id_schema_requires_new_page_range(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="events",
+            operation_mode="add_only",
+            filename_template="{{ event_name }}.md",
+            directory="viking://user/{{ user_space }}/memories/events",
+            fields=[
+                MemoryField(
+                    name="event_name",
+                    field_type=FieldType.STRING,
+                    merge_op=MergeOp.IMMUTABLE,
+                )
+            ],
+        )
+
+        model = SchemaModelGenerator([memory_type]).create_flat_data_model(memory_type)
+        schema = model.model_json_schema()
+
+        assert schema["properties"]["page_id"]["minimum"] == 100
+        assert "MUST be at least 100" in schema["properties"]["page_id"]["description"]
+        # Runtime resolution normalizes bad model output instead of dropping the event.
+        assert model.model_validate({"page_id": 5, "event_name": "demo"}).page_id == 5
+
+    def test_non_event_add_only_page_id_schema_is_unchanged(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="trajectories",
+            operation_mode="add_only",
+            filename_template="{{ trajectory_name }}.md",
+            directory="viking://user/{{ user_space }}/memories/trajectories",
+            fields=[],
+        )
+
+        model = SchemaModelGenerator([memory_type]).create_flat_data_model(memory_type)
+        page_id_schema = model.model_json_schema()["properties"]["page_id"]
+
+        assert "minimum" not in page_id_schema
+        assert page_id_schema["description"] == (
             "Temporary page_id for identifying the target memory item."
         )
 

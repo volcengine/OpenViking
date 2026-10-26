@@ -509,7 +509,8 @@ class TestMessageToDict:
         assert d["parts"][0]["type"] == "text"
         assert d["parts"][1]["type"] == "context"
 
-    def test_to_dict_with_tool_part(self):
+    @pytest.mark.parametrize("tool_input", [None, {}, {"query": "OpenViking"}])
+    def test_to_dict_with_tool_part(self, tool_input):
         """Test to_dict with ToolPart."""
         msg = Message(
             id="msg-1",
@@ -519,6 +520,7 @@ class TestMessageToDict:
                     tool_id="call-1",
                     tool_name="search",
                     tool_uri="viking://tools/1",
+                    tool_input=tool_input,
                     tool_status="completed",
                     duration_ms=100,
                     prompt_tokens=50,
@@ -542,6 +544,9 @@ class TestMessageToDict:
         assert d["parts"][0]["tool_output_original_chars"] == 1000
         assert d["parts"][0]["tool_output_preview_chars"] == 100
         assert d["parts"][0]["tool_output_externalized_reason"] == "single_threshold"
+        assert ("tool_input" in d["parts"][0]) == (tool_input is not None)
+        assert Message.from_dict(d).parts[0].tool_input == tool_input
+        assert Message.from_dict(json.loads(msg.to_jsonl())).to_dict()["parts"] == d["parts"]
 
     def test_to_dict_with_image_part(self):
         """Test to_dict with ImagePart."""

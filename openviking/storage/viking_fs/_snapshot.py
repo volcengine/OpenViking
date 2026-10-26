@@ -4,7 +4,8 @@
 
 import asyncio
 import sys
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import replace
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
@@ -13,7 +14,10 @@ from openviking.pyagfs.exceptions import (
     AGFSResourceExhaustedError,
 )
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import TaskPatch
+from openviking.service.task_work_index import detach_task_context
+from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs._base import (
     _prepare_snapshot_diff,
     logger,
@@ -21,6 +25,7 @@ from openviking.storage.viking_fs._base import (
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     ResourceExhaustedError,
 )
 
@@ -28,32 +33,98 @@ from openviking_cli.exceptions import (
 def _pkg():
     return sys.modules[__package__]
 
+
+_DERIVED_FILE_NAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
+
+
 class _SnapshotMixin:
     """Snapshot/git-like version control (commit/restore/show/diff/log)."""
 
-    async def system_sync_status(
-        self, uri: str, ctx: Optional[RequestContext] = None
-    ) -> Dict[str, Any]:
-        """Return multi-write sync status for one Viking URI subtree."""
-        self._ensure_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        path = self._uri_to_path(uri, ctx=ctx)
-        return await self._async_agfs.system_sync_status(
-            path,
-            fs_ctx={"account_id": real_ctx.account_id},
-        )
+    def _ensure_snapshot_admin(self, ctx: RequestContext) -> None:
+        if ctx.role not in {Role.ROOT, Role.ADMIN}:
+            raise PermissionDeniedError(
+                "Managing snapshot ignore rules requires an administrator",
+                resource=".ovgitignore",
+            )
 
-    async def system_sync_retry(
-        self, uri: str, ctx: Optional[RequestContext] = None
-    ) -> Dict[str, Any]:
-        """Retry multi-write sync for one Viking URI subtree."""
-        self._ensure_mutable_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        path = self._uri_to_path(uri, ctx=ctx)
-        return await self._async_agfs.system_sync_retry(
-            path,
-            fs_ctx={"account_id": real_ctx.account_id},
-        )
+    async def _snapshot_scope_uris(
+        self,
+        uris: List[str],
+        ctx: RequestContext,
+    ) -> List[str]:
+        """Return each requested snapshot scope and all current descendants."""
+        result: List[str] = []
+        acl_enabled = await self._acl_enabled(ctx)
+        for uri in uris:
+            path = self._uri_to_path(uri, ctx=ctx)
+            try:
+                stat = await self._async_agfs.stat(path)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+            else:
+                if isinstance(stat, dict) and stat.get("isDir", False):
+                    entries = await self._async_agfs.tree_directory(
+                        path,
+                        show_hidden=True,
+                        node_limit=None,
+                        level_limit=None,
+                    )
+                    result.extend(
+                        self._path_to_uri(entry["path"], ctx=ctx)
+                        for entry in entries
+                        if self._is_tree_entry_visible(
+                            entry,
+                            path,
+                            ctx,
+                            acl_enabled=acl_enabled,
+                        )
+                    )
+            result.append(uri)
+        return list(dict.fromkeys(result))
+
+    async def _ensure_restore_plan_access(
+        self,
+        plan: Dict[str, Any],
+        *,
+        tree_dir: str,
+        ctx: RequestContext,
+    ) -> None:
+        """Authorize every VFS mutation reported by a restore dry-run."""
+        diff = plan["diff"]
+        write_targets: List[str] = []
+        for item in diff["to_write"]:
+            tree_path = f"{tree_dir}/{item['path']}".strip("/")
+            uri = self._tree_path_to_uri(tree_path)
+            try:
+                await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+                parent_tree_path = tree_path.rsplit("/", 1)[0]
+                write_targets.append(self._tree_path_to_uri(parent_tree_path))
+            else:
+                write_targets.append(uri)
+
+        delete_targets = [
+            self._tree_path_to_uri(f"{tree_dir}/{path}".strip("/")) for path in diff["to_delete"]
+        ]
+        if write_targets:
+            await self._ensure_access_many(
+                list(dict.fromkeys(write_targets)),
+                ctx,
+                action=AclAction.WRITE,
+            )
+        if delete_targets:
+            await self._ensure_access_many(
+                list(dict.fromkeys(delete_targets)),
+                ctx,
+                action=AclAction.WRITE,
+            )
+
+    @staticmethod
+    def _restore_reindex_context(ctx: RequestContext) -> RequestContext:
+        return replace(ctx, bypass_acl=True)
 
     async def get_gitignore(self, ctx: Optional[RequestContext] = None) -> str:
         """Return the account-level .ovgitignore content, or an empty string if absent.
@@ -62,7 +133,9 @@ class _SnapshotMixin:
         UTF-8, mirroring the Rust layer's reject-non-UTF-8 behavior at commit
         time rather than leaking a raw ``UnicodeDecodeError``.
         """
-        path = self._gitignore_agfs_path(ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        self._ensure_snapshot_admin(real_ctx)
+        path = self._gitignore_agfs_path(real_ctx)
         try:
             raw = await self._async_agfs.read(path, 0, -1)
         except Exception as exc:
@@ -98,7 +171,9 @@ class _SnapshotMixin:
         """
         if not isinstance(content, str):
             raise TypeError("content must be a string")
-        path = self._gitignore_agfs_path(ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        self._ensure_snapshot_admin(real_ctx)
+        path = self._gitignore_agfs_path(real_ctx)
         data = content.encode("utf-8")
         if len(data) > self._OVGITIGNORE_MAX_BYTES:
             raise AGFSInvalidOperationError(
@@ -110,7 +185,9 @@ class _SnapshotMixin:
 
     async def delete_gitignore(self, ctx: Optional[RequestContext] = None) -> None:
         """Delete the account-level .ovgitignore control file. Missing is success."""
-        path = self._gitignore_agfs_path(ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        self._ensure_snapshot_admin(real_ctx)
+        path = self._gitignore_agfs_path(real_ctx)
         try:
             await self._async_agfs.rm(path, recursive=False)
         except Exception as exc:
@@ -130,6 +207,7 @@ class _SnapshotMixin:
         author_name: Optional[str] = None,
         author_email: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a git snapshot of the account's tree.
 
@@ -145,6 +223,7 @@ class _SnapshotMixin:
             branch: Branch to advance. Defaults to ``"main"``.
             author_name / author_email: Override the default bot author.
             ctx: Request context (provides ``account_id``).
+            lease_ref: Existing content lease whose ownership the snapshot shares.
 
         Returns:
             Dict with ``result`` (``"created"`` / ``"noop"``) and ``commit_oid``.
@@ -155,19 +234,88 @@ class _SnapshotMixin:
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
+        if real_ctx.role != Role.ROOT and paths is None:
+            raise PermissionDeniedError(
+                "Snapshot commit requires explicit paths",
+                resource="viking://",
+            )
         if paths is None:
             tree_paths: Optional[List[str]] = None
         else:
             tree_paths = [self._uri_to_tree_path(p, ctx=real_ctx) for p in paths]
-        return await self._async_agfs.run(
-            "git_commit",
-            account=account,
-            branch=branch,
-            message=message,
-            paths=tree_paths,
-            author_name=author_name or self._DEFAULT_GIT_AUTHOR_NAME,
-            author_email=author_email or self._DEFAULT_GIT_AUTHOR_EMAIL,
-        )
+        kwargs = {
+            "account": account,
+            "branch": branch,
+            "message": message,
+            "paths": tree_paths,
+            "author_name": author_name or self._DEFAULT_GIT_AUTHOR_NAME,
+            "author_email": author_email or self._DEFAULT_GIT_AUTHOR_EMAIL,
+        }
+        if real_ctx.role == Role.ROOT or not paths:
+            return await self._async_agfs.run("git_commit", **kwargs)
+
+        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+
+        # Lock by current state: Tree for a directory, Exact for a file. With
+        # the filesystem PathLock provider a missing target gets no lock: a
+        # Tree token there is stored as `{target}/.path.ovlock`, which creates
+        # the target as a directory, and an Exact sidecar creates a missing
+        # parent chain (#4966). Nothing is read under a missing name; the
+        # commit only records its deletion. If another writer recreates the
+        # name meanwhile the snapshot may miss it or read a partially written
+        # file; the next commit records the final content. The cache (Redis)
+        # provider keeps tokens off the filesystem, so it takes Tree as usual.
+        missing_kind = self._snapshot_missing_target_lock_kind()
+        lock_requests: List[Dict[str, str]] = []
+        tree_roots: List[str] = []
+        for path in sorted(
+            {self._uri_to_path(uri, ctx=real_ctx) for uri in paths},
+            key=lambda value: (value.count("/"), value),
+        ):
+            if any(path == root or path.startswith(f"{root.rstrip('/')}/") for root in tree_roots):
+                continue
+            try:
+                stat = await self._async_agfs.stat(path)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+                if missing_kind is not None:
+                    tree_roots.append(path)
+                    lock_requests.append({"path": path, "kind": missing_kind})
+                continue
+            if isinstance(stat, dict) and stat.get("isDir", False):
+                tree_roots.append(path)
+                lock_requests.append({"path": path, "kind": "tree"})
+            else:
+                lock_requests.append({"path": path, "kind": "exact"})
+        lease = None
+        if lock_requests:
+            try:
+                lock_options = {"owner_lease_ref": lease_ref} if lease_ref is not None else {}
+                lease = await self._async_agfs.pathlock_acquire_batch(lock_requests, **lock_options)
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    "A snapshot path is being processed",
+                    uri=paths[0],
+                ) from exc
+        try:
+            scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
+            await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.WRITE)
+            return await self._async_agfs.run("git_commit", **kwargs)
+        finally:
+            if lease is not None:
+                await self._async_agfs.pathlock_release(lease)
+
+    @staticmethod
+    def _snapshot_missing_target_lock_kind() -> Optional[str]:
+        """Lock kind for a missing commit target: Tree on Redis, none on filesystem."""
+        try:
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+            provider = get_openviking_config().storage.agfs.pathlock.provider
+        except Exception:
+            provider = "filesystem"
+        return "tree" if provider == "cache" else None
 
     async def restore(
         self,
@@ -180,6 +328,7 @@ class _SnapshotMixin:
         author_name: Optional[str] = None,
         author_email: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
+        record_restore: Optional[Callable[..., Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         """Restore a project subtree to the state at ``source_commit``.
 
@@ -199,6 +348,8 @@ class _SnapshotMixin:
             message: Optional commit message; defaults to a generated string.
             author_name / author_email: Override the default bot author.
             ctx: Request context (provides ``account_id``).
+            record_restore: Optional version callback under the writeback lease;
+                whole-account restores also lend it the metadata-covering lease.
 
         Returns:
             Dict containing ``result`` (``"applied"`` / ``"noop"`` / ``"dry_run"``)
@@ -220,6 +371,14 @@ class _SnapshotMixin:
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
+        acl_project_dir: Optional[str] = None
+        if real_ctx.role != Role.ROOT:
+            if project_dir is None:
+                raise PermissionDeniedError(
+                    "Snapshot restore requires an explicit project_dir",
+                    resource="viking://",
+                )
+            acl_project_dir = project_dir
         tree_dir: Optional[str]
         if project_dir is None:
             tree_dir = None
@@ -239,10 +398,18 @@ class _SnapshotMixin:
         }
         if tree_dir is not None:
             kwargs["project_dir"] = tree_dir
-        # dry_run only computes the diff; it never writes the VFS, so it needs
-        # no lock.
-        if dry_run:
+        # ROOT is used by the local, unauthenticated deployment mode and by
+        # trusted internal callers. Keep its existing dry-run path unchanged.
+        if dry_run and real_ctx.role == Role.ROOT:
             return await self._async_agfs.run("git_restore", **kwargs)
+        # A dry run only computes a plan; it must not take the tree lock,
+        # which would recreate a deleted project_dir to hold lock metadata.
+        if dry_run:
+            assert acl_project_dir is not None
+            await self._ensure_access(acl_project_dir, real_ctx)
+            plan = await self._async_agfs.run("git_restore", **kwargs)
+            await self._ensure_restore_plan_access(plan, tree_dir=tree_dir or "", ctx=real_ctx)
+            return plan
 
         from openviking.pyagfs.exceptions import GitRestoreWritebackPartialError
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
@@ -259,6 +426,7 @@ class _SnapshotMixin:
             else f"/local/{account}"
         )
         partial_exc: Optional[GitRestoreWritebackPartialError] = None
+        record_error: Optional[BaseException] = None
         try:
             lease = await self._async_agfs.pathlock_acquire_tree(lock_path)
         except LockAcquisitionError:
@@ -268,14 +436,40 @@ class _SnapshotMixin:
             )
 
         try:
+            if acl_project_dir is not None:
+                await self._ensure_access(acl_project_dir, real_ctx)
+                plan = await self._async_agfs.run(
+                    "git_restore",
+                    **{**kwargs, "dry_run": True},
+                )
+                await self._ensure_restore_plan_access(
+                    plan,
+                    tree_dir=tree_dir or "",
+                    ctx=real_ctx,
+                )
             try:
-                result = await self._async_agfs.run("git_restore", **kwargs)
+                result = await self._async_agfs.run(
+                    "git_restore", **kwargs, ctx=self._pathlock_fs_ctx(real_ctx, lease)
+                )
             except GitRestoreWritebackPartialError as exc:
                 # The ref already advanced — capture the exception and
                 # finish the lock scope cleanly. Reindex scheduling and
                 # re-raise happen below, outside the tree lock.
                 partial_exc = exc
                 result = None
+            if record_restore is not None:
+                try:
+                    from openviking.service.task_tracker_concurrency import run_to_completion
+
+                    await run_to_completion(
+                        lambda: record_restore(
+                            partial_exc.to_dict() if partial_exc else result,
+                            lease_ref=lease,
+                            metadata_lease=lease if project_dir is None else None,
+                        )
+                    )
+                except BaseException as exc:
+                    record_error = exc
         finally:
             await self._async_agfs.pathlock_release(lease)
 
@@ -300,6 +494,8 @@ class _SnapshotMixin:
             raise partial_exc
 
         if result.get("result") != "applied":
+            if record_error is not None:
+                raise record_error
             return result
 
         written = list(result.get("written_paths") or [])
@@ -319,7 +515,13 @@ class _SnapshotMixin:
                     "[VikingFS] git restore reindex task creation failed; "
                     "falling back to fire-and-forget rebuild"
                 )
-                self._schedule_vector_rebuild(written=written, deleted=deleted, ctx=real_ctx)
+                self._schedule_vector_rebuild(
+                    written=written,
+                    deleted=deleted,
+                    ctx=self._restore_reindex_context(real_ctx),
+                )
+        if record_error is not None:
+            raise record_error
         return result
 
     async def _schedule_restore_reindex_for_paths(
@@ -352,9 +554,9 @@ class _SnapshotMixin:
             account_id=real_ctx.account_id,
             user_id=real_ctx.user.user_id,
         )
-        await tracker.update_stage(
+        await tracker.patch_task(
             task.task_id,
-            "queued",
+            TaskPatch(stage="queued"),
             account_id=real_ctx.account_id,
             user_id=real_ctx.user.user_id,
         )
@@ -381,6 +583,13 @@ class _SnapshotMixin:
         directly, stripping the oid/size envelope returned by the binding.
         """
         real_ctx = self._ctx_or_default(ctx)
+        if real_ctx.role != Role.ROOT and path is None:
+            raise PermissionDeniedError(
+                "Snapshot show requires an explicit path",
+                resource="viking://",
+            )
+        if path is not None:
+            await self._ensure_access(path, real_ctx)
         account = real_ctx.account_id
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx) if path else None
         kwargs: Dict[str, Any] = {
@@ -409,6 +618,7 @@ class _SnapshotMixin:
         ``X-Snapshot-Oid`` / ``X-Snapshot-Size`` response headers.
         """
         real_ctx = self._ctx_or_default(ctx)
+        await self._ensure_access(path, real_ctx)
         account = real_ctx.account_id
         tree_path = self._uri_to_tree_path(path, ctx=real_ctx)
         resp = await self._async_agfs.run(
@@ -434,16 +644,28 @@ class _SnapshotMixin:
     ) -> Dict[str, Any]:
         """Return a unified text diff for one path between two snapshots."""
         real_ctx = self._ctx_or_default(ctx)
-        self._ensure_access(path, real_ctx)
+        await self._ensure_access(path, real_ctx)
 
+        account = real_ctx.account_id
+        tree_path = self._uri_to_tree_path(path, ctx=real_ctx)
         from_meta: Optional[Dict[str, Any]] = None
         if from_ref:
             try:
-                from_meta = await self.show(from_ref, ctx=real_ctx)
+                from_meta = await self._async_agfs.run(
+                    "git_show",
+                    account=account,
+                    target_ref=from_ref,
+                    path=None,
+                )
             except AGFSNotFoundError as exc:
                 raise NotFoundError(from_ref, "git_ref") from exc
         try:
-            to_meta = await self.show(to_ref, ctx=real_ctx)
+            to_meta = await self._async_agfs.run(
+                "git_show",
+                account=account,
+                target_ref=to_ref,
+                path=None,
+            )
         except AGFSNotFoundError as exc:
             raise NotFoundError(to_ref, "git_ref") from exc
 
@@ -452,11 +674,12 @@ class _SnapshotMixin:
 
         async def read_optional(ref: str) -> Optional[bytes]:
             try:
-                value = await self.show(
-                    ref,
-                    path=path,
+                response = await self._async_agfs.run(
+                    "git_show",
+                    account=account,
+                    target_ref=ref,
+                    path=tree_path,
                     max_blob_bytes=_pkg().SNAPSHOT_DIFF_MAX_FILE_BYTES,
-                    ctx=real_ctx,
                 )
             except AGFSPathNotFoundError:
                 return None
@@ -466,9 +689,11 @@ class _SnapshotMixin:
                     f"({_pkg().SNAPSHOT_DIFF_MAX_FILE_BYTES} bytes)",
                     details={"limit_bytes": _pkg().SNAPSHOT_DIFF_MAX_FILE_BYTES, "path": path},
                 ) from exc
-            if not isinstance(value, bytes):
-                raise TypeError(f"git_show returned unexpected blob type: {type(value).__name__}")
-            return value
+            if not isinstance(response, dict) or "bytes" not in response:
+                raise TypeError(
+                    f"git_show returned unexpected blob response: {type(response).__name__}"
+                )
+            return response["bytes"]
 
         before_bytes = await read_optional(from_oid) if from_ref else None
         after_bytes = await read_optional(to_oid)
@@ -543,6 +768,14 @@ class _SnapshotMixin:
         if limit <= 0:
             return []
         real_ctx = self._ctx_or_default(ctx)
+        if real_ctx.role != Role.ROOT:
+            if not paths:
+                raise PermissionDeniedError(
+                    "Snapshot log requires explicit paths",
+                    resource="viking://",
+                )
+            scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
+            await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.READ)
         account = real_ctx.account_id
         tree_paths = (
             None if not paths else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
@@ -554,6 +787,35 @@ class _SnapshotMixin:
             limit=limit,
             paths=tree_paths,
         )
+
+    async def diff_paths(
+        self,
+        *,
+        dirs: List[str],
+        base: Optional[str],
+        head: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[Dict[str, str]]:
+        """List files changed under ``dirs`` between two commits.
+
+        ``base=None`` treats every file as added. Requires read access only;
+        derived summaries (.abstract.md / .overview.md / .relations.json) are
+        omitted so regenerated summaries do not count as source changes.
+        """
+        real_ctx = self._ctx_or_default(ctx)
+        await self._ensure_access_many(dirs, real_ctx, action=AclAction.READ)
+        changes = await self._async_agfs.run(
+            "git_diff_paths",
+            account=real_ctx.account_id,
+            base=base,
+            head=head,
+            paths=[self._uri_to_tree_path(uri, ctx=real_ctx) for uri in dirs],
+        )
+        return [
+            {"uri": self._tree_path_to_uri(path), "change_type": change}
+            for path, change in changes
+            if path.rsplit("/", 1)[-1] not in _DERIVED_FILE_NAMES
+        ]
 
     def _collect_restore_vector_tasks(
         self,
@@ -604,7 +866,7 @@ class _SnapshotMixin:
         Failures are logged and never propagate.
         """
         try:
-            from openviking.service.reindex_executor import get_reindex_executor
+            from openviking.service.reindex_executor import ReindexExecutor
         except Exception:
             logger.exception("[VikingFS] ReindexExecutor import failed; skipping rebuild")
             return
@@ -619,12 +881,23 @@ class _SnapshotMixin:
         if not tasks:
             return
 
-        executor = get_reindex_executor()
-        for op, uri, level in tasks:
-            loop.create_task(
-                self._run_vector_rebuild(executor, op, uri, level, ctx),
-                name=f"vikingfs-git-{op}:{uri}:{int(level)}",
-            )
+        executor = ReindexExecutor(
+            vlm_resolver=self._vlm_resolver,
+            vector_config_resolver=self._vector_config_resolver,
+        )
+        with detach_task_context():
+            for op, uri, level in tasks:
+                loop.create_task(
+                    self._run_vector_rebuild(
+                        executor,
+                        op,
+                        uri,
+                        level,
+                        ctx,
+                        file_task_owner="standalone",
+                    ),
+                    name=f"vikingfs-git-{op}:{uri}:{int(level)}",
+                )
 
     async def _run_restore_rebuild_tracked(
         self,
@@ -639,11 +912,16 @@ class _SnapshotMixin:
         swallowed (and logged) inside :py:meth:`_run_vector_rebuild`, preserving
         the "failures do not block" semantics.
         """
+        from openviking.service.reindex_executor import ReindexExecutor
         from openviking.service.task_tracker import get_task_tracker
         from openviking.service.task_work_index import bind_task_context
 
         tracker = get_task_tracker()
-        tracker.register_running_task(task_id)
+        running_work_id = await tracker.register_running_task(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
         try:
             await tracker.start(
                 task_id,
@@ -651,13 +929,27 @@ class _SnapshotMixin:
                 user_id=ctx.user.user_id,
                 stage="reindexing",
             )
-            from openviking.service.reindex_executor import get_reindex_executor
-
-            executor = get_reindex_executor()
-            with bind_task_context(task_id, ctx.account_id, ctx.user.user_id):
+            executor = ReindexExecutor(
+                vlm_resolver=self._vlm_resolver,
+                vector_config_resolver=self._vector_config_resolver,
+            )
+            reindex_ctx = self._restore_reindex_context(ctx)
+            with bind_task_context(
+                task_id,
+                ctx.account_id,
+                ctx.user.user_id,
+                work_id=running_work_id,
+            ):
                 await asyncio.gather(
                     *[
-                        self._run_vector_rebuild(executor, op, uri, level, ctx)
+                        self._run_vector_rebuild(
+                            executor,
+                            op,
+                            uri,
+                            level,
+                            reindex_ctx,
+                            file_task_owner="current",
+                        )
                         for (op, uri, level) in tasks
                     ]
                 )
@@ -687,13 +979,27 @@ class _SnapshotMixin:
         uri: str,
         level: Any,
         ctx: RequestContext,
+        *,
+        file_task_owner: Literal["current", "standalone"],
     ) -> None:
         """Wrapper coroutine: dispatch one vector task and swallow errors."""
         try:
             if op == "reindex_marker":
                 await executor.reindex_directory_marker(dir_uri=uri, level=level, ctx=ctx)
             elif op == "reindex_file":
-                await executor.execute(uri=uri, mode="vectors_only", wait=True, ctx=ctx)
+                if file_task_owner == "current":
+                    await executor.execute_in_current_task(
+                        uri=uri,
+                        mode="vectors_only",
+                        ctx=ctx,
+                    )
+                else:
+                    await executor.execute(
+                        uri=uri,
+                        mode="vectors_only",
+                        wait=True,
+                        ctx=ctx,
+                    )
             elif op == "delete":
                 await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
             else:  # pragma: no cover - defensive

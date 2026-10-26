@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 #include "index/detail/index_manager_impl.h"
 #include <algorithm>
+#include <cmath>
+#include <numeric>
 #include <stdexcept>
 #include <memory>
 #include <chrono>
@@ -24,22 +26,21 @@ constexpr uint64_t kFilterLayoutInverseMaxSpanFactor = 4;
 constexpr uint32_t kMissingFilterLayoutOffset =
     std::numeric_limits<uint32_t>::max();
 
-IndexManagerImpl::IndexManagerImpl(const std::string& path_or_json) {
-  int ret = 0;
+IndexManagerImpl::IndexManagerImpl(const std::string& path_or_json,
+                                   bool normalize_vector) {
   std::filesystem::path dir(path_or_json);
   std::error_code ec;
   if (std::filesystem::exists(dir, ec)) {
     load_from_path(dir);
-    return;
-  }
-
-  JsonDoc json;
-  json.Parse(path_or_json.c_str());
-  if (!json.HasParseError()) {
+  } else {
+    JsonDoc json;
+    json.Parse(path_or_json.c_str());
+    if (json.HasParseError()) {
+      return;
+    }
     init_from_json(json);
-    return;
   }
-  return;
+  manager_meta_->vector_index_meta->normalize_vector = normalize_vector;
 }
 
 void IndexManagerImpl::init_from_json(const JsonDoc& json) {
@@ -508,9 +509,32 @@ int IndexManagerImpl::perform_vector_recall(const SearchRequest& req,
                                             SearchContext& ctx,
                                             const BitmapPtr& bitmap,
                                             SearchResult& result) {
+  JsonDoc decay;
+  const bool apply_decay = !req.time_decay.empty();
+  if (apply_decay) {
+    decay.Parse(req.time_decay.c_str());
+    if (decay.HasParseError() || !decay.IsObject() ||
+        !decay.HasMember("field") || !decay["field"].IsString()) {
+      throw std::invalid_argument("invalid time-decay field");
+    }
+    for (const auto* key : {"origin_ms", "offset_ms", "scale_ms", "decay"}) {
+      if (!decay.HasMember(key) || !decay[key].IsNumber() ||
+          !std::isfinite(decay[key].GetDouble())) {
+        throw std::invalid_argument("invalid time-decay numeric parameter");
+      }
+    }
+    if (decay["offset_ms"].GetDouble() < 0 ||
+        decay["scale_ms"].GetDouble() <= 0 ||
+        decay["decay"].GetDouble() <= 0 || decay["decay"].GetDouble() >= 1 ||
+        req.topk > 100000) {
+      throw std::invalid_argument("invalid time-decay range or topk");
+    }
+  }
+  // The native recall owns candidate amplification; callers receive only topk.
+  const uint32_t recall_topk = apply_decay ? std::min(req.topk * 3u, 100000u) : req.topk;
   VectorRecallRequest recall_request{
       .dense_vector = req.query.data(),
-      .topk = req.topk,
+      .topk = recall_topk,
       .bitmap = bitmap.get(),
       .sparse_terms =
           req.sparse_raw_terms.empty() ? nullptr : &req.sparse_raw_terms,
@@ -524,8 +548,46 @@ int IndexManagerImpl::perform_vector_recall(const SearchRequest& req,
     return ret;
   }
 
-  std::swap(result.labels, recall_result.labels);
-  std::swap(result.scores, recall_result.scores);
+  if (!apply_decay) {
+    std::swap(result.labels, recall_result.labels);
+    std::swap(result.scores, recall_result.scores);
+    return 0;
+  }
+  const auto time_values = scalar_index_->get_field_sets()->get_rangedmap_ptr(
+      decay["field"].GetString());
+  const double origin = decay["origin_ms"].GetDouble();
+  const double protection = decay["offset_ms"].GetDouble();
+  const double rate = std::log(decay["decay"].GetDouble()) / decay["scale_ms"].GetDouble();
+  std::vector<float> fused = recall_result.scores;
+  std::vector<double> time_scores(fused.size(), std::numeric_limits<double>::quiet_NaN());
+  for (size_t i = 0; i < fused.size(); ++i) {
+    const int offset = vector_index_->get_offset_by_label(recall_result.labels[i]);
+    if (!time_values || offset < 0 || static_cast<uint32_t>(offset) >= time_values->size()) continue;
+    const double updated = time_values->get_score_by_offset(offset);
+    if (!std::isfinite(updated)) continue;
+    time_scores[i] = std::exp(rate * std::max(0.0, std::abs(origin - updated) - protection));
+    fused[i] *= time_scores[i];
+  }
+  std::vector<size_t> order(fused.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+    return fused[a] > fused[b];
+  });
+  order.resize(std::min(order.size(), static_cast<size_t>(req.topk)));
+  JsonDoc details;
+  details.SetObject();
+  auto& allocator = details.GetAllocator();
+  for (const size_t i : order) {
+    result.labels.push_back(recall_result.labels[i]);
+    result.scores.push_back(fused[i]);
+    rapidjson::Value detail(rapidjson::kObjectType);
+    detail.AddMember("origin_score", recall_result.scores[i], allocator);
+    if (std::isfinite(time_scores[i])) detail.AddMember("addition_score", time_scores[i], allocator);
+    const auto label = std::to_string(recall_result.labels[i]);
+    rapidjson::Value key(label.c_str(), allocator);
+    details.AddMember(key, detail, allocator);
+  }
+  result.extra_json = json_stringify(details);
   return 0;
 }
 
@@ -620,6 +682,59 @@ int IndexManagerImpl::delete_data(
   SPDLOG_DEBUG(
       "IndexManagerImpl::delete_data finish, batch size: {}, cost: {}us",
       data_list.size(), duration_us);
+  return 0;
+}
+
+int IndexManagerImpl::rebuild_scalar_index(
+    const std::string& scalar_index_json,
+    const std::function<bool(std::vector<AddDataRequest>&)>& read_batch) {
+  JsonDoc scalar_index_doc;
+  scalar_index_doc.Parse(scalar_index_json.c_str());
+  if (scalar_index_doc.HasParseError() || !scalar_index_doc.IsArray()) {
+    throw std::invalid_argument("Invalid scalar index metadata");
+  }
+
+  auto next_meta = std::make_shared<ScalarIndexMeta>();
+  if (next_meta->init_from_json(scalar_index_doc) != 0) {
+    throw std::invalid_argument("Invalid scalar index metadata");
+  }
+
+  auto next_scalar_index = std::make_shared<ScalarIndex>(next_meta);
+  std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+  std::vector<AddDataRequest> batch;
+  while (read_batch(batch)) {
+    for (const auto& data : batch) {
+      FieldsDict fields;
+      if (fields.parse_from_json(data.fields_str) != 0) {
+        throw std::runtime_error(
+            "Failed to parse scalar fields for label=" +
+            std::to_string(data.label));
+      }
+      const int offset = vector_index_->get_offset_by_label(data.label);
+      if (offset < 0) {
+        SPDLOG_WARN("IndexManagerImpl::rebuild_scalar_index label={} not found",
+                    data.label);
+        continue;
+      }
+      if (next_scalar_index->add_row_data(offset, fields, FieldsDict{}) != 0) {
+        throw std::runtime_error(
+            "Failed to rebuild scalar fields for label=" +
+            std::to_string(data.label));
+      }
+    }
+    batch.clear();
+  }
+
+  scalar_index_ = std::move(next_scalar_index);
+  manager_meta_->scalar_index_meta = std::move(next_meta);
+  register_label_offset_converter_();
+  clear_filter_layout_();
+  clear_filter_token_cache_();
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  manager_meta_->update_timestamp = std::max(
+      manager_meta_->update_timestamp + 1, static_cast<uint64_t>(now));
   return 0;
 }
 

@@ -4,9 +4,10 @@
  *
  * When the OpenViking server is temporarily unreachable, write operations
  * (addMessage, commitSession) serialize their payloads to
- * `~/.openviking/pending/` as JSON files. On the next session-start, the
- * queue is replayed in small batches. This is a session-start-triggered retry
- * path with maxRetries/TTL, not a long-running background worker.
+ * `~/.openviking/pending/` as JSON files. The queue is replayed in small
+ * batches, either at session-start (consuming retry budgets, with
+ * maxRetries/TTL) or by a long-running drainer that passes
+ * `consumeRetries: false` so transient failures stay retryable.
  *
  * Each file contains: { type, sessionId, payload, createdAt, retries, dedupKey }
  *
@@ -20,7 +21,7 @@
  *                                  (default: 50)
  */
 
-import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod, utimes } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -267,8 +268,29 @@ export async function claimForReplay(filename) {
   const dir = getPendingDir();
   const claimed = processingFilename(filename);
   try {
+    // Recovery measures claim age, not how long the item waited offline.
+    // Refresh before publishing .processing so recovery cannot see an old mtime.
+    const now = new Date();
+    await utimes(join(dir, filename), now, now);
     await rename(join(dir, filename), join(dir, claimed));
     return claimed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Release a claimed file back to the queue without consuming a retry. The
+ * entry keeps its original filename, retry count, and createdAt position, so a
+ * later run retries it as if this attempt never happened.
+ */
+export async function releaseClaim(claimedFilename) {
+  if (!claimedFilename.endsWith(".processing")) return null;
+  const dir = getPendingDir();
+  const restored = pendingFromProcessingFilename(claimedFilename);
+  try {
+    await rename(join(dir, claimedFilename), join(dir, restored));
+    return restored;
   } catch {
     return null;
   }
@@ -350,9 +372,16 @@ export async function cleanStale() {
  *
  * @param {Function} fetchJSON - the configured fetchJSON from makeFetchJSON
  * @param {Function} log - logger function
+ * @param {object} [options]
+ * @param {boolean} [options.consumeRetries=true] - when false, retryable
+ *   failures release their claim instead of incrementing the retry count, so
+ *   a background drainer can keep retrying a transient failure without
+ *   burning the session-start retry budget. Exhausted and non-retryable
+ *   entries are deleted exactly as in the default mode.
  * @returns {{ replayed: number, failed: number, skipped: number, deferred: number }}
  */
-export async function replayPending(fetchJSON, log) {
+export async function replayPending(fetchJSON, log, options = {}) {
+  const consumeRetries = options.consumeRetries !== false;
   const pending = await listPending();
 
   if (pending.length === 0) {
@@ -427,7 +456,18 @@ export async function replayPending(fetchJSON, log) {
       await dequeue(claimedFilename);
       skipped++;
     } else {
-      await incrementRetry(claimedFilename, entry);
+      if (consumeRetries) {
+        await incrementRetry(claimedFilename, entry);
+      } else {
+        const released = await releaseClaim(claimedFilename);
+        log("pending-queue", {
+          action: released ? "replay-deferred" : "release-failed",
+          sessionId: entry.sessionId,
+          type: entry.type,
+          status: res?.result?.status || res?.status,
+          retries: entry.retries || 0,
+        });
+      }
       failed++;
       if (entry.type === "addMessage") {
         deferred += Math.max(0, pending.length - processed);

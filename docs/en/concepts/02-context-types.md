@@ -1,14 +1,39 @@
 # Context Types
 
-Based on a simplified mapping of human cognitive patterns and engineering considerations, OpenViking abstracts context into **three basic types: Resource, Memory, and Skill**, each serving different purposes in Agent applications.
+OpenViking manages three types of context: resources provide reference material, memories retain information from interactions, and skills describe how to carry out tasks.
 
 ## Overview
 
 | Type | Purpose | Lifecycle | Initiative |
 |------|---------|-----------|------------|
-| **Resource** | Knowledge and rules | Long-term, relatively static | User adds |
-| **Memory** | Agent's cognition | Long-term, dynamically updated | Agent records |
-| **Skill** | Declarable agent capability configuration (AgentDefinedContextType) | Long-term, static | User or system adds |
+| **Resource** | Knowledge and rules | Retained until updated or deleted | User adds |
+| **Memory** | Preferences, facts, and task experience | Long-term, dynamically updated | Extracted from sessions or recorded explicitly |
+| **Skill** | Task instructions and supporting resources | Long-term, updatable | User or system adds |
+
+## Example Setup
+
+The examples below use the synchronous Python SDK and an existing server. `add_resource` and `add_skill` take `wait=True` to block until processing finishes. Session commits return before memory extraction finishes and have no built-in wait, so this helper polls the commit task before dependent searches. A polling timeout does not cancel the server task.
+
+```python
+import time
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+
+
+def wait_for_task(task_id):
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        task = client.get_task(task_id)
+        if task is None:
+            raise RuntimeError(f"Task {task_id} not found")
+        if task["status"] == "completed":
+            return task
+        if task["status"] in {"failed", "cancelled"}:
+            raise RuntimeError(task)
+        time.sleep(1)
+    raise TimeoutError(f"Task {task_id} is still running")
+```
 
 ## Resource
 
@@ -17,7 +42,7 @@ Resources are external knowledge that Agents can reference.
 ### Characteristics
 
 - **User-driven**: Resource information actively added by users to supplement LLM knowledge, such as product manuals and code repositories
-- **Static content**: Content rarely changes after addition, usually modified by users
+- **Explicit updates**: Re-import changed content, or use a Watch to refresh supported remote sources
 - **Structured storage**: Organized by project or topic in directory hierarchy, with multi-layer information extraction
 
 ### Examples
@@ -33,6 +58,8 @@ Resources are external knowledge that Agents can reference.
 client.add_resource(
     path="https://docs.example.com/api.pdf",
     options={"reason": "API documentation"},
+    wait=True,
+    timeout=300,
 )
 
 # Search resources
@@ -76,17 +103,18 @@ The schema-defined `memories/tools/` and `memories/skills/` types are disabled. 
 from openviking_sdk import TextPart
 
 # Memories are auto-extracted from sessions
-session_info = await client.create_session()
+session_info = client.create_session()
 session = client.session(session_id=session_info["session_id"])
-await session.add_message(
+session.add_message(
     role="user",
     parts=[TextPart(text="I prefer dark mode")],
 )
-commit = await session.commit()  # Starts background memory extraction
-task = await client.get_task(task_id=commit["task_id"])  # Poll until task["status"] == "completed"
+commit = session.commit()  # Starts background memory extraction
+if commit.get("task_id"):
+    wait_for_task(commit["task_id"])
 
 # Search memories
-results = await client.find(
+results = client.find(
     query="UI preferences",
     target_uri="viking://~/memories/"
 )
@@ -94,13 +122,13 @@ results = await client.find(
 
 ## Skill (Capabilities / AgentDefinedContextType)
 
-Skills are capabilities that Agents can invoke, belonging to the **AgentDefinedContextType** category. This includes traditional workflow definitions, communication endpoints, tool configurations, and payment capabilities. Their common characteristic is that they **define how an agent interacts with external systems**, with relatively static runtime definitions, but invocation experiences are updated in Memory.
+A Skill uses `SKILL.md` and supporting files to describe a task’s steps, constraints, and resources. An agent reads the Skill and carries out the task using its own tools. Execution experience can be stored separately as memory.
 
 ### Characteristics
 
-- **Defined capabilities**: Tool definitions for completing specific tasks
-- **Relatively static**: Skill definitions don't change at runtime, but usage memories related to tools are updated in memory
-- **Callable**: Agent decides when to use which skill
+- **Task instructions**: Steps and constraints for completing a type of work
+- **Maintainable**: Skill content can be updated; execution experience is stored separately
+- **Read on demand**: The agent selects skills for its current task
 
 ### Storage Location
 
@@ -111,7 +139,7 @@ viking://~/skills/{skill-name}/     # Default storage path
 ├── SKILL.md              # L2: Skill definition
 └── scripts               # L2: Supporting implementation
 
-viking://agent/skills/{skill-name}/    # Override via --uri, public/shared (account global)
+viking://agent/skills/{skill-name}/    # Override via -p/--parent-auto-create, public/shared (account global)
 ├── .abstract.md          # L0: Short description
 ├── .overview.md          # L1: Directory overview (after generation)
 ├── SKILL.md              # L2: Skill definition
@@ -120,7 +148,7 @@ viking://agent/skills/{skill-name}/    # Override via --uri, public/shared (acco
 
 ### AgentDefinedContextType Subtypes
 
-AgentDefinedContextType includes the following subtypes, all stored under the `viking://agent/` scope:
+The table below lists the design categories for shared capabilities. Skills are supported and installed in the user-private directory by default, with an option to use `viking://agent/skills/`. The other categories are planned and do not imply available APIs:
 
 | Subtype | Location | Description |
 |---------|----------|-------------|
@@ -133,37 +161,45 @@ AgentDefinedContextType includes the following subtypes, all stored under the `v
 
 ```python
 # Add skill (defaults to viking://~/skills/)
-await client.add_skill(
+client.add_skill(
     data={
         "name": "search-web",
         "description": "Search the web for information",
         "content": "# search-web\n...",
     },
+    wait=True,
+    timeout=300,
 )
 
-# Write to global agent skills root (public/shared) via -p override
-ov skills add search-web -p viking://agent/skills
-
 # Search user skills
-results = await client.find(
+results = client.find(
     query="web search",
     target_uri="viking://~/skills/"
 )
 
 # Search global agent skills
-results = await client.find(
+results = client.find(
     query="web search",
     target_uri="viking://agent/skills/",
 )
 ```
 
+Install into the account-shared skills directory with the CLI (requires write access to that path):
+
+```bash
+ov skills add ./skills/search-web -p viking://agent/skills
+```
+
 ## Unified Search
 
-Based on Agent's needs, supports unified search across all three context types, providing comprehensive information:
+A single retrieval can return resources, memories, and skills within its search scope. The default includes the current user's space and shared resources; add `viking://agent/skills` explicitly to include shared Skills:
 
 ```python
 # Search across all context types
-results = await client.find(query="user authentication")
+results = client.find(
+    query="user authentication",
+    target_uri=["viking://~", "viking://resources", "viking://agent/skills"],
+)
 
 for context in results.get("memories", []):
     print(f"Memory: {context['uri']}")
@@ -171,6 +207,12 @@ for context in results.get("resources", []):
     print(f"Resource: {context['uri']}")
 for context in results.get("skills", []):
     print(f"Skill: {context['uri']}")
+```
+
+Close the client when these operations are finished:
+
+```python
+client.close()
 ```
 
 ## Related Documents

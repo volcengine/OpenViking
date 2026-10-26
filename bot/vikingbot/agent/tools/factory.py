@@ -8,6 +8,7 @@ from vikingbot.agent.tools.image import ImageGenerationTool
 from vikingbot.agent.tools.message import MessageTool
 from vikingbot.agent.tools.ov_file import (
     VikingAddResourceTool,
+    VikingDiffPathsTool,
     VikingExportTool,
     VikingGlobTool,
     VikingGrepTool,
@@ -20,6 +21,7 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.agent.tools.web import WebFetchTool
 from vikingbot.agent.tools.websearch import WebSearchTool
+from vikingbot.config.schema import SandboxBackend
 
 if TYPE_CHECKING:
     from vikingbot.agent.subagent import SubagentManager
@@ -74,12 +76,13 @@ def register_default_tools(
     registry.register(EditFileTool())
     registry.register(ListDirTool())
 
-    # Shell tool
-    registry.register(
-        ExecTool(
-            timeout=exec_config.timeout,
+    # All agents share this registration, including Compile and subagents.
+    if config.sandbox.backend != SandboxBackend.DIRECT or config.sandbox.backends.direct.allow_exec:
+        registry.register(
+            ExecTool(
+                timeout=exec_config.timeout,
+            )
         )
-    )
 
     # Web tools
     registry.register(
@@ -96,6 +99,7 @@ def register_default_tools(
     if include_viking_tools:
         registry.register(VikingMultiReadTool(config=config))
         registry.register(VikingListTool(config=config))
+        registry.register(VikingDiffPathsTool(config=config))
         registry.register(VikingSearchTool(config=config))
         registry.register(VikingGrepTool(config=config))
         registry.register(VikingGlobTool(config=config))
@@ -128,7 +132,7 @@ def register_default_tools(
         registry.register(spawn_tool)
 
     # Cron tool
-    if include_cron_tool and cron_service:
+    if include_cron_tool and cron_service and config.tools.cron.enabled:
         registry.register(CronTool(cron_service))
 
 

@@ -108,6 +108,7 @@ class TelegramChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.TELEGRAM
     token: str = ""
+    groq_api_key: str = Field(default="", description="Groq API key for voice transcription")
     allow_from: list[str] = Field(default_factory=list)
     proxy: str | None = None
 
@@ -125,6 +126,10 @@ class FeishuChannelConfig(BaseChannelConfig):
     app_secret: str = ""
     encrypt_key: str = ""
     verification_token: str = ""
+    domain: str = Field(
+        default="https://open.feishu.cn",
+        description="开放平台域名：飞书用 https://open.feishu.cn，Lark 国际版用 https://open.larksuite.com",
+    )
     allow_from: list[str] = Field(default_factory=list)
     allow_cmd_from: list[str] = Field(default_factory=list)  ## 允许执行命令的Feishu用户ID列表
     thread_require_mention: bool = Field(
@@ -428,6 +433,45 @@ class ChannelsConfig(BaseModel):
         return None
 
 
+class CompileConfig(BaseModel):
+    """Per-task Compile batching and worker limits; unset concurrency inherits vlm.max_concurrent.
+
+    Limits apply to direct model jobs and agent jobs. Model calls across Compile
+    tasks also share the service-wide capacity from vlm.max_concurrent.
+    """
+
+    map_concurrency: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description="Maximum concurrent Map jobs per task; None inherits vlm.max_concurrent.",
+    )
+    shuffle_batch_size: int = Field(
+        default=4,
+        ge=1,
+        strict=True,
+        description="Maximum primary records per Shuffle routing request, independent of concurrency.",
+    )
+    shuffle_concurrency: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description=(
+            "Maximum concurrent Shuffle routing jobs and embedding batches per task; "
+            "None inherits vlm.max_concurrent."
+        ),
+    )
+    reduce_concurrency: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description=(
+            "Maximum concurrent Reduce jobs per task, also used for same-path merges; "
+            "None inherits vlm.max_concurrent."
+        ),
+    )
+
+
 class AgentsConfig(BaseModel):
     """Agent configuration."""
 
@@ -468,6 +512,11 @@ class AgentsConfig(BaseModel):
     subagent_enabled: bool = Field(
         default=True,
         description="Enable the spawn tool so the main agent can start background subagents.",
+    )
+    subagent_max_concurrency: int = Field(
+        default=8,
+        ge=1,
+        description="Maximum number of background subagents running at once.",
     )
     session_context_enabled: bool = True
     session_context_token_budget: int = 3000
@@ -534,26 +583,6 @@ class ProviderConfig(BaseModel):
     extra_headers: Optional[dict[str, str]] = Field(
         default_factory=dict
     )  # Custom headers (e.g. APP-Code for AiHubMix)
-
-
-class ProvidersConfig(BaseModel):
-    """Configuration for LLM providers."""
-
-    anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
-    openai: ProviderConfig = Field(default_factory=ProviderConfig)
-    openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
-    deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
-    groq: ProviderConfig = Field(default_factory=ProviderConfig)
-    zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
-    dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # 阿里云通义千问
-    vllm: ProviderConfig = Field(default_factory=ProviderConfig)
-    gemini: ProviderConfig = Field(default_factory=ProviderConfig)
-    moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
-    minimax: ProviderConfig = Field(default_factory=ProviderConfig)
-    volcengine: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # VolcEngine (火山引擎) API gateway
-    aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
 
 
 class HeartbeatConfig(BaseModel):
@@ -696,6 +725,12 @@ class WebToolsConfig(BaseModel):
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
 
 
+class CronConfig(BaseModel):
+    """Scheduled task tool and scheduler configuration."""
+
+    enabled: bool = False
+
+
 class ExecToolConfig(BaseModel):
     """Shell exec tool configuration."""
 
@@ -724,6 +759,7 @@ class ToolsConfig(BaseModel):
     """Tools configuration."""
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
+    cron: CronConfig = Field(default_factory=CronConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
@@ -763,7 +799,8 @@ class DirectBackendConfig(BaseModel):
     """Direct backend configuration."""
 
     restrict_to_workspace: bool = False  # If true, restrict file access to workspace directory
-    allow_compile_exec: bool = True
+    allow_exec: bool = Field(default=True, description="Allow agents to execute host commands")
+    allow_compile_exec: bool = False
 
 
 class SrtBackendConfig(BaseModel):
@@ -792,21 +829,22 @@ class OpenSandboxNetworkConfig(BaseModel):
 class OpenSandboxRuntimeConfig(BaseModel):
     """OpenSandbox runtime configuration."""
 
-    timeout: int = 300
+    timeout: int = Field(default=300, gt=0)
     cpu: str = "500m"
     memory: str = "1Gi"
 
 
 class OpenSandboxBackendConfig(BaseModel):
-    """OpenSandbox backend configuration.
-
-    Auto-detects runtime environment:
-    - Local: uses configured server_url (default http://localhost:18792)
-    - VKE: auto-detects KUBERNETES_SERVICE_HOST, uses http://opensandbox-server:8080
-    """
+    """Docker-backed OpenSandbox; manage a local server or connect to an external one."""
 
     server_url: str = "http://localhost:18792"
     api_key: str = ""
+    managed: bool = True
+    startup_timeout: int = Field(default=600, ge=10)
+    use_server_proxy: bool = True
+    execd_image: str = "opensandbox/execd:v1.0.6"
+    egress_image: str = "opensandbox/egress:v1.0.1"
+    pids_limit: int = Field(default=256, gt=0)
     default_image: str = "opensandbox/code-interpreter:v1.0.1"
     network: OpenSandboxNetworkConfig = Field(default_factory=OpenSandboxNetworkConfig)
     runtime: OpenSandboxRuntimeConfig = Field(default_factory=OpenSandboxRuntimeConfig)
@@ -867,10 +905,8 @@ class Config(BaseSettings):
 
     inherits_root_vlm_state: SkipJsonSchema[bool] = Field(default=False, repr=False)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    compile: CompileConfig = Field(default_factory=CompileConfig)
     channels: list[Any] = Field(default_factory=list)
-    providers: ProvidersConfig = Field(
-        default_factory=ProvidersConfig, deprecated=True
-    )  # Deprecated: Use ov.conf vlm config instead
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     ov_server: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
@@ -936,6 +972,21 @@ class Config(BaseSettings):
     def workspace_path(self) -> Path:
         """Get expanded workspace path: {storage_workspace}/bot/workspace."""
         return self.bot_data_path / "workspace"
+
+    @property
+    def opensandbox_workspaces_path(self) -> Path:
+        """Dedicated host bind mounts, separate from Server credentials and logs."""
+        return self.bot_data_path / "runtime" / "opensandbox" / "workspaces"
+
+    @property
+    def uses_managed_opensandbox(self) -> bool:
+        return self.sandbox.backend == "opensandbox" and self.sandbox.backends.opensandbox.managed
+
+    @property
+    def sandbox_workspace_path(self) -> Path:
+        if self.uses_managed_opensandbox:
+            return self.opensandbox_workspaces_path
+        return self.workspace_path
 
     @property
     def ov_data_path(self) -> Path:

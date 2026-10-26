@@ -8,7 +8,7 @@ export type TempUploadResult = {
 
 export type ResourceProcessingMode = 'semantic_and_vectors' | 'vectors_only'
 
-export type ResourceTagMode = 'replace' | 'append'
+export type ResourceTagMode = 'replace' | 'append' | 'clear'
 
 export type ResourceImportArgs = Record<string, unknown> & {
   allow_external_links?: boolean

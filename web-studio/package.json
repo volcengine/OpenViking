@@ -10,10 +10,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "lint": "eslint src --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts' --ignore-pattern 'src/components/ui/**'",
+    "lint": "eslint src --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts'",
     "format": "prettier --check 'src/**/*.{ts,tsx}'",
-    "check": "prettier --write 'src/**/*.{ts,tsx}' && eslint src --fix --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts' --ignore-pattern 'src/components/ui/**'",
-    "gen-server-client": "sh ./script/gen-server-client/gen-server-client.sh"
+    "check": "prettier --write 'src/**/*.{ts,tsx}' && eslint src --fix --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts'",
+    "gen-server-client": "sh ./script/gen-server-client/gen-server-client.sh",
+    "test:i18n": "vitest run src/i18n src/components/code-editor.test.tsx script/eslint-i18n.test.ts",
+    "prebuild": "npm run lint && npm run test:i18n"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
@@ -41,6 +43,7 @@
     "@microsoft/fetch-event-source": "^2.0.1",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",
+    "@streamdown/mermaid": "^1.0.2",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-devtools": "latest",
     "@tanstack/react-form": "^1.28.6",
@@ -48,11 +51,11 @@
     "@tanstack/react-router": "latest",
     "@tanstack/react-router-devtools": "latest",
     "@tanstack/react-table": "^8.21.3",
-    "@tanstack/router-plugin": "^1.132.0",
     "@uiw/react-heat-map": "^2.3.3",
     "axios": "^1.14.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "diff": "^8.0.2",
     "file-type": "^22.0.1",
     "gsap": "^3.14.2",
     "highlight.js": "^11.11.1",
@@ -61,6 +64,7 @@
     "lucide-react": "^0.545.0",
     "next-themes": "^0.4.6",
     "postprocessing": "^6.39.0",
+    "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-dropzone": "^15.0.0",
@@ -69,6 +73,7 @@
     "recharts": "^3.8.1",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
+    "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "shadcn": "^4.1.2",
     "sonner": "^2.0.7",
@@ -76,16 +81,18 @@
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.1.18",
     "three": "^0.183.2",
-    "tw-animate-css": "^1.4.0"
+    "tw-animate-css": "^1.4.0",
+    "yaml": "^2.8.1"
   },
   "devDependencies": {
     "@hey-api/openapi-ts": "^0.95.0",
     "@tailwindcss/typography": "^0.5.16",
     "@tanstack/devtools-vite": "latest",
     "@tanstack/eslint-config": "latest",
-    "@tanstack/router-plugin": "latest",
+    "@tanstack/router-plugin": "1.167.12",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.6",
     "@types/node": "^22.10.2",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
@@ -100,5 +107,8 @@
     "vite": "^7.3.1",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.0.5"
+  },
+  "overrides": {
+    "mermaid": "^11.16.1"
   }
 }

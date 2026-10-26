@@ -29,13 +29,12 @@ class OIDCConfig(BaseModel):
     # Identity mapping
     identity: IdentityMappingConfig = Field(default_factory=IdentityMappingConfig)
 
-    model_config = {"extra": "forbid"}
-
     @field_validator("issuer")
     @classmethod
     def validate_issuer(cls, v: str) -> str:
         """Validate issuer URL."""
-        v = v.rstrip("/")
-        if not v:
+        # Preserve the exact issuer for token validation. Discovery URL
+        # construction handles any trailing slash separately.
+        if not v.rstrip("/"):
             raise ValueError("issuer cannot be empty")
         return v

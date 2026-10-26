@@ -90,6 +90,16 @@ ov status
 
 使用普通 user API key 时，`account` 和 `user` 通常可以省略，因为服务端可以从 key 推导身份。使用 `trusted` 鉴权或租户级操作时，建议显式配置它们。仅 root key 的配置必须显式配置 `account` 和 `user`，因为 root key 本身不包含租户身份。
 
+### 私有 CA 证书
+
+`ov` 同时信任内置的公共 CA 根证书和操作系统原生信任库中的证书。可以把组织的私有 CA 安装到系统信任库，也可以为单次命令通过 `SSL_CERT_FILE` 指定 PEM 证书包：
+
+```bash
+SSL_CERT_FILE=/path/to/company-ca.pem ov health
+```
+
+在 Unix 上，也可以通过 `SSL_CERT_DIR` 指定以冒号分隔的证书目录列表。TLS 证书校验仍然保持启用。
+
 更完整的配置说明见 [docs/zh/getting-started/05-cli-setup.md](../../docs/zh/getting-started/05-cli-setup.md)。
 
 ## 快速开始
@@ -106,6 +116,8 @@ ov add-resource https://raw.githubusercontent.com/volcengine/OpenViking/refs/hea
 ov ls viking://resources
 ov tree viking://resources -L 2
 ov read viking://resources/...
+# 读取第 11～15 行（offset 从 0 开始；limit 为 -1 时读到结尾）
+ov read viking://resources/... --offset 10 --limit 5
 
 # 检索上下文
 ov find "what is openviking"
@@ -130,10 +142,17 @@ ov grep "openviking" --uri viking://resources
 - `tree` - 显示目录树。
 - `mkdir` - 创建目录。
 - `rm` - 删除资源或目录。
+- `cp` - 复制文件，或使用 `-r` 递归复制目录。
 - `mv` - 移动或重命名资源。
 - `stat` - 查看资源元数据。
 - `attrs` - 获取逻辑扩展属性。
 - `get` - 下载文件到本地路径。
+
+```bash
+# 目标父目录必须已存在；已有文件直接覆盖，已有目录递归合并。
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
 
 ### 内容访问
 
@@ -148,6 +167,8 @@ ov grep "openviking" --uri viking://resources
 - `search` - 上下文感知检索，实验特性。
 - `grep` - 内容模式搜索。
 - `glob` - 文件 glob 搜索。
+
+`search --mode list`（默认）返回排序命中列表。`search --mode context` 按服务端默认配置组装上下文并输出文本；使用 `-o json` 可保留完整的 `entries`、`rendered`、`digest` 和 `stats` 结果。context 模式支持 `--events-time-decay-protection`，但拒绝 `--uri` 和 `--read-content`，服务端会忽略 `--level`。CLI 暂未提供 `max_tokens`、`detail` 等 context 专用选项。
 
 ### Session 与记忆
 
@@ -246,11 +267,11 @@ ov -o json config list
 
 ```bash
 # 添加 URL 并等待处理完成
-ov add-resource https://example.com/docs --wait --timeout 60
+ov add-resource https://example.com/docs --wait
 
 # 添加本地目录并过滤文件
 ov add-resource ./dir \
-  --wait --timeout 600 \
+  --wait \
   --ignore-dirs "node_modules,dist" \
   --include "*.md,*.py" \
   --exclude "*.tmp,*.log"
@@ -262,8 +283,24 @@ ov add-resource ./docs -p "viking://resources/docs/{calendar:today}" --wait
 ov find "API authentication" --threshold 0.7 --limit 5
 ov find "authentication" --uri viking://resources/project --level 0,1
 
+# 组装上下文并启用事件时间衰减，或查看完整 JSON 结果
+ov search "recent decisions" --mode context --events-time-decay-protection 7d
+ov -o json search "authentication" --mode context
+
 # 递归列目录
 ov ls viking://resources --recursive
+
+# 按修改时间排序并分页
+ov ls viking://resources --offset 100 --limit 50 \
+  --sort-by mtime --sort-order desc
+ov tree viking://resources --offset 100 --limit 50
+
+# 写入调用方提供的 tags，再按 tags 过滤或回显
+ov write viking://resources/docs/api.md --content "# API" \
+  --tags team=search,env=prod
+ov ls viking://resources/docs --tags team=search,env=prod --fields tags
+ov grep "TODO" --uri viking://resources/docs --tags team=search,env=prod
+ov glob "**/*.md" --uri viking://resources/docs --tags team=search,env=prod
 
 # 临时通过 CLI 参数覆盖身份
 ov --account acme --user alice ls viking://
@@ -275,6 +312,7 @@ ov admin regenerate-key acme bob --seed bob-new-seed
 
 # Glob 搜索
 ov glob "**/*.md" --uri viking://resources
+ov glob "**/*.md" --uri viking://resources -f tags
 
 # Session 工作流
 SESSION=$(ov -o json session new | jq -r '.result.session_id')

@@ -1,5 +1,10 @@
 """Base channel interface for chat platforms."""
 
+import re as _re
+
+# Bare image filenames only: no path separators, no "..", bounded length.
+_SEND_FILENAME_RE = _re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}")
+
 import base64
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -231,7 +236,16 @@ class BaseChannel(ABC):
 
                 return False, content
         elif data_uri.startswith("send://"):
-            path_obj = get_data_path() / "images" / data_uri.split("send://", 1)[1]
+            filename = data_uri.split("send://", 1)[1]
+            # send:// URIs come from model-authored outbound content and must
+            # never escape the images directory: a crafted remainder such as
+            # "../../secrets.txt" would otherwise read an arbitrary server file
+            # and (via channel image delivery) exfiltrate it.
+            if not _SEND_FILENAME_RE.fullmatch(filename):
+                raise ValueError(
+                    f"send:// URI must be a bare filename, got {filename!r}"
+                )
+            path_obj = get_data_path() / "images" / filename
             return False, path_obj.read_bytes()
         else:
             # Try to resolve as local file path

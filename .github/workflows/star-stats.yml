@@ -1,0 +1,41 @@
+name: Star Stats
+
+# Appends the daily star history kept on the data-only `stat` branch, so pages can read
+# https://raw.githubusercontent.com/volcengine/OpenViking/stat/stat.csv instead of calling the API.
+# Rows are per UTC day from starredAt, so how often this runs changes freshness, not granularity:
+# the weekly main-package release is enough, and a run after a gap backfills every missed day.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-stats
+  cancel-in-progress: false
+
+jobs:
+  update:
+    # Same filter as release.yml: only main-package tags (v*), not cli@ / python-sdk@ / sdk releases.
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'v') && !github.event.release.prerelease)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: stat
+
+      - run: python3 update_stars.py stat.csv
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit the new rows
+        run: |
+          git add stat.csv
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(stat): update star history"
+          git push

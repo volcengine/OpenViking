@@ -2,12 +2,15 @@
 
 RAGFS cache is an optional read-cache layer for OpenViking. It speeds up full file reads and directory reads. It is only an acceleration layer, not the source of truth; backend filesystem data remains authoritative.
 
-Assumptions:
+CachedFileSystem assumptions:
 
-- Only one OpenViking / RAGFS process writes to the same namespace.
+- Only one OpenViking / RAGFS process writes to the same cache namespace.
 - File and directory changes go through RAGFS.
 - The backend is not modified externally by bypassing RAGFS.
 - After a cache Provider successfully writes or deletes one key, later reads of that key do not return the old value.
+
+These assumptions apply to the read-cache layer. QueueFS and PathLock also use
+CacheRuntime, but define their own consistency rules.
 
 ## Quick Start
 
@@ -18,30 +21,34 @@ openviking-server init
 openviking-server doctor
 ```
 
-Then enable the cache under `storage.agfs.cache` in `~/.openviking/ov.conf`. The following Redis example is a good quick validation setup:
+Configure the global top-level `cache` Provider, then select `backend=cache` under `storage.agfs.cachefs`:
 
 ```json
 {
+  "service_name": "openviking-server",
+  "cache": {
+    "provider": "redis",
+    "params": {
+      "mode": "standalone",
+      "endpoints": ["redis://127.0.0.1:6379"],
+      "pool_size": 32,
+      "connect_timeout_ms": 1000,
+      "command_timeout_ms": 1000,
+      "default_ttl_seconds": 3600
+    }
+  },
   "storage": {
     "workspace": "./data",
     "agfs": {
       "backend": "local",
-      "cache": {
-        "enabled": true,
-        "provider": "redis",
-        "namespace": "openviking",
+      "cachefs": {
+        "backend": "cache",
         "max_file_size_bytes": 1048576,
-        "bypass_prefixes": ["/queue", "/tmp"],
-        "redis": {
-          "mode": "standalone",
-          "endpoints": ["redis://127.0.0.1:6379"],
-          "pool_size": 32,
-          "connect_timeout_ms": 1000,
-          "command_timeout_ms": 20,
-          "key_prefix": "ragfs-cache",
-          "default_ttl_seconds": 3600,
-          "read_from_replica": false
-        }
+        "bypass_prefixes": ["/queue", "/tmp"]
+      },
+      "pathlock": {
+        "provider": "cache",
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -52,6 +59,11 @@ Start Redis and OpenViking:
 
 ```bash
 redis-server
+```
+
+In a second terminal, start OpenViking:
+
+```bash
 openviking-server --config ~/.openviking/ov.conf
 ```
 
@@ -65,182 +77,125 @@ Available Providers:
 
 | Provider | Best for | Notes |
 |----------|----------|-------|
-| `memory` | Local validation and tests | In-process cache; lost after restart |
-| `redis` | Fast rollout on standard networks | Currently supports standalone; read from primary only |
-| `yuanrong` | Near-compute cache, shared memory, or heterogeneous multi-tier cache | Requires Yuanrong worker and native feature |
-| `mooncake` | Remote memory pool, RDMA/TCP data plane | Requires Mooncake services and native feature |
+| `redis` | Default delivery on standard networks | Built into RAGFS; supports standalone, Cluster, and Sentinel |
+| `dynamic` | YuanRong, Mooncake, or closed-source cache systems | Loaded from an external shared library through the versioned C ABI |
 
-If the runtime package was not compiled with the selected Provider, startup returns an error similar to "requires the ... feature".
+`MemoryMockProvider` is only used by unit and smoke tests; it is not a production configuration option.
 
-## Native Provider Builds
+### Cache-backed PathLock
 
-The standard OpenViking wheel is suitable for the `memory` and `redis`
-Providers. The `yuanrong` and `mooncake` Providers depend on platform-specific
-native SDKs and must be built for the target deployment environment.
+Set `storage.agfs.pathlock.provider` to `cache` to coordinate path locks
+between OpenViking processes through the shared Redis CacheRuntime.
+OpenViking derives the PathLock Redis namespace from top-level `service_name`.
+Use distinct service names for independent deployments. Distributed path
+locking does not remove the single-writer requirement of CachedFileSystem.
+Cache-backed PathLock only supports the built-in Redis Provider.
 
-Install the wheel builder first:
+Redis HASH keys are partitioned by logical path scope:
 
-```bash
-python -m pip install "maturin[patchelf]"
+```text
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-### Yuanrong
+`{service_name}` is used as the Redis Cluster
+hash tag, so all PathLock keys for one deployment remain in one slot. Tree
+conflict checks scan only the HASH for
+the request scope. `/` and `/local` use the global HASH but do not scan
+account or `_system` HASHes. A batch containing paths from different scopes
+is rejected.
 
-Install the Yuanrong DataSystem C++ SDK and export its header and library
-locations:
+Do not run versions that use the legacy single HASH key together with versions
+that use scoped keys. Stop old writers, wait at least
+`2 * lock_expire_secs` for legacy keys to expire, and then start the new
+version.
 
-```bash
-export YUANRONG_SDK_INCLUDE=/path/to/yuanrong/include
-export YUANRONG_SDK_LIB_DIR=/path/to/yuanrong/lib
-# Optional; defaults to "datasystem".
-export YUANRONG_SDK_LIB_NAME=datasystem
-export LD_LIBRARY_PATH="$YUANRONG_SDK_LIB_DIR:${LD_LIBRARY_PATH:-}"
+## Breaking Configuration Change
+
+Legacy cache configuration is no longer accepted. Migrate before upgrading:
+
+| Removed configuration | Canonical replacement |
+|-----------------------|-----------------------|
+| `storage.agfs.cache` | top-level `cache.provider` + `cache.params`, plus `storage.agfs.cachefs.backend="cache"` |
+| `storage.agfs.queuefs.backend="redis"` and `queuefs.redis` | `storage.agfs.queuefs.backend="cache"`, plus the shared top-level `cache` section |
+| Redis `mode="singleton"` | `mode="standalone"` |
+| `tls_enabled=true` | use `rediss://` endpoints |
+| `read_from_replica` | removed; all reads use the primary |
+
+## DynamicProvider
+
+OpenViking ships the DynamicProvider loader and a versioned C ABI. The default wheel does not bundle third-party SDKs or Provider libraries. Deploy the Provider shared library separately and configure `provider=dynamic` when an external cache system is required.
+
+A dynamic library must export this versioned entry point:
+
+```text
+openviking_cache_provider_v1
 ```
 
-Build and install the wheel:
+The C contract is defined by `crates/ragfs/include/openviking_cache_provider_v1.h`. The Provider must use the Host allocator for returned data, obey the documented ownership and close semantics, catch exceptions before they cross the C ABI, and make its handle safe for concurrent calls.
 
-```bash
-maturin build --release \
-  --manifest-path crates/ragfs-python-native/Cargo.toml \
-  --features yuanrong-native
+Provider artifacts should declare the ABI version, target OS and CPU, minimum runtime version, external SDK version, dynamic dependencies, and SHA256. When a Provider depends on native libraries, its publisher must make them discoverable through RPATH, `LD_LIBRARY_PATH`, or deployment instructions.
 
-python -m pip install --force-reinstall target/wheels/ragfs_python-*.whl
-```
-
-The Yuanrong worker configured by `storage.agfs.cache.yuanrong` must be
-available when OpenViking starts.
-
-### Mooncake
-
-Check out the Mooncake revision used by
-`crates/ragfs-cache-mooncake/Cargo.toml`, then build Mooncake Store with Rust
-support:
-
-```bash
-cmake -S /path/to/Mooncake -B /path/to/Mooncake/build \
-  -DWITH_STORE=ON \
-  -DWITH_STORE_RUST=ON \
-  -DCMAKE_BUILD_TYPE=Release
-
-cmake --build /path/to/Mooncake/build \
-  --target build_mooncake_store_rust mooncake_master -j
-```
-
-Export the paths required by the official Mooncake Rust binding:
-
-```bash
-export MOONCAKE_BUILD_DIR=/path/to/Mooncake/build
-export MOONCAKE_STORE_LIB_DIR="$MOONCAKE_BUILD_DIR/mooncake-store/src"
-export MOONCAKE_STORE_INCLUDE_DIR=/path/to/Mooncake/mooncake-store/include
-export LD_LIBRARY_PATH="$MOONCAKE_BUILD_DIR/mooncake-common:\
-$MOONCAKE_BUILD_DIR/mooncake-common/src:\
-$MOONCAKE_BUILD_DIR/mooncake-store/src:\
-$MOONCAKE_BUILD_DIR/mooncake-store/src/cachelib_memory_allocator:\
-$MOONCAKE_BUILD_DIR/mooncake-transfer-engine/src:\
-$MOONCAKE_BUILD_DIR/mooncake-transfer-engine/src/common/base:\
-${LD_LIBRARY_PATH:-}"
-```
-
-Build and install the wheel:
-
-```bash
-maturin build --release \
-  --manifest-path crates/ragfs-python-native/Cargo.toml \
-  --features mooncake-native
-
-python -m pip install --force-reinstall target/wheels/ragfs_python-*.whl
-```
-
-The Mooncake metadata service and Master configured by
-`storage.agfs.cache.mooncake` must be available when OpenViking starts.
-Native wheels are platform-specific and should be built on a system compatible
-with the target deployment environment.
-
-For production wheels, use a Mooncake revision whose Rust `build.rs` links
-`libasan` only when ASan is explicitly enabled. Verify that the release wheel
-does not contain or depend on `libasan`:
-
-```bash
-rm -rf /tmp/ragfs-python-wheel
-python -m zipfile -e target/wheels/ragfs_python-*.whl /tmp/ragfs-python-wheel
-readelf -d /tmp/ragfs-python-wheel/ragfs_python/ragfs_python.abi3.so \
-  | grep libasan
-find /tmp/ragfs-python-wheel -name 'libasan*'
-```
-
-Both checks should produce no output.
+External Providers can be upgraded independently without rebuilding the default OpenViking wheel. OpenViking only needs a coordinated upgrade when the DynamicProvider ABI becomes incompatible.
 
 ## Configuration
 
-`storage.agfs.cache` supports these common options:
+Top-level `service_name` defaults to `"openviking-server"` and supplies the Redis
+namespace for CacheFS, QueueFS cache backend, cache-backed PathLock, and
+cache-backed multi-write metadata.
+
+The top-level `cache` section is a sibling of `storage`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable the RAGFS cache |
-| `provider` | str | `"memory"` | `memory`, `redis`, `yuanrong`, or `mooncake` |
-| `namespace` | str | `"openviking"` | Cache namespace for isolating deployments or tenants |
+| `provider` | str | none | Provider name; supports `redis` and `dynamic` |
+| `params` | object | `{}` | Provider-owned parameters |
+
+`storage.agfs.cachefs` controls CacheFS behavior:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `backend` | str | `"local"` | `local` preserves existing behavior; `cache` enables CachedFileSystem |
 | `max_file_size_bytes` | int | `1048576` | Maximum full-file object size admitted to cache |
+| `traversal_mode` | str | `"backend"` | Use backend traversal or `cached_traversal` for recursive APIs |
 | `bypass_prefixes` | list[str] | `[]` | Path prefixes that always bypass cache |
+
+`storage.agfs.pathlock` controls PathLock storage:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `provider` | str | `"filesystem"` | `filesystem`, `memory`, or `cache` |
+| `lock_expire_secs` | float | `30.0` | Lock stale timeout; must be at least `1.0` |
 
 Redis configuration:
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `mode` | `"standalone"` | Redis deployment mode |
-| `endpoints` | `["redis://127.0.0.1:6379"]` | Redis connection URLs |
+| `endpoints` | `["redis://127.0.0.1:6379"]` | Redis connection URLs; use `redis://` for plaintext or `rediss://` for TLS |
 | `username` | `""` | Redis ACL username |
 | `password_env` | `""` | Environment variable that stores the Redis password |
 | `pool_size` | `32` | Command concurrency |
 | `connect_timeout_ms` | `1000` | Connection timeout |
 | `command_timeout_ms` | `20` | Command timeout |
-| `key_prefix` | `"ragfs-cache"` | Redis-side key prefix |
 | `default_ttl_seconds` | `3600` | Default TTL; `0` means no TTL |
-| `read_from_replica` | `false` | Must be `false` in standalone mode |
+| `tls_insecure_skip_verify` | `false` | Skip certificate verification for `rediss://`; intended only for controlled test environments |
 
-Yuanrong configuration:
+All Redis reads are sent to the primary node so QueueFS does not observe stale queue state. CacheRuntime relies on Redis transport security when required and does not add a separate application-layer value encryption format.
 
-```json
-{
-  "storage": {
-    "agfs": {
-      "cache": {
-        "enabled": true,
-        "provider": "yuanrong",
-        "yuanrong": {
-          "host": "127.0.0.1",
-          "port": 31501,
-          "connect_timeout_ms": 5000,
-          "request_timeout_ms": 5000,
-          "sdk_concurrency": 4
-        }
-      }
-    }
-  }
-}
-```
+DynamicProvider configuration:
 
-Mooncake configuration:
+OpenViking uses `cache.params.library` to load the dynamic library. All remaining fields are Provider-owned and passed to `create` as JSON. Use the schema documented by the Provider publisher.
 
 ```json
 {
-  "storage": {
-    "agfs": {
-      "cache": {
-        "enabled": true,
-        "provider": "mooncake",
-        "mooncake": {
-          "local_hostname": "127.0.0.1",
-          "metadata_server": "http://127.0.0.1:8080/metadata",
-          "master_server_addr": "127.0.0.1:50051",
-          "protocol": "tcp",
-          "device_name": "",
-          "global_segment_size": 536870912,
-          "local_buffer_size": 134217728,
-          "replica_num": 2,
-          "sdk_concurrency": 4,
-          "operation_timeout_ms": 5000
-        }
-      }
+  "cache": {
+    "provider": "dynamic",
+    "params": {
+      "library": "/opt/openviking/providers/libopenviking_cache_provider.so",
+      "endpoint": "127.0.0.1:31501",
+      "request_timeout_ms": 5000
     }
   }
 }
@@ -248,22 +203,28 @@ Mooncake configuration:
 
 ## Architecture
 
-RAGFS splits caching into two layers:
+RAGFS separates Provider access from its consumers:
 
 - `CachedFileSystem`: implements filesystem semantics, including cache hit/miss handling, backend fallback, cache fill, invalidation, generation checks, and metrics.
-- `CacheProvider`: only stores cache objects through `get`, `put`, `delete`, batch reads/writes, and close operations.
+- `CacheRuntime`: exposes common primitive operations and binds either the built-in RedisProvider or an external DynamicProvider during startup.
+- `QueueFS` and `RedisPathLockProvider`: reuse the shared CacheRuntime for queue and distributed-lock storage. RedisPathLockProvider requires the built-in RedisProvider.
 
 Call flow:
 
 ```text
 OpenViking
   -> RAGFS / MountableFS
-  -> CachedFileSystem
-       |-> CacheProvider -> Memory / Redis / Yuanrong / Mooncake
+       |-> CachedFileSystem ------\
+       |-> QueueFS cache backend --+-> shared CacheRuntime -> RedisProvider
+       `-> RedisPathLockProvider --/                     `-> DynamicProvider
        `-> Backend FileSystem
 ```
 
-With this boundary, file, directory, rename, recursive delete, and write-after-invalidation logic live only in the common layer. A Provider does not need to understand path semantics; it only needs to store stable key-value objects.
+CachedFileSystem and QueueFS can use RedisProvider or DynamicProvider.
+RedisPathLockProvider depends on Redis Lua execution and therefore only uses
+RedisProvider. Filesystem semantics remain in CachedFileSystem; an external
+Provider only supplies primitive key-value operations through the stable C
+ABI.
 
 ## Cache Objects
 
@@ -274,7 +235,7 @@ RAGFS mainly caches three object types.
 File keys use a stable namespace and path hash:
 
 ```text
-ragfs:v1:{namespace}:file:{hash(path)}
+<service_name>:ov:cache:v1:file:<hash(path)>
 ```
 
 The file value is a `CacheEnvelope` containing file content, object kind, path, and generation snapshots. After a full-read cache hit, RAGFS validates the envelope and generation before returning the content.
@@ -286,7 +247,7 @@ The default policy prefers summary files such as `.abstract.md` and `.overview.m
 Directory key:
 
 ```text
-ragfs:v1:{namespace}:dir:{hash(path)}
+<service_name>:ov:cache:v1:dir:<hash(path)>
 ```
 
 The directory cache stores raw backend `read_dir` entries, not permission-filtered final results. Permission, role, and agent-context filtering still happens in the OpenViking upper layer at request time.
@@ -298,7 +259,7 @@ This lets one directory cache object serve `ls`, `tree`, `glob`, the file-collec
 Subtree generation key:
 
 ```text
-ragfs:v1:{namespace}:subtree:{hash(scope)}
+<service_name>:ov:cache:v1:subtree:<hash(scope)>
 ```
 
 `remove_all` and directory `rename` can leave descendant keys behind in the Provider. RAGFS bumps the subtree generation so old envelopes fail their generation snapshot check. Later real reads fall back to the backend and rebuild the cache.
@@ -366,10 +327,12 @@ Recommended signals to watch:
 
 ## Recommended Rollout
 
-1. Use `memory` locally to validate the configuration shape.
-2. Use `redis` to validate real remote-cache benefits.
-3. Move to `yuanrong` or `mooncake` for high-performance environments.
+1. Disable caching to validate baseline backend behavior.
+2. Use the built-in `redis` Provider to validate remote-cache benefits.
+3. Use an independently released DynamicProvider `.so` for high-performance or closed-source cache systems.
 4. Cache summary files and raw `read_dir` first, then expand to more regular small files.
 5. Add lock, control-plane, and permission-sensitive paths to `bypass_prefixes`.
 
-In short: RAGFS cache is responsible for correct invalidation according to filesystem semantics, while the Provider is responsible for where cache objects live. As long as the backend remains the source of truth, every cache hit must pass envelope and generation validation before it is returned.
+RAGFS cache handles invalidation according to filesystem semantics; the Provider decides where cache objects live. The backend remains the source of truth, and every cache hit must pass envelope and generation validation before it is returned.
+
+After enabling the cache, compare repeated reads and invalidation after a file update against the baseline. A higher hit rate is useful only if the returned contents remain current.

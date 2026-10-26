@@ -26,7 +26,7 @@ function TaskStatusBadge({ status }: { status: ResourceUploadTask['status'] }) {
 
   if (status === 'failed') {
     return (
-      <Badge variant="secondary" className="bg-rose-500/12 text-black">
+      <Badge variant="secondary" className="bg-rose-500/12 text-destructive">
         {t('processingTasks.status.failed')}
       </Badge>
     )
@@ -105,7 +105,8 @@ export function UploadTaskDialog({
                   const isFailed = task.status === 'failed'
                   const isExpanded = expandedTaskIds.has(task.id)
                   const hasDetail =
-                    isFailed && (task.errorCode || task.errorMessage)
+                    isFailed &&
+                    (task.errorCode || task.errorMessage || task.errorDetail)
 
                   return (
                     <div
@@ -155,13 +156,19 @@ export function UploadTaskDialog({
                       {hasDetail && isExpanded ? (
                         <div className="space-y-1 border-t border-border/40 bg-rose-500/6 px-10 py-3 text-sm">
                           {task.errorCode ? (
-                            <div className="font-mono text-black">
+                            <div className="font-mono text-foreground">
                               {task.errorCode}
                             </div>
                           ) : null}
                           {task.errorMessage ? (
-                            <div className="text-black">
+                            <div className="text-foreground">
                               {task.errorMessage}
+                            </div>
+                          ) : null}
+                          {task.errorDetail &&
+                          task.errorDetail !== task.errorMessage ? (
+                            <div className="font-mono text-xs text-foreground">
+                              {task.errorDetail}
                             </div>
                           ) : null}
                         </div>

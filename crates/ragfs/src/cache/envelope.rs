@@ -1,6 +1,6 @@
 //! Stable values stored behind the provider contract.
 
-use super::{CacheError, CacheResult};
+use crate::cache_runtime::{CacheError, CacheResult};
 use crate::core::FileInfo;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};

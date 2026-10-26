@@ -83,6 +83,58 @@ describe("context-engine message adapter seam", () => {
 });
 
 describe("context-engine lifecycle service seam", () => {
+  it("short-circuits transformContext non-user tails before lifecycle work", async () => {
+    const messages = [
+      { role: "user", content: "run the tool" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_1", name: "bash", arguments: {} }],
+      },
+    ];
+    const getClient = vi.fn();
+    const resolveAgentId = vi.fn();
+    const rememberSessionAgentId = vi.fn();
+    const isBypassedSession = vi.fn(() => false);
+    const diag = vi.fn();
+    const roughEstimate = vi.fn(() => 42);
+    const messageDigest = vi.fn(() => []);
+    const extractAgentMessageText = vi.fn(() => "");
+    const hasAutoRecallBlock = vi.fn(() => false);
+    const prependRecallToLatestUserMessage = vi.fn();
+
+    const result = await assembleOpenVikingSession({
+      sessionId: "tool-loop-session",
+      messages,
+      tokenBudget: 4096,
+      isMainAssemble: false,
+      cfg: { autoRecall: true },
+      getClient,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      resolveAgentId,
+      rememberSessionAgentId,
+      isBypassedSession,
+      diag,
+      roughEstimate,
+      messageDigest,
+      extractAgentMessageText,
+      hasAutoRecallBlock,
+      prependRecallToLatestUserMessage,
+    });
+
+    expect(result).toEqual({ messages, estimatedTokens: 0 });
+    expect(result.messages).toBe(messages);
+    expect(roughEstimate).not.toHaveBeenCalled();
+    expect(messageDigest).not.toHaveBeenCalled();
+    expect(rememberSessionAgentId).not.toHaveBeenCalled();
+    expect(isBypassedSession).not.toHaveBeenCalled();
+    expect(diag).not.toHaveBeenCalled();
+    expect(getClient).not.toHaveBeenCalled();
+    expect(resolveAgentId).not.toHaveBeenCalled();
+    expect(extractAgentMessageText).not.toHaveBeenCalled();
+    expect(hasAutoRecallBlock).not.toHaveBeenCalled();
+    expect(prependRecallToLatestUserMessage).not.toHaveBeenCalled();
+  });
+
   it("assembles through the lifecycle service seam and preserves no-data passthrough diagnostics", async () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const messages = [{ role: "user", content: "hello world" }];
@@ -104,7 +156,7 @@ describe("context-engine lifecycle service seam", () => {
       tokenBudget: 4096,
       runtimeContext: { senderId: "telegram:123", agentId: "runtime-agent" },
       isMainAssemble: true,
-      cfg: { autoRecall: false },
+      cfg: { autoRecall: false, contextManagementMode: "openviking" },
       getClient: vi.fn().mockResolvedValue(client),
       logger,
       resolveAgentId: vi.fn().mockReturnValue("agent_main"),
@@ -170,6 +222,7 @@ describe("context-engine lifecycle service seam", () => {
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
       keepRecentCount: 0,
+      resetContext: true,
     });
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("memories=5"));
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("trace_id=trace-1"));
@@ -209,6 +262,7 @@ describe("context-engine lifecycle service seam", () => {
       commitSession: vi.fn().mockResolvedValue({
         status: "completed",
         archived: true,
+        effective_enable_working_memory: true,
         archive_uri: "ov://archive/archive-9",
         memories_extracted: { core: 4 },
         task_id: "task-9",
@@ -218,6 +272,7 @@ describe("context-engine lifecycle service seam", () => {
     const diag = vi.fn();
 
     const result = await compactOpenVikingSession({
+      contextManagementMode: "openviking",
       sessionId: "plain-session",
       sessionKey: "agent:main:main",
       tokenBudget: 4096,
@@ -237,6 +292,7 @@ describe("context-engine lifecycle service seam", () => {
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
       keepRecentCount: 0,
+      enableWorkingMemory: true,
     });
     expect(result).toEqual({
       ok: true,
@@ -251,6 +307,7 @@ describe("context-engine lifecycle service seam", () => {
           commit: {
             status: "completed",
             archived: true,
+        effective_enable_working_memory: true,
             archive_uri: "ov://archive/archive-9",
             memories_extracted: { core: 4 },
             task_id: "task-9",

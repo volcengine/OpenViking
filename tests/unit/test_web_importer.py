@@ -4,11 +4,11 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.parse.accessors.web_importer import (
-    WebImportOptions,
     WebImporter,
+    WebImportOptions,
     parse_web_import_options,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import FailedPreconditionError, InvalidArgumentError
 
 
 class TestParseWebImportOptions:
@@ -244,12 +244,13 @@ class TestWebImporter:
 
         monkeypatch.setattr("openviking.parse.accessors.web_importer.ScrapyWebCrawler", FakeCrawler)
 
-        with pytest.raises(RuntimeError) as exc_info:
+        with pytest.raises(FailedPreconditionError) as exc_info:
             await WebImporter().import_to_directory(
                 root_url="https://mp.weixin.qq.com/s/abc",
                 options=WebImportOptions(),
             )
         message = str(exc_info.value)
+        assert exc_info.value.code == "FAILED_PRECONDITION"
         assert "Forbidden by robots.txt" not in message
         assert "compliance" in message
         assert "local file" in message

@@ -97,7 +97,9 @@ The Provider layer gives AgentLoop a unified `chat()` and `chat_stream()` interf
 - Provider-specific system message and thinking parameters;
 - `prompt_tokens`, `completion_tokens`, and `total_tokens`.
 
-LiteLLMProvider adapts general model services. OpenViking VLM uses VLMProviderAdapter to implement the same interface. Models are read from the root-level `vlm` configuration by default, while `bot.agents` can override Bot-specific parameters.
+VLMProviderAdapter connects all model services through OpenViking VLM, including its LiteLLM backend. Models are read from the root-level `vlm` configuration by default, while `bot.agents` can override Bot-specific parameters.
+
+The old `bot.providers` field has been removed. Loading an `ov.conf` that contains it emits a warning and ignores its model settings without overriding `vlm` or `bot.agents` or rewriting the file. Saving Bot configuration no longer writes this field. Configure model credentials in `vlm` or `bot.agents` instead. Root-level `vlm.providers` remains supported. The only preserved legacy use is Telegram voice transcription: `bot.providers.groq.api_key` is migrated on load into each Telegram channel's `groq_api_key`, without overriding an explicitly configured value (including an empty string).
 
 ## Local Session
 

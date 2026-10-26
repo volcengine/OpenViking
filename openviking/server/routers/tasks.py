@@ -28,20 +28,26 @@ router = APIRouter(prefix="/api/v1", tags=["tasks"])
 @router.get("/tasks/{task_id}")
 async def get_task(
     task_id: str,
+    include_events: bool = Query(False, description="Include recorded execution events"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get the status of a single background task."""
     tracker = get_task_tracker()
+    get_task_record = tracker.get_with_events if include_events else tracker.get
     if _ctx.role == Role.ROOT:
-        task = await tracker.get(task_id)
+        task = await get_task_record(task_id)
         if task is None:
-            task = await tracker.get(
+            task = await get_task_record(
+                task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id
+            )
+        if task is None:
+            task = await get_task_record(
                 task_id,
                 account_id=SYSTEM_TASK_ACCOUNT_ID,
                 user_id=SYSTEM_TASK_USER_ID,
             )
     else:
-        task = await tracker.get(
+        task = await get_task_record(
             task_id,
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,
@@ -52,7 +58,7 @@ async def get_task(
             code="NOT_FOUND",
             details={"resource": task_id, "type": "task"},
         )
-    return Response(status="ok", result=task.to_dict())
+    return Response(status="ok", result=task.to_dict(include_events=include_events))
 
 
 @router.post("/tasks/{task_id}/cancel")
@@ -89,11 +95,64 @@ async def list_tasks(
         description="Filter by status (pending/running/cancelling/completed/failed/cancelled)",
     ),
     resource_id: Optional[str] = Query(None, description="Filter by resource ID (e.g. session_id)"),
-    limit: int = Query(50, le=200, description="Max results"),
+    include_internal: bool = Query(False, description="Include internal Connector child tasks"),
+    limit: int = Query(50, ge=1, le=200, description="Max results"),
+    pagination: Optional[str] = Query(None, pattern="^cursor$"),
+    cursor: Optional[str] = Query(None, max_length=2048),
+    q: Optional[str] = Query(None, max_length=200),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List background tasks with optional filters."""
     tracker = get_task_tracker()
+    if pagination == "cursor":
+        from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
+
+        filters = {
+            "task_type": task_type,
+            "status": status,
+            "resource_id": resource_id,
+            "include_internal": include_internal,
+            "q": q,
+        }
+        scope = page_scope(
+            account=_ctx.account_id, user=_ctx.user.user_id, role=str(_ctx.role), **filters
+        )
+        list_call = (
+            tracker.list_root_tasks(
+                account_id=_ctx.account_id,
+                user_id=_ctx.user.user_id,
+                limit=limit + 1,
+                before=decode_cursor(cursor, scope),
+                task_type=task_type,
+                status=status,
+                resource_id=resource_id,
+                include_internal=include_internal,
+                q=q,
+            )
+            if _ctx.role == Role.ROOT
+            else tracker.list_tasks(
+                account_id=_ctx.account_id,
+                user_id=_ctx.user.user_id,
+                limit=limit + 1,
+                before=decode_cursor(cursor, scope),
+                task_type=task_type,
+                status=status,
+                resource_id=resource_id,
+                include_internal=include_internal,
+                q=q,
+            )
+        )
+        tasks = await list_call
+        more = len(tasks) > limit
+        items = [t.to_dict() for t in tasks[:limit]]
+        return Response(
+            status="ok",
+            result={
+                "items": items,
+                "has_more": more,
+                "next_cursor": encode_cursor(items[-1], scope) if more else None,
+            },
+        )
     if _ctx.role == Role.ROOT:
         system_tasks = await tracker.list_tasks(
             task_type=task_type,
@@ -102,12 +161,14 @@ async def list_tasks(
             limit=limit,
             account_id=SYSTEM_TASK_ACCOUNT_ID,
             user_id=SYSTEM_TASK_USER_ID,
+            include_internal=include_internal,
         )
         cached_tasks = await tracker.list_tasks(
             task_type=task_type,
             status=status,
             resource_id=resource_id,
             limit=limit,
+            include_internal=include_internal,
         )
         tasks_by_id = {task.task_id: task for task in cached_tasks}
         tasks_by_id.update({task.task_id: task for task in system_tasks})
@@ -120,5 +181,6 @@ async def list_tasks(
             limit=limit,
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,
+            include_internal=include_internal,
         )
     return Response(status="ok", result=[t.to_dict() for t in tasks])

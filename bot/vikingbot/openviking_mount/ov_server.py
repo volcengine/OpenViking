@@ -2,13 +2,14 @@ import base64
 import json
 import re
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional
 
 from loguru import logger
 
 import openviking as ov
 from openviking.core.namespace import uri_parts
 from openviking.core.peer_id import normalize_peer_id
+from openviking_cli.exceptions import InvalidArgumentError
 from vikingbot.config.loader import load_config
 
 if TYPE_CHECKING:
@@ -39,6 +40,8 @@ def _peer_id_from_external_id(peer_id: Optional[str]) -> Optional[str]:
 
 
 class VikingClient:
+    _skill_snapshot: Optional[Mapping[str, Any]] = None
+
     def __init__(
         self,
         workspace_id: Optional[str] = None,
@@ -66,16 +69,15 @@ class VikingClient:
         self.mode = "local" if self.auth_mode == "dev" else "remote"
         self.api_key_type = self._resolve_api_key_type(openviking_config)
 
+        self._skill_snapshot = (connection or {}).get("skill_snapshot")
+        snapshot_id = (self._skill_snapshot or {}).get("snapshot_id")
+        if snapshot_id and not re.fullmatch(r"[0-9a-fA-F]{40}", snapshot_id):
+            raise ValueError("Skill snapshot_id must be a commit ID")
         self._request_connection = self._normalize_connection(connection)
         self._request_role: str | None = None
 
         self.admin_user_client = None
         self._user_clients = {}
-        self._namespace_policy = {
-            "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": False,
-        }
-        self._namespace_policy_loaded = False
         connection_actor_peer_id = (
             self._request_connection.get("actor_peer_id") if self._request_connection else None
         )
@@ -160,23 +162,7 @@ class VikingClient:
             value = connection.get(key)
             if isinstance(value, str) and value.strip():
                 normalized[key] = value.strip()
-        policy = connection.get("namespace_policy")
-        if isinstance(policy, Mapping):
-            normalized["namespace_policy"] = {
-                "isolate_user_scope_by_agent": bool(
-                    policy.get("isolate_user_scope_by_agent", False)
-                ),
-                "isolate_agent_scope_by_user": bool(
-                    policy.get("isolate_agent_scope_by_user", False)
-                ),
-            }
         if not normalized.get("api_key"):
-            if (
-                normalized.get("api_key_type") == "root"
-                and normalized.get("account_id")
-                and normalized.get("user_id")
-            ):
-                return normalized
             return None
         return normalized
 
@@ -191,11 +177,6 @@ class VikingClient:
         self.workspace_id = self.agent_id
         self.account_id = connection.get("account_id")
         self.admin_user_id = connection.get("user_id")
-
-        policy = connection.get("namespace_policy")
-        if isinstance(policy, dict):
-            self._namespace_policy = policy
-            self._namespace_policy_loaded = True
 
         remote_client_kwargs = {
             "url": self.openviking_config.server_url,
@@ -214,7 +195,6 @@ class VikingClient:
     async def _initialize(self):
         """Initialize the client (must be called after construction)"""
         await self.client.initialize()
-        await self._load_namespace_policy()
 
     @classmethod
     async def create(
@@ -278,7 +258,8 @@ class VikingClient:
                 items.append(dict(item))
             else:
                 items.append(self._matched_context_to_dict(item))
-        return items
+        # Search snippets cannot supply live rules from the task's pinned Skill.
+        return [item for item in items if not self._skill_snapshot_ref(item.get("uri", ""))]
 
     def _matched_context_total(
         self,
@@ -291,7 +272,7 @@ class VikingClient:
             total = result.get("total")
         else:
             total = getattr(result, "total", None)
-        if isinstance(total, int):
+        if isinstance(total, int) and not self._skill_snapshot:
             return total
         return len(memories) + len(resources) + len(skills)
 
@@ -350,47 +331,10 @@ class VikingClient:
         if self.actor_peer_id:
             client_kwargs["actor_peer_id"] = self.actor_peer_id
 
-    async def _load_namespace_policy(self) -> None:
-        if self._namespace_policy_loaded:
-            return
-
-        policy = {
-            "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": False,
-        }
-        if self._has_request_connection() or self._is_dev_mode() or self._is_user_key_mode():
-            self._namespace_policy = policy
-            self._namespace_policy_loaded = True
-            return
-
-        if self._is_root_key_mode() and self.account_id:
-            try:
-                accounts = await self.client.admin_list_accounts()
-                for account in accounts or []:
-                    if account.get("account_id") == self.account_id:
-                        policy = {
-                            "isolate_user_scope_by_agent": bool(
-                                account.get("isolate_user_scope_by_agent", False)
-                            ),
-                            "isolate_agent_scope_by_user": bool(
-                                account.get("isolate_agent_scope_by_user", False)
-                            ),
-                        }
-                        break
-            except Exception as e:
-                logger.warning(
-                    f"Failed to load account namespace policy for {self.account_id}: {e}"
-                )
-
-        self._namespace_policy = policy
-        self._namespace_policy_loaded = True
-
     def _user_space_fragment(self, user_id: Optional[str]) -> str:
         effective_user_id = self._effective_user_id(user_id)
         if not effective_user_id:
             return ""
-        if self._namespace_policy["isolate_user_scope_by_agent"] and self.agent_id:
-            return f"{effective_user_id}/agent/{self.agent_id}"
         return effective_user_id
 
     def _memory_target_uri(self, user_id: Optional[str]) -> str:
@@ -561,11 +505,17 @@ class VikingClient:
         limit: int = 10,
     ):
         """搜索资源"""
-        kwargs: Dict[str, Any] = {"limit": limit}
+        # The SDK find/search sync moved context_type/filter out of top-level
+        # find() kwargs into FindOptions. Adapt here so callers keep the stable
+        # VikingClient.find(context_type=..., filter=...) interface.
+        options: Dict[str, Any] = {}
         if context_type is not None:
-            kwargs["context_type"] = context_type
+            options["context_type"] = context_type
         if filter is not None:
-            kwargs["filter"] = filter
+            options["filter"] = filter
+        kwargs: Dict[str, Any] = {"limit": limit}
+        if options:
+            kwargs["options"] = options
         if target_uri:
             return await self.client.find(query, target_uri=target_uri, **kwargs)
         return await self.client.find(query, **kwargs)
@@ -584,20 +534,77 @@ class VikingClient:
         )
         return result
 
+    async def compile_embeddings(
+        self, texts: List[str], *, target_uri: str, expected_model: str | None = None
+    ) -> Dict[str, Any]:
+        """Use the authenticated server embedder for transient Compile routing batches."""
+        response = await self.client._request(
+            "POST",
+            "/api/v1/compile/embeddings",
+            json={"texts": texts, "target_uri": target_uri, "expected_model": expected_model},
+        )
+        return self.client._handle_response_data(response).get("result", {})
+
+    async def diff_paths(
+        self,
+        dirs: list[str],
+        *,
+        head: str,
+        base: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Return one authenticated directory-change page; a null base compares an empty tree."""
+        return await self.client.git_diff_paths(
+            dirs, to_ref=head, from_ref=base, offset=offset, limit=limit
+        )
+
     async def list_resources(
         self,
         path: Optional[str] = None,
         recursive: bool = False,
         node_limit: int = 1000,
+        *,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """列出资源"""
+        """列出资源；offset 跳过指定数量的可见节点，递归深度遵循服务端默认值。"""
         if path is None or path == "":
             path = viking_resource_prefix
-        entries = await self.client.ls(path, recursive=recursive, node_limit=node_limit)
+        entries = await self.client.ls(
+            path, recursive=recursive, node_limit=node_limit, offset=offset
+        )
         return entries
 
+    def _skill_snapshot_ref(self, uri: str) -> Optional[str]:
+        """Select the task's immutable Skill commit; reads outside its package stay live."""
+        snapshot = self._skill_snapshot
+        if snapshot and (
+            uri == snapshot["uri"] or uri.startswith(snapshot["uri"].rstrip("/") + "/")
+        ):
+            return snapshot.get("snapshot_id")
+        return None
+
     async def stat(self, uri: str) -> Dict[str, Any]:
-        return await self.client.stat(uri)
+        if self._skill_snapshot_ref(uri):
+            try:
+                data = await self.download_bytes(uri)
+            except InvalidArgumentError as exc:
+                # Git reports existing trees through its invalid-operation response.
+                if "path is a directory, not a file:" not in str(exc):
+                    raise
+                return {"uri": uri, "isDir": True, "size": 0}
+            return {"uri": uri, "isDir": False, "size": len(data)}
+        client = self.client
+        should_close = False
+        scoped_user_id = self._owner_user_id_for_uri(uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
+
+        try:
+            return await client.stat(uri)
+        finally:
+            if should_close:
+                await client.close()
 
     async def attrs(self, uri: str) -> Dict[str, Any]:
         return await self.client.attrs(uri)
@@ -605,14 +612,35 @@ class VikingClient:
     async def mkdir(self, uri: str) -> None:
         await self.client.mkdir(uri)
 
-    async def tree(self, uri: str, *, node_limit: int = 1000) -> List[Dict[str, Any]]:
-        return await self.client.tree(uri, node_limit=node_limit)
+    async def tree(
+        self, uri: str, *, node_limit: int = 1000, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Return one visible tree page; offset skips entries from preceding pages."""
+        return await self.client.tree(uri, node_limit=node_limit, offset=offset)
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        if self._skill_snapshot_ref(uri):
+            if offset < 0 or limit < -1:
+                raise ValueError("Invalid snapshot line range")
+            lines = (await self.download_bytes(uri)).decode("utf-8").splitlines(keepends=True)
+            return "".join(lines[offset:] if limit == -1 else lines[offset : offset + limit])
         return await self.client.read_raw(uri, offset=offset, limit=limit)
 
     async def download_bytes(self, uri: str) -> bytes:
-        return await self.client.download_bytes(uri)
+        client = self.client
+        should_close = False
+        scoped_user_id = self._owner_user_id_for_uri(uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
+
+        try:
+            snapshot_id = self._skill_snapshot_ref(uri)
+            if snapshot_id:
+                return (await client.git_show(snapshot_id, path=uri))["bytes"]
+            return await client.download_bytes(uri)
+        finally:
+            if should_close:
+                await client.close()
 
     async def find_skills(
         self,
@@ -653,13 +681,17 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
+        """Publish a Compile-created package so failed tasks can roll back their own output."""
         return await self.client.add_skill(
             path,
-            target_uri=target_uri,
+            options={
+                "target_uri": target_uri,
+                "extra": {
+                    "source_metadata": {"type": "api", "source": "compile", "operation": "add"}
+                },
+            },
             wait=wait,
-            timeout=timeout,
         )
 
     async def update_skill(
@@ -669,14 +701,12 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         return await self.client.update_skill(
             skill_name,
             path,
-            target_uri=target_uri,
+            options={"target_uri": target_uri},
             wait=wait,
-            timeout=timeout,
         )
 
     async def batch_write(
@@ -685,13 +715,20 @@ class VikingClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
-        timeout: Optional[float] = None,
+        skip_conflicts: bool = False,
+        defer_processing: bool = False,
+        edit_source: Literal["manual", "agent", "compile"] = "agent",
     ) -> Dict[str, Any]:
+        """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
         return await self.client.batch_write(
             root_uri=root_uri,
             operations=operations,
             wait=wait,
-            timeout=timeout,
+            options={
+                "skip_conflicts": skip_conflicts,
+                "defer_processing": defer_processing,
+                "edit_source": edit_source,
+            },
         )
 
     async def read_content(
@@ -710,6 +747,15 @@ class VikingClient:
             offset: Starting line number (0-indexed); only used for level="read"
             limit: Number of lines to read, -1 means read to end; only used for level="read"
         """
+        if self._skill_snapshot_ref(uri):
+            if level in {"read", "raw"}:
+                return await self.read_raw(uri, offset=offset, limit=limit)
+            if level in {"abstract", "overview"}:
+                directory = uri.rstrip("/")
+                if not (await self.stat(uri))["isDir"]:
+                    directory = directory.rsplit("/", 1)[0]
+                return await self.read_raw(f"{directory}/.{level}.md")
+            raise ValueError(f"Unsupported level: {level}")
         client = self.client
         should_close = False
         scoped_user_id = user_id or self._owner_user_id_for_uri(uri)
@@ -928,19 +974,29 @@ class VikingClient:
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
+        if self._skill_snapshot_ref(uri):
+            raise ValueError("Read fixed Skill files with openviking_multi_read")
         client = self.client
         should_close = False
         if user_id:
             client, should_close = await self._get_user_scoped_client(user_id)
 
         try:
-            return await client.grep(
+            result = await client.grep(
                 uri,
                 pattern,
                 case_insensitive=case_insensitive,
                 node_limit=node_limit,
                 exclude_uri=exclude_uri,
             )
+            if (self._skill_snapshot or {}).get("snapshot_id"):
+                result["matches"] = [
+                    item
+                    for item in result.get("matches", [])
+                    if not self._skill_snapshot_ref(item.get("uri", ""))
+                ]
+                result["count"] = len(result["matches"])
+            return result
         finally:
             if should_close:
                 await client.close()
@@ -1057,7 +1113,7 @@ class VikingClient:
                         "type": "tool",
                         "tool_id": tool_id,
                         "tool_name": tool_name,
-                        "tool_uri": f"viking://session/{session_id}/tools/{tool_id}"
+                        "tool_uri": f"viking://~/sessions/{session_id}/tools/{tool_id}"
                         if session_id
                         else "",
                         "tool_input": tool_input,
@@ -1169,7 +1225,7 @@ class VikingClient:
 
         return await client.create_session(
             session_id=session_id,
-            memory_policy=memory_policy,
+            options={"memory_policy": memory_policy} if memory_policy is not None else None,
         )
 
     @staticmethod
@@ -1229,6 +1285,7 @@ class VikingClient:
         keep_recent_count: int = 0,
         user_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        enable_working_memory: Optional[bool] = None,
         retention_mode: Optional[str] = None,
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
@@ -1245,6 +1302,7 @@ class VikingClient:
         retention_kwargs = {
             key: value
             for key, value in {
+                "enable_working_memory": enable_working_memory,
                 "retention_mode": retention_mode,
                 "keep_recent_turn_count": keep_recent_turn_count,
                 "retained_message_token_budget": retained_message_token_budget,

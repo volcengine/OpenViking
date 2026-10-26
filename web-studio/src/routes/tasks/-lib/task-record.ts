@@ -1,4 +1,5 @@
 import type { TaskTimestamp } from './task-time'
+import type { TaskEventHistory } from './task-events'
 
 export type TaskStatus =
   | 'cancelled'
@@ -11,6 +12,7 @@ export type TaskStatus =
 
 export type TaskRecord = TaskTimestamp & {
   error?: string | null
+  execution_events?: TaskEventHistory | null
   resource_id?: string | null
   result?: unknown
   stage?: string | null

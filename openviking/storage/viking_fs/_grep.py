@@ -6,13 +6,18 @@ import asyncio
 import re
 import sys
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
+from openviking.core.namespace import is_session_uri
 from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs._base import logger
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.config.grep_config import GrepEngine
+
+_GREP_LS_PAGE_SIZE = 1000
+_FULLTEXT_UNSUPPORTED_CACHE_TTL = 60.0
 
 
 def _pkg():
@@ -32,6 +37,12 @@ class _GrepMixin:
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
         content_transform: Optional[Callable[[str, str], str]] = None,
+        allowed_uris: Optional[Set[str]] = None,
+        tag_filter: Optional[Dict[str, Any]] = None,
+        include_tags: bool = False,
+        before_context: int = 0,
+        after_context: int = 0,
+        force_fs: bool = False,
     ) -> Dict:
         """Content search by pattern or keywords.
 
@@ -51,13 +62,15 @@ class _GrepMixin:
             level_limit: Maximum depth level to traverse (default: 10)
             ctx: Request context
             content_transform: Optional projection applied before regex matching.
+            before_context: Number of lines to include before each match.
+            after_context: Number of lines to include after each match.
             Internal bm25 recall limit is auto-adapted from node_limit as
             min(node_limit * 5, 100000); when node_limit is unset, use 100000.
 
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
         await self.stat(uri, ctx=ctx, skip_count=True)
@@ -72,31 +85,67 @@ class _GrepMixin:
         # persisted raw content, so it cannot safely recall projected results.
         resolved_engine = (
             "fs"
-            if content_transform is not None
+            if force_fs or content_transform is not None or is_session_uri(uri)
             else await self._resolve_grep_engine(engine, uri, ctx, switch_to_remote_threshold)
         )
+        tags_by_uri: Dict[str, List[str]] = {}
+        if tag_filter is not None and resolved_engine == "fs":
+            vector_store = self._get_vector_store()
+            if vector_store is None:
+                return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+            records = await vector_store.filter(
+                filter=And(
+                    [
+                        PathScope("uri", uri, depth=level_limit),
+                        RawDSL(tag_filter),
+                    ]
+                ),
+                limit=100000,
+                output_fields=["uri", "search_tags"],
+                ctx=ctx,
+            )
+            allowed_uris = {str(record["uri"]) for record in records if record.get("uri")}
+            if not allowed_uris:
+                return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+            tags_by_uri = {
+                str(record["uri"]): list(record.get("search_tags") or [])
+                for record in records
+                if record.get("uri")
+            }
 
-        if resolved_engine == "fs":
-            return await self._grep_fs(
-                uri=uri,
-                pattern=pattern,
-                exclude_uri=exclude_uri,
-                case_insensitive=case_insensitive,
-                node_limit=node_limit,
-                level_limit=level_limit,
-                ctx=ctx,
-                content_transform=content_transform,
-            )
-        else:  # "vikingdb_then_fs"
-            return await self._grep_vikingdb_then_fs(
-                uri=uri,
-                pattern=pattern,
-                exclude_uri=exclude_uri,
-                case_insensitive=case_insensitive,
-                node_limit=node_limit,
-                level_limit=level_limit,
-                ctx=ctx,
-            )
+        try:
+            if resolved_engine == "fs":
+                result = await self._grep_fs(
+                    uri=uri,
+                    pattern=pattern,
+                    exclude_uri=exclude_uri,
+                    case_insensitive=case_insensitive,
+                    node_limit=node_limit,
+                    level_limit=level_limit,
+                    ctx=ctx,
+                    content_transform=content_transform,
+                    allowed_uris=allowed_uris,
+                    before_context=before_context,
+                    after_context=after_context,
+                )
+            else:  # "vikingdb_then_fs"
+                result = await self._grep_vikingdb_then_fs(
+                    uri=uri,
+                    pattern=pattern,
+                    exclude_uri=exclude_uri,
+                    case_insensitive=case_insensitive,
+                    node_limit=node_limit,
+                    level_limit=level_limit,
+                    ctx=ctx,
+                    allowed_uris=allowed_uris,
+                    tag_filter=tag_filter,
+                    include_tags=include_tags,
+                    before_context=before_context,
+                    after_context=after_context,
+                )
+        except re.error as exc:
+            raise InvalidArgumentError(f"Invalid grep pattern: {exc}") from exc
+        return self._attach_grep_tags(result, tags_by_uri)
 
     async def _resolve_grep_engine(
         self, engine: GrepEngine, uri: str, ctx, switch_to_remote_threshold: int = 10000
@@ -110,7 +159,11 @@ class _GrepMixin:
         if not vector_store:
             return "fs"
 
-        backend_type = getattr(vector_store, "_backend_type", "unknown")
+        account_id = getattr(ctx, "account_id", None) if ctx is not None else None
+        if account_id and hasattr(vector_store, "get_account_backend"):
+            backend_type = (await vector_store.get_account_backend(account_id))._mode
+        else:
+            backend_type = getattr(vector_store, "_backend_type", "unknown")
         # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
         # only these backends store the ``content`` field required for full-text grep.
         if backend_type not in ("volcengine", "vikingdb"):
@@ -137,21 +190,43 @@ class _GrepMixin:
 
         return "vikingdb_then_fs"
 
-    async def _collection_has_fulltext(self, vector_store, ctx) -> bool:
+    async def _collection_has_fulltext(
+        self, vector_store, ctx, supported_modes=None, raise_on_error: bool = False
+    ) -> bool:
         """Check if collection has content field and FullText config.
 
-        Result is cached on the VikingFS instance since collection schema
-        does not change at runtime.
+        The cache is scoped by Account and collection identity because one
+        VikingFS instance can serve dedicated Account VectorDB collections.
         """
-        if self._fulltext_available is not None:
-            return self._fulltext_available
+        account_id = getattr(ctx, "account_id", "") if ctx is not None else ""
+        backend = None
+        if account_id and hasattr(vector_store, "get_account_backend"):
+            backend = await vector_store.get_account_backend(account_id)
+        elif not account_id:
+            backend = vector_store
+        cache_key = (
+            account_id,
+            str(getattr(backend, "_mode", "")),
+            str(getattr(backend, "collection_name", getattr(backend, "_collection_name", ""))),
+            str(getattr(backend, "index_name", getattr(backend, "_index_name", ""))),
+        )
+        if supported_modes is not None and getattr(backend, "_mode", None) not in supported_modes:
+            return False
+        cached = self._fulltext_available.get(cache_key)
+        if cached is not None:
+            supported, expires_at = cached
+            if expires_at is None or time.monotonic() < expires_at:
+                return supported
+            del self._fulltext_available[cache_key]
         try:
             meta = None
             if hasattr(vector_store, "get_collection_meta"):
-                meta = await vector_store.get_collection_meta(ctx=ctx)
-            if not meta:
-                self._fulltext_available = False
-                return False
+                meta = await vector_store.get_collection_meta(
+                    ctx=ctx,
+                    raise_on_error=raise_on_error,
+                )
+            if not isinstance(meta, dict) or not isinstance(meta.get("Fields"), list):
+                raise RuntimeError("Vector backend returned invalid collection metadata")
             fields = meta.get("Fields", [])
             has_content = any(
                 f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields
@@ -159,9 +234,21 @@ class _GrepMixin:
             fulltext = meta.get("FullText") or []
             has_content_fulltext = any(ft.get("Field") == "content" for ft in fulltext)
             result = has_content and has_content_fulltext
-            self._fulltext_available = result
+            expires_at = None if result else time.monotonic() + _FULLTEXT_UNSUPPORTED_CACHE_TTL
+            self._fulltext_available[cache_key] = (result, expires_at)
             return result
         except Exception:
+            if raise_on_error:
+                logger.error(
+                    "Failed to check collection fulltext config: "
+                    "account_id=%s backend=%s collection=%s index=%s",
+                    account_id,
+                    cache_key[1],
+                    cache_key[2],
+                    cache_key[3],
+                    exc_info=True,
+                )
+                raise
             logger.debug(
                 "Failed to check collection fulltext config, assuming no fulltext", exc_info=True
             )
@@ -200,18 +287,37 @@ class _GrepMixin:
         level_limit,
         ctx,
         content_transform=None,
+        allowed_uris=None,
+        before_context=0,
+        after_context=0,
     ):
         """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
-        if content_transform is None:
+        native_safe = (
+            content_transform is None
+            and allowed_uris is None
+            and await self._session_native_grep_safe(uri, ctx)
+        )
+        if native_safe:
             try:
+                # Session grep historically used the Python fallback, where
+                # level_limit counts directory expansions and therefore
+                # includes files one path segment deeper than native grep.
+                # Preserve that public behavior when selecting the fast path.
+                native_level_limit = (
+                    level_limit + 1
+                    if is_session_uri(uri) and level_limit is not None
+                    else level_limit
+                )
                 return await self._grep_with_agfs(
                     uri=uri,
                     pattern=pattern,
                     exclude_uri=exclude_uri,
                     case_insensitive=case_insensitive,
                     node_limit=node_limit,
-                    level_limit=level_limit,
+                    level_limit=native_level_limit,
                     ctx=ctx,
+                    before_context=before_context,
+                    after_context=after_context,
                 )
             except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
                 logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
@@ -225,7 +331,41 @@ class _GrepMixin:
             level_limit=level_limit,
             ctx=ctx,
             content_transform=content_transform,
+            allowed_uris=allowed_uris,
+            before_context=before_context,
+            after_context=after_context,
         )
+
+    async def _session_native_grep_safe(self, uri: str, ctx: Optional[RequestContext]) -> bool:
+        """Return whether native grep sees every visible path for ``uri``.
+
+        Canonical session reads merge the current user namespace with two
+        historical storage layouts. Native AGFS grep accepts one physical
+        root, so it is complete only when no visible legacy candidate exists.
+        """
+        legacy_uri = self._legacy_session_alias(uri)
+        if legacy_uri is None:
+            return True
+
+        real_ctx = self._ctx_or_default(ctx)
+        if self._is_session_root_uri(uri):
+            primary_path = self._uri_to_path(uri, ctx=ctx)
+            if not await self._agfs_path_exists(primary_path):
+                return False
+            legacy_path = self._legacy_session_path(legacy_uri, ctx=ctx)
+            owner_user_id = self._safe_uri_parts(uri)[1]
+            legacy_items = await self._legacy_session_root_items(
+                legacy_path, real_ctx, uri.rstrip("/"), owner_user_id
+            )
+            return not legacy_items
+
+        primary_path = self._uri_to_path(uri, ctx=ctx)
+        for path in self._read_paths(uri, ctx=ctx)[1:]:
+            if not await self._agfs_path_exists(path):
+                continue
+            if await self._read_path_visible(uri, path, primary_path, real_ctx):
+                return False
+        return True
 
     async def _grep_vikingdb_then_fs(
         self,
@@ -236,9 +376,16 @@ class _GrepMixin:
         node_limit,
         level_limit,
         ctx,
+        allowed_uris=None,
+        tag_filter=None,
+        include_tags=False,
+        before_context=0,
+        after_context=0,
     ):
         """VikingDB bm25 recall + local fs precise matching."""
         vector_store = self._get_vector_store()
+        tags_by_uri: Dict[str, List[str]] = {}
+        output_fields = ["uri", "search_tags"] if tag_filter is not None or include_tags else ["uri"]
 
         # Split regex alternation (e.g. "error|warning|fail") and join as a
         # single query string for bm25 search. VikingDB's standard tokenizer
@@ -248,16 +395,22 @@ class _GrepMixin:
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = exclude_uri.rstrip("/")
-            self._ensure_access(excluded_prefix, ctx)
-            filter_expr = And([
-                filter_expr,
-                RawDSL({
-                    "op": "must_not",
-                    "field": "uri",
-                    "conds": [excluded_prefix],
-                    "para": "-d=-1",
-                }),
-            ])
+            await self._ensure_access(excluded_prefix, ctx)
+            filter_expr = And(
+                [
+                    filter_expr,
+                    RawDSL(
+                        {
+                            "op": "must_not",
+                            "field": "uri",
+                            "conds": [excluded_prefix],
+                            "para": "-d=-1",
+                        }
+                    ),
+                ]
+            )
+        if tag_filter is not None:
+            filter_expr = And([filter_expr, RawDSL(tag_filter)])
 
         # Auto-adapt bm25 recall limit: recall up to 5x requested matches
         # while capping at VikingDB's max limit. If node_limit is unset,
@@ -272,28 +425,64 @@ class _GrepMixin:
                 query,
                 remote_return_limit,
                 filter_expr,
-                ["uri"],
+                output_fields,
             )
             result = await vector_store.search_by_keywords(
                 query=query,
                 limit=remote_return_limit,
                 filter=filter_expr,
-                output_fields=["uri"],
+                output_fields=output_fields,
                 ctx=ctx,
             )
         except Exception as e:
             logger.warning(f"grep vikingdb step failed, falling back to fs: {e}")
-            return await self._grep_fs(
-                uri=uri,
-                pattern=pattern,
-                exclude_uri=exclude_uri,
-                case_insensitive=case_insensitive,
-                node_limit=node_limit,
-                level_limit=level_limit,
-                ctx=ctx,
-            )
+            if tag_filter is not None and allowed_uris is None:
+                try:
+                    records = await vector_store.filter(
+                        filter=And(
+                            [
+                                PathScope("uri", uri, depth=level_limit),
+                                RawDSL(tag_filter),
+                            ]
+                        ),
+                        limit=100000,
+                        output_fields=["uri", "search_tags"],
+                        ctx=ctx,
+                    )
+                except Exception as filter_error:
+                    logger.warning(
+                        "grep tag-filter fallback failed; returning no results: %s",
+                        filter_error,
+                    )
+                    return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+                allowed_uris = {str(record["uri"]) for record in records if record.get("uri")}
+                if not allowed_uris:
+                    return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+                tags_by_uri = {
+                    str(record["uri"]): list(record.get("search_tags") or [])
+                    for record in records
+                    if record.get("uri")
+                }
+            fallback_kwargs = {
+                "uri": uri,
+                "pattern": pattern,
+                "exclude_uri": exclude_uri,
+                "case_insensitive": case_insensitive,
+                "node_limit": node_limit,
+                "level_limit": level_limit,
+                "ctx": ctx,
+                "before_context": before_context,
+                "after_context": after_context,
+            }
+            if allowed_uris is not None:
+                fallback_kwargs["allowed_uris"] = allowed_uris
+            return self._attach_grep_tags(await self._grep_fs(**fallback_kwargs), tags_by_uri)
 
         candidate_uris = [r["uri"] for r in result if r.get("uri")]
+        if allowed_uris is not None:
+            candidate_uris = [
+                candidate_uri for candidate_uri in candidate_uris if candidate_uri in allowed_uris
+            ]
         if excluded_prefix:
             candidate_uris = [
                 u
@@ -305,13 +494,36 @@ class _GrepMixin:
             return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
 
         # Step 2: local fs precise matching on candidate files
-        return await self._grep_in_files(
+        grep_result = await self._grep_in_files(
             candidate_uris,
             pattern,
             case_insensitive,
             node_limit,
             ctx,
+            before_context,
+            after_context,
         )
+        if tag_filter is None and not include_tags:
+            return grep_result
+        return self._attach_grep_tags(
+            grep_result,
+            {
+                str(record["uri"]): list(record.get("search_tags") or [])
+                for record in result
+                if record.get("uri")
+            },
+        )
+
+    @staticmethod
+    def _attach_grep_tags(result: Dict, tags_by_uri: Dict[str, List[str]]) -> Dict:
+        if not tags_by_uri:
+            return result
+        result = dict(result)
+        result["matches"] = [
+            {**match, "tags": tags_by_uri.get(str(match.get("uri") or ""), [])}
+            for match in result.get("matches", [])
+        ]
+        return result
 
     async def _grep_in_files(
         self,
@@ -320,6 +532,8 @@ class _GrepMixin:
         case_insensitive: bool,
         node_limit: Optional[int],
         ctx: Optional[RequestContext],
+        before_context: int = 0,
+        after_context: int = 0,
     ) -> Dict:
         """Execute regex matching in specified file list (vikingdb_then_fs Step 2)."""
         flags = re.IGNORECASE if case_insensitive else 0
@@ -336,9 +550,18 @@ class _GrepMixin:
             except Exception:
                 continue
 
-            for line_no, line in enumerate(content.splitlines(), 1):
+            lines = content.splitlines()
+            for line_index, line in enumerate(lines):
                 if compiled.search(line):
-                    results.append({"uri": file_uri, "line": line_no, "content": line})
+                    results.append(
+                        self._build_grep_match(
+                            file_uri,
+                            lines,
+                            line_index,
+                            before_context,
+                            after_context,
+                        )
+                    )
                     if node_limit and len(results) >= node_limit:
                         return {
                             "matches": results,
@@ -363,6 +586,8 @@ class _GrepMixin:
         node_limit: Optional[int] = None,
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
+        before_context: int = 0,
+        after_context: int = 0,
     ) -> Dict:
         """Grep using agfs native implementation.
 
@@ -381,6 +606,8 @@ class _GrepMixin:
             node_limit: Maximum number of results to return
             level_limit: Maximum depth level to traverse
             ctx: Request context
+            before_context: Number of lines to include before each match
+            after_context: Number of lines to include after each match
 
         Returns:
             Dict with matches, count, match_count, files_scanned
@@ -390,7 +617,7 @@ class _GrepMixin:
         excluded_path = None
         if exclude_uri:
             normalized_excluded_uri = exclude_uri.rstrip("/")
-            self._ensure_access(normalized_excluded_uri, ctx)
+            await self._ensure_access(normalized_excluded_uri, ctx)
             excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
         try:
@@ -403,6 +630,8 @@ class _GrepMixin:
                 node_limit=node_limit,
                 exclude_path=excluded_path,
                 level_limit=level_limit,
+                before_context=before_context,
+                after_context=after_context,
             )
         except (AttributeError, AGFSNotSupportedError, NotImplementedError):
             # Capability missing: let the outer caller fall back to the VikingFS implementation.
@@ -414,6 +643,21 @@ class _GrepMixin:
         files_scanned_set = set()
         real_ctx = self._ctx_or_default(ctx)
 
+        # Resolve every matched file to a Viking URI first, then run one
+        # ACL-aware batch authorization. ``_is_accessible`` is ACL-blind for
+        # ``viking://resources`` and would leak content protected by restricted
+        # inheritance, so matched URIs must go through ``_can_access_many`` the
+        # same way filesystem reads and vector retrieval do.
+        match_uris: List[str] = []
+        for match in matches:
+            match_file = match.get("file", "")
+            if not match_file:
+                continue
+            agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
+            match_uris.append(self._path_to_uri(agfs_file_path, ctx=ctx))
+
+        access = await self._can_access_many(match_uris, real_ctx)
+
         for match in matches:
             match_file = match.get("file", "")
             if not match_file:
@@ -422,16 +666,21 @@ class _GrepMixin:
             agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
 
             file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
-            if not self._is_accessible(file_uri, real_ctx):
+            if not access.get(file_uri, False):
                 continue
 
             files_scanned_set.add(file_uri)
 
-            results.append({
+            mapped_match = {
                 "line": match.get("line", match.get("line_number", 0)),
                 "uri": file_uri,
                 "content": match.get("content", ""),
-            })
+            }
+            if before_context > 0:
+                mapped_match["before_context"] = match.get("before_context", [])
+            if after_context > 0:
+                mapped_match["after_context"] = match.get("after_context", [])
+            results.append(mapped_match)
 
             if node_limit and len(results) >= node_limit:
                 break
@@ -463,6 +712,9 @@ class _GrepMixin:
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
         content_transform: Optional[Callable[[str, str], str]] = None,
+        allowed_uris: Optional[Set[str]] = None,
+        before_context: int = 0,
+        after_context: int = 0,
     ) -> Dict:
         """Grep implementation for encrypted files.
 
@@ -486,12 +738,13 @@ class _GrepMixin:
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = exclude_uri.rstrip("/")
-            self._ensure_access(excluded_prefix, ctx)
+            await self._ensure_access(excluded_prefix, ctx)
         file_uris = await self._collect_grep_files(
             uri,
             excluded_prefix=excluded_prefix,
             level_limit=level_limit,
             ctx=ctx,
+            allowed_uris=allowed_uris,
         )
         results, files_scanned = await self._grep_files_parallel(
             file_uris,
@@ -499,6 +752,8 @@ class _GrepMixin:
             node_limit=node_limit,
             ctx=ctx,
             content_transform=content_transform,
+            before_context=before_context,
+            after_context=after_context,
         )
 
         return {
@@ -514,6 +769,7 @@ class _GrepMixin:
         excluded_prefix: Optional[str],
         level_limit: int,
         ctx: Optional[RequestContext] = None,
+        allowed_uris: Optional[Set[str]] = None,
     ) -> List[str]:
         file_uris: List[str] = []
 
@@ -529,23 +785,46 @@ class _GrepMixin:
                 logger.debug(f"Skipping excluded uri during grep: {normalized_current_uri}")
                 return
 
-            try:
-                entries = await self.ls(normalized_current_uri, ctx=ctx)
-            except Exception:
-                return
+            offset = 0
+            while True:
+                try:
+                    entries = await self.ls(
+                        normalized_current_uri,
+                        node_limit=_GREP_LS_PAGE_SIZE,
+                        offset=offset,
+                        ctx=ctx,
+                    )
+                except PermissionDeniedError:
+                    # A denial on the first page means this child subtree is
+                    # no longer visible and can be skipped. Once traversal has
+                    # consumed a page, swallowing the error would misreport a
+                    # partial result as complete.
+                    if current_depth == 0 or offset > 0:
+                        raise
+                    logger.debug(
+                        f"Skipping inaccessible directory during grep: {normalized_current_uri}"
+                    )
+                    return
 
-            for entry in entries:
-                entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
-                if excluded_prefix and (
-                    entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
-                ):
-                    logger.debug(f"Skipping excluded uri during grep: {entry_uri}")
-                    continue
+                for entry in entries:
+                    entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
+                    if excluded_prefix and (
+                        entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
+                    ):
+                        logger.debug(f"Skipping excluded uri during grep: {entry_uri}")
+                        continue
+                    if entry.get("access") == "denied":
+                        logger.debug(f"Skipping inaccessible uri during grep: {entry_uri}")
+                        continue
 
-                if entry.get("isDir"):
-                    await search_recursive(entry_uri, current_depth + 1)
-                else:
-                    file_uris.append(entry_uri)
+                    if entry.get("isDir"):
+                        await search_recursive(entry_uri, current_depth + 1)
+                    elif allowed_uris is None or entry_uri in allowed_uris:
+                        file_uris.append(entry_uri)
+
+                if len(entries) < _GREP_LS_PAGE_SIZE:
+                    break
+                offset += len(entries)
 
         normalized_uri = uri
         if excluded_prefix and (
@@ -553,12 +832,10 @@ class _GrepMixin:
         ):
             logger.debug(f"Skipping excluded uri during grep: {normalized_uri}")
             return file_uris
-        try:
-            root_stat = await self.stat(normalized_uri, ctx=ctx)
-        except Exception:
-            return file_uris
+        root_stat = await self.stat(normalized_uri, ctx=ctx, skip_count=True)
         if not root_stat.get("isDir", False):
-            file_uris.append(normalized_uri)
+            if allowed_uris is None or normalized_uri in allowed_uris:
+                file_uris.append(normalized_uri)
             return file_uris
 
         await search_recursive(uri, 0)
@@ -571,18 +848,24 @@ class _GrepMixin:
         node_limit: Optional[int],
         ctx: Optional[RequestContext] = None,
         content_transform: Optional[Callable[[str, str], str]] = None,
+        before_context: int = 0,
+        after_context: int = 0,
     ) -> tuple[List[Dict[str, Any]], int]:
         results: List[Dict[str, Any]] = []
         files_scanned = 0
         concurrency = _pkg()._DEFAULT_GREP_FILE_CONCURRENCY
         for start in range(0, len(file_uris), concurrency):
             batch_uris = file_uris[start : start + concurrency]
+            remaining_limit = node_limit - len(results) if node_limit else None
             batch_jobs = [
                 self._grep_single_file(
                     entry_uri,
                     compiled_pattern,
                     ctx,
+                    node_limit=remaining_limit,
                     content_transform=content_transform,
+                    before_context=before_context,
+                    after_context=after_context,
                 )
                 for entry_uri in batch_uris
             ]
@@ -601,7 +884,10 @@ class _GrepMixin:
         entry_uri: str,
         compiled_pattern: re.Pattern,
         ctx: Optional[RequestContext] = None,
+        node_limit: Optional[int] = None,
         content_transform: Optional[Callable[[str, str], str]] = None,
+        before_context: int = 0,
+        after_context: int = 0,
     ) -> tuple[List[Dict[str, Any]], int]:
         try:
             content = await self.read(entry_uri, ctx=ctx)
@@ -612,17 +898,50 @@ class _GrepMixin:
 
             matches: List[Dict[str, Any]] = []
             lines = content.split("\n")
-            for line_num, line in enumerate(lines, 1):
+            for line_index, line in enumerate(lines):
                 if compiled_pattern.search(line):
-                    matches.append({
-                        "line": line_num,
-                        "uri": entry_uri,
-                        "content": line,
-                    })
+                    matches.append(
+                        self._build_grep_match(
+                            entry_uri,
+                            lines,
+                            line_index,
+                            before_context,
+                            after_context,
+                        )
+                    )
+                    if node_limit and len(matches) >= node_limit:
+                        break
             return matches, 1
         except Exception as e:
             logger.debug(f"Failed to grep {entry_uri}: {e}")
             return [], 1
+
+    @staticmethod
+    def _build_grep_match(
+        uri: str,
+        lines: List[str],
+        line_index: int,
+        before_context: int,
+        after_context: int,
+    ) -> Dict[str, Any]:
+        match = {
+            "line": line_index + 1,
+            "uri": uri,
+            "content": lines[line_index],
+        }
+        if before_context > 0:
+            start = max(0, line_index - before_context)
+            match["before_context"] = [
+                {"line": index + 1, "content": lines[index]}
+                for index in range(start, line_index)
+            ]
+        if after_context > 0:
+            end = min(len(lines), line_index + after_context + 1)
+            match["after_context"] = [
+                {"line": index + 1, "content": lines[index]}
+                for index in range(line_index + 1, end)
+            ]
+        return match
 
     def _resolve_grep_match_agfs_path(self, base_path: str, match_file: str) -> str:
         """Resolve a grep match path (relative to query root) into a full AGFS path."""

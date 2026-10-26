@@ -1,4 +1,4 @@
-from build_support.x86_profiles import get_host_engine_build_config
+from scripts.build_support.x86_profiles import get_host_engine_build_config
 
 
 def test_x86_host_uses_sse3_extension_baseline():

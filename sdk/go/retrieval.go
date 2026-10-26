@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -27,6 +30,7 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	}
 	payload["limit"] = limit
 	setString(payload, "image_url", imageURL)
+	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
@@ -67,12 +71,14 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 		return nil, err
 	}
 	payload := map[string]any{"query": queryText}
+	setString(payload, "search_type", opts.SearchType)
 	if opts.TargetURI != nil {
 		payload["target_uri"] = normalizeTarget(opts.TargetURI)
 	}
 	payload["limit"] = limit
 	setString(payload, "image_url", imageURL)
 	setString(payload, "session_id", opts.SessionID)
+	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
@@ -105,6 +111,7 @@ func (c *Client) SearchContext(ctx context.Context, query string, opts *SearchCo
 		"query": query,
 		"mode":  "context",
 	}
+	setString(payload, "search_type", opts.SearchType)
 	imageURL, err := normalizeImageInput(opts.Image)
 	if err != nil {
 		return nil, err
@@ -123,6 +130,7 @@ func (c *Client) SearchContext(ctx context.Context, query string, opts *SearchCo
 	setString(payload, "since", opts.Since)
 	setString(payload, "until", opts.Until)
 	setString(payload, "time_field", opts.TimeField)
+	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
 	setString(payload, "query_expansion", opts.QueryExpansion)
 	setAny(payload, "max_tokens", opts.MaxTokens)
 	if opts.Quotas != nil {
@@ -166,6 +174,12 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 	if opts.ExcludeURI != "" {
 		payload["exclude_uri"] = NormalizeURI(opts.ExcludeURI)
 	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+	}
+	if opts.IncludeTags {
+		payload["include_tags"] = true
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/grep", nil, payload, &result)
 	return result, err
@@ -185,6 +199,12 @@ func (c *Client) Glob(ctx context.Context, pattern string, uri string, opts *Glo
 	}
 	if opts.NodeLimit != nil {
 		payload["node_limit"] = *opts.NodeLimit
+	}
+	if opts.Tags != nil {
+		payload["tags"] = opts.Tags
+	}
+	if opts.IncludeTags {
+		payload["include_tags"] = true
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/glob", nil, payload, &result)

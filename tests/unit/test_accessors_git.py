@@ -17,6 +17,7 @@ from openviking.utils import code_hosting_utils
 from openviking.utils.git_auth import (
     build_git_http_auth_env,
     git_http_basic_auth_header,
+    is_git_https_url,
     parse_git_http_auth_config,
 )
 from openviking_cli.exceptions import InvalidArgumentError
@@ -75,6 +76,20 @@ def test_git_http_auth_config_defaults_username_and_builds_isolated_env() -> Non
     assert env["GIT_CONFIG_KEY_3"] == f"http.{repo_url}.extraHeader"
     assert env["GIT_CONFIG_VALUE_3"] == ""
     assert env["GIT_CONFIG_KEY_4"] == f"http.{repo_url}.extraHeader"
+
+
+@pytest.mark.parametrize(
+    ("repo_url", "expected"),
+    [
+        ("https://github.com/org/repo.git", True),
+        (" HTTPS://github.com/org/repo.git ", True),
+        ("http://github.com/org/repo.git", False),
+        ("git@github.com:org/repo.git", False),
+        ("ssh://git@github.com/org/repo.git", False),
+    ],
+)
+def test_git_https_url_detection(repo_url: str, expected: bool) -> None:
+    assert is_git_https_url(repo_url) is expected
 
 
 @pytest.mark.parametrize(
@@ -484,6 +499,87 @@ class TestGitAccessor:
         )
         assert resource.original_source == source
         assert token not in str(resource.meta)
+
+    async def test_github_token_is_preserved_for_archive_fallback_clone(
+        self,
+        accessor: GitAccessor,
+        tmp_path: Path,
+    ) -> None:
+        source = "https://github.com/org/private.git"
+        token = "account-token"
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_github_zip_download",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("archive unavailable"),
+            ) as zip_download,
+            patch.object(
+                accessor,
+                "_git_clone",
+                new_callable=AsyncMock,
+                return_value="org/private",
+            ) as git_clone,
+        ):
+            await accessor.access(source, github_token=token)
+
+        zip_download.assert_awaited_once_with(
+            source,
+            None,
+            str(tmp_path),
+            github_token=token,
+        )
+        clone_env = git_clone.await_args.kwargs["env"]
+        assert _git_config_entries(clone_env)[f"http.{source}.extraHeader"] == (
+            "Authorization: Basic "
+            + base64.b64encode(f"oauth2:{token}".encode()).decode("ascii")
+        )
+
+    async def test_environment_github_token_does_not_replace_ssh_clone_auth(
+        self,
+        accessor: GitAccessor,
+        tmp_path: Path,
+    ) -> None:
+        source = "ssh://git@github.com/org/private.git"
+        token = "environment-token"
+        with (
+            patch.dict(os.environ, {"GITHUB_TOKEN": token}),
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_github_zip_download",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("archive unavailable"),
+            ) as zip_download,
+            patch.object(
+                accessor,
+                "_git_clone",
+                new_callable=AsyncMock,
+                return_value="org/private",
+            ) as git_clone,
+        ):
+            await accessor.access(source)
+
+        zip_download.assert_awaited_once_with(
+            source,
+            None,
+            str(tmp_path),
+            github_token=token,
+        )
+        git_clone.assert_awaited_once_with(
+            source,
+            str(tmp_path),
+            branch=None,
+            commit=None,
+            env=None,
+        )
 
     async def test_embedded_http_credentials_are_passed_through_unchanged(
         self,

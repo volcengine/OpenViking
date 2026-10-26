@@ -7,6 +7,8 @@ from typing import Any, AsyncIterator, Callable, Literal
 
 import json_repair
 
+from openviking.models.model_error import ModelErrorKind
+
 
 @dataclass
 class ToolCallRequest:
@@ -27,6 +29,7 @@ class LLMResponse:
     finish_reason: str = "stop"
     usage: dict[str, int] = field(default_factory=dict)
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
+    error_kind: ModelErrorKind | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -87,7 +90,7 @@ def parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
         if not (stripped.startswith("{") and stripped.endswith("}")):
             return {"raw": raw_arguments}
         try:
-            parsed = json_repair.loads(raw_arguments)
+            parsed = json_repair.loads(raw_arguments, stream_stable=True)
         except (ValueError, TypeError, RecursionError):
             return {"raw": raw_arguments}
         if not isinstance(parsed, dict):
@@ -152,6 +155,8 @@ class LLMProvider(ABC):
         max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
+        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -163,6 +168,8 @@ class LLMProvider(ABC):
             max_tokens: Maximum tokens in response. None uses the model provider default.
             temperature: Sampling temperature.
             session_id: Optional session ID for tracing.
+            thinking: Optional per-call reasoning mode; None preserves provider configuration.
+            reasoning_effort: Optional per-call effort override for supported backends.
 
         Returns:
             LLMResponse with content and/or tool calls.
@@ -191,6 +198,10 @@ class LLMProvider(ABC):
             session_id=session_id,
         )
         yield LLMStreamEvent(type="response", response=response)
+
+    def supports_tool_result_media(self, model: str | None = None) -> bool:
+        """Whether this provider can preserve media inside a tool result."""
+        return False
 
     @abstractmethod
     def get_default_model(self) -> str:

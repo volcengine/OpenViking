@@ -1,16 +1,17 @@
 //! A transparent [`FileSystem`](crate::FileSystem) cache wrapper.
 
 use super::envelope::{CacheEnvelope, CacheObjectKind, GenerationSnapshot};
-use super::{
-    CacheError, CacheMetrics, CachePolicy, CacheProvider, CacheResult, CacheTraversalMode,
-};
+use super::{CacheMetrics, CachePolicy, CacheTraversalMode};
+use crate::cache_runtime::{CacheError, CacheResult, CacheRuntime, SetOptions, SetResult};
 use crate::core::filesystem::{
-    compile_grep_regex, is_excluded_path, normalize_prefix_path, relative_depth,
-    relative_match_file,
+    apply_read_dir_options, compile_grep_regex, is_excluded_path, normalize_prefix_path,
+    paginate_entries, relative_depth, relative_match_file,
 };
+use crate::core::grep::GrepLineCollector;
+use crate::core::types::GrepContextLine;
 use crate::core::{
-    FileInfo, FileSystem, GlobPage, GrepMatch, GrepResult, MultiWriteWrappedFS, Result,
-    TreeEntry, WriteFlag,
+    FileInfo, FileSystem, GlobPage, GrepMatch, GrepOptions, GrepResult, ListSortBy,
+    MultiWriteWrappedFS, Result, SortOrder, TreeEntry, WriteFlag,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,26 +24,7 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 const GREP_CACHE_FILE_CONCURRENCY: usize = 8;
-
-/// Namespace prepended to every provider key owned by one wrapper.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CacheNamespace {
-    value: String,
-}
-
-impl CacheNamespace {
-    /// Create a namespace from a mount-, account-, or application-specific value.
-    pub fn new(value: impl Into<String>) -> Self {
-        Self {
-            value: value.into(),
-        }
-    }
-
-    /// Return the namespace text.
-    pub fn as_str(&self) -> &str {
-        &self.value
-    }
-}
+const GENERATION_PUT_CONCURRENCY: usize = 8;
 
 /// A provider-independent read-through filesystem cache.
 ///
@@ -50,8 +32,8 @@ impl CacheNamespace {
 /// default mount path, so existing filesystem behavior remains unchanged.
 pub struct CachedFileSystem {
     backend: Box<dyn FileSystem>,
-    provider: Arc<dyn CacheProvider>,
-    namespace: CacheNamespace,
+    runtime: Arc<CacheRuntime>,
+    service_name: String,
     policy: CachePolicy,
     metrics: Arc<CacheMetrics>,
     operation_lock: RwLock<()>,
@@ -62,17 +44,26 @@ pub struct CachedFileSystem {
 }
 
 impl CachedFileSystem {
-    /// Wrap an existing backend with a cache provider.
-    pub fn new(
+    /// Wrap an existing backend with the unified cache runtime.
+    pub fn with_runtime(
         backend: Box<dyn FileSystem>,
-        provider: Arc<dyn CacheProvider>,
-        namespace: CacheNamespace,
+        runtime: Arc<CacheRuntime>,
+        service_name: impl Into<String>,
+        policy: CachePolicy,
+    ) -> Self {
+        Self::build(backend, runtime, service_name.into(), policy)
+    }
+
+    fn build(
+        backend: Box<dyn FileSystem>,
+        runtime: Arc<CacheRuntime>,
+        service_name: String,
         policy: CachePolicy,
     ) -> Self {
         Self {
             backend,
-            provider,
-            namespace,
+            runtime,
+            service_name,
             policy,
             metrics: Arc::new(CacheMetrics::default()),
             operation_lock: RwLock::new(()),
@@ -88,9 +79,9 @@ impl CachedFileSystem {
         Arc::clone(&self.metrics)
     }
 
-    /// Return the provider used by this wrapper.
-    pub fn provider(&self) -> Arc<dyn CacheProvider> {
-        Arc::clone(&self.provider)
+    /// Return the unified cache runtime used by this wrapper.
+    pub fn runtime(&self) -> Arc<CacheRuntime> {
+        Arc::clone(&self.runtime)
     }
 
     /// Return the wrapped filesystem for mount-stack capability discovery.
@@ -115,6 +106,10 @@ impl CachedFileSystem {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         enum TreeTask {
             VisitDir(String),
@@ -124,9 +119,10 @@ impl CachedFileSystem {
         let base_path = normalize_prefix_path(path);
         let mut result = Vec::new();
         let mut stack = vec![TreeTask::VisitDir(base_path.clone())];
+        let traversal_limit = node_limit.map(|limit| offset.unwrap_or(0).saturating_add(limit));
 
         while let Some(task) = stack.pop() {
-            if node_limit.is_some_and(|limit| result.len() >= limit) {
+            if traversal_limit.is_some_and(|limit| result.len() >= limit) {
                 break;
             }
 
@@ -140,7 +136,9 @@ impl CachedFileSystem {
                         }
                     }
 
-                    let entries = self.read_dir(&current_path).await?;
+                    let entries = self
+                        .read_dir(&current_path, None, None, sort_by, sort_order)
+                        .await?;
                     for entry in entries.into_iter().rev() {
                         let is_hidden_file = !entry.is_dir && entry.name.starts_with('.');
                         if is_hidden_file && !show_hidden {
@@ -164,32 +162,34 @@ impl CachedFileSystem {
                         if is_dir {
                             stack.push(TreeTask::VisitDir(entry_path));
                         }
-                        stack.push(TreeTask::Emit(tree_entry));
+                        if is_dir || !directories_only {
+                            stack.push(TreeTask::Emit(tree_entry));
+                        }
                     }
                 }
             }
         }
 
-        Ok(result)
+        Ok(paginate_entries(result, offset, node_limit))
     }
 
     async fn grep_via_cache(
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         enum GrepTask {
             Visit { path: String, is_dir: Option<bool> },
         }
 
-        let re = compile_grep_regex(pattern, case_insensitive)?;
+        let re = compile_grep_regex(pattern, options.case_insensitive)?;
         let base_path = normalize_prefix_path(path);
-        let normalized_exclude = exclude_path.map(normalize_prefix_path);
+        let normalized_exclude = options.exclude_path.map(normalize_prefix_path);
+        let options = GrepOptions {
+            exclude_path: normalized_exclude.as_deref(),
+            ..options
+        };
         let mut result = GrepResult::new();
         let generation_cache = Mutex::new(HashMap::new());
         let mut file_batch = Vec::new();
@@ -203,7 +203,10 @@ impl CachedFileSystem {
             is_dir,
         }) = stack.pop()
         {
-            if node_limit.is_some_and(|limit| result.count >= limit) {
+            if options
+                .node_limit
+                .is_some_and(|limit| result.count >= limit)
+            {
                 break;
             }
 
@@ -222,20 +225,23 @@ impl CachedFileSystem {
                     &mut file_batch,
                     &base_path,
                     &re,
-                    node_limit,
+                    options,
                     &mut result,
                     &generation_cache,
                 )
                 .await?;
-                if node_limit.is_some_and(|limit| result.count >= limit) {
+                if options
+                    .node_limit
+                    .is_some_and(|limit| result.count >= limit)
+                {
                     break;
                 }
 
-                if !recursive && current_path != base_path {
+                if !options.recursive && current_path != base_path {
                     continue;
                 }
 
-                if let Some(limit) = level_limit {
+                if let Some(limit) = options.level_limit {
                     let rel = relative_match_file(&base_path, &current_path);
                     if relative_depth(&rel) >= limit {
                         continue;
@@ -257,7 +263,7 @@ impl CachedFileSystem {
                     });
                 }
             } else {
-                if let Some(limit) = level_limit {
+                if let Some(limit) = options.level_limit {
                     let rel = relative_match_file(&base_path, &current_path);
                     if relative_depth(&rel) > limit {
                         continue;
@@ -270,7 +276,7 @@ impl CachedFileSystem {
                         &mut file_batch,
                         &base_path,
                         &re,
-                        node_limit,
+                        options,
                         &mut result,
                         &generation_cache,
                     )
@@ -283,7 +289,7 @@ impl CachedFileSystem {
             &mut file_batch,
             &base_path,
             &re,
-            node_limit,
+            options,
             &mut result,
             &generation_cache,
         )
@@ -297,23 +303,36 @@ impl CachedFileSystem {
         file_batch: &mut Vec<String>,
         base_path: &str,
         re: &Regex,
-        node_limit: Option<usize>,
+        options: GrepOptions<'_>,
         result: &mut GrepResult,
         generation_cache: &Mutex<HashMap<String, u64>>,
     ) -> Result<()> {
-        if file_batch.is_empty() || node_limit.is_some_and(|limit| result.count >= limit) {
+        if file_batch.is_empty()
+            || options
+                .node_limit
+                .is_some_and(|limit| result.count >= limit)
+        {
             file_batch.clear();
             return Ok(());
         }
 
-        let remaining_limit = node_limit
+        let remaining_limit = options
+            .node_limit
             .map(|limit| limit.saturating_sub(result.count))
             .unwrap_or(usize::MAX);
         let files = std::mem::take(file_batch);
         let mut indexed = stream::iter(files.into_iter().enumerate())
             .map(|(index, path)| async move {
                 let matches = self
-                    .grep_cached_file(&path, base_path, re, remaining_limit, generation_cache)
+                    .grep_cached_file(
+                        &path,
+                        base_path,
+                        re,
+                        remaining_limit,
+                        options.before_context,
+                        options.after_context,
+                        generation_cache,
+                    )
                     .await;
                 (index, matches)
             })
@@ -324,7 +343,10 @@ impl CachedFileSystem {
         indexed.sort_by_key(|(index, _)| *index);
         for (_, matches) in indexed {
             for item in matches? {
-                if node_limit.is_some_and(|limit| result.count >= limit) {
+                if options
+                    .node_limit
+                    .is_some_and(|limit| result.count >= limit)
+                {
                     return Ok(());
                 }
                 result.matches.push(item);
@@ -341,6 +363,8 @@ impl CachedFileSystem {
         base_path: &str,
         re: &Regex,
         remaining_limit: usize,
+        before_context: usize,
+        after_context: usize,
         generation_cache: &Mutex<HashMap<String, u64>>,
     ) -> Result<Vec<GrepMatch>> {
         let content = self
@@ -348,27 +372,39 @@ impl CachedFileSystem {
             .await?;
         let content_str = String::from_utf8_lossy(&content);
         let rel_file = relative_match_file(base_path, path);
-        let mut matches = Vec::new();
+        let mut result = GrepResult {
+            matches: Vec::with_capacity(remaining_limit.min(64)),
+            count: 0,
+        };
+        let mut collector = GrepLineCollector::new(
+            rel_file.clone(),
+            before_context,
+            after_context,
+            remaining_limit,
+            &mut result,
+        );
 
-        for (line_num, line) in content_str.lines().enumerate() {
-            if matches.len() >= remaining_limit {
-                break;
-            }
-            if re.is_match(line) {
-                matches.push(GrepMatch {
-                    file: rel_file.clone(),
-                    line: (line_num + 1) as u64,
+        for (line_index, line) in content_str.lines().enumerate() {
+            let is_match = re.is_match(line);
+            if !collector.consume_line(
+                &rel_file,
+                GrepContextLine {
+                    line: (line_index + 1) as u64,
                     content: line.to_string(),
-                });
+                },
+                is_match,
+            ) {
+                break;
             }
         }
 
-        Ok(matches)
+        drop(collector);
+        Ok(result.matches)
     }
 
     async fn cache_get(&self, key: &str) -> CacheResult<Option<Bytes>> {
         let started = Instant::now();
-        let result = self.provider.get(key).await;
+        let result = self.runtime.get(key).await;
         self.metrics.get(started.elapsed());
         result
     }
@@ -378,7 +414,7 @@ impl CachedFileSystem {
             return Ok(Vec::new());
         }
 
-        if keys.len() == 1 || !self.provider.capabilities().batch_get {
+        if keys.len() == 1 {
             let mut values = Vec::with_capacity(keys.len());
             for key in keys {
                 values.push(self.cache_get(key).await?);
@@ -387,7 +423,7 @@ impl CachedFileSystem {
         }
 
         let started = Instant::now();
-        let result = self.provider.batch_get(keys).await;
+        let result = self.runtime.mget(keys).await;
         self.metrics.get(started.elapsed());
         let values = result?;
         if values.len() != keys.len() {
@@ -402,10 +438,15 @@ impl CachedFileSystem {
 
     async fn cache_put(&self, key: &str, value: Bytes, affected_path: &str) -> bool {
         let started = Instant::now();
-        let result = self.provider.put(key, value).await;
+        let result = self.runtime.set(key, value, SetOptions::default()).await;
         self.metrics.put(started.elapsed());
         match result {
-            Ok(()) => true,
+            Ok(SetResult::Applied) => true,
+            Ok(SetResult::ConditionNotMet) => {
+                self.metrics.error();
+                self.mark_bypass(affected_path).await;
+                false
+            }
             Err(_) => {
                 self.metrics.error();
                 self.mark_bypass(affected_path).await;
@@ -416,10 +457,10 @@ impl CachedFileSystem {
 
     async fn cache_delete(&self, key: &str, affected_path: &str) {
         let started = Instant::now();
-        let result = self.provider.delete(key).await;
+        let result = self.runtime.del(&[key.to_string()]).await;
         self.metrics.delete(started.elapsed());
         match result {
-            Ok(()) => self.metrics.invalidation(),
+            Ok(_) => self.metrics.invalidation(),
             Err(_) => {
                 self.metrics.error();
                 self.mark_bypass(affected_path).await;
@@ -536,35 +577,23 @@ impl CachedFileSystem {
     }
 
     async fn put_missing_generations(&self, missing: Vec<(String, u64)>) {
-        if missing.is_empty() {
-            return;
-        }
-
-        if missing.len() > 1 && self.provider.capabilities().batch_put {
-            let entries = missing
-                .into_iter()
-                .map(|(key, value)| (key, Bytes::copy_from_slice(&value.to_be_bytes())))
-                .collect();
-            let started = Instant::now();
-            if self.provider.batch_put(entries).await.is_err() {
-                self.metrics.error();
-            }
-            self.metrics.put(started.elapsed());
-            return;
-        }
-
-        for (key, value) in missing {
-            let started = Instant::now();
-            if self
-                .provider
-                .put(&key, Bytes::copy_from_slice(&value.to_be_bytes()))
-                .await
-                .is_err()
-            {
-                self.metrics.error();
-            }
-            self.metrics.put(started.elapsed());
-        }
+        stream::iter(missing)
+            .for_each_concurrent(GENERATION_PUT_CONCURRENCY, |(key, value)| async move {
+                let started = Instant::now();
+                let result = self
+                    .runtime
+                    .set(
+                        &key,
+                        Bytes::copy_from_slice(&value.to_be_bytes()),
+                        SetOptions::default(),
+                    )
+                    .await;
+                self.metrics.put(started.elapsed());
+                if !matches!(result, Ok(SetResult::Applied)) {
+                    self.metrics.error();
+                }
+            })
+            .await;
     }
 
     async fn generation_snapshots(&self, path: &str) -> CacheResult<Vec<GenerationSnapshot>> {
@@ -843,13 +872,13 @@ impl CachedFileSystem {
     ) -> Result<Vec<FileInfo>> {
         if !self.policy.cache_directory(path) || self.is_runtime_bypassed(path).await {
             self.metrics.policy_bypass();
-            return self.backend.read_dir(path).await;
+            return self.backend.read_dir(path, None, None, None, None).await;
         }
 
         let _operation_guard = self.operation_lock.read().await;
         if self.is_runtime_bypassed(path).await {
             self.metrics.policy_bypass();
-            return self.backend.read_dir(path).await;
+            return self.backend.read_dir(path, None, None, None, None).await;
         }
 
         let normalized = normalize_path(path);
@@ -887,7 +916,7 @@ impl CachedFileSystem {
             }
         }
 
-        let entries = self.backend.read_dir(path).await;
+        let entries = self.backend.read_dir(path, None, None, None, None).await;
         if let Ok(value) = &entries {
             self.metrics.backend_fallback(0);
             self.fill_directory(&key, &normalized, value).await;
@@ -961,8 +990,8 @@ impl CachedFileSystem {
     fn object_key(&self, kind: &str, path: &str) -> String {
         let normalized = normalize_path(path);
         format!(
-            "ragfs:v1:{}:{}:{:016x}",
-            self.namespace.as_str(),
+            "{}:ov:cache:v1:{}:{:016x}",
+            self.service_name,
             kind,
             stable_hash(normalized.as_bytes())
         )
@@ -1066,7 +1095,10 @@ impl FileSystem for CachedFileSystem {
         let key = self.file_key(&normalized);
         self.cache_delete(&key, &normalized).await;
         if offset == 0
-            && matches!(flags, WriteFlag::Create | WriteFlag::CreateNew | WriteFlag::Truncate)
+            && matches!(
+                flags,
+                WriteFlag::Create | WriteFlag::CreateNew | WriteFlag::Truncate
+            )
             && self.policy.cache_file(&normalized, data.len())
             && !self.is_runtime_bypassed(&normalized).await
         {
@@ -1076,22 +1108,37 @@ impl FileSystem for CachedFileSystem {
         Ok(written)
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         if !self.policy.cache_directory(path) || self.is_runtime_bypassed(path).await {
             self.metrics.policy_bypass();
-            return self.backend.read_dir(path).await;
+            return self
+                .backend
+                .read_dir(path, offset, limit, sort_by, sort_order)
+                .await;
         }
 
         let _operation_guard = self.operation_lock.read().await;
         if self.is_runtime_bypassed(path).await {
             self.metrics.policy_bypass();
-            return self.backend.read_dir(path).await;
+            return self
+                .backend
+                .read_dir(path, offset, limit, sort_by, sort_order)
+                .await;
         }
 
         let normalized = normalize_path(path);
         let key = self.directory_key(&normalized);
         if let Some(entries) = self.probe_directory(&key, &normalized, true).await {
-            return Ok(entries);
+            return Ok(apply_read_dir_options(
+                entries, offset, limit, sort_by, sort_order,
+            ));
         }
         self.metrics.read_dir_miss();
 
@@ -1108,18 +1155,20 @@ impl FileSystem for CachedFileSystem {
                 self.metrics.inflight_backend_saved();
                 drop(inflight_guard);
                 self.release_inflight(&key, &inflight).await;
-                return Ok(entries);
+                return Ok(apply_read_dir_options(
+                    entries, offset, limit, sort_by, sort_order,
+                ));
             }
         }
 
-        let entries = self.backend.read_dir(path).await;
+        let entries = self.backend.read_dir(path, None, None, None, None).await;
         if let Ok(value) = &entries {
             self.metrics.backend_fallback(0);
             self.fill_directory(&key, &normalized, value).await;
         }
         drop(inflight_guard);
         self.release_inflight(&key, &inflight).await;
-        entries
+        entries.map(|entries| apply_read_dir_options(entries, offset, limit, sort_by, sort_order))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -1183,39 +1232,15 @@ impl FileSystem for CachedFileSystem {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         if self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
             && !self.wraps_multiwrite()
         {
-            return self
-                .grep_via_cache(
-                    path,
-                    pattern,
-                    recursive,
-                    case_insensitive,
-                    node_limit,
-                    exclude_path,
-                    level_limit,
-                )
-                .await;
+            return self.grep_via_cache(path, pattern, options).await;
         }
 
-        self.backend
-            .grep(
-                path,
-                pattern,
-                recursive,
-                case_insensitive,
-                node_limit,
-                exclude_path,
-                level_limit,
-            )
-            .await
+        self.backend.grep(path, pattern, options).await
     }
 
     async fn tree_directory(
@@ -1224,17 +1249,39 @@ impl FileSystem for CachedFileSystem {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         if self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
             && !self.wraps_multiwrite()
         {
             return self
-                .tree_directory_via_cache(path, show_hidden, node_limit, level_limit)
+                .tree_directory_via_cache(
+                    path,
+                    show_hidden,
+                    node_limit,
+                    level_limit,
+                    offset,
+                    sort_by,
+                    sort_order,
+                    directories_only,
+                )
                 .await;
         }
 
         self.backend
-            .tree_directory(path, show_hidden, node_limit, level_limit)
+            .tree_directory(
+                path,
+                show_hidden,
+                node_limit,
+                level_limit,
+                offset,
+                sort_by,
+                sort_order,
+                directories_only,
+            )
             .await
     }
 

@@ -1,4 +1,6 @@
+import i18n from '#/i18n/core'
 import axios, { AxiosHeaders } from 'axios'
+import { resolveApiKeyAuth } from '#/lib/connection/auth'
 import type { InternalAxiosRequestConfig } from 'axios'
 
 import { createClient } from '#/gen/ov-client/client'
@@ -153,6 +155,9 @@ function isEnvelopeError(value: unknown): value is OvErrorEnvelope & {
 export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   const bindSdkClient = options.bindSdkClient ?? false
   let runtimeOptions = {
+    apiKeyAuth:
+      options.apiKeyAuth ??
+      resolveApiKeyAuth(normalizeBaseUrl(options.baseUrl)),
     apiKeyStorageKey: options.apiKeyStorageKey ?? DEFAULT_API_KEY_STORAGE_KEY,
     baseUrl: normalizeBaseUrl(options.baseUrl),
     defaultTelemetry: options.defaultTelemetry ?? true,
@@ -184,15 +189,30 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       headers.set(key, value)
     }
 
-    if (!readHeader(headers, 'X-API-Key')?.trim()) {
-      const apiKey = shouldUseAdminApiKey(config)
-        ? connection.adminApiKey || connection.apiKey
-        : connection.apiKey || connection.adminApiKey
-      setOptionalHeader(headers, 'X-API-Key', apiKey)
+    const credentialHeader =
+      runtimeOptions.apiKeyAuth === 'bearer' ? 'Authorization' : 'X-API-Key'
+    if (!readHeader(headers, credentialHeader)?.trim()) {
+      const apiKey =
+        runtimeOptions.apiKeyAuth === 'bearer'
+          ? connection.apiKey
+          : shouldUseAdminApiKey(config)
+            ? connection.adminApiKey || connection.apiKey
+            : connection.apiKey || connection.adminApiKey
+      setOptionalHeader(
+        headers,
+        credentialHeader,
+        apiKey && runtimeOptions.apiKeyAuth === 'bearer'
+          ? `Bearer ${apiKey}`
+          : apiKey,
+      )
     }
     if (connection.identityHeaders) {
-      setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
-      setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
+      if (!readHeader(headers, 'X-OpenViking-Account')?.trim()) {
+        setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
+      }
+      if (!readHeader(headers, 'X-OpenViking-User')?.trim()) {
+        setOptionalHeader(headers, 'X-OpenViking-User', connection.userId)
+      }
     } else {
       headers.delete('X-OpenViking-Account')
       headers.delete('X-OpenViking-User')
@@ -210,7 +230,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
 
       if (isEnvelopeError(response.data)) {
         const { error } = response.data
-        const message = error.message || 'OpenViking request failed'
+        const message = error.message || i18n.t('studio:errors.requestFailed')
 
         throw new OvClientError({
           code: error.code || 'ERROR',
@@ -286,6 +306,11 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   ): Readonly<typeof runtimeOptions> {
     const previousStorageKey = runtimeOptions.apiKeyStorageKey
     runtimeOptions = {
+      apiKeyAuth:
+        next.apiKeyAuth ??
+        (next.baseUrl !== undefined
+          ? resolveApiKeyAuth(normalizeBaseUrl(next.baseUrl))
+          : runtimeOptions.apiKeyAuth),
       apiKeyStorageKey:
         next.apiKeyStorageKey ?? runtimeOptions.apiKeyStorageKey,
       baseUrl:

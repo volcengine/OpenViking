@@ -12,6 +12,7 @@ import asyncio
 import re
 from typing import Any, Collection, Dict, Literal, Optional, Tuple
 
+from openviking.config.vlm import VLMHandle
 from openviking.prompts import render_prompt
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
@@ -24,13 +25,11 @@ URI_PATTERN = re.compile(r"""viking://[^\s<>"')\]]+""")
 
 
 def server_rewrite_enabled(mode: bool | Literal["auto"]) -> bool:
-    """Resolve the API mode without constructing a model client."""
-    if mode is True:
-        return True
-    if mode != "auto":
-        return False
-    planner = get_openviking_config().query_planner
-    return planner is not None and planner._has_any_config()
+    """Return whether rewrite was explicitly enabled.
+
+    Account-aware ``auto`` resolution belongs to the caller's VLM resolver.
+    """
+    return mode is True
 
 
 def normalize_digest(
@@ -66,10 +65,10 @@ def normalize_digest(
     return f"{DIGEST_HEADER}\n" + "\n".join(bullets)
 
 
-def _usage_snapshot(planner: Any) -> Optional[Tuple[int, int, int]]:
+def _usage_snapshot(planner: VLMHandle) -> Optional[Tuple[int, int, int]]:
     """``(prompt, completion, calls)`` from the model instance's usage tracker."""
     try:
-        total = planner.get_vlm_instance().token_tracker.get_total_usage()
+        total = planner.token_tracker.get_total_usage()
         return int(total.prompt_tokens), int(total.completion_tokens), int(total.call_count)
     except Exception:
         return None
@@ -82,6 +81,7 @@ async def rewrite_context(
     max_bullets: int = 6,
     timeout_s: Optional[float] = None,
     valid_uris: Optional[Collection[str]] = None,
+    planner: VLMHandle,
 ) -> Tuple[str, str, Optional[Dict[str, int]]]:
     """Return ``(digest, status, usage)`` while containing every model failure."""
     if not rendered.strip():
@@ -97,12 +97,6 @@ async def rewrite_context(
             "max_bullets": max(1, max_bullets),
         },
     )
-    try:
-        planner = config.get_query_planner()
-    except Exception as exc:
-        logger.warning("Rewrite planner unavailable: %s", exc)
-        return "", "failed", None
-
     before = _usage_snapshot(planner)
     try:
         response = await asyncio.wait_for(

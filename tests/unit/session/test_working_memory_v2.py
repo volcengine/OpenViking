@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for Working Memory v2 merge guardrails."""
 
-from openviking.session.session import Session
+from openviking.session import working_memory as wm
 
 
 def _wm(
@@ -49,7 +49,7 @@ def test_dynamic_reminders_flag_large_key_facts_and_bulk_urls():
         f"- https://example.com/images/{i}.png - raw parser image URL." for i in range(1, 23)
     )
 
-    reminders = Session._build_wm_section_reminders(
+    reminders = wm.build_wm_section_reminders(
         _wm(key_facts=key_facts, files_context=files_context)
     )
 
@@ -74,7 +74,7 @@ def test_key_facts_allows_safe_consolidation_when_oversized():
     ops = _keep_all()
     ops["Key Facts & Decisions"] = {"op": "UPDATE", "content": consolidated}
 
-    merged = Session._merge_wm_sections(old_wm, ops)
+    merged = wm.merge_wm_sections(old_wm, ops)
 
     assert consolidated in merged
     assert "- Decision 1: keep module_1.py because API contract 1 is stable." in merged
@@ -93,7 +93,7 @@ def test_key_facts_rejects_unsafe_consolidation_that_drops_anchors():
         "content": "- New decision: only module_1.py remains relevant.",
     }
 
-    merged = Session._merge_wm_sections(old_wm, ops)
+    merged = wm.merge_wm_sections(old_wm, ops)
 
     assert "- Decision 41: keep module_41.py because API contract 41 is stable." in merged
     assert "- New decision: only module_1.py remains relevant." in merged
@@ -114,7 +114,7 @@ def test_files_context_update_blocked_when_dropping_path_like_tokens():
         "content": "- openviking/session/session.py - WM merge logic.",
     }
 
-    merged = Session._merge_wm_sections(old_wm, ops)
+    merged = wm.merge_wm_sections(old_wm, ops)
 
     assert "openviking/session/session.py" in merged
     assert "unused.png" in merged

@@ -72,4 +72,11 @@ export type SessionMeta = SessionDetail
 export type CreateSessionResult = SessionCreatedResult
 export type DeleteSessionResult = SessionDeletedResult
 export type AddMessageResult = MessageAddedResult
-export type CommitSessionResult = CommitResult
+export type CommitSessionResult = Omit<
+  CommitResult,
+  'archive_uri' | 'task_id'
+> & {
+  archive_uri: string | null
+  task_id: string | null
+  reason?: string
+}

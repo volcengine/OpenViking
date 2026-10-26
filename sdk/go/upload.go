@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -141,6 +144,13 @@ func (c *Client) uploadTempFile(ctx context.Context, filePath string) (string, e
 }
 
 func (c *Client) addLocalUpload(ctx context.Context, payload map[string]any, path string, includeSourceName bool) error {
+	for _, prefix := range []string{"http://", "https://", "git@", "ssh://", "git://"} {
+		if strings.HasPrefix(path, prefix) {
+			payload["path"] = path
+			return nil
+		}
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {

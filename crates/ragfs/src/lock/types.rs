@@ -196,6 +196,13 @@ pub enum PathLockError {
     #[error("invalid lock token: {0}")]
     InvalidToken(String),
 
+    /// Lock file exists but contains no token data.
+    #[error("empty lock token at '{lock_path}'")]
+    EmptyToken {
+        /// Lock path containing the empty token.
+        lock_path: String,
+    },
+
     /// Invalid lock request supplied by a caller.
     #[error("invalid lock request: {0}")]
     InvalidRequest(String),

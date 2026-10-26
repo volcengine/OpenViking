@@ -17,6 +17,7 @@ from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, Process
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.temp_upload_store import TempUploadStore
+from openviking.storage.acl import AclSpec
 
 
 async def ingest_temp_upload(
@@ -25,12 +26,14 @@ async def ingest_temp_upload(
     ctx: RequestContext,
     *,
     to: str = "",
+    parent: str = "",
     reason: str = "",
     args: Optional[dict[str, Any]] = None,
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     tags: Optional[list[str]] = None,
     tag_mode: str = "replace",
     parse_mode: ParseMode | str = ParseMode.DEFAULT,
+    acl: AclSpec | None = None,
 ) -> dict[str, Any]:
     """Resolve a temp upload and ingest it as a resource; return the raw add_resource result.
 
@@ -47,20 +50,27 @@ async def ingest_temp_upload(
         try:
             ingest_args = dict(args or {})
             if parse_mode != ParseMode.DEFAULT and parse_mode != ParseMode.DEFAULT.value:
-                ingest_args.setdefault("parse_mode", str(parse_mode.value if isinstance(parse_mode, ParseMode) else parse_mode))
+                ingest_args.setdefault(
+                    "parse_mode",
+                    str(parse_mode.value if isinstance(parse_mode, ParseMode) else parse_mode),
+                )
             result = await get_service().resources.add_resource(
                 path=resolved.local_path,
                 ctx=ctx,
                 to=to or None,
+                parent=parent or None,
+                create_parent=bool(parent),
                 reason=reason,
                 source_name=resolved.original_filename,
                 wait=False,
                 processing_mode=processing_mode,
                 allow_local_path_resolution=True,
                 enforce_public_remote_targets=True,
+                temp_file_id=temp_file_id,
                 args=ingest_args,
                 tags=tags,
                 tag_mode=tag_mode,
+                acl=acl,
             )
         except Exception:
             raise

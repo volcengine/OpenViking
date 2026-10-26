@@ -19,6 +19,8 @@ Channels adapt different chat platforms into unified messages. The Gateway assem
 
 Interactive CLI sessions use ChatChannel, while one-shot commands use SingleTurnChannel. Both use the same unified message model.
 
+Configure Telegram voice transcription with `groq_api_key` (or `groqApiKey`) on the corresponding `bot.channels[]` entry. `GROQ_API_KEY` remains an environment-variable fallback when no key is configured. This key is independent of the chat model's `vlm` / `bot.agents` configuration.
+
 ## Channel Responsibilities
 
 BaseChannel and platform-specific implementations jointly handle:
@@ -49,6 +51,8 @@ FastAPI / Uvicorn
 ```
 
 The default listen address is `127.0.0.1:18790`. If `gateway.host` is not localhost, `bot.gateway.token` is required or the Gateway refuses to start.
+
+`vikingbot status` shows the selected model configuration source (inherited root `vlm` or `bot.agents`), credentials in configured order, each credential's provider/model, and whether an API key or custom headers are configured. It does not print secrets or header values or send model requests; an unset API key does not rule out local models or external authentication. This is a configuration summary, not a Gateway health check or an indication of the active credential after runtime failover.
 
 ## Bot HTTP API
 

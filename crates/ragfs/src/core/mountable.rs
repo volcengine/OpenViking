@@ -6,36 +6,38 @@
 
 use async_trait::async_trait;
 use radix_trie::{Trie, TrieCommon};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::warn;
 
-use crate::lock::{
-    AutoPathLockAction, PathLockKind, PathLockManager, PathLockRequest,
-};
-use crate::multibackend::factory::build_multi_write_fs;
+use crate::lock::{AutoPathLockAction, PathLockKind, PathLockManager, PathLockRequest};
+use crate::metrics::{lock_metrics, merge_metrics, operation_metrics, RagfsMetric};
+use crate::multibackend::factory::build_inactive_multi_write_fs;
 use crate::multibackend::types::MultiBackendBuildContext;
+use crate::plugins::QueueFileSystem;
 use crate::shape::validate::ensure_backend_shape;
 
 use super::internal_names::is_hidden_internal_name;
 
 use super::encryption_wrapper::EncryptionWrappedFS;
 use super::errors::{Error, Result};
-use super::filesystem::{sort_directory_entries, validate_virtual_path, FileSystem};
+use super::filesystem::{
+    apply_read_dir_options, paginate_entries, sort_directory_entries, validate_virtual_path,
+    FileSystem,
+};
 use super::multibackend_wrapper::MultiWriteWrappedFS;
 use super::plugin::ServicePlugin;
 use super::stats::{FilesystemStats, StatsCollector};
 use super::stats_wrapper::StatsWrappedFS;
 use super::types::{
-    BackendsConfig, FileInfo, GlobPage, GrepResult, PluginConfig, TreeEntry, WriteFlag,
+    BackendsConfig, FileInfo, GlobPage, GrepOptions, GrepResult, PluginConfig, TreeEntry, WriteFlag,
 };
 #[cfg(feature = "cache")]
-use crate::cache::{
-    CacheNamespace, CachePolicy, CacheProvider, CacheTraversalMode, CachedFileSystem,
-};
+use crate::cache::{CachePolicy, CacheTraversalMode, CachedFileSystem};
+#[cfg(feature = "cache")]
+use crate::cache_runtime::CacheRuntime;
 
 /// Information about a mounted filesystem
 #[derive(Clone)]
@@ -83,13 +85,17 @@ pub struct MountableFS {
     /// Optional cache configuration shared by mounted filesystems.
     #[cfg(feature = "cache")]
     cache: Option<MountCacheConfig>,
+
+    /// Optional shared runtime, independent of mount-level CacheFS enablement.
+    #[cfg(feature = "cache")]
+    cache_runtime: Option<Arc<CacheRuntime>>,
 }
 
 #[cfg(feature = "cache")]
 #[derive(Clone)]
 struct MountCacheConfig {
-    provider: Arc<dyn CacheProvider>,
-    namespace: CacheNamespace,
+    runtime: Arc<CacheRuntime>,
+    service_name: String,
     policy: CachePolicy,
 }
 
@@ -149,6 +155,24 @@ impl MountableFS {
         None
     }
 
+    fn as_queuefs_ref(fs: &dyn FileSystem) -> Option<&QueueFileSystem> {
+        let any = fs as &dyn std::any::Any;
+        if let Some(queuefs) = any.downcast_ref::<QueueFileSystem>() {
+            return Some(queuefs);
+        }
+        if let Some(stats) = any.downcast_ref::<StatsWrappedFS>() {
+            return Self::as_queuefs_ref(stats.inner_fs().as_ref());
+        }
+        None
+    }
+
+    async fn shutdown_mount(mount_info: &MountInfo) -> Result<()> {
+        if let Some(queuefs) = Self::as_queuefs_ref(mount_info.fs.as_ref()) {
+            queuefs.shutdown().await?;
+        }
+        Ok(())
+    }
+
     /// Return whether a mounted wrapper chain contains encryption-owned pathlock.
     fn encryption_handles_pathlock_ref(fs: &dyn FileSystem) -> bool {
         let any = fs as &dyn std::any::Any;
@@ -194,22 +218,6 @@ impl MountableFS {
         Self::encryption_handles_pathlock_ref(mount_info.fs.as_ref())
     }
 
-    /// Query multi-write sync status for a mounted path.
-    pub async fn system_sync_status(&self, path: &str) -> Result<Value> {
-        let (mount_info, rel_path) = self.find_mount(path).await?;
-        let multiwrite = Self::as_multiwrite(&mount_info.fs)
-            .ok_or_else(|| Error::invalid_operation("mounted filesystem is not multi-write"))?;
-        multiwrite.system_sync_status(&rel_path).await
-    }
-
-    /// Manually retry pending multi-write sync operations under a mounted path.
-    pub async fn system_sync_retry(&self, path: &str) -> Result<Value> {
-        let (mount_info, rel_path) = self.find_mount(path).await?;
-        let multiwrite = Self::as_multiwrite(&mount_info.fs)
-            .ok_or_else(|| Error::invalid_operation("mounted filesystem is not multi-write"))?;
-        multiwrite.system_sync_retry(&rel_path).await
-    }
-
     /// Create a new MountableFS
     pub fn new() -> Self {
         Self {
@@ -220,17 +228,30 @@ impl MountableFS {
             pathlock_manager: OnceLock::new(),
             #[cfg(feature = "cache")]
             cache: None,
+            #[cfg(feature = "cache")]
+            cache_runtime: None,
         }
     }
 
-    /// Create a new MountableFS that transparently wraps mounted backends with cache.
-    ///
-    /// Encrypted multi-write mounts skip the mount-level cache because their encryption boundary
-    /// lives inside `MultiWriteWrappedFS`; caching outside it would store plaintext.
+    /// Create a MountableFS that shares a runtime without enabling CacheFS.
     #[cfg(feature = "cache")]
-    pub fn with_cache(
-        provider: Arc<dyn CacheProvider>,
-        namespace: CacheNamespace,
+    pub fn with_shared_cache_runtime(runtime: Arc<CacheRuntime>) -> Self {
+        Self {
+            mounts: Arc::new(RwLock::new(Trie::new())),
+            registry: Arc::new(RwLock::new(HashMap::new())),
+            encryption_root_key: RwLock::new(None),
+            encryption_provider_type: RwLock::new(None),
+            pathlock_manager: OnceLock::new(),
+            cache: None,
+            cache_runtime: Some(runtime),
+        }
+    }
+
+    /// Create a MountableFS backed by the unified CacheRuntime.
+    #[cfg(feature = "cache")]
+    pub fn with_cache_runtime(
+        runtime: Arc<CacheRuntime>,
+        service_name: impl Into<String>,
         policy: CachePolicy,
     ) -> Self {
         Self {
@@ -240,10 +261,11 @@ impl MountableFS {
             encryption_provider_type: RwLock::new(None),
             pathlock_manager: OnceLock::new(),
             cache: Some(MountCacheConfig {
-                provider,
-                namespace,
+                runtime: runtime.clone(),
+                service_name: service_name.into(),
                 policy,
             }),
+            cache_runtime: Some(runtime),
         }
     }
 
@@ -345,7 +367,7 @@ impl MountableFS {
                 let storage_fs = if is_control_plugin {
                     raw_arc.clone()
                 } else {
-                    self.maybe_wrap_cache(raw_arc.clone(), &normalized_path)
+                    self.maybe_wrap_cache(raw_arc.clone())
                 };
                 #[cfg(not(feature = "cache"))]
                 let storage_fs = raw_arc.clone();
@@ -357,9 +379,9 @@ impl MountableFS {
                         (Some(rk), Some(pt)) => {
                             if !Self::supports_encrypted_publish(&config.name) {
                                 return Err(Error::config(format!(
-                                      "encrypted backend '{}' must support replace() semantics",
-                                      config.name
-                                  )));
+                                    "encrypted backend '{}' must support replace() semantics",
+                                    config.name
+                                )));
                             }
                             let pl_mgr = self
                                 .pathlock_manager
@@ -397,10 +419,10 @@ impl MountableFS {
                     arc
                 } else {
                     match &self.cache {
-                        Some(cache) => Arc::new(CachedFileSystem::new(
+                        Some(cache) => Arc::new(CachedFileSystem::with_runtime(
                             Box::new(ArcFileSystem(arc)),
-                            cache.provider.clone(),
-                            mount_namespace(&cache.namespace, &normalized_path),
+                            cache.runtime.clone(),
+                            &cache.service_name,
                             cache
                                 .policy
                                 .clone()
@@ -425,9 +447,13 @@ impl MountableFS {
             stats: stats_collector,
             plugin_name: config.name.clone(),
         };
-
+        let mounted_fs = mount_info.fs.clone();
         let mut mounts = self.mounts.write().await;
         mounts.insert(normalized_path, mount_info);
+        drop(mounts);
+        if let Some(multiwrite) = Self::as_multiwrite(&mounted_fs) {
+            multiwrite.activate();
+        }
 
         Ok(())
     }
@@ -445,14 +471,10 @@ impl MountableFS {
         bc: &BackendsConfig,
     ) -> Result<MultiWriteWrappedFS> {
         let (enc_root_key, enc_provider_type) = self.get_encryption_config().await;
-        let pathlock_manager = self
-            .pathlock_manager
-            .get()
-            .cloned()
-            .ok_or_else(|| {
-                Error::config("pathlock manager must be initialized before multi-write mount")
-            })?;
-        build_multi_write_fs(
+        let pathlock_manager = self.pathlock_manager.get().cloned().ok_or_else(|| {
+            Error::config("pathlock manager must be initialized before multi-write mount")
+        })?;
+        build_inactive_multi_write_fs(
             &self.registry,
             config,
             bc,
@@ -461,13 +483,15 @@ impl MountableFS {
                 enc_provider_type,
                 pathlock_manager,
                 backend_prefix: config.mount_path.clone(),
+                #[cfg(feature = "cache")]
+                cache_runtime: self.cache_runtime.clone(),
             },
         )
         .await
     }
 
     #[cfg(feature = "cache")]
-    fn maybe_wrap_cache(&self, fs: Arc<dyn FileSystem>, mount_path: &str) -> Arc<dyn FileSystem> {
+    fn maybe_wrap_cache(&self, fs: Arc<dyn FileSystem>) -> Arc<dyn FileSystem> {
         match &self.cache {
             Some(cache) => {
                 let policy = if cache.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
@@ -480,10 +504,10 @@ impl MountableFS {
                 } else {
                     cache.policy.clone()
                 };
-                Arc::new(CachedFileSystem::new(
+                Arc::new(CachedFileSystem::with_runtime(
                     Box::new(ArcFileSystem(fs)),
-                    cache.provider.clone(),
-                    mount_namespace(&cache.namespace, mount_path),
+                    cache.runtime.clone(),
+                    &cache.service_name,
                     policy,
                 ))
             }
@@ -508,15 +532,28 @@ impl MountableFS {
                 .ok_or_else(|| Error::MountPointNotFound(normalized_path.clone()))?
         };
 
-        if let Some(multiwrite) = Self::as_multiwrite(&mount_info.fs) {
-            multiwrite.shutdown().await?;
-        }
+        Self::shutdown_mount(&mount_info).await?;
 
         let mut mounts = self.mounts.write().await;
         if mounts.remove(&normalized_path).is_none() {
             return Err(Error::MountPointNotFound(normalized_path));
         }
 
+        Ok(())
+    }
+
+    /// Stop background work owned by all mounted filesystems.
+    pub async fn shutdown(&self) -> Result<()> {
+        let mounts = {
+            let mounts = self.mounts.read().await;
+            mounts
+                .iter()
+                .map(|(_, mount_info)| mount_info.clone())
+                .collect::<Vec<_>>()
+        };
+        for mount_info in mounts {
+            Self::shutdown_mount(&mount_info).await?;
+        }
         Ok(())
     }
 
@@ -566,6 +603,34 @@ impl MountableFS {
         result
     }
 
+    /// Read current mount and lock collectors; return merged, sorted native metrics or an error.
+    pub async fn metrics(&self) -> Result<Vec<RagfsMetric>> {
+        let mut mounts: Vec<_> = {
+            let mounts = self.mounts.read().await;
+            mounts.iter().map(|(_, info)| info.clone()).collect()
+        };
+        mounts.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let mut metrics = Vec::new();
+        for mount in mounts {
+            metrics.extend(operation_metrics(
+                &mount.plugin_name,
+                &mount.stats.snapshot().await,
+            ));
+            #[cfg(feature = "cache")]
+            if let Some(cache) = Self::as_cached(&mount.fs) {
+                metrics.extend(crate::metrics::cache_metrics(cache.metrics().snapshot()));
+            }
+            if let Some(multiwrite) = Self::as_multiwrite(&mount.fs) {
+                metrics.extend(multiwrite.metrics().await?);
+            }
+        }
+        if let Some(manager) = self.pathlock_manager.get() {
+            metrics.extend(lock_metrics(manager.metrics_snapshot().await));
+        }
+        merge_metrics(metrics)
+    }
+
     /// Read raw bytes from the underlying plugin backend, bypassing the encryption layer.
     ///
     /// Used by tests to verify ciphertext on disk and by cp/persist for verbatim blob copies.
@@ -603,11 +668,8 @@ impl MountableFS {
             return Ok(false);
         }
 
-        let manager = self
-            .pathlock_manager
-            .get()
-            .cloned()
-            .ok_or_else(|| {
+        let manager =
+            self.pathlock_manager.get().cloned().ok_or_else(|| {
                 Error::config("pathlock manager must be initialized before raw copy")
             })?;
         let request = PathLockRequest {
@@ -619,8 +681,7 @@ impl MountableFS {
             Ok(AutoPathLockAction::Acquire) => Some(
                 manager
                     .acquire_exact(dst_path, Duration::ZERO, None)
-                    .await
-                    .map_err(|error| Error::internal(format!("lock error: {error}")))?,
+                    .await?,
             ),
             Err(error) => {
                 return Err(Error::internal(format!("lock lease error: {error}")));
@@ -655,9 +716,9 @@ impl MountableFS {
         match (result, release) {
             (Err(error), _) => Err(error),
             (Ok(performed), Ok(())) => Ok(performed),
-            (Ok(_), Err(error)) => Err(Error::internal(format!(
-                "copy lock release error: {error}"
-            ))),
+            (Ok(_), Err(error)) => {
+                Err(Error::internal(format!("copy lock release error: {error}")))
+            }
         }
     }
 
@@ -786,8 +847,17 @@ impl FileSystem for ArcFileSystem {
         self.0.write(path, data, offset, flags).await
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
-        self.0.read_dir(path).await
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
+        self.0
+            .read_dir(path, offset, limit, sort_by, sort_order)
+            .await
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -805,11 +875,6 @@ impl FileSystem for ArcFileSystem {
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         self.0.chmod(path, mode).await
     }
-}
-
-#[cfg(feature = "cache")]
-fn mount_namespace(base: &CacheNamespace, mount_path: &str) -> CacheNamespace {
-    CacheNamespace::new(format!("{}:{}", base.as_str(), mount_path))
 }
 
 impl Default for MountableFS {
@@ -935,11 +1000,20 @@ impl FileSystem for MountableFS {
         Ok(changed)
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let mut entries = self.read_internal_dir(path).await?;
         entries.retain(|entry| !is_hidden_internal_name(&entry.name));
         sort_directory_entries(&mut entries);
-        Ok(entries)
+        Ok(apply_read_dir_options(
+            entries, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn read_internal_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
@@ -1000,20 +1074,15 @@ impl FileSystem for MountableFS {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
-        // Route grep to the mounted plugin so plugin-specific fast paths (e.g. localfs + rg)
-        // can take effect. If a plugin doesn't override grep, it will fall back to the trait
-        // default implementation on that plugin instance (still correct, just slower).
+        // Route grep to the mounted plugin so plugin-specific implementations can take effect.
+        // Plugins without an override use the trait's default implementation.
         let (mount_info, rel_path) = self.find_mount(path).await?;
 
         // Exclude path only applies when it resolves to the same mount point; otherwise it
         // should not affect searching under `path`.
-        let exclude_rel: Option<String> = match exclude_path {
+        let exclude_rel: Option<String> = match options.exclude_path {
             None => None,
             Some(excl_abs) => match self.find_mount(excl_abs).await {
                 Ok((exclude_mount, excl_rel)) => {
@@ -1032,11 +1101,10 @@ impl FileSystem for MountableFS {
             .grep(
                 &rel_path,
                 pattern,
-                recursive,
-                case_insensitive,
-                node_limit,
-                exclude_rel.as_deref(),
-                level_limit,
+                GrepOptions {
+                    exclude_path: exclude_rel.as_deref(),
+                    ..options
+                },
             )
             .await?;
 
@@ -1057,6 +1125,10 @@ impl FileSystem for MountableFS {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         let (mount_info, rel_path) = self.find_mount(path).await?;
 
@@ -1068,7 +1140,16 @@ impl FileSystem for MountableFS {
 
         let mut entries = mount_info
             .fs
-            .tree_directory(&rel_path, show_hidden, node_limit, level_limit)
+            .tree_directory(
+                &rel_path,
+                show_hidden,
+                None,
+                level_limit,
+                None,
+                sort_by,
+                sort_order,
+                directories_only,
+            )
             .await?;
 
         for entry in &mut entries {
@@ -1087,9 +1168,10 @@ impl FileSystem for MountableFS {
                 .rsplit('/')
                 .next()
                 .map_or(true, |name| !is_hidden_internal_name(name))
+                && (!directories_only || e.info.is_dir)
         });
 
-        Ok(entries)
+        Ok(paginate_entries(entries, offset, node_limit))
     }
 
     async fn glob_directory(
@@ -1147,7 +1229,7 @@ impl FileSystem for MountableFS {
 mod tests {
     use super::*;
     use crate::core::BackendItemConfig;
-    use crate::core::RedirectPolicy;
+    use crate::core::ConfigValue;
     use crate::shape::SHAPE_MANIFEST_PATH;
     use serde_json::Value;
     use std::collections::HashMap;
@@ -1169,27 +1251,64 @@ mod tests {
             mount_path: mount_path.to_string(),
             params: HashMap::new(),
             backups: Some(BackendsConfig {
-                sync_type: "async".to_string(),
-                write_ack_count: None,
-                write_ack_timeout_ms: None,
-                write_concurrency: None,
-                retry_interval_ms: None,
-                retry_backoff_base_ms: None,
-                retry_max_retries_per_round: None,
-                retry_quarantine_after_failures: None,
-                read_probe_cache_ttl_ms: None,
+                service_name: "mw-test".to_string(),
+                initial_partitions: 16,
+                checkpoint_interval_secs: 86_400,
+                provider: "filesystem".to_string(),
                 items: vec![BackendItemConfig {
                     name: "backup1".to_string(),
                     backend: backup_backend.to_string(),
                     params: Value::Null,
-                    timeout: None,
                     encryption: None,
-                    operations: None,
-                    excludes: None,
                 }],
             }),
             ..PluginConfig::default()
         }
+    }
+
+    /// Build a two-backup LocalFS configuration from three persistent directories.
+    fn local_multiwrite_test_config(
+        primary_dir: &std::path::Path,
+        backup_dirs: [(&str, &std::path::Path); 2],
+    ) -> PluginConfig {
+        let mut config = multiwrite_test_config("localfs", "localfs", "/local");
+        config.params.insert(
+            "local_dir".to_string(),
+            ConfigValue::String(primary_dir.to_string_lossy().into_owned()),
+        );
+        config.backups.as_mut().unwrap().initial_partitions = 1;
+        config.backups.as_mut().unwrap().items = backup_dirs
+            .into_iter()
+            .map(|(name, path)| BackendItemConfig {
+                name: name.to_string(),
+                backend: "localfs".to_string(),
+                params: serde_json::json!({
+                    "local_dir": path.to_string_lossy(),
+                }),
+                encryption: None,
+            })
+            .collect();
+        config
+    }
+
+    /// Mount one LocalFS multi-write configuration with the shared lock provider.
+    async fn mount_local_multiwrite_for_test(
+        config: PluginConfig,
+        provider: Arc<dyn crate::lock::PathLockProvider>,
+    ) -> Arc<MountableFS> {
+        use crate::lock::{PathLockConfig, PathLockManager};
+        use crate::plugins::{memfs::MemFileSystem, LocalFSPlugin};
+
+        let mfs = Arc::new(MountableFS::new());
+        mfs.register_plugin(LocalFSPlugin::new()).await;
+        let manager = Arc::new(PathLockManager::new(
+            Arc::new(MemFileSystem::new()),
+            provider,
+            PathLockConfig::default(),
+        ));
+        mfs.set_pathlock_manager(manager).await;
+        mfs.mount(config).await.unwrap();
+        mfs
     }
 
     // Mock filesystem for testing
@@ -1233,10 +1352,10 @@ mod tests {
         }
 
         async fn read(&self, path: &str, _offset: u64, _size: u64) -> Result<Vec<u8>> {
-            if path == SHAPE_MANIFEST_PATH
-                || path.ends_with(".redirect.json")
-                || path.ends_with(".sync_log.json")
-            {
+            if path == "/_system/accounts.json" {
+                return Ok(br#"{"accounts":{}}"#.to_vec());
+            }
+            if path == SHAPE_MANIFEST_PATH || path == "/_system/.multiwrite.json" {
                 return Err(Error::not_found(path));
             }
             Ok(self.name.as_bytes().to_vec())
@@ -1252,7 +1371,14 @@ mod tests {
             Ok(data.len() as u64)
         }
 
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             Ok(self
                 .tree_entries
                 .iter()
@@ -1261,6 +1387,9 @@ mod tests {
         }
 
         async fn stat(&self, path: &str) -> Result<FileInfo> {
+            if path == "/_system/.multiwrite.json" {
+                return Err(Error::not_found(path));
+            }
             Ok(FileInfo::new_file(path.to_string(), 0, 0o644))
         }
 
@@ -1276,11 +1405,7 @@ mod tests {
             &self,
             path: &str,
             pattern: &str,
-            _recursive: bool,
-            _case_insensitive: bool,
-            _node_limit: Option<usize>,
-            _exclude_path: Option<&str>,
-            _level_limit: Option<usize>,
+            _options: GrepOptions<'_>,
         ) -> Result<GrepResult> {
             let mut out = GrepResult::new();
             // Encode the received rel_path into the match so the test can assert routing worked.
@@ -1294,6 +1419,10 @@ mod tests {
             _show_hidden: bool,
             _node_limit: Option<usize>,
             _level_limit: Option<usize>,
+            _offset: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+            _directories_only: bool,
         ) -> Result<Vec<TreeEntry>> {
             Ok(self.tree_entries.clone())
         }
@@ -1387,7 +1516,14 @@ mod tests {
             Ok(data.len() as u64)
         }
 
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             Ok(vec![])
         }
 
@@ -1439,32 +1575,6 @@ mod tests {
         let mfs = MountableFS::new();
         mfs.register_plugin(MockPlugin::new(name)).await;
         mfs.mount(test_config(name, mount_path)).await.unwrap();
-        mfs
-    }
-
-    /// Create a MountableFS backed by the real in-memory plugin.
-    async fn mounted_memfs(mount_path: &str) -> MountableFS {
-        use crate::plugins::MemFSPlugin;
-
-        let mfs = MountableFS::new();
-        mfs.register_plugin(MemFSPlugin).await;
-        mfs.mount(test_config("memfs", mount_path)).await.unwrap();
-        mfs
-    }
-
-    /// Create a cache-enabled MountableFS backed by the real in-memory plugin.
-    #[cfg(feature = "cache")]
-    async fn mounted_cached_memfs(namespace: &str, mount_path: &str) -> MountableFS {
-        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
-        use crate::plugins::MemFSPlugin;
-
-        let mfs = MountableFS::with_cache(
-            Arc::new(MemoryCacheProvider::new()),
-            CacheNamespace::new(namespace),
-            CachePolicy::default(),
-        );
-        mfs.register_plugin(MemFSPlugin).await;
-        mfs.mount(test_config("memfs", mount_path)).await.unwrap();
         mfs
     }
 
@@ -1539,12 +1649,13 @@ mod tests {
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn mount_wraps_backend_with_cache_when_configured() {
-        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+        use crate::cache::CachePolicy;
+        use crate::cache_runtime::CacheRuntime;
 
         let reads = Arc::new(AtomicU64::new(0));
-        let mfs = MountableFS::with_cache(
-            Arc::new(MemoryCacheProvider::new()),
-            CacheNamespace::new("mount-test"),
+        let mfs = MountableFS::with_cache_runtime(
+            CacheRuntime::memory(),
+            "mount-test",
             CachePolicy::default(),
         );
         mfs.register_plugin(CountingPlugin {
@@ -1571,13 +1682,14 @@ mod tests {
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn queuefs_mount_bypasses_cache_even_when_cache_is_configured() {
-        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+        use crate::cache::CachePolicy;
+        use crate::cache_runtime::{CacheRuntime, MemoryMockProvider};
         use crate::plugins::QueueFSPlugin;
 
-        let provider = Arc::new(MemoryCacheProvider::new());
-        let mfs = MountableFS::with_cache(
-            provider.clone(),
-            CacheNamespace::new("queue-cache-test"),
+        let provider = Arc::new(MemoryMockProvider::new());
+        let mfs = MountableFS::with_cache_runtime(
+            CacheRuntime::memory_with_provider(provider.clone()),
+            "queue-cache-test",
             CachePolicy::default().with_bypass_prefix("/queue"),
         );
         mfs.register_plugin(QueueFSPlugin::new()).await;
@@ -1590,10 +1702,7 @@ mod tests {
         .unwrap();
         mfs.mkdir("/queue/Embedding", 0o755).await.unwrap();
 
-        assert_eq!(
-            mfs.read("/queue/Embedding/size", 0, 0).await.unwrap(),
-            b"0"
-        );
+        assert_eq!(mfs.read("/queue/Embedding/size", 0, 0).await.unwrap(), b"0");
         mfs.write(
             "/queue/Embedding/enqueue",
             br#"{"id":"one"}"#,
@@ -1612,6 +1721,63 @@ mod tests {
             provider.keys().await.is_empty(),
             "queuefs control filesystem should not populate shared cache"
         );
+    }
+
+    /// Verifies service shutdown leaves multi-write workers to process teardown.
+    #[tokio::test]
+    async fn shutdown_does_not_stop_multiwrite_runtime() {
+        use crate::lock::MemoryPathLockProvider;
+
+        let primary = tempfile::tempdir().unwrap();
+        let backup_a = tempfile::tempdir().unwrap();
+        let backup_b = tempfile::tempdir().unwrap();
+        let config = local_multiwrite_test_config(
+            primary.path(),
+            [("backup-a", backup_a.path()), ("backup-b", backup_b.path())],
+        );
+        let mfs =
+            mount_local_multiwrite_for_test(config, Arc::new(MemoryPathLockProvider::new())).await;
+        let mount = mfs.mounts.read().await.get("/local").unwrap().clone();
+
+        mfs.shutdown().await.unwrap();
+
+        assert_eq!(
+            MountableFS::as_multiwrite(&mount.fs)
+                .unwrap()
+                .background_task_count(),
+            1
+        );
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn shutdown_reaches_cache_queuefs_through_stats_wrapper() {
+        use crate::cache_runtime::{CacheRuntime, MemoryMockProvider};
+        use crate::plugins::QueueFSPlugin;
+
+        let provider = Arc::new(MemoryMockProvider::new().with_script_handler(|request| {
+            panic!(
+                "script execution is outside this shutdown test's scope: {}",
+                request.script_id
+            )
+        }));
+        let runtime = CacheRuntime::memory_with_provider(provider.clone());
+        let mfs = MountableFS::new();
+        mfs.register_plugin(QueueFSPlugin::with_cache_runtime(runtime))
+            .await;
+        let mut params = HashMap::new();
+        params.insert("backend".into(), ConfigValue::String("cache".into()));
+        params.insert(
+            "service_name".into(),
+            ConfigValue::String("mountable-shutdown-test".into()),
+        );
+        mfs.mount(PluginConfig::single_backend("queuefs", "/queue", params))
+            .await
+            .unwrap();
+
+        assert_eq!(provider.keys().await.len(), 1);
+        mfs.shutdown().await.unwrap();
+        assert!(provider.keys().await.is_empty());
     }
 
     #[tokio::test]
@@ -1666,12 +1832,13 @@ mod tests {
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn copy_within_mount_overwrite_invalidates_cached_destination() {
-        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+        use crate::cache::CachePolicy;
+        use crate::cache_runtime::CacheRuntime;
         use crate::plugins::MemFSPlugin;
 
-        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::with_cache(
-            Arc::new(MemoryCacheProvider::new()),
-            CacheNamespace::new("copy-cache-test"),
+        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::with_cache_runtime(
+            CacheRuntime::memory(),
+            "copy-cache-test",
             CachePolicy::default(),
         )))
         .await;
@@ -1687,7 +1854,7 @@ mod tests {
 
         assert_eq!(mfs.read("/local/dir/b.md", 0, 0).await.unwrap(), b"old");
         assert_eq!(
-            mfs.read_dir("/local/dir")
+            mfs.read_dir("/local/dir", None, None, None, None)
                 .await
                 .unwrap()
                 .into_iter()
@@ -1704,7 +1871,7 @@ mod tests {
 
         let copied = mfs.read("/local/dir/b.md", 0, 0).await.unwrap();
         let copied_size = mfs
-            .read_dir("/local/dir")
+            .read_dir("/local/dir", None, None, None, None)
             .await
             .unwrap()
             .into_iter()
@@ -1718,23 +1885,24 @@ mod tests {
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn encrypted_mount_caches_ciphertext_below_account_validation() {
-        use crate::cache::{CacheNamespace, CachePolicy, CacheProvider, MemoryCacheProvider};
+        use crate::cache::CachePolicy;
+        use crate::cache_runtime::{CacheRuntime, MemoryMockProvider};
         use crate::core::{FsContextInner, FS_CTX};
         use crate::lock::{
             MemoryPathLockProvider, PathLockConfig, PathLockManager, PathLockProvider,
         };
         use crate::plugins::MemFSPlugin;
 
-        let cache_provider = Arc::new(MemoryCacheProvider::new());
-        let mfs = Arc::new(MountableFS::with_cache(
-            cache_provider.clone(),
-            CacheNamespace::new("encrypted-mount-test"),
+        let cache_provider = Arc::new(MemoryMockProvider::new());
+        let cache_runtime = CacheRuntime::memory_with_provider(cache_provider.clone());
+        let mfs = Arc::new(MountableFS::with_cache_runtime(
+            cache_runtime.clone(),
+            "encrypted-mount-test",
             CachePolicy::default(),
         ));
         mfs.register_plugin(MemFSPlugin).await;
         mfs.set_encryption_config(Some([9u8; 32]), Some(1)).await;
-        let pathlock_provider: Arc<dyn PathLockProvider> =
-            Arc::new(MemoryPathLockProvider::new());
+        let pathlock_provider: Arc<dyn PathLockProvider> = Arc::new(MemoryPathLockProvider::new());
         let manager = Arc::new(PathLockManager::new(
             mfs.clone() as Arc<dyn FileSystem>,
             pathlock_provider,
@@ -1784,7 +1952,7 @@ mod tests {
             .into_iter()
             .find(|key| key.contains(":file:"))
             .expect("encrypted read should populate one file cache object");
-        let encoded = cache_provider
+        let encoded = cache_runtime
             .get(&file_key)
             .await
             .unwrap()
@@ -1800,113 +1968,6 @@ mod tests {
             payload.starts_with(b"OVE1"),
             "shared cache providers must store encrypted file envelopes"
         );
-    }
-
-    #[cfg(feature = "cache")]
-    #[tokio::test]
-    async fn encrypted_multiwrite_mount_does_not_install_plaintext_cache() {
-        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
-        use crate::lock::{
-            MemoryPathLockProvider, PathLockConfig, PathLockManager, PathLockProvider,
-        };
-        use crate::plugins::MemFSPlugin;
-
-        let mfs = Arc::new(MountableFS::with_cache(
-            Arc::new(MemoryCacheProvider::new()),
-            CacheNamespace::new("encrypted-multiwrite-test"),
-            CachePolicy::default(),
-        ));
-        mfs.register_plugin(MemFSPlugin).await;
-        mfs.set_encryption_config(Some([9u8; 32]), Some(1)).await;
-        let provider: Arc<dyn PathLockProvider> = Arc::new(MemoryPathLockProvider::new());
-        let manager = Arc::new(PathLockManager::new(
-            mfs.clone() as Arc<dyn FileSystem>,
-            provider,
-            PathLockConfig::default(),
-        ));
-        mfs.set_pathlock_manager(manager).await;
-
-        let mut config = multiwrite_test_config("memfs", "memfs", "/local");
-        config.server_encryption_enabled = true;
-        config.primary_encryption_enabled = true;
-        mfs.mount(config).await.unwrap();
-
-        let mounts = mfs.mounts.read().await;
-        let mount_info = mounts.get("/local").expect("mounted entry should exist");
-        let stats = (mount_info.fs.as_ref() as &dyn std::any::Any)
-            .downcast_ref::<StatsWrappedFS>()
-            .expect("stats wrapper should be outermost");
-        assert!(
-            (stats.inner_fs().as_ref() as &dyn std::any::Any)
-                .downcast_ref::<MultiWriteWrappedFS>()
-                .is_some(),
-            "encrypted multi-write must not install a plaintext cache outside MultiWriteWrappedFS"
-        );
-    }
-
-    #[cfg(feature = "cache")]
-    #[tokio::test]
-    async fn cached_unencrypted_multiwrite_keeps_admin_and_copy_fast_paths() {
-        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
-        use crate::core::{FsContextInner, FS_CTX};
-        use crate::plugins::MemFSPlugin;
-
-        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::with_cache(
-            Arc::new(MemoryCacheProvider::new()),
-            CacheNamespace::new("cached-multiwrite-test"),
-            CachePolicy::default(),
-        )))
-        .await;
-        mfs.register_plugin(MemFSPlugin).await;
-
-        let mut config = multiwrite_test_config("memfs", "memfs", "/local");
-        config.backups.as_mut().unwrap().items[0].name = "backup1".to_string();
-        mfs.mount(config).await.unwrap();
-
-        let ctx = Arc::new(FsContextInner::new("acct"));
-        FS_CTX
-            .scope(ctx.clone(), async {
-                let status = mfs.system_sync_status("/local").await.unwrap();
-                assert_eq!(status["path"], "/");
-                assert_eq!(status["entry_count"], 0);
-
-                let retry = mfs.system_sync_retry("/local").await.unwrap();
-                assert_eq!(retry["path"], "/");
-                assert_eq!(retry["retried"], 0);
-
-                mfs.mkdir("/local/docs", 0o755).await.unwrap();
-                mfs.write("/local/docs/src.md", b"copied", 0, WriteFlag::Create)
-                    .await
-                    .unwrap();
-
-                assert!(mfs
-                    .copy_within_mount("/local/docs/src.md", "/local/docs/dst.md")
-                    .await
-                    .unwrap());
-                assert_eq!(
-                    mfs.read("/local/docs/dst.md", 0, 0).await.unwrap(),
-                    b"copied"
-                );
-            })
-            .await;
-
-        mfs.unmount("/local").await.unwrap();
-        assert!(mfs.list_mounts().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn multiwrite_mount_without_pathlock_returns_config_error() {
-        use crate::plugins::MemFSPlugin;
-
-        let mfs = MountableFS::new();
-        mfs.register_plugin(MemFSPlugin).await;
-
-        let error = mfs
-            .mount(multiwrite_test_config("memfs", "memfs", "/local"))
-            .await
-            .unwrap_err();
-
-        assert!(matches!(error, Error::Config(_)));
     }
 
     #[tokio::test]
@@ -2059,7 +2120,7 @@ mod tests {
         let mfs = mounted_mock("mock", "/mock").await;
 
         let result = mfs
-            .grep("/mock/a.txt", "foo", false, false, None, None, None)
+            .grep("/mock/a.txt", "foo", GrepOptions::default())
             .await
             .unwrap();
 
@@ -2093,13 +2154,16 @@ mod tests {
                 make_tree_entry("/A.txt", "A.txt", "A.txt", false),
                 make_tree_entry("/c", "c", "c", true),
                 make_tree_entry("/B", "B", "B", true),
+                make_tree_entry("/.path.ovlock", ".path.ovlock", ".path.ovlock", false),
+                make_tree_entry("/.sync_log.json", ".sync_log.json", ".sync_log.json", false),
+                make_tree_entry("/.redirect.json", ".redirect.json", ".redirect.json", false),
             ],
         );
         mfs.register_plugin(plugin).await;
         mfs.mount(test_config("sorted", "/sorted")).await.unwrap();
 
         let names: Vec<String> = mfs
-            .read_dir("/sorted")
+            .read_dir("/sorted", None, None, None, None)
             .await
             .unwrap()
             .into_iter()
@@ -2107,13 +2171,48 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["B", "c", "A.txt", "b.txt"]);
+
+        // Upgrade leftovers remain available for migration, but not to business callers.
+        let internal_names: Vec<String> = mfs
+            .read_internal_dir("/sorted")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert!(internal_names.iter().any(|name| name == ".sync_log.json"));
+        assert!(internal_names.iter().any(|name| name == ".redirect.json"));
+
+        let page: Vec<String> = mfs
+            .read_dir(
+                "/sorted",
+                Some(1),
+                Some(2),
+                Some(crate::core::ListSortBy::Name),
+                Some(crate::core::SortOrder::Desc),
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(page, vec!["B", "b.txt"]);
     }
 
     #[tokio::test]
     async fn test_tree_directory_no_mount_returns_error() {
         let mfs = MountableFS::new();
         let result = mfs
-            .tree_directory("/nonexistent/subdir", false, None, None)
+            .tree_directory(
+                "/nonexistent/subdir",
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
             .await;
         assert!(result.is_err());
     }
@@ -2134,7 +2233,7 @@ mod tests {
         mfs.mount(test_config("rewrite", "/rewrite")).await.unwrap();
 
         let result = mfs
-            .tree_directory("/rewrite/sub", false, None, None)
+            .tree_directory("/rewrite/sub", false, None, None, None, None, None, false)
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
@@ -2155,191 +2254,21 @@ mod tests {
             .unwrap();
 
         let result = mfs
-            .tree_directory("/local/test_account/a", false, None, None)
+            .tree_directory(
+                "/local/test_account/a",
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].path, "/local/test_account/a/b/c.txt");
         assert_eq!(result[0].rel_path, "a/b/c.txt");
-    }
-
-    #[tokio::test]
-    async fn test_build_multi_write_fs_rejects_primary_encryption_disable() {
-        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::new())).await;
-        mfs.register_plugin(MockPlugin::new("primary")).await;
-        mfs.register_plugin(MockPlugin::new("backupfs")).await;
-        mfs.set_encryption_config(Some([7u8; 32]), Some(1)).await;
-
-        let backups = BackendsConfig {
-            sync_type: "async".to_string(),
-            write_ack_count: None,
-            write_ack_timeout_ms: None,
-            write_concurrency: None,
-            retry_interval_ms: None,
-            retry_backoff_base_ms: None,
-            retry_max_retries_per_round: None,
-            retry_quarantine_after_failures: None,
-            read_probe_cache_ttl_ms: None,
-            items: vec![BackendItemConfig {
-                name: "backup1".to_string(),
-                backend: "backupfs".to_string(),
-                params: serde_json::Value::Null,
-                timeout: None,
-                encryption: None,
-                operations: None,
-                excludes: None,
-            }],
-        };
-        let config = PluginConfig {
-            name: "primary".to_string(),
-            mount_path: "/local".to_string(),
-            params: HashMap::new(),
-            backups: Some(backups.clone()),
-            server_encryption_enabled: true,
-            ..PluginConfig::default()
-        };
-
-        let result = mfs.build_multi_write_fs(&config, &backups).await;
-        assert!(result.is_err());
-        assert!(matches!(result.err(), Some(Error::Config(_))));
-    }
-
-    #[tokio::test]
-    async fn encrypted_multiwrite_reports_pathlock_ownership() {
-        use crate::core::{FsContextInner, PathLockContext, FS_CTX};
-        use crate::lock::{
-            MemoryPathLockProvider, PathLockConfig, PathLockManager, PathLockProvider,
-        };
-        use crate::plugins::MemFSPlugin;
-
-        let mfs = Arc::new(MountableFS::new());
-        mfs.register_plugin(MemFSPlugin).await;
-        mfs.set_encryption_config(Some([7u8; 32]), Some(1)).await;
-        let provider: Arc<dyn PathLockProvider> = Arc::new(MemoryPathLockProvider::new());
-        let manager = Arc::new(PathLockManager::new(
-            mfs.clone() as Arc<dyn FileSystem>,
-            provider,
-            PathLockConfig::default(),
-        ));
-        mfs.set_pathlock_manager(manager.clone()).await;
-
-        let mut config = multiwrite_test_config("memfs", "memfs", "/local");
-        config.server_encryption_enabled = true;
-        config.primary_encryption_enabled = true;
-        mfs.mount(config).await.unwrap();
-
-        assert!(mfs.encryption_handles_pathlock("/local/file.txt").await);
-
-        let outer_ctx = Arc::new(FsContextInner::new("tenant"));
-        let outer = FS_CTX
-            .scope(outer_ctx, async {
-                manager
-                    .acquire_exact("/local/tenant/file.txt", std::time::Duration::ZERO, None)
-                    .await
-            })
-            .await
-            .unwrap();
-        let ctx = Arc::new(FsContextInner::with_pathlock(
-            "tenant",
-            PathLockContext {
-                lease_ref: Some(outer.lease.lease_ref.clone()),
-                disable_auto_pathlock: false,
-            },
-        ));
-        FS_CTX
-            .scope(ctx, async {
-                mfs.write(
-                    "/local/tenant/file.txt",
-                    b"content",
-                    0,
-                    WriteFlag::Create,
-                )
-                .await
-            })
-            .await
-            .unwrap();
-        manager.release(&outer).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_build_multi_write_fs_rejects_exclude_target_field() {
-        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::new())).await;
-        mfs.register_plugin(MockPlugin::new("primary")).await;
-        mfs.register_plugin(MockPlugin::new("backupfs")).await;
-
-        let backups = BackendsConfig {
-            sync_type: "async".to_string(),
-            write_ack_count: None,
-            write_ack_timeout_ms: None,
-            write_concurrency: None,
-            retry_interval_ms: None,
-            retry_backoff_base_ms: None,
-            retry_max_retries_per_round: None,
-            retry_quarantine_after_failures: None,
-            read_probe_cache_ttl_ms: None,
-            items: vec![BackendItemConfig {
-                name: "backup1".to_string(),
-                backend: "backupfs".to_string(),
-                params: serde_json::Value::Null,
-                timeout: None,
-                encryption: None,
-                operations: None,
-                excludes: Some(vec![RedirectPolicy::FileExtensionPolicy {
-                    extensions: vec!["\\.tmp$".to_string()],
-                    target: Some(vec!["should-not-exist".to_string()]),
-                }]),
-            }],
-        };
-        let config = PluginConfig {
-            name: "primary".to_string(),
-            mount_path: "/local".to_string(),
-            params: HashMap::new(),
-            backups: Some(backups.clone()),
-            ..PluginConfig::default()
-        };
-
-        let result = mfs.build_multi_write_fs(&config, &backups).await;
-        assert!(result.is_err());
-        assert!(matches!(result.err(), Some(Error::Config(_))));
-    }
-
-    #[tokio::test]
-    async fn test_build_multi_write_fs_rejects_reserved_primary_backup_name() {
-        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::new())).await;
-        mfs.register_plugin(MockPlugin::new("primary")).await;
-        mfs.register_plugin(MockPlugin::new("backupfs")).await;
-
-        let backups = BackendsConfig {
-            sync_type: "async".to_string(),
-            write_ack_count: None,
-            write_ack_timeout_ms: None,
-            write_concurrency: None,
-            retry_interval_ms: None,
-            retry_backoff_base_ms: None,
-            retry_max_retries_per_round: None,
-            retry_quarantine_after_failures: None,
-            read_probe_cache_ttl_ms: None,
-            items: vec![BackendItemConfig {
-                name: "primary".to_string(),
-                backend: "backupfs".to_string(),
-                params: serde_json::Value::Null,
-                timeout: None,
-                encryption: None,
-                operations: None,
-                excludes: None,
-            }],
-        };
-        let config = PluginConfig {
-            name: "primary".to_string(),
-            mount_path: "/local".to_string(),
-            params: HashMap::new(),
-            backups: Some(backups.clone()),
-            ..PluginConfig::default()
-        };
-
-        let result = mfs.build_multi_write_fs(&config, &backups).await;
-        assert!(result.is_err());
-        assert!(matches!(result.err(), Some(Error::Config(_))));
     }
 
     #[tokio::test]
@@ -2373,84 +2302,5 @@ mod tests {
                 .is_some(),
             "single-backend encrypted mount should place encryption under stats"
         );
-    }
-
-    #[tokio::test]
-    async fn test_multiwrite_mount_wraps_stats_outside_multiwrite() {
-        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::new())).await;
-        mfs.register_plugin(MockPlugin::new("primary")).await;
-        mfs.register_plugin(MockPlugin::new("backupfs")).await;
-
-        mfs.mount(multiwrite_test_config("primary", "backupfs", "/local"))
-            .await
-            .unwrap();
-
-        let mounts = mfs.mounts.read().await;
-        let mount_info = mounts.get("/local").expect("mounted entry should exist");
-        let wrapped = (mount_info.fs.as_ref() as &dyn std::any::Any)
-            .downcast_ref::<StatsWrappedFS>()
-            .expect("stats wrapper should be outermost");
-        assert!(
-            (wrapped.inner_fs().as_ref() as &dyn std::any::Any)
-                .downcast_ref::<MultiWriteWrappedFS>()
-                .is_some(),
-            "multi-write mount should place MultiWriteWrappedFS directly under stats"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_multiwrite_raw_access_is_rejected() {
-        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::new())).await;
-        mfs.register_plugin(MockPlugin::new("primary")).await;
-        mfs.register_plugin(MockPlugin::new("backupfs")).await;
-
-        mfs.mount(multiwrite_test_config("primary", "backupfs", "/local"))
-            .await
-            .unwrap();
-
-        let read_err = mfs.read_raw("/local/data.txt", 0, 0).await.unwrap_err();
-        assert!(matches!(read_err, Error::InvalidOperation(_)));
-
-        let write_err = mfs
-            .write_raw("/local/data.txt", b"raw", WriteFlag::Create)
-            .await
-            .unwrap_err();
-        assert!(matches!(write_err, Error::InvalidOperation(_)));
-    }
-
-    #[tokio::test]
-    async fn test_mountable_multiwrite_admin_smoke() {
-        let mfs = with_test_pathlock_manager(Arc::new(MountableFS::new())).await;
-        mfs.register_plugin(MockPlugin::new("primary")).await;
-        mfs.register_plugin(MockPlugin::new("backupfs")).await;
-
-        mfs.mount(multiwrite_test_config("primary", "backupfs", "/local"))
-            .await
-            .unwrap();
-
-        let status = crate::core::FS_CTX
-            .scope(
-                Arc::new(crate::core::context::FsContextInner::new(
-                    "acct".to_string(),
-                )),
-                async { mfs.system_sync_status("/local").await.unwrap() },
-            )
-            .await;
-        assert_eq!(status["path"], "/");
-        assert_eq!(status["entry_count"], 0);
-        assert_eq!(status["pending_target_count"], 0);
-        assert_eq!(status["capabilities"]["multi_instance_safe"], false);
-
-        let retry = crate::core::FS_CTX
-            .scope(
-                Arc::new(crate::core::context::FsContextInner::new(
-                    "acct".to_string(),
-                )),
-                async { mfs.system_sync_retry("/local").await.unwrap() },
-            )
-            .await;
-        assert_eq!(retry["path"], "/");
-        assert_eq!(retry["retried"], 0);
-        assert_eq!(retry["failed"], 0);
     }
 }

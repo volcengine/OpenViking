@@ -10,23 +10,28 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '#/lib/utils'
+import { retrievalResultNameFromUri } from '#/lib/viking-uri'
 import { useTransientScrollbar } from '#/hooks/use-transient-scrollbar'
+import { useRetrievalQuery } from '#/routes/retrieval/-hooks/use-retrieval-query'
+import type { RetrievalMode } from '#/routes/retrieval/-types/retrieval'
 
-import {
-  fileNameFromUri,
-  normalizeDirUri,
-  parentUri as getParentUri,
-} from '../-lib/normalize'
+import { normalizeDirUri, parentUri as getParentUri } from '../-lib/normalize'
 import {
   filterResourceSearchEntries,
   getResourceSearchSpec,
+  normalizeGlobPattern,
+  resourceEntryAbstractForDisplay,
+  retrievalItemsToEntries,
 } from '../-lib/find-search'
 import {
   PALETTE_ROOT_URI,
+  PALETTE_SEARCH_MODES,
   buildDirBrowseQuery,
+  cycleSearchMode,
   isResetGlobalCommand,
   parsePaletteMode,
 } from '../-lib/palette-mode'
+import type { PaletteSearchMode } from '../-lib/palette-mode'
 import {
   useVikingFsList,
   useVikingFsStat,
@@ -46,9 +51,10 @@ interface FindPaletteProps {
   scopeUri?: string
 }
 const KEY_ESCAPE_LABEL = 'esc'
+const KEY_TAB_LABEL = 'Tab'
 
 function displayName(uri: string): { name: string; parent: string } {
-  const name = fileNameFromUri(uri)
+  const name = retrievalResultNameFromUri(uri)
   const dir = getParentUri(uri)
   const segments = dir.replace(/\/$/, '').split('/').filter(Boolean)
   const parent = segments.length > 1 ? segments.slice(-1)[0] : dir
@@ -81,8 +87,9 @@ export function FindPalette({
   onNavigateDir,
   scopeUri,
 }: FindPaletteProps) {
-  const { t } = useTranslation('resources')
+  const { t } = useTranslation(['resources', 'retrieval'])
   const [query, setQuery] = useState('')
+  const [searchMode, setSearchMode] = useState<PaletteSearchMode>('name')
   const [findTargetUri, setFindTargetUri] = useState(() =>
     normalizeDirUri(scopeUri || PALETTE_ROOT_URI),
   )
@@ -117,15 +124,57 @@ export function FindPalette({
     [showIdleBrowse, idleBrowseQuery.data?.entries],
   )
 
+  const isNameMode = searchMode === 'name'
   const treeQuery = useVikingFsTree(
     searchSpec?.rootUri || PALETTE_ROOT_URI,
     { output: 'agent', showAllHidden: true, nodeLimit: 2000, levelLimit: 100 },
-    mode.kind === 'search' && Boolean(searchSpec),
+    isNameMode && mode.kind === 'search' && Boolean(searchSpec),
   )
+
+  // ponytail: 400ms debounce auto-fires find/search semantic retrieval; switch
+  // to Enter-to-run if it turns out too expensive.
+  const debouncedQuery = useDebouncedValue(
+    mode.kind === 'search' ? mode.query : '',
+    400,
+  )
+  const retrievalOptions = useMemo(
+    () => ({
+      contextTypes: [],
+      customPathInput: '',
+      ignoreCase: true,
+      includeProvenance: false,
+      levels: [],
+      resultCount: 20,
+      scope: 'custom' as const,
+      tags: [],
+      targetUri: isRoot ? undefined : findTargetUri,
+      timeField: 'updated_at' as const,
+    }),
+    [isRoot, findTargetUri],
+  )
+  const retrievalQuery = useRetrievalQuery({
+    enabled: mode.kind === 'search' && !isNameMode && debouncedQuery.length > 0,
+    mode: searchMode as RetrievalMode,
+    options: retrievalOptions,
+    query:
+      searchMode === 'glob'
+        ? normalizeGlobPattern(debouncedQuery)
+        : debouncedQuery,
+  })
+
   const filteredEntries = useMemo(() => {
-    if (mode.kind !== 'search' || !treeQuery.data?.nodes) return []
+    if (mode.kind !== 'search') return []
+    if (!isNameMode) return retrievalItemsToEntries(retrievalQuery.data)
+    if (!treeQuery.data?.nodes) return []
     return filterResourceSearchEntries(treeQuery.data.nodes, searchSpec)
-  }, [mode.kind, treeQuery.data?.nodes, searchSpec])
+  }, [
+    mode.kind,
+    isNameMode,
+    retrievalQuery.data,
+    treeQuery.data?.nodes,
+    searchSpec,
+  ])
+  const searchQuery = isNameMode ? treeQuery : retrievalQuery
 
   // Directory listing lifted up from DirBrowser so the cursor (activeIndex) and
   // keyboard handling can live in one place. DirBrowser is now a pure view.
@@ -298,6 +347,13 @@ export function FindPalette({
         return
       }
 
+      // Outside dirBrowse, Tab cycles the search mode (query is untouched).
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        setSearchMode((current) => cycleSearchMode(current, e.shiftKey))
+        return
+      }
+
       // search / idle list navigation
       if (visibleEntries.length === 0) return
       switch (e.key) {
@@ -339,11 +395,16 @@ export function FindPalette({
 
   if (!open) return null
 
-  const showPreview =
-    mode.kind !== 'dirBrowse' && activeEntry !== null && !activeEntry.isDir
-  const paletteWidth = showPreview
-    ? 'w-[min(92vw,67rem)]'
-    : 'w-[min(90vw,45rem)]'
+  // Directories preview too: FilePreview renders their L0/L1 pages.
+  const showPreview = mode.kind !== 'dirBrowse' && activeEntry !== null
+  // Width tracks the palette mode, not the cursor: searching and directory
+  // browsing are both wide, so an empty result set or a `/` command never
+  // resizes the dialog out from under the user. Only the empty idle prompt,
+  // which has nothing to show yet, stays narrow.
+  const paletteWidth =
+    mode.kind === 'idle' && !showPreview
+      ? 'w-[min(90vw,45rem)]'
+      : 'w-[min(92vw,67rem)]'
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center px-4 sm:items-start sm:px-6 sm:pt-[12vh]"
@@ -370,7 +431,11 @@ export function FindPalette({
           <input
             ref={inputRef}
             type="text"
-            placeholder={t('searchPalette.placeholder')}
+            placeholder={
+              searchMode === 'name'
+                ? t('searchPalette.placeholder')
+                : t(`placeholders.${searchMode}`, { ns: 'retrieval' })
+            }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onCompositionStart={() => {
@@ -409,6 +474,35 @@ export function FindPalette({
             )}
           </span>
         </div>
+
+        {/* Search mode switcher */}
+        {mode.kind !== 'dirBrowse' && (
+          <div className="flex items-center gap-1 border-b px-4 py-1.5">
+            {PALETTE_SEARCH_MODES.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={cn(
+                  'rounded px-1.5 py-0.5 font-mono text-[11px] transition-colors',
+                  searchMode === item
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground/60 hover:text-foreground',
+                )}
+                onClick={() => setSearchMode(item)}
+              >
+                {item === 'name'
+                  ? t('searchPalette.modes.name')
+                  : t(`controls.modes.${item}`, { ns: 'retrieval' })}
+              </button>
+            ))}
+            <span className="ml-auto text-[11px] text-muted-foreground/50">
+              <kbd className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
+                {KEY_TAB_LABEL}
+              </kbd>{' '}
+              {t('searchPalette.modes.switchHint')}
+            </span>
+          </div>
+        )}
 
         {/* Body */}
         <div className="flex min-h-0 flex-1" ref={resultsRef}>
@@ -487,21 +581,21 @@ export function FindPalette({
                       </div>
                     </div>
                   )
-                ) : treeQuery.isLoading ? (
+                ) : searchQuery.isLoading ? (
                   <div className="flex flex-col items-center gap-3 py-12">
                     <Loader2 className="size-5 animate-spin text-muted-foreground/50" />
                     <p className="text-xs text-muted-foreground/60">
                       {t('searchPalette.scopeState.validatingTitle')}
                     </p>
                   </div>
-                ) : treeQuery.error ? (
+                ) : searchQuery.error ? (
                   <div
                     role="alert"
                     className="flex flex-col items-center gap-1 px-4 py-6 text-center text-xs text-destructive"
                   >
                     <span>{t('searchPalette.error')}</span>
                     <span className="max-w-[32rem] text-muted-foreground">
-                      {errorDescription(treeQuery.error)}
+                      {errorDescription(searchQuery.error)}
                     </span>
                   </div>
                 ) : !hasResults ? (
@@ -600,7 +694,7 @@ export function FindPalette({
               </span>
               <span className="ml-auto tabular-nums">
                 {t('searchPalette.footer.resultMode.count', {
-                  count: filteredEntries.length,
+                  count: visibleEntries.length,
                 })}
               </span>
             </div>
@@ -639,12 +733,13 @@ function DirResultList({
     >
       {items.map((entry, i) => {
         const { name, parent } = displayName(entry.uri)
+        const abstract = resourceEntryAbstractForDisplay(entry)
         const isActive = i === activeIndex
         const EntryIcon = entry.isDir ? FolderIcon : FileIcon
 
         return (
           <div
-            key={entry.uri}
+            key={`${entry.uri}#${i}`}
             data-active={isActive}
             className={cn(
               'animate-palette-row group relative flex w-full items-start gap-3 border-b border-border/50 px-4 py-3 text-left transition-colors last:border-b-0',
@@ -673,7 +768,7 @@ function DirResultList({
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{name}</div>
                 <div className="mt-0.5 truncate text-xs text-muted-foreground/80">
-                  {parent}
+                  {abstract || parent}
                 </div>
               </div>
             </button>

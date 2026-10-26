@@ -1,6 +1,6 @@
 # 指标与 Metrics
 
-OpenViking 提供一套面向机器抓取的指标体系，用于暴露系统运行态、请求质量、模型调用情况、资源处理吞吐、探针健康状态等信息。
+OpenViking 提供一套面向机器抓取的指标体系，用于暴露系统运行态、请求状态、模型调用情况、资源处理吞吐、探针健康状态等信息。
 
 与人类排障用的 `/api/v1/observer/*` 和业务分析用的 `/api/v1/stats/*` 不同，Metrics 的目标是：
 
@@ -94,7 +94,7 @@ MetricRegistry 是进程内的指标注册中心，用于保存当前指标值�
 
 ### 访问 `/metrics`
 
-当前实现中，`/metrics` 未接入 `get_request_context` 等鉴权依赖，因此从代码行为上看，它当前等价于公开抓取端点。
+`/metrics` 不要求 OpenViking API Key。需要限制访问时，在网关或反向代理上配置抓取权限。
 
 ```bash
 curl http://localhost:1933/metrics
@@ -124,7 +124,7 @@ scrape_configs:
 | `context_type` | 检索上下文类型 | `resource` |
 | `provider` | 模型或外部服务提供方 | `volcengine` |
 | `model_name` | 模型名称 | `doubao-seed-1-8-251228` |
-| `stage` | 阶段标签（按指标族定义） | 资源阶段：`parse`；Token 归因阶段：`embed_query` |
+| `stage` | 阶段标签（按指标族定义） | 资源阶段：`parse_artifact`；Token 归因阶段：`embed_query` |
 | `valid` | 当前样本是否为有效新鲜值 | `1` / `0` |
 
 其中：
@@ -132,12 +132,12 @@ scrape_configs:
 - `account_id` 只在受控白名单指标上启用，避免高基数失控
 - `valid=0` 表示该状态/探针的当前样本是失败回退值或 stale fallback，不代表标签本身错误
 - `stage` 的语义依赖指标族：
-  - `openviking_resource_stage_*`：资源导入流水线阶段（如 `parse/persist/process`）
+  - `openviking_resource_stage_*`：资源导入流水线阶段（如 `parse_artifact/target_resolve/content_commit`）
   - `openviking_operation_tokens_total`：Token Attribution 的归因阶段（如 `embed_query/rerank/vlm`）
 
 ## 关键指标说明
 
-下面的指标说明基于当前实际暴露的代表性指标输出（整理自 `openviking/metrics/collectors/`）。
+下面列出 Collector 定义的代表性指标。某个指标是否出现，取决于功能是否启用、是否发生对应事件，以及 Collector 是否采集成功；未出现不能直接解释为数值为零。
 
 ### 请求与操作
 
@@ -164,18 +164,25 @@ scrape_configs:
 | `openviking_retrieval_zero_result_total` | Counter | `account_id, context_type` | 检索零结果次数 |
 | `openviking_retrieval_rerank_used_total` | Counter | `account_id` | 检索中使用 rerank 的次数 |
 | `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | 检索 rerank 回退次数 |
+| `openviking_resource_imports_total` | Counter | `account_id, pipeline, source_type` | 已受理的资源导入任务数；Connector 导入使用 `pipeline="connector"`，`source_type` 为 `repository` 或 `document` |
 | `openviking_resource_stage_total` | Counter | `account_id, stage, status` | 资源导入各阶段执行次数 |
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | 资源导入阶段耗时分布 |
 | `openviking_resource_wait_duration_seconds` | Histogram | `account_id, operation` | 资源导入等待耗时分布（例如队列等待） |
 
-典型 `stage` 包括：
+当前内置资源事件按执行路径上报以下 `stage` 值：
 
-- `request`
-- `parse`
-- `summarize`
-- `persist`
-- `finalize`
-- `process`
+- `source_prepare`
+- `parse_artifact`
+- `target_resolve`
+- `update_plan`
+- `content_commit`
+- `derived_enqueue`
+- `semantic_queue_wait`
+- `semantic_execute`
+- `embedding_queue_wait`
+- `embedding_execute`
+
+Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`、`finalize`、`summarize`、`wait`、`watch`。当前资源摘要构建器不生成这些键，因此它们不是当前导入流水线额外上报的阶段。该转换表也不包含 `persist`。
 
 ### 向量检索、记忆与语义节点
 
@@ -186,7 +193,7 @@ scrape_configs:
 | `openviking_vector_passed_total` | Counter | `operation` | 向量候选通过数量累计 |
 | `openviking_vector_returned_total` | Counter | `operation` | 向量候选返回数量累计 |
 | `openviking_vector_scanned_total` | Counter | `operation` | 向量候选扫描数量累计 |
-| `openviking_memory_extracted_total` | Counter | `operation` | memory extracted 数量累计 |
+| `openviking_memory_extracted_total` | Counter | `operation`, `memory_type` | memory extracted 数量累计，按记忆 schema 类型拆分 |
 | `openviking_semantic_nodes_total` | Counter | `status` | semantic nodes 数量累计 |
 
 ### 模型调用与 Token
@@ -199,6 +206,7 @@ scrape_configs:
 | `openviking_vlm_tokens_input_total` | Counter | `account_id, provider, model_name` | VLM 输入 token |
 | `openviking_vlm_tokens_output_total` | Counter | `account_id, provider, model_name` | VLM 输出 token |
 | `openviking_vlm_tokens_total` | Counter | `account_id, provider, model_name` | VLM 总 token |
+| `openviking_vlm_ingestion_tokens_total` | Counter | `account_id, source_type` | 资源导入阶段 VLM 总 token，`source_type` 区分 `repository` / `document` |
 | `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name` | VLM 调用耗时分布 |
 | `openviking_embedding_requests_total` | Counter | `account_id, status` | embedding 请求数 |
 | `openviking_embedding_latency_seconds` | Histogram | `account_id, status` | embedding 耗时分布 |
@@ -208,6 +216,7 @@ scrape_configs:
 | `openviking_embedding_tokens_input_total` | Counter | `account_id, provider, model_name` | embedding 输入 token（per-call 聚合） |
 | `openviking_embedding_tokens_output_total` | Counter | `account_id, provider, model_name` | embedding 输出 token（per-call 聚合；若长期为 0 可能不出现） |
 | `openviking_embedding_tokens_total` | Counter | `account_id, provider, model_name` | embedding 总 token（per-call 聚合） |
+| `openviking_embedding_ingestion_tokens_total` | Counter | `account_id, source_type` | 资源导入阶段 embedding 总 token，`source_type` 区分 `repository` / `document` |
 | `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name` | rerank provider 调用次数（per-call） |
 | `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name` | rerank provider 调用耗时分布（per-call） |
 | `openviking_rerank_tokens_input_total` | Counter | `account_id, provider, model_name` | rerank 输入 token（per-call 聚合） |
@@ -221,7 +230,7 @@ scrape_configs:
 - `openviking_vlm_*` 和 `openviking_embedding_*` 更适合业务侧针对性看板
   - `*_requests_*` 更偏“业务请求视角”
   - `*_calls_* / *_call_duration_* / *_tokens_*` 更偏“模型调用视角”（按 `provider/model_name` 聚合）
- - `openviking_operation_tokens_total` 不存 `token_type="all/total"` 这类预聚合标签，总账建议在 TSDB 查询侧用 `sum(...)` 聚合得到
+- `openviking_operation_tokens_total` 不存 `token_type="all/total"` 这类预聚合标签，总账建议在 TSDB 查询侧用 `sum(...)` 聚合得到
 
 ### 队列、锁与系统运行态
 
@@ -231,14 +240,72 @@ scrape_configs:
 | `openviking_queue_errors_total` | Counter | `queue` | 队列累计错误量 |
 | `openviking_queue_pending` | Gauge | `queue` | 队列待处理数 |
 | `openviking_queue_in_progress` | Gauge | `queue` | 队列执行中数量 |
-| `openviking_lock_active` | Gauge | 无 | 当前活跃锁数量 |
-| `openviking_lock_waiting` | Gauge | 无 | 当前等待中的锁数量 |
-| `openviking_lock_stale` | Gauge | 无 | 可能 stale 的锁数量 |
+| `openviking_queue_process_duration_seconds` | Histogram | `queue, outcome` | 消息被 worker 取出后到 handler 结束的处理耗时 |
+| `openviking_queue_end_to_end_duration_seconds` | Histogram | `queue, outcome` | 消息从入队到 handler 结束的端到端耗时，包含排队时间 |
+| `openviking_executor_max_workers` | Gauge | `pool, process_role, worker` | asyncio 默认 executor 最大 worker 数 |
+| `openviking_executor_threads` | Gauge | `pool, process_role, worker` | asyncio 默认 executor 已创建线程数 |
+| `openviking_executor_active_tasks` | Gauge | `pool, process_role, worker` | 默认 executor 当前执行中的任务数 |
+| `openviking_executor_pending_tasks` | Gauge | `pool, process_role, worker` | 默认 executor 当前等待执行的任务数 |
+| `openviking_executor_submitted_total` | Counter | `pool, process_role, worker` | 默认 executor 累计提交任务数 |
+| `openviking_executor_completed_total` | Counter | `pool, process_role, worker` | 默认 executor 累计执行结束任务数，失败也计入 |
+| `openviking_executor_failed_total` | Counter | `pool, process_role, worker` | 默认 executor callable 抛异常次数 |
+| `openviking_lock_active` | Gauge | 无 | 当前已发布的锁租约数 |
+| `openviking_lock_waiting` | Gauge | 无 | 当前等待锁的请求数 |
+| `openviking_lock_stale` | Gauge | 无 | 累计已清理的过期锁 token 数 |
+| `openviking_lock_conflicts_total` | Counter | 无 | 累计锁冲突次数 |
+| `openviking_lock_stale_leases_released_total` | Counter | 无 | 已释放的过期租约数 |
+| `openviking_lock_descendant_scans_total` | Counter | 无 | 已完成的后代锁扫描次数 |
+| `openviking_lock_descendant_scan_duration_seconds_total` | Counter | 无 | 后代锁扫描累计耗时 |
+
+队列耗时指标中的 `outcome` 可取 `success`、`failed`、`requeued`、`cancelled`、`exception`。其中 `failed` 表示 handler 返回了可确认的失败结果，`exception` 表示处理过程抛出异常，当前消息不会 ACK。
 
 这些指标适合回答：
 
 - 是否有队列堆积？
+- 哪个队列处理慢，以及耗时是否主要来自排队？
 - 是否有锁竞争或 stale lock？
+- 默认 executor 是否接近线程上限或出现排队？
+
+executor 指标只统计 `loop.run_in_executor(None, ...)` 和 `asyncio.to_thread(...)`。
+显式传入自定义 executor 的调用、Rust / RAGFS 内部 runtime 或线程不计入。
+`failed_total` 统计 callable 抛异常的次数。如果异常被上层捕获并作为正常分支处理，
+也会计入该指标，因此它不等同于业务请求失败数。
+
+
+### RAGFS
+
+RAGFS 通过一次原生 `metrics()` 调用读取文件系统、Cache、multi-backend
+和 Lock 指标。Collector 直接覆盖 Registry 当前值，不计算差分。
+内部以整数纳秒采样，导出为小数秒，例如 `123 ns = 0.000000123 seconds`。
+
+| 指标族 | 类型 | 常见标签 | 含义 |
+|--------|------|----------|------|
+| `openviking_ragfs_operation_results_total` | Counter | `plugin, operation, status` | 操作成功和失败次数 |
+| `openviking_ragfs_operation_duration_seconds` | Histogram | `plugin, operation` | 操作耗时分布 |
+| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | 文件和目录缓存命中、未命中次数 |
+| `openviking_ragfs_cache_backend_fallbacks_total` | Counter | 无 | 缓存未命中后的后端读取次数 |
+| `openviking_ragfs_cache_operations_total` | Counter | `operation` | 缓存 put/delete 尝试次数 |
+| `openviking_ragfs_cache_invalidations_total` | Counter | 无 | 已完成的缓存失效次数 |
+| `openviking_ragfs_cache_errors_total` | Counter | 无 | 旁路模式下忽略的缓存错误数 |
+| `openviking_ragfs_cache_policy_bypasses_total` | Counter | 无 | 绕过缓存的读取次数 |
+| `openviking_ragfs_cache_bytes_total` | Counter | `source` | 来自后端和缓存的字节数 |
+| `openviking_ragfs_cache_operation_duration_seconds_total` | Counter | `operation` | get/put/delete 累计耗时 |
+| `openviking_ragfs_cache_inflight_events_total` | Counter | `event` | leader/follower/backend_saved 次数 |
+| `openviking_ragfs_multiwrite_background_tasks` | Gauge | 无 | 每个 mount 的活跃 flush runtime，值为 `0` 或 `1` |
+| `openviking_ragfs_multiwrite_pending_events` | Gauge | 无 | 已提交且正在排队、执行中或重试中的事件数 |
+| `openviking_ragfs_multiwrite_errors_total` | Counter | `worker` | `flush`、`checkpoint`、`catch_up`、`gc` 的最终失败次数 |
+| `openviking_ragfs_multiwrite_backend_lag_events` | Gauge | `backend, partition` | 所有 account 的 `tail - synced_seq` 之和 |
+| `openviking_ragfs_multiwrite_protocol_version` | Gauge | `version` | 闭集标签 `v2` 对应的 mount 数 |
+| `openviking_ragfs_multiwrite_protocol_status` | Gauge | `status` | 闭集标签 `migrating`、`stable` 对应的 mount 数 |
+
+这些指标不带 `mount` 和 `account_id` 标签。未启用 Cache 或 multi-backend
+时，不生成对应指标族。`status` 为 `success` 或 `error`。
+`exists=false` 计为成功；`replace` 使用 `rename` 操作标签。
+Histogram 包含全部操作结果，有限桶边界范围为 0.0001 至 10 秒。
+Python `get_stats()` 保留原有微秒字段。
+
+protocol 指标始终包含闭集中的两条 series。任何 protocol、account 或 segment
+manifest 无法读取或校验时，本次完整 snapshot 失败，不会发布部分 lag=0。
 
 ### 任务与 Task Tracker
 
@@ -248,6 +315,8 @@ scrape_configs:
 | `openviking_task_running` | Gauge | `task_type` | task tracker 执行中任务数 |
 | `openviking_task_completed` | Gauge | `task_type` | task tracker 已完成任务数 |
 | `openviking_task_failed` | Gauge | `task_type` | task tracker 失败任务数 |
+| `openviking_task_cancelling` | Gauge | `task_type` | 正在取消的任务数 |
+| `openviking_task_cancelled` | Gauge | `task_type` | 已取消任务数 |
 
 ### Cache
 
@@ -261,7 +330,6 @@ scrape_configs:
 | 指标族 | 类型 | 常见标签 | 含义 |
 |--------|------|----------|------|
 | `openviking_session_lifecycle_total` | Counter | `account_id, action, status` | session 生命周期事件次数 |
-| `openviking_session_contexts_used_total` | Counter | `account_id, action` | session contexts used 累计量 |
 | `openviking_session_archive_total` | Counter | `account_id, status` | session archive 次数 |
 
 ### Feedback
@@ -346,7 +414,7 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 | `openviking_service_readiness` | Gauge | 可含 `valid` | 服务主 readiness |
 | `openviking_api_key_manager_readiness` | Gauge | 可含 `valid` | API Key Manager readiness |
 | `openviking_storage_readiness` | Gauge | `probe, valid` | 存储探针，例如 `agfs` |
-| `openviking_model_provider_readiness` | Gauge | `provider, valid` | 模型提供方 readiness |
+| `openviking_model_provider_readiness` | Gauge | `provider, valid` | VLM 客户端能否按配置创建；不发实际模型请求 |
 | `openviking_async_system_readiness` | Gauge | `probe, valid` | 异步系统 readiness |
 | `openviking_retrieval_backend_readiness` | Gauge | `probe, valid` | 检索后端 readiness |
 | `openviking_encryption_component_health` | Gauge | `valid` | 加密组件总体健康 |
@@ -359,6 +427,8 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 - `valid="0"`：当前样本是失败回退值或 stale fallback，说明该探针/状态当前不可完全信任
 
 ### 加密（运行指标）
+
+以下指标由 Python 加密事件驱动，不应当作所有 RAGFS 加密文件 I/O 的完整计数。评估实际文件读写吞吐时，还需结合 RAGFS 指标和启用的后端。
 
 | 指标族 | 类型 | 常见标签 | 含义 |
 |--------|------|----------|------|
@@ -406,6 +476,8 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 - `vlm`
 - `embedding`
 - `rerank`
+
+`openviking_model_provider_readiness=1` 不证明模型认证、额度或远端推理可用；它只检查客户端实例能否创建。模型调用错误和耗时应结合实际调用指标判断。
 
 ## 配置示例
 
@@ -456,7 +528,7 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 - `server.observability.metrics.exporters.otel.protocol`：`"grpc"` 或 `"http"`
 - `server.observability.metrics.exporters.otel.tls.insecure`：仅对 OTLP/gRPC 生效；`true` 表示明文连接（无 TLS）
 - `server.observability.metrics.exporters.otel.endpoint`：OTLP 端点（gRPC 用 `host:4317`；HTTP 必须是完整 URL）
-- `server.observability.metrics.exporters.otel.service_name`：OTLP `service.name` 资源属性（默认 `"openviking-server"`）
+- `server.observability.metrics.exporters.otel.service_name`：OTLP `service.name` 资源属性；省略时默认继承顶层 `service_name`
 - `server.observability.metrics.exporters.otel.export_interval_ms`：OTLP 推送间隔，单位毫秒（默认 `10000`）
 - `server.observability.metrics.exporters.otel.headers`：可选的自定义 OTLP 请求头；gRPC 会作为 metadata 发送，HTTP 会作为 headers 发送
 - 使用 gRPC 时，`headers` 中的 key 需要使用小写形式，例如 `x-byteapm-appkey`；HTTP 不受该限制
@@ -507,4 +579,3 @@ max by (job) (openviking_feedback_events_total{valid="0"})
 - [数据加密](./10-encryption.md) - 存储层加密与隔离
 - [Metrics API](../api/09-metrics.md) - `/metrics` 端点用法
 - [VikingBot 问答效果反馈观测方案设计](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/design/vikingbot-feedback-observability-design.md) - feedback 指标与阶段性落地背景
-- [指标体系设计](../../design/metric-design.md) - 指标体系设计细节

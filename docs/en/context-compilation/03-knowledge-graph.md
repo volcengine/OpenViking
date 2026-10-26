@@ -1,6 +1,6 @@
 # Example: Knowledge Graph
 
-Compile a set of sources into an **evidence-grounded, visualization-ready** knowledge graph: semantically typed entity nodes, statement-level provenance, and typed directed relationship edges. The output is this artifact tree:
+Extract typed entities and typed, directed relationships into a knowledge graph, keeping source references for each statement and edge. The output contains entity files and an edge list:
 
 ```text
 entities/
@@ -16,7 +16,9 @@ Each edge is a compact JSON line, readable as the statement `<from> <relation> <
 
 `relation` is a stable, language-independent machine predicate (`member_of`, `leads`, `located_in`…), `label` is its localized display name, and `entity_type` drives node color, shape, and filtering in the visualization. The graph refreshes incrementally: existing nodes and edges are preserved, evidence is merged, and new knowledge is appended.
 
-Skill source: [examples/compile/ov-compile-skills/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/knowledge-graph) · Visualization script: [examples/compile/graph-show/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/knowledge-graph)
+Skill source: [openviking/system_assets/compile/example-skills/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/knowledge-graph) · Visualization script: [examples/compile/graph-show/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/knowledge-graph)
+
+Check the [prerequisites](01-overview.md#prerequisites) and run these commands from the OpenViking repository root. Replace the source directory with your own material.
 
 ## Step 1: Prepare the sources
 
@@ -28,7 +30,7 @@ ov ls -r viking://resources/journal
 ## Step 2: Add the Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-graph --wait
+ov add-skill openviking/system_assets/compile/example-skills/knowledge-graph -p viking://agent/skills --wait
 ov skills list
 # → viking://agent/skills/knowledge-graph
 ```
@@ -40,11 +42,10 @@ ov compile \
   --from viking://resources/journal \
   --to viking://resources/journal-kg \
   --skill viking://agent/skills/knowledge-graph \
-  --reason "Extract characters, places, artifacts and their relationships into a traversable graph" \
-  --wait
+  --instruction "Extract characters, places, artifacts and their relationships into a traversable graph"
 ```
 
-Drop `--wait` to get a `task_id` back immediately, then:
+The command returns a `task_id` immediately. Then:
 
 ```bash
 ov task status cmp_01abc      # progress and final result
@@ -63,7 +64,7 @@ ov read viking://resources/journal-kg/entities/sun-wukong.md
 
 Unlike the LLM Wiki script, `knowledge_graph.py` reads from a **local directory** (it needs both `entities/` and `relations.jsonl` on disk). So download the output first, then generate the HTML.
 
-Download the whole artifact tree. `ov get` downloads one file at a time; combine it with `ov ls -r -s` to pull every path:
+`ov get` downloads one file at a time. This script downloads only the entity Markdown files and edge list:
 
 ```bash
 SRC="viking://resources/journal-kg"
@@ -72,7 +73,8 @@ mkdir -p "$DST"
 ov ls -r -s "$SRC" | while read -r uri; do
   # only download files (entities/*.md and relations.jsonl), skip directories
   case "$uri" in
-    */entities|"$SRC") continue ;;
+    "$SRC"/entities/*.md|"$SRC"/relations.jsonl) ;;
+    *) continue ;;
   esac
   rel="${uri#$SRC/}"
   mkdir -p "$DST/$(dirname "$rel")"
@@ -80,7 +82,7 @@ ov ls -r -s "$SRC" | while read -r uri; do
 done
 ```
 
-> `ov get` requires the local target path to not exist yet, so clear the old directory (`rm -rf ./journal-kg`) before re-downloading.
+> `ov get` requires the local target file to not exist. To download again, change `DST` to a new directory and keep the previous result.
 
 Confirm the local layout is correct:
 
@@ -103,4 +105,4 @@ Open `journal-kg.html` in a browser. The script validates first — `relations.j
 
 - [Context Compilation Overview](./01-overview.md)
 - [LLM Wiki example](./02-llm-wiki.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

@@ -26,7 +26,7 @@ from openviking.retrieve.context_assembler.params import (
     Tier,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking.storage.abstract_overview import body_for_preview
+from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
 
 OVERVIEW_HEADING_LIMIT = 24
 OVERVIEW_PARAGRAPH_CHARS = 400
@@ -110,7 +110,10 @@ def overview_from_content(candidate: Candidate, content: str) -> str:
         return ""
     if candidate.is_directory:
         # The cached content already is the directory's own overview sidecar.
-        return body_for_preview(content).strip()
+        try:
+            return body_for_preview(content).strip()
+        except AbstractOverviewFormatError:
+            return ""
     if _is_code_uri(candidate.base_uri):
         extraction = extract_skeleton_result(filename_from_uri(candidate.base_uri), content)
         if extraction.text:

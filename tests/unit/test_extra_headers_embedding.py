@@ -60,6 +60,20 @@ class TestExtraHeadersDirectConstruction:
         call_kwargs = mock_openai_class.call_args[1]
         assert "default_headers" not in call_kwargs
 
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_sdk_retries_disabled(self, mock_openai_class):
+        """OpenAI SDK retries should be disabled in favor of OpenViking retries."""
+        mock_openai_class.return_value = _make_mock_client()
+
+        OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_key="sk-test",
+        )
+
+        mock_openai_class.assert_called_once()
+        call_kwargs = mock_openai_class.call_args[1]
+        assert call_kwargs["max_retries"] == 0
+
 
 class TestExtraHeadersViaFactory:
     """Test extra_headers forwarding through EmbeddingConfig._create_embedder."""

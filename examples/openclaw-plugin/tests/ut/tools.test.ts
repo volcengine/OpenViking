@@ -473,7 +473,7 @@ describe("Tool: memory_store (behavioral)", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "person" });
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "sender" });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     const factory = factoryTools.get("memory_store");
@@ -529,6 +529,50 @@ describe("Tool: memory_store (behavioral)", () => {
 
     expect(result.content[0].text).toContain("trace_id=trace-memory-store");
     expect(result.details).toMatchObject({ traceId: "trace-memory-store" });
+  });
+
+  it("returns a tool-visible failure when commit extracts zero memories", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: true,
+          memories_extracted: {},
+          trace_id: "trace-zero",
+        });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store-zero", {
+      text: "Remember this important thing",
+    });
+
+    expect(result.content[0].text).toContain("created or updated no memory");
+    expect(result.content[0].text).toContain("no new memory was created");
+    expect(result.content[0].text).toContain("trace_id=trace-zero");
+    expect(result.content[0].text).not.toContain("Stored");
+    expect(result.details).toMatchObject({
+      action: "failed",
+      error: "no_memories_extracted",
+      memoriesCount: 0,
+      archived: true,
+      traceId: "trace-zero",
+    });
   });
 
   it("uses a temporary session by default instead of the current tool session", async () => {
@@ -831,7 +875,7 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     expect(props).toHaveProperty("source");
     expect(props).toHaveProperty("data");
     expect(props).toHaveProperty("wait");
-    expect(props).toHaveProperty("timeout");
+    expect(props).not.toHaveProperty("timeout");
     expect(props).not.toHaveProperty("to");
     expect(props).not.toHaveProperty("parent");
   });
@@ -1339,14 +1383,6 @@ describe("OpenViking import command parsing", () => {
     expect(() =>
       parseAddResourceCommandArgs("./README.md --to viking://resources/a --parent viking://resources"),
     ).toThrow("Cannot specify both");
-  });
-
-  it("parses add-skill flags", () => {
-    expect(parseAddSkillCommandArgs("./skills/demo --wait --timeout=30")).toMatchObject({
-      source: "./skills/demo",
-      wait: true,
-      timeout: 30,
-    });
   });
 
   it("rejects resource-only flags for skill imports", () => {
@@ -2098,7 +2134,7 @@ describe("Plugin registration", () => {
       return okResponse({});
     });
 
-    const { commands, api } = setupPlugin();
+    const { commands, api } = setupPlugin(undefined, { peer_role: "assistant" });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
 
@@ -2115,7 +2151,7 @@ describe("Plugin registration", () => {
     expect(headers.get("X-OpenViking-Actor-Peer")).toBe("worker");
   });
 
-  it("search command propagates configured tenant headers", async () => {
+  it("search command omits actor peer identity with the default memory scope", async () => {
     const openVikingTransport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/search/find")) {
         return okResponse({ memories: [], resources: [], skills: [], total: 0 });
@@ -2124,6 +2160,31 @@ describe("Plugin registration", () => {
     });
 
     const { commands, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+
+    await commands.get("ov-search")!.handler({
+      args: "test query --uri viking://resources",
+      commandBody: "/ov-search",
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:session-1",
+    });
+
+    const [, init] = openVikingTransport.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Actor-Peer")).toBeNull();
+  });
+
+  it("search command propagates configured tenant headers", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+
+    const { commands, api } = setupPlugin(undefined, { peer_role: "assistant" });
     (api as any).openVikingTransport = openVikingTransport;
     api.pluginConfig = {
       ...api.pluginConfig,
@@ -2221,7 +2282,6 @@ describe("Plugin registration", () => {
     const result = await tool.execute("tc-add-skill", {
       data: "name: demo\n",
       wait: true,
-      timeout: 30,
     }) as ToolResult;
 
     expect(result.content[0]!.text).toContain("Imported OpenViking skill");
@@ -2231,7 +2291,6 @@ describe("Plugin registration", () => {
     expect(body).toMatchObject({
       data: "name: demo\n",
       wait: true,
-      timeout: 30,
     });
   });
 

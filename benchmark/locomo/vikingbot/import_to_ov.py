@@ -612,7 +612,7 @@ async def viking_ingest(
         try:
             result = await _retry_transient_http(
                 f"commit_session session={session_id}",
-                lambda: client.commit_session(session_id, options={"telemetry": True}),
+                lambda: client.commit_session(session_id, telemetry=True),
                 attempts=2,
             )
         except _TRANSIENT_HTTP_ERRORS as exc:
