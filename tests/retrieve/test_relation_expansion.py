@@ -389,7 +389,7 @@ async def test_links_survive_ovpack_export_and_import(make_service, tmp_path):
     await service.fs.rm(A, ctx=CTX, wait=True)
 
     root = await service.pack.import_ovpack(pack, "viking://resources/restored", ctx=CTX)
-    await service.resources.wait_processed(timeout=60)
+    await service.resources.wait_processed()
     restored = f"{root.rstrip('/')}/a.md"
 
     result = await _search(service)
