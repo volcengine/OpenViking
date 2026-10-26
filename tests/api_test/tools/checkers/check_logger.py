@@ -1,6 +1,3 @@
-logger_path = "/usr/local/lib/python3.11/site-packages/openviking_cli/utils/logger.py"
-print(f"Reading {logger_path}...")
-print("=" * 80)
+from source_reader import read_source
 
-with open(logger_path, "r") as f:
-    print(f.read())
+print(read_source("openviking_cli/utils/logger.py", "openviking_cli.utils.logger"))
