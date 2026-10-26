@@ -36,7 +36,6 @@ class OTelMetricExporter(MetricExporter):
         export_interval_ms=10000,
         export_timeout_seconds=None,
         headers=None,
-        enabled=True,
     ):
         self._registry = registry
         self._collector_manager = collector_manager
@@ -48,22 +47,20 @@ class OTelMetricExporter(MetricExporter):
             if export_timeout_seconds is not None
             else max(5.0, self._refresh_deadline_seconds)
         )
-        self._enabled = enabled
+        self._closed = False
         self._export_task = None
         self._export_lock = asyncio.Lock()
-        self._sdk = None
         if protocol not in ("grpc", "http"):
             raise ValueError(f"unsupported OTLP protocol: {protocol}")
-        if enabled:
-            options = {"endpoint": endpoint, "headers": headers, "timeout": self._timeout}
-            if protocol == "http":
-                self._sdk = HttpExporter(**options)
-            else:
-                self._sdk = GrpcExporter(**options, insecure=insecure)
+        options = {"endpoint": endpoint, "headers": headers, "timeout": self._timeout}
+        if protocol == "http":
+            self._sdk = HttpExporter(**options)
+        else:
+            self._sdk = GrpcExporter(**options, insecure=insecure)
 
     async def export(self) -> str:
         async with self._export_lock:
-            if not self._enabled:
+            if self._closed:
                 return ""
             if self._collector_manager is not None:
                 try:
@@ -94,7 +91,7 @@ class OTelMetricExporter(MetricExporter):
         return ""
 
     def start(self) -> None:
-        if not self._enabled or self._export_task is not None:
+        if self._closed or self._export_task is not None:
             return
         try:
             loop = asyncio.get_running_loop()
@@ -106,7 +103,7 @@ class OTelMetricExporter(MetricExporter):
     async def _run(self) -> None:
         loop = asyncio.get_running_loop()
         next_tick = loop.time()
-        while self._enabled:
+        while not self._closed:
             try:
                 await self.export()
             except Exception as exc:
@@ -118,7 +115,7 @@ class OTelMetricExporter(MetricExporter):
             await asyncio.sleep(next_tick - now)
 
     async def shutdown(self) -> None:
-        self._enabled = False
+        self._closed = True
         if self._export_task is not None:
             self._export_task.cancel()
             try:

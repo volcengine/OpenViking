@@ -156,15 +156,9 @@ class MetricRegistry:
     def set_histogram(
         self, name, *, bucket_bounds, bucket_counts, count, value_sum, labels=None, label_names=()
     ) -> None:
-        bounds = self._bounds(bucket_bounds)
+        """Accept a native histogram validated at the RagfsMetricDataSource boundary."""
+        bounds = tuple(bucket_bounds)
         counts = tuple(bucket_counts)
-        value_sum = float(value_sum)
-        if len(counts) != len(bounds) + 1 or any(
-            type(value) is not int or value < 0 for value in (*counts, count)
-        ):
-            raise ValueError("histogram counts must be nonnegative integers matching bounds")
-        if sum(counts) != count or not math.isfinite(value_sum) or value_sum < 0:
-            raise ValueError("histogram count or sum is invalid")
         with self._lock:
             binding, key = self._bind(
                 name, "histogram", label_names, labels, mode="snapshot", bounds=bounds
@@ -204,23 +198,15 @@ class MetricRegistry:
             point = binding.points.get(normalize_labels(labels))
             return None if point is None else point.value
 
-    def gauge_delete_matching(self, name, *, match_labels: Mapping[str, str]) -> None:
-        self._delete(name, "gauge", match_labels)
-
-    def counter_delete_matching(self, name, *, match_labels: Mapping[str, str]) -> None:
-        self._delete(name, "counter", match_labels)
-
-    def histogram_delete_matching(self, name, *, match_labels: Mapping[str, str]) -> None:
-        self._delete(name, "histogram", match_labels)
-
-    def _delete(self, name, kind, match_labels):
+    def delete_matching(self, name, *, match_labels: Mapping[str, str]) -> None:
+        """Remove matching state snapshots; the registered metric owns its type."""
         match = set(normalize_labels(match_labels))
         with self._lock:
             binding = self._bindings.get(name)
             if binding is None:
                 return
-            if binding.kind != kind or binding.mode != "snapshot":
-                raise ValueError(f"metric {name} is not a {kind} snapshot")
+            if binding.mode != "snapshot":
+                raise ValueError(f"metric {name} is not a state snapshot")
             for key in list(binding.points):
                 if match.issubset(key):
                     del binding.points[key]

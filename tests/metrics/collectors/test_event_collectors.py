@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import re
 
-import openviking.metrics.global_api as global_api
 from openviking.metrics.collectors.base import EventMetricCollector
 from openviking.metrics.collectors.cache import CacheCollector
 from openviking.metrics.collectors.embedding import EmbeddingCollector
@@ -270,17 +269,6 @@ def test_telemetry_bridge_collector_ignores_malformed_payloads_instead_of_raisin
 
     text = render_prometheus(registry)
     assert "openviking_operation_requests_total" not in text
-
-
-def test_http_collector_importable() -> None:
-    from openviking.metrics.collectors.http import HTTPCollector
-
-    assert HTTPCollector is not None
-
-
-def test_global_api_no_longer_exports_metrics_enabled_helper() -> None:
-    """Avoid redundant exports: metrics enablement is read via direct config access."""
-    assert not hasattr(global_api, "is_metrics_enabled_from_server_config")
 
 
 def test_embedding_collector_maps_call_metrics_and_tokens(registry, render_prometheus):

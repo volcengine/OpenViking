@@ -434,7 +434,7 @@ def test_ragfs_collector_replaces_recovers_and_deletes(monkeypatch):
     assert "openviking_ragfs_partial_total 9.0" in PrometheusExporter(registry=registry).render()
     records.clear()
     with monkeypatch.context() as patch:
-        patch.setattr(registry, "counter_delete_matching", fail)
+        patch.setattr(registry, "delete_matching", fail)
         with pytest.raises(RuntimeError, match="injected"):
             collector.collect(registry)
     collector.collect(registry)
