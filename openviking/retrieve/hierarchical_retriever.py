@@ -19,6 +19,7 @@ from openviking.models.embedder.base import (
     embedder_supports_multimodal,
 )
 from openviking.models.rerank import RerankClient
+from openviking.retrieve.rerank_cache import CachedRerankClient
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
@@ -72,6 +73,9 @@ class HierarchicalRetriever:
     RERANK_CANDIDATE_MULTIPLIER = 2
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
+    # RerankClient instance, a CachedRerankClient wrapper around one, or None.
+    _rerank_client: Optional[Any]
+
     def __init__(
         self,
         storage: VikingDBManager,
@@ -96,6 +100,8 @@ class HierarchicalRetriever:
         # Initialize rerank client — all providers go through unified dispatch
         if rerank_config and rerank_config.is_available():
             self._rerank_client = RerankClient.from_config(rerank_config)
+            if self._rerank_client is not None:
+                self._rerank_client = CachedRerankClient(self._rerank_client)
             provider = rerank_config._effective_provider()
             logger.info(
                 f"[HierarchicalRetriever] Rerank enabled (provider={provider}), threshold={self.threshold}"
