@@ -1528,6 +1528,8 @@ ov admin register-user acme bob-private --role user \
 
 List active users in a workspace. Users with deletion in progress are omitted.
 
+With the file account store, both HTTP and MCP `list_users` read the current process's in-memory user registry without refreshing files during the query. User changes completed in this process are immediately visible; changes from other processes become visible after the background watcher synchronizes them or the registry is reloaded. The `redis_mysql` account store continues to list users from MySQL.
+
 **Processing Flow:**
 1. Verify requester has ROOT privileges or is an ADMIN of the account
 2. Call API Key Manager to get active users list (in creation order)

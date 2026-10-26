@@ -1559,8 +1559,6 @@ class FileStore(AccountStore):
             async with self._mutation_lock:
                 async with self._reload_lock:
                     await self._refresh_account_users_from_store_unlocked(account_id)
-        else:
-            await self._refresh_users_for_management_read(account_id)
         return self._get_users_page(
             account_id,
             limit=limit,
