@@ -1,0 +1,18 @@
+docs/en/workflows/01-overview.md
+  h_b34c679d17e2ac 11
+docs/zh/workflows/01-overview.md
+  h_b34c679d17e2ac 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "8d18dde8419834768f85df836d48cb23d9bac26b",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

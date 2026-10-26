@@ -1,0 +1,34 @@
+crates/ov_cli/src/client.rs
+  h_b34c679d17e2ac 119,122-124,126-128,2901-2920
+crates/ov_cli/src/commands/compile.rs
+  h_b34c679d17e2ac 90-97
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 21,25,47,62-77,89,147,278
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 21,25,47,62-77,89,147,278
+openviking/server/routers/compile.py
+  h_b34c679d17e2ac 9,28-32,35,42,50,56-59
+openviking/service/compile_scheduler.py
+  h_b34c679d17e2ac 23-28,209,212-216,249,253-255
+openviking/service/compile_service.py
+  h_b34c679d17e2ac 412-415,417-418,429-437,714-715
+openviking/service/compile_targets.py
+  h_b34c679d17e2ac 973,985,993-997,1018-1021,1024-1026,1059
+sdk/go/compile.go
+  h_b34c679d17e2ac 11
+sdk/python/openviking_sdk/client.py
+  h_b34c679d17e2ac 1664
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2750f4a0c0763681e992fbf075df20aa06a7b367",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

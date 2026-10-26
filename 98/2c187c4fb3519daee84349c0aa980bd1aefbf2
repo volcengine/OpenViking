@@ -1,0 +1,26 @@
+docs/en/api/01-overview.md
+  h_b34c679d17e2ac 594
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 122
+docs/zh/api/01-overview.md
+  h_b34c679d17e2ac 589
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 122
+openviking/server/routers/compile.py
+  h_b34c679d17e2ac 8,17-21,84-95
+openviking/service/compile_service.py
+  h_b34c679d17e2ac 50-66,685-700
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "982c187c4fb3519daee84349c0aa980bd1aefbf2",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

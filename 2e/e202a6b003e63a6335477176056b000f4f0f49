@@ -1,0 +1,16 @@
+openviking/service/compile_scheduler.py
+  h_b34c679d17e2ac 57,226,268-271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2ee202a6b003e63a6335477176056b000f4f0f49",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
