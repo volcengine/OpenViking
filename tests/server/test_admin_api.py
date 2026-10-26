@@ -3111,6 +3111,164 @@ async def test_remove_group_members_batch_rejects_invalid_body(
     remove.assert_not_awaited()
 
 
+@pytest.mark.parametrize("include_summary", [False, True])
+@pytest.mark.parametrize("include_credentials", [None, True, False])
+async def test_user_list_masks_credentials_for_admin_only(
+    lightweight_admin_client, lightweight_admin_app, include_summary, include_credentials
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    admin_key = await manager.create_account(account, "owner")
+    keys = {"owner": admin_key}
+    keys["alice"] = await manager.register_user(account, "alice")
+    keys["manager"] = await manager.register_user(account, "manager", Role.ADMIN)
+    params = {"include_summary": include_summary, "limit": 2, "page": 1}
+    if include_credentials is not None:
+        params["include_credentials"] = include_credentials
+    url = f"/api/v1/admin/accounts/{account}/users"
+
+    # Each ADMIN sees its own stored key in plaintext and only masked key_prefix
+    # for every other user; ROOT sees every plaintext key.
+    callers = [
+        (admin_key, "owner", False),
+        (keys["manager"], "manager", False),
+        (ROOT_KEY, None, True),
+    ]
+    for caller_key, caller_id, is_root in callers:
+        users = []
+        for page in (1, 2):
+            response = await lightweight_admin_client.get(
+                url, params={**params, "page": page}, headers={"X-API-Key": caller_key}
+            )
+            assert response.status_code == 200
+            result = response.json()["result"]
+            if include_summary:
+                assert result["total"] == result["account_total"] == result["key_count"] == 3
+                result = result["users"]
+            users.extend(result)
+        assert len(users) == 3
+        for user in users:
+            key = keys[user["user_id"]]
+            if include_credentials is False:
+                assert user["api_key_available"] is True
+                assert "api_key" not in user and "key_prefix" not in user
+            elif is_root or user["user_id"] == caller_id:
+                assert user["api_key"] == key
+                assert "key_prefix" not in user
+            else:
+                account_part, user_part, secret = key.split(".")
+                assert user["key_prefix"] == (
+                    f"{account_part}.{user_part}.{'*' * (len(secret) - 4)}{secret[-4:]}"
+                )
+                assert "api_key" not in user
+                assert key not in json.dumps(users)
+                assert secret not in json.dumps(users)
+        if not is_root and include_credentials is not False:
+            payload = json.dumps(users)
+            assert keys[caller_id] in payload
+            for other_id, other_key in keys.items():
+                if other_id != caller_id:
+                    assert other_key not in payload
+                    assert other_key.split(".")[2] not in payload
+    assert (await manager.resolve_identity(keys["alice"])).user_id == "alice"
+    response = await lightweight_admin_client.get(url, headers={"X-API-Key": keys["alice"]})
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        ("YWNtZQ.YWxpY2U.abcdefghijklmnop", "YWNtZQ.YWxpY2U.************mnop"),
+        ("YWNtZQ.YWxpY2U.abcdefgh", "YWNtZQ.YWxpY2U.****efgh"),
+        ("YWNtZQ.YWxpY2U.abcde", "YWNtZQ.YWxpY2U.*bcde"),
+        ("YWNtZQ.YWxpY2U.abcd", "YWNtZQ.YWxpY2U.****"),
+        ("YWNtZQ.YWxpY2U.a", "YWNtZQ.YWxpY2U.*"),
+        ("legacy-secret", "*************"),
+        ("two.parts", "*********"),
+        ("abcd", "****"),
+        ("a", "*"),
+    ],
+)
+async def test_user_key_mask_handles_malformed_and_short_keys(key, expected):
+    from openviking.server.api_keys import APIKeyManager
+
+    store = Mock()
+    store.list_users_page = AsyncMock(
+        return_value={
+            "users": [
+                {"user_id": "alice", "api_key": key},
+                {"user_id": "hashed", "key_prefix": "existing-prefix"},
+                {"user_id": "keyless"},
+            ],
+            "key_count": 2,
+        }
+    )
+    result = await APIKeyManager("root", store).list_users_page("acme", mask_keys=True)
+    assert result["users"] == [
+        {"user_id": "alice", "key_prefix": expected},
+        {"user_id": "hashed", "key_prefix": "existing-prefix"},
+        {"user_id": "keyless"},
+    ]
+    assert result["key_count"] == 2
+    store.list_users_page.assert_awaited_once_with("acme")
+
+
+async def test_user_key_mask_reveals_only_the_viewers_own_key():
+    from openviking.server.api_keys import APIKeyManager
+    from openviking.server.api_keys.new import generate_api_key, mask_api_key
+
+    alice_key = generate_api_key("acme", "alice")
+    bob_key = generate_api_key("acme", "bob")
+    other_alice_key = generate_api_key("other", "alice")
+    rows = {
+        "users": [
+            {"user_id": "alice", "api_key": alice_key},
+            {"user_id": "bob", "api_key": bob_key},
+            # Stored key that does not belong to the row's declared identity.
+            {"user_id": "carol", "api_key": other_alice_key},
+            {"user_id": "hashed", "key_prefix": "existing-prefix"},
+        ],
+        "key_count": 3,
+    }
+
+    def store_with_rows():
+        store = Mock()
+        store.list_users_page = AsyncMock(return_value=deepcopy(rows))
+        return store
+
+    # Matching viewer: only the viewer's own row stays plaintext.
+    result = await APIKeyManager("root", store_with_rows()).list_users_page(
+        "acme", mask_keys=True, viewer_account_id="acme", viewer_user_id="alice"
+    )
+    assert result["users"] == [
+        {"user_id": "alice", "api_key": alice_key},
+        {"user_id": "bob", "key_prefix": mask_api_key(bob_key)},
+        {"user_id": "carol", "key_prefix": mask_api_key(other_alice_key)},
+        {"user_id": "hashed", "key_prefix": "existing-prefix"},
+    ]
+
+    # Account mismatch suppresses the plaintext reveal.
+    result = await APIKeyManager("root", store_with_rows()).list_users_page(
+        "acme", mask_keys=True, viewer_account_id="other", viewer_user_id="alice"
+    )
+    assert result["users"][0] == {"user_id": "alice", "key_prefix": mask_api_key(alice_key)}
+
+    # User-only mismatch (row belongs to another account's identity) never reveals.
+    result = await APIKeyManager("root", store_with_rows()).list_users_page(
+        "acme", mask_keys=True, viewer_account_id="acme", viewer_user_id="carol"
+    )
+    assert result["users"][2] == {
+        "user_id": "carol",
+        "key_prefix": mask_api_key(other_alice_key),
+    }
+
+    # Without viewer identity everything is masked, including the caller's row.
+    result = await APIKeyManager("root", store_with_rows()).list_users_page(
+        "acme", mask_keys=True
+    )
+    assert result["users"][0] == {"user_id": "alice", "key_prefix": mask_api_key(alice_key)}
+
+
 async def test_remove_user(
     admin_client: httpx.AsyncClient,
     admin_service: OpenVikingService,
@@ -3881,7 +4039,15 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
                 credentials = await mcp_endpoint.list_users(
                     context, query="user-112", include_credentials=True
                 )
-                assert credentials["users"][0]["api_key"] == last_key
+                if role == Role.ROOT:
+                    assert credentials["users"][0]["api_key"] == last_key
+                else:
+                    account_part, user_part, secret = last_key.split(".")
+                    assert credentials["users"][0]["key_prefix"] == (
+                        f"{account_part}.{user_part}.{'*' * (len(secret) - 4)}{secret[-4:]}"
+                    )
+                    assert "api_key" not in credentials["users"][0]
+                    assert last_key not in json.dumps(credentials)
                 original_config = lightweight_admin_app.state.config
                 lightweight_admin_app.state.config = ServerConfig(
                     auth_mode="trusted", root_api_key=ROOT_KEY

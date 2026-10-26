@@ -1451,7 +1451,7 @@ HTTP 和 MCP 的 `list_users` 都直接读取当前进程的内存用户登记�
 2. 调用 API Key Manager 获取活跃用户列表（按创建顺序排列）
 3. 应用可选的过滤条件（name、role）
 4. 应用可选的 `limit`/`page` 分页
-5. 返回用户列表（trusted 模式下不包含 user_key）
+5. 按调用者角色返回密钥信息（trusted 模式下不包含密钥信息）
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_users` - HTTP 路由
@@ -1469,14 +1469,18 @@ HTTP 和 MCP 的 `list_users` 都直接读取当前进程的内存用户登记�
 | role | str | 否 | null | 按角色过滤 |
 | query | str | 否 | null | 仅 HTTP，按用户 ID 做不区分大小写的字面包含匹配 |
 | include_summary | bool | 否 | false | 仅 HTTP，以对象返回分页用户和账号统计 |
-| include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；仅当服务端能读取完整 key 并用于服务端绑定时 `api_key_available` 才为 true，仅存哈希的凭据返回 false；默认保持现有按鉴权模式返回字段的行为。 |
+| include_credentials | bool | 否 | true | 仅 HTTP。ROOT 可获取可用的明文密钥，ADMIN 仅获取打码后的前缀。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；仅当服务端能读取完整 key 并用于服务端绑定时 `api_key_available` 才为 true，仅存哈希的凭据返回 false。 |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
 **说明：**
 - 结果按创建顺序返回
 - ADMIN 只能列出自己所属的 account 中的用户
-- 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
+- ROOT 可通过 `api_key` 获取全部已存储的明文密钥。非 ROOT 调用方只有自身那一行返回 `api_key` 明文，其他用户（包括其他 ADMIN）均返回打码后的 `key_prefix`。自身匹配是严格匹配：列表 account、行内 user ID 以及三段式 key 内嵌的 account/user 段必须全部等于调用方认证身份，否则该行仍打码。三段式密钥保留前两段和 secret 的最后 4 个字符，secret 中其余每个字符均替换为 `*`；secret 不超过 4 个字符时完全隐藏。非三段式密钥完全隐藏；仅存哈希的凭据沿用已有前缀。
+- 打码在服务端执行，同时覆盖 HTTP 和 MCP 的 `list_users(include_credentials=true)`，因此 CLI/SDK 的 JSON 输出也受保护。客户端只能将 `key_prefix` 用于展示，切换身份时需要另行提供可用密钥。
+- `ov admin list-users` 默认还会在 CLI 侧对明文 `api_key` 行使用相同格式打码，table 和 JSON 输出保持一致，并在 stderr 打印提示。传入 `--reveal-api-keys` 可输出明文：ROOT 会显示全部密钥，ADMIN/USER 调用方仍只能看到自身密钥（其他行由服务端打码）。该 flag 只影响 CLI 渲染，不改变服务端响应。table 输出会把服务端的 `api_key`（明文或 CLI 打码值）与 `key_prefix` 合并为同一个 `api_key` 列；JSON 输出保留服务端的字段名。
+- 本限制针对已存储密钥的列表浏览。创建用户与重置密钥仍会向 ROOT 或 ADMIN 返回新密钥；普通 USER 尚无自助轮换接口。
+- 在 `trusted` 模式下，响应中不会包含 `api_key` 或 `key_prefix` 字段
 - 用户删除开始后，不再出现在该列表中
 
 **带统计的响应（HTTP）：** 设置 `include_summary=true` 后，`result` 返回对象：`users` 为当前页，`total` 为匹配人数，`account_total` 为账号总人数，`manager_count` 为 admin/root 人数，`key_count` 为具有可见密钥或前缀的用户数。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。默认仍返回用户数组，兼容现有调用。
@@ -1546,6 +1550,8 @@ fmt.Println(users)
 ov admin list-users acme
 # 如果使用 root_api_key（--sudo）：
 ov --sudo admin list-users acme
+# 输出明文密钥而不是打码值（仅 ROOT）
+ov --sudo admin list-users acme --reveal-api-keys
 # 按通配符 name 过滤
 ov admin list-users acme --name '*ali*'
 # 分页

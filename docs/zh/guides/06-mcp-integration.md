@@ -203,7 +203,8 @@ tree 和 resolve 标记为只读，upsert 标记为可能覆盖数据的写入�
 
 `list_users`、`list_groups` 对当前 account 的普通用户开放，不接受跨 account 查询参数。
 `list_users` 默认仅返回 `user_id` 和匹配总数，`list_groups` 仅返回 `group_id`。
-管理员也必须显式传 `include_credentials=true` 才会返回可用的凭证字段；普通用户传该参数会得到
+管理员也必须显式传 `include_credentials=true` 才会返回凭证字段：ROOT 可获得全部 `api_key` 明文，
+ADMIN 仅自身记录为 `api_key` 明文，其他用户一律为打码后的 `key_prefix`；普通用户传该参数会得到
 `PERMISSION_DENIED`，即使查询结果为空也一样。trusted 鉴权模式禁止返回凭证。
 组成员管理和成员名单查询仍使用管理员接口。
 

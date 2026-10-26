@@ -101,7 +101,7 @@ File encryption and API key hashing are independent controls:
 **By default, `encryption.api_key_hashing.enabled = false`**:
 - API keys are stored in plaintext within JSON files
 - If `encryption.enabled = true`, the entire file is protected by AES-GCM encryption
-- `ov admin list-users` can display the full API key
+- `ov admin list-users` can display the full API key when run with `--reveal-api-keys`
 - If `encryption.enabled = true` and API key hashing stays disabled, the server writes an informational log line about this at startup
 
 ### Enabling Argon2id Hashing
@@ -122,7 +122,7 @@ Enable Argon2id one-way hashing to stop storing recoverable API key values:
 **Note**: When enabled:
 - API keys are stored using Argon2id one-way hashing
 - Plaintext keys cannot be recovered from hash values
-- `ov admin list-users` only shows `key_prefix` instead of the full API key
+- `ov admin list-users` only shows `key_prefix` instead of the full API key (a caller's own row cannot be revealed either, since no plaintext is stored)
 - Plaintext keys are only visible when creating users or regenerating keys
 
 ### Configuration Example

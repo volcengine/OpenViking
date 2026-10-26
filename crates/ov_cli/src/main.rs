@@ -2185,6 +2185,9 @@ enum AdminCommands {
         /// 1-based page number (requires --limit)
         #[arg(long, default_value = "1", value_name = "n")]
         page: u32,
+        /// Show plaintext API keys instead of masked values (ROOT sees all keys; ADMIN/USER only its own)
+        #[arg(long)]
+        reveal_api_keys: bool,
     },
     /// Create an empty account-scoped group
     CreateGroup {

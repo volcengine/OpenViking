@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from openviking.server.account_stores.base import AccountStore
-from openviking.server.api_keys.legacy import FileStore
+from openviking.server.account_stores.file import FileStore
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError
 

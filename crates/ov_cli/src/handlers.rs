@@ -648,6 +648,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             name,
             role,
             page,
+            reveal_api_keys,
         } => {
             commands::admin::list_users(
                 &client,
@@ -656,6 +657,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 name,
                 role,
                 page,
+                reveal_api_keys,
                 ctx.output_format,
                 ctx.compact,
             )

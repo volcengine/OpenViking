@@ -101,7 +101,7 @@ test()
 **默认情况下，`encryption.api_key_hashing.enabled = false`**：
 - API key 以明文存储在 JSON 文件中
 - 如果 `encryption.enabled = true`，整个文件会被 AES-GCM 加密保护
-- `ov admin list-users` 可以显示完整的 API key
+- `ov admin list-users` 传入 `--reveal-api-keys` 后可以显示完整的 API key
 - 如果 `encryption.enabled = true` 且未启用 API key 哈希，服务端启动时会输出一条说明此情况的 INFO 日志
 
 ### 启用 Argon2id 哈希
@@ -122,7 +122,7 @@ test()
 **注意**：启用后：
 - API key 使用 Argon2id 单向哈希存储
 - 无法从哈希值还原出明文 key
-- `ov admin list-users` 只显示 `key_prefix` 而不是完整的 API key
+- `ov admin list-users` 只显示 `key_prefix` 而不是完整的 API key（调用方自身的行也无法显示明文，因为服务端未存储明文）
 - 只有在创建用户或重新生成 key 时才能看到明文 key
 
 ### 配置示例
