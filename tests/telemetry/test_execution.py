@@ -207,6 +207,32 @@ async def test_run_with_telemetry_returns_usage_and_payload():
 
 
 @pytest.mark.asyncio
+async def test_run_with_telemetry_preserves_error_when_metrics_publish_fails(monkeypatch):
+    from openviking.metrics.datasources.telemetry_bridge import TelemetryBridgeEventDataSource
+    from openviking.telemetry.execution import run_with_telemetry
+
+    publish_attempts = []
+
+    def fail_publish(_summary):
+        publish_attempts.append(True)
+        raise RuntimeError("metrics unavailable")
+
+    async def fail_operation():
+        raise RuntimeError("operation failed")
+
+    monkeypatch.setattr(TelemetryBridgeEventDataSource, "record_summary", fail_publish)
+
+    with pytest.raises(RuntimeError, match="operation failed"):
+        await run_with_telemetry(
+            operation="search.find",
+            telemetry=False,
+            fn=fail_operation,
+        )
+
+    assert publish_attempts == [True]
+
+
+@pytest.mark.asyncio
 async def test_run_with_telemetry_raises_invalid_argument_for_bad_request():
     from openviking.telemetry.execution import run_with_telemetry
 
