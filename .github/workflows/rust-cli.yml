@@ -31,6 +31,9 @@ jobs:
       with:
         toolchain: stable
     - name: Run unit and integration tests
+      # Work around default-stack overflows observed in CLI help tests on Rust 1.99.1.
+      env:
+        RUST_MIN_STACK: 16777216
       run: cargo test --locked -p ov_cli
 
   build:
