@@ -1098,6 +1098,12 @@ class FileStore(AccountStore):
             await self._load_account_groups_if_needed(account_id, account)
             if user_id not in account.users:
                 raise NotFoundError(user_id, "user")
+            if account.users[user_id].get("deletion"):
+                # Mirrors the MySQL store (add_group_member locks the user and
+                # calls _require_active) and the sibling user mutators here
+                # (_set_user_key, _set_role): a user being deleted must not
+                # gain new group memberships mid-deletion.
+                raise FailedPreconditionError("User deletion is in progress")
             group = self._require_group(account_id, group_id)
             if user_id in group.get("members", []):
                 return True

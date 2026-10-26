@@ -18,6 +18,7 @@ from openviking.server.api_keys.legacy import FileStore
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
@@ -459,4 +460,35 @@ async def test_group_deletion_preserves_users_and_persists_membership_removal():
             await manager.delete_group("acme", "engineering")
     finally:
         await reloaded.close()
+        await manager.close()
+
+
+async def test_add_group_member_rejects_user_with_deletion_in_progress():
+    fs = SimpleNamespace(agfs=InMemoryAGFS())
+    manager = build_api_key_manager("root", fs)
+    await manager.load()
+    try:
+        await manager.create_account("acme", "alice")
+        await manager.register_user("acme", "bob")
+        await manager.create_group("acme", "engineering")
+
+        await manager.begin_deletion(
+            "acme",
+            "bob",
+            task_id="delete-bob",
+            owner_account_id="acme",
+            owner_user_id="alice",
+        )
+
+        # MySQL's add_group_member refuses via _require_active, and the
+        # sibling FileStore user mutators (_set_user_key, _set_role) refuse
+        # too; this path must not be the exception that keeps granting
+        # memberships to a user whose deletion is already in progress.
+        with pytest.raises(FailedPreconditionError, match="User deletion is in progress"):
+            await manager.add_group_member("acme", "engineering", "bob")
+
+        # Non-deleting users are unaffected.
+        await manager.add_group_member("acme", "engineering", "alice")
+        assert await manager.get_user_group_ids("acme", "alice") == ("engineering",)
+    finally:
         await manager.close()
