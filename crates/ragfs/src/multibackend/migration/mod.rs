@@ -59,6 +59,7 @@ pub struct FullDataImporter {
     provider: Arc<dyn MultiWriteProvider>,
     initial_partitions: u32,
     backup_names: Vec<String>,
+    reconcile_existing_data: bool,
 }
 
 impl FullDataImporter {
@@ -69,6 +70,7 @@ impl FullDataImporter {
         provider: Arc<dyn MultiWriteProvider>,
         initial_partitions: u32,
         backup_names: Vec<String>,
+        reconcile_existing_data: bool,
     ) -> Self {
         Self {
             primary,
@@ -76,6 +78,7 @@ impl FullDataImporter {
             provider,
             initial_partitions,
             backup_names,
+            reconcile_existing_data,
         }
     }
 
@@ -94,7 +97,8 @@ impl FullDataImporter {
             .into_iter()
             .collect::<Vec<_>>();
         accounts.sort();
-        self.import_scope(SYSTEM_DIR).await?;
+        self.import_scope(SYSTEM_DIR, self.reconcile_existing_data)
+            .await?;
         for account in &accounts {
             if !read_active_accounts(self.primary.as_ref())
                 .await?
@@ -102,7 +106,8 @@ impl FullDataImporter {
             {
                 continue;
             }
-            self.import_scope(account).await?;
+            self.import_scope(account, self.reconcile_existing_data)
+                .await?;
         }
         self.cleanup_v1_global_metadata().await?;
 
@@ -129,7 +134,7 @@ impl FullDataImporter {
     }
 
     /// Initialize one V2 scope and import its current file states.
-    async fn import_scope(&self, account: &str) -> Result<()> {
+    async fn import_scope(&self, account: &str, reconcile_existing_data: bool) -> Result<()> {
         let partitions = self
             .store
             .initialize_account(account, self.initial_partitions, &self.backup_names)
@@ -141,6 +146,13 @@ impl FullDataImporter {
             &partitions,
         )
         .await?;
+        if !reconcile_existing_data {
+            tracing::info!(
+                account = %account,
+                "multi-write existing data reconciliation skipped"
+            );
+            return Ok(());
+        }
         let context = Arc::new(FsContextInner::new(account).with_auto_pathlock_disabled());
         FS_CTX.scope(context, self.import_account(account)).await
     }

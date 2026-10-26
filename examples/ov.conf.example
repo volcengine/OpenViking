@@ -82,6 +82,7 @@
                 "_comment": "Rename this key to backups to enable V2 multi-write.",
                 "initial_partitions": 16,
                 "checkpoint_interval_secs": 86400,
+                "reconcile_existing_data": false,
                 "provider": "cache",
                 "items": [{
                     "name": "local-backup",
