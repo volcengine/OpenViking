@@ -1396,7 +1396,7 @@ export function FilePreview({
     file && !file.isDir && file.name.toLowerCase().endsWith('.json'),
   )
   const needsMetadata = Boolean(
-    isJsonPath && file && (file.sizeBytes === null || !file.modTime),
+    file && !file.isDir && (file.sizeBytes === null || !file.modTime),
   )
   const statQuery = useVikingFsStat(needsMetadata ? file?.uri : undefined)
   const resolvedFile = useMemo(() => {
@@ -1409,8 +1409,9 @@ export function FilePreview({
     }
   }, [file, statQuery.data])
   const isJsonFile = isJsonPath
+  const previewSourceFile = isJsonFile ? resolvedFile : file
   const previewQuery = useVikingFilePreview(
-    resolvedFile,
+    previewSourceFile,
     {
       maxAutoReadBytes: LARGE_FILE_PREVIEW_BYTES,
       defaultReadLimit: defaultReadLimit ?? (readOnly ? 10000 : -1),
@@ -1421,7 +1422,7 @@ export function FilePreview({
     },
   )
   const preview = previewQuery.preview
-  const metadataLoading = needsMetadata && statQuery.isPending
+  const metadataLoading = isJsonPath && needsMetadata && statQuery.isPending
   const hasPreviewContent =
     Boolean(preview?.shouldAutoRead) || previewQuery.isContentLoaded
   const previewLoading = metadataLoading || previewQuery.isLoading
