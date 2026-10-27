@@ -331,6 +331,10 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
     """System assets reconcile after auth loading and before deletion setup."""
 
     events = []
+    monkeypatch.setattr(
+        "openviking.server.app.get_openviking_config",
+        lambda: SimpleNamespace(reconcile_system_assets_on_startup=True),
+    )
 
     class MockService:
         def __init__(self):
@@ -402,19 +406,20 @@ async def test_initialize_runtime_state_skips_reconcile_without_account_manager(
     assert setup.await_args.kwargs["manager"] is None
 
 
-async def test_initialize_runtime_state_respects_disabled_system_asset_reconcile(monkeypatch):
+async def test_initialize_runtime_state_skips_reconcile_when_disabled(monkeypatch):
     service = SimpleNamespace(
         initialize=AsyncMock(),
         apply_agent_evolution_config=AsyncMock(),
         reconcile_system_assets=AsyncMock(),
     )
-    manager = object()
     setup = AsyncMock(return_value=None)
     monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
     monkeypatch.setattr(
         "openviking.server.app.get_openviking_config",
         lambda: SimpleNamespace(reconcile_system_assets_on_startup=False),
     )
+
+    manager = object()
 
     async def initialize_plugin(app, service, config):
         app.state.api_key_manager = manager

@@ -240,10 +240,6 @@ class OpenVikingConfig(BaseModel):
         default=DEFAULT_SERVICE_NAME,
         description="OpenViking deployment name shared by cache namespaces and OTel defaults",
     )
-    reconcile_system_assets_on_startup: bool = Field(
-        default=True,
-        description="Reconcile packaged system assets across accounts during server startup",
-    )
 
     cache: Optional[CacheConfig] = Field(
         default=None,
@@ -385,6 +381,14 @@ class OpenVikingConfig(BaseModel):
             "Whether to start the background WatchScheduler that periodically re-processes "
             "watched resources. Disable on read-only replicas that share a writer's data "
             "so only the writer runs the watch/refresh background loop."
+        ),
+    )
+
+    reconcile_system_assets_on_startup: bool = Field(
+        default=True,
+        description=(
+            "Whether to reconcile packaged system assets for active accounts during startup. "
+            "Disable on read-only replicas that share a writer's data."
         ),
     )
 
