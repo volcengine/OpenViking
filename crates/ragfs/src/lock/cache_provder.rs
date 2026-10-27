@@ -1,4 +1,5 @@
-//! Redis-backed PathLock storage.
+//! Redis-backed PathLock storage. Tree locks must fit within one account or
+//! system scope; global roots cannot atomically cover the separate scope HASHes.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -13,7 +14,8 @@ use crate::cache_runtime::{
 use super::codec::LockTokenCodec;
 use super::path::validate_normalized_logical_path;
 use super::provider::{
-    AcquisitionChange, AtomicAcquisition, AtomicAcquisitionResult, PathLockHandleMode, PathLockProvider,
+    AcquisitionChange, AtomicAcquisition, AtomicAcquisitionResult, PathLockHandleMode,
+    PathLockProvider,
 };
 use super::types::{LockToken, PathLockError, PathLockKind, PathLockRequest, PathLockResult};
 
@@ -571,6 +573,17 @@ impl RedisPathLockProvider {
         ))
     }
 
+    /// Reject Tree roots whose descendants span multiple Redis HASHes.
+    fn validate_lock_scope(path: &str, kind: PathLockKind) -> PathLockResult<()> {
+        if kind == PathLockKind::Tree && (path == "/" || path == "/local") {
+            return Err(PathLockError::InvalidRequest(format!(
+                "cache PathLock Tree lock at '{path}' spans multiple scopes; \
+                 use '/local/<account>' or '/local/_system' as the Tree root"
+            )));
+        }
+        Ok(())
+    }
+
     /// Return the shared Redis HASH key for one same-scope path batch.
     fn tokens_key_for_batch<'a>(
         &self,
@@ -824,6 +837,9 @@ impl PathLockProvider for RedisPathLockProvider {
                 "lock request batch must not be empty".to_string(),
             ));
         }
+        for request in requests {
+            Self::validate_lock_scope(&request.path, request.kind)?;
+        }
         let key =
             self.tokens_key_for_batch(requests.iter().map(|request| request.path.as_str()))?;
         let mut args = vec![
@@ -973,6 +989,7 @@ impl PathLockProvider for RedisPathLockProvider {
 
     /// Atomically create one token when the path is absent.
     async fn try_create_token(&self, lock_path: &str, token: &LockToken) -> PathLockResult<()> {
+        Self::validate_lock_scope(lock_path, token.lock_type)?;
         let key = self.tokens_key_for_path(lock_path)?;
         let values = self
             .execute_array(
@@ -1010,6 +1027,7 @@ impl PathLockProvider for RedisPathLockProvider {
         expected: &LockToken,
         replacement: &LockToken,
     ) -> PathLockResult<bool> {
+        Self::validate_lock_scope(lock_path, replacement.lock_type)?;
         let key = self.tokens_key_for_path(lock_path)?;
         self.execute_integer(
             COMPARE_WRITE_ID,
@@ -1715,6 +1733,185 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         runtime.close().await.unwrap();
     }
 
+    /// Reject global Tree requests before accessing Redis, including token upgrades.
+    #[tokio::test]
+    async fn provider_rejects_cross_scope_tree_before_redis_access() {
+        let mock = crate::cache_runtime::MemoryMockProvider::new()
+            .with_script_handler(|_| panic!("invalid Tree request must not access Redis"));
+        let runtime = CacheRuntime::memory_with_provider(Arc::new(mock));
+        let provider = RedisPathLockProvider::new(runtime.clone(), "global-tree", 1.0).unwrap();
+        for root in ["/", "/local"] {
+            let exact = token("owner-a", 100, PathLockKind::Exact);
+            let tree = token("owner-a", 200, PathLockKind::Tree);
+            for requests in [
+                vec![request(root, PathLockKind::Tree)],
+                vec![
+                    request(root, PathLockKind::Exact),
+                    request(root, PathLockKind::Tree),
+                ],
+            ] {
+                assert!(matches!(
+                    provider
+                        .try_acquire_batch_atomic(&requests, "owner-a", 200, 100)
+                        .await,
+                    Err(PathLockError::InvalidRequest(message))
+                        if message.contains("Tree") && message.contains("scope")
+                ));
+            }
+            assert!(matches!(
+                provider.try_create_token(root, &tree).await,
+                Err(PathLockError::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                provider.compare_and_write_token(root, &exact, &tree).await,
+                Err(PathLockError::InvalidRequest(_))
+            ));
+        }
+        runtime.close().await.unwrap();
+    }
+
+    /// Neither acquisition order can publish a Tree token spanning Redis scope HASHes.
+    #[tokio::test]
+    async fn provider_rejects_cross_scope_tree_in_both_acquisition_orders() {
+        let Some((runtime, provider)) = test_provider("global-tree-orders").await else {
+            return;
+        };
+        for root in ["/", "/local"] {
+            for scope in ["/local/account-a", "/local/_system"] {
+                let child = format!("{scope}/file");
+                for kind in [PathLockKind::Exact, PathLockKind::Tree] {
+                    for child_first in [false, true] {
+                        if child_first {
+                            provider
+                                .try_acquire_batch_atomic(
+                                    &[request(&child, kind)],
+                                    "owner-b",
+                                    100,
+                                    0,
+                                )
+                                .await
+                                .unwrap();
+                        }
+                        assert!(matches!(
+                            provider
+                                .try_acquire_batch_atomic(
+                                    &[request(root, PathLockKind::Tree)],
+                                    "owner-a",
+                                    100,
+                                    0,
+                                )
+                                .await,
+                            Err(PathLockError::InvalidRequest(_))
+                        ));
+                        assert_eq!(provider.read_token(root).await.unwrap(), None);
+                        if !child_first {
+                            provider
+                                .try_acquire_batch_atomic(
+                                    &[request(&child, kind)],
+                                    "owner-b",
+                                    100,
+                                    0,
+                                )
+                                .await
+                                .unwrap();
+                        }
+                        assert_eq!(
+                            provider.read_token(&child).await.unwrap(),
+                            Some(token("owner-b", 100, kind))
+                        );
+                        provider
+                            .remove_token(&child, "owner-b", false)
+                            .await
+                            .unwrap();
+                    }
+                }
+            }
+        }
+        runtime.close().await.unwrap();
+    }
+
+    /// A rejected mixed batch cannot replace or clean up existing global Exact tokens.
+    #[tokio::test]
+    async fn provider_rejected_global_tree_batch_preserves_exact_tokens() {
+        let Some((runtime, provider)) = test_provider("global-tree-no-mutation").await else {
+            return;
+        };
+        let existing = token("owner-a", 1, PathLockKind::Exact);
+        provider.try_create_token("/", &existing).await.unwrap();
+        assert!(matches!(
+            provider
+                .try_acquire_batch_atomic(
+                    &[
+                        request("/", PathLockKind::Exact),
+                        request("/local", PathLockKind::Tree),
+                    ],
+                    "owner-b",
+                    200,
+                    100,
+                )
+                .await,
+            Err(PathLockError::InvalidRequest(_))
+        ));
+        assert_eq!(
+            provider.read_token("/").await.unwrap(),
+            Some(existing.clone())
+        );
+        assert_eq!(provider.read_token("/local").await.unwrap(), None);
+        assert!(matches!(
+            provider
+                .compare_and_write_token("/", &existing, &token("owner-a", 200, PathLockKind::Tree))
+                .await,
+            Err(PathLockError::InvalidRequest(_))
+        ));
+        assert_eq!(provider.read_token("/").await.unwrap(), Some(existing));
+        // Global Exact locks protect only their own path, so child scopes remain available.
+        provider
+            .try_acquire_batch_atomic(
+                &[request("/local/account-a/file", PathLockKind::Exact)],
+                "owner-b",
+                200,
+                0,
+            )
+            .await
+            .unwrap();
+        runtime.close().await.unwrap();
+    }
+
+    /// Account and system root Trees still exclude descendants in both directions.
+    #[tokio::test]
+    async fn provider_scope_root_trees_preserve_mutual_exclusion() {
+        let Some((runtime, provider)) = test_provider("scope-root-tree").await else {
+            return;
+        };
+        for root in ["/local/account-a", "/local/_system"] {
+            let child = format!("{root}/file");
+            for kind in [PathLockKind::Exact, PathLockKind::Tree] {
+                for child_first in [false, true] {
+                    let (first, second) = if child_first {
+                        (request(&child, kind), request(root, PathLockKind::Tree))
+                    } else {
+                        (request(root, PathLockKind::Tree), request(&child, kind))
+                    };
+                    provider
+                        .try_acquire_batch_atomic(&[first.clone()], "owner-a", 100, 0)
+                        .await
+                        .unwrap();
+                    assert!(matches!(
+                        provider
+                            .try_acquire_batch_atomic(&[second], "owner-b", 100, 0)
+                            .await,
+                        Err(PathLockError::Conflict { .. })
+                    ));
+                    provider
+                        .remove_token(&first.path, "owner-a", false)
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        runtime.close().await.unwrap();
+    }
+
     /// Verify CRUD preserves the token format and refreshes the HASH TTL.
     #[tokio::test]
     async fn provider_crud_preserves_tokens_and_hash_ttl() {
@@ -1812,10 +2009,12 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             )
             .await
             .is_ok());
-        assert!(provider
-            .try_acquire_batch_atomic(&[request("/", PathLockKind::Tree)], "owner-c", 104, 0,)
-            .await
-            .is_ok());
+        assert!(matches!(
+            provider
+                .try_acquire_batch_atomic(&[request("/", PathLockKind::Tree)], "owner-c", 104, 0,)
+                .await,
+            Err(PathLockError::InvalidRequest(_))
+        ));
 
         let race = [request("/local/account-a/race", PathLockKind::Exact)];
         let (first, second) = tokio::join!(
