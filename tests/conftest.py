@@ -4,6 +4,7 @@
 """Global test fixtures"""
 
 import asyncio
+import os
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
@@ -84,6 +85,21 @@ _patch_agfs_grep_if_missing()
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
+@pytest.fixture(autouse=True)
+def _restore_process_environment():
+    """Undo environment writes a test leaves behind.
+
+    Some code writes process-wide variables directly (the LiteLLM provider exports its
+    API key, e.g. OPENAI_API_KEY). Leaked into later tests, such a key turns a model call
+    that should fail fast into a real network request that can hang.
+    """
+    saved = dict(os.environ)
+    yield
+    if os.environ != saved:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create session-level event loop"""
@@ -147,6 +163,9 @@ async def service(
         def get_dimension(self) -> int:
             return 1024
 
+    # Domain tests configure no VLM: an ambient key must not turn their model calls
+    # into real provider requests.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder())
     mock_agfs = MockLocalAGFS(root_path=test_data_dir / "mock_agfs_root")
     monkeypatch.setattr(
