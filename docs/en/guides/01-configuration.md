@@ -2284,7 +2284,7 @@ At-rest encryption protects newly written files with account-specific keys throu
 | `provider` | str | Key provider: `"local"`, `"vault"`, or `"volcengine_kms"` | - |
 | `api_key_hashing.enabled` | bool | File-provider only: whether to apply Argon2id one-way hashing to API key values (independent of file-level `enabled`); see [Encryption Guide](./08-encryption.md) | `false` |
 
-### Local (File)
+### Local
 
 Suitable for development environments and single-node deployments:
 
@@ -2303,6 +2303,11 @@ Suitable for development environments and single-node deployments:
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `local.key_file` | str | Root key file path | `~/.openviking/master.key` |
+| `local.root_key` | str | Inline 32-byte root key encoded as exactly 64 hexadecimal characters | - |
+
+Do not configure `local.key_file` and `local.root_key` together. If both are omitted,
+`local.key_file` defaults to `~/.openviking/master.key`. See the [Encryption Guide](./08-encryption.md)
+for inline-key handling and security requirements.
 
 ### Vault (HashiCorp Vault)
 

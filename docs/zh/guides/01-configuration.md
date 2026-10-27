@@ -2199,7 +2199,7 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
 | `provider` | str | 密钥提供程序：`"local"`、`"vault"` 或 `"volcengine_kms"` | - |
 | `api_key_hashing.enabled` | bool | 仅 File Provider：是否对 API key 字段启用 Argon2id 单向哈希（与文件级 `enabled` 独立控制），详见 [加密指南](./08-encryption.md) | `false` |
 
-### Local（本地文件）
+### Local
 
 适合开发环境和单节点部署：
 
@@ -2218,6 +2218,10 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `local.key_file` | str | 根密钥文件路径 | `~/.openviking/master.key` |
+| `local.root_key` | str | 直接配置的 32 字节根密钥，必须编码为恰好 64 个十六进制字符 | - |
+
+不要同时配置 `local.key_file` 和 `local.root_key`。如果两者都省略，`local.key_file` 默认使用
+`~/.openviking/master.key`。内联密钥的管理和安全要求详见[加密指南](./08-encryption.md)。
 
 ### Vault（HashiCorp Vault）
 
