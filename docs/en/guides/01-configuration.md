@@ -1429,9 +1429,6 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `backend` | str | `local` keeps the original filesystem path; `cache` enables the CacheFS wrapper | `local` |
-| `max_file_size_bytes` | int | Maximum full-file object size admitted to cache | `1048576` |
-| `traversal_mode` | str | `backend` or `cached_traversal` | `backend` |
-| `bypass_prefixes` | array[str] | Path prefixes that bypass cache | `[]` |
 
 `storage.agfs.pathlock` selects the PathLock storage provider:
 

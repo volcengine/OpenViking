@@ -16,8 +16,6 @@ use super::stats_wrapper::StatsWrappedFS;
 
 use super::errors::{Error, Result};
 #[cfg(feature = "cache")]
-use crate::cache::CachePolicy;
-#[cfg(feature = "cache")]
 use crate::cache_runtime::{
     CacheOperation, CacheRuntime, DynamicProviderConfig, RedisProviderConfig,
 };
@@ -81,8 +79,6 @@ pub struct CacheFsConfig {
     pub enabled: bool,
     /// OpenViking instance name used by CacheFS keys.
     pub service_name: String,
-    /// Existing CacheFS policy and traversal settings.
-    pub policy: CachePolicy,
 }
 
 #[cfg(feature = "cache")]
@@ -91,7 +87,6 @@ impl Default for CacheFsConfig {
         Self {
             enabled: false,
             service_name: String::new(),
-            policy: CachePolicy::default(),
         }
     }
 }
@@ -102,7 +97,7 @@ impl Default for CacheFsConfig {
 pub struct CacheStackConfig {
     /// One global provider. `None` means no Runtime is initialized.
     pub provider: Option<CacheRuntimeProviderConfig>,
-    /// CacheFS enablement and policy.
+    /// CacheFS enablement.
     pub cachefs: CacheFsConfig,
 }
 
@@ -185,10 +180,14 @@ pub async fn build_configured_stack(
             .as_ref()
             .expect("cache provider is validated")
             .require_operations(&[
-                CacheOperation::Get,
-                CacheOperation::Set,
-                CacheOperation::Del,
-                CacheOperation::Mget,
+                CacheOperation::Hget,
+                CacheOperation::Hset,
+                CacheOperation::Expire,
+                CacheOperation::Zadd,
+                CacheOperation::Zscan,
+                CacheOperation::ZrangeByScore,
+                CacheOperation::Zrem,
+                CacheOperation::Unlink,
             ])
             .map_err(|error| Error::config(format!("CacheFS provider is incompatible: {error}")))?;
     }
@@ -199,7 +198,6 @@ pub async fn build_configured_stack(
                 .expect("cache provider is validated")
                 .clone(),
             cache.cachefs.service_name,
-            cache.cachefs.policy,
         ))
     } else if let Some(runtime) = runtime.as_ref() {
         Arc::new(MountableFS::with_shared_cache_runtime(runtime.clone()))

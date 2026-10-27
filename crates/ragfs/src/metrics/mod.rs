@@ -95,10 +95,8 @@ pub(crate) fn operation_metrics(plugin: &str, stats: &FilesystemStats) -> Vec<Ra
 pub(crate) fn cache_metrics(stats: crate::cache::CacheMetricsSnapshot) -> Vec<RagfsMetric> {
     let mut metrics = Vec::new();
     for (kind, result, count) in [
-        ("file", "hit", stats.file_hits),
-        ("file", "miss", stats.file_misses),
-        ("directory", "hit", stats.read_dir_hits),
-        ("directory", "miss", stats.read_dir_misses),
+        ("query", "hit", stats.query_hits),
+        ("query", "miss", stats.query_misses),
     ] {
         metrics.push(RagfsMetric::counter(
             "ragfs_cache_requests_total", &[("kind", kind), ("result", result)], count, 1.0,
@@ -108,21 +106,16 @@ pub(crate) fn cache_metrics(stats: crate::cache::CacheMetricsSnapshot) -> Vec<Ra
         ("ragfs_cache_backend_fallbacks_total", stats.backend_fallbacks),
         ("ragfs_cache_invalidations_total", stats.invalidations),
         ("ragfs_cache_errors_total", stats.errors),
-        ("ragfs_cache_policy_bypasses_total", stats.policy_bypasses),
     ] {
         metrics.push(RagfsMetric::counter(name, &[], count, 1.0));
     }
     for (name, label, value, count, scale) in [
+        ("ragfs_cache_operations_total", "operation", "get", stats.gets, 1.0),
         ("ragfs_cache_operations_total", "operation", "put", stats.puts, 1.0),
         ("ragfs_cache_operations_total", "operation", "delete", stats.deletes, 1.0),
-        ("ragfs_cache_bytes_total", "source", "backend", stats.backend_bytes, 1.0),
-        ("ragfs_cache_bytes_total", "source", "cache", stats.cache_bytes, 1.0),
         ("ragfs_cache_operation_duration_seconds_total", "operation", "get", stats.get_latency_ns, 1e-9),
         ("ragfs_cache_operation_duration_seconds_total", "operation", "put", stats.put_latency_ns, 1e-9),
         ("ragfs_cache_operation_duration_seconds_total", "operation", "delete", stats.delete_latency_ns, 1e-9),
-        ("ragfs_cache_inflight_events_total", "event", "leader", stats.inflight_leaders, 1.0),
-        ("ragfs_cache_inflight_events_total", "event", "follower", stats.inflight_followers, 1.0),
-        ("ragfs_cache_inflight_events_total", "event", "backend_saved", stats.inflight_backend_saved, 1.0),
     ] {
         metrics.push(RagfsMetric::counter(name, &[(label, value)], count, scale));
     }

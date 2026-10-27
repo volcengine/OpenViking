@@ -1,6 +1,6 @@
 # RAGFS Cache
 
-RAGFS cache is an optional read-cache layer for OpenViking. It speeds up full file reads and directory reads. It is only an acceleration layer, not the source of truth; backend filesystem data remains authoritative.
+RAGFS cache is an optional read-cache layer for OpenViking query results. It speeds up `stat`, `read_dir`, `tree_directory`, `glob_directory`, and `grep`. It is only an acceleration layer, not the source of truth; backend filesystem data remains authoritative.
 
 CachedFileSystem assumptions:
 
@@ -34,7 +34,7 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
       "pool_size": 32,
       "connect_timeout_ms": 1000,
       "command_timeout_ms": 1000,
-      "default_ttl_seconds": 3600
+      "default_ttl_seconds": 300
     }
   },
   "storage": {
@@ -42,9 +42,7 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
     "agfs": {
       "backend": "local",
       "cachefs": {
-        "backend": "cache",
-        "max_file_size_bytes": 1048576,
-        "bypass_prefixes": ["/queue", "/tmp"]
+        "backend": "cache"
       },
       "pathlock": {
         "provider": "cache",
@@ -157,9 +155,6 @@ The top-level `cache` section is a sibling of `storage`:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `backend` | str | `"local"` | `local` preserves existing behavior; `cache` enables CachedFileSystem |
-| `max_file_size_bytes` | int | `1048576` | Maximum full-file object size admitted to cache |
-| `traversal_mode` | str | `"backend"` | Use backend traversal or `cached_traversal` for recursive APIs |
-| `bypass_prefixes` | list[str] | `[]` | Path prefixes that always bypass cache |
 
 `storage.agfs.pathlock` controls PathLock storage:
 
@@ -179,7 +174,7 @@ Redis configuration:
 | `pool_size` | `32` | Command concurrency |
 | `connect_timeout_ms` | `1000` | Connection timeout |
 | `command_timeout_ms` | `20` | Command timeout |
-| `default_ttl_seconds` | `3600` | Default TTL; `0` means no TTL |
+| `default_ttl_seconds` | `300` | Runtime default TTL used by CacheFS query buckets; `0` means no TTL |
 | `tls_insecure_skip_verify` | `false` | Skip certificate verification for `rediss://`; intended only for controlled test environments |
 
 All Redis reads are sent to the primary node so QueueFS does not observe stale queue state. CacheRuntime relies on Redis transport security when required and does not add a separate application-layer value encryption format.
@@ -205,7 +200,7 @@ OpenViking uses `cache.params.library` to load the dynamic library. All remainin
 
 RAGFS separates Provider access from its consumers:
 
-- `CachedFileSystem`: implements filesystem semantics, including cache hit/miss handling, backend fallback, cache fill, invalidation, generation checks, and metrics.
+- `CachedFileSystem`: implements filesystem semantics, including cache hit/miss handling, backend fallback, cache fill, invalidation, request checks, and metrics.
 - `CacheRuntime`: exposes common primitive operations and binds either the built-in RedisProvider or an external DynamicProvider during startup.
 - `QueueFS` and `RedisPathLockProvider`: reuse the shared CacheRuntime for queue and distributed-lock storage. RedisPathLockProvider requires the built-in RedisProvider.
 
@@ -228,65 +223,77 @@ ABI.
 
 ## Cache Objects
 
-RAGFS mainly caches three object types.
+RAGFS caches read-only query results. It no longer stores legacy path-object cache entries.
 
-### File Cache
+### Query Bucket
 
-File keys use a stable namespace and path hash:
-
-```text
-<service_name>:ov:cache:v1:file:<hash(path)>
-```
-
-The file value is a `CacheEnvelope` containing file content, object kind, path, and generation snapshots. After a full-read cache hit, RAGFS validates the envelope and generation before returning the content.
-
-The default policy prefers summary files such as `.abstract.md` and `.overview.md`. Files larger than `max_file_size_bytes` are not admitted to cache. Non-full range reads also bypass the cache.
-
-### Directory Cache
-
-Directory key:
+Each path and operation has one HASH bucket:
 
 ```text
-<service_name>:ov:cache:v1:dir:<hash(path)>
+<service_name>:ov:cache:v1:<path_key>:<op>
 ```
 
-The directory cache stores raw backend `read_dir` entries, not permission-filtered final results. Permission, role, and agent-context filtering still happens in the OpenViking upper layer at request time.
+The HASH field is `xxh3_128(canonical_request_json)`. The value is a `QueryCacheEnvelope` containing:
 
-This lets one directory cache object serve `ls`, `tree`, `glob`, the file-collection phase of `grep`, and path collection before delete or move operations.
+- `request`
+- `payload`
 
-### Subtree Generation
+RAGFS compares the stored `request` with the current request before returning the cached payload. This protects against hash collisions and request encoding changes.
 
-Subtree generation key:
+Supported operations:
+
+- `stat`
+- `read_dir`
+- `tree_directory`
+- `glob_directory`
+- `grep`
+
+### Query Index
+
+All active buckets are registered in one ZSET:
 
 ```text
-<service_name>:ov:cache:v1:subtree:<hash(scope)>
+<service_name>:ov:cacheidx:v1
 ```
 
-`remove_all` and directory `rename` can leave descendant keys behind in the Provider. RAGFS bumps the subtree generation so old envelopes fail their generation snapshot check. Later real reads fall back to the backend and rebuild the cache.
+The ZSET member is the bucket key. The score is `expire_at_ms`. This index lets writes delete affected buckets without scanning all Redis keys.
 
 ## Consistency and Invalidation
 
-In the single-writer scenario, RAGFS does not need a distributed write lock. The important part is maintaining three invalidation classes according to filesystem semantics:
+In the single-writer scenario, RAGFS does not need a distributed write lock. It physically deletes query buckets affected by each write.
 
-- File changes: delete or update `file_key(path)` and delete `dir_key(parent)`.
-- Directory changes: delete the directory's own `dir_key` and the parent directory's `dir_key`.
-- Subtree changes: bump `subtree` generation for recursive delete and directory rename.
+For a normal path change, RAGFS builds the affected bucket list in memory:
+
+- exact path buckets: `stat`, `read_dir`, `tree_directory`, `glob_directory`, `grep`
+- parent bucket: `read_dir(parent)`
+- ancestor recursive buckets: `tree_directory`, `glob_directory`, `grep`
+
+It then sends one batched `UNLINK` for the bucket keys and one batched `ZREM` for the index.
+
+For recursive path operations such as `remove_all`, `rename`, and `replace`, RAGFS also scans the query index:
+
+```text
+ZSCAN <service_name>:ov:cacheidx:v1 MATCH '<service_name>:ov:cache:v1:<path_key>/*:*' COUNT 1000
+```
+
+Matched descendant buckets are added to the same batched `UNLINK` and `ZREM` calls. No generation fallback is kept.
 
 Typical write order:
 
 ```text
-Acquire the in-process operation lock
--> Apply backend change
--> Update or delete related cache keys
--> Bump subtree generation when needed
+Apply backend change
+-> Schedule asynchronous invalidation
 -> Return result
+Background task -> ZSCAN descendant buckets
+Background task -> Build exact-path and ancestor buckets
+Background task -> UNLINK bucket keys and ZREM index members
 ```
 
-If a Provider fails, RAGFS treats the backend as authoritative and puts the affected path into short-term bypass, avoiding reads from potentially stale cache.
+If a Provider fails, RAGFS treats the backend as authoritative for the current request. It records the cache error and does not cache that result.
 
 ## Request Coalescing
 
-When multiple requests read the same uncached small file or directory at the same time, `CachedFileSystem` uses an in-process inflight table to coalesce them:
+When multiple requests read the same uncached query at the same time, `CachedFileSystem` uses an in-process inflight table to coalesce them:
 
 ```text
 The first miss becomes the leader and performs backend fallback and cache fill.
@@ -296,43 +303,33 @@ The inflight entry is removed after the request completes.
 
 This only reduces duplicate backend access within one OpenViking process. It does not change the Provider consistency boundary.
 
-## Cache Policy
+## Cache Scope
 
-RAGFS automatically bypasses paths that are not suitable for caching:
-
-- Lock files: `.path.ovlock`, `*.lock`, `*.lck`
-- Control files: `enqueue`, `dequeue`, `peek`, `ack`
-- Transient state: `heartbeat`, `lease`, `cursor`, `offset`, `pid`
-- Path prefixes configured through `bypass_prefixes`
-
-Add permission-sensitive directories to `bypass_prefixes`. If raw directory entries themselves depend on the caller's permissions, that directory should not be cached.
+CacheFS only stores query results for `stat`, `read_dir`, `tree_directory`, `glob_directory`, and `grep`. Cache keys are derived from the path, operation name, and query parameters. Successful writes actively remove affected query buckets. Runtime-internal PathLock files such as `.path.ovlock` and `.exact.ovlock.*` are excluded from query cache payloads, and direct queries against those files bypass CacheFS.
 
 ## Failure and Observability
 
 The cache layer must not affect filesystem correctness:
 
 - `get` failure: fall back to backend.
-- `put` failure: record the error and put the path into bypass.
-- `delete` failure: record the error and put the path or scope into bypass.
+- `put` failure: record the error and keep the backend result.
+- `delete` failure: record the error; TTL remains the fallback.
 - Provider unavailable: do not return old cache; use backend results as authoritative.
 
 Recommended signals to watch:
 
-- cache hit / miss / bypass
-- stale generation
+- query hit / miss
 - provider get / put / delete latency
 - cache set / delete failures
-- inflight leader / follower / backend saved
-- backend fallback bytes
+- backend fallbacks
 
 ## Recommended Rollout
 
 1. Disable caching to validate baseline backend behavior.
 2. Use the built-in `redis` Provider to validate remote-cache benefits.
 3. Use an independently released DynamicProvider `.so` for high-performance or closed-source cache systems.
-4. Cache summary files and raw `read_dir` first, then expand to more regular small files.
-5. Add lock, control-plane, and permission-sensitive paths to `bypass_prefixes`.
+4. Cache `stat`, `read_dir`, `tree_directory`, `glob_directory`, and `grep` query results.
 
-RAGFS cache handles invalidation according to filesystem semantics; the Provider decides where cache objects live. The backend remains the source of truth, and every cache hit must pass envelope and generation validation before it is returned.
+RAGFS cache handles invalidation according to filesystem semantics; the Provider decides where cache objects live. The backend remains the source of truth, and every cache hit must pass request validation before it is returned.
 
 After enabling the cache, compare repeated reads and invalidation after a file update against the baseline. A higher hit rate is useful only if the returned contents remain current.

@@ -1414,9 +1414,6 @@ Redis 命名空间。
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `backend` | str | `local` 完全沿用原文件系统；`cache` 启用 CacheFS wrapper | `local` |
-| `max_file_size_bytes` | int | 允许缓存的单文件最大字节数 | `1048576` |
-| `traversal_mode` | str | `backend` 或 `cached_traversal` | `backend` |
-| `bypass_prefixes` | array[str] | 绕过缓存的路径前缀 | `[]` |
 
 `storage.agfs.pathlock` 选择 PathLock 存储 Provider：
 
