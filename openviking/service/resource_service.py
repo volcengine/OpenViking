@@ -72,7 +72,6 @@ from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
-from openviking.storage.resource_target import AgfsResourceTarget
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry, register_telemetry, unregister_telemetry
@@ -693,13 +692,12 @@ class ResourceService:
             )
             if any(entry.get("name") not in {None, "", ".", ".."} for entry in entries):
                 return False
-            target = AgfsResourceTarget(
-                viking_fs=self._viking_fs,
-                root_uri=root_uri,
+            await self._viking_fs.rm(
+                root_uri,
+                recursive=True,
                 ctx=ctx,
                 lease_ref=resource_lock,
             )
-            await target.delete_path("", is_dir=True)
             return True
         except Exception as exc:
             logger.warning(

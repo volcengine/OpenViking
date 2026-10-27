@@ -35,9 +35,7 @@ async def test_cleanup_reserved_target_removes_only_empty_directory():
         exists=AsyncMock(return_value=True),
         stat=AsyncMock(return_value={"isDir": True}),
         ls=AsyncMock(return_value=[]),
-        _ensure_access=AsyncMock(),
-        _acl_enabled=AsyncMock(return_value=False),
-        remove_files=AsyncMock(),
+        rm=AsyncMock(),
     )
     service = _service(viking_fs)
 
@@ -48,7 +46,7 @@ async def test_cleanup_reserved_target_removes_only_empty_directory():
     )
 
     assert removed is True
-    viking_fs.remove_files.assert_awaited_once_with(
+    viking_fs.rm.assert_awaited_once_with(
         "viking://resources/empty",
         recursive=True,
         ctx=ctx,
@@ -68,7 +66,7 @@ async def test_cleanup_reserved_target_preserves_nonempty_directory():
         exists=AsyncMock(return_value=True),
         stat=AsyncMock(return_value={"isDir": True}),
         ls=AsyncMock(return_value=[{"name": "document.md", "isDir": False}]),
-        remove_files=AsyncMock(),
+        rm=AsyncMock(),
     )
     service = _service(viking_fs)
 
@@ -79,7 +77,7 @@ async def test_cleanup_reserved_target_preserves_nonempty_directory():
     )
 
     assert removed is False
-    viking_fs.remove_files.assert_not_awaited()
+    viking_fs.rm.assert_not_awaited()
     viking_fs.stat.assert_awaited_once_with(
         "viking://resources/nonempty",
         ctx=ctx,

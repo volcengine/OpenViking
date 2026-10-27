@@ -216,30 +216,42 @@ async def test_default_rm_still_cleans_vector_records(storage, missing, uri):
         storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
 
 
-@pytest.mark.parametrize("is_dir", [False, True])
-async def test_resource_delete_requires_manage_on_file_and_descendants(storage, is_dir):
+@pytest.mark.parametrize("no_vector", [False, True])
+@pytest.mark.parametrize("child_allowed", [False, True])
+async def test_resource_rm_still_checks_descendant_manage_acl(storage, no_vector, child_allowed):
     child_uri = f"{RESOURCE_URI}/restricted.md"
-    uri = RESOURCE_URI if is_dir else child_uri
-    storage.agfs.stat.return_value = {"isDir": is_dir}
-    storage.fs._collect_uris.side_effect = lambda *args, **kwargs: [child_uri] if is_dir else []
+    storage.fs._collect_uris.return_value = [child_uri]
     storage.acl.is_enabled.return_value = True
-    permissions = {
-        level: EffectiveAcl(
-            AclMode.RESTRICTED, DirectAcl((AclEntry("user:alice", level),)), DirectAcl()
-        )
-        for level in (AclLevel.WRITE, AclLevel.MANAGE)
-    }
-    grants = {RESOURCE_URI: permissions[AclLevel.MANAGE], child_uri: permissions[AclLevel.WRITE]}
-    storage.acl.resolve_many.return_value = grants
-
-    with pytest.raises(PermissionDeniedError, match="manage permission required"):
-        await storage.fs.rm(uri, recursive=is_dir, ctx=storage.ctx)
-    storage.agfs.rm.assert_not_awaited()
-    storage.vector.delete_uris.assert_not_awaited()
-
-    grants[child_uri] = permissions[AclLevel.MANAGE]
-    await storage.fs.rm(uri, recursive=is_dir, ctx=storage.ctx)
-    storage.agfs.rm.assert_awaited_once()
-    storage.vector.delete_uris.assert_awaited_once_with(
-        storage.ctx, [child_uri, RESOURCE_URI] if is_dir else [child_uri]
+    allowed = EffectiveAcl(
+        AclMode.RESTRICTED,
+        DirectAcl((AclEntry("user:alice", AclLevel.MANAGE),)),
+        DirectAcl(),
     )
+    denied = EffectiveAcl(AclMode.RESTRICTED, DirectAcl(), DirectAcl())
+
+    async def resolve_many(uris, ctx):
+        return {uri: denied if uri == child_uri and not child_allowed else allowed for uri in uris}
+
+    storage.acl.resolve_many.side_effect = resolve_many
+
+    if child_allowed:
+        result = await storage.fs.rm(
+            RESOURCE_URI, recursive=True, ctx=storage.ctx, no_vector=no_vector
+        )
+        assert result == {"estimated_deleted_count": 0 if no_vector else 7}
+        storage.agfs.rm.assert_awaited_once()
+    else:
+        with pytest.raises(PermissionDeniedError, match="restricted.md"):
+            await storage.fs.rm(RESOURCE_URI, recursive=True, ctx=storage.ctx, no_vector=no_vector)
+        storage.agfs.rm.assert_not_awaited()
+
+    storage.fs._collect_uris.assert_awaited_once_with(
+        RESOURCE_PATH, True, ctx=storage.ctx, strict=True
+    )
+    if no_vector or not child_allowed:
+        storage.vector.count.assert_not_awaited()
+        storage.vector.delete_uris.assert_not_awaited()
+    else:
+        storage.vector.count.assert_awaited_once()
+        storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [child_uri, RESOURCE_URI])
+    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)

@@ -14,6 +14,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.service.task_work_index import bind_task_context
 from openviking.storage.abstract_overview import body_for_preview
+from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError
@@ -34,6 +35,7 @@ def run_fs_operations_inline(monkeypatch):
 
 class _FakeVikingFS:
     def __init__(self, *, rm_error=None, events=None, parent_exists=True):
+        self._ensure_access = AsyncMock()
         self.rm_calls = []
         self.mv_calls = []
         self.cp_calls = []
@@ -907,6 +909,7 @@ async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_cont
         wait=True,
     )
 
+    viking_fs._ensure_access.assert_awaited_once_with(uri, request_context, action=AclAction.MANAGE)
     assert viking_fs.rm_calls == [{"uri": uri, "recursive": True, "ctx": request_context}]
     assert len(queue_manager.messages) == 1
     msg = queue_manager.messages[0]
@@ -1572,6 +1575,7 @@ async def test_system_mkdir_skips_semantic_sidecar_and_vectorization(request_con
 async def test_system_rm_skips_vector_and_semantic_work(request_context):
     uri = "viking://system/memory/memory_templates/custom/demo.md"
     viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
         rm=AsyncMock(return_value={"estimated_deleted_count": 0}),
     )
     service = FSService(viking_fs=viking_fs)
@@ -1693,12 +1697,15 @@ async def test_indexed_copy_preserves_native_vectors_and_content_copy_refresh(re
 async def test_indexed_move_preserves_native_vector_transfer(request_context):
     source = "viking://resources/source/demo.md"
     target = "viking://resources/target/demo.md"
-    viking_fs = SimpleNamespace(mv=AsyncMock())
+    viking_fs = SimpleNamespace(_ensure_access=AsyncMock(), mv=AsyncMock())
     service = FSService(viking_fs=viking_fs)
     service._refresh_move_parents = AsyncMock()
 
     await service.mv(source, target, ctx=request_context)
 
+    viking_fs._ensure_access.assert_awaited_once_with(
+        source, request_context, action=AclAction.MANAGE
+    )
     viking_fs.mv.assert_awaited_once_with(source, target, ctx=request_context)
     service._refresh_move_parents.assert_awaited_once_with(
         from_uri=source,
@@ -1731,7 +1738,7 @@ async def test_move_to_system_deletes_source_vectors_without_target_index(
 ):
     source = "viking://resources/project/demo.md"
     target = "viking://system/memory/memory_templates/custom/demo.md"
-    viking_fs = SimpleNamespace(mv=AsyncMock())
+    viking_fs = SimpleNamespace(_ensure_access=AsyncMock(), mv=AsyncMock())
     service = FSService(viking_fs=viking_fs)
     refresh = AsyncMock()
     monkeypatch.setattr(service, "_refresh_move_parents", refresh)
@@ -1840,6 +1847,7 @@ async def test_move_from_system_rebuilds_target_index(request_context):
     source = "viking://system/memory/memory_templates/custom/demo.md"
     target = "viking://resources/project/demo.md"
     viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
         mv=AsyncMock(),
         stat=AsyncMock(return_value={"isDir": False}),
     )
@@ -1876,6 +1884,7 @@ async def test_move_target_refresh_failure_does_not_roll_back_physical_move(requ
     source = "viking://system/memory/memory_templates/custom/demo.md"
     target = "viking://resources/project/demo.md"
     viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
         mv=AsyncMock(),
         stat=AsyncMock(return_value={"isDir": False}),
     )
@@ -1893,6 +1902,7 @@ async def test_recursive_move_from_system_rebuilds_target_subtree(request_contex
     source = "viking://system/compile/example-skills/demo"
     target = "viking://resources/project/demo"
     viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
         mv=AsyncMock(),
         stat=AsyncMock(return_value={"isDir": True}),
     )

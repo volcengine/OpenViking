@@ -276,7 +276,7 @@ async def rewrite_image_uris(
         ctx: Optional request context for permissions
         lease_ref: Optional lease reference held by the caller. When the caller
             already owns a TREE lock over *root_uri*, forwarding it lets the
-            cleanup ``remove_files`` reuse that lock instead of conflicting with it.
+            cleanup ``rm`` reuse that lock instead of conflicting with it.
 
     Returns:
         Dict with ``files_processed`` and ``references_rewritten`` counts.
@@ -349,7 +349,7 @@ async def rewrite_image_uris(
     # Clean up mapping sidecars — no longer needed after rewrite
     for map_dir in mappings_by_dir:
         try:
-            await viking_fs.remove_files(
+            await viking_fs.rm(
                 f"{map_dir}/{IMAGE_MAPPINGS_FILENAME}",
                 ctx=ctx,
                 lease_ref=lease_ref,

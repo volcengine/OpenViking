@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from openviking.storage.acl import AclAction, is_acl_uri
 from openviking.utils.path_safety import safe_join_viking_uri
 
 
@@ -58,21 +57,9 @@ class AgfsResourceTarget:
         return await self._viking_fs.read_file_bytes(self._resolve(rel_path), ctx=self._ctx)
 
     async def delete_path(self, rel_path: str, *, is_dir: bool) -> None:
-        """Apply import cleanup with WRITE under the already-held resource lease."""
-        uri = self._resolve(rel_path)
-        await self._viking_fs._ensure_access(uri, self._ctx, action=AclAction.WRITE)
-        if is_dir and is_acl_uri(uri) and await self._viking_fs._acl_enabled(self._ctx):
-            descendants = await self._viking_fs._collect_uris(
-                self._viking_fs._uri_to_path(uri, ctx=self._ctx),
-                recursive=True,
-                ctx=self._ctx,
-                strict=True,
-            )
-            await self._viking_fs._ensure_access_many(
-                [uri, *descendants], self._ctx, action=AclAction.WRITE
-            )
+        """Delete one planned path under the already-held resource tree lease."""
         await self._viking_fs.remove_files(
-            uri,
+            self._resolve(rel_path),
             recursive=is_dir,
             ctx=self._ctx,
             lease_ref=self._lease_ref,

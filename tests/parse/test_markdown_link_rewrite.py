@@ -263,7 +263,7 @@ class FakeVikingFS:
         matches = [u for u in self.files if u.startswith(prefix) and u.endswith(suffix)]
         return {"matches": matches}
 
-    async def remove_files(self, uri, **kw):
+    async def rm(self, uri, **kw):
         self.files.pop(uri, None)
 
     async def stat(self, uri, **kw):

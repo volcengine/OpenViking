@@ -2,16 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for the AGFS resource target used by content tree actions."""
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-
 import pytest
 
-from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
 from openviking.storage.resource_target import AgfsResourceTarget
-from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import PermissionDeniedError
-from tests.utils.mock_agfs import MockLocalAGFS
 
 
 class _Ctx:
@@ -22,6 +15,7 @@ class _FakeVikingFS:
     def __init__(self, existing=None):
         self.files = dict(existing or {})
         self.written = []
+        self.removed = []
 
     async def write_file_bytes(self, uri, content, *, ctx=None, lease_ref=None):
         self.files[uri] = content
@@ -29,6 +23,14 @@ class _FakeVikingFS:
 
     async def read_file_bytes(self, uri, *, ctx=None):
         return self.files[uri]
+
+    async def rm(self, uri, *, recursive=False, ctx=None, lease_ref=None):
+        self.removed.append(uri)
+        self.files.pop(uri, None)
+
+    async def remove_files(self, uri, *, recursive=False, ctx=None, lease_ref=None):
+        self.removed.append((uri, recursive, lease_ref))
+        self.files.pop(uri, None)
 
 
 _ROOT = "viking://resources/proj"
@@ -72,33 +74,33 @@ class TestAgfsResourceTarget:
         with pytest.raises(ValueError):
             await target.write_file("../evil.py", b"x")
 
-    async def test_import_directory_cleanup_requires_write_on_descendants(
-        self, tmp_path, request_context
-    ) -> None:
-        root_path = f"/local/{request_context.account_id}/resources/proj"
-        child_uri = f"{_ROOT}/nested/document.md"
-        writer = EffectiveAcl(
-            AclMode.RESTRICTED,
-            DirectAcl((AclEntry("user:*", AclLevel.WRITE),)),
-            DirectAcl(),
+    async def test_delete_path_uses_exact_semantics_for_file(self) -> None:
+        lease = {"lease_ref": "root-tree"}
+        vfs = _FakeVikingFS(existing={f"{_ROOT}/gone.py": b"x"})
+        target = AgfsResourceTarget(
+            viking_fs=vfs,
+            root_uri=_ROOT,
+            ctx=_Ctx(),
+            lease_ref=lease,
         )
-        denied = EffectiveAcl(AclMode.RESTRICTED, DirectAcl(), DirectAcl())
-        grants = {_ROOT: writer, f"{_ROOT}/nested": writer, child_uri: denied}
-        acl = SimpleNamespace(
-            is_enabled=AsyncMock(return_value=True), resolve_many=AsyncMock(return_value=grants)
+
+        await target.delete_path("gone.py", is_dir=False)
+
+        assert vfs.removed == [(f"{_ROOT}/gone.py", False, lease)]
+
+    async def test_delete_path_uses_tree_semantics_for_directory(self) -> None:
+        lease = {"lease_ref": "root-tree"}
+        vfs = _FakeVikingFS()
+        target = AgfsResourceTarget(
+            viking_fs=vfs,
+            root_uri=_ROOT,
+            ctx=_Ctx(),
+            lease_ref=lease,
         )
-        agfs = MockLocalAGFS(root_path=tmp_path)
-        agfs.write(f"{root_path}/nested/document.md", b"content")
-        fs = VikingFS(agfs=agfs, acl_manager=acl)
-        target = AgfsResourceTarget(viking_fs=fs, root_uri=_ROOT, ctx=request_context)
 
-        with pytest.raises(PermissionDeniedError, match="write permission required"):
-            await target.delete_path("", is_dir=True)
-        assert agfs.read_file(f"{root_path}/nested/document.md") == b"content"
+        await target.delete_path("old-dir", is_dir=True)
 
-        grants[child_uri] = writer
-        await target.delete_path("", is_dir=True)
-        assert not agfs.exists(root_path)
+        assert vfs.removed == [(f"{_ROOT}/old-dir", True, lease)]
 
     async def test_read_file_returns_existing_bytes(self) -> None:
         vfs = _FakeVikingFS(existing={f"{_ROOT}/a.py": b"body"})

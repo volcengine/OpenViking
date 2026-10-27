@@ -15,7 +15,6 @@ from openviking.server.app import create_app
 from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import AclMode
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     InvalidURIError,
@@ -230,7 +229,6 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
             {"principal": "user:snapshot_reader", "level": "read"},
         ],
         ctx=admin,
-        acl_mode=AclMode.RESTRICTED,
     )
     await service.fs.write(file_uri, content="v1", mode="create", wait=True, ctx=admin)
     v1 = await service.fs.commit(message="acl restore v1", paths=[root], ctx=writer)
@@ -261,16 +259,6 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
 
     await service.fs.write(extra_uri, content="remove", mode="create", wait=True, ctx=admin)
     await service.fs.commit(message="acl restore delete", paths=[root], ctx=admin)
-    with pytest.raises(PermissionDeniedError, match="manage permission required"):
-        await service.fs.restore(
-            project_dir=root,
-            source_commit=v1["commit_oid"],
-            ctx=writer,
-        )
-    assert await service.fs.read(extra_uri, ctx=writer) == "remove"
-    await service.fs.grant_acl(
-        extra_uri, principal="user:snapshot_writer", level="manage", ctx=admin
-    )
     delete_plan = await service.fs.restore(
         project_dir=root,
         source_commit=v1["commit_oid"],

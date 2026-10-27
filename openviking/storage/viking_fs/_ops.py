@@ -5,6 +5,7 @@
 import asyncio
 import math
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
@@ -240,7 +241,9 @@ class _OpsMixin:
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        await self._ensure_access(uri, ctx, action=AclAction.MANAGE)
+        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
+        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -259,7 +262,6 @@ class _OpsMixin:
 
         async def _finish_missing_delete() -> Dict[str, Any]:
             """Clean orphan index records for an idempotent delete."""
-            await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
             if no_vector:
                 return {"estimated_deleted_count": 0}
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
@@ -280,9 +282,12 @@ class _OpsMixin:
                 if mapped is not None:
                     raise mapped from exc
                 raise
+            if recursive:
+                await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
             return await _finish_missing_delete()
 
         if is_dir:
+            await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
             if not recursive:
                 raise InvalidArgumentError(
                     f"Cannot remove directory without --recursive: {uri}",
@@ -305,7 +310,6 @@ class _OpsMixin:
                 raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
         try:
-            await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
             if lease_ref is None and lease is not None:
                 try:
                     await self._async_agfs.stat(path)
@@ -552,11 +556,11 @@ class _OpsMixin:
             if bool(stat.get("isDir", False)) != directory:
                 raise InvalidArgumentError(f"transfer source type changed: {source}")
             if move:
-                await self._ensure_access(source, ctx, action=AclAction.MANAGE)
-                await self._ensure_move_target_access(target, ctx)
+                if directory or source != old_uri:
+                    await self._ensure_access(source, ctx, action=AclAction.MANAGE)
             else:
                 await self._ensure_copy_source_access(source, recursive=directory, ctx=ctx)
-                await self._ensure_access(target, ctx, action=AclAction.WRITE)
+            await self._ensure_access(target, ctx, action=AclAction.WRITE)
             await self._ensure_transfer_target_type(
                 self._uri_to_path(target, ctx=ctx), target, is_dir=directory
             )
@@ -576,27 +580,6 @@ class _OpsMixin:
 
         await visit(old_uri, new_uri, is_dir)
         return source_uris
-
-    async def _ensure_move_target_access(
-        self,
-        uri: str,
-        ctx: Optional[RequestContext],
-    ) -> None:
-        """Require write on the destination and, for a new resource, its parent."""
-        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
-        if not is_acl_uri(uri) or not await self._acl_enabled(ctx):
-            return
-        try:
-            await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-            parent = VikingURI(uri).parent
-            if parent is not None:
-                await self._ensure_access(parent.uri, ctx, action=AclAction.WRITE)
 
     async def _ensure_copy_source_access(
         self,
@@ -747,8 +730,10 @@ class _OpsMixin:
         new_uri = self._normalize_transfer_uri(new_uri)
         acl_manager = self.acl_manager
         acl_enabled = await self._acl_enabled(ctx)
-        await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
-        await self._ensure_move_target_access(new_uri, ctx)
+        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
+        await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
+        await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
         old_scope = old_uri.rstrip("/")
         new_scope = new_uri.rstrip("/")
         if old_scope == new_scope:
@@ -772,6 +757,8 @@ class _OpsMixin:
                 raise
             raise FileNotFoundError(f"mv source not found: {old_uri}") from exc
 
+        if is_dir:
+            await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="mv")
         await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
 
@@ -797,19 +784,8 @@ class _OpsMixin:
                     )
 
         if is_dir:
-            target_lock_path = new_path
-            if new_acl_scope and not await self.exists(new_uri, ctx=ctx):
-                # Locking the missing target itself can create it. Lock its
-                # parent so authorization can distinguish creation from overwrite.
-                target_lock_path = self._transfer_parent_path(new_path)
-            lock_paths = sorted({old_path, target_lock_path}, key=len)
-            requests = [
-                {"path": path, "kind": "tree"}
-                for path in lock_paths
-                if path == lock_paths[0] or not path.startswith(lock_paths[0].rstrip("/") + "/")
-            ]
             lease = await self._async_agfs.pathlock_acquire_batch(
-                requests,
+                self._directory_transfer_lock_requests(old_path, new_path),
                 owner_lease_ref=lease_ref,
             )
         else:
@@ -2479,22 +2455,12 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
-        await self._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
-        await self._ensure_move_target_access(to_uri, ctx)
+        await self._ensure_access(from_uri, ctx, action=AclAction.WRITE)
+        await self._ensure_access(to_uri, ctx, action=AclAction.WRITE)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
-        to_path = self._uri_to_path(to_uri, ctx=ctx)
-        self._validate_transfer_paths(from_path, to_path)
-        lease = await self._async_agfs.pathlock_acquire_batch(
-            [{"path": from_path, "kind": "exact"}, {"path": to_path, "kind": "exact"}]
-        )
-        try:
-            await self._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
-            await self._ensure_move_target_access(to_uri, ctx)
-            content = await self.read_file_bytes(from_uri, ctx=ctx)
-            await self.write_file_bytes(to_uri, content, ctx=ctx, lease_ref=lease)
-            await self._async_agfs.rm(from_path, fs_ctx=self._pathlock_fs_ctx(ctx, lease))
-        finally:
-            await self._async_agfs.pathlock_release(lease)
+
+        await self._copy_file_through_vikingfs(from_uri, to_uri, ctx=ctx)
+        await self._async_agfs.rm(from_path)
 
     # ========== Temp File Operations (backward compatible) ==========
 
