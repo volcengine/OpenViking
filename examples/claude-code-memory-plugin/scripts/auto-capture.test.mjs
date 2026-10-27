@@ -66,6 +66,54 @@ async function writeTranscript(path) {
   );
 }
 
+test("fresh hook processes keep the project peer after cwd moves outside the workspace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-project-peer-"));
+  const project = join(root, "系统管理");
+  const task = join(root, "desktop-task");
+  const transcript = join(root, "transcript.jsonl");
+  const batches = [];
+  try {
+    await mkdir(join(project, ".openviking"), { recursive: true });
+    await mkdir(join(task, ".git"), { recursive: true });
+    await writeFile(join(task, ".git", "config"), "[core]\nrepositoryformatversion = 0\n");
+    const configPath = join(project, ".openviking", "config.json");
+    const configText = JSON.stringify({ version: 1, peer: { id: "dev" } });
+    await writeFile(configPath, configText);
+    await writeTranscript(transcript);
+    await withMockOpenViking(async (req, res) => {
+      const path = new URL(req.url, "http://127.0.0.1").pathname;
+      if (path.endsWith("/messages/batch")) {
+        const body = await readRequestBody(req);
+        batches.push(body);
+        writeJson(res, { status: "ok", result: { added: body.messages.length } });
+      } else {
+        writeJson(res, { status: "ok", result: { healthy: true, pending_tokens: 10 } });
+      }
+    }, async (baseUrl) => {
+      const env = {
+        ...hookEnv(root, baseUrl),
+        OPENVIKING_HOME: join(root, ".openviking"),
+        OPENVIKING_PENDING_DIR: join(root, "pending"),
+        CLAUDE_PROJECT_DIR: project,
+      };
+      for (const [index, cwd] of [project, task, task].entries()) {
+        await runAutoCapture({
+          session_id: `project-peer-${index}`, transcript_path: transcript,
+          cwd, workspace_roots: [project],
+        }, env);
+      }
+    });
+    assert.equal(batches.length, 3);
+    for (const batch of batches) {
+      assert.equal(batch.messages.length, 2);
+      assert.deepEqual(batch.messages.map(message => message.peer_id), ["dev", "dev"]);
+    }
+    assert.equal(await readFile(configPath, "utf8"), configText);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("failed non-retryable capture keeps the cursor for a later retry", async () => {
   const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-retry-"));
   const transcriptPath = join(root, "transcript.jsonl");
