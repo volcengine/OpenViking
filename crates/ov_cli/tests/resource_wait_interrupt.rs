@@ -34,9 +34,10 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
 }
 
 #[tokio::test]
-async fn ctrl_c_exits_130_without_error_panel_or_server_cancellation() {
+async fn ctrl_c_exits_130_without_cancelling_server_task() {
     timeout(Duration::from_secs(20), async {
-        for language in ["en"] {
+        for (config_output, cli_output) in [("table", None), ("table", Some("json")), ("json", None)] {
+            let json_output = cli_output.unwrap_or(config_output) == "json";
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let url = format!("http://{}", listener.local_addr().unwrap());
             let (status_tx, status_rx) = oneshot::channel();
@@ -63,18 +64,22 @@ async fn ctrl_c_exits_130_without_error_panel_or_server_cancellation() {
                     "CLI must neither resubmit nor cancel the task");
             });
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("ovcli.conf"), json!({"url":url}).to_string()).unwrap();
+            std::fs::write(dir.path().join("ovcli.conf"), json!({"url":url,"output":config_output}).to_string()).unwrap();
             std::fs::create_dir(dir.path().join(".openviking")).unwrap();
             std::fs::write(dir.path().join(".openviking/ovcli.settings.conf"),
-                json!({"language":language}).to_string()).unwrap();
+                json!({"language":"en"}).to_string()).unwrap();
+            let mut args = vec!["add-resource", "https://example.com/docs",
+                "--to", "viking://resources/demo/docs", "--wait"];
+            if let Some(format) = cli_output {
+                args.extend(["--output", format]);
+            }
             let child = Command::new(env!("CARGO_BIN_EXE_ov"))
                 // Isolate saved language settings from the user's real home.
                 .env("HOME", dir.path())
                 .env("OPENVIKING_CLI_CONFIG_FILE", dir.path().join("ovcli.conf"))
-                .env("OPENVIKING_LANG", language)
+                .env("OPENVIKING_LANG", "en")
                 .env("NO_COLOR", "1")
-                .args(["add-resource", "https://example.com/docs",
-                    "--to", "viking://resources/demo/docs", "--wait"])
+                .args(&args)
                 .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
                 .kill_on_drop(true).spawn().unwrap();
             status_rx.await.unwrap();
@@ -85,8 +90,20 @@ async fn ctrl_c_exits_130_without_error_panel_or_server_cancellation() {
             assert_eq!(output.status.code(), Some(130), "{output:?}");
             assert!(output.stdout.is_empty());
             let stderr = String::from_utf8(output.stderr).unwrap();
-            assert!(stderr.contains("ov task status task-import"), "{stderr}");
-            assert!(!stderr.contains("INVALID_ARGUMENT") && !stderr.contains("Client error"));
+            if json_output {
+                // 显式参数或配置选择 JSON 时，stderr 必须是完整错误 envelope。
+                let envelope: serde_json::Value = serde_json::from_str(&stderr)
+                    .unwrap_or_else(|e| panic!("stderr must be a JSON envelope ({e}): {stderr}"));
+                assert_eq!(envelope["ok"], false, "{stderr}");
+                assert_eq!(envelope["error"]["code"], "INTERRUPTED", "{stderr}");
+                assert_eq!(envelope["error"]["details"]["task_id"], "task-import", "{stderr}");
+                assert!(envelope["error"]["message"]
+                    .as_str().unwrap().contains("ov task status task-import"), "{stderr}");
+            } else {
+                assert!(stderr.contains("ov task status task-import"), "{stderr}");
+                assert_eq!(stderr.lines().count(), 1, "{stderr}");
+                assert!(!stderr.contains("INVALID_ARGUMENT") && !stderr.contains("Client error"));
+            }
             finish_tx.send(()).unwrap();
             server.await.unwrap();
         }

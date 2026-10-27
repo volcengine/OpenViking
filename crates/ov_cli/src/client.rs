@@ -1134,18 +1134,30 @@ impl HttpClient {
                         result["task_id"] = json!(task_id);
                         return Ok(result);
                     }
-                    Some("failed" | "cancelled") => {
+                    Some("cancelled") => {
+                        // 服务端取消任务时会清空 result 和 error，需显式保留取消语义。
+                        return Err(Error::Api {
+                            code: Some("CANCELLED".into()),
+                            message: format!(
+                                "Task {task_id} cancelled; check with: ov task status {task_id}"
+                            ),
+                            details: Some(json!({"task_id": task_id, "status": "cancelled"})),
+                            status: None,
+                        });
+                    }
+                    Some("failed") => {
                         let result = &task["result"];
-                        let status = task["status"].as_str().unwrap();
                         return Err(Error::Api {
                             code: result["code"].as_str().map(str::to_string),
                             message: format!(
-                                "Task {task_id} {status}: {}",
-                                task["error"].as_str().unwrap_or(status)
+                                "Task {task_id} failed: {}",
+                                task["error"]
+                                    .as_str()
+                                    .unwrap_or("resource processing failed")
                             ),
                             details: Some(json!({
                                 "task_id": task_id,
-                                "status": status,
+                                "status": "failed",
                                 "details": result.get("details"),
                             })),
                             status: None,

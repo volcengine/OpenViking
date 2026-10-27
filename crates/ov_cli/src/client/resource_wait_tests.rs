@@ -285,21 +285,49 @@ async fn authentication_and_malformed_status_errors_include_recovery_command() {
 }
 
 #[tokio::test]
-async fn failed_and_cancelled_tasks_are_terminal() {
-    for status in ["failed", "cancelled"] {
-        let (client, peer) = server(vec![(200, task(status), 0)]).await;
-        let error = bounded(client.wait_for_resource_task(
-            "task-import",
-            std::future::pending(),
-            Duration::from_millis(1),
-        ))
-        .await
-        .unwrap_err();
-        assert_eq!(error.code(), "MODEL_ERROR");
-        assert!(error.to_string().contains(status));
-        assert!(!error.to_string().contains("continues"));
-        assert_eq!(bounded(peer).await.unwrap().len(), 1);
+async fn failed_tasks_are_terminal() {
+    let (client, peer) = server(vec![(200, task("failed"), 0)]).await;
+    let error = bounded(client.wait_for_resource_task(
+        "task-import",
+        std::future::pending(),
+        Duration::from_millis(1),
+    ))
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "MODEL_ERROR");
+    assert!(error.to_string().contains("failed: resource processing failed"));
+    assert!(!error.to_string().contains("continues"));
+    assert_eq!(bounded(peer).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn cancelled_tasks_surface_a_cancelled_code() {
+    // 使用 mark_cancelled 的真实响应形状：result 和 error 均为空。
+    let (client, peer) = server(vec![(
+        200,
+        json!({"status":"ok","result":{"status":"cancelled","error":null,"result":null}}),
+        0,
+    )])
+    .await;
+    let error = bounded(client.wait_for_resource_task(
+        "task-import",
+        std::future::pending(),
+        Duration::from_millis(1),
+    ))
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "CANCELLED");
+    assert!(error.to_string().contains("ov task status task-import"));
+    assert!(!error.to_string().contains("cancelled: cancelled"));
+    match error {
+        crate::error::Error::Api { message, details, status, .. } => {
+            assert_eq!(message, "Task task-import cancelled; check with: ov task status task-import");
+            assert_eq!(details.unwrap(), json!({"task_id": "task-import", "status": "cancelled"}));
+            assert_eq!(status, None);
+        }
+        other => panic!("{other}"),
     }
+    assert_eq!(bounded(peer).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
