@@ -2997,16 +2997,38 @@ fn preprocess_privacy_upsert_field_flags(args: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn preprocess_compact_args(args: Vec<OsString>) -> Vec<OsString> {
-    if args.is_empty() {
+    if !args.iter().skip(1).any(|arg| {
+        let token = arg.to_string_lossy();
+        token == "--compact" || token == "-c"
+    }) {
         return args;
     }
 
+    let value_options = cli_value_options();
     let mut converted = Vec::with_capacity(args.len());
     converted.push(args[0].clone());
     let mut i = 1;
 
     while i < args.len() {
         let token = args[i].to_string_lossy();
+        if token == "--" {
+            converted.extend(args[i..].iter().cloned());
+            break;
+        }
+        if token != "--compact"
+            && token != "-c"
+            && !token.contains('=')
+            && value_options.consumes_value(&token)
+        {
+            converted.push(args[i].clone());
+            if let Some(value) = args.get(i + 1) {
+                converted.push(value.clone());
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
         if token == "--compact" || token == "-c" {
             if let Some(next) = args.get(i + 1) {
                 let next_value = next.to_string_lossy();
@@ -4067,8 +4089,8 @@ mod tests {
         find_command_index, first_command_token, is_language_command_request,
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
-        pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
-        render_pre_language_help_request, resolve_output_format,
+        pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_compact_args,
+        preprocess_privacy_args, render_pre_language_help_request, resolve_output_format,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -6432,5 +6454,54 @@ mod tests {
             .expect("-c false should keep its explicit bool value");
             assert!(!explicit_false.compact);
         });
+    }
+
+    #[test]
+    fn compact_preprocessor_preserves_other_option_values() {
+        assert_eq!(
+            preprocess_compact_args(os_args(&["ov", "--account", "-c", "status"])),
+            os_args(&["ov", "--account", "-c", "status"])
+        );
+        assert_eq!(
+            preprocess_compact_args(os_args(&[
+                "ov",
+                "write",
+                "viking://resources/x.md",
+                "--content",
+                "-c",
+                "--compact",
+                "false",
+            ])),
+            os_args(&[
+                "ov",
+                "write",
+                "viking://resources/x.md",
+                "--content",
+                "-c",
+                "--compact=false",
+            ])
+        );
+        assert_eq!(
+            preprocess_compact_args(os_args(&[
+                "ov",
+                "write",
+                "viking://resources/x.md",
+                "--content",
+                "--compact",
+                "false",
+            ])),
+            os_args(&[
+                "ov",
+                "write",
+                "viking://resources/x.md",
+                "--content",
+                "--compact",
+                "false",
+            ])
+        );
+        assert_eq!(
+            preprocess_compact_args(os_args(&["ov", "read", "--", "--compact", "-c"])),
+            os_args(&["ov", "read", "--", "--compact", "-c"])
+        );
     }
 }
