@@ -125,7 +125,12 @@ def _agent_skills_root(ctx: RequestContext, target_uri: Optional[str] = None) ->
 
 
 async def _list_skills_from_root(
-    service, ctx: RequestContext, root_uri: str, node_limit: int = _DEFAULT_SKILL_LIST_LIMIT
+    service,
+    ctx: RequestContext,
+    root_uri: str,
+    node_limit: int = _DEFAULT_SKILL_LIST_LIMIT,
+    *,
+    include_digest: bool = False,
 ) -> list[Dict[str, Any]]:
     """List skills from a specific root URI.
 
@@ -155,7 +160,32 @@ async def _list_skills_from_root(
         if not await _entry_looks_like_skill(service, ctx, entry):
             continue
         results.append(_skill_summary_from_entry(entry))
+    if include_digest and results:
+        await _attach_content_digests(service, ctx, results)
     return results
+
+
+async def _attach_content_digests(
+    service, ctx: RequestContext, skills: list[Dict[str, Any]]
+) -> None:
+    """Add ``content_sha256`` per skill, bounded the same way as show integrity.
+
+    Opt-in because it reads every SKILL.md: callers that only need presence
+    (a listing UI) keep the cheap path, while a synchronising client can compare
+    digests instead of re-reading each skill one by one.
+    """
+
+    semaphore = asyncio.Semaphore(_SKILL_INTEGRITY_READ_CONCURRENCY)
+
+    async def _digest(skill: Dict[str, Any]) -> None:
+        try:
+            async with semaphore:
+                content = await service.fs.read(_skill_md_uri(skill["root_uri"]), ctx=ctx)
+            skill["content_sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        except Exception:  # noqa: BLE001 - a missing/unreadable file must not fail the listing
+            return
+
+    await asyncio.gather(*(_digest(skill) for skill in skills))
 
 
 async def _entry_looks_like_skill(service, ctx: RequestContext, entry: Dict[str, Any]) -> bool:
@@ -559,24 +589,38 @@ async def _restore_skill_privacy(
 async def list_skills(
     node_limit: int = _DEFAULT_SKILL_LIST_LIMIT,
     target_uri: Optional[str] = None,
+    include_digest: bool = False,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """List installed agent skills; ``node_limit`` caps each skill root (0 keeps the default)."""
+    """List installed agent skills; ``node_limit`` caps each skill root (0 keeps the default).
+
+    ``include_digest`` adds ``content_sha256`` per skill so a client can detect
+    content drift without re-reading every skill; it costs one SKILL.md read per
+    listed skill, so it is off by default.
+    """
     service = get_service()
     limit = node_limit if node_limit > 0 else _DEFAULT_SKILL_LIST_LIMIT
     if target_uri:
         resolved_uri = validate_request_viking_uri(
             resolve_path_variables(target_uri), _ctx, field_name="target_uri"
         )
-        skills = await _list_skills_from_root(service, _ctx, resolved_uri, limit)
+        skills = await _list_skills_from_root(
+            service, _ctx, resolved_uri, limit, include_digest=include_digest
+        )
         return Response(
             status="ok", result={"root_uri": resolved_uri, "skills": skills, "total": len(skills)}
         )
     else:
         user_skills = await _list_skills_from_root(
-            service, _ctx, f"{canonical_user_root(_ctx)}/skills", limit
+            service,
+            _ctx,
+            f"{canonical_user_root(_ctx)}/skills",
+            limit,
+            include_digest=include_digest,
         )
-        agent_skills = await _list_skills_from_root(service, _ctx, "viking://agent/skills", limit)
+        agent_skills = await _list_skills_from_root(
+            service, _ctx, "viking://agent/skills", limit, include_digest=include_digest
+        )
         # Intentionally concatenate without deduplication: when the same skill
         # name exists in both the user-private and the account-shared agent
         # scope, both entries should be visible so the caller can tell them
