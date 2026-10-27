@@ -1351,7 +1351,11 @@ class TestFinalOperationsHydration:
         )
 
         context_provider = Mock()
-        schema = SimpleNamespace(memory_type="experiences", fields=[])
+        schema = SimpleNamespace(
+            memory_type="experiences",
+            fields=[],
+            identity_fields=lambda *, include_peer_id=True: (),
+        )
         context_provider.get_memory_schemas.return_value = [schema]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []

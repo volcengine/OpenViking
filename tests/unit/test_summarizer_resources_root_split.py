@@ -38,6 +38,7 @@ class _DummyQueueManager:
 class _DummyVikingFS:
     def __init__(self, entries_by_uri):
         self.entries_by_uri = entries_by_uri
+        self._async_agfs = None
 
     async def ls(self, uri, show_all_hidden=False, ctx=None, **kwargs):
         return self.entries_by_uri.get(uri, [])

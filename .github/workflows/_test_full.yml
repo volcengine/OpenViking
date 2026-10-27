@@ -71,7 +71,7 @@ jobs:
       run: echo "C:\mingw64\bin" >> $env:GITHUB_PATH
 
     - name: Install Python dependencies
-      run: uv sync --frozen --extra test
+      run: uv sync --frozen --extra test --extra gemini
 
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm cmake wheel
@@ -82,8 +82,5 @@ jobs:
     - name: Build C++ extensions
       run: uv run python setup.py build_ext --inplace
 
-    # Non-blocking for now: the suite has pre-existing failures on main.
-    # Remove continue-on-error once they are fixed and the suite is clean.
-    - name: Run Python unit tests (non-blocking)
-      continue-on-error: true
+    - name: Run Python unit tests
       run: uv run pytest -q -o addopts='' tests/unit

@@ -115,4 +115,11 @@ def test_explicit_local_routes_reach_completion_unchanged(
         assert kwargs.get("api_key") == api_key
         assert kwargs.get("api_base") == api_base
         if model.startswith(("ollama/", "ollama_chat/")):
-            assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False} | extra_body
+            # num_ctx is passed top-level because LiteLLM forwards extra_body
+            # verbatim while Ollama only reads num_ctx from options.
+            assert kwargs["num_ctx"] == extra_body.get("num_ctx", 16384)
+            expected_extra_body = {
+                key: value for key, value in extra_body.items() if key != "num_ctx"
+            }
+            expected_extra_body.setdefault("think", False)
+            assert kwargs["extra_body"] == expected_extra_body

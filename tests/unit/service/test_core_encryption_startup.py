@@ -10,9 +10,17 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import set_task_tracker
 from openviking.utils.agfs_utils import RagfsBindingConfig
 from openviking.utils.process_lock import LOCK_FILENAME
 from openviking_cli.utils.config.vlm_config import VLMConfig
+
+
+class _NoopTaskTracker:
+    """Stand-in for the tracker installed during storage initialization."""
+
+    async def close(self) -> None:
+        return None
 
 
 class _FakeCacheConfig:
@@ -30,7 +38,7 @@ class _FakeConfig:
             backend="local",
             cachefs=SimpleNamespace(backend="local"),
             pathlock=SimpleNamespace(
-                model_dump=lambda mode: {
+                model_dump=lambda **kwargs: {
                     "provider": "filesystem",
                     "lock_timeout_secs": 0.0,
                     "lock_expire_secs": 30.0,
@@ -83,7 +91,6 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
             "enabled": False,
             "runtime_enabled": False,
             "provider": "redis",
-            "namespace": "openviking",
             "max_file_size_bytes": 1024 * 1024,
             "traversal_mode": "backend",
             "bypass_prefixes": [],
@@ -98,6 +105,7 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
             "root_key": b"k" * 32,
             "provider_type": 1,
         },
+        "service_name": "openviking-server",
     }
     assert isinstance(service._encryptor, _FakeEncryptor)
 
@@ -222,6 +230,7 @@ async def test_close_releases_data_dir_lock_after_successful_cleanup(monkeypatch
     service._runtime_config_manager = None
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
+    service._compile_scheduler = None
     service._queue_manager = None
     service._lock_manager = None
     service._vikingdb_manager = None
@@ -229,7 +238,11 @@ async def test_close_releases_data_dir_lock_after_successful_cleanup(monkeypatch
     service._initialized = True
     monkeypatch.setattr(service, "_release_data_dir_lock", lambda: released.append(True))
 
-    await service.close()
+    set_task_tracker(_NoopTaskTracker())
+    try:
+        await service.close()
+    finally:
+        set_task_tracker(None)
 
     assert service._initialized is False
     assert released == [True]
