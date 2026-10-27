@@ -8,6 +8,7 @@ import {
   enqueue,
   listPending,
   replayPending,
+  trimPending,
 } from "./lib/pending-queue.mjs";
 import { createOvHttp } from "./lib/ov-http.mjs";
 import { withMockOpenViking, withPendingDir, writeJson } from "./testing/support.mjs";
@@ -60,6 +61,52 @@ test("replayPending honors the per-run replay limit", async () => {
     assert.equal(result.deferred, 1);
     assert.equal(calls.length, 1);
     assert.equal((await listPending()).length, 1);
+  });
+});
+
+test("enqueue evicts the oldest entries once the queue reaches its cap", async () => {
+  await withPendingDir(async (dir) => {
+    process.env.OPENVIKING_PENDING_MAX_ENTRIES = "10";
+    const base = Date.now() - 60_000;
+    for (let i = 0; i < 10; i++) {
+      const queued = await enqueue("addMessage", "queue-cap", { role: "user", content: `m${i}` });
+      assert.equal(queued.evicted, 0);
+      const at = new Date(base + i * 1000);
+      await utimes(join(dir, queued.path), at, at);
+    }
+
+    const overflow = await enqueue("addMessage", "queue-cap", { role: "user", content: "m10" });
+
+    assert.equal(overflow.ok, true);
+    assert.equal(overflow.evicted, 2);
+    const contents = (await listPending()).map(({ entry }) => entry.payload.content);
+    assert.deepEqual(contents.sort(), ["m10", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9"]);
+  });
+});
+
+test("replayPending trims a backlog already over the cap without an enqueue", async () => {
+  await withPendingDir(async () => {
+    for (let i = 0; i < 30; i++) {
+      await enqueue("addMessage", "queue-backlog", { role: "user", content: `m${i}` });
+    }
+    process.env.OPENVIKING_PENDING_MAX_ENTRIES = "10";
+    process.env.OPENVIKING_PENDING_REPLAY_LIMIT = "1";
+
+    await replayPending(async () => ({ ok: false, status: 503 }), () => {});
+
+    assert.ok((await listPending()).length <= 10);
+  });
+});
+
+test("trimPending leaves a queue at the cap untouched", async () => {
+  await withPendingDir(async () => {
+    process.env.OPENVIKING_PENDING_MAX_ENTRIES = "3";
+    for (let i = 0; i < 3; i++) {
+      await enqueue("addMessage", "queue-at-cap", { role: "user", content: `m${i}` });
+    }
+
+    assert.equal(await trimPending(), 0);
+    assert.equal((await listPending()).length, 3);
   });
 });
 

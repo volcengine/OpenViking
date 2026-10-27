@@ -99,7 +99,39 @@ test("drainTick keeps the latch while the server stays down and leaves the entry
   assert.equal((await listPending()).length, 2);
 });
 
+test("drainTick trims a backlog already over the cap and warns", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-drain-trim-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const originalMax = process.env.OPENVIKING_PENDING_MAX_ENTRIES;
+  try {
+    for (let i = 0; i < 12; i++) {
+      await enqueue("addMessage", "dsh-backlog", { role: "user", content: `m${i}` });
+    }
+    process.env.OPENVIKING_PENDING_MAX_ENTRIES = "10";
+    const warnings = [];
+    const runtime = new OpenVikingRuntime({
+      async healthResult() {
+        return { ok: false, status: 503, error: { message: "down" } };
+      },
+    }, config(), { debug() {}, warn(message) { warnings.push(message); } });
+
+    await runtime.drainTick();
+
+    assert.ok((await listPending()).length <= 10);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /pending_evicted \{"evicted":\d+\}/);
+  } finally {
+    if (originalMax === undefined) delete process.env.OPENVIKING_PENDING_MAX_ENTRIES;
+    else process.env.OPENVIKING_PENDING_MAX_ENTRIES = originalMax;
+  }
+});
+
 test("drainTick does not hit the network while the queue is empty", async () => {
+  // An isolated dir: drainTick trims the queue, so it must not see the real one.
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-drain-idle-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
   let fetchCalls = 0;
   const runtime = new OpenVikingRuntime({
     async fetchJSON() {

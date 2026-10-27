@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test, { after } from "node:test";
 import { apply } from "./index.mjs";
+
+// agent/created startup replays (and trims) the pending queue; keep it off the
+// real ~/.openviking/pending.
+const originalPendingDir = process.env.OPENVIKING_PENDING_DIR;
+const pendingDir = await mkdtemp(join(tmpdir(), "dsh-index-pending-"));
+process.env.OPENVIKING_PENDING_DIR = pendingDir;
+
+after(async () => {
+  if (originalPendingDir === undefined) delete process.env.OPENVIKING_PENDING_DIR;
+  else process.env.OPENVIKING_PENDING_DIR = originalPendingDir;
+  await rm(pendingDir, { recursive: true, force: true });
+});
 
 test("session filtering skips subagents without changing main-session recall", async () => {
   const handlers = new Map();

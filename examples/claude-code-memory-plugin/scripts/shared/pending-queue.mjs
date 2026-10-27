@@ -19,6 +19,8 @@
  *                                  (default: 7)
  *   OPENVIKING_PENDING_REPLAY_LIMIT max items replayed per session-start
  *                                  (default: 50)
+ *   OPENVIKING_PENDING_MAX_ENTRIES max queued items; the least recently
+ *                                  touched are evicted past it (default: 5000)
  */
 
 import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod, utimes } from "node:fs/promises";
@@ -30,6 +32,7 @@ import { isRetryableFailure } from "./retryable.mjs";
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_TTL_DAYS = 7;
 const DEFAULT_REPLAY_LIMIT = 50;
+const DEFAULT_MAX_ENTRIES = 5000;
 const PROCESSING_STALE_MS = 10 * 60 * 1000;
 const DEFAULT_PENDING_DIR = () => join(homedir(), ".openviking", "pending");
 
@@ -71,6 +74,11 @@ function getTTLDays() {
 function getReplayLimit() {
   const v = parseInt(process.env.OPENVIKING_PENDING_REPLAY_LIMIT || "", 10);
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_REPLAY_LIMIT;
+}
+
+function getMaxEntries() {
+  const v = parseInt(process.env.OPENVIKING_PENDING_MAX_ENTRIES || "", 10);
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_MAX_ENTRIES;
 }
 
 function stableStringify(value) {
@@ -177,6 +185,52 @@ async function recoverStaleProcessing(dir) {
 }
 
 /**
+ * Keep the queue within OPENVIKING_PENDING_MAX_ENTRIES by deleting the least
+ * recently touched `.json` entries (by mtime), never `keep` (the entry just
+ * written, if any). mtime only approximates enqueue time, since claiming and
+ * retrying an entry refresh it, but filenames carry no timestamp and reading
+ * createdAt would parse every entry, which is the cost this bound exists to
+ * cap. Overflow trims to 90% of the cap so the stat pass runs once per batch
+ * of enqueues, not on every one; under the cap this is a single readdir.
+ */
+async function evictOverflow(dir, keep = null) {
+  const maxEntries = getMaxEntries();
+  let files;
+  try {
+    files = (await readdir(dir)).filter(f => f.endsWith(".json") && f !== keep);
+  } catch {
+    return 0;
+  }
+  const reserved = keep ? 1 : 0;
+  if (files.length + reserved <= maxEntries) return 0;
+
+  const aged = [];
+  for (const f of files) {
+    try {
+      aged.push({ f, mtimeMs: (await stat(join(dir, f))).mtimeMs });
+    } catch {
+      // Claimed or removed concurrently.
+    }
+  }
+  aged.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  const keepOthers = Math.max(0, Math.floor(maxEntries * 0.9) - reserved);
+  let evicted = 0;
+  for (const { f } of aged.slice(0, Math.max(0, aged.length - keepOthers))) {
+    if (await dequeue(f)) evicted++;
+  }
+  return evicted;
+}
+
+/**
+ * Trim a backlog that is already over the cap, e.g. one left from before the
+ * cap existed, without waiting for the next enqueue. Returns the number of
+ * entries evicted.
+ */
+export async function trimPending() {
+  return evictOverflow(getPendingDir());
+}
+
+/**
  * Enqueue a failed operation to local disk.
  *
  * @param {string} type - "addMessage" or "commitSession"
@@ -216,7 +270,7 @@ export async function enqueue(type, sessionId, payload, options = {}) {
       flag: "wx",
       mode: PENDING_FILE_MODE,
     });
-    return { ok: true, path: filename, dedupKey };
+    return { ok: true, path: filename, dedupKey, evicted: await evictOverflow(dir, filename) };
   } catch (err) {
     if (err?.code !== "EEXIST") {
       return { ok: false, error: err?.message || String(err), dedupKey };
@@ -382,6 +436,7 @@ export async function cleanStale() {
  */
 export async function replayPending(fetchJSON, log, options = {}) {
   const consumeRetries = options.consumeRetries !== false;
+  await trimPending();
   const pending = await listPending();
 
   if (pending.length === 0) {

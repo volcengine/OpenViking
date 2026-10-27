@@ -241,6 +241,35 @@ test("new queued messages move an older pending commit behind them", async () =>
   ]);
 });
 
+test("a capture that overflows the pending queue warns about the evicted entries", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-evict-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const originalMax = process.env.OPENVIKING_PENDING_MAX_ENTRIES;
+  process.env.OPENVIKING_PENDING_MAX_ENTRIES = "2";
+  try {
+    await enqueue("addMessage", "dsh-old-backlog", { role: "user", content: "old" });
+    await enqueue("addMessage", "dsh-old-backlog", { role: "user", content: "older" });
+    const warnings = [];
+    const runtime = new OpenVikingRuntime({}, config(), {
+      debug() {},
+      warn(message) { warnings.push(message); },
+    });
+    const session = { id: "evict", header: { cwd: "/workspace" } };
+    runtime.stateFor(session).hasPendingWrites = true;
+
+    runtime.capture(session, userEvent("Message that overflows the queue."));
+    await runtime.flush(session);
+
+    assert.equal((await listPending()).length, 1);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /pending_evicted \{"triggerSessionId":"[^"]+","evicted":2\}/);
+  } finally {
+    if (originalMax === undefined) delete process.env.OPENVIKING_PENDING_MAX_ENTRIES;
+    else process.env.OPENVIKING_PENDING_MAX_ENTRIES = originalMax;
+  }
+});
+
 test("flush waits only for the requested session", async () => {
   const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
   const first = { id: "first", header: { cwd: "/workspace/first" } };
