@@ -10,10 +10,12 @@ use crate::cache_runtime::{
 };
 
 use super::codec::LockTokenCodec;
-use super::provider::{AcquisitionChange, AtomicAcquisition, PathLockHandleMode, PathLockProvider};
+use super::provider::{
+    AcquisitionChange, AtomicAcquisition, AtomicAcquisitionResult, PathLockHandleMode, PathLockProvider,
+};
 use super::types::{LockToken, PathLockError, PathLockKind, PathLockRequest, PathLockResult};
 
-const ACQUIRE_BATCH_ID: &str = "pathlock.acquire_batch.v1";
+const ACQUIRE_BATCH_ID: &str = "pathlock.acquire_batch.v2";
 const ROLLBACK_BATCH_ID: &str = "pathlock.rollback_batch.v1";
 const COMPARE_WRITE_ID: &str = "pathlock.compare_write.v1";
 const COMPARE_REMOVE_ID: &str = "pathlock.compare_remove.v1";
@@ -254,7 +256,7 @@ if redis.call("HLEN", key) > 0 then
     redis.call("PEXPIRE", key, ttl_ms)
 end
 
-local result = { "ok" }
+local result = { "ok", tostring(#stale) }
 for _, change in ipairs(changes) do
     table.insert(result, change.path)
     table.insert(result, change.change)
@@ -730,6 +732,19 @@ impl PathLockProvider for RedisPathLockProvider {
         now_ns: u128,
         stale_before_ns: u128,
     ) -> PathLockResult<Option<Vec<AtomicAcquisition>>> {
+        Ok(self
+            .try_acquire_batch_atomic_with_stats(requests, owner_id, now_ns, stale_before_ns)
+            .await?
+            .map(|result| result.acquisitions))
+    }
+
+    async fn try_acquire_batch_atomic_with_stats(
+        &self,
+        requests: &[PathLockRequest],
+        owner_id: &str,
+        now_ns: u128,
+        stale_before_ns: u128,
+    ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
         if requests.is_empty() {
             return Err(PathLockError::InvalidRequest(
                 "lock request batch must not be empty".to_string(),
@@ -752,15 +767,18 @@ impl PathLockProvider for RedisPathLockProvider {
         if status != "ok" {
             return Err(Self::decode_error_result("acquire_batch", &values)?);
         }
-        if (values.len() - 1) % 4 != 0 {
+        if values.len() < 2 || (values.len() - 2) % 4 != 0 {
             return Err(PathLockError::Internal(format!(
                 "Redis PathLock acquire_batch returned {} trailing values",
-                values.len() - 1
+                values.len().saturating_sub(2)
             )));
         }
 
-        let mut acquisitions = Vec::with_capacity((values.len() - 1) / 4);
-        for values in values[1..].chunks_exact(4) {
+        let stale_tokens_removed = Self::result_string(&values[1], "acquire_batch")?
+            .parse::<usize>()
+            .map_err(|_| PathLockError::Internal("invalid Redis stale recovery count".into()))?;
+        let mut acquisitions = Vec::with_capacity((values.len() - 2) / 4);
+        for values in values[2..].chunks_exact(4) {
             let handle = Self::result_string(&values[0], "acquire_batch")?.to_string();
             let change = Self::result_string(&values[1], "acquire_batch")?;
             let previous = Self::result_string(&values[2], "acquire_batch")?;
@@ -782,7 +800,10 @@ impl PathLockProvider for RedisPathLockProvider {
             };
             acquisitions.push(AtomicAcquisition { handle, change });
         }
-        Ok(Some(acquisitions))
+        Ok(Some(AtomicAcquisitionResult {
+            acquisitions,
+            stale_tokens_removed,
+        }))
     }
 
     /// Atomically roll back mutations reported by one completed batch.
@@ -1196,6 +1217,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         let config = PathLockConfig {
             provider: "cache".to_string(),
             service_name: Some(service_name.clone()),
+            sqlite_path: None,
             lock_timeout_secs: 0.0,
             lock_expire_secs: 3.0,
         };
@@ -1841,6 +1863,31 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         ) {
             exercise_topology("sentinel", endpoints, Some(master), "sentinel").await;
         }
+    }
+
+    /// Verify storage-side stale recovery reaches manager metrics.
+    #[tokio::test]
+    async fn stale_recovery_count_reaches_manager_observation() {
+        let Some((runtime, provider)) = test_provider("stale-metrics").await else {
+            return;
+        };
+        let path = "/local/account-a/old";
+        provider
+            .try_create_token(path, &token("dead", 1, PathLockKind::Exact))
+            .await
+            .unwrap();
+        let manager = PathLockManager::new(
+            Arc::new(MemFileSystem::new()),
+            Arc::new(provider),
+            PathLockConfig::default(),
+        );
+        let lease = manager
+            .acquire_tree(path, Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert_eq!(manager.observe().await.stale_locks_removed, 1);
+        manager.release(&lease).await.unwrap();
+        runtime.close().await.unwrap();
     }
 
     /// Measure HASH-only atomic batch latency for representative lock counts.

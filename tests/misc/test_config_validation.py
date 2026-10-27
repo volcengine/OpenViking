@@ -866,6 +866,22 @@ def test_redis_pathlock_enables_shared_runtime_without_cachefs(tmp_path):
     assert binding["service_name"] == "prod-a"
 
 
+def test_sqlite_pathlock_binding_without_redis(tmp_path):
+    database = str(tmp_path / "locks.sqlite3")
+    config = AGFSConfig(
+        path=str(tmp_path), pathlock={"provider": "sqlite", "sqlite_path": database}
+    )
+    binding = RagfsBindingConfig(agfs=config, service_name="local-a").to_binding_dict()
+    assert binding["pathlock"]["sqlite_path"] == database
+    assert binding["pathlock"]["provider"] == "sqlite"
+    assert binding["cache"]["runtime_enabled"] is False
+    for path in [None, "", "relative.sqlite3", ":memory:"]:
+        with pytest.raises(ValueError, match="sqlite_path"):
+            AGFSConfig(
+                path=str(tmp_path), pathlock={"provider": "sqlite", "sqlite_path": path}
+            )
+
+
 def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):
     agfs_config = AGFSConfig(
         path=str(tmp_path),

@@ -440,7 +440,8 @@ Redis-backed configuration:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, or `cache` | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache` | `filesystem` |
+| `sqlite_path` | str / null | Absolute local database file required for `sqlite`; see [SQLite setup](../configuration/01-server.md#storage) | `null` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale | `30.0` |
 
 Legacy compatibility form:

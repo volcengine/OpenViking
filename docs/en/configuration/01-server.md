@@ -303,11 +303,37 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
+| `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `cache` | `filesystem` | Path lock storage |
+| `agfs.pathlock.sqlite_path` | absolute local file path | `null` | Shared SQLite lock database; required for `sqlite` |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
 | `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
+
+For local path locking without recursive business-directory scans, set
+`storage.agfs.pathlock` to `{"provider":"sqlite","sqlite_path":"/data/openviking/pathlocks.sqlite3"}`.
+The database parent directory must exist. Every process accessing the same filesystem
+must use the same database path, top-level `service_name`, and lock expiry setting.
+SQLite stores authoritative lock tokens and atomically checks Exact/Tree conflicts
+using its path index. Blocking database work runs off the async executor.
+SQLite waits up to 100 ms per attempt for transient database writer contention,
+including when the logical lock wait timeout is zero. The provider retries only
+Busy, with three total attempts and 1 ms / 4 ms backoff. Database waits can total
+about 300 ms, plus 5 ms backoff and execution/scheduling overhead. Exhausted
+retries still report Busy to the manager; logical lock Conflict is not retried. WAL uses
+`synchronous=FULL` to preserve committed lock tokens after a crash, at the cost of
+additional synchronization I/O compared with `NORMAL`.
+Lease heartbeats refresh owned paths in one SQLite transaction (bounded batches
+for large leases). `stale_locks_removed` includes tokens recovered by committed
+atomic SQLite/Redis acquisitions; failed transactions do not increment the count.
+
+Use a local disk; this provider does not coordinate different hosts and is unsuitable
+for NFS/SMB databases. Stop all participating processes before switching providers:
+SQLite and filesystem lock files do not share a protocol. Do not delete the database,
+WAL, or SHM files while participants are running. Crashed owners' tokens become
+eligible for takeover after `lock_expire_secs` (default 30 seconds). This setting
+does not change the workspace process lock or other backend concurrency constraints.
 
 Remote backends also require endpoint, bucket/collection, credentials, and timeout fields. See [Configuration](../guides/01-configuration.md#storage) for complete examples.
 

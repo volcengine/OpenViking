@@ -460,7 +460,12 @@ fn pathlock_config_from_value(
     let pathlock = value
         .as_object()
         .ok_or_else(|| "pathlock config must be an object".to_string())?;
-    const FIELDS: &[&str] = &["provider", "lock_timeout_secs", "lock_expire_secs"];
+    const FIELDS: &[&str] = &[
+        "provider",
+        "sqlite_path",
+        "lock_timeout_secs",
+        "lock_expire_secs",
+    ];
     if let Some(field) = pathlock
         .keys()
         .find(|field| !FIELDS.contains(&field.as_str()))
@@ -469,12 +474,25 @@ fn pathlock_config_from_value(
     }
 
     let provider = string_field(pathlock, "provider", "filesystem")?;
-    if !matches!(provider.as_str(), "filesystem" | "memory" | "cache") {
+    if !matches!(provider.as_str(), "filesystem" | "memory" | "sqlite" | "cache") {
         return Err(format!(
-            "unsupported pathlock.provider: {provider}; expected filesystem, memory, or cache"
+            "unsupported pathlock.provider: {provider}; expected filesystem, memory, sqlite, or cache"
         ));
     }
-    let pathlock_service_name = (provider == "cache").then(|| service_name.to_string());
+    let pathlock_service_name =
+        matches!(provider.as_str(), "cache" | "sqlite").then(|| service_name.to_string());
+    let sqlite_path = match pathlock.get("sqlite_path") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(path)) => Some(path.clone()),
+        _ => return Err("pathlock.sqlite_path must be a string".to_string()),
+    };
+    if provider == "sqlite"
+        && !sqlite_path
+            .as_deref()
+            .is_some_and(|path| std::path::Path::new(path).is_absolute())
+    {
+        return Err("pathlock.sqlite_path must be an absolute local file path".to_string());
+    }
 
     let lock_timeout_secs = f64_field(pathlock, "lock_timeout_secs", 0.0)?;
     if !lock_timeout_secs.is_finite() || lock_timeout_secs < 0.0 {
@@ -488,6 +506,7 @@ fn pathlock_config_from_value(
     Ok(PathLockConfig {
         provider,
         service_name: pathlock_service_name,
+        sqlite_path,
         lock_timeout_secs,
         lock_expire_secs,
     })
@@ -3416,6 +3435,25 @@ mod tests {
         .unwrap();
 
         assert_eq!(pathlock.service_name.as_deref(), Some("prod-a"));
+    }
+
+    #[test]
+    fn sqlite_pathlock_config_parses_shared_path_and_namespace() {
+        let path = std::env::temp_dir().join("openviking-locks.sqlite3");
+        let config = pathlock_config_from_value(
+            &serde_json::json!({"provider": "sqlite", "sqlite_path": path}),
+            "local-a",
+        )
+        .unwrap();
+        assert_eq!(config.sqlite_path.as_deref(), path.to_str());
+        assert_eq!(config.service_name.as_deref(), Some("local-a"));
+        for value in [
+            serde_json::json!({"provider": "sqlite"}),
+            serde_json::json!({"provider": "sqlite", "sqlite_path": "relative.db"}),
+            serde_json::json!({"provider": "sqlite", "sqlite_path": 42}),
+        ] {
+            assert!(pathlock_config_from_value(&value, "local-a").is_err());
+        }
     }
 
     #[test]

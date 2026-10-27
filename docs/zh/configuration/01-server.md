@@ -295,11 +295,33 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
+| `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`cache` | `filesystem` | 路径锁存储 |
+| `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | `null` | SQLite 共享锁数据库，使用 `sqlite` 时必填 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
+
+本地路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
+`{"provider":"sqlite","sqlite_path":"/data/openviking/pathlocks.sqlite3"}`，数据库父目录需提前存在。
+访问同一文件系统的所有进程必须使用同一数据库路径、顶层 `service_name` 和锁过期配置。
+SQLite 是锁状态的唯一存储，通过路径索引查询，并在事务中原子检查及获取 Exact/Tree 锁；
+数据库阻塞操作在异步执行器之外运行。
+SQLite 每次尝试对瞬时数据库写竞争最多等待 100 毫秒，即使逻辑锁等待超时为零也会执行该等待。
+仅 Busy 会在 provider 内重试，最多尝试 3 次，重试前分别退避 1、4 毫秒；
+数据库等待可累计约 300 毫秒，另加 5 毫秒退避及执行、调度开销。
+重试耗尽仍向 manager 返回 Busy；逻辑锁 Conflict 不重试。
+WAL 使用 `synchronous=FULL` 保证崩溃后已提交锁记录的持久性，
+代价是比 `NORMAL` 更多的同步 I/O。
+租约心跳在一次 SQLite 事务中批量刷新所属路径，大租约按有限大小分批执行。
+`stale_locks_removed` 包含 SQLite/Redis 原子加锁事务实际回收的锁数量，
+失败并回滚的事务不会增加计数。
+
+仅支持同机本地磁盘，不支持跨主机协调或 NFS/SMB 上的数据库。切换 provider 前需停止全部参与进程，
+SQLite 与 filesystem 锁文件不共享协议。进程运行期间不能删除数据库及其 WAL/SHM 文件。
+崩溃进程的锁在 `lock_expire_secs`（默认 30 秒）后可被接管。
+此配置不会改变 workspace 进程锁或其他后端的并发限制。
 
 远程存储后端还需要配置 endpoint、bucket/collection、鉴权和超时等字段。完整后端示例见[配置指南](../guides/01-configuration.md#storage)。
 

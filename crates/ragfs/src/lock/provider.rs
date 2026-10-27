@@ -53,6 +53,15 @@ pub struct AtomicAcquisition {
     pub change: AcquisitionChange,
 }
 
+/// Committed atomic acquisition mutations and storage-side recovery statistics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtomicAcquisitionResult {
+    /// Mutations used to publish or roll back the local lease.
+    pub acquisitions: Vec<AtomicAcquisition>,
+    /// Stale tokens actually removed or replaced by this committed transaction.
+    pub stale_tokens_removed: usize,
+}
+
 /// Storage abstraction for lock tokens. Only `PathLockManager` should call these methods.
 #[async_trait]
 pub trait PathLockProvider: Send + Sync {
@@ -73,6 +82,24 @@ pub trait PathLockProvider: Send + Sync {
         _stale_before_ns: u128,
     ) -> PathLockResult<Option<Vec<AtomicAcquisition>>> {
         Ok(None)
+    }
+
+    /// Acquire with recovery statistics. Existing providers keep their atomic hook
+    /// and report zero until they implement storage-side recovery accounting.
+    async fn try_acquire_batch_atomic_with_stats(
+        &self,
+        requests: &[PathLockRequest],
+        owner_id: &str,
+        now_ns: u128,
+        stale_before_ns: u128,
+    ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
+        Ok(self
+            .try_acquire_batch_atomic(requests, owner_id, now_ns, stale_before_ns)
+            .await?
+            .map(|acquisitions| AtomicAcquisitionResult {
+                acquisitions,
+                stale_tokens_removed: 0,
+            }))
     }
 
     /// Roll back one completed atomic acquisition when supported.
@@ -118,6 +145,21 @@ pub trait PathLockProvider: Send + Sync {
         owner_id: &str,
         time_ns: u128,
     ) -> PathLockResult<bool>;
+
+    /// Refresh one lease, preserving per-path results and input order.
+    /// One failed path must not prevent refreshing the remaining paths.
+    async fn refresh_tokens(
+        &self,
+        lock_paths: &[String],
+        owner_id: &str,
+        time_ns: u128,
+    ) -> Vec<PathLockResult<bool>> {
+        let mut results = Vec::with_capacity(lock_paths.len());
+        for path in lock_paths {
+            results.push(self.refresh_token(path, owner_id, time_ns).await);
+        }
+        results
+    }
 
     /// Remove the token at `lock_path` if owned by `owner_id`.
     /// `force` bypasses storage CAS after the ownership check.

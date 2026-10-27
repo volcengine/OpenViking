@@ -1422,7 +1422,8 @@ Redis 命名空间。
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | `filesystem`、`memory` 或 `cache`；`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`、`memory`、`sqlite` 或 `cache`；`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `sqlite_path` | str / null | 本地共享锁数据库的绝对路径，使用 `sqlite` 时必填。见 [SQLite 配置](../configuration/01-server.md#storage) | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
 | `lock_timeout_secs` | float | 已废弃且忽略；运行时等待超时固定为 `0.0` | `0.0` |
 

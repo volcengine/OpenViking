@@ -28,10 +28,12 @@ use super::types::{
 /// Configuration for the PathLockManager.
 #[derive(Debug, Clone)]
 pub struct PathLockConfig {
-    /// Built-in provider name: `filesystem`, `memory`, or `cache`.
+    /// Built-in provider name: `filesystem`, `memory`, `sqlite`, or `cache`.
     pub provider: String,
-    /// OpenViking instance name used by the cache-backed provider.
+    /// OpenViking instance name used by the SQLite/cache-backed provider.
     pub service_name: Option<String>,
+    /// Absolute local database file shared by SQLite lock participants.
+    pub sqlite_path: Option<String>,
     /// Default wait timeout for auto-acquired locks.
     pub lock_timeout_secs: f64,
     /// Seconds after which a lock token is considered stale.
@@ -43,6 +45,7 @@ impl Default for PathLockConfig {
         Self {
             provider: "filesystem".to_string(),
             service_name: None,
+            sqlite_path: None,
             lock_timeout_secs: 0.0,
             lock_expire_secs: 30.0,
         }
@@ -524,11 +527,11 @@ impl PathLockManager {
                     let pending_handoff = entry.pending_handoff;
                     let mut any_ok = false;
                     let mut released_handoff_paths = Vec::new();
-                    for lp in &lock_paths {
-                        match refresh_provider
-                            .refresh_token(lp, &owner.owner_id, now_ns)
-                            .await
-                        {
+                    let refresh_results = refresh_provider
+                        .refresh_tokens(&lock_paths, &owner.owner_id, now_ns)
+                        .await;
+                    for (lp, result) in lock_paths.iter().zip(refresh_results) {
+                        match result {
                             Ok(true) => {
                                 any_ok = true;
                                 debug!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatically refreshed");
@@ -1011,7 +1014,7 @@ impl PathLockManager {
         let now_ns = Self::now_ns();
         match self
             .provider
-            .try_acquire_batch_atomic(
+            .try_acquire_batch_atomic_with_stats(
                 requests,
                 owner_id,
                 now_ns,
@@ -1019,7 +1022,12 @@ impl PathLockManager {
             )
             .await
         {
-            Ok(Some(acquisitions)) => return Ok(acquisitions),
+            Ok(Some(result)) => {
+                if result.stale_tokens_removed != 0 {
+                    self.metrics.write().await.stale_tokens_removed += result.stale_tokens_removed;
+                }
+                return Ok(result.acquisitions);
+            }
             Ok(None) => {}
             Err(error) => return Err(error),
         }
@@ -1373,12 +1381,12 @@ impl PathLockManager {
         let mut all_ok = true;
         let mut any_ok = false;
 
-        for lp in &lock_paths {
-            match self
-                .provider
-                .refresh_token(lp, &owner.owner_id, now_ns)
-                .await
-            {
+        for result in self
+            .provider
+            .refresh_tokens(&lock_paths, &owner.owner_id, now_ns)
+            .await
+        {
+            match result {
                 Ok(true) => any_ok = true,
                 Ok(false) => all_ok = false,
                 Err(_) => all_ok = false,
