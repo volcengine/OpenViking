@@ -243,6 +243,20 @@ async fn build_stack_with_mountable_and_runtime(
             let path = path.to_string();
             let namespace = namespace.to_string();
             let provider = tokio::task::spawn_blocking(move || {
+                let database = std::path::Path::new(&path);
+                if !database.is_absolute() || namespace.trim().is_empty() {
+                    return Err(crate::lock::types::PathLockError::InvalidRequest(
+                        "SQLite PathLock requires an absolute sqlite_path and nonempty service_name"
+                            .to_string(),
+                    ));
+                }
+                if let Some(parent) = database.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| {
+                        crate::lock::types::PathLockError::Io(format!(
+                            "failed to create SQLite PathLock parent directory: {error}"
+                        ))
+                    })?;
+                }
                 SQLitePathLockProvider::new(&path, &namespace)
             })
             .await

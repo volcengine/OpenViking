@@ -316,6 +316,8 @@ For same-machine path locking on a local disk without recursive business-directo
 `{storage.workspace}/_system/pathlock/pathlock.db`, resolved to an absolute path
 from the final workspace when initializing the runtime binding. An explicit absolute
 `sqlite_path` takes precedence. The database parent directory is created automatically.
+Omitting `sqlite_path` or setting it to `null` also uses this default when constructing
+`RAGFSBindingClient(config_path=..., config={"service_name": ...})` directly.
 Every participating process must access the same actual local database file,
 with the same top-level `service_name` and lock expiry setting. Containers on the
 same host must share that local file; identical paths in separate container

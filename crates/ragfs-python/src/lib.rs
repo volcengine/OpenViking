@@ -447,7 +447,31 @@ fn pathlock_config_from_canonical_ov_conf(
         .and_then(|storage| storage.get("agfs"))
         .and_then(|agfs| agfs.get("pathlock"));
     match pathlock {
-        Some(pathlock) => pathlock_config_from_value(pathlock, service_name),
+        Some(pathlock) => {
+            let mut pathlock = pathlock.clone();
+            if pathlock.get("provider").and_then(serde_json::Value::as_str) == Some("sqlite")
+                && pathlock
+                    .get("sqlite_path")
+                    .is_none_or(serde_json::Value::is_null)
+            {
+                let workspace = json
+                    .get("storage")
+                    .and_then(|storage| storage.get("workspace"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|workspace| !workspace.is_empty())
+                    .ok_or_else(|| {
+                        "storage.workspace is required for the default SQLite lock database"
+                            .to_string()
+                    })?;
+                // The workspace may not exist yet. Resolve relative paths against
+                // the process working directory without requiring existing parents.
+                let database = std::path::absolute(workspace)
+                    .map_err(|error| format!("failed to resolve storage.workspace: {error}"))?
+                    .join("_system/pathlock/pathlock.db");
+                pathlock["sqlite_path"] = serde_json::json!(database);
+            }
+            pathlock_config_from_value(&pathlock, service_name)
+        }
         None => Ok(PathLockConfig::default()),
     }
 }
@@ -3435,6 +3459,144 @@ mod tests {
         .unwrap();
 
         assert_eq!(pathlock.service_name.as_deref(), Some("prod-a"));
+    }
+
+    #[test]
+    fn constructor_sqlite_config_path_resolves_defaults_and_creates_parent() {
+        let root = std::env::temp_dir().join(format!(
+            "openviking-sqlite-config-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        Python::initialize();
+        Python::attach(|py| {
+            for mode in ["omitted", "null", "explicit"] {
+                let workspace = root.join(mode).join("workspace");
+                let database = if mode == "explicit" {
+                    root.join(mode).join("custom").join("locks.db")
+                } else {
+                    workspace.join("_system/pathlock/pathlock.db")
+                };
+                let mut pathlock = serde_json::json!({"provider": "sqlite"});
+                if mode == "null" {
+                    pathlock["sqlite_path"] = serde_json::Value::Null;
+                } else if mode == "explicit" {
+                    pathlock["sqlite_path"] = serde_json::json!(database);
+                }
+                let path = root.join(format!("{mode}.json"));
+                fs::write(
+                    &path,
+                    serde_json::json!({
+                        "storage": {
+                            "workspace": workspace,
+                            "agfs": {"pathlock": pathlock}
+                        }
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+                assert!(!database.parent().unwrap().exists());
+                let config = PyDict::new(py);
+                config.set_item("service_name", "local-a").unwrap();
+                let kwargs = PyDict::new(py);
+                kwargs
+                    .set_item("config_path", path.to_str().unwrap())
+                    .unwrap();
+                kwargs.set_item("config", config).unwrap();
+                let ty = py.get_type::<RAGFSBindingClient>();
+                let first = ty.call((), Some(&kwargs)).unwrap();
+                let second = ty.call((), Some(&kwargs)).unwrap();
+                assert!(database.is_file());
+                if mode == "explicit" {
+                    assert!(!workspace.join("_system/pathlock/pathlock.db").exists());
+                }
+                let first = first.extract::<PyRef<'_, RAGFSBindingClient>>().unwrap();
+                let second = second.extract::<PyRef<'_, RAGFSBindingClient>>().unwrap();
+                let lease = first
+                    .rt
+                    .block_on(first.pathlock_manager.acquire_tree(
+                        "/missing",
+                        std::time::Duration::ZERO,
+                        None,
+                    ))
+                    .unwrap();
+                assert!(second
+                    .rt
+                    .block_on(second.pathlock_manager.acquire_exact(
+                        "/missing/child",
+                        std::time::Duration::ZERO,
+                        None,
+                    ))
+                    .is_err());
+                first
+                    .rt
+                    .block_on(first.pathlock_manager.release(&lease))
+                    .unwrap();
+                let lease = second
+                    .rt
+                    .block_on(second.pathlock_manager.acquire_exact(
+                        "/missing/child",
+                        std::time::Duration::ZERO,
+                        None,
+                    ))
+                    .unwrap();
+                second
+                    .rt
+                    .block_on(second.pathlock_manager.release(&lease))
+                    .unwrap();
+            }
+        });
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn canonical_sqlite_default_requires_workspace_and_preserves_explicit_path() {
+        for pathlock in [
+            serde_json::json!({"provider": "sqlite"}),
+            serde_json::json!({"provider": "sqlite", "sqlite_path": null}),
+        ] {
+            let json = serde_json::json!({
+                "storage": {"workspace": "relative/workspace", "agfs": {"pathlock": pathlock}}
+            });
+            let config = pathlock_config_from_canonical_ov_conf(&json, "local-a").unwrap();
+            let expected = std::path::absolute("relative/workspace")
+                .unwrap()
+                .join("_system/pathlock/pathlock.db");
+            assert_eq!(config.sqlite_path.as_deref(), expected.to_str());
+            assert_eq!(config.service_name.as_deref(), Some("local-a"));
+        }
+        for workspace in [
+            serde_json::Value::Null,
+            serde_json::json!(""),
+            serde_json::json!(42),
+        ] {
+            let json = serde_json::json!({
+                "storage": {"workspace": workspace, "agfs": {"pathlock": {"provider": "sqlite"}}}
+            });
+            let error = pathlock_config_from_canonical_ov_conf(&json, "local-a").unwrap_err();
+            assert!(error.contains("storage.workspace"), "{error}");
+        }
+        let path = std::env::temp_dir().join("explicit-pathlock.db");
+        let json = serde_json::json!({
+            "storage": {"agfs": {"pathlock": {"provider": "sqlite", "sqlite_path": path}}}
+        });
+        assert_eq!(
+            pathlock_config_from_canonical_ov_conf(&json, "local-a")
+                .unwrap()
+                .sqlite_path
+                .as_deref(),
+            path.to_str()
+        );
+        assert_eq!(
+            pathlock_config_from_canonical_ov_conf(&serde_json::json!({}), "local-a")
+                .unwrap()
+                .provider,
+            "filesystem"
+        );
     }
 
     #[test]

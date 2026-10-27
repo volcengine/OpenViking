@@ -308,6 +308,8 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 `{storage.workspace}/_system/pathlock/pathlock.db`，初始化运行时 binding 时
 根据最终 workspace 解析为绝对路径。显式指定的绝对路径 `sqlite_path` 优先，
 数据库父目录会自动创建。
+直接通过 `RAGFSBindingClient(config_path=..., config={"service_name": ...})` 构造时，
+省略 `sqlite_path` 或将其设为 `null` 也会使用上述默认路径。
 所有参与进程必须访问同一个实际的本地数据库文件，并使用相同的顶层 `service_name` 和锁过期配置。
 同一主机上的容器必须共享该本地文件；不同容器文件系统中相同的路径字符串指向独立数据库，
 不能互相协调路径锁。
