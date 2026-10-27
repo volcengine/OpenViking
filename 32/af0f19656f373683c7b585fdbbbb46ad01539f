@@ -1,0 +1,18 @@
+openviking/server/mcp_endpoint.py
+  h_b34c679d17e2ac 1437,1492-1498
+openviking/storage/content_write.py
+  h_b34c679d17e2ac 157-158,1930-1931,2152,2155-2157,2331,2396,2399,2401,2408-2409,2415,2548,2709
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "32af0f19656f373683c7b585fdbbbb46ad01539f",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
