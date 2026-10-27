@@ -388,7 +388,10 @@ export async function replayPending(fetchJSON, log, options = {}) {
     return { replayed: 0, failed: 0, skipped: 0, deferred: 0 };
   }
 
-  const replayLimit = getReplayLimit();
+  // A host may say how much replay it can afford inside its own budget:
+  // how many entries, and how long the replay may take.
+  const replayLimit = Number(options.limit) > 0 ? Number(options.limit) : getReplayLimit();
+  const replayDeadlineMs = Number(options.timeoutMs) > 0 ? Date.now() + Number(options.timeoutMs) : 0;
   log("pending-queue", { count: pending.length, replayLimit, action: "replay-start" });
 
   let replayed = 0;
@@ -399,6 +402,13 @@ export async function replayPending(fetchJSON, log, options = {}) {
 
   for (const { filename, entry } of pending) {
     if (processed >= replayLimit) {
+      deferred++;
+      continue;
+    }
+    // A slow server can make every entry expensive, and the session start has
+    // a budget of its own. Leave the rest for the next attempt instead of
+    // spending the whole budget on the queue.
+    if (replayDeadlineMs && Date.now() >= replayDeadlineMs) {
       deferred++;
       continue;
     }

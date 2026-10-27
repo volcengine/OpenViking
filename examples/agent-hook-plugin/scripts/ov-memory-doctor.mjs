@@ -81,6 +81,18 @@ const CLIENTS = {
       ? join(homedir(), "Library", "Application Support", "Trae CN", "User", "mcp.json")
       : join(homedir(), ".trae-cn", "mcp.json")),
   },
+  mcode: {
+    cliName: "mcode",
+    launcherHint: "MiniMax Code",
+    // MiniMax Code installs a local plugin package, so the hook document and
+    // the MCP entry live inside the package rather than in a host config file.
+    hooks: () => join(homedir(), ".minimax", "plugins", "openviking-memory", "hooks", "hooks.json"),
+    mcp: () => join(homedir(), ".minimax", "plugins", "openviking-memory", "servers.mcp.json"),
+    extras: () => [
+      join(homedir(), ".minimax", "plugins", "openviking-memory", "skills", "openviking-memory", "SKILL.md"),
+      join(homedir(), ".minimax", "plugins", "openviking-memory", "skills", "openviking-skills", "SKILL.md"),
+    ],
+  },
   zcode: {
     cliName: "zcode",
     launcherHint: "ZCode",
@@ -138,7 +150,12 @@ function checkInstall(report) {
   else {
     const text = JSON.stringify(hooks.data);
     const events = Object.keys(hooks.data.hooks?.events || hooks.data.hooks || {});
-    if (!text.includes("OPENVIKING_INTEGRATION_ID")) report.fail(`${homeShort(hooksPath)} has no OpenViking hooks`, `events present: ${events.join(", ") || "(none)"}`, `re-run the installer with --harness ${CLIENT}`);
+    const marker = CLIENT === "mcode"
+      // A plugin package is not rewritten by the installer, so it carries no
+      // integration marker; the hook commands are the evidence instead.
+      ? "scripts/hook.mjs"
+      : "OPENVIKING_INTEGRATION_ID";
+    if (!text.includes(marker)) report.fail(`${homeShort(hooksPath)} has no OpenViking hooks`, `events present: ${events.join(", ") || "(none)"}`, `re-run the installer with --harness ${CLIENT}`);
     else {
       report.ok(`hooks in ${homeShort(hooksPath)}: ${events.join(", ")}`);
       if (!text.includes("scripts/hook.mjs")) report.warn("the installed hook commands do not name scripts/hook.mjs", "they were written by an older installer", "re-run the installer");
@@ -159,7 +176,12 @@ function checkInstall(report) {
   else {
     report.ok(`MCP server 'openviking' in ${homeShort(mcpPath)}`);
     const proxy = Array.isArray(server.args) ? server.args.find((arg) => String(arg).endsWith("mcp-proxy.mjs")) : "";
-    if (proxy && !existsPath(proxy)) report.fail("the MCP server points at a proxy that is not on disk", proxy, "re-run the installer");
+    // A plugin package resolves a relative MCP argument against the package
+    // root, not against the directory the doctor happens to run in.
+    const proxyPath = proxy && CLIENT === "mcode"
+      ? join(homedir(), ".minimax", "plugins", "openviking-memory", proxy)
+      : proxy;
+    if (proxyPath && !existsPath(proxyPath)) report.fail("the MCP server points at a proxy that is not on disk", proxyPath, "re-run the installer");
     if (server.env?.OPENVIKING_HOOK_SOURCE && server.env.OPENVIKING_HOOK_SOURCE !== CLIENT) {
       report.warn(`the MCP server is tagged for ${server.env.OPENVIKING_HOOK_SOURCE}`, `this copy serves ${CLIENT}; the proxy reads its configuration under the tagged client`, "re-run the installer");
     }

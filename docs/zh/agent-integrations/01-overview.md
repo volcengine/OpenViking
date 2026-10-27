@@ -6,6 +6,7 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 
 | 你在用… | 选这个 |
 |---------|---------|
+| **MiniMax Code** | [MiniMax Code 记忆集成](./17-minimax-code) | 本地插件包，hook 负责自动召回与捕获，MCP 暴露记忆工具 |
 | **Claude Code** | [Claude Code 记忆插件](./02-claude-code.md) — 通过 hooks 实现自动召回与自动捕获 |
 | **OpenClaw** | [OpenClaw 插件](./03-openclaw.md) — 全生命周期一体化集成 |
 | **Codex / TraeCode CLI 2.0** | [Codex 记忆插件](./04-codex.md) — 生命周期 hooks 自动召回与增量捕获 |

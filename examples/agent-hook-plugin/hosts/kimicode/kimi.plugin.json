@@ -1,6 +1,6 @@
 {
   "name": "openviking-memory",
-  "version": "0.5.25",
+  "version": "0.5.26",
   "description": "Long-term semantic memory for Kimi Code CLI, powered by OpenViking.",
   "author": {
     "name": "OpenViking",
@@ -8,7 +8,12 @@
   },
   "homepage": "https://github.com/volcengine/OpenViking",
   "license": "Apache-2.0",
-  "keywords": ["memory", "openviking", "kimi-code", "long-term-memory"],
+  "keywords": [
+    "memory",
+    "openviking",
+    "kimi-code",
+    "long-term-memory"
+  ],
   "interface": {
     "displayName": "OpenViking Memory",
     "shortDescription": "Recall and capture long-term memory through OpenViking"
@@ -16,7 +21,9 @@
   "mcpServers": {
     "openviking": {
       "command": "node",
-      "args": ["./agent-integrations/kimicode/servers/mcp-proxy.mjs"],
+      "args": [
+        "./agent-integrations/kimicode/servers/mcp-proxy.mjs"
+      ],
       "env": {
         "OPENVIKING_HOOK_SOURCE": "kimicode"
       }

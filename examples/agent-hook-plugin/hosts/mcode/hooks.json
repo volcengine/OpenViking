@@ -1,0 +1,82 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs SessionStart __OPENVIKING_CLIENT_ID__",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs UserPromptSubmit __OPENVIKING_CLIENT_ID__",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "read|glob|grep|write|edit|bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/uri-guard.mjs __OPENVIKING_CLIENT_ID__",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs Stop __OPENVIKING_CLIENT_ID__",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs PreCompact __OPENVIKING_CLIENT_ID__",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs SessionEnd __OPENVIKING_CLIENT_ID__",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs SubagentStop __OPENVIKING_CLIENT_ID__",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -6,6 +6,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 
 | If you use… | Use this |
 |-------------|----------|
+| **MiniMax Code** | [MiniMax Code memory integration](./17-minimax-code) | A local plugin package whose hooks recall and capture automatically, with the memory tools over MCP |
 | **Claude Code** | [Claude Code Memory Plugin](./02-claude-code.md) — auto-recall + auto-capture via hooks |
 | **OpenClaw** | [OpenClaw Plugin](./03-openclaw.md) — context-engine with full lifecycle integration |
 | **Codex / TraeCode CLI 2.0** | [Codex Memory Plugin](./04-codex.md) — lifecycle hooks for auto-recall and incremental capture |

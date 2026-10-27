@@ -40,6 +40,19 @@ curl -fsSL https://openviking.ai/install | bash
 
 实现细节与当前已验证的 ZCode 假设见插件目录中的 [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md)。
 
+## MiniMax Code 记忆集成
+
+来源：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+MiniMax Code 集成通过生命周期 hook 与一个 OpenViking MCP server，提供跨项目、跨会话的记忆：
+
+- **SessionStart** 注入用户档案。
+- **UserPromptSubmit** 召回相关记忆。
+- **Stop** 在脱离的 worker 中捕获尚未发送的对话轮次，然后提交 OpenViking 会话。
+- **PreCompact** 在压缩前捕获并提交。
+- **SessionEnd** 收尾提交。
+- **PreToolUse** 把直接的 `viking://` 读取改道到 MCP 工具。
+
 ## Kimi Code 记忆集成
 
 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)

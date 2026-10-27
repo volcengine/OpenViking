@@ -1,0 +1,6 @@
+{
+  "client": "mcode",
+  "host": "MiniMax Code",
+  "hooks": "hooks/hooks.json",
+  "note": "MiniMax Code loads a local plugin package, so the hook document is shipped inside the package rather than written into a host configuration file."
+}

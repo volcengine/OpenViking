@@ -265,6 +265,7 @@ export const HARNESS_KEYS = {
   codebuddy: "codebuddy",
   codex: "codex",
   cursor: "cursor",
+  mcode: "mcode",
   kimicode: "kimicode",
   trae: "trae",
   traeCn: "trae_cn",

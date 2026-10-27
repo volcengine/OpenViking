@@ -40,6 +40,19 @@ After restarting ZCode, verify that:
 
 Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md).
 
+## MiniMax Code memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The MiniMax Code integration adds cross-project, cross-session memory through lifecycle hooks and an OpenViking MCP server:
+
+- **SessionStart** injects the user profile.
+- **UserPromptSubmit** recalls relevant memories.
+- **Stop** captures the unseen turns in a detached worker, then commits the OpenViking session.
+- **PreCompact** captures and commits before compaction.
+- **SessionEnd** commits what is left.
+- **PreToolUse** redirects direct `viking://` reads to the MCP tools.
+
 ## Kimi Code memory integration
 
 Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
