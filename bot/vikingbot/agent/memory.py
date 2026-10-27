@@ -379,8 +379,8 @@ class MemoryStore:
                         total_chars += full_chars
                         continue
                 elif use_type_budgets and memory_type == "preferences":
-                    preference_full_count += 1
                     if total_chars + full_chars <= max_chars:
+                        preference_full_count += 1
                         grouped_memories.setdefault(memory_type, []).append(full_memory_str)
                         total_chars += full_chars
                         continue
