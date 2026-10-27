@@ -1,0 +1,22 @@
+docs/en/api/01-overview.md
+  h_b34c679d17e2ac 597-598
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 143-188
+docs/zh/api/01-overview.md
+  h_b34c679d17e2ac 592-593
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 143-188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "295d6193b2760b48b939cf7fc9f8dcbbea694302",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
