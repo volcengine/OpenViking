@@ -1,5 +1,6 @@
 //! Redis-backed PathLock storage.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -18,6 +19,9 @@ const ROLLBACK_BATCH_ID: &str = "pathlock.rollback_batch.v1";
 const COMPARE_WRITE_ID: &str = "pathlock.compare_write.v1";
 const COMPARE_REMOVE_ID: &str = "pathlock.compare_remove.v1";
 const REFRESH_ID: &str = "pathlock.refresh.v1";
+const REFRESH_BATCH_ID: &str = "pathlock.refresh_batch.v1";
+// Bound each Lua execution so large leases do not monopolize Redis.
+const REFRESH_BATCH_SIZE: usize = 256;
 const IS_LOCKED_ID: &str = "pathlock.is_locked.v1";
 const SCAN_DESCENDANTS_ID: &str = "pathlock.scan_descendants.v1";
 const READ_MANY_ID: &str = "pathlock.read_many.v1";
@@ -357,6 +361,41 @@ return { "ok" }
 "#
 );
 
+const REFRESH_BATCH_SCRIPT: &str = token_script!(
+    r#"
+local owner = ARGV[1]
+local time_ns = ARGV[2]
+local ttl_ms = ARGV[3]
+if not normalize_decimal(time_ns) then
+    return { "invalid_request", "invalid time_ns" }
+end
+local results = {}
+local refreshed = false
+for index = 4, #ARGV do
+    local path = ARGV[index]
+    local raw = redis.call("HGET", KEYS[1], path)
+    if not raw then
+        table.insert(results, { "missing" })
+    else
+        local token = decode_token(raw)
+        if not token then
+            table.insert(results, { "invalid_token", raw })
+        elseif token.owner ~= owner then
+            table.insert(results, { "owner_mismatch" })
+        else
+            redis.call("HSET", KEYS[1], path, token.owner .. ":" .. time_ns .. ":" .. token.kind)
+            table.insert(results, { "ok" })
+            refreshed = true
+        end
+    end
+end
+if refreshed then
+    redis.call("PEXPIRE", KEYS[1], ttl_ms)
+end
+return results
+"#
+);
+
 const IS_LOCKED_SCRIPT: &str = token_script!(
     r#"
 local path = ARGV[1]
@@ -433,6 +472,7 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
     script!(COMPARE_WRITE_ID, COMPARE_WRITE_SCRIPT),
     script!(COMPARE_REMOVE_ID, COMPARE_REMOVE_SCRIPT),
     script!(REFRESH_ID, REFRESH_SCRIPT),
+    script!(REFRESH_BATCH_ID, REFRESH_BATCH_SCRIPT),
     script!(IS_LOCKED_ID, IS_LOCKED_SCRIPT),
     script!(SCAN_DESCENDANTS_ID, SCAN_DESCENDANTS_SCRIPT),
     script!(READ_MANY_ID, READ_MANY_SCRIPT),
@@ -617,6 +657,25 @@ impl RedisPathLockProvider {
     fn decode_token(path: &str, raw: &str) -> PathLockResult<LockToken> {
         LockTokenCodec::decode(raw)
             .map_err(|_| PathLockError::InvalidToken(format!("invalid token at '{path}': {raw}")))
+    }
+
+    /// Decode the shared single-token and batch per-path refresh response.
+    fn decode_refresh_result(lock_path: &str, values: &[ScriptValue]) -> PathLockResult<bool> {
+        let status = Self::result_status(values, "refresh")?;
+        match status {
+            "ok" if values.len() == 1 => Ok(true),
+            "missing" | "owner_mismatch" if values.len() == 1 => Ok(false),
+            "invalid_token" if values.len() == 2 => Err(PathLockError::InvalidToken(format!(
+                "invalid token at '{lock_path}': {}",
+                Self::result_string(&values[1], "refresh")?
+            ))),
+            "invalid_request" if values.len() == 2 => Err(PathLockError::InvalidRequest(
+                Self::result_string(&values[1], "refresh")?.to_string(),
+            )),
+            _ => Err(PathLockError::Internal(format!(
+                "Redis PathLock refresh returned invalid status '{status}'"
+            ))),
+        }
     }
 
     /// Decode a conflict or invalid-token script response.
@@ -950,21 +1009,67 @@ impl PathLockProvider for RedisPathLockProvider {
                 ],
             )
             .await?;
-        let status = Self::result_status(&values, "refresh")?;
-        match status {
-            "ok" if values.len() == 1 => Ok(true),
-            "missing" | "owner_mismatch" if values.len() == 1 => Ok(false),
-            "invalid_token" if values.len() == 2 => Err(PathLockError::InvalidToken(format!(
-                "invalid token at '{lock_path}': {}",
-                Self::result_string(&values[1], "refresh")?
-            ))),
-            "invalid_request" if values.len() == 2 => Err(PathLockError::InvalidRequest(
-                Self::result_string(&values[1], "refresh")?.to_string(),
-            )),
-            _ => Err(PathLockError::Internal(format!(
-                "Redis PathLock refresh returned invalid status '{status}'"
-            ))),
+        Self::decode_refresh_result(lock_path, &values)
+    }
+
+    /// Refresh each scope HASH in bounded batches while preserving input order.
+    async fn refresh_tokens(
+        &self,
+        lock_paths: &[String],
+        owner_id: &str,
+        time_ns: u128,
+    ) -> Vec<PathLockResult<bool>> {
+        let mut results: Vec<_> = lock_paths.iter().map(|_| Ok(false)).collect();
+        let mut groups: BTreeMap<String, Vec<(usize, &str)>> = BTreeMap::new();
+        for (index, path) in lock_paths.iter().enumerate() {
+            match self.tokens_key_for_path(path) {
+                Ok(key) => groups.entry(key).or_default().push((index, path)),
+                Err(error) => results[index] = Err(error),
+            }
         }
+        for (key, paths) in groups {
+            for batch in paths.chunks(REFRESH_BATCH_SIZE) {
+                let mut args = vec![
+                    Self::bytes(owner_id),
+                    Self::bytes(time_ns.to_string()),
+                    Self::bytes(self.hash_ttl_ms.to_string()),
+                ];
+                args.extend(batch.iter().map(|(_, path)| Self::bytes(*path)));
+                match self
+                    .execute_array(REFRESH_BATCH_ID, key.clone(), args)
+                    .await
+                {
+                    Ok(values) if values.len() == batch.len() => {
+                        for ((index, path), value) in batch.iter().zip(values) {
+                            results[*index] = match value {
+                                ScriptValue::Array(values) => {
+                                    Self::decode_refresh_result(path, &values)
+                                }
+                                other => Err(PathLockError::Internal(format!(
+                                    "Redis PathLock batch refresh returned non-array result: {other:?}"
+                                ))),
+                            };
+                        }
+                    }
+                    Ok(values) => {
+                        for (index, _) in batch {
+                            results[*index] = Err(PathLockError::Internal(format!(
+                                "Redis PathLock batch refresh returned {} results for {} paths",
+                                values.len(),
+                                batch.len()
+                            )));
+                        }
+                    }
+                    Err(error) => {
+                        for (index, _) in batch {
+                            results[*index] =
+                                Err(PathLockError::Io(format!("batch refresh failed: {error}")));
+                        }
+                    }
+                }
+            }
+        }
+        results
     }
 
     /// Remove one owned token using complete-token compare-and-remove.
@@ -1020,6 +1125,10 @@ impl PathLockProvider for RedisPathLockProvider {
         Ok(paths)
     }
 }
+
+#[cfg(test)]
+#[path = "cache_refresh_tests.rs"]
+mod refresh_tests;
 
 #[cfg(test)]
 mod tests {

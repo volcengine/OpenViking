@@ -119,6 +119,22 @@ pub trait PathLockProvider: Send + Sync {
         time_ns: u128,
     ) -> PathLockResult<bool>;
 
+    /// Refresh owned tokens, returning one result per input path in input order.
+    /// A failed path must not prevent the remaining paths from being refreshed.
+    /// Backends without batch support retain the single-token behavior.
+    async fn refresh_tokens(
+        &self,
+        lock_paths: &[String],
+        owner_id: &str,
+        time_ns: u128,
+    ) -> Vec<PathLockResult<bool>> {
+        let mut results = Vec::with_capacity(lock_paths.len());
+        for lock_path in lock_paths {
+            results.push(self.refresh_token(lock_path, owner_id, time_ns).await);
+        }
+        results
+    }
+
     /// Remove the token at `lock_path` if owned by `owner_id`.
     /// `force` bypasses storage CAS after the ownership check.
     /// Returns `true` if removed, `false` if not found or wrong owner.
@@ -311,6 +327,34 @@ mod tests {
     use crate::plugins::memfs::MemFileSystem;
 
     use super::*;
+
+    /// Verify the fallback reports each path and continues after a token error.
+    #[tokio::test]
+    async fn batch_refresh_fallback_preserves_per_path_results() {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        for (path, raw) in [
+            ("/data/bad", "not-a-token"),
+            ("/data/good", "owner:100:T"),
+            ("/data/foreign", "other:100:E"),
+        ] {
+            fs.write(path, raw.as_bytes(), 0, WriteFlag::Create)
+                .await
+                .unwrap();
+        }
+        let provider = FilesystemPathLockProvider::new(fs, 30.0);
+        let paths = ["bad", "good", "foreign", "missing"].map(|name| format!("/data/{name}"));
+        let results = provider.refresh_tokens(&paths, "owner", 200).await;
+        assert_eq!(results.len(), paths.len());
+        assert!(matches!(results[0], Err(PathLockError::InvalidToken(_))));
+        assert!(matches!(results[1], Ok(true)));
+        assert!(matches!(results[2], Ok(false)));
+        assert!(matches!(results[3], Ok(false)));
+        let token = provider.read_token(&paths[1]).await.unwrap().unwrap();
+        assert_eq!(token.time_ns, 200);
+        assert_eq!(token.lock_type, crate::lock::PathLockKind::Tree);
+        assert!(provider.refresh_tokens(&[], "owner", 200).await.is_empty());
+    }
 
     /// Verify legacy encrypted lock files are treated as removable upgrade leftovers.
     #[tokio::test]

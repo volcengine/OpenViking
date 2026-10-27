@@ -524,11 +524,11 @@ impl PathLockManager {
                     let pending_handoff = entry.pending_handoff;
                     let mut any_ok = false;
                     let mut released_handoff_paths = Vec::new();
-                    for lp in &lock_paths {
-                        match refresh_provider
-                            .refresh_token(lp, &owner.owner_id, now_ns)
-                            .await
-                        {
+                    let results = refresh_provider
+                        .refresh_tokens(&lock_paths, &owner.owner_id, now_ns)
+                        .await;
+                    for (lp, result) in lock_paths.iter().zip(results) {
+                        match result {
                             Ok(true) => {
                                 any_ok = true;
                                 debug!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatically refreshed");
@@ -1373,12 +1373,12 @@ impl PathLockManager {
         let mut all_ok = true;
         let mut any_ok = false;
 
-        for lp in &lock_paths {
-            match self
-                .provider
-                .refresh_token(lp, &owner.owner_id, now_ns)
-                .await
-            {
+        for result in self
+            .provider
+            .refresh_tokens(&lock_paths, &owner.owner_id, now_ns)
+            .await
+        {
+            match result {
                 Ok(true) => any_ok = true,
                 Ok(false) => all_ok = false,
                 Err(_) => all_ok = false,
