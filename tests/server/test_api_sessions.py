@@ -170,23 +170,6 @@ async def test_get_session(client: httpx.AsyncClient):
     assert body["result"]["uri"] == session_uri
 
 
-async def test_legacy_session_uri_alias_reads_current_user_session(client: httpx.AsyncClient):
-    session_id = "legacy-alias-read"
-    await client.post("/api/v1/sessions", json={"session_id": session_id})
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json=_message_request("user", content="legacy alias message"),
-    )
-
-    resp = await client.get(
-        "/api/v1/content/read",
-        params={"uri": f"viking://session/{session_id}/messages.jsonl"},
-    )
-
-    assert resp.status_code == 200
-    assert "legacy alias message" in resp.json()["result"]
-
-
 @pytest.mark.parametrize("artifact", ["empty", "recall_ledger", "meta"])
 async def test_add_message_repairs_session_directory_without_live_messages(
     client: httpx.AsyncClient,

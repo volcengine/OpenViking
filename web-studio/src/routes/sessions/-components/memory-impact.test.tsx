@@ -27,7 +27,7 @@ afterEach(cleanup)
 const diffs: SessionMemoryDiff[] = [
   {
     archiveId: 'archive-1',
-    archiveUri: 'viking://session/archive-1',
+    archiveUri: 'viking://user/default/sessions/archive-1',
     extractedAt: '2026-07-26T00:00:00Z',
     operations: [
       {
@@ -47,7 +47,7 @@ const diffs: SessionMemoryDiff[] = [
   },
   {
     archiveId: 'archive-2',
-    archiveUri: 'viking://session/archive-2',
+    archiveUri: 'viking://user/default/sessions/archive-2',
     extractedAt: '2026-07-26T01:00:00Z',
     operations: [
       {

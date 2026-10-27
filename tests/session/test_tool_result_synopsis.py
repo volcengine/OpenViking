@@ -27,7 +27,7 @@ def test_render_stub_preserves_navigation_contract():
 
     rendered = render_tool_result_stub(
         synopsis,
-        ref="viking://session/s1/tool-results/tr_123",
+        ref="viking://user/default/sessions/s1/tool-results/tr_123",
         tool_name="read_file",
         sha256="0123456789abcdef0123",
         reason="single_threshold",
@@ -40,7 +40,7 @@ def test_render_stub_preserves_navigation_contract():
     assert "tool_name: read_file" in rendered
     assert "original_chars: 120" in rendered
     assert "preview_chars: 80" in rendered
-    assert "ref: viking://session/s1/tool-results/tr_123" in rendered
+    assert "ref: viking://user/default/sessions/s1/tool-results/tr_123" in rendered
     assert "openviking_tool_result_search" in rendered
     assert "openviking_tool_result_read" in rendered
 

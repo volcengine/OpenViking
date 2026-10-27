@@ -55,7 +55,7 @@ from openviking.session.memory.memory_isolation_handler import MemoryIsolationHa
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry, get_default_registry
 from openviking.session.memory.patch_merge_context_provider import PatchMergeContextProvider
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
-from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.exceptions import NotFoundError, OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
 
@@ -3347,8 +3347,20 @@ async def test_legacy_cleanup_preserves_public_agent_directories(
 async def test_session_storage_uses_canonical_uri(
     admin_service: OpenVikingService,
 ):
-    """Canonical session URIs can read existing session storage."""
+    """Canonical session reads do not fall back to obsolete storage paths."""
     ctx = RequestContext(user=UserIdentifier("default", "admin_user"), role=Role.USER)
+    await _agfs_write(
+        admin_service,
+        "/local/default/user/admin_user/sessions/current-session/messages.jsonl",
+        '{"role":"user"}\n',
+    )
+    assert (
+        await admin_service.viking_fs.read_file(
+            "viking://user/admin_user/sessions/current-session/messages.jsonl",
+            ctx=ctx,
+        )
+        == '{"role":"user"}\n'
+    )
     await _agfs_write(
         admin_service,
         "/local/default/session/old-session/messages.jsonl",
@@ -3360,13 +3372,11 @@ async def test_session_storage_uses_canonical_uri(
         '{"created_by_user_id":"admin_user"}',
     )
 
-    assert (
+    with pytest.raises(NotFoundError):
         await admin_service.viking_fs.read_file(
             "viking://user/admin_user/sessions/old-session/messages.jsonl",
             ctx=ctx,
         )
-        == '{"role":"user"}\n'
-    )
 
 
 @pytest_asyncio.fixture(scope="function")

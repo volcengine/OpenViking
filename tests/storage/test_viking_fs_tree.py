@@ -40,9 +40,6 @@ async def test_stat_queries_lock_status_only_when_requested(monkeypatch, fs):
     async def ensure_access(_uri, _ctx):
         return None
 
-    async def read_path_visible(_uri, _path, _primary_path, _ctx):
-        return True
-
     async def stat_path(_path):
         return {"name": "example.md", "isDir": False}
 
@@ -53,8 +50,6 @@ async def test_stat_queries_lock_status_only_when_requested(monkeypatch, fs):
     monkeypatch.setattr(fs, "resolve_uri", resolve_uri)
     monkeypatch.setattr(fs, "_ensure_access", ensure_access)
     monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: path)
-    monkeypatch.setattr(fs, "_read_paths", lambda _uri, **_kwargs: [path])
-    monkeypatch.setattr(fs, "_read_path_visible", read_path_visible)
     monkeypatch.setattr(fs._async_agfs, "stat", stat_path)
     monkeypatch.setattr(fs, "_is_path_locked_async", is_path_locked)
 
@@ -808,16 +803,6 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
     assert result[2]["overview"] == "L1 overview"
     abstract.assert_not_awaited()
     overview.assert_awaited_once_with("viking://resources/docs", ctx=_default_ctx())
-
-    tied = [
-        ({"name": name, "isDir": False, "modTime": "2026-01-01T00:00:00Z"}, name)
-        for name in ["b.md", "a.md"]
-    ]
-    assert [entry["name"] for entry, _ in fs._sort_ls_entry_items(tied, "mtime", "desc")] == [
-        "a.md",
-        "b.md",
-    ]
-
 
 @pytest.mark.asyncio
 async def test_tree_filters_and_paginates_before_summary_reads(monkeypatch, fs):

@@ -252,8 +252,7 @@ viking://~/memories/
 `viking://~/sessions/{session_id}` 使用家目录别名，服务端会按认证身份将其展开为
 `viking://user/{user_id}/sessions/{session_id}`。无 uid 的写法
 `viking://user/sessions/{session_id}` 不再被接受，请求会报错并提示改用 `viking://~/...`。
-`viking://session/{session_id}` 仍会作为同一个 session 路径的向后兼容别名被接受，
-不是独立的存储根。
+旧 URI `viking://session/{session_id}` 也不再接受。
 
 ## 相关文档
 

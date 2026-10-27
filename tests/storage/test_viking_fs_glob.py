@@ -88,11 +88,7 @@ def fs(monkeypatch):
     monkeypatch.setattr(
         viking_fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources"
     )
-    monkeypatch.setattr(
-        viking_fs, "_read_paths", lambda _uri, **_kwargs: ["/local/test_account/resources"]
-    )
     monkeypatch.setattr(viking_fs, "_agfs_path_exists", lambda _path: _async_true())
-    monkeypatch.setattr(viking_fs, "_read_path_visible", lambda *_args, **_kwargs: _async_true())
     monkeypatch.setattr(
         viking_fs,
         "_path_to_uri",
@@ -816,7 +812,6 @@ async def test_glob_checks_access_before_listing(monkeypatch, fs):
 @pytest.mark.asyncio
 async def test_glob_preserves_request_uri_alias(monkeypatch, fs):
     monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/user")
-    monkeypatch.setattr(fs, "_read_paths", lambda _uri, **_kwargs: ["/local/test_account/user"])
     monkeypatch.setattr(
         fs, "_path_to_uri", lambda _path, **_kwargs: "viking://user/test_account/demo.md"
     )
@@ -844,7 +839,6 @@ async def test_glob_preserves_request_uri_alias(monkeypatch, fs):
 @pytest.mark.asyncio
 async def test_glob_preserves_root_uri(monkeypatch, fs):
     monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account")
-    monkeypatch.setattr(fs, "_read_paths", lambda _uri, **_kwargs: ["/local/test_account"])
     monkeypatch.setattr(
         fs, "_path_to_uri", lambda _path, **_kwargs: "viking://resources/should-not-leak.md"
     )
@@ -975,11 +969,6 @@ async def test_glob_preserves_canonical_session_uri(monkeypatch, fs):
     monkeypatch.setattr(
         fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/user/alice/sessions/sess_1"
     )
-    monkeypatch.setattr(
-        fs,
-        "_read_paths",
-        lambda _uri, **_kwargs: ["/local/test_account/user/alice/sessions/sess_1"],
-    )
 
     async def fake_glob_directory(path, pattern, **kwargs):
         return {
@@ -1009,17 +998,12 @@ async def test_glob_preserves_canonical_session_uri(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_glob_uses_path_to_uri_for_non_legacy_namespace(monkeypatch, fs):
-    """中文注释：非 legacy 命名空间必须回落到 _path_to_uri，避免错误沿用请求别名。"""
+async def test_glob_uses_path_to_uri_when_request_mapping_differs(monkeypatch, fs):
+    """Return the physical path's URI when the requested mapping differs."""
     monkeypatch.setattr(
         fs,
         "_uri_to_path",
         lambda _uri, **_kwargs: "/local/test_account/resources/actual-root",
-    )
-    monkeypatch.setattr(
-        fs,
-        "_read_paths",
-        lambda _uri, **_kwargs: ["/local/test_account/resources/actual-root"],
     )
     monkeypatch.setattr(
         fs,
