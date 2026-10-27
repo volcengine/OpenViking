@@ -192,7 +192,15 @@ def test_agfs_queuefs_validation_rejects_invalid_shapes(queuefs, match):
 
 
 def test_top_level_cache_provider_params_build_redis_binding_config():
-    assert OpenVikingConfig.from_dict({}).service_name == "openviking-server"
+    default_config = OpenVikingConfig.from_dict({})
+    assert default_config.service_name == "openviking-server"
+    assert default_config.reconcile_system_assets_on_startup is True
+    assert (
+        OpenVikingConfig.from_dict(
+            {"reconcile_system_assets_on_startup": False}
+        ).reconcile_system_assets_on_startup
+        is False
+    )
 
     config = OpenVikingConfig.from_dict(
         {

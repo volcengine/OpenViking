@@ -127,3 +127,24 @@ async def test_system_asset_sync_rejects_missing_packaged_root(tmp_path, monkeyp
                 role=Role.ADMIN,
             )
         )
+
+
+def test_system_asset_manifest_digest_is_stable_and_tracks_managed_assets(tmp_path):
+    compile_source = tmp_path / "compile/example-skills/demo/SKILL.md"
+    memory_source = tmp_path / "memory/memory_templates/builtin/profile.yaml"
+    compile_source.parent.mkdir(parents=True)
+    memory_source.parent.mkdir(parents=True)
+    compile_source.write_bytes(b"skill")
+    memory_source.write_bytes(b"profile")
+
+    first = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path).manifest_digest
+    second = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path).manifest_digest
+    assert first == second
+
+    compile_source.write_bytes(b"updated skill")
+    content_changed = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path).manifest_digest
+    assert content_changed != first
+
+    compile_source.rename(compile_source.with_name("RENAMED.md"))
+    path_changed = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path).manifest_digest
+    assert path_changed != content_changed

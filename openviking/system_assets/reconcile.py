@@ -3,13 +3,19 @@
 """Reconcile packaged system assets across all active accounts."""
 
 import asyncio
+import json
 from collections.abc import Collection
-from typing import Protocol
+from typing import Any, Protocol
 
+from openviking.pyagfs import AGFSNotFoundError, AsyncAGFSClient
+from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.server.account_stores.models import AccountSummary
 from openviking.server.identity import RequestContext, Role
 from openviking.system_assets.sync import SystemAssetSynchronizer
 from openviking_cli.session.user_id import UserIdentifier
+
+_SYSTEM_ASSET_MANIFEST_PATH = "/local/_system/system_assets_manifest.json"
+_RECONCILE_LOCK_TIMEOUT_SECONDS = 300.0
 
 
 class AccountLister(Protocol):
@@ -23,6 +29,7 @@ class SystemAssetReconciler:
         self,
         synchronizer: SystemAssetSynchronizer,
         account_lister: AccountLister,
+        agfs: AsyncAGFSClient,
         *,
         user_id: str,
         skip_account_ids: Collection[str] | None = None,
@@ -35,10 +42,29 @@ class SystemAssetReconciler:
             raise ValueError("max_concurrency must be positive")
         self._synchronizer = synchronizer
         self._account_lister = account_lister
+        self._agfs = agfs
         self._user_id = user_id
         self._skip_account_ids = frozenset(skip_account_ids or ())
         self._page_size = page_size
         self._semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def sync_if_changed(self) -> int:
+        digest = self._synchronizer.manifest_digest
+        if await self._read_manifest_digest() == digest:
+            return 0
+
+        lease = await self._agfs.pathlock_acquire_exact(
+            _SYSTEM_ASSET_MANIFEST_PATH,
+            timeout_secs=_RECONCILE_LOCK_TIMEOUT_SECONDS,
+        )
+        try:
+            if await self._read_manifest_digest() == digest:
+                return 0
+            synced_accounts = await self.sync_all()
+            await self._write_manifest_digest(digest, lease)
+            return synced_accounts
+        finally:
+            await self._agfs.pathlock_release(lease)
 
     async def sync_all(self) -> int:
         synced_accounts = 0
@@ -81,6 +107,35 @@ class SystemAssetReconciler:
             page += 1
         return synced_accounts
 
+    async def _read_manifest_digest(self) -> str | None:
+        fs_ctx = fs_ctx_from_agfs_path(_SYSTEM_ASSET_MANIFEST_PATH)
+        fs_ctx["bypass_cache"] = "true"
+        try:
+            result = await self._agfs.read(_SYSTEM_ASSET_MANIFEST_PATH, fs_ctx=fs_ctx)
+        except (AGFSNotFoundError, FileNotFoundError):
+            return None
+
+        raw = result if isinstance(result, bytes) else getattr(result, "content", result)
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        digest = payload.get("sha256") if isinstance(payload, dict) else None
+        return digest if isinstance(digest, str) else None
+
+    async def _write_manifest_digest(self, digest: str, lease: Any) -> None:
+        fs_ctx = _lease_fs_ctx(_SYSTEM_ASSET_MANIFEST_PATH, lease)
+        await self._agfs.ensure_parent_dirs(_SYSTEM_ASSET_MANIFEST_PATH, fs_ctx=fs_ctx)
+        payload = json.dumps({"sha256": digest}, sort_keys=True).encode("utf-8")
+        await self._agfs.write(
+            _SYSTEM_ASSET_MANIFEST_PATH,
+            payload,
+            fs_ctx=fs_ctx,
+            auto_pathlock=False,
+        )
+
     async def _sync_account(self, account: AccountSummary) -> int:
         account_id = account.get("account_id")
         if not account_id:
@@ -92,3 +147,13 @@ class SystemAssetReconciler:
                     role=Role(Role.ROOT),
                 )
             )
+
+
+def _lease_fs_ctx(path: str, lease: Any) -> dict[str, str]:
+    fs_ctx = fs_ctx_from_agfs_path(path)
+    lease_ref = getattr(lease, "lease_ref", None) or getattr(lease, "id", None)
+    if isinstance(lease, dict):
+        lease_ref = lease.get("lease_ref", lease_ref)
+    if isinstance(lease_ref, str) and lease_ref:
+        fs_ctx["lease_ref"] = lease_ref
+    return fs_ctx

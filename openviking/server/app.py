@@ -172,7 +172,7 @@ async def _initialize_runtime_state(
     await service.apply_agent_evolution_config()
     await _initialize_auth_plugin(app, service, config)
     manager = getattr(app.state, "api_key_manager", None)
-    if manager is not None:
+    if manager is not None and get_openviking_config().reconcile_system_assets_on_startup:
         account_count = await service.reconcile_system_assets(manager)
         logger.info("Reconciled system assets for %d active accounts", account_count)
     compile_scheduler = getattr(service, "compile_scheduler", None)
