@@ -16,6 +16,8 @@ OpenViking 的所有重要变更都将记录在此文件中。
     默认存储仍是 SQLite。
   - 新增 `X-OpenViking-Upstream-URL` 请求头，按 Base URL 从允许的上游中选择一个，
     见[按请求指定上游](../gateway/07-upstreams.md#upstream-url-header)。
+  - `session_ttl_seconds`（不低于 3600）取代 `session_ttl_days`，对话可以在一天内过期；
+    旧字段会被忽略并在启动时打印警告，升级时请改用新字段。
   - 无需修改配置的行为变化：独立网关 keep-alive 从 5 秒提高到 75 秒；
     绑定公网地址的网关在启动时遇到 OpenViking 不可达或返回 5xx 会等待并重试；
     空闲 SSE 流每 15 秒发送一条注释心跳；OpenViking 以 402 或 403 拒绝密钥的请求会被拒绝，

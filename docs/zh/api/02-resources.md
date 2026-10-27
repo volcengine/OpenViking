@@ -502,6 +502,11 @@ fmt.Println(result["task_id"])
 
 **CLI**
 
+`ov add-resource --wait` 只提交一次，再轮询任务，不设置整体等待期限。
+状态查询超时、网络错误及 HTTP 429/502/503/504 会重试；连续 10 次失败后
+退出并提供任务查询命令。Ctrl+C 仅停止等待，不取消任务，退出码为 130。
+完成后 CLI 结果保留 `task_id`。
+
 ```bash
 # 添加本地文件
 ov add-resource ./documents/guide.md --reason "User guide"

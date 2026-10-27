@@ -10,13 +10,16 @@ Published as [`@openviking/dsh-memory-plugin`](https://www.npmjs.com/package/@op
 
 ## Install
 
-DSH is covered by the unified memory-plugin installer, which asks which profile
-to install into (default `web`):
+DSH is covered by the unified memory-plugin installer:
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
+
+It installs into the npm `dsh`'s `web` profile; pass `--dsh-profile <name>`
+for another one. On macOS it also offers DeepSeek Harness Desktop as a separate
+harness, `dsh-desktop` (see [DeepSeek Harness Desktop](#deepseek-harness-desktop)).
 
 Or add the package to a profile directly:
 
@@ -33,10 +36,48 @@ tree's realpath rather than from the profile.
 It also needs `node examples/memory-plugin-shared/sync.mjs` run first: the
 `shared/` modules the bundle imports are generated, not committed.
 
+### DeepSeek Harness Desktop
+
+Desktop keeps its plugins in a reserved `desktop` profile under
+`${DSH_HOME:-$HOME/.dsh}/profiles/desktop`, separate from the CLI's profiles.
+The bundle runs there unchanged; only the way it gets installed differs.
+
+- **Plugins page** (macOS and Windows, manual): Plugins → Add plugin → enter
+  `@openviking/dsh-memory-plugin` → Install, then turn it on if its switch is
+  off. The page does not ask for OpenViking credentials, so write
+  `~/.openviking/ovcli.conf` yourself first. Uninstall from the same page. The page shows [`docs/DETAIL.md`](docs/DETAIL.md)
+  ([`DETAIL.zh.md`](docs/DETAIL.zh.md) in Chinese) as the plugin's detail
+  document, through `meta.detail` in `locale/*.json`.
+- **Installer** (macOS, needs Node.js): with Desktop present the installer
+  selects the `dsh-desktop` harness, and `--dsh-profile desktop` routes there
+  too. It uses Desktop's own launcher at `OPENVIKING_DSH_DESKTOP_CLI` when set,
+  otherwise the one in `/Applications` or `~/Applications`, otherwise a `dsh`
+  on `PATH` that resolves into the app.
+- **Desktop's launcher** (macOS). Open Desktop once so the profile exists, quit
+  it with ⌘Q (closing the window only hides it), run the command, then reopen
+  Desktop:
+
+  ```bash
+  DSH_DESKTOP="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
+  "$DSH_DESKTOP" plugin --profile desktop add @openviking/dsh-memory-plugin
+  "$DSH_DESKTOP" plugin --profile desktop ls    # should list the package
+  "$DSH_DESKTOP" plugin --profile desktop rm @openviking/dsh-memory-plugin
+  ```
+
+An npm-installed `dsh` refuses `--profile desktop`, and no `dsh` boots that
+profile or runs `--dump-config` on it, Desktop's own launcher included. To
+confirm an install, use `plugin --profile desktop ls` or check that
+`profiles/desktop/package.json` lists the package under `dsh.profile.bundles`.
+On Windows, install from the Plugins page and configure the connection in
+`~/.openviking/ovcli.conf`; the installer does not cover Windows. Desktop has
+no Linux release.
+
 ## Requirements
 
 - `@deepseek-ai/dsh` `0.1.0-rc.6` or later, below `1.0.0` (see [DSH version compatibility](#dsh-version-compatibility))
-- Node.js `^22.19.0` or `>=24`
+- Node.js `^22.19.0` or `>=24` for the bundle itself. The host decides in
+  practice: DSH `0.2.1-rc.2` and later need Node.js `>=24.9`, and Desktop ships
+  its own runtime, so it needs no system Node.js.
 - A reachable OpenViking server
 
 The bundle has no runtime npm dependencies. Its message structures come from
@@ -66,13 +107,20 @@ the plugin entry points of `@deepseek-ai/dsh-mcp-client` and
 releases tested so far.
 
 Verified releases: `0.1.0-rc.6`, `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.7-rc.2`,
-`0.2.0-rc.2`, and `0.2.1-alpha.1`. A daily job
+`0.2.0-rc.2`, `0.2.1-alpha.1`, `0.2.1-rc.2`, and `0.2.1-rc.3` (built from the
+same source tag as Desktop `0.2.1-rc.3`). A daily job
 (`.github/workflows/host-compat.yml`) runs the bundle's tests against the
 releases DSH's `latest`, `next`, and `alpha` dist-tags point at, installs each
-of those releases, adds the packed bundle to a profile and checks
+of those releases from npm, adds the packed bundle to a `web` profile and checks
 `--dump-config` lists it, and opens an issue when any of that fails, so a breaking release is usually caught before users
 reach it; if the bundle still fails to start on a new release, pin DSH to a
-verified one and open an issue. DSH 1.0 and later, pre-releases included, fall outside the
+verified one and open an issue. Every one of those checks uses npm `dsh` on
+Linux, because Desktop is not on npm and has no Linux build. A further smoke step
+emulates Desktop's launcher with the same release: it initializes a `desktop`
+profile the way Desktop's first launch does, adds the bundle through
+`runCli({ manageDesktopProfile: true })`, and checks that the profile lists it,
+that npm `dsh` still refuses that profile, and that no `dsh` dumps its config. Real Desktop builds are checked by
+hand. DSH 1.0 and later, pre-releases included, fall outside the
 range and DSH refuses to load the bundle; `dsh plugin allow-version` grants an exact-version
 exemption if you accept the risk. Local devDependencies and `overrides` stay
 pinned to rc.6 to exercise the minimum supported contract.
@@ -165,6 +213,10 @@ effect for the tools when DSH restarts the bundle, as it does for the runtime.
 Two consequences follow from the proxy being one process per profile:
 
 - **MCP actor scope is process-level.** With the default `recallPeerScope: all`, MCP tool calls omit the actor peer header. With `actor`, they use the peer resolved at boot. Automatic recall, capture, and commit resolve their peer from each session's workspace.
+  Desktop boots the bundle in its profile directory, which is no repository, so
+  there the boot peer is empty and `actor`-scoped tool calls fall back to broad
+  recall. Set `actor_peer_id` in `ovcli.conf` or `OPENVIKING_PEER_ID` to give
+  them a peer; either one also overrides the workspace peer of every session.
 - **`remember` is not session-scoped.** The server's MCP `remember` stores into
   its own short-lived session rather than the live `dsh-<session-id>` stream —
   the same behavior the Claude Code, Codex, and Cursor integrations have.
@@ -178,9 +230,17 @@ lifecycle registration, so a proxy that cannot start holds up nothing above it.
 `skills.mjs` registers a second `ctx.skills` provider with
 `includeDefaultRoots: false` and `bundledSkillDir` pointing at `skills/`. DSH
 reads this host-owned bundle directly rather than asking a workspace filesystem
-to resolve a path outside its root. Its existing `filesystem` provider still
-owns the project and user skill roots; the bundle does not duplicate that
-catalog or override higher-priority project skills.
+to resolve a path outside its root. The provider discovers no project or user
+roots, so the bundle does not duplicate that catalog or override
+higher-priority project skills. Those roots belong to DSH's own
+`skill-filesystem`: `dsh-base`'s host-level row in `headless`, `acp`, and
+`sdk`, whose app bundles keep it, and per-preset rows in `web` and `desktop`,
+where `dsh-web-app` disables the host row and the `standard`, `ptc`, and
+`cordis` agent presets each mount their own `skill-filesystem` and
+`tool-skill`. The bundle's provider registers at host level, which every
+preset reads, so those agents see the bundled skills. The `minimal` preset mounts no `tool-skill`, so its agents
+see no skills, these included, and `sdk-minimal` has no `skills` service, so the
+provider never starts there.
 
 ## Configuration
 
@@ -251,7 +311,7 @@ The older size settings apply to fallback recall, not the primary context reques
 - `skillCatalog` (default `true`) and `skillCatalogTokenBudget` (default `1200`; `0` also turns the catalog off) govern `<available-skills>`. The catalog comes from one `GET /api/v1/skills?node_limit=200` call: the user's own skills first, then those shared under `viking://agent/skills` minus any whose name the user also owns, each description cut to about 40 tokens. Its budget is separate from `profileTokenBudget`. When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit); when not even one name fits, it shrinks to a one-line count; with no skills, or a server without the endpoint, it is omitted.
 - Failed writes enter the shared OpenViking pending queue. A background drainer (default every 60s, `OPENVIKING_PENDING_DRAIN_INTERVAL_MS`) probes the server health and replays the queue in-process, so a transient write failure recovers without restarting dsh; it does not consume the session-start retry budget. Session-start replays keep consuming retries as before.
 - `tools/pre-execute` denies a DSH filesystem tool (`read`, `glob`, `grep`, `edit`, `write`, `str_replace_editor`) whose path argument is a `viking://` URI, pointing the model at the bridged `mcp__openviking__*` tools instead. A `write` or `edit` under a skill directory (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) points at `mcp__openviking__add_skill` instead, which creates or replaces a whole skill from its `SKILL.md` text. A `grep` whose pattern is `viking://` text still runs.
-- `tools/post-execute` lets a `bash` command that carries a `viking://` URI run unchanged and attaches a notice for the model: use the bridged tools if it meant OpenViking content, or ignore the notice when the URI is intentional data such as an `ov` argument or an HTTP payload.
+- `tools/post-execute` lets a `bash` command (`pwsh` on Windows, where DSH mounts it in place of `bash`) that carries a `viking://` URI run unchanged and attaches a notice for the model: use the bridged tools if it meant OpenViking content, or ignore the notice when the URI is intentional data such as an `ov` argument or an HTTP payload.
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking. IDs that contain Windows-invalid path characters are normalized to a readable underscore form plus a stable hash, so two native IDs cannot collapse onto the same OpenViking session; already-portable IDs keep their existing mapping. Existing sessions whose native IDs require normalization start a new OpenViking session after this upgrade. Workspace-derived actor peers are resolved per session and sent on every session-specific request: the peer is the git identity of the session's workspace — the normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), else the repository root path, that fallback keeping the older rule where every non-letter-or-digit character becomes `-`. With the default peer settings, no peer is sent outside a git repository, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. Memories written under the older path-derived peer stay reachable: the default `recallPeerScope: all` sweeps every peer under the user.
 

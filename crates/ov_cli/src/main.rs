@@ -4046,6 +4046,20 @@ async fn main() {
     };
 
     if let Err(e) = result {
+        if e.code() == "INTERRUPTED" {
+            if matches!(output_format, OutputFormat::Json) {
+                error_ui::print_runtime_error(
+                    &command_display,
+                    &e,
+                    output_format,
+                    compact,
+                    verbose_errors,
+                );
+            } else if let Error::Api { message, .. } = &e {
+                eprintln!("{message}");
+            }
+            std::process::exit(130);
+        }
         if !matches!(e, Error::AlreadyReported) {
             error_ui::print_runtime_error(
                 &command_display,

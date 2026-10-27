@@ -16,6 +16,9 @@ This changelog is automatically generated from [GitHub Releases](https://github.
     SQLite remains the default storage.
   - New `X-OpenViking-Upstream-URL` request header picks one of the allowed upstreams by its
     Base URL; see [Pick the upstream per request](../gateway/07-upstreams.md#upstream-url-header).
+  - `session_ttl_days` is replaced by `session_ttl_seconds` (at least 3600), so sessions can
+    expire in under a day. The old setting is ignored with a startup warning; set the new one
+    when upgrading.
   - Behavior changes with no configuration change: standalone keep-alive rises from 5 to 75
     seconds; a gateway bound to a public address waits and retries at startup while
     OpenViking is unreachable or returns 5xx; idle SSE streams carry a comment heartbeat every

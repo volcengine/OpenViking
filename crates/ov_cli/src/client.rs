@@ -916,7 +916,7 @@ impl HttpClient {
 
         // A declared Connector add_type sends the path verbatim as a remote
         // source; never interpret it as a local file to upload.
-        if add_type.is_none() && path_obj.exists() {
+        let submitted: Value = if add_type.is_none() && path_obj.exists() {
             if path_obj.is_dir() {
                 let source_name = path_obj
                     .file_name()
@@ -941,7 +941,7 @@ impl HttpClient {
                     "parent": effective_parent,
                     "reason": reason,
                     "instruction": instruction,
-                    "wait": wait,
+                    "wait": false,
                     "strict": strict,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
@@ -976,7 +976,7 @@ impl HttpClient {
                     "parent": effective_parent,
                     "reason": reason,
                     "instruction": instruction,
-                    "wait": wait,
+                    "wait": false,
                     "strict": strict,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
@@ -999,7 +999,7 @@ impl HttpClient {
                     "parent": effective_parent,
                     "reason": reason,
                     "instruction": instruction,
-                    "wait": wait,
+                    "wait": false,
                     "strict": strict,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
@@ -1020,7 +1020,7 @@ impl HttpClient {
                 "parent": effective_parent,
                 "reason": reason,
                 "instruction": instruction,
-                "wait": wait,
+                "wait": false,
                 "strict": strict,
                 "ignore_dirs": ignore_dirs,
                 "include": include,
@@ -1032,6 +1032,158 @@ impl HttpClient {
             }));
 
             self.post("/api/v1/resources", &body).await
+        }?;
+
+        if !wait {
+            return Ok(submitted);
+        }
+        let task_id = submitted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                Error::Client(
+                    "Import response has no task_id; cannot wait for completion. \
+                     Check 'ov task list' before submitting again."
+                        .to_string(),
+                )
+            })?;
+        self.wait_for_resource_task(
+            task_id,
+            tokio::signal::ctrl_c(),
+            std::time::Duration::from_secs(1),
+        )
+        .await
+    }
+
+    /// Wait without an overall deadline. Each status GET retains the ordinary
+    /// HTTP timeout. Consecutive observation failures are bounded, and retries
+    /// never resubmit the import.
+    async fn wait_for_resource_task(
+        &self,
+        task_id: &str,
+        interrupted: impl std::future::Future<Output = std::io::Result<()>>,
+        interval: std::time::Duration,
+    ) -> Result<Value> {
+        tokio::pin!(interrupted);
+        let observation_error = |error: Error| {
+            let code = Some(error.code().to_string());
+            let (message, details, status) = match error {
+                Error::Api {
+                    message,
+                    details,
+                    status,
+                    ..
+                } => (message, details, status),
+                other => (other.to_string(), None, None),
+            };
+            Error::Api {
+                code,
+                message: format!(
+                    "{message}; task continues on the server; check with: ov task status {task_id}"
+                ),
+                details: Some(json!({"task_id": task_id, "details": details})),
+                status,
+            }
+        };
+        let poll = async {
+            let mut retry_delay = interval;
+            let mut failures = 0;
+            loop {
+                let task = match self.get_task(task_id).await {
+                    Ok(task) => {
+                        retry_delay = interval;
+                        failures = 0;
+                        task
+                    }
+                    Err(err)
+                        if matches!(
+                            err,
+                            Error::Timeout(_)
+                                | Error::Network(_)
+                                | Error::Api {
+                                    status: Some(429 | 502 | 503 | 504),
+                                    ..
+                                }
+                        ) =>
+                    {
+                        failures += 1;
+                        if failures >= 10 {
+                            return Err(observation_error(err));
+                        }
+                        tokio::time::sleep(retry_delay).await;
+                        retry_delay = (retry_delay * 2).min(interval * 5);
+                        continue;
+                    }
+                    Err(err) => return Err(observation_error(err)),
+                };
+                match task.get("status").and_then(Value::as_str) {
+                    Some("completed") => {
+                        let mut result = task.get("result").cloned().ok_or_else(|| {
+                            observation_error(Error::Parse(format!(
+                                "Completed task {task_id} has no result"
+                            )))
+                        })?;
+                        if !result.is_object() {
+                            return Err(observation_error(Error::Parse(format!(
+                                "Completed task {task_id} has an invalid result"
+                            ))));
+                        }
+                        // Return the task result plus task_id for inspection.
+                        // The server's wait=true response omits this extra field.
+                        result["task_id"] = json!(task_id);
+                        return Ok(result);
+                    }
+                    Some("cancelled") => {
+                        // 服务端取消任务时会清空 result 和 error，需显式保留取消语义。
+                        return Err(Error::Api {
+                            code: Some("CANCELLED".into()),
+                            message: format!(
+                                "Task {task_id} cancelled; check with: ov task status {task_id}"
+                            ),
+                            details: Some(json!({"task_id": task_id, "status": "cancelled"})),
+                            status: None,
+                        });
+                    }
+                    Some("failed") => {
+                        let result = &task["result"];
+                        return Err(Error::Api {
+                            code: result["code"].as_str().map(str::to_string),
+                            message: format!(
+                                "Task {task_id} failed: {}",
+                                task["error"]
+                                    .as_str()
+                                    .unwrap_or("resource processing failed")
+                            ),
+                            details: Some(json!({
+                                "task_id": task_id,
+                                "status": "failed",
+                                "details": result.get("details"),
+                            })),
+                            status: None,
+                        });
+                    }
+                    Some("pending" | "running" | "cancelling") => {}
+                    _ => {
+                        return Err(observation_error(Error::Parse(format!(
+                            "Task {task_id} returned an invalid status"
+                        ))));
+                    }
+                }
+                tokio::time::sleep(interval).await;
+            }
+        };
+        tokio::select! {
+            result = poll => result,
+            signal = &mut interrupted => {
+                signal.map_err(|error| observation_error(Error::Io(error)))?;
+                Err(Error::Api {
+                    code: Some("INTERRUPTED".into()),
+                    message: format!("Stopped waiting. The server task was not cancelled. Check progress with: ov task status {task_id}"),
+                    details: Some(json!({"task_id": task_id})),
+                    status: None,
+                })
+            }
         }
     }
 
@@ -2111,6 +2263,9 @@ impl HttpClient {
         Ok(SnapshotShowResult::Metadata(result))
     }
 }
+
+#[cfg(test)]
+mod resource_wait_tests;
 
 #[cfg(test)]
 mod tests {

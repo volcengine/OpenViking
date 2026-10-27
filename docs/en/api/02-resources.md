@@ -503,6 +503,12 @@ fmt.Println(result["task_id"])
 
 **CLI**
 
+`ov add-resource --wait` submits once and polls the task without an overall
+deadline. Status-query timeouts, network errors, and HTTP 429/502/503/504
+retry; 10 consecutive failures exit with a task recovery command.
+Ctrl+C stops waiting without cancelling the task (exit 130).
+The completed CLI result retains `task_id`.
+
 ```bash
 # Add local file
 ov add-resource ./documents/guide.md --reason "User guide"

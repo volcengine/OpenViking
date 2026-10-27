@@ -484,7 +484,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Kimi Code | 统一安装器；Kimi Code 托管插件 | `kc-<id>` | 共享配置，`plugin.kimicode` |
 | CodeBuddy Code | 统一安装器，由其注册本地 marketplace | `cb-<id>` | 共享配置，`plugin.codebuddy` |
 | OpenCode | 统一安装器、npm（`@openviking/opencode-plugin`）或源码 | `oc-<id>`；子代理 `oc-<parent>__subagent-<child>` | 共享配置，`plugin.opencode` |
-| DSH | 统一安装器或 `dsh plugin add @openviking/dsh-memory-plugin` | `dsh-<id>` | 共享配置，`plugin.dsh`，然后是 Cordis patch |
+| DSH | 统一安装器、`dsh plugin add @openviking/dsh-memory-plugin` 或 Desktop 的插件页 | `dsh-<id>` | 共享配置，`plugin.dsh`，然后是 Cordis patch |
 | pi | 统一安装器，装入 pi 的扩展目录 | `pi-<id>` | 共享配置，`plugin.pi` |
 | OpenClaw | ClawHub、npm 安装器或离线包；之后运行 `openclaw openviking setup` | 会话 UUID，或会话 key 的 SHA-256 | `openclaw.json` 和少量环境变量 |
 | Hermes（内置） | 随 Hermes 发布；运行 `hermes memory setup openviking` | Hermes 自己的会话 ID | `.env`、关联的 `ovcli.conf` 和 Hermes `config.yaml` |
@@ -657,9 +657,9 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安装 **URI 
 
 - 监听 `agent/session-start`、`agent/pre-step`、`session/event`、`session/flush`、`tools/pre-execute` 和 `tools/post-execute`。
 - `ctx.provide("openvikingMemory")` 让其他 Cordis 插件可以在它之上构建功能。
-- 安装器默认使用 `web` profile，可以用 `--dsh-profile` 指定其他 profile。除 `dev` 外的所有模式都安装已发布的 npm 包。
+- 安装器默认使用 `web` profile，可以用 `--dsh-profile` 指定其他 profile。在 macOS 上，它还会把 DeepSeek Harness Desktop 的 `desktop` profile 作为单独的 harness `dsh-desktop`，通过 Desktop 自带的 `dsh` 命令安装（见 [DeepSeek Harness Desktop](./17-dsh.md#deepseek-harness-desktop)）。除 `dev` 外的所有模式都安装已发布的 npm 包。
 - 默认捕获工具结果（`captureToolResults: true`），所以 `ov-experience-memory` 能完整运行；关闭捕获后，只能检索和应用 Experience。
-- URI guard 先把工具名转成小写，在 `tools/pre-execute` 拒绝对 `viking://` 路径的文件工具调用，在 `tools/post-execute` 为包含这种路径的 `bash` 命令附加提示。
+- URI guard 先把工具名转成小写，在 `tools/pre-execute` 拒绝对 `viking://` 路径的文件工具调用，在 `tools/post-execute` 为包含这种路径的 `bash` 命令（Windows 上是 `pwsh` 命令）附加提示。
 - Cordis patch 中写明的凭据优先于其他所有来源；对行为配置来说，patch 是优先级最低的一层。
 
 <a id="pi-pi-coding-agent-extension"></a>

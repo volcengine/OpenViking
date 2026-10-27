@@ -128,7 +128,7 @@ helm upgrade --install gateway ./deploy/helm/openviking-gateway \
 
 默认使用单副本 SQLite、持久卷和 `Recreate` 更新策略。集群必须有默认 StorageClass，或配置 `persistence.storageClass`/`persistence.existingClaim`。设置 `persistence.enabled: false` 后，更换 Pod 会丢失 SQLite 状态，Helm NOTES 会显示警告。卸载会保留 PVC。扩容前必须把两个 provider 都改成 Redis，见[扩展](#scaling)。
 
-chart 设置了 `session_ttl_days: 7` 和 `response_ttl_seconds: 604800`，比网关 30 天的默认值短；需要其他值时覆盖 `config.*`。每个 Pod 请求 500m CPU 和 1Gi 内存，上限为 2 CPU 和 4Gi；可按负载设置 `resources`。
+chart 设置了 `session_ttl_seconds: 604800` 和 `response_ttl_seconds: 604800`，比网关 30 天的默认值短；需要其他值时覆盖 `config.*`。每个 Pod 请求 500m CPU 和 1Gi 内存，上限为 2 CPU 和 4Gi；可按负载设置 `resources`。
 
 独立 chart 的 `existingSecret` 接受 `management-key`、`redis-password` 和 `root-key`。前两项分别注入 `OPENVIKING_GATEWAY_MANAGEMENT_KEY` 和 `OPENVIKING_GATEWAY_REDIS_PASSWORD`；`config.storage.redis.password_env` 指向后者。local 和 KMS 加密把 `root-key` 只读挂载到 `/etc/openviking-gateway/keys/root-key`，并将 provider 的 `key_file` 指向它。安装前先按[加密](#encryption)生成密钥。上游凭证和 KMS AK/SK 在 `config` 中写 `$VAR`，通过 `extraEnv` 的 `secretKeyRef` 注入，不要将明文凭证写入 ConfigMap。
 

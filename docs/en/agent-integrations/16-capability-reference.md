@@ -485,7 +485,7 @@ The session ID prefix tells you which integration wrote a session on the server.
 | Kimi Code | Unified installer; managed Kimi Code plugin | `kc-<id>` | Shared settings, `plugin.kimicode` |
 | CodeBuddy Code | Unified installer, which registers a local marketplace | `cb-<id>` | Shared settings, `plugin.codebuddy` |
 | OpenCode | Unified installer, npm (`@openviking/opencode-plugin`), or source | `oc-<id>`; subagents `oc-<parent>__subagent-<child>` | Shared settings, `plugin.opencode` |
-| DSH | Unified installer or `dsh plugin add @openviking/dsh-memory-plugin` | `dsh-<id>` | Shared settings, `plugin.dsh`, then the Cordis patch |
+| DSH | Unified installer, `dsh plugin add @openviking/dsh-memory-plugin`, or Desktop's Plugins page | `dsh-<id>` | Shared settings, `plugin.dsh`, then the Cordis patch |
 | pi | Unified installer, into pi's extension directory | `pi-<id>` | Shared settings, `plugin.pi` |
 | OpenClaw | ClawHub, npm installer, or offline bundle; then `openclaw openviking setup` | The session UUID, or a SHA-256 of the session key | `openclaw.json` and a few environment variables |
 | Hermes (bundled) | Ships with Hermes; `hermes memory setup openviking` | Hermes's own session ID | `.env`, a linked `ovcli.conf`, and Hermes `config.yaml` |
@@ -658,9 +658,9 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 - It listens to `agent/session-start`, `agent/pre-step`, `session/event`, `session/flush`, `tools/pre-execute`, and `tools/post-execute`.
 - `ctx.provide("openvikingMemory")` lets other Cordis plugins build on it.
-- The installer uses the `web` profile unless `--dsh-profile` names another. Every mode except `dev` installs the published npm package.
+- The installer uses the `web` profile unless `--dsh-profile` names another. On macOS it installs into DeepSeek Harness Desktop's `desktop` profile as a separate harness, `dsh-desktop`, through Desktop's own `dsh` command ([DeepSeek Harness Desktop](./17-dsh.md#deepseek-harness-desktop)). Every mode except `dev` installs the published npm package.
 - Tool results are captured by default (`captureToolResults: true`), so `ov-experience-memory` runs its full loop; turning capture off leaves it able only to find and apply Experience.
-- The URI guard lowercases tool names, denies file tools on `viking://` paths in `tools/pre-execute`, and adds a notice to `bash` commands in `tools/post-execute`.
+- The URI guard lowercases tool names, denies file tools on `viking://` paths in `tools/pre-execute`, and adds a notice to `bash` commands, and to `pwsh` commands on Windows, in `tools/post-execute`.
 - Credentials named in the Cordis patch override every other source. For behavior settings the patch is the lowest layer.
 
 <a id="pi-pi-coding-agent-extension"></a>
