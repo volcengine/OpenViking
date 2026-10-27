@@ -412,6 +412,8 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 
 `readonly` 模式不会注册 `openviking_add_resource`。渠道设置 `ov_tools_enable: false` 时，该渠道不显示 OpenViking 工具，也不注入 Profile、Memory 和 Experience。
 
+`bot.tools.web.search.backend` 用于选择 `web_search` 后端。默认值 `auto` 在配置了对应密钥时依次使用 Tavily、Exa、Brave（`bot.tools.web.search.tavily_api_key`、`EXA_API_KEY`、`bot.tools.web.search.api_key`），否则使用 DuckDuckGo。设为 `brave`、`ddgs`、`exa`、`tavily` 或 `keenable` 可固定使用某一个后端。Keenable 仅在此处显式选择时使用；它无需 API 密钥，`KEENABLE_API_KEY` 仅用于提升其速率限制。
+
 ### 定时任务配置
 
 定时任务默认关闭。在 `ov.conf` 中设置 `bot.tools.cron.enabled` 为 `true`，即可开启：
