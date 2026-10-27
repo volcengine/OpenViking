@@ -32,6 +32,8 @@ class _FakeSession:
         return True
 
     async def resume_queued_commit(self, msg) -> bool:
+        if self._processed:
+            await self.load()
         root = get_root_observability_context()
         self._captured["account_id"] = root.account_id if root else None
         self._captured["user_id"] = root.user_id if root else None
