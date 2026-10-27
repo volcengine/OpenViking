@@ -658,6 +658,150 @@ async fn stale_cleanup_is_bounded_and_keeps_this_owners_tokens() {
         .is_empty());
 }
 
+#[tokio::test]
+async fn stale_conflicting_descendants_cannot_be_revived_after_tree_takeover() {
+    for root in ["/a", "/"] {
+        let dir = TempDir::new().unwrap();
+        let old = provider(&dir, "test");
+        let new = provider(&dir, "test");
+        let requests: Vec<_> = (0..300)
+            .map(|id| {
+                request(
+                    &format!("{}/child/{id:03}", root.trim_end_matches('/')),
+                    if id % 2 == 0 {
+                        PathLockKind::Exact
+                    } else {
+                        PathLockKind::Tree
+                    },
+                )
+            })
+            .collect();
+        old.try_acquire_batch_atomic(&requests, "old", 1, 0)
+            .await
+            .unwrap();
+        let result = new
+            .try_acquire_batch_atomic_with_stats(&[request(root, PathLockKind::Tree)], "new", 10, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        let paths: Vec<_> = requests
+            .iter()
+            .map(|request| request.path.clone())
+            .collect();
+        let refreshed = old.refresh_tokens(&paths, "old", 11).await;
+        assert!(
+            refreshed.iter().all(|result| matches!(result, Ok(false))),
+            "expired descendants must not revive under {root}: {refreshed:?}"
+        );
+        assert_eq!(result.stale_tokens_removed, 300);
+        assert!(!old.refresh_token(&paths[299], "old", 12).await.unwrap());
+        assert!(new.scan_descendant_locks(root).await.unwrap().is_empty());
+        assert_eq!(new.read_token(root).await.unwrap().unwrap().owner_id, "new");
+        assert!(matches!(
+            acquire(&old, &paths[299], PathLockKind::Exact, "old", 12, 2).await,
+            Err(PathLockError::Conflict {
+                kind: PathLockKind::Tree,
+                ..
+            })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn stale_target_and_ancestor_trees_are_cleaned_beyond_unrelated_budget() {
+    let dir = TempDir::new().unwrap();
+    let old = provider(&dir, "test");
+    let new = provider(&dir, "test");
+    let unrelated: Vec<_> = (0..300)
+        .map(|id| request(&format!("/unrelated/{id:03}"), PathLockKind::Exact))
+        .collect();
+    old.try_acquire_batch_atomic(&unrelated, "old", 0, 0)
+        .await
+        .unwrap();
+    let conflicting = [
+        request("/", PathLockKind::Tree),
+        request("/a", PathLockKind::Tree),
+        request("/a/b/c", PathLockKind::Exact),
+    ];
+    old.try_acquire_batch_atomic(&conflicting, "old", 1, 0)
+        .await
+        .unwrap();
+    acquire(&old, "/a/b", PathLockKind::Exact, "old", 1, 0)
+        .await
+        .unwrap();
+    // A separate namespace survives the cleanup.
+    let other = provider(&dir, "other");
+    acquire(&other, "/", PathLockKind::Tree, "old", 1, 0)
+        .await
+        .unwrap();
+    let result = new
+        .try_acquire_batch_atomic_with_stats(
+            &[request("/a/b/c", PathLockKind::Exact)],
+            "new",
+            10,
+            2,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.stale_tokens_removed, 259);
+    let paths: Vec<_> = conflicting
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert!(old
+        .refresh_tokens(&paths, "old", 11)
+        .await
+        .iter()
+        .all(|result| matches!(result, Ok(false))));
+    assert_eq!(
+        old.scan_descendant_locks("/unrelated").await.unwrap().len(),
+        44
+    );
+    assert!(old.refresh_token("/a/b", "old", 11).await.unwrap());
+    assert!(other.refresh_token("/", "old", 11).await.unwrap());
+}
+
+#[tokio::test]
+async fn failed_batch_restores_stale_conflicts_beyond_cleanup_budget() {
+    let dir = TempDir::new().unwrap();
+    let old = provider(&dir, "test");
+    let new = provider(&dir, "test");
+    let requests: Vec<_> = (0..300)
+        .map(|id| request(&format!("/a/{id:03}"), PathLockKind::Exact))
+        .collect();
+    old.try_acquire_batch_atomic(&requests, "old", 1, 0)
+        .await
+        .unwrap();
+    acquire(&old, "/live", PathLockKind::Exact, "live", 10, 0)
+        .await
+        .unwrap();
+    assert!(matches!(
+        new.try_acquire_batch_atomic_with_stats(
+            &[
+                request("/a", PathLockKind::Tree),
+                request("/live", PathLockKind::Exact),
+            ],
+            "new",
+            10,
+            2,
+        )
+        .await,
+        Err(PathLockError::Conflict { .. })
+    ));
+    assert!(new.read_token("/a").await.unwrap().is_none());
+    assert_eq!(old.scan_descendant_locks("/a").await.unwrap().len(), 300);
+    let paths: Vec<_> = requests
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert!(old
+        .refresh_tokens(&paths, "old", 11)
+        .await
+        .iter()
+        .all(|result| matches!(result, Ok(true))));
+}
+
 fn wait_for_file(path: &Path) {
     let start = Instant::now();
     while !path.exists() {

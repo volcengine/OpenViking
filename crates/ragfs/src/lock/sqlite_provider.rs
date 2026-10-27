@@ -260,18 +260,27 @@ impl PathLockProvider for SQLitePathLockProvider {
             let tx = conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(db_error)?;
-            // Reclaim dead owners incrementally; avoid unbounded crash residue without
-            // making one acquisition pay for an arbitrarily large cleanup.
+            let stale_before = timestamp(stale_before_ns);
+            // Opportunistic global cleanup is bounded. Conflicting stale records
+            // must also be removed completely below so their owners cannot revive
+            // them after a successful takeover.
             let mut stale_tokens_removed = tx
                 .execute(
                     "DELETE FROM pathlock_tokens WHERE (namespace,path) IN (
                  SELECT namespace,path FROM pathlock_tokens
                  WHERE namespace=?1 AND time_ns<?2 AND owner<>?3 LIMIT 256)",
-                    params![namespace, timestamp(stale_before_ns), owner],
+                    params![namespace, stale_before, owner],
                 )
                 .map_err(db_error)?;
             let mut changes = Vec::with_capacity(requests.len());
             for request in &requests {
+                stale_tokens_removed += tx
+                    .execute(
+                        "DELETE FROM pathlock_tokens
+                         WHERE namespace=?1 AND path=?2 AND owner<>?3 AND time_ns<?4",
+                        params![namespace, request.path, owner, stale_before],
+                    )
+                    .map_err(db_error)?;
                 let existing = read(&tx, namespace, &request.path)?;
                 if let Some(token) = &existing {
                     if token.owner_id != owner && token.time_ns >= stale_before_ns {
@@ -279,6 +288,14 @@ impl PathLockProvider for SQLitePathLockProvider {
                     }
                 }
                 for ancestor in ancestors(&request.path) {
+                    stale_tokens_removed += tx
+                        .execute(
+                            "DELETE FROM pathlock_tokens
+                             WHERE namespace=?1 AND path=?2 AND owner<>?3
+                             AND time_ns<?4 AND kind='T'",
+                            params![namespace, ancestor, owner, stale_before],
+                        )
+                        .map_err(db_error)?;
                     if let Some(token) = read(&tx, namespace, ancestor)? {
                         if token.lock_type == PathLockKind::Tree
                             && token.owner_id != owner
@@ -290,19 +307,20 @@ impl PathLockProvider for SQLitePathLockProvider {
                 }
                 if request.kind == PathLockKind::Tree {
                     let (lower, upper) = descendant_bounds(&request.path);
+                    stale_tokens_removed += tx
+                        .execute(
+                            "DELETE FROM pathlock_tokens
+                             WHERE namespace=?1 AND path>=?2 AND path<?3 AND path<>?4
+                             AND owner<>?5 AND time_ns<?6",
+                            params![namespace, lower, upper, request.path, owner, stale_before],
+                        )
+                        .map_err(db_error)?;
                     let found = tx
                         .query_row(
                             "SELECT path, owner, time_ns, kind FROM pathlock_tokens
                              WHERE namespace=?1 AND path>=?2 AND path<?3 AND path<>?4
                              AND owner<>?5 AND time_ns>=?6 LIMIT 1",
-                            params![
-                                namespace,
-                                lower,
-                                upper,
-                                request.path,
-                                owner,
-                                timestamp(stale_before_ns)
-                            ],
+                            params![namespace, lower, upper, request.path, owner, stale_before],
                             |row| {
                                 let path: String = row.get(0)?;
                                 Ok((
@@ -347,9 +365,7 @@ impl PathLockProvider for SQLitePathLockProvider {
                             AcquisitionChange::Reentrant
                         }
                     }
-                    previous => {
-                        // A stale target outside the bounded cleanup was replaced.
-                        stale_tokens_removed += usize::from(previous.is_some());
+                    _ => {
                         write(&tx, namespace, &request.path, &replacement)?;
                         AcquisitionChange::Created { replacement }
                     }

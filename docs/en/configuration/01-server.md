@@ -333,6 +333,13 @@ Lease heartbeats refresh owned paths in one SQLite transaction (bounded batches
 for large leases). `stale_locks_removed` includes tokens recovered by committed
 atomic SQLite/Redis acquisitions; failed transactions do not increment the count.
 
+SQLite acquisitions completely delete expired tokens belonging to other owners
+that conflict with the request: the target path, ancestor Tree locks, and all
+descendants of a requested Tree lock. Cleanup and acquisition share one transaction,
+so a previous owner cannot revive these tokens by refreshing them after takeover.
+Opportunistic global cleanup is limited to 256 tokens per acquisition; conflicting
+cleanup can exceed that limit and costs more for large expired subtrees.
+
 Do not place the database on EFS, NFS, or SMB. SQLite WAL requires participants
 on the same machine and is not supported on network filesystems; frequent lock
 updates also add synchronization I/O. If `storage.workspace` is on EFS, the
