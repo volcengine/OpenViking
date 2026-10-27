@@ -143,21 +143,10 @@ def test_session_uri_helpers_use_user_namespace():
     # hint pointing at the '~' home alias.
     with pytest.raises(NamespaceShapeError, match=re.escape("viking://~/sessions/s1")):
         resolve_request_uri("viking://user/sessions/s1", ctx)
-    assert (
-        resolve_request_uri("viking://session/s1", ctx)
-        == "viking://user/alice/sessions/s1"
-    )
-    assert (
-        resolve_request_uri(
-            "viking://session/s1/history/archive_001/messages.jsonl", ctx
-        )
-        == "viking://user/alice/sessions/s1/history/archive_001/messages.jsonl"
-    )
     assert is_session_uri("viking://user/alice/sessions/s1")
     assert not is_session_uri("viking://user/sessions/s1")
-    assert is_session_uri("viking://session/s1")
     roots = visible_roots(ctx)
-    assert "viking://session" not in roots
+    assert "viking://user/alice" in roots
     assert "viking://agent" in roots
 
 

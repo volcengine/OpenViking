@@ -351,7 +351,7 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 	}))
 	defer closeServer()
 
-	listPage, err := client.ListPage(context.Background(), "viking://session", &ListOptions{
+	listPage, err := client.ListPage(context.Background(), "viking://~/sessions", &ListOptions{
 		NodeLimit:       200,
 		Offset:          4,
 		Limit:           5,
@@ -370,9 +370,9 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 	if !listPage.HasMore || !reflect.DeepEqual(listPage.Result, entries) {
 		t.Fatalf("list page = %#v", listPage)
 	}
-	legacyList, err := client.List(context.Background(), "viking://session", nil)
-	if err != nil || !reflect.DeepEqual(legacyList, entries) {
-		t.Fatalf("list = %#v, err = %v", legacyList, err)
+	sessionList, err := client.List(context.Background(), "viking://~/sessions", nil)
+	if err != nil || !reflect.DeepEqual(sessionList, entries) {
+		t.Fatalf("list = %#v, err = %v", sessionList, err)
 	}
 	treePage, err := client.TreePage(context.Background(), "viking://resources/docs", &TreeOptions{
 		NodeLimit:       200,
