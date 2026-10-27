@@ -1173,7 +1173,7 @@ export function TerminalPanel({
                   id,
                   formatJson(result),
                 ]),
-                refs: [{ uri: `viking://session/${id}` }],
+                refs: [{ uri: `viking://~/sessions/${id}` }],
               })
             }
             return

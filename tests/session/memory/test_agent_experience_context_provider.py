@@ -140,7 +140,7 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
             "task_query": "Discuss the album release party.",
             "retrieval_anchor": "Stage: final_response; Boundary: completed discussion.",
             "case_name": "discussion_case",
-            "source_archive_uri": "viking://session/previous/archive/001",
+            "source_archive_uri": "viking://user/default/sessions/previous/archive/001",
             "last_update_trace_id": "source-trace-id",
             "version": 3,
         },
