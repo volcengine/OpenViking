@@ -1039,6 +1039,16 @@ impl PathLockProvider for RedisPathLockProvider {
                     .execute_array(REFRESH_BATCH_ID, key.clone(), args)
                     .await
                 {
+                    Ok(values)
+                        if matches!(
+                            Self::result_status(&values, "refresh_batch"),
+                            Ok("invalid_request")
+                        ) =>
+                    {
+                        for (index, path) in batch {
+                            results[*index] = Self::decode_refresh_result(path, &values);
+                        }
+                    }
                     Ok(values) if values.len() == batch.len() => {
                         for ((index, path), value) in batch.iter().zip(values) {
                             results[*index] = match value {

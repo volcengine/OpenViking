@@ -155,6 +155,31 @@ async fn malformed_batch_response_never_reports_refresh_success() {
 }
 
 #[tokio::test]
+async fn batch_invalid_request_is_preserved_for_every_path() {
+    // Inject Lua's early-return shape; every u128 supplied by Rust is a valid time_ns.
+    let (runtime, provider) = mock_provider(|request| {
+        assert_eq!(request.script_id, REFRESH_BATCH_ID);
+        Ok(ScriptValue::Array(vec![
+            ScriptValue::Bytes(b"invalid_request".to_vec()),
+            ScriptValue::Bytes(b"invalid time_ns".to_vec()),
+        ]))
+    });
+    for size in [2, 1, 3, 20, REFRESH_BATCH_SIZE + 1] {
+        let paths: Vec<_> = (0..size).map(|i| format!("/local/account-a/{i}")).collect();
+        let results = provider.refresh_tokens(&paths, "owner", u128::MAX).await;
+        assert_eq!(results.len(), size);
+        assert!(
+            results.iter().all(|result| matches!(
+                result,
+                Err(PathLockError::InvalidRequest(message)) if message == "invalid time_ns"
+            )),
+            "batch size {size}: {results:?}"
+        );
+    }
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn manager_uses_batch_for_manual_and_background_refresh() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
