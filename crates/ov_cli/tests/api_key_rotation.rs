@@ -14,8 +14,18 @@ const OLD_KEY: &str = "YWNtZQ.YWxpY2U.b2xkLXNlY3JldA";
 const NEW_KEY: &str = "YWNtZQ.YWxpY2U.bmV3LXNlY3JldA";
 
 fn run(dir: &Path, args: &[&str]) -> Output {
+    let home = dir.join("home");
+    let settings_dir = home.join(".openviking");
+    fs::create_dir_all(&settings_dir).unwrap();
+    fs::write(
+        settings_dir.join("ovcli.settings.conf"),
+        json!({"language": "en"}).to_string(),
+    )
+    .unwrap();
     Command::new(env!("CARGO_BIN_EXE_ov"))
         .current_dir(dir)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env("OPENVIKING_CLI_CONFIG_FILE", "selected.json")
         .env("OPENVIKING_LANG", "en")
         .env("NO_COLOR", "1")
@@ -48,6 +58,7 @@ fn serve(
                 Err(error) => panic!("{error}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
