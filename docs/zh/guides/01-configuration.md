@@ -1434,6 +1434,15 @@ Redis 命名空间。
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
 | `lock_timeout_secs` | float | 已废弃且忽略；运行时等待超时固定为 `0.0` | `0.0` |
 
+SQLite PathLock 仅适用于同一主机上的进程共享同一个本地磁盘数据库文件。
+不能将数据库放在 EFS/NFS/SMB，也不能为每个副本配置独立的容器本地数据库。
+workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
+详见 [SQLite 部署限制](../configuration/01-server.md#storage)。
+
+多个容器或主机共享 EFS 时，使用下面的共享 Redis PathLock 配置。
+所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
+示例同时使用 Redis QueueFS，避免默认的 SQLite 队列数据库落在 EFS。
+
 ```json
 {
   "service_name": "production",

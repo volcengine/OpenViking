@@ -311,13 +311,15 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
 
-For local path locking without recursive business-directory scans, set
+For same-machine path locking on a local disk without recursive business-directory scans, set
 `storage.agfs.pathlock` to `{"provider":"sqlite"}`. The database defaults to
 `{storage.workspace}/_system/pathlock/pathlock.db`, resolved to an absolute path
 from the final workspace when initializing the runtime binding. An explicit absolute
 `sqlite_path` takes precedence. The database parent directory is created automatically.
-Every process accessing the same filesystem
-must use the same database path, top-level `service_name`, and lock expiry setting.
+Every participating process must access the same actual local database file,
+with the same top-level `service_name` and lock expiry setting. Containers on the
+same host must share that local file; identical paths in separate container
+filesystems refer to independent databases and do not coordinate locks.
 SQLite stores authoritative lock tokens and atomically checks Exact/Tree conflicts
 using its path index. Blocking database work runs off the async executor.
 SQLite waits up to 100 ms per attempt for transient database writer contention,
@@ -331,8 +333,21 @@ Lease heartbeats refresh owned paths in one SQLite transaction (bounded batches
 for large leases). `stale_locks_removed` includes tokens recovered by committed
 atomic SQLite/Redis acquisitions; failed transactions do not increment the count.
 
-Use a local disk; this provider does not coordinate different hosts and is unsuitable
-for NFS/SMB databases. Stop all participating processes before switching providers:
+Do not place the database on EFS, NFS, or SMB. SQLite WAL requires participants
+on the same machine and is not supported on network filesystems; frequent lock
+updates also add synchronization I/O. If `storage.workspace` is on EFS, the
+default database path is on EFS too. Moving it to each container's local disk
+creates independent lock authorities and cannot coordinate replicas.
+
+For multiple containers or hosts sharing EFS, use shared Redis PathLock:
+set `storage.agfs.pathlock.provider="cache"` and top-level `cache.provider="redis"`.
+All replicas must use the same Redis deployment, top-level `service_name`, and
+lock expiry setting. See the [shared Redis configuration example](../guides/01-configuration.md).
+Shared QueueFS must also use a backend suitable for that deployment, such as
+`storage.agfs.queuefs.backend="cache"`; changing PathLock alone does not change
+the default SQLite queue backend.
+
+Stop all participating processes before switching providers:
 SQLite and filesystem lock files do not share a protocol. Do not delete the database,
 WAL, or SHM files while participants are running. Crashed owners' tokens become
 eligible for takeover after `lock_expire_secs` (default 30 seconds). This setting

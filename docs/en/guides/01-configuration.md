@@ -1450,6 +1450,16 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
 | `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
 
+SQLite PathLock is limited to processes sharing one actual database file on the
+same machine's local disk. Do not put it on EFS/NFS/SMB or give each replica its
+own container-local database. A workspace on EFS also puts the default
+`sqlite_path` on EFS. See [SQLite deployment limits](../configuration/01-server.md#storage).
+
+For multiple containers or hosts sharing EFS, use shared Redis PathLock as in
+the example below. All replicas must use the same Redis deployment, top-level
+`service_name`, and lock expiry setting. The example also uses Redis QueueFS
+so its default SQLite database is not placed on EFS.
+
 ```json
 {
   "service_name": "production",

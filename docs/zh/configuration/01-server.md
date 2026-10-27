@@ -303,12 +303,14 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
 
-本地路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
+同机本地磁盘上的路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
 `{"provider":"sqlite"}`。数据库默认位于
 `{storage.workspace}/_system/pathlock/pathlock.db`，初始化运行时 binding 时
 根据最终 workspace 解析为绝对路径。显式指定的绝对路径 `sqlite_path` 优先，
 数据库父目录会自动创建。
-访问同一文件系统的所有进程必须使用同一数据库路径、顶层 `service_name` 和锁过期配置。
+所有参与进程必须访问同一个实际的本地数据库文件，并使用相同的顶层 `service_name` 和锁过期配置。
+同一主机上的容器必须共享该本地文件；不同容器文件系统中相同的路径字符串指向独立数据库，
+不能互相协调路径锁。
 SQLite 是锁状态的唯一存储，通过路径索引查询，并在事务中原子检查及获取 Exact/Tree 锁；
 数据库阻塞操作在异步执行器之外运行。
 SQLite 每次尝试对瞬时数据库写竞争最多等待 100 毫秒，即使逻辑锁等待超时为零也会执行该等待。
@@ -321,7 +323,18 @@ WAL 使用 `synchronous=FULL` 保证崩溃后已提交锁记录的持久性，
 `stale_locks_removed` 包含 SQLite/Redis 原子加锁事务实际回收的锁数量，
 失败并回滚的事务不会增加计数。
 
-仅支持同机本地磁盘，不支持跨主机协调或 NFS/SMB 上的数据库。切换 provider 前需停止全部参与进程，
+不能将数据库放在 EFS、NFS 或 SMB 上。SQLite WAL 要求参与者位于同一主机，不支持网络文件系统；
+频繁更新锁记录还会增加同步 I/O。如果 `storage.workspace` 位于 EFS，默认数据库路径也会落在 EFS。
+将数据库改到各容器本地磁盘会形成独立的锁状态，无法协调多个副本。
+
+多个容器或主机共享 EFS 时，使用共享 Redis PathLock：
+设置 `storage.agfs.pathlock.provider="cache"` 和顶层 `cache.provider="redis"`。
+所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
+参见[共享 Redis 配置示例](../guides/01-configuration.md)。
+共享 QueueFS 也需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；
+仅修改 PathLock 不会改变默认的 SQLite 队列后端。
+
+切换 provider 前需停止全部参与进程，
 SQLite 与 filesystem 锁文件不共享协议。进程运行期间不能删除数据库及其 WAL/SHM 文件。
 崩溃进程的锁在 `lock_expire_secs`（默认 30 秒）后可被接管。
 此配置不会改变 workspace 进程锁或其他后端的并发限制。

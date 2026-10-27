@@ -452,6 +452,10 @@ Redis 配置：
 | `sqlite_path` | str / null | 使用 `sqlite` 时可覆盖本地数据库绝对路径；见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数 | `30.0` |
 
+跨容器或主机共享 EFS 的副本应使用 `provider="cache"`，连接共享 Redis。
+SQLite 仅支持同机共享同一个本地磁盘数据库文件，不支持 EFS/NFS/SMB
+或各容器独立的本地数据库。参见[部署限制与 Provider 选择](../configuration/01-server.md#storage)。
+
 兼容旧写法：
 
 ```json
