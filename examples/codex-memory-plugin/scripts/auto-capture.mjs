@@ -22,6 +22,7 @@
  * Stop output schema accepts {} as a no-op.
  */
 
+import { healRetiredVersions } from "./cache-heal.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { catchUpTurns, hasCaptureKeyword, makeFetchJSON } from "./ov-session.mjs";
@@ -30,6 +31,7 @@ import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
+healRetiredVersions();
 let cfg = loadConfig();
 const { log, logError } = createLogger("auto-capture", cfg);
 let activePeerId = cfg.peerId || "";
