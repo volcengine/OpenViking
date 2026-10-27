@@ -226,7 +226,7 @@ ov task status uuid-xxx
 |------|------|------|--------|------|
 | task_id | str | 是 | - | 要取消的后台任务 ID |
 
-只有任务所属的当前用户可以取消任务。ROOT 身份不能执行取消操作。
+只有任务所属的当前用户可以取消任务。ROOT 身份可以取消任意存在的任务；任务 ID 不存在或已过期时对其返回 `404`。
 
 #### 3. 使用示例
 
@@ -292,7 +292,6 @@ ov task cancel uuid-xxx
 
 **错误处理**：
 - `NOT_FOUND`（404）：任务不存在、已过期或不属于当前用户
-- `PERMISSION_DENIED`（403）：ROOT 身份请求取消任务
 - `FAILED_PRECONDITION`（412）：任务类型不支持取消，或任务已经 `completed`/`failed`
 
 ---

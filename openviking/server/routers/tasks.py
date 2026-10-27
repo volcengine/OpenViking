@@ -16,11 +16,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
 from openviking.service.task_tracker import get_task_tracker
-from openviking_cli.exceptions import (
-    FailedPreconditionError,
-    OpenVikingError,
-    PermissionDeniedError,
-)
+from openviking_cli.exceptions import FailedPreconditionError, OpenVikingError
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
@@ -67,14 +63,23 @@ async def cancel_task(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Request cooperative cancellation of a background task."""
-    if _ctx.role == Role.ROOT:
-        raise PermissionDeniedError("ROOT may not cancel tasks")
     tracker = get_task_tracker()
+    if _ctx.role == Role.ROOT:
+        record = await tracker.get(task_id)
+        if record is None:
+            raise OpenVikingError(
+                "Task not found or expired",
+                code="NOT_FOUND",
+                details={"resource": task_id, "type": "task"},
+            )
+        account_id, user_id = record.account_id, record.user_id
+    else:
+        account_id, user_id = _ctx.account_id, _ctx.user.user_id
     try:
         task = await tracker.cancel(
             task_id,
-            account_id=_ctx.account_id,
-            user_id=_ctx.user.user_id,
+            account_id=account_id,
+            user_id=user_id,
         )
     except ValueError as exc:
         raise FailedPreconditionError(str(exc)) from exc
