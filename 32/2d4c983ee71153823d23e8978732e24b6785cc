@@ -1,0 +1,16 @@
+tests/server/test_compile_studio.py
+  h_b34c679d17e2ac 459-466,468,470,473,476
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "322d4c983ee71153823d23e8978732e24b6785cc",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
