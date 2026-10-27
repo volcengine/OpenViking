@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,7 +16,9 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
     write_abstract_overview,
 )
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
 class _FakeFS:
@@ -175,3 +179,36 @@ async def test_pending_snapshot_reads_existing_sidecars_under_lock():
         await read_abstract_overview_pending_snapshot(viking_fs=fs, dir_uri=dir_uri, ctx=None) == 3
     )
     assert fs.lock_timeouts == [0.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trigger", ["content_delete", "resource_ingest"])
+@pytest.mark.parametrize("l0_changed", [False, True])
+async def test_delete_refresh_propagates_through_wide_ancestors(monkeypatch, trigger, l0_changed):
+    parent = "viking://resources/wide"
+    grandparent = "viking://resources"
+    fs = _FakeFS({**_files(parent, pending=0), **_files(grandparent, pending=0)})
+    queue = SimpleNamespace(enqueue=AsyncMock())
+    manager = SimpleNamespace(SEMANTIC="semantic", get_queue=lambda *a, **kw: queue)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace()),
+    )
+    processor = SemanticProcessor()
+    msg = SemanticMsg(uri=f"{parent}/child", context_type="resource", generation_trigger=trigger)
+    await processor._enqueue_parent_refresh(msg, msg.uri, l0_body_changed=l0_changed)
+
+    if trigger != "content_delete" or not l0_changed:
+        queue.enqueue.assert_not_awaited()
+        return
+    assert queue.enqueue.await_count == 1
+    first = queue.enqueue.await_args.args[0]
+    assert first.uri == parent
+    await processor._enqueue_parent_refresh(first, first.uri, l0_body_changed=True)
+    assert [call.args[0].uri for call in queue.enqueue.await_args_list] == [parent, grandparent]
+    assert all(
+        call.args[0].generation_trigger == "content_delete"
+        for call in queue.enqueue.await_args_list
+    )

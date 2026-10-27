@@ -631,6 +631,8 @@ ov mkdir viking://resources/new-project/ --description "接口文档目录"
 
 删除文件或目录。递归删除目录时会返回删除的项目估计数量。
 
+删除 resource 或 skill 内容后，会跳过 freshness 阈值安排父目录摘要刷新。如果刷新的 L0 正文发生变化，向祖先传播删除刷新时也会跳过阈值。使用 `wait=true` 等待本次请求的父目录刷新；向祖先传播仍为后台任务。
+
 `rm` 是幂等操作：删除一个合法但不存在的 URI 仍会成功。
 URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用域时返回 `INVALID_URI`。
 

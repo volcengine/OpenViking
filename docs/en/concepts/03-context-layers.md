@@ -154,6 +154,8 @@ When the direct-entry count exceeds `semantic.overview_sample_limit` (32 by defa
 
 Resource/skill parent refreshes are freshness-aware. An unchanged child L0 body does not trigger propagation. A changed body triggers an immediate refresh when the parent has no freshness baseline, or its direct-entry count is at most `semantic.overview_sample_limit`. Larger directories accumulate `pending_child_changes` and refresh when its ratio to `total_entries` reaches `semantic.freshness_refresh_ratio` (default `0.10`). Manual refresh/import bypasses the threshold for its requested root, not every ancestor. Propagation stops at the namespace-root boundary. Below the threshold, the parent stays readable but pending; the threshold policy does not promise a timed refresh.
 
+Deletion-triggered resource/skill refreshes bypass the freshness threshold for the parent and for ancestors reached after an L0 body change. A delete with `wait=true` waits for the requested parent refresh; upward propagation remains background work.
+
 ## Write Protection
 
 L0/L1 bodies can be updated through public `write` / `batch_write`, while metadata remains protected:
