@@ -2885,7 +2885,7 @@ async def test_list_users(admin_client: httpx.AsyncClient):
 
 @pytest.mark.parametrize("include_summary", [False, True])
 @pytest.mark.parametrize("include_credentials", [None, True, False])
-async def test_user_list_masks_credentials_for_admin_only(
+async def test_user_list_credentials_follow_caller_role(
     lightweight_admin_client, lightweight_admin_app, include_summary, include_credentials
 ):
     manager = lightweight_admin_app.state.api_key_manager
@@ -2904,6 +2904,7 @@ async def test_user_list_masks_credentials_for_admin_only(
     callers = [
         (admin_key, "owner", False),
         (keys["manager"], "manager", False),
+        (keys["alice"], "alice", False),
         (ROOT_KEY, None, True),
     ]
     for caller_key, caller_id, is_root in callers:
@@ -2915,13 +2916,19 @@ async def test_user_list_masks_credentials_for_admin_only(
             assert response.status_code == 200
             result = response.json()["result"]
             if include_summary:
-                assert result["total"] == result["account_total"] == result["key_count"] == 3
+                assert result["total"] == result["account_total"] == 3
+                if caller_id == "alice":
+                    assert "key_count" not in result
+                else:
+                    assert result["key_count"] == 3
                 result = result["users"]
             users.extend(result)
         assert len(users) == 3
         for user in users:
             key = keys[user["user_id"]]
-            if include_credentials is False:
+            if caller_id == "alice" and user["user_id"] != caller_id:
+                assert set(user) == {"user_id", "role"}
+            elif include_credentials is False:
                 assert user["api_key_available"] is True
                 assert "api_key" not in user and "key_prefix" not in user
             elif is_root or user["user_id"] == caller_id:
@@ -2944,7 +2951,109 @@ async def test_user_list_masks_credentials_for_admin_only(
                     assert other_key.split(".")[2] not in payload
     assert (await manager.resolve_identity(keys["alice"])).user_id == "alice"
     response = await lightweight_admin_client.get(url, headers={"X-API-Key": keys["alice"]})
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("seed", [None, "new-self-service-seed"])
+async def test_user_can_rotate_only_their_own_key(
+    lightweight_admin_client, lightweight_admin_app, seed
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    admin_key = await manager.create_account(account, "owner")
+    old_key = await manager.register_user(account, "alice")
+    await manager.create_account("other", "alice")
+    headers = {"X-API-Key": old_key, "X-OpenViking-User": "owner", "X-OpenViking-Account": "other"}
+    for target_account, target_user in [(account, "owner"), ("other", "alice")]:
+        denied = await lightweight_admin_client.post(
+            f"/api/v1/admin/accounts/{target_account}/users/{target_user}/key", headers=headers
+        )
+        assert denied.status_code == 403
+    denied = await lightweight_admin_client.get(
+        "/api/v1/admin/accounts/other/users", headers=headers
+    )
+    assert denied.status_code == 403
+    response = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{account}/users/alice/key",
+        headers=headers,
+        json={"seed": seed} if seed else {},
+    )
+    assert response.status_code == 200
+    new_key = response.json()["result"]["user_key"]
+    assert new_key != old_key
+    url = f"/api/v1/admin/accounts/{account}/users"
+    assert (
+        await lightweight_admin_client.get(url, headers={"X-API-Key": old_key})
+    ).status_code == 401
+    current = await lightweight_admin_client.get(url, headers={"X-API-Key": new_key})
+    assert current.status_code == 200
+    assert current.json()["result"][1]["api_key"] == new_key
+    assert (await manager.resolve_identity(admin_key)).role == Role.ADMIN
+
+
+@pytest.mark.parametrize(
+    "auth_mode,from_oauth",
+    [("api_key", True), ("oidc", False), ("ldap", False), ("trusted", False)],
+)
+async def test_user_other_auth_cannot_disclose_or_rotate_personal_key(
+    lightweight_admin_client, lightweight_admin_app, auth_mode, from_oauth
+):
+    from openviking.server.auth import get_request_context
+
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    await manager.create_account(account, "owner")
+    key = await manager.register_user(account, "alice")
+    lightweight_admin_app.state.config = lightweight_admin_app.state.config.model_copy(
+        update={"auth_mode": auth_mode}
+    )
+    lightweight_admin_app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        UserIdentifier(account, "alice"), Role(Role.USER), from_oauth=from_oauth, api_key="identity-token"
+    )
+    response = await lightweight_admin_client.get(f"/api/v1/admin/accounts/{account}/users")
+    assert response.status_code == 200
+    assert all(set(row) == {"user_id", "role"} for row in response.json()["result"])
+    response = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{account}/users/alice/key"
+    )
     assert response.status_code == 403
+    assert (await manager.resolve_identity(key)).user_id == "alice"
+
+
+async def test_in_flight_user_rotation_cannot_overwrite_admin_reset(
+    lightweight_admin_client, lightweight_admin_app, monkeypatch
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    await manager.create_account(account, "owner")
+    old_key = await manager.register_user(account, "alice")
+    authenticated = asyncio.Event()
+    resume = asyncio.Event()
+    regenerate = manager.regenerate_key
+
+    async def pause_user_rotation(*args, **kwargs):
+        if kwargs.get("expected_api_key") == old_key:
+            authenticated.set()
+            await resume.wait()
+        return await regenerate(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "regenerate_key", pause_user_rotation)
+    path = f"/api/v1/admin/accounts/{account}/users/alice/key"
+    pending = asyncio.create_task(
+        lightweight_admin_client.post(path, headers={"X-API-Key": old_key})
+    )
+    try:
+        await asyncio.wait_for(authenticated.wait(), timeout=5)
+        reset = await lightweight_admin_client.post(path, headers={"X-API-Key": ROOT_KEY})
+        assert reset.status_code == 200
+        reset_key = reset.json()["result"]["user_key"]
+    finally:
+        resume.set()
+        response = await asyncio.wait_for(pending, timeout=5)
+    assert response.status_code == 401
+    url = f"/api/v1/admin/accounts/{account}/users"
+    assert (await lightweight_admin_client.get(url, headers={"X-API-Key": reset_key})).status_code == 200
+    assert (await lightweight_admin_client.get(url, headers={"X-API-Key": old_key})).status_code == 401
 
 
 @pytest.mark.parametrize(
@@ -3035,10 +3144,31 @@ async def test_user_key_mask_reveals_only_the_viewers_own_key():
     }
 
     # Without viewer identity everything is masked, including the caller's row.
-    result = await APIKeyManager("root", store_with_rows()).list_users_page(
-        "acme", mask_keys=True
-    )
+    result = await APIKeyManager("root", store_with_rows()).list_users_page("acme", mask_keys=True)
     assert result["users"][0] == {"user_id": "alice", "key_prefix": mask_api_key(alice_key)}
+
+
+async def test_user_list_hides_other_prefixes_and_mismatched_keys():
+    from openviking.server.api_keys import APIKeyManager, generate_api_key
+
+    store = Mock()
+    store.list_users_page = AsyncMock(
+        return_value={
+            "users": [
+                {
+                    "user_id": "alice",
+                    "api_key": generate_api_key("other", "alice"),
+                    "key_prefix": "other-prefix",
+                },
+                {"user_id": "hashed", "key_prefix": "sensitive-prefix"},
+            ],
+            "key_count": 2,
+        }
+    )
+    page = await APIKeyManager("root", store).list_users_page(
+        "acme", hide_other_keys=True, viewer_account_id="acme", viewer_user_id="alice"
+    )
+    assert page["users"] == [{"user_id": "alice"}, {"user_id": "hashed"}]
 
 
 async def test_remove_user(
@@ -3259,8 +3389,8 @@ async def test_empty_seed_rejected(admin_client: httpx.AsyncClient):
 # ---- Permission guard ----
 
 
-async def test_user_role_cannot_access_admin_api(admin_client: httpx.AsyncClient):
-    """USER role should not access admin endpoints."""
+async def test_user_role_cannot_register_users(admin_client: httpx.AsyncClient):
+    """USER self-service does not grant user-management privileges."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -3788,7 +3918,7 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
     request = FastAPIRequest({"type": "http", "app": lightweight_admin_app})
     context = SimpleNamespace(request_context=SimpleNamespace(request=request))
     for role in (Role.USER, Role.ADMIN, Role.ROOT):
-        identity = RequestContext(UserIdentifier(acct, "user-1"), role)
+        identity = RequestContext(UserIdentifier(acct, "user-1"), role, api_key="personal-key")
         token = mcp_endpoint._mcp_ctx.set(identity)
         try:
             directory = await mcp_endpoint.list_users(context, query="user-112")
@@ -3796,35 +3926,43 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
             assert await mcp_endpoint.list_groups(context) == {
                 "groups": [{"group_id": "engineering"}]
             }
-            if role == Role.USER:
-                # Explicit opt-in is rejected even for an empty search result.
-                with pytest.raises(PermissionDeniedError, match="ADMIN or ROOT"):
-                    await mcp_endpoint.list_users(
-                        context, query="missing", include_credentials=True
-                    )
+            credentials = await mcp_endpoint.list_users(
+                context, query="user-112", include_credentials=True
+            )
+            if role == Role.ROOT:
+                assert credentials["users"][0]["api_key"] == last_key
+            elif role == Role.ADMIN:
+                account_part, user_part, secret = last_key.split(".")
+                assert credentials["users"][0]["key_prefix"] == (
+                    f"{account_part}.{user_part}.{'*' * (len(secret) - 4)}{secret[-4:]}"
+                )
+                assert "api_key" not in credentials["users"][0]
             else:
-                credentials = await mcp_endpoint.list_users(
-                    context, query="user-112", include_credentials=True
+                assert credentials == {
+                    "users": [{"user_id": "user-112", "role": "admin"}],
+                    "total": 1,
+                }
+                own = await mcp_endpoint.list_users(
+                    context, query="user-1", include_credentials=True
                 )
-                if role == Role.ROOT:
-                    assert credentials["users"][0]["api_key"] == last_key
-                else:
-                    account_part, user_part, secret = last_key.split(".")
-                    assert credentials["users"][0]["key_prefix"] == (
-                        f"{account_part}.{user_part}.{'*' * (len(secret) - 4)}{secret[-4:]}"
-                    )
-                    assert "api_key" not in credentials["users"][0]
-                    assert last_key not in json.dumps(credentials)
-                original_config = lightweight_admin_app.state.config
-                lightweight_admin_app.state.config = ServerConfig(
-                    auth_mode="trusted", root_api_key=ROOT_KEY
-                )
-                try:
-                    with pytest.raises(PermissionDeniedError, match="trusted"):
-                        await mcp_endpoint.list_users(context, include_credentials=True)
-                    assert await mcp_endpoint.list_users(context, query="user-112") == directory
-                finally:
-                    lightweight_admin_app.state.config = original_config
+                assert "api_key" in own["users"][0]
+                assert all(set(row) == {"user_id", "role"} for row in own["users"][1:])
+                assert await mcp_endpoint.list_users(
+                    context, query="missing", include_credentials=True
+                ) == {"users": [], "total": 0}
+            if role != Role.ROOT:
+                assert last_key not in json.dumps(credentials)
+            original_config = lightweight_admin_app.state.config
+            lightweight_admin_app.state.config = ServerConfig(
+                auth_mode="trusted", root_api_key=ROOT_KEY
+            )
+            try:
+                with pytest.raises(PermissionDeniedError, match="trusted"):
+                    await mcp_endpoint.list_users(context, include_credentials=True)
+                assert await mcp_endpoint.list_users(context, query="user-112") == directory
+            finally:
+                lightweight_admin_app.state.config = original_config
+
         finally:
             mcp_endpoint._mcp_ctx.reset(token)
 

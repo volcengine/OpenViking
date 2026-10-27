@@ -11,12 +11,13 @@ import hmac
 import secrets
 import ssl as ssl_module
 from contextlib import asynccontextmanager
+from datetime import timezone
 from typing import AsyncGenerator
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import and_, case, delete, func, select, update
+from sqlalchemy import and_, case, delete, exists, func, insert, literal, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -56,6 +57,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
+    UnauthenticatedError,
 )
 from openviking_cli.session.user_id import (
     validate_account_id,
@@ -66,6 +68,7 @@ from openviking_cli.utils.config.config_utils import normalize_service_name
 
 _MYSQL_IDENTIFIER_MAX_LENGTH = MAX_IDENTIFIER_LENGTH
 _RETAINED_REVOKED_CREDENTIALS = 10
+_DEFAULT_ACCOUNT_ID = "default"
 
 
 def _validate_length(value: str, name: str) -> None:
@@ -127,6 +130,12 @@ def _deletion(record) -> DeletionRecord | None:
         owner_account_id=record.deletion_owner_account_id,
         owner_user_id=record.deletion_owner_user_id,
     )
+
+
+def _utc_isoformat(value) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
 
 
 @mysql_runtime_store
@@ -326,6 +335,17 @@ class MySQLAccountStore(AccountStore):
             async with sessions() as session:
                 for model in (Account, User, Group, GroupMember, Credential):
                     await session.execute(select(*model.__table__.columns).limit(1))
+                await session.execute(
+                    insert(Account)
+                    .prefix_with("IGNORE", dialect="mysql")
+                    .from_select(
+                        ["service_name", "account_id"],
+                        select(literal(self._service_name), literal(_DEFAULT_ACCOUNT_ID)).where(
+                            ~exists().where(Account.service_name == self._service_name)
+                        ),
+                    )
+                )
+                await session.commit()
         except ImportError:
             await wait_mysql_cleanup(cleanup_failed_load())
             raise RuntimeError("MySQL account storage requires openviking[mysql]") from None
@@ -427,7 +447,7 @@ class MySQLAccountStore(AccountStore):
     def _account_summary(account, user_count: int) -> AccountSummary:
         return {
             "account_id": account.account_id,
-            "created_at": account.created_at.isoformat(),
+            "created_at": _utc_isoformat(account.created_at),
             "user_count": user_count,
             "status": "deleting" if account.deletion_task_id else "active",
             **({"task_id": account.deletion_task_id} if account.deletion_task_id else {}),
@@ -1151,13 +1171,29 @@ class MySQLAccountStore(AccountStore):
             await session.delete(group)
 
     async def replace_active_user_api_key(
-        self, account_id: str, user_id: str, api_key: str
+        self, account_id: str, user_id: str, api_key: str,
+        *, expected_api_key: str | None = None,
     ) -> None:
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
             self._require_active(account)
             user = await self._lock_user(session, account, user_id)
             self._require_active(user)
+            if expected_api_key is not None:
+                # A locking read observes the current credential, even when a
+                # concurrent reset committed after request authentication.
+                current = await session.scalar(
+                    select(Credential.credential_id)
+                    .where(
+                        Credential.service_name == self._service_name,
+                        Credential.user_pk == user.user_pk,
+                        Credential.revoked.is_(False),
+                        Credential.lookup_digest == _credential_digest(expected_api_key),
+                    )
+                    .with_for_update()
+                )
+                if current is None:
+                    raise UnauthenticatedError("API key is no longer active")
             sequence = await session.scalar(
                 select(func.coalesce(func.max(Credential.sequence), 0)).where(
                     Credential.service_name == self._service_name,

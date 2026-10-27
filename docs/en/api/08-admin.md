@@ -20,10 +20,11 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 |-----------|------|-------|------|
 | Create/delete workspace | Y | N | N |
 | List workspaces | Y | N | N |
+| List users | Y | Y (own account) | Y (own account) |
 | Register/remove users | Y | Y (own account) | N |
 | Manage groups and membership | Y | Y (own account) | N |
 | List agents (deprecated, returns empty list) | Y | Y (own account) | N |
-| Regenerate user key (API Key mode only) | Y | Y (own account) | N |
+| Regenerate user key (API Key mode only) | Y | Y (own account) | Y (own key) |
 | Promote user to ADMIN | Y | Y (own account) | N |
 
 ## CLI `--sudo` Option
@@ -1589,7 +1590,7 @@ ov admin register-user acme bob-private --role user \
 List active users in a workspace. Users with deletion in progress are omitted.
 
 **Processing Flow:**
-1. Verify requester has ROOT privileges or is an ADMIN of the account
+1. Verify requester has ROOT privileges or is an ADMIN/USER of the account
 2. Call API Key Manager to get active users list (in creation order)
 3. Apply optional filters (name, role)
 4. Apply optional `limit`/`page` pagination
@@ -1611,21 +1612,22 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | role | str | No | null | Filter by role |
 | query | str | No | null | HTTP-only, case-insensitive literal substring match on user IDs |
 | include_summary | bool | No | false | HTTP-only, return paginated users and account statistics in an object |
-| include_credentials | bool | No | true | HTTP-only. ROOT receives all available plaintext keys; ADMIN receives its own plaintext key and masked prefixes for other users. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. `api_key_available` is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. |
+| include_credentials | bool | No | true | HTTP-only. ROOT receives all available plaintext keys; ADMIN receives its own plaintext key and masked prefixes for other users; USER receives only its own key. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. USER receives availability only for its own row. Availability is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. |
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
 **Notes:**
 - Results are returned in creation order
-- ADMIN can only list users in their own account
-- ROOT receives every stored key as plaintext in `api_key`. A non-ROOT caller receives plaintext in `api_key` only for its own row; every other user (including other ADMIN users) is returned as a masked `key_prefix`. Self-matching is strict: the listing account, the row's user ID, and the account/user segments embedded in the three-segment key must all equal the caller's authenticated identity; otherwise the row is masked. Three-segment keys retain the first two segments and only the last four characters of the secret segment; every preceding secret character is replaced by `*`. Secrets of four characters or fewer are completely hidden. Keys that are not in the three-segment format are fully masked. Hash-only credentials retain their existing prefix.
+- ADMIN and USER can only list users in their own account.
+- ROOT receives every stored key as plaintext in `api_key`. ADMIN receives its own plaintext key and a masked `key_prefix` for every other user. USER authenticated with a personal API key receives only its own stored key; other rows omit both `api_key` and `key_prefix`. OAuth and other authentication methods do not grant USER access to stored credentials. Self-matching is strict: the listing account, the row's user ID, and the account/user segments embedded in the three-segment key must all equal the caller's authenticated identity. A mismatched key is masked for ADMIN and omitted for USER.
+- ADMIN masking retains the first two key segments and only the last four characters of the secret; every preceding secret character is replaced by `*`. Secrets of four characters or fewer and malformed keys are completely hidden. Hash-only credentials cannot be recovered as plaintext; their existing prefix is visible to ROOT/ADMIN and to the owning USER only.
 - Masking is enforced by the server for HTTP and MCP `list_users(include_credentials=true)`, so it also applies to CLI/SDK JSON output. Clients must treat `key_prefix` as display-only and require a supplied key to switch identities.
-- `ov admin list-users` additionally masks the plaintext `api_key` rows client-side by default, in both table and JSON output, and prints a notice on stderr. Pass `--reveal-api-keys` to emit plaintext: ROOT then shows every key, while an ADMIN/USER caller still sees only its own key (other rows are masked by the server). The flag affects CLI rendering only and does not change the server response. In table output the server's `api_key` (plaintext or client-masked) and `key_prefix` fields are merged into a single `api_key` column; JSON output keeps the server field names.
-- This restriction applies to stored-key listing. Registration and key regeneration still return the newly issued key to ROOT or ADMIN; ordinary USER self-service key rotation is not yet available.
+- `ov admin list-users` additionally masks the plaintext `api_key` rows client-side by default, in both table and JSON output, and prints a notice on stderr. Pass `--reveal-api-keys` to emit plaintext: ROOT then shows every key, while ADMIN/USER still sees only its own key. Other rows remain masked for ADMIN and contain no key or prefix for USER. The flag affects CLI rendering only and does not change the server response. In table output the server's `api_key` (plaintext or client-masked) and `key_prefix` fields are merged into a single `api_key` column; JSON output keeps the server field names.
+- Registration and key regeneration still return the newly issued key to ROOT or ADMIN. USER may regenerate only its own key using personal API key authentication.
 - In `trusted` mode, both `api_key` and `key_prefix` are omitted from the response
 - Users whose deletion has started are no longer returned
 
-**Summary responses (HTTP):** Set `include_summary=true` to return an object in `result` with `users` (the current page), `total` (matching users), `account_total`, `manager_count` (admin/root), and `key_count` (users with a visible key or prefix). Account statistics ignore search/role filters and exclude deleting users; `key_count` is zero when key exposure is disabled. The default remains a user array for existing callers.
+**Summary responses (HTTP):** Set `include_summary=true` to return an object in `result` with `users` (the current page), `total` (matching users), `account_total`, `manager_count` (admin/root), and `key_count` (users with a visible key or prefix). USER responses omit `key_count`. Account statistics ignore search/role filters and exclude deleting users; `key_count` is zero when key exposure is disabled. The default remains a user array for existing callers.
 
 `query` performs a trimmed, case-insensitive literal substring match on user IDs. It combines with the existing `name` wildcard and `role` filters. For example:
 
@@ -1687,12 +1689,13 @@ fmt.Println(users)
 **CLI**
 
 ```bash
-# Either ROOT or account ADMIN can execute
-# If using regular user's api_key who is an ADMIN of acme:
+# ROOT or an ADMIN/USER in acme can execute
 ov admin list-users acme
+# Reveal your own key (other users' credentials remain hidden for USER)
+ov admin list-users acme --reveal-api-keys
 # If using root_api_key (--sudo):
 ov --sudo admin list-users acme
-# Show plaintext keys instead of masked values (ROOT: all keys; ADMIN/USER: own key only)
+# ROOT can reveal all available plaintext keys
 ov --sudo admin list-users acme --reveal-api-keys
 # Filter by wildcard name
 ov admin list-users acme --name '*ali*'
@@ -1916,7 +1919,7 @@ ov --sudo admin set-role acme bob admin
 Generate and store a user API key. With the default random generation, the old key stops working after a successful update. Reusing the same account, user, and seed reproduces the same key; choose a new seed or omit it when rotating credentials.
 
 **Processing Flow:**
-1. Verify requester has ROOT privileges or is an ADMIN of the account
+1. Verify requester has ROOT privileges, is an ADMIN of the account, or is the target USER authenticated with a personal API key
 2. Call API Key Manager to regenerate user key
 3. With random generation or a new seed, the old key stops working immediately
 4. Return new user key
@@ -1937,8 +1940,9 @@ Generate and store a user API key. With the default random generation, the old k
 | seed | str | No | `null` | Optional deterministic API key seed in the JSON request body. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 
 **Notes:**
-- `trusted` mode rejects this operation with HTTP 412 (`FAILED_PRECONDITION`) without generating or modifying credentials.
+- In `trusted` mode, ROOT/ADMIN requests receive HTTP 412 (`FAILED_PRECONDITION`); USER self-service requests receive HTTP 403. No credentials are generated or modified.
 - ADMIN can only regenerate keys for users in their own account
+- USER can only regenerate its own key in its own account, authenticated with a personal API key. OAuth, trusted, OIDC, and LDAP identities cannot use USER self-service rotation.
 - With random generation or a new seed, the old key stops working immediately; update clients that use it
 - Omit `seed` for the default random regenerated key. Deterministic examples use `OV_KEY_SEED` or `OV_NEW_KEY_SEED`; set these to a securely generated secret before use. In Go, import `os`. Do not use the example variable names as seed values.
 
@@ -2003,6 +2007,25 @@ ov admin regenerate-key acme bob --seed "$OV_NEW_KEY_SEED"
 # If using root_api_key (--sudo):
 ov --sudo admin regenerate-key acme bob
 ```
+
+For a USER authenticated as `acme/alice`:
+
+```bash
+ov admin list-users acme --reveal-api-keys
+ov admin regenerate-key acme alice
+```
+
+When the target matches the personal `api_key` in the active configuration, the CLI
+automatically updates that file's `api_key`, preserving other settings. It uses
+`OPENVIKING_CLI_CONFIG_FILE` when set, otherwise `~/.openviking/ovcli.conf`.
+Before requesting rotation it prints the destination path to stderr; after saving,
+it confirms the update and reminds you to update other clients. JSON stdout remains
+machine-readable. `--sudo` and rotation of another user's key do not update the local key.
+
+The CLI checks that a replacement file can be prepared before requesting rotation.
+If saving fails after the server rotates the key, or the configuration changes while
+the request is in progress, the command exits with an error and keeps the returned
+`user_key` in stdout for manual recovery. Save that key to the indicated configuration.
 
 **Response Example**
 

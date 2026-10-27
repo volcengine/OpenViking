@@ -189,6 +189,7 @@ This endpoint stores Skill instructions and supporting files, then generates sum
 | data | Any | No | - | Inline SKILL.md, structured/MCP data, or Git URL; choose this or `temp_file_id` |
 | temp_file_id | str | No | - | Temporary upload file ID (from `temp_upload`); choose this or `data` |
 | wait | bool | No | False | Wait for skill processing to complete |
+| timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 | target_uri | str | No | Target resolution order | Skills root, such as `viking://~/skills` or `viking://agent/skills` |
 | skills | List[str] | No | `[]` | Select directory names from a directory/Git collection; empty or `["*"]` selects all |
@@ -704,6 +705,7 @@ Missing names/descriptions and invalid YAML produce errors. Directory/name misma
 | `target_uri` | Unspecified | Skills root to try first; see read resolution fallback |
 | `source_metadata` | Generated automatically | Updated source tracking |
 | `wait` | `false` | Wait for background processing |
+| `timeout` | `null` | Deprecated: accepted and ignored |
 | `telemetry` | `false` | Telemetry configuration |
 
 Supply new content/an upload, or set `from_source=true`. The new name must match `skill_name` in the URL; update is neither rename nor a partial patch. The server parses and checks the new package before backing up and replacing the old one, and attempts restoration on synchronous failure. Include all auxiliary files that should remain in the replacement package.

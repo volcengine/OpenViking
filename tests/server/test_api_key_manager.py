@@ -454,6 +454,49 @@ async def test_regenerate_key(manager: APIKeyManager):
     assert identity.account_id == acct
 
 
+@pytest.mark.parametrize("hashing", [False, True])
+@pytest.mark.parametrize("mutation", ["reset", "revoke"])
+async def test_conditional_rotation_checks_persisted_key(manager_service, hashing, mutation):
+    from openviking.server.api_keys import generate_api_key
+
+    managers = [
+        build_api_key_manager(
+            root_key=ROOT_KEY,
+            viking_fs=manager_service.viking_fs,
+            api_key_hashing_enabled=hashing,
+        )
+        for _ in range(2)
+    ]
+    writer, stale = managers
+    try:
+        await writer.load()
+        account = _uid()
+        await writer.create_account(account, "owner")
+        initial_key = await writer.register_user(account, "alice")
+        old_key = await writer.regenerate_key(account, "alice", expected_api_key=initial_key)
+        await stale.load()
+        if mutation == "reset":
+            reset_key = await writer.regenerate_key(account, "alice")
+        else:
+            await writer._store.revoke_active_api_keys(account, "alice")
+        rejected_key = generate_api_key(account, "alice")
+        # This store still has the old credential in memory. Its conditional
+        # write must validate the persisted registry under the shared lease.
+        with pytest.raises(UnauthenticatedError):
+            await stale._store.replace_active_user_api_key(
+                account, "alice", rejected_key, expected_api_key=old_key
+            )
+        await stale.load()
+        for key in (old_key, rejected_key):
+            with pytest.raises(UnauthenticatedError):
+                await stale.resolve_identity(key)
+        if mutation == "reset":
+            assert (await stale.resolve_identity(reset_key)).user_id == "alice"
+    finally:
+        for manager in managers:
+            await manager.close()
+
+
 async def test_get_user_key_fingerprint_changes_on_rotation(manager: APIKeyManager):
     """fp must change when the key is regenerated and disappear when user is removed."""
     acct = _uid()

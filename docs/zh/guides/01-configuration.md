@@ -1303,10 +1303,13 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 
 Task 记录默认使用本地 FileStore。需要多个 OpenViking 进程共享
 Task/Work 状态时，先在 MySQL 中执行
-`openviking/service/sql/task_store_init.sql`，再选择关系型后端：
+`openviking/service/sql/task_store_init.sql`，再按顺序执行
+`openviking/service/sql/changes/` 下的变更脚本，配置稳定的顶层
+`service_name` 后选择关系型后端：
 
 ```json
 {
+  "service_name": "production",
   "storage": {
     "task_store": {
       "provider": "mysql",
@@ -1329,7 +1332,11 @@ Task/Work 状态时，先在 MySQL 中执行
 
 MySQL 后端需要安装 `openviking[mysql]` extra。Task mutation、Task
 最终化和 execution event 更新在同一个数据库事务中提交。`task_id`
-是全局唯一身份；`account_id` 和 `user_id` 用于鉴权和查询范围。同一部署
+在同一个 `service_name` 分区内唯一；顶层 `service_name` 会写入每条
+Task/Work/Event 记录，用于隔离共用同一套表的多个 OpenViking 部署。
+`account_id` 和 `user_id` 用于鉴权和查询范围。新库需要先执行 init SQL，
+再按顺序执行变更脚本；升级使用旧 TaskStore 表的库前，先执行
+`openviking/service/sql/changes/0001_task_store_service_name.sql`。同一部署
 不要同时让 FileStore 和 MySQL 表作为写入端。
 
 #### agfs (RAGFS)

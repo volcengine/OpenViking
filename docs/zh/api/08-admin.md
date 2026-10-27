@@ -20,10 +20,11 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 |------|------|-------|------|
 | 创建/删除工作区 | Y | N | N |
 | 列出工作区 | Y | N | N |
+| 列出用户 | Y | Y（本 account） | Y（本 account） |
 | 注册/移除用户 | Y | Y（本 account） | N |
 | 管理用户组和成员 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
-| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | N |
+| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | Y（自身密钥） |
 | 将用户提升为 ADMIN | Y | Y（本 account） | N |
 
 ## CLI `--sudo` 选项
@@ -1445,7 +1446,7 @@ ov admin register-user acme bob-private --role user \
 列出工作区中的活跃用户。正在删除中的用户不会返回。
 
 **处理流程：**
-1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
+1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN/USER
 2. 调用 API Key Manager 获取活跃用户列表（按创建顺序排列）
 3. 应用可选的过滤条件（name、role）
 4. 应用可选的 `limit`/`page` 分页
@@ -1467,21 +1468,22 @@ ov admin register-user acme bob-private --role user \
 | role | str | 否 | null | 按角色过滤 |
 | query | str | 否 | null | 仅 HTTP，按用户 ID 做不区分大小写的字面包含匹配 |
 | include_summary | bool | 否 | false | 仅 HTTP，以对象返回分页用户和账号统计 |
-| include_credentials | bool | 否 | true | 仅 HTTP。ROOT 可获取可用的明文密钥，ADMIN 仅获取打码后的前缀。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；仅当服务端能读取完整 key 并用于服务端绑定时 `api_key_available` 才为 true，仅存哈希的凭据返回 false。 |
+| include_credentials | bool | 否 | true | 仅 HTTP。ROOT 获取所有可用明文密钥；ADMIN 获取自身明文及他人的打码前缀；USER 仅获取自身密钥。设为 false 时返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；USER 仅自身行包含可用状态。仅当服务端能读取完整 key 并用于服务端绑定时可用状态才为 true，仅存哈希的凭据返回 false。 |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
 **说明：**
 - 结果按创建顺序返回
-- ADMIN 只能列出自己所属的 account 中的用户
-- ROOT 可通过 `api_key` 获取全部已存储的明文密钥。非 ROOT 调用方只有自身那一行返回 `api_key` 明文，其他用户（包括其他 ADMIN）均返回打码后的 `key_prefix`。自身匹配是严格匹配：列表 account、行内 user ID 以及三段式 key 内嵌的 account/user 段必须全部等于调用方认证身份，否则该行仍打码。三段式密钥保留前两段和 secret 的最后 4 个字符，secret 中其余每个字符均替换为 `*`；secret 不超过 4 个字符时完全隐藏。非三段式密钥完全隐藏；仅存哈希的凭据沿用已有前缀。
+- ADMIN 和 USER 只能列出自己所属 account 中的用户。
+- ROOT 可通过 `api_key` 获取全部已存储的明文密钥。ADMIN 获取自身明文及他人的打码 `key_prefix`。使用个人 API Key 认证的 USER 仅获取自身已存储密钥，其他行不包含 `api_key` 或 `key_prefix`。OAuth 等其他认证方式不授予 USER 查看已存储凭据的权限。自身匹配是严格匹配：列表 account、行内 user ID 以及三段式 key 内嵌的 account/user 段必须全部等于调用方认证身份；不匹配的 key 对 ADMIN 打码，对 USER 隐藏。
+- ADMIN 打码保留密钥前两段和 secret 的最后 4 个字符，secret 中其余每个字符均替换为 `*`；secret 不超过 4 个字符或密钥格式无效时完全隐藏。仅存哈希的凭据无法恢复明文，其已有前缀仅 ROOT/ADMIN 及凭据所属 USER 可见。
 - 打码在服务端执行，同时覆盖 HTTP 和 MCP 的 `list_users(include_credentials=true)`，因此 CLI/SDK 的 JSON 输出也受保护。客户端只能将 `key_prefix` 用于展示，切换身份时需要另行提供可用密钥。
-- `ov admin list-users` 默认还会在 CLI 侧对明文 `api_key` 行使用相同格式打码，table 和 JSON 输出保持一致，并在 stderr 打印提示。传入 `--reveal-api-keys` 可输出明文：ROOT 会显示全部密钥，ADMIN/USER 调用方仍只能看到自身密钥（其他行由服务端打码）。该 flag 只影响 CLI 渲染，不改变服务端响应。table 输出会把服务端的 `api_key`（明文或 CLI 打码值）与 `key_prefix` 合并为同一个 `api_key` 列；JSON 输出保留服务端的字段名。
-- 本限制针对已存储密钥的列表浏览。创建用户与重置密钥仍会向 ROOT 或 ADMIN 返回新密钥；普通 USER 尚无自助轮换接口。
+- `ov admin list-users` 默认还会在 CLI 侧对明文 `api_key` 行使用相同格式打码，table 和 JSON 输出保持一致，并在 stderr 打印提示。传入 `--reveal-api-keys` 可输出明文：ROOT 会显示全部密钥，ADMIN/USER 仍只能看到自身密钥；其他行对 ADMIN 打码，对 USER 完全隐藏密钥和前缀。该 flag 只影响 CLI 渲染，不改变服务端响应。table 输出会把服务端的 `api_key`（明文或 CLI 打码值）与 `key_prefix` 合并为同一个 `api_key` 列；JSON 输出保留服务端的字段名。
+- 创建用户与重置密钥仍会向 ROOT 或 ADMIN 返回新密钥；USER 使用个人 API Key 认证时可以重新生成自身密钥。
 - 在 `trusted` 模式下，响应中不会包含 `api_key` 或 `key_prefix` 字段
 - 用户删除开始后，不再出现在该列表中
 
-**带统计的响应（HTTP）：** 设置 `include_summary=true` 后，`result` 返回对象：`users` 为当前页，`total` 为匹配人数，`account_total` 为账号总人数，`manager_count` 为 admin/root 人数，`key_count` 为具有可见密钥或前缀的用户数。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。默认仍返回用户数组，兼容现有调用。
+**带统计的响应（HTTP）：** 设置 `include_summary=true` 后，`result` 返回对象：`users` 为当前页，`total` 为匹配人数，`account_total` 为账号总人数，`manager_count` 为 admin/root 人数，`key_count` 为具有可见密钥或前缀的用户数。USER 响应不包含 `key_count`。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。默认仍返回用户数组，兼容现有调用。
 
 `query` 对用户 ID 做去除首尾空格、不区分大小写的字面包含匹配，可与已有的 `name` 通配符、`role` 过滤组合。例如：
 
@@ -1543,12 +1545,13 @@ fmt.Println(users)
 **CLI**
 
 ```bash
-# ROOT 或本账户的 ADMIN 都可以执行
-# 如果使用普通用户的 api_key 但该用户是 acme 的 ADMIN：
+# ROOT 或 acme 中的 ADMIN/USER 都可以执行
 ov admin list-users acme
+# 显示自己的明文密钥（USER 仍看不到其他用户的密钥或前缀）
+ov admin list-users acme --reveal-api-keys
 # 如果使用 root_api_key（--sudo）：
 ov --sudo admin list-users acme
-# 输出明文密钥而不是打码值（仅 ROOT）
+# ROOT 可显示全部可用的明文密钥
 ov --sudo admin list-users acme --reveal-api-keys
 # 按通配符 name 过滤
 ov admin list-users acme --name '*ali*'
@@ -1771,7 +1774,7 @@ ov --sudo admin set-role acme bob admin
 生成并保存用户的 API Key。默认随机生成时，更新成功后旧 Key 失效。同一 account、user 和 seed 会生成相同的 Key；轮换密钥时应使用新 seed，或省略 seed。
 
 **处理流程：**
-1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
+1. 验证请求者具有 ROOT 权限、为本账户的 ADMIN，或为使用个人 API Key 认证的目标 USER
 2. 调用 API Key Manager 重新生成用户密钥
 3. 随机生成或使用新 seed 时，旧密钥立即失效
 4. 返回新的用户密钥
@@ -1792,8 +1795,9 @@ ov --sudo admin set-role acme bob admin
 | seed | str | 否 | `null` | JSON request body 中可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 
 **说明：**
-- `trusted` 模式拒绝此操作，返回 HTTP 412（`FAILED_PRECONDITION`），不生成或修改密钥。
+- `trusted` 模式下，ROOT/ADMIN 请求返回 HTTP 412（`FAILED_PRECONDITION`），USER 自助轮换返回 HTTP 403，均不生成或修改密钥。
 - ADMIN 只能为自己所属的 account 中的用户重新生成密钥
+- USER 仅能使用个人 API Key 认证，轮换本 account 下的自身密钥。OAuth、trusted、OIDC 和 LDAP 身份不能使用 USER 自助轮换。
 - 随机生成或使用新 seed 时，旧密钥立即失效，需要更新使用该密钥的客户端
 - 省略 `seed` 时随机生成新密钥。确定性示例使用 `OV_KEY_SEED` 或 `OV_NEW_KEY_SEED`，运行前需将其设为安全生成的秘密值；Go 示例需导入 `os`。不要把示例变量名直接当作 seed。
 
@@ -1858,6 +1862,22 @@ ov admin regenerate-key acme bob --seed "$OV_NEW_KEY_SEED"
 # 如果使用 root_api_key（--sudo）：
 ov --sudo admin regenerate-key acme bob
 ```
+
+以普通 USER `acme/alice` 的身份调用：
+
+```bash
+ov admin list-users acme --reveal-api-keys
+ov admin regenerate-key acme alice
+```
+
+当目标与当前配置中的个人 `api_key` 身份匹配时，CLI 自动更新该配置文件的 `api_key`，
+保留其他设置。配置路径优先使用 `OPENVIKING_CLI_CONFIG_FILE`，否则为
+`~/.openviking/ovcli.conf`。CLI 在请求轮换前向 stderr 提示将写入的文件路径，
+保存成功后确认更新，并提醒同步其他客户端；JSON stdout 保持可解析。
+使用 `--sudo` 或轮换其他用户的密钥时，不自动修改本地密钥。
+
+CLI 在请求轮换前检查能否准备替换文件。如果服务端已换钥但保存失败，或请求期间配置被修改，
+命令返回非零退出码并明确报错，stdout 仍保留返回的 `user_key`，供手动恢复到提示的配置文件中。
 
 **响应示例**
 

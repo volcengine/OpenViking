@@ -7,6 +7,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
+use crate::base_client::ProgressGuard;
 use crate::error::{Error, Result};
 
 /// Drop null-valued keys (and an empty `args` object) from a request body before
@@ -210,6 +211,22 @@ impl HttpClient {
 
     pub fn api_key(&self) -> Option<&str> {
         self.base.api_key()
+    }
+
+    /// Match the server's credential selection after custom headers are applied.
+    pub(crate) fn request_api_key(&self) -> Option<String> {
+        let headers = self.base.build_headers();
+        headers
+            .get("X-API-Key")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                headers
+                    .get(reqwest::header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.strip_prefix("Bearer "))
+            })
+            .map(str::to_owned)
     }
 
     fn upload_mode(&self) -> Option<String> {
@@ -1480,6 +1497,7 @@ impl HttpClient {
         body: serde_json::Value,
         to: &str,
         default_name: &str,
+        show_progress: bool,
     ) -> Result<String> {
         let url = format!("{}{}", self.base.base_url, endpoint);
         let request = self
@@ -1489,6 +1507,9 @@ impl HttpClient {
             .headers(self.base.build_headers())
             .json(&body)
             .query(&[("profile", "0")]);
+        let progress = show_progress.then(|| {
+            ProgressGuard::new("Preparing OVPack on server", "OVPack download failed")
+        });
         let response = self
             .base
             .send_request(request, "HTTP request failed")
@@ -1500,10 +1521,12 @@ impl HttpClient {
                 .bytes()
                 .await
                 .map_err(|e| Error::from_reqwest("Failed to read error response", e))?;
-
             return Err(crate::base_client::api_error_from_body(&bytes, status));
         }
 
+        if let Some(progress) = &progress {
+            progress.set_message("Downloading OVPack");
+        }
         let bytes = response
             .bytes()
             .await
@@ -1521,10 +1544,29 @@ impl HttpClient {
         if let Some(parent) = final_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-
         std::fs::write(&final_path, bytes)?;
 
+        if let Some(progress) = progress {
+            progress.finish("OVPack download complete");
+        }
+
         Ok(final_path.to_string_lossy().to_string())
+    }
+
+    async fn post_pack_operation(
+        &self,
+        endpoint: &str,
+        body: &serde_json::Value,
+        show_progress: bool,
+        message: &str,
+    ) -> Result<serde_json::Value> {
+        let processing = show_progress
+            .then(|| ProgressGuard::new(message, "OVPack processing failed"));
+        let result = self.post(endpoint, body).await?;
+        if let Some(processing) = processing {
+            processing.finish("OVPack processing complete");
+        }
+        Ok(result)
     }
 
     pub async fn export_ovpack(
@@ -1532,6 +1574,7 @@ impl HttpClient {
         uri: &str,
         to: &str,
         include_vectors: bool,
+        show_progress: bool,
     ) -> Result<String> {
         let body = serde_json::json!({
             "uri": uri,
@@ -1542,16 +1585,22 @@ impl HttpClient {
             .split('/')
             .last()
             .unwrap_or("export");
-        self.download_pack("/api/v1/pack/export", body, to, base_name)
+        self.download_pack("/api/v1/pack/export", body, to, base_name, show_progress)
             .await
     }
 
-    pub async fn backup_ovpack(&self, to: &str, include_vectors: bool) -> Result<String> {
+    pub async fn backup_ovpack(
+        &self,
+        to: &str,
+        include_vectors: bool,
+        show_progress: bool,
+    ) -> Result<String> {
         self.download_pack(
             "/api/v1/pack/backup",
             serde_json::json!({"include_vectors": include_vectors}),
             to,
             "openviking-backup",
+            show_progress,
         )
         .await
     }
@@ -1562,6 +1611,7 @@ impl HttpClient {
         parent: &str,
         on_conflict: Option<&str>,
         vector_mode: Option<&str>,
+        show_progress: bool,
     ) -> Result<serde_json::Value> {
         let file_path_obj = Path::new(file_path);
 
@@ -1575,7 +1625,12 @@ impl HttpClient {
             return Err(Error::Client(format!("Path is not a file: {}", file_path)));
         }
 
-        let temp_file_id = self.upload_temp_file(file_path_obj).await?;
+        let temp_file_id = if show_progress {
+            self.upload_temp_file_with_progress(file_path_obj, false)
+                .await?
+        } else {
+            self.upload_temp_file(file_path_obj).await?
+        };
         let conflict_policy = on_conflict.unwrap_or("fail");
         let body = serde_json::json!({
             "temp_file_id": temp_file_id,
@@ -1583,7 +1638,13 @@ impl HttpClient {
             "on_conflict": conflict_policy,
             "vector_mode": vector_mode.unwrap_or("auto"),
         });
-        self.post("/api/v1/pack/import", &body).await
+        self.post_pack_operation(
+            "/api/v1/pack/import",
+            &body,
+            show_progress,
+            "Validating and importing OVPack on server",
+        )
+        .await
     }
 
     pub async fn restore_ovpack(
@@ -1591,6 +1652,7 @@ impl HttpClient {
         file_path: &str,
         on_conflict: Option<&str>,
         vector_mode: Option<&str>,
+        show_progress: bool,
     ) -> Result<serde_json::Value> {
         let file_path_obj = Path::new(file_path);
 
@@ -1604,14 +1666,25 @@ impl HttpClient {
             return Err(Error::Client(format!("Path is not a file: {}", file_path)));
         }
 
-        let temp_file_id = self.upload_temp_file(file_path_obj).await?;
+        let temp_file_id = if show_progress {
+            self.upload_temp_file_with_progress(file_path_obj, false)
+                .await?
+        } else {
+            self.upload_temp_file(file_path_obj).await?
+        };
         let conflict_policy = on_conflict.unwrap_or("fail");
         let body = serde_json::json!({
             "temp_file_id": temp_file_id,
             "on_conflict": conflict_policy,
             "vector_mode": vector_mode.unwrap_or("auto"),
         });
-        self.post("/api/v1/pack/restore", &body).await
+        self.post_pack_operation(
+            "/api/v1/pack/restore",
+            &body,
+            show_progress,
+            "Validating and restoring OVPack on server",
+        )
+        .await
     }
 
     // ============ Admin Methods ============
@@ -2270,7 +2343,9 @@ mod resource_wait_tests;
 #[cfg(test)]
 mod tests {
     use super::{BaseClient, HttpClient, TimeoutConfig};
-    use crate::base_client::api_error_from_envelope;
+    use crate::base_client::{
+        api_error_from_envelope, spawn_test_response, take_test_progress,
+    };
     use reqwest::StatusCode;
     use serde_json::{Map, json};
     use std::collections::HashMap;
@@ -2787,6 +2862,7 @@ mod tests {
                     .to_str()
                     .expect("tempdir path should be valid"),
                 false,
+                false,
             )
             .await
             .expect("pack export should retry through gateway");
@@ -3073,6 +3149,33 @@ mod tests {
             .await
             .expect("cancel request should be captured");
         assert!(cancel_request.starts_with("POST /api/v1/tasks/cmp_1/cancel "));
+    }
+
+    #[tokio::test]
+    async fn ovpack_download_progress_reports_failure_for_http_error() {
+        let base_url = spawn_test_response(
+            "500 Internal Server Error",
+            r#"{"error":{"code":"INTERNAL_ERROR","message":"export failed"}}"#,
+        )
+        .await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let destination = tempfile::tempdir().expect("download directory should be created");
+
+        let _ = take_test_progress();
+        let error = client
+            .export_ovpack(
+                "viking://resources/demo",
+                destination.path().to_str().unwrap(),
+                false,
+                true,
+            )
+            .await
+            .expect_err("HTTP error should fail download");
+        let progress = take_test_progress().expect("download progress should be recorded");
+
+        assert!(matches!(error, crate::error::Error::Api { status: Some(500), .. }));
+        assert!(progress.is_finished());
+        assert_eq!(progress.message(), "OVPack download failed");
     }
 
     #[tokio::test]

@@ -58,6 +58,11 @@ class AddResourceRequest(BaseModel):
     reason: str = ""
     instruction: str = ""
     wait: bool = False
+    timeout: float | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    )
     strict: bool = False
     internal_task: bool = False
     source_name: Optional[str] = None

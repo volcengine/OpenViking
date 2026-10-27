@@ -75,6 +75,7 @@ class DeletionService:
         self._service = service
         self._manager = manager
         self._service_loop = service_loop
+        self._manager_dispatcher = OwnerLoopDispatcher(service_loop)
         self._oauth_store = oauth_store
         self._usage_audit_runtime = usage_audit_runtime
         self._gateway_app = gateway_app
@@ -128,7 +129,10 @@ class DeletionService:
                 queued_task_ids.add(task_id)
 
     async def _is_deleting(self, account_id: str, user_id: str | None = None) -> bool:
-        return await self._manager.get_deletion(account_id, user_id) is not None
+        deletion = await self._manager_dispatcher.run(
+            lambda: self._manager.get_deletion(account_id, user_id)
+        )
+        return deletion is not None
 
     async def delete(
         self,

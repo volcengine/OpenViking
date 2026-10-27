@@ -39,6 +39,7 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
+    UnauthenticatedError,
 )
 from openviking_cli.session.user_id import (
     validate_account_id,
@@ -553,6 +554,7 @@ class FileStore(AccountStore):
         api_key: str,
         *,
         rotate: bool,
+        expected_api_key: str | None = None,
     ) -> None:
         """Persist one credential in the legacy user record."""
         self._ensure_account_active(account_id)
@@ -580,7 +582,13 @@ class FileStore(AccountStore):
         else:
             user_info.pop("key_prefix", None)
         try:
-            await self._save_users_json(account_id, {user_id: user_info})
+            await self._save_users_json(
+                account_id,
+                {user_id: user_info},
+                expected_api_keys={user_id: expected_api_key}
+                if expected_api_key is not None
+                else None,
+            )
         except Exception:
             account.users[user_id] = old_user_info
             self._rebuild_prefix_index()
@@ -1364,6 +1372,7 @@ class FileStore(AccountStore):
         deleted_user_ids: set[str] | None = None,
         reject_existing_user_ids: set[str] | None = None,
         replace_existing: bool = False,
+        expected_api_keys: dict[str, str] | None = None,
     ) -> None:
         """Merge targeted user mutations, or initialize a newly created account."""
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
@@ -1382,6 +1391,14 @@ class FileStore(AccountStore):
             else:
                 data = await self._read_json(path) or {"users": {}}
                 users = data.setdefault("users", {})
+            # Check persisted credentials while holding the cross-instance lease.
+            # Request-time authentication and the local cache may already be stale.
+            for user_id, expected_key in (expected_api_keys or {}).items():
+                current_user = users.get(user_id, {})
+                if current_user.get("deletion") or not await self._key_matches(
+                    current_user.get("key", ""), expected_key
+                ):
+                    raise UnauthenticatedError("API key is no longer active")
             if updated_users is None:
                 account = self._accounts.get(account_id)
                 if account is None:
@@ -1684,7 +1701,8 @@ class FileStore(AccountStore):
         await self._delete_group(account_id, group_id)
 
     async def replace_active_user_api_key(
-        self, account_id: str, user_id: str, api_key: str
+        self, account_id: str, user_id: str, api_key: str,
+        *, expected_api_key: str | None = None,
     ) -> None:
         async with self._mutation_lock:
             await self._set_user_key(
@@ -1692,7 +1710,19 @@ class FileStore(AccountStore):
                 user_id,
                 api_key,
                 rotate=True,
+                expected_api_key=expected_api_key,
             )
+
+    @staticmethod
+    async def _key_matches(material: str, api_key: str) -> bool:
+        if not material:
+            return False
+        if not material.startswith("$argon2"):
+            return hmac.compare_digest(material, api_key)
+        try:
+            return await asyncio.to_thread(PasswordHasher().verify, material, api_key)
+        except VerificationError:
+            return False
 
     async def verify_api_key(
         self,
@@ -1712,23 +1742,7 @@ class FileStore(AccountStore):
             user = account.users.get(entry.user_id)
             if user is None or user.get("deletion"):
                 continue
-            if entry.is_hashed:
-                try:
-                    matched = await asyncio.to_thread(
-                        PasswordHasher(
-                            time_cost=ARGON2_TIME_COST,
-                            memory_cost=ARGON2_MEMORY_COST,
-                            parallelism=ARGON2_PARALLELISM,
-                            hash_len=ARGON2_HASH_LENGTH,
-                        ).verify,
-                        entry.key_or_hash,
-                        api_key,
-                    )
-                except VerificationError:
-                    matched = False
-            else:
-                matched = hmac.compare_digest(entry.key_or_hash, api_key)
-            if matched:
+            if await self._key_matches(entry.key_or_hash, api_key):
                 return entry.account_id, entry.user_id
         return None
 

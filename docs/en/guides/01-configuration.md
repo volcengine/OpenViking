@@ -1315,10 +1315,12 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 
 Task records use the local FileStore by default. To share Task/Work state across
 OpenViking processes, provision `openviking/service/sql/task_store_init.sql` in
-MySQL and select the relational backend:
+MySQL, apply the SQL changes under `openviking/service/sql/changes/`, configure
+a stable top-level `service_name`, and select the relational backend:
 
 ```json
 {
+  "service_name": "production",
   "storage": {
     "task_store": {
       "provider": "mysql",
@@ -1342,9 +1344,15 @@ Replace `ov_tasks` consistently in the provisioning SQL when using a custom pref
 
 The MySQL backend requires the `openviking[mysql]` extra. Its mutations,
 Task finalization, and execution-event updates commit in one database
-transaction. `task_id` is globally unique; `account_id` and `user_id` scope
-authorization and queries. Do not use the FileStore tables and MySQL tables as
-active writers for the same deployment.
+transaction. Top-level `service_name` is stored on every Task/Work/Event row and
+isolates multiple OpenViking deployments that share one table set. Within one
+`service_name`, `task_id` is unique; `account_id` and `user_id` scope
+authorization and queries. Fresh deployments should run the init SQL and then
+the change scripts in order; existing TaskStore tables created before
+`service_name` must run
+`openviking/service/sql/changes/0001_task_store_service_name.sql` before
+upgrading. Do not use the FileStore tables and MySQL tables as active writers
+for the same deployment.
 
 #### agfs (RAGFS)
 
