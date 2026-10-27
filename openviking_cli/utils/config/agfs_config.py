@@ -303,7 +303,8 @@ class AGFSPathLockConfig(BaseModel):
     )
     sqlite_path: Optional[str] = Field(
         default=None,
-        description="Absolute local SQLite lock database file shared by all participating processes.",
+        description="Absolute local SQLite lock database file shared by all participating processes. "
+        "Defaults to '{storage.workspace}/_system/pathlock/pathlock.db' when not set.",
     )
     lock_timeout_secs: float = Field(
         default=0.0,
@@ -321,8 +322,10 @@ class AGFSPathLockConfig(BaseModel):
             raise ValueError(
                 "pathlock provider must be one of: 'filesystem', 'memory', 'sqlite', 'cache'"
             )
-        if self.provider == "sqlite" and (
-            not self.sqlite_path or not os.path.isabs(self.sqlite_path)
+        if (
+            self.provider == "sqlite"
+            and self.sqlite_path is not None
+            and not os.path.isabs(self.sqlite_path)
         ):
             raise ValueError("pathlock sqlite_path must be an absolute local file path")
         if not math.isfinite(self.lock_expire_secs) or self.lock_expire_secs < 1.0:

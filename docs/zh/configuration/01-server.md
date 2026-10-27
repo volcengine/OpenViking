@@ -296,7 +296,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
 | `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`cache` | `filesystem` | 路径锁存储 |
-| `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | `null` | SQLite 共享锁数据库，使用 `sqlite` 时必填 |
+| `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | 使用 `sqlite` 时为 `{workspace}/_system/pathlock/pathlock.db` | SQLite 共享锁数据库，可显式覆盖 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
@@ -304,7 +304,10 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
 
 本地路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
-`{"provider":"sqlite","sqlite_path":"/data/openviking/pathlocks.sqlite3"}`，数据库父目录需提前存在。
+`{"provider":"sqlite"}`。数据库默认位于
+`{storage.workspace}/_system/pathlock/pathlock.db`，初始化运行时 binding 时
+根据最终 workspace 解析为绝对路径。显式指定的绝对路径 `sqlite_path` 优先，
+数据库父目录会自动创建。
 访问同一文件系统的所有进程必须使用同一数据库路径、顶层 `service_name` 和锁过期配置。
 SQLite 是锁状态的唯一存储，通过路径索引查询，并在事务中原子检查及获取 Exact/Tree 锁；
 数据库阻塞操作在异步执行器之外运行。

@@ -449,7 +449,7 @@ Redis 配置：
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `provider` | str | `filesystem`、`memory`、`sqlite` 或 `cache` | `filesystem` |
-| `sqlite_path` | str / null | 使用 `sqlite` 时必填的本地数据库绝对路径；见 [SQLite 配置](../configuration/01-server.md#storage) | `null` |
+| `sqlite_path` | str / null | 使用 `sqlite` 时可覆盖本地数据库绝对路径；见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数 | `30.0` |
 
 兼容旧写法：

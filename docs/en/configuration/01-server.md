@@ -304,7 +304,7 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
 | `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `cache` | `filesystem` | Path lock storage |
-| `agfs.pathlock.sqlite_path` | absolute local file path | `null` | Shared SQLite lock database; required for `sqlite` |
+| `agfs.pathlock.sqlite_path` | absolute local file path | `{workspace}/_system/pathlock/pathlock.db` for `sqlite` | Shared SQLite lock database; optional override |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
@@ -312,8 +312,11 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
 
 For local path locking without recursive business-directory scans, set
-`storage.agfs.pathlock` to `{"provider":"sqlite","sqlite_path":"/data/openviking/pathlocks.sqlite3"}`.
-The database parent directory must exist. Every process accessing the same filesystem
+`storage.agfs.pathlock` to `{"provider":"sqlite"}`. The database defaults to
+`{storage.workspace}/_system/pathlock/pathlock.db`, resolved to an absolute path
+from the final workspace when initializing the runtime binding. An explicit absolute
+`sqlite_path` takes precedence. The database parent directory is created automatically.
+Every process accessing the same filesystem
 must use the same database path, top-level `service_name`, and lock expiry setting.
 SQLite stores authoritative lock tokens and atomically checks Exact/Tree conflicts
 using its path index. Blocking database work runs off the async executor.
