@@ -76,6 +76,8 @@ export type AssembleOpenVikingSessionParams = {
   tokenBudget: number;
   runtimeContext?: Record<string, unknown>;
   isMainAssemble: boolean;
+  /** before_prompt_build owns auto-recall; assemble keeps history and profile only. */
+  recallViaPromptHook?: boolean;
   cfg: any;
   getClient: () => Promise<OpenVikingClient>;
   logger: ContextEngineLifecycleLogger;
@@ -431,7 +433,7 @@ function isSessionNotFoundError(err: unknown): boolean {
 const PROFILE_MAX_CHARS = 8000;
 const PROFILE_READ_TIMEOUT_MS = 3000;
 
-function resolveAssembleRouting(params: AssembleOpenVikingSessionParams) {
+function resolveAssembleRouting(params: RecallParams) {
   const { sessionId, sessionKey, cfg, resolveAgentId, logger } = params;
   const ovSessionId = openClawSessionToOvStorageId(sessionId, sessionKey);
   const sender = extractRuntimeSenderId(params.runtimeContext);
@@ -473,11 +475,17 @@ async function readProfileBlock(
     .join("\n\n");
 }
 
+type RecallParams = Pick<
+  AssembleOpenVikingSessionParams,
+  "sessionId" | "sessionKey" | "runtimeContext" | "cfg" | "logger" | "resolveAgentId" | "queryConfigStore" | "traceRecorder"
+>;
+
 async function recallForAssemble(
-  params: AssembleOpenVikingSessionParams,
+  params: RecallParams,
   recallQuery: ReturnType<typeof prepareRecallQuery>,
   client: OpenVikingClient,
   routing: ReturnType<typeof resolveAssembleRouting>,
+  dedupTurns?: number,
 ) {
   const { sessionId, sessionKey, cfg, queryConfigStore, logger, traceRecorder } = params;
   const { ovSessionId, agentId, actorPeerId } = routing;
@@ -502,9 +510,22 @@ async function recallForAssemble(
     ovSessionId,
     queryTruncated: recallQuery.truncated,
     rawUserTextPreview: recallQuery.query,
-    // System additions are transient; the next turn must be able to recall the same URI.
-    dedupTurns: params.isMainAssemble ? 0 : undefined,
+    dedupTurns,
   });
+}
+
+export type PromptHookRecallParams = RecallParams & {
+  prompt: string;
+  getClient: () => Promise<OpenVikingClient>;
+};
+
+// Recall for before_prompt_build. The host freezes prependContext into the
+// admitted user turn and replays it byte-for-byte, so the default cooldown applies.
+export async function recallForPromptHook(params: PromptHookRecallParams): Promise<string> {
+  const query = prepareRecallQuery(params.prompt);
+  if (query.query.length < 5) return "";
+  const recall = await recallForAssemble(params, query, await params.getClient(), resolveAssembleRouting(params));
+  return recall.block ?? "";
 }
 
 export async function assembleOpenVikingSession(
@@ -516,7 +537,7 @@ export async function assembleOpenVikingSession(
   if (!params.isMainAssemble || !params.cfg.autoRecall || params.isBypassedSession(params)) {
     return assembled;
   }
-  const query = prepareRecallQuery(params.prompt ?? "");
+  const query = prepareRecallQuery(params.recallViaPromptHook ? "" : params.prompt ?? "");
 
   try {
     const routing = resolveAssembleRouting(params);
@@ -528,7 +549,8 @@ export async function assembleOpenVikingSession(
         Math.min(params.cfg.autoRecallTimeoutMs ?? PROFILE_READ_TIMEOUT_MS, PROFILE_READ_TIMEOUT_MS),
         params.logger,
       ),
-      query.query.length < 5 ? "" : recallForAssemble(params, query, client, routing)
+      // System additions are transient; the next turn must be able to recall the same URI.
+      query.query.length < 5 ? "" : recallForAssemble(params, query, client, routing, 0)
         .then((recall) => recall.block)
         .catch((err) => {
           params.logger.warn?.(`openviking: auto-recall failed: ${String(err)}`);
@@ -605,6 +627,9 @@ async function assembleSessionContext(params: AssembleOpenVikingSessionParams): 
   if (isTransformContextAssemble) {
     if (!cfg.autoRecall) {
       return assemblePassthrough({ diag, ovSessionId, reason: "transform_context_auto_recall_disabled", liveMessages: messages, originalTokens });
+    }
+    if (params.recallViaPromptHook) {
+      return assemblePassthrough({ diag, ovSessionId, reason: "transform_context_recall_via_prompt_hook", liveMessages: messages, originalTokens });
     }
     if (hasAutoRecallBlock(latestMessage)) {
       return assemblePassthrough({ diag, ovSessionId, reason: "transform_context_recall_already_injected", liveMessages: messages, originalTokens });
