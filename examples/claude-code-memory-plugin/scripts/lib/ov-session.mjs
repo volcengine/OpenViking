@@ -25,6 +25,7 @@ import {
   getAgentSessionContext,
   makeAgentFetchJSON,
 } from "../shared/agent-hook-runtime.mjs";
+import { dequeue, enqueue, listPending } from "../shared/pending-queue.mjs";
 import { isRetryableFailure } from "../shared/retryable.mjs";
 import {
   deriveHarnessSessionId,
@@ -74,4 +75,34 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
  */
 export function commitSession(fetchJSON, sessionId, payload = {}) {
   return commitAgentSession(fetchJSON, sessionId, undefined, payload);
+}
+
+async function queuedFor(sessionId) {
+  return (await listPending()).filter(({ entry }) => entry.sessionId === sessionId);
+}
+
+/** Whether the local queue still holds messages for this session. */
+export async function hasPendingWrites(sessionId) {
+  return (await queuedFor(sessionId)).some(({ entry }) => entry.type === "addMessage");
+}
+
+/**
+ * Queue a commit that replays after every message queued for this session;
+ * replay only sends what is queued, so an earlier commit archives none of
+ * them. Queued writes can be stamped ahead of the clock, and dedup would keep
+ * an older queued commit in place of this one, so that one is dropped.
+ */
+export async function enqueueCommitAfterWrites(sessionId) {
+  try {
+    const queued = await queuedFor(sessionId);
+    const lastWrite = Math.max(0, ...queued
+      .filter(({ entry }) => entry.type === "addMessage")
+      .map(({ entry }) => entry.createdAt || 0));
+    for (const { filename, entry } of queued) {
+      if (entry.type === "commitSession" && (entry.createdAt || 0) <= lastWrite) await dequeue(filename);
+    }
+    return await enqueue("commitSession", sessionId, {}, { createdAt: Math.max(Date.now(), lastWrite + 1) });
+  } catch {
+    return { ok: false };
+  }
 }

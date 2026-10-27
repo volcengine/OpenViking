@@ -30,6 +30,7 @@ import { extractCaptureTurns, parseTranscript } from "./cc-transcript.mjs";
 import {
   commitSession,
   deriveOvSessionId,
+  enqueueCommitAfterWrites,
   enqueuePendingDirectly,
   isRetryableFailure,
   makeFetchJSON,
@@ -123,14 +124,17 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   let commitQueued = false;
   let commitTraceId = "";
   if (ok + queued > 0) {
-    const commitRes = enqueueOnly
-      ? await enqueuePendingDirectly("commitSession", ovSessionId, {})
+    // Queued turns reach the server only on replay, so the commit has to wait
+    // behind them in the queue.
+    const commitLater = queued > 0;
+    const commitRes = commitLater
+      ? await enqueueCommitAfterWrites(ovSessionId)
       : await commitSession(fetchJSON, ovSessionId);
-    committed = !enqueueOnly && commitRes.ok;
-    commitQueued = enqueueOnly ? Boolean(commitRes.ok) : Boolean(commitRes.pendingQueued);
-    commitTraceId = enqueueOnly ? "" : commitRes.traceId || commitRes.result?.trace_id || "";
-    if (enqueueOnly && !commitRes.ok) enqueueFailed++;
-    else if (!enqueueOnly && commitRes.pendingEnqueueFailed) enqueueFailed++;
+    committed = !commitLater && commitRes.ok;
+    commitQueued = commitLater ? Boolean(commitRes.ok) : Boolean(commitRes.pendingQueued);
+    commitTraceId = commitLater ? "" : commitRes.traceId || commitRes.result?.trace_id || "";
+    if (commitLater && !commitRes.ok) enqueueFailed++;
+    else if (!commitLater && commitRes.pendingEnqueueFailed) enqueueFailed++;
   }
   return {
     ok,

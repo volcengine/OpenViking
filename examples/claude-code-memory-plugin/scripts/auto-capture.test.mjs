@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { readRequestBody, withMockOpenViking, withPendingDir, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { extractCaptureTurns } from "./cc-transcript.mjs";
-import { enqueue, listPending } from "./lib/pending-queue.mjs";
+import { enqueue, listPending, replayPending } from "./lib/pending-queue.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -622,6 +622,130 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
     assert.deepEqual(texts(batches[0]), ["first task for the subagent", "first task done"]);
     assert.deepEqual(texts(batches[1]), ["follow-up from a background task"]);
     assert.equal(commits, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function queueWrites(sessionId, count, createdAt) {
+  for (let i = 0; i < count; i++) {
+    await enqueue("addMessage", sessionId, {
+      role: "user",
+      parts: [{ type: "text", text: `parked ${i}` }],
+    }, { createdAt: createdAt + i });
+  }
+}
+
+async function queueOrder() {
+  return (await listPending()).map(({ entry }) => [entry.type, entry.sessionId]);
+}
+
+async function replayAll() {
+  const paths = [];
+  await replayPending(async (path) => {
+    paths.push(path);
+    return { ok: true, result: {} };
+  }, () => {});
+  return paths;
+}
+
+function rejectAllButHealth(healthy) {
+  return async (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    if (req.method === "GET" && url.pathname === "/health" && healthy) {
+      writeJson(res, { status: "ok", result: { healthy: true } });
+      return;
+    }
+    if (req.method === "POST") await readRequestBody(req);
+    writeJson(res, { status: "error", error: { code: "UNAVAILABLE" } }, 503);
+  };
+}
+
+for (const healthy of [true, false]) {
+  test(`SessionEnd queues its commit behind parked writes (health ${healthy ? "ok" : "down"})`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "ov-cc-session-end-parked-"));
+    const ovSessionId = "cc-end-parked";
+    try {
+      await withPendingDir(async (pendingDir) => {
+        // A commit left over from an earlier failure, and writes stamped
+        // ahead of the clock the way a failed batch stamps them.
+        await enqueue("commitSession", ovSessionId, {}, { createdAt: Date.now() - 1000 });
+        await queueWrites(ovSessionId, 3, Date.now() + 60_000);
+
+        await withMockOpenViking(rejectAllButHealth(healthy), async (baseUrl) => {
+          await runHook("session-end.mjs", { session_id: "end-parked", cwd: root }, {
+            ...hookEnv(root, baseUrl),
+            OPENVIKING_PENDING_DIR: pendingDir,
+          });
+        });
+
+        assert.deepEqual(await queueOrder(), [
+          ["addMessage", ovSessionId],
+          ["addMessage", ovSessionId],
+          ["addMessage", ovSessionId],
+          ["commitSession", ovSessionId],
+        ]);
+        assert.deepEqual(await replayAll(), [
+          ...Array(3).fill(`/api/v1/sessions/${ovSessionId}/messages`),
+          `/api/v1/sessions/${ovSessionId}/commit`,
+        ]);
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("SessionEnd sends parked writes before committing once the server is back", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-session-end-replay-"));
+  const ovSessionId = "cc-end-replay";
+  try {
+    await withPendingDir(async (pendingDir) => {
+      await queueWrites(ovSessionId, 3, Date.now());
+
+      await withMockOpenViking(async (req, res) => {
+        if (req.method === "POST") await readRequestBody(req);
+        writeJson(res, { status: "ok", result: {} });
+      }, async (baseUrl, requests) => {
+        await runHook("session-end.mjs", { session_id: "end-replay", cwd: root }, {
+          ...hookEnv(root, baseUrl),
+          OPENVIKING_PENDING_DIR: pendingDir,
+        });
+        assert.deepEqual(requests.filter((r) => r.method === "POST").map((r) => r.path), [
+          ...Array(3).fill(`/api/v1/sessions/${ovSessionId}/messages`),
+          `/api/v1/sessions/${ovSessionId}/commit`,
+        ]);
+      });
+
+      assert.deepEqual(await listPending(), []);
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop queues its commit behind turns parked by a failed send", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-subagent-parked-"));
+  const transcriptPath = join(root, "subagent.jsonl");
+  try {
+    await writeTranscript(transcriptPath);
+    await withPendingDir(async (pendingDir) => {
+      await withMockOpenViking(rejectAllButHealth(true), async (baseUrl, requests) => {
+        await runHook("subagent-stop.mjs", {
+          session_id: "parent-parked",
+          agent_id: "child-parked",
+          agent_transcript_path: transcriptPath,
+          cwd: root,
+        }, { ...hookEnv(root, baseUrl), OPENVIKING_PENDING_DIR: pendingDir });
+        assert.equal(requests.some((r) => r.path.endsWith("/commit")), false);
+      });
+
+      assert.deepEqual((await queueOrder()).map(([type]) => type), [
+        "addMessage",
+        "addMessage",
+        "commitSession",
+      ]);
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
