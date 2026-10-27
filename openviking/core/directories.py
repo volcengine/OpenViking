@@ -141,6 +141,13 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 "should retrieve relevant skills before executing tasks, select most appropriate skill to execute.",
             ),
             DirectoryDefinition(
+                path="tools",
+                abstract="User-private tool configuration for agent capabilities.",
+                overview="Stores tool integration definitions owned by the current User, "
+                "such as MCP server tool catalogs. Shared tools remain under "
+                "viking://agent/tools.",
+            ),
+            DirectoryDefinition(
                 path="sessions",
                 abstract="User session registry. Stores conversation state, live messages, tool outputs, and session history owned by the current User.",
                 overview="Use this directory to inspect or migrate user-owned session records. Session entries are created lazily when sessions are started.",

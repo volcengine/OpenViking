@@ -1,6 +1,6 @@
 export * from '#/gen/ov-client'
 
-export { createOvClient, ovClient } from './client'
+export { createOvClient, getOvClient, ovClient } from './client'
 export {
   getOvResult,
   isOvClientError,

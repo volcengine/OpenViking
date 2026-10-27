@@ -75,6 +75,21 @@ async def test_remote_resource_business_failure_sets_error_result(monkeypatch):
     assert result["isError"] is True
     assert result["content"] == [{"type": "text", "text": direct_result}]
 
+    upstream_error = {
+        "content": [{"type": "text", "text": "upstream rejected the request"}],
+        "structuredContent": {"code": "invalid_city"},
+        "isError": True,
+    }
+    service.mcps = SimpleNamespace(invoke=AsyncMock(return_value=upstream_error))
+    result = await _call_tool(
+        "invoke_mcp_tool",
+        {
+            "tool_uri": "viking://agent/tools/weather/current.json",
+            "arguments": {"city": "Atlantis"},
+        },
+    )
+    assert result == upstream_error
+
 
 async def test_skill_install_business_failure_sets_error_result(monkeypatch):
     monkeypatch.setattr(
@@ -153,7 +168,10 @@ async def test_read_partial_failure_remains_a_success_result(monkeypatch):
     monkeypatch.setattr(
         mcp_endpoint,
         "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(read_visible=read_visible),
+            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
+        ),
     )
 
     arguments = {

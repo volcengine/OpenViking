@@ -41,6 +41,7 @@ from openviking.server.routers import (
     content_router,
     debug_router,
     filesystem_router,
+    mcps_router,
     metrics_router,
     observer_router,
     openviking_assets_router,
@@ -642,6 +643,7 @@ def create_app(
     app.include_router(resources_router)
     app.include_router(rules_router)
     app.include_router(filesystem_router)
+    app.include_router(mcps_router)
     app.include_router(content_router)
     app.include_router(console_router)
     app.include_router(search_router)

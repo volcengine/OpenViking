@@ -27,6 +27,7 @@ import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as GatewayRouteRouteImport } from './routes/gateway/route'
 import { Route as FilesystemRouteRouteImport } from './routes/filesystem/route'
 import { Route as DirectoryRouteRouteImport } from './routes/directory/route'
+import { Route as ArrangerRouteRouteImport } from './routes/arranger/route'
 import { Route as AgentExperienceRouteRouteImport } from './routes/agent-experience/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as VikingbotIndexRouteImport } from './routes/vikingbot/index'
@@ -139,6 +140,11 @@ const FilesystemRouteRoute = FilesystemRouteRouteImport.update({
 const DirectoryRouteRoute = DirectoryRouteRouteImport.update({
   id: '/directory',
   path: '/directory',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ArrangerRouteRoute = ArrangerRouteRouteImport.update({
+  id: '/arranger',
+  path: '/arranger',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AgentExperienceRouteRoute = AgentExperienceRouteRouteImport.update({
@@ -263,6 +269,7 @@ const CompileTasksTaskIdRoute = CompileTasksTaskIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agent-experience': typeof AgentExperienceRouteRouteWithChildren
+  '/arranger': typeof ArrangerRouteRoute
   '/directory': typeof DirectoryRouteRoute
   '/filesystem': typeof FilesystemRouteRoute
   '/gateway': typeof GatewayRouteRouteWithChildren
@@ -305,6 +312,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/arranger': typeof ArrangerRouteRoute
   '/directory': typeof DirectoryRouteRoute
   '/filesystem': typeof FilesystemRouteRoute
   '/home': typeof HomeRouteRoute
@@ -345,6 +353,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/agent-experience': typeof AgentExperienceRouteRouteWithChildren
+  '/arranger': typeof ArrangerRouteRoute
   '/directory': typeof DirectoryRouteRoute
   '/filesystem': typeof FilesystemRouteRoute
   '/gateway': typeof GatewayRouteRouteWithChildren
@@ -390,6 +399,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/agent-experience'
+    | '/arranger'
     | '/directory'
     | '/filesystem'
     | '/gateway'
@@ -432,6 +442,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/arranger'
     | '/directory'
     | '/filesystem'
     | '/home'
@@ -471,6 +482,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/agent-experience'
+    | '/arranger'
     | '/directory'
     | '/filesystem'
     | '/gateway'
@@ -515,6 +527,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AgentExperienceRouteRoute: typeof AgentExperienceRouteRouteWithChildren
+  ArrangerRouteRoute: typeof ArrangerRouteRoute
   DirectoryRouteRoute: typeof DirectoryRouteRoute
   FilesystemRouteRoute: typeof FilesystemRouteRoute
   GatewayRouteRoute: typeof GatewayRouteRouteWithChildren
@@ -666,6 +679,13 @@ declare module '@tanstack/react-router' {
       path: '/directory'
       fullPath: '/directory'
       preLoaderRoute: typeof DirectoryRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/arranger': {
+      id: '/arranger'
+      path: '/arranger'
+      fullPath: '/arranger'
+      preLoaderRoute: typeof ArrangerRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/agent-experience': {
@@ -916,6 +936,7 @@ const VikingbotRouteRouteWithChildren = VikingbotRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentExperienceRouteRoute: AgentExperienceRouteRouteWithChildren,
+  ArrangerRouteRoute: ArrangerRouteRoute,
   DirectoryRouteRoute: DirectoryRouteRoute,
   FilesystemRouteRoute: FilesystemRouteRoute,
   GatewayRouteRoute: GatewayRouteRouteWithChildren,

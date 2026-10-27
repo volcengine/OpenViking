@@ -280,6 +280,58 @@ result = client.find(query="hello", limit=5)
 print(result)
 ```
 
+### MCP Server 与实时上下文
+
+```python
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://127.0.0.1:1933", api_key="your-user-key")
+client.initialize()
+
+client.add_mcp(
+    name="weather",
+    url="https://mcp.example.com/api",
+    headers={"Authorization": "Bearer token"},
+)
+# 工具摘要和索引默认在后台继续处理。
+# 需要处理完成后再返回时传入 wait=True。
+tools = client.find_mcp_tools("当前天气", limit=5)
+mounted = client.mount_mcp_tool(
+    tool_uri="viking://agent/tools/weather/current.json",
+    node_uri="viking://resources/arranger/beijing-weather.md",
+    title="北京天气",
+    description="北京区域的实时天气。",
+    timeout_seconds=60,
+    arguments={"city": "Beijing"},
+    tags=["project=weather", "kind=live-context"],
+    wait=True,
+)
+batch_result = client.batch_mount_mcp_tools(
+    [
+        {
+            "tool_uri": "viking://agent/tools/weather/current.json",
+            "node_uri": "viking://resources/arranger/shanghai-weather.md",
+            "title": "上海天气",
+            "arguments": {"city": "Shanghai"},
+        }
+    ],
+    wait=True,
+)
+client.batch_unmount_mcp_tools(
+    ["viking://resources/arranger/shanghai-weather.md"],
+    wait=True,
+)
+sync_result = client.sync_mcp("weather")
+print(sync_result["changes"])
+print(sync_result["affected_mounts"])
+```
+
+异步客户端提供相同的方法。MCP 操作包括 `add_mcp`、`remove_mcp`、
+`list_mcps`、`get_mcp`、`validate_mcp`、`sync_mcp`、
+`get_mcp_status`、`find_mcp_tools`、`invoke_mcp_tool`、
+`mount_mcp_tool`、`batch_mount_mcp_tools`、`unmount_mcp_tool`、
+`batch_unmount_mcp_tools` 和 `list_mcp_mounts`。
+
 ### 高频参数与 Options
 
 高频字段使用显式参数。为保证可读性，推荐使用参数名，例如 `add_resource` 的

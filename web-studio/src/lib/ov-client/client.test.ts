@@ -48,6 +48,9 @@ it('uses the documented hosted Bearer credential and returns to source headers a
   )
   client.setConnection({ apiKey: 'user-key' })
   await client.instance.get('/api/v1/fs/ls')
+  expect(requests[0].baseURL).toBe(
+    'https://api.vikingdb.cn-beijing.volces.com/openviking',
+  )
   expect(readRequestHeader(requests[0], 'Authorization')).toBe(
     'Bearer user-key',
   )
@@ -59,12 +62,14 @@ it('uses the documented hosted Bearer credential and returns to source headers a
   await client.instance.get('/health', {
     headers: { Authorization: 'Bearer candidate-key' },
   })
+  expect(requests[1].baseURL).toBe('https://proxy.example/openviking')
   expect(readRequestHeader(requests[1], 'Authorization')).toBe(
     'Bearer candidate-key',
   )
   client.setOptions({ baseUrl: 'http://localhost:19340' })
   await client.instance.get('/api/v1/fs/ls')
   expect(readRequestHeader(requests[2], 'X-API-Key')).toBe('user-key')
+  expect(requests[2].baseURL).toBe('http://localhost:19340')
   expect(readRequestHeader(requests[2], 'Authorization')).toBe('')
   client.setOptions({
     baseUrl: 'https://api.vikingdb.cn-beijing.volces.com/openviking',

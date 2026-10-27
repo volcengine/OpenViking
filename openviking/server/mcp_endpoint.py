@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import contextvars
 import dataclasses
+import json
 import os
 import shlex
 from contextlib import asynccontextmanager
@@ -269,6 +270,12 @@ _READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
     destructiveHint=False,
     idempotentHint=True,
     openWorldHint=False,
+)
+_LIVE_CONTEXT_READ_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
 )
 _DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False,
@@ -527,6 +534,54 @@ async def privacy_upsert(
     }
 
 
+
+# -- find_mcp_tools / invoke_mcp_tool ---------------------------------------------------------
+
+
+@_mcp_error_results(structured_output=False)
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
+async def find_mcp_tools(query: str, limit: int = 10) -> CallToolResult | str:
+    """
+    Semantically retrieve candidate MCP tools for the user's intent.
+    Returns ranked tools with routing URI, revision, score, and complete MCP definitions including inputSchema and annotations.
+    Choose a tool, fill arguments according to its inputSchema, then call invoke_mcp_tool with the returned uri as tool_uri.
+    No additional read is needed.
+    """
+    service = get_service()
+    ctx = _get_ctx()
+    try:
+        result = await service.mcps.find(query, limit, ctx, include_definition=True)
+    except OpenVikingError as exc:
+        return _mcp_failure(str(exc))
+    tools = [{key: hit[key] for key in ("uri", "score", "tool")} for hit in result["tools"]]
+    payload = {"tools": tools, "total": len(tools)}
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))],
+        structuredContent=payload,
+    )
+
+
+@_mcp_error_results(structured_output=False)
+@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS, structured_output=False)
+async def invoke_mcp_tool(
+    tool_uri: str,
+    arguments: Optional[Dict[str, Any]] = None,
+) -> CallToolResult | str:
+    """
+    Execute a tool selected from find_mcp_tools.
+    Pass its returned uri as tool_uri and fill arguments according to the returned tool.inputSchema.
+    OpenViking resolves the server and credentials internally.
+    The upstream tool may have external side effects and calls are not retried.
+    """
+    service = get_service()
+    ctx = _get_ctx()
+    try:
+        result = await service.mcps.invoke(tool_uri, arguments or {}, ctx)
+    except OpenVikingError as exc:
+        return _mcp_failure(str(exc))
+    return CallToolResult.model_validate(result)
+
+
 # -- find / search ---------------------------------------------------------
 
 
@@ -551,7 +606,7 @@ async def find(
     read_content: bool = False,
     events_time_decay_protection: Optional[str] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills.  read_content only expands stored content; use read explicitly to execute a Live Context node."""
     try:
         validate_event_time_decay_request(events_time_decay_protection)
     except ValueError as exc:
@@ -633,7 +688,8 @@ async def search(
     abstract, and score. ``mode="context"`` returns an injection-ready,
     token-budgeted context block and supports category quotas, purpose presets,
     detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
-    ``target_uri`` is only supported in list mode.
+    ``target_uri`` is only supported in list mode. ``read_content`` only expands
+    stored content; use ``read`` explicitly to execute a Live Context node.
     """
     try:
         validate_event_time_decay_request(events_time_decay_protection)
@@ -942,13 +998,13 @@ def _mcp_media_download_hint(uri: str) -> str:
 
 
 @_mcp_error_results(structured_output=False)
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
+@mcp.tool(annotations=_LIVE_CONTEXT_READ_TOOL_ANNOTATIONS, structured_output=False)
 async def read(
     uris: str | list[str],
     offset: int = 0,
     limit: int = -1,
-) -> str | list[ContentBlock]:
-    """Read one or more viking:// file URIs. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+) -> str | list[ContentBlock] | CallToolResult:
+    """Read one or more viking:// file URIs. A complete read of an OpenViking Live Context node returns its evaluated text content; paginated reads only return stored descriptor text. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
 
     service = get_service()
@@ -1025,7 +1081,7 @@ async def read(
 
     async def _read_one(
         uri: str, prepared: tuple[str, Optional[int], Optional[_MCPToolFailure]]
-    ) -> str | ContentBlock:
+    ) -> str | ContentBlock | CallToolResult:
         async with semaphore:
             try:
                 resolved_uri, declared_size, error = prepared
@@ -1059,12 +1115,18 @@ async def read(
                     offset=offset,
                     limit=limit,
                 )
+                if offset == 0 and limit == -1:
+                    result = await service.mcps.read_live_context(content, ctx)
+                    if result is not None:
+                        return result
                 return content
             except OpenVikingError as exc:
                 return _mcp_failure(exc)
 
     if len(uri_list) == 1:
         result = await _read_one(uri_list[0], checked[0])
+        if isinstance(result, CallToolResult):
+            return result
         if isinstance(result, str):
             return result
         return [TextContent(type="text", text=f"Source: {uri_list[0]}"), result]
@@ -1074,12 +1136,20 @@ async def read(
     )
     if any(not isinstance(result, str) for result in results):
         blocks: list[ContentBlock] = []
+        has_tool_result = False
+        is_error = False
         for uri, result in zip(uri_list, results, strict=True):
             blocks.append(TextContent(type="text", text=f"=== {uri} ==="))
             if isinstance(result, str):
                 blocks.append(TextContent(type="text", text=result))
+            elif isinstance(result, CallToolResult):
+                has_tool_result = True
+                is_error = is_error or result.isError
+                blocks.extend(result.content)
             else:
                 blocks.append(result)
+        if has_tool_result:
+            return CallToolResult(content=blocks, isError=is_error)
         return blocks
 
     parts = []

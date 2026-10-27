@@ -3,6 +3,8 @@
 OpenViking Server 内置 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 端点。支持 Streamable HTTP 的客户端可直接连接；只支持 stdio 的客户端可使用 [Agent Plugins 包](../agent-integrations/15-agent-plugins.md)提供的代理。
 
 > **快速接入？** 见 [MCP 客户端](../agent-integrations/06-mcp-clients.md) 获取各平台配置片段和注意事项。本页面覆盖完整的工具参考和高级配置。
+>
+> **接入外部 MCP Server？** 见[实时上下文接入与编排](24-live-context-arrangement.md)，了解 `ov mcps`、Tool Catalog、实时节点、Studio Arranger 和 Context as Code。
 
 ## 前提条件
 
@@ -124,6 +126,8 @@ claude mcp add --transport http openviking \
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
+| `find_mcp_tools` | 按用户意图语义检索已注册的上游 MCP 工具。返回按相关度排序的候选项，包含 `uri`、`score` 和完整 MCP `tool` 定义（含 `inputSchema` 与 annotations）。可直接将返回的 `uri` 作为 `invoke_mcp_tool.tool_uri`，无需额外调用 `read` | `query`, `limit`（默认 10） |
+| `invoke_mcp_tool` | 执行 `find_mcp_tools` 选出的工具。OpenViking 在服务端解析上游 Server 和凭证，并透明保留上游返回的 `content`、`structuredContent` 与 `isError`。上游工具可能产生外部副作用，调用不会自动重试 | `tool_uri`, `arguments`（可选，必须符合检索结果中的 `tool.inputSchema`） |
 | `find` | 无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选) |
 | `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具。`list` 模式下每个 skill 包也只出一条命中，URI 指向 `SKILL.md`、摘要取自包本身，但 `limit` 在合并之前生效，所以一个包在多个文件上命中时会占掉多个名额，返回条数少于 `limit` | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选), `events_time_decay_protection`（两种模式均可选），以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
 | `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频；需要原始字节时用 `download` | `uris`（单个字符串或数组）, `offset`, `limit`（文本行数） |

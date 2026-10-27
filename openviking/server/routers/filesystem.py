@@ -7,7 +7,7 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
 
-from openviking.core.namespace import context_type_for_uri
+from openviking.core.namespace import canonical_user_root, context_type_for_uri
 from openviking.core.namespace_policy import namespace_policy_for_uri
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
@@ -24,12 +24,26 @@ from openviking.storage.expr import And, Eq, In
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking.utils.tags import normalize_search_tags
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
 
 
 _ATTR_INDEX_FIELDS = ["level", "search_tags"]
+
+
+def _reject_managed_tools_uri(
+    operation: str,
+    uris: list[str],
+    ctx: RequestContext,
+) -> None:
+    roots = ("viking://agent/tools", f"{canonical_user_root(ctx)}/tools")
+    for uri in uris:
+        if any(uri == root or uri.startswith(f"{root}/") for root in roots):
+            raise InvalidArgumentError(
+                f"{operation} is not allowed under managed MCP tools directories; "
+                "use 'ov mcps' instead"
+            )
 
 
 def _clean_memory_attrs(raw: str) -> dict[str, Any]:
@@ -283,6 +297,7 @@ async def mkdir(
     service = get_service()
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
+    _reject_managed_tools_uri("mkdir", [uri], _ctx)
     try:
         await service.fs.mkdir(
             uri,
@@ -309,6 +324,7 @@ async def rm(
     service = get_service()
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
+    _reject_managed_tools_uri("rm", [uri], _ctx)
     try:
         result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait)
     except AGFSNotFoundError:
@@ -368,6 +384,7 @@ async def cp(
     to_uri = validate_request_viking_uri(
         resolve_path_variables(request.to_uri), _ctx, field_name="to_uri"
     )
+    _reject_managed_tools_uri("cp", [from_uri, to_uri], _ctx)
     try:
         result = await service.fs.cp(
             from_uri,
@@ -409,6 +426,7 @@ async def mv(
     to_uri = validate_request_viking_uri(
         resolve_path_variables(request.to_uri), _ctx, field_name="to_uri"
     )
+    _reject_managed_tools_uri("mv", [from_uri, to_uri], _ctx)
     try:
         await service.fs.mv(from_uri, to_uri, ctx=_ctx)
     except AGFSNotFoundError:

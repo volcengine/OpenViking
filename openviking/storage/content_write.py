@@ -761,6 +761,8 @@ class ContentWriteCoordinator:
                 try:
                     if exists and stat.get("isDir"):
                         raise ConflictError(f"Target is a directory: {uri}")
+                    if operation["if_absent"] and exists:
+                        raise ConflictError(f"Target already exists: {uri}")
                     expected = operation.get("expected_sha256")
                     if expected is not None:
                         if not exists:
@@ -1101,6 +1103,17 @@ class ContentWriteCoordinator:
             ):
                 raise InvalidArgumentError("expected_sha256 must be a lowercase SHA-256 digest")
             self._validate_batch_mode(mode)
+            if_absent = raw.get("if_absent", False)
+            if not isinstance(if_absent, bool):
+                raise InvalidArgumentError(f"batch-write if_absent must be a boolean: {uri}")
+            if if_absent and expected is not None:
+                raise InvalidArgumentError(
+                    f"batch-write if_absent cannot be combined with expected_sha256: {uri}"
+                )
+            if if_absent and mode == "append":
+                raise InvalidArgumentError(
+                    f"batch-write if_absent cannot be combined with append mode: {uri}"
+                )
             if has_content_base64 and mode == "append":
                 raise InvalidArgumentError(
                     f"batch-write append does not support binary content: {uri}"
@@ -1132,6 +1145,7 @@ class ContentWriteCoordinator:
                     "content": content,
                     "mode": mode,
                     "expected_sha256": raw.get("expected_sha256"),
+                    "if_absent": if_absent,
                     "ingest_options": ingest_options,
                 }
             )

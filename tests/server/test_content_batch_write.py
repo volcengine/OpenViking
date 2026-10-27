@@ -25,6 +25,7 @@ from openviking.telemetry.context import bind_telemetry
 from openviking.telemetry.operation import OperationTelemetry
 from openviking.utils.content_hash import content_md5
 from openviking_cli.exceptions import (
+    ConflictError,
     InvalidArgumentError,
     NotFoundError,
 )
@@ -423,7 +424,7 @@ async def test_batch_create_replace_and_upsert_overwrite_or_create(monkeypatch):
         root_uri=root,
         operations=[
             {"uri": existing, "content": "replacement", "mode": "create"},
-            {"uri": created_by_replace, "content": "created", "mode": "replace"},
+            {"uri": created_by_replace, "content": "created", "mode": "replace", "if_absent": True},
             {"uri": created_by_upsert, "content": "upsert", "mode": "upsert"},
         ],
         ctx=ctx,
@@ -437,6 +438,19 @@ async def test_batch_create_replace_and_upsert_overwrite_or_create(monkeypatch):
         created_by_replace: "created",
         created_by_upsert: "upsert",
     }
+
+    with pytest.raises(ConflictError, match="Target already exists"):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[
+                {"uri": existing, "content": "must not be written"},
+                {"uri": created_by_replace, "content": "overwrite", "if_absent": True},
+            ],
+            ctx=ctx,
+            wait=False,
+        )
+    assert vfs.files[existing] == "replacement"
+    assert vfs.files[created_by_replace] == "created"
 
 
 @pytest.mark.asyncio

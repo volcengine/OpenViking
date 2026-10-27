@@ -406,6 +406,25 @@ JSON 输出 - 错误：
 | PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
 | DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
 
+### [MCP 与实时上下文](26-mcp-live-context.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/mcps/validate` | 校验 MCP Server 连接并发现工具，不保存配置 |
+| POST | `/api/v1/mcps` | 注册 MCP Server 并发布工具目录 |
+| GET | `/api/v1/mcps` | 列出已注册 MCP Server |
+| GET | `/api/v1/mcps/{name}` | 查看 MCP Server 和当前工具定义 |
+| GET | `/api/v1/mcps/status` | 检查 MCP Server 是否可访问 |
+| POST | `/api/v1/mcps/{name}/sync` | 同步工具目录并报告受影响的实时上下文挂载 |
+| DELETE | `/api/v1/mcps/{name}` | 删除 MCP Server 和工具目录 |
+| POST | `/api/v1/mcps/find` | 语义检索 MCP 工具 |
+| POST | `/api/v1/mcps/invoke` | 调用 MCP 工具 |
+| POST | `/api/v1/mcps/mount` | 创建或替换一个 MCP 实时上下文节点 |
+| POST | `/api/v1/mcps/batch-mount` | 批量创建或替换实时上下文节点 |
+| DELETE | `/api/v1/mcps/mount` | 删除一个挂载及其节点 |
+| POST | `/api/v1/mcps/batch-unmount` | 批量删除挂载及其节点 |
+| GET | `/api/v1/mcps/mounts` | 查询 MCP Server 或工具的挂载 |
+
 ### [会话](05-sessions.md)、[记忆](16-memory.md)与 [Agent 进化](19-agent-evolution.md)
 
 | 方法 | 路径 | 说明 |
@@ -614,4 +633,4 @@ JSON 输出 - 错误：
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
 | 身份与治理 | 管理员、ACL、隐私配置 |
-| 协议与扩展 | OpenViking Assets、WebDAV、Agent Runtime API、VikingBot API |
+| 协议与扩展 | MCP 与实时上下文、OpenViking Assets、WebDAV、Agent Runtime API、VikingBot API |

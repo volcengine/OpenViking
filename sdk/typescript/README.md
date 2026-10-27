@@ -20,7 +20,7 @@ const results = await client.search("deployment guide", {
 });
 ```
 
-The client follows the same HTTP API, identity headers, response envelope and error codes as `openviking-sdk` for Python and the Go SDK. It supports resources and skills, filesystem/content operations, retrieval, sessions, OVPack files, snapshots, tasks, watches, observer status and tenant administration.
+The client follows the same HTTP API, identity headers, response envelope and error codes as `openviking-sdk` for Python and the Go SDK. It supports resources and skills, MCP servers and live context, filesystem/content operations, retrieval, sessions, OVPack files, snapshots, tasks, watches, observer status and tenant administration.
 
 Existing local file paths are uploaded automatically, and local directories are zipped before upload. Other strings are sent to the server as URLs or server-side paths.
 
@@ -61,6 +61,60 @@ await client.commitSession("s1", { keepRecentCount: 0, eventTags: [] });
 ```
 
 Deployments using shared temporary storage can set `uploadMode: "shared"`; the server also accepts `"local"` (the default).
+
+## MCP Servers and Live Context
+
+```ts
+await client.addMCP(
+  "weather",
+  "https://mcp.example.com/api",
+  { Authorization: "Bearer token" },
+  { targetUri: "viking://agent/tools" },
+);
+// Tool summaries and indexing continue in the background by default.
+// Pass { wait: true } as the fourth argument to wait.
+const tools = await client.findMCPTools("current weather", 5);
+const mounted = await client.mountMCPTool(
+  "viking://agent/tools/weather/current.json",
+  "viking://resources/arranger/beijing-weather.md",
+  "Beijing Weather",
+  {
+    description: "Current weather for the Beijing region.",
+    timeoutSeconds: 60,
+    arguments: { city: "Beijing" },
+    tags: ["project=weather", "kind=live-context"],
+    wait: true,
+  },
+);
+const batchMounted = await client.batchMountMCPTools(
+  [
+    {
+      toolUri: "viking://agent/tools/weather/current.json",
+      nodeUri: "viking://resources/arranger/shanghai-weather.md",
+      title: "Shanghai Weather",
+      arguments: { city: "Shanghai" },
+    },
+  ],
+  { wait: true },
+);
+await client.batchUnmountMCPTools(
+  ["viking://resources/arranger/shanghai-weather.md"],
+  { wait: true },
+);
+const syncResult = await client.syncMCP("weather", {
+  targetUri: "viking://agent/tools",
+});
+console.log(syncResult.changes, syncResult.affected_mounts);
+```
+
+The client also exposes `removeMCP`, `listMCPs`, `validateMCP`, `getMCP`,
+`getMCPStatus`, `invokeMCPTool`, `batchMountMCPTools`, `unmountMCPTool`,
+`batchUnmountMCPTools`, and `listMCPMounts`.
+
+Registration defaults to `viking://~/tools`. Set `targetUri` to
+`viking://agent/tools` for account-shared servers. `listMCPs` and
+`findMCPTools` merge both spaces when it is omitted; name-based operations
+default to the user space.
 
 OVPack exports and backups follow the Python and Go SDK contract: they are streamed to a Node.js local file and return its final path.
 

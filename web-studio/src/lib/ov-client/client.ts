@@ -184,6 +184,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
 
   instance.interceptors.request.use((config) => {
     const headers = AxiosHeaders.from(config.headers)
+    config.baseURL = runtimeOptions.baseUrl
 
     for (const [key, value] of Object.entries(defaultHeaders)) {
       headers.set(key, value)
@@ -255,6 +256,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   }
 
   function syncClientConfig(): void {
+    instance.defaults.baseURL = runtimeOptions.baseUrl
     client.setConfig({
       baseURL: runtimeOptions.baseUrl,
       throwOnError: true,
@@ -343,8 +345,23 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   }
 }
 
-export const ovClient = createOvClient({
-  apiKeyStorageKey: '',
-  baseUrl: ENV_BASE_URL,
-  bindSdkClient: true,
-})
+const GLOBAL_CLIENT_KEY = '__OPENVIKING_STUDIO_OV_CLIENT__'
+const sharedGlobal = globalThis as typeof globalThis & {
+  [GLOBAL_CLIENT_KEY]?: OvClientAdapter
+}
+
+// Vite can load timestamped module copies after HMR. Keep one runtime client so
+// every route observes the connection selected by AppConnectionProvider.
+export const ovClient =
+  sharedGlobal[GLOBAL_CLIENT_KEY] ??
+  createOvClient({
+    apiKeyStorageKey: '',
+    baseUrl: ENV_BASE_URL,
+    bindSdkClient: true,
+  })
+
+sharedGlobal[GLOBAL_CLIENT_KEY] = ovClient
+
+export function getOvClient(): OvClientAdapter {
+  return sharedGlobal[GLOBAL_CLIENT_KEY] ?? ovClient
+}

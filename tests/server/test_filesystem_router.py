@@ -504,10 +504,13 @@ async def test_service_startup_syncs_builtin_assets_and_custom_directory(service
     ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
     profile_uri = f"{SYSTEM_MEMORY_BUILTIN_ROOT}/profile.yaml"
 
-    assert await service.viking_fs.read_file_bytes(
-        profile_uri,
-        ctx=ctx,
-    ) == (builtin_memory_templates_dir() / "profile.yaml").read_bytes()
+    assert (
+        await service.viking_fs.read_file_bytes(
+            profile_uri,
+            ctx=ctx,
+        )
+        == (builtin_memory_templates_dir() / "profile.yaml").read_bytes()
+    )
     assert (
         await service.viking_fs.stat(
             SYSTEM_MEMORY_CUSTOM_ROOT,
