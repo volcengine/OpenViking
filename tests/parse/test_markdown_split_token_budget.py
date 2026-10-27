@@ -25,3 +25,21 @@ def test_smart_split_preserves_content():
     paragraph = "\u4e2d" * 5000
     parts = parser._smart_split_content(paragraph, max_size=2048)
     assert "".join(parts) == paragraph
+
+
+def test_estimate_token_count_covers_cjk_punctuation_and_extensions():
+    """CJK punctuation, fullwidth forms and Extension A must count at the CJK rate.
+
+    These characters fall outside the basic ``\\u4e00-\\u9fff`` ideograph range, so
+    the previous regex downgraded them to the 0.3 "other" rate and undercounted
+    CJK-heavy documents. They must be weighted like CJK (0.7/char).
+    """
+    parser = MarkdownParser()
+    # 、 。 ！ ， 㐀 㐁  — CJK punctuation, fullwidth forms and Extension A.
+    text = "\u3001\u3002\uff01\uff0c\u3400\u3401"
+    assert parser._estimate_token_count(text) == int(6 * 0.7)
+
+
+def test_estimate_token_count_still_counts_ascii_as_other():
+    parser = MarkdownParser()
+    assert parser._estimate_token_count("abcd") == int(4 * 0.3)
