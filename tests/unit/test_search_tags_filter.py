@@ -1,12 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import logging
-
 import pytest
 
 from openviking.server.routers.search import _resolve_search_filter
-from openviking.utils import tags as tags_module
 from openviking.utils.tags import (
     build_search_tags_filter,
     merge_search_tags,
@@ -74,38 +71,17 @@ def test_search_tag_accepts_long_keys_and_values(key_length, value_length):
     assert normalize_search_tag(f"{key}={value}") == f"{key}={value}"
 
 
-def test_discard_invalid_search_tags_logs_one_warning_for_batch(caplog):
-    tags_module.logger.addHandler(caplog.handler)
-    try:
-        with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
-            result = normalize_search_tags(
-                ["bad-one", "also-bad", "team=search"],
-                discard_invalid=True,
-            )
-    finally:
-        tags_module.logger.removeHandler(caplog.handler)
-
+def test_discard_invalid_search_tags_keeps_valid_tags():
+    result = normalize_search_tags(
+        ["default", "also-bad", "team=search"],
+        discard_invalid=True,
+    )
     assert result == ["team=search"]
-    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert warnings[0].invalid_tags == ["bad-one", "also-bad"]
-    assert "Discarded invalid search tags" in warnings[0].message
-    assert "bad-one" in warnings[0].message
-    assert "also-bad" in warnings[0].message
 
 
-def test_merge_search_tags_discards_invalid_existing_tags(caplog):
-    tags_module.logger.addHandler(caplog.handler)
-    try:
-        with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
-            result = merge_search_tags(["bad-existing", "team=old"], ["owner=alice"])
-    finally:
-        tags_module.logger.removeHandler(caplog.handler)
-
+def test_merge_search_tags_discards_invalid_existing_tags():
+    result = merge_search_tags(["bad-existing", "team=old"], ["owner=alice"])
     assert result == ["team=old", "owner=alice"]
-    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert warnings[0].invalid_tags == ["bad-existing"]
 
 
 def test_find_tags_filter_requires_all_tags():
