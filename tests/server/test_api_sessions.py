@@ -585,7 +585,7 @@ async def test_direct_session_add_message_records_last_message_at(service):
     assert session.meta.last_message_at
 
 
-async def test_session_initialization_preserves_concurrent_message(
+async def test_session_initialization_rejects_concurrent_message_until_retry(
     client: httpx.AsyncClient,
     service,
     monkeypatch,
@@ -625,15 +625,19 @@ async def test_session_initialization_preserves_concurrent_message(
             )
         )
         await asyncio.wait_for(append_started.wait(), timeout=5)
-        # Without the session lock the append finishes before the initial meta
-        # overwrites it. With the lock it waits for initialization to finish.
-        await asyncio.wait({message_task}, timeout=1)
+        conflict = await asyncio.wait_for(message_task, timeout=5)
+        assert conflict.status_code == 409, conflict.text
     finally:
         finish_initialization.set()
         tasks = [task for task in (create_task, message_task) if task is not None]
         responses = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
 
-    assert all(response.status_code == 200 for response in responses)
+    assert responses[0].status_code == 200
+    retried = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "message during initialization"},
+    )
+    assert retried.status_code == 200, retried.text
     meta = json.loads(await service.viking_fs.read_file(f"{session_uri}/.meta.json", ctx=ctx))
     messages = await service.viking_fs.read_file(f"{session_uri}/messages.jsonl", ctx=ctx)
     assert [json.loads(line)["parts"][0]["text"] for line in messages.splitlines()] == [

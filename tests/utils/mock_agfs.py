@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from openviking.pyagfs import AGFSNotFoundError
+from openviking.storage.errors import LockAcquisitionError
 
 
 class MockLocalAGFS:
@@ -187,7 +188,7 @@ class MockLocalAGFS:
                 with self._pathlocks_guard:
                     lock = self._pathlocks.setdefault(path, threading.Lock())
                 if not await asyncio.to_thread(lock.acquire, timeout=timeout_secs):
-                    raise TimeoutError(f"timed out acquiring test path lock: {path}")
+                    raise LockAcquisitionError(f"timed out acquiring test path lock: {path}")
                 acquired.append(lock)
         except BaseException:
             for lock in reversed(acquired):

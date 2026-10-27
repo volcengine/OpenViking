@@ -722,9 +722,7 @@ class Session:
         """Materialize session root and messages file if missing."""
         # Initial state must not overwrite a concurrent append or commit.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(session_path)
         try:
             if await self.exists():
                 return
@@ -747,13 +745,10 @@ class Session:
         """
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         agfs = self._viking_fs._async_agfs
-        session_lease = await agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
+        session_lease = await agfs.pathlock_acquire_exact(session_path)
         try:
             file_lease = await agfs.pathlock_acquire_exact_batch(
                 [f"{session_path}/{name}" for name in filenames],
-                timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
                 owner_lease_ref=session_lease,
             )
             try:
@@ -1394,6 +1389,7 @@ class Session:
         record_idle_commit_success: bool = False,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
+        lock_timeout_secs: float = _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1428,6 +1424,7 @@ class Session:
                 to event memories. ``None`` uses the session default
                 (``meta.event_search_tags``); an empty list disables default-tag
                 injection for this commit; a non-empty list overrides it.
+            lock_timeout_secs: Maximum wait to acquire the Phase 1 and publication locks.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1504,7 +1501,7 @@ class Session:
         # locks, so Phase 2 can keep writing an earlier archive concurrently.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+            session_path, timeout_secs=lock_timeout_secs
         )
         publication_lease: Optional[Any] = None
         try:
@@ -1745,7 +1742,7 @@ class Session:
                 archive_path = self._viking_fs._uri_to_path(archive_uri, ctx=self.ctx)
                 publication_lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
                     archive_path,
-                    timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
+                    timeout_secs=lock_timeout_secs,
                 )
                 await self._write_phase1_ready_marker(archive_uri)
                 if record_idle_commit_success:

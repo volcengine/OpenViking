@@ -698,6 +698,7 @@ async def commit_session(
         fn=lambda: service.sessions.commit_async(
             session_id,
             _ctx,
+            lock_timeout_secs=0.0,
             **commit_kwargs,
         ),
     )

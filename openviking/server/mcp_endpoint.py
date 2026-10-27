@@ -1381,7 +1381,7 @@ async def remember(messages: list[StoreMessage]) -> str:
             else:
                 session.add_message(msg.role, [TextPart(text=msg.content)])
             added += 1
-    result = await service.sessions.commit_async(session_id, ctx)
+    result = await service.sessions.commit_async(session_id, ctx, lock_timeout_secs=0.0)
     task_id = result.get("task_id")
     if not task_id:
         reason = result.get("reason") or result.get("status") or "unknown"
