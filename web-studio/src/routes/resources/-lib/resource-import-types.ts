@@ -23,6 +23,7 @@ export type ResourceImportArgs = Record<string, unknown> & {
   max_pages?: number
   parse_mode?: 'default' | 'no_split'
   site?: boolean
+  subdir?: string
   skip_download_links?: boolean
 }
 

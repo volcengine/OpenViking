@@ -454,6 +454,53 @@ class TestGitAccessor:
         git_clone.assert_awaited_once()
         assert git_clone.await_args.args[0] == source
 
+    async def test_subdir_selects_nested_parse_root(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        source = "git@github.com:org/monorepo.git"
+        selected = tmp_path / "docs"
+        (selected / "agent").mkdir(parents=True)
+        (selected / "agent" / "SKILL.md").write_text("---\nname: test\n---\n")
+
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_git_clone",
+                new_callable=AsyncMock,
+                return_value="org/monorepo",
+            ),
+        ):
+            resource = await accessor.access(source, branch="main", subdir="docs")
+
+        assert resource.path == selected
+        assert resource.meta["repo_name"] == "org/monorepo"
+        assert resource.meta["repo_subdir"] == "docs"
+
+    @pytest.mark.parametrize("subdir", ["../outside", "/absolute", "missing"])
+    async def test_subdir_rejects_unsafe_or_missing_path(
+        self, accessor: GitAccessor, tmp_path: Path, subdir: str
+    ) -> None:
+        source = "git@github.com:org/monorepo.git"
+
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_git_clone",
+                new_callable=AsyncMock,
+                return_value="org/monorepo",
+            ),
+        ):
+            with pytest.raises(ValueError, match="subdir"):
+                await accessor.access(source, subdir=subdir)
+
     @pytest.mark.parametrize(
         ("source", "zip_method"),
         [

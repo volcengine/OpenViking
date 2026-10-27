@@ -176,7 +176,8 @@ const resources = {
       feishuHint: 'Documents, wiki pages, spreadsheets, and bitables',
       feishuExample: 'https://example.feishu.cn/docx/...',
       git: 'Git Repository',
-      gitHint: 'Public or private repositories with a branch or commit',
+      gitHint:
+        'Public or private repositories with an optional branch, commit, or subdirectory',
       gitExample: 'https://github.com/org/repo',
       webPage: 'Web Page / Site',
       webPageHint: 'Single pages, crawling, Sitemap, RSS, and Atom',
@@ -226,6 +227,10 @@ const resources = {
       'branch.placeholder': 'main',
       commit: 'Commit',
       'commit.placeholder': 'Full or short commit SHA',
+      subdir: 'Subdirectory',
+      'subdir.placeholder': 'e.g. docs',
+      'subdir.hint':
+        'Optional. Import only this directory from the repository; leave empty to import the whole repository.',
       auth: {
         title: 'Repository Access',
         public: 'Public Repository',

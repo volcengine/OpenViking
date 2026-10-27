@@ -189,6 +189,34 @@ describe('AddResourceForm watch options', () => {
     ).toBe('true')
   })
 
+  it('submits a Git subdirectory from the Git options', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm initialMode="remote" />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /sourcePicker.git/ }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
+      target: { value: 'https://github.com/volcengine/OpenViking' },
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: 'git.subdir' }), {
+      target: { value: 'docs' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'startProcessing' }))
+
+    expect(uploadMocks.startRemote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commonBody: expect.objectContaining({
+          args: { subdir: 'docs' },
+        }),
+      }),
+    )
+  })
+
   it('submits watch_interval for a watched remote resource', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
