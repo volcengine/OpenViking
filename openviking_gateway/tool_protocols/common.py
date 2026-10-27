@@ -64,7 +64,16 @@ def merge_delta(target, delta):
             if not isinstance(target.get(key), dict):
                 target[key] = {}
             merge_delta(target[key], value)
-        elif isinstance(value, str) and key not in {"role", "type", "id"}:
+        elif key in {"role", "type", "id"}:
+            # Some gateways repeat these fields in later deltas, often as an empty
+            # string; only a non-empty repeat may replace what the first delta set.
+            if value or not target.get(key):
+                target[key] = copy.deepcopy(value)
+        elif isinstance(value, str):
+            # The same gateway may resend the whole tool call in every delta; its name
+            # arrives once, so an identical repeat is not another fragment of it.
+            if key == "name" and target.get(key) == value:
+                continue
             append(target, key, value)
         elif isinstance(value, list):
             target.setdefault(key, []).extend(copy.deepcopy(value))
