@@ -198,7 +198,7 @@ jobs:
             HAS_SECRETS=true
             echo "Using full configuration with VLM and Embedding"
           else
-            echo "Using minimal configuration (no VLM/Embedding)"
+            echo "Using minimal configuration (mock embedding and VLM)"
           fi
           
           echo "HAS_SECRETS=$HAS_SECRETS" >> $GITHUB_ENV
@@ -275,7 +275,7 @@ jobs:
             $hasSecrets = "true"
             Write-Host "Using full configuration with VLM and Embedding"
           } else {
-            Write-Host "Using minimal configuration (no VLM/Embedding)"
+            Write-Host "Using minimal configuration (mock embedding and VLM)"
           }
           
           echo "HAS_SECRETS=$hasSecrets" >> $env:GITHUB_ENV
@@ -359,7 +359,11 @@ jobs:
           echo "Starting OpenViking Server on port $SERVER_PORT..."
           export ROOT_API_KEY=test-root-api-key
           export SERVER_PORT=$SERVER_PORT
-          nohup uv run python -m openviking.server.bootstrap > openviking-server.log 2>&1 &
+          SERVER_MODULE=openviking.server.bootstrap
+          if [ "$HAS_SECRETS" != "true" ]; then
+            SERVER_MODULE=tests.api_test.mock_embedding_server
+          fi
+          nohup uv run python -m "$SERVER_MODULE" --workers 1 > openviking-server.log 2>&1 &
           echo $! > openviking-server.pid
           echo "SERVER_PID=$(cat openviking-server.pid)" >> $GITHUB_ENV
           
@@ -395,7 +399,11 @@ jobs:
           $errFile = Join-Path $PWD "openviking-server-error.log"
           $batchFile = Join-Path $PWD "start-server.bat"
           
-          $batchContent = "@echo off`r`nset ROOT_API_KEY=test-root-api-key`r`nset SERVER_PORT=$port`r`nuv run python -m openviking.server.bootstrap`r`n"
+          $serverModule = "openviking.server.bootstrap"
+          if ($env:HAS_SECRETS -ne "true") {
+            $serverModule = "tests.api_test.mock_embedding_server"
+          }
+          $batchContent = "@echo off`r`nset ROOT_API_KEY=test-root-api-key`r`nset SERVER_PORT=$port`r`nuv run python -m $serverModule --workers 1`r`n"
           Set-Content -Path $batchFile -Value $batchContent -Encoding ASCII
           
           Write-Host "Batch file created at: $batchFile"
@@ -486,7 +494,7 @@ jobs:
             Write-Host "Running full test suite with VLM/Embedding (Windows: skipping filesystem and slow tests)"
             uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/ --ignore=scenarios/resources_retrieval/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
           } else {
-            Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem and slow tests)"
+            Write-Host "Running basic tests only (mock embedding and VLM, Windows: skipping filesystem and slow tests)"
             uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ -k "not test_observer"
           }
       - name: Install released OpenViking CLI for compatibility tests (Unix)
@@ -573,7 +581,7 @@ jobs:
         run: |
           if [ -f openviking-server.pid ]; then
             kill $(cat openviking-server.pid) 2>/dev/null || true
-            pkill -f "openviking.server.bootstrap" 2>/dev/null || true
+            pkill -f "openviking.server.bootstrap|tests.api_test.mock_embedding_server" 2>/dev/null || true
           fi
 
       - name: Stop OpenViking Server (Windows)
