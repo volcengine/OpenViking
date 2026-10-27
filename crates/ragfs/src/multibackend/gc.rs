@@ -9,6 +9,7 @@ use crate::multibackend::constants::SEGMENT_FILE_EXTENSION;
 use crate::multibackend::meta::{MetadataStore, MultiWriteWorker};
 use crate::multibackend::model::{is_checkpoint_directory_name, CheckpointsManifest, DirectoryEvent, LatestCheckpoint,PartitionState, PartitionsManifest, ProtocolStatus, ScopeKey, SegmentManifest,};
 use crate::multibackend::provider::MultiWriteProvider;
+use tracing::info;
 
 struct ScopeSnapshot { latest: Option<LatestCheckpoint>, segments: SegmentManifest}
 
@@ -26,13 +27,26 @@ impl MetadataGc {
 
     /// Collect one scope while treating concurrent account deletion as complete.
     pub async fn collect_scope(&self, scope: &ScopeKey) -> Result<()> {
+        info!(
+            account = %scope.account_id,
+            partition = scope.partition_id,
+            epoch = scope.epoch,
+            "multi-write metadata gc started"
+        );
         match self.collect_scope_inner(scope).await {
-            Err(Error::NotFound(_)) => Ok(()),
+            Ok(()) | Err(Error::NotFound(_)) => {
+                info!(
+                    account = %scope.account_id,
+                    partition = scope.partition_id,
+                    epoch = scope.epoch,
+                    "multi-write metadata gc completed"
+                );
+                Ok(())
+            }
             Err(error) => {
                 self.store.record_worker_error(MultiWriteWorker::Gc);
                 Err(error)
             }
-            result => result,
         }
     }
 
