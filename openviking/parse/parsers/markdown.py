@@ -683,7 +683,9 @@ class MarkdownParser(BaseParser):
         if max_chars <= 0:
             # Char limit disabled (misconfigured); fall back to token-only splitting
             max_chars = len(content) + 1
-        paragraphs = content.split("\n\n")
+        # Blank lines separate paragraphs; \s* also matches the CRLF form
+        # ("\r\n\r\n"), which split("\n\n") cannot see.
+        paragraphs = re.split(r"\r?\n\s*\r?\n", content)
         parts = []
         current = ""
         current_tokens = 0
