@@ -199,6 +199,12 @@ def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
     return None
 
 
+# Bare OpenAIError messages that report runtime failures, which may be transient.
+_OPENAI_RUNTIME_ERROR = re.compile(
+    r"^WebSocket error|^Token exchange|^Failed to resolve", re.IGNORECASE
+)
+
+
 def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
     module = type(error).__module__
     name = type(error).__name__
@@ -211,6 +217,13 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
 
     if module.startswith("openai"):
         provider = "openai"
+        if name == "OpenAIError" and not _OPENAI_RUNTIME_ERROR.search(str(error)):
+            # The SDK raises the bare base class for client-side configuration problems
+            # (no credentials, no endpoint) before any request; API errors are subclasses.
+            # Retrying cannot fix the configuration.
+            if re.search(r"credential|api[_ ]?key", str(error), re.IGNORECASE):
+                return ModelErrorKind.AUTHENTICATION_ERROR, provider
+            return ModelErrorKind.INVALID_REQUEST, provider
         class_kinds = {
             "APITimeoutError": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
             "APIConnectionError": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
