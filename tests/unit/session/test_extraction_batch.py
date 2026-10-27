@@ -2,17 +2,19 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from openviking.message import Message, TextPart
+from openviking.session.checkpoints import CheckpointRequest
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
     plan_extraction_batches,
     resolve_extraction_batch_limits,
 )
 from openviking.session.session import Session
+from openviking.storage.viking_fs import VikingFS
 
 
 def _message(message_id: str, role: str = "user", text: str = "content") -> Message:
@@ -146,6 +148,48 @@ async def test_working_memory_no_vlm_fallback_uses_all_messages(monkeypatch):
     )
 
     assert result == "# Session Summary\n\n**Overview**: 3 turns, 3 messages"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior", ["", "Legacy summary", "## Current State\nPrevious work"])
+@pytest.mark.parametrize("thinking", [False, True])
+@pytest.mark.parametrize("result_kind", ["tool", "text", "missing_checkpoint"])
+async def test_working_memory_accepts_auto_only_provider(monkeypatch, prior, thinking, result_kind):
+    # A relay can enable reasoning independently of the local thinking flag.
+    async def complete(**kwargs):
+        if kwargs["tool_choice"] != "auto":
+            raise RuntimeError("Thinking mode does not support this tool_choice")
+        arguments = {
+            "working_memory": "## Current State\nUpdated",
+            "sections": {"Current State": {"op": "UPDATE", "content": "Updated"}},
+            "checkpoint_summaries": [] if result_kind == "missing_checkpoint" else ["Checkpoint"],
+        }
+        return SimpleNamespace(
+            has_tool_calls=result_kind != "text",
+            tool_calls=[SimpleNamespace(arguments=arguments)] if result_kind != "text" else [],
+        )
+
+    vlm = SimpleNamespace(
+        thinking=thinking, is_available=lambda: True, get_completion_async=complete
+    )
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(output_language_override="en"),
+    )
+    session = Session(
+        viking_fs=Mock(spec=VikingFS),
+        vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=vlm)),
+    )
+    request = CheckpointRequest("u1", ("u1",), 100, 200)
+    if result_kind == "tool":
+        result = await session._generate_archive_summary_async([_message("u1")], prior, [request])
+        assert not isinstance(result, str)
+        assert "Updated" in result.overview
+        assert result.checkpoint_summaries == ("Checkpoint",)
+    else:
+        reason = "no .*tool call" if result_kind == "text" else "exactly 1 strings"
+        with pytest.raises(ValueError, match=reason):
+            await session._generate_archive_summary_async([_message("u1")], prior, [request])
 
 
 @pytest.mark.asyncio
