@@ -50,7 +50,7 @@ ov --version
 
 如果我用英文和你交流，改用 `ov language en`。未保存显示语言时，大多数 `ov` 命令在非交互式 shell 中以退出码 2 退出。
 
-安装后仍找不到 `ov` 时，把 `$(npm prefix -g)/bin` 加入 `PATH`。不要使用 `sudo npm`。没有 npm 时，先 ASK 我，再用 `cargo install --git https://github.com/volcengine/OpenViking ov_cli` 从源码构建。
+安装后仍找不到 `ov` 时，在 macOS 和 Linux 上把 `$(npm prefix -g)/bin` 加入 `PATH`；在 Windows 上则加入 `npm prefix -g` 输出的目录本身，不要追加 `/bin`。不要使用 `sudo npm`。没有 npm 时，先 ASK 我，再用 `cargo install --git https://github.com/volcengine/OpenViking ov_cli` 从源码构建。
 
 查看要用到的命令帮助：
 
