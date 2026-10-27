@@ -105,19 +105,6 @@ fn render_json_error(error: &Error, compact: bool) -> String {
         _ => (error.to_string(), None),
     };
 
-    if let Error::TaskWait { task_id, source } = error {
-        let mut envelope: Value = serde_json::from_str(&render_json_error(source, true)).unwrap();
-        envelope["error"]["message"] = Value::String(message);
-        let original_details = envelope["error"].get("details").cloned();
-        envelope["error"]["details"] =
-            serde_json::json!({"task_id": task_id, "details": original_details});
-        return if compact {
-            envelope.to_string()
-        } else {
-            serde_json::to_string_pretty(&envelope).unwrap()
-        };
-    }
-
     let mut body = Map::new();
     body.insert("code".to_string(), Value::String(error.code().to_string()));
     body.insert("message".to_string(), Value::String(message));
@@ -244,34 +231,6 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
     let language = Language::current();
     let command = command.into();
     match error {
-        Error::TaskWait { task_id, source } => {
-            let mut report = report_for_runtime_error(command, source);
-            report.message = format!("{} {} ov task status {task_id}", report.message,
-                copy(language,
-                    "The task continues on the server; check with:",
-                    "任务继续在服务端运行；查询进度："));
-            report.actions.insert(0, ErrorAction::new(
-                format!("ov task status {task_id}"),
-                copy(language, "Check the submitted task", "查询已提交的任务"),
-            ));
-            report
-        }
-        Error::ResourceSubmission { source } => {
-            let mut report = report_for_runtime_error(command, source);
-            report.message = format!("{} {}", report.message,
-                copy(language,
-                    "Import may have been accepted; check ov task list before resubmitting.",
-                    "导入可能已被服务端接受；请先运行 ov task list 确认，再决定是否重新提交。"));
-            report.actions.insert(0, ErrorAction::new(
-                "ov task list",
-                copy(language, "Check before resubmitting", "重新提交前检查任务"),
-            ));
-            report
-        }
-        Error::Interrupted { task_id } => ErrorReport::new(
-            copy(language, "Stopped waiting", "已停止等待"),
-            format!("ov task status {task_id}"),
-        ).with_command(command),
         Error::MissingConfig => ErrorReport::new(
             copy(language, "Configuration Error", "配置错误"),
             copy(
@@ -1026,55 +985,6 @@ mod tests {
 
     fn os_args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
-    }
-
-    #[test]
-    fn task_wait_error_keeps_api_code_details_and_recovery_command() {
-        let error = Error::TaskWait {
-            task_id: "task-import".into(),
-            source: Box::new(Error::api_response(
-                Some("FORBIDDEN".into()),
-                "Access denied",
-                Some(serde_json::json!({"reason": "permission revoked"})),
-                403,
-            )),
-        };
-        let body: serde_json::Value =
-            serde_json::from_str(&render_json_error(&error, true)).unwrap();
-        assert_eq!(body["error"]["code"], "FORBIDDEN");
-        assert_eq!(body["error"]["details"]["task_id"], "task-import");
-        assert_eq!(
-            body["error"]["details"]["details"]["reason"],
-            "permission revoked"
-        );
-        assert!(
-            body["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("ov task status task-import")
-        );
-        let report = report_for_runtime_error("ov add-resource", &error);
-        assert!(report.message.contains("ov task status task-import"));
-        assert_eq!(report.actions[0].command, "ov task status task-import");
-    }
-
-    #[test]
-    fn submission_timeout_keeps_code_and_exposes_uncertain_acceptance() {
-        let error = Error::ResourceSubmission {
-            source: Box::new(Error::Timeout("response lost".into())),
-        };
-        let body: serde_json::Value =
-            serde_json::from_str(&render_json_error(&error, true)).unwrap();
-        assert_eq!(body["error"]["code"], "DEADLINE_EXCEEDED");
-        assert!(
-            body["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("ov task list")
-        );
-        let report = report_for_runtime_error("ov add-resource", &error);
-        assert!(report.message.contains("before resubmitting"));
-        assert_eq!(report.actions[0].command, "ov task list");
     }
 
     fn strip_ansi(input: &str) -> String {

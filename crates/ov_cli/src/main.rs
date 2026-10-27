@@ -4043,7 +4043,10 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        if matches!(e, Error::Interrupted { .. }) {
+        if e.code() == "INTERRUPTED" {
+            if let Error::Api { message, .. } = &e {
+                eprintln!("{message}");
+            }
             std::process::exit(130);
         }
         if !matches!(e, Error::AlreadyReported) {

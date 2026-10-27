@@ -1,53 +1,55 @@
 use super::HttpClient;
-use serde_json::json;
+use serde_json::{Value, json};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
-
-// A scripted HTTP peer checks the actual request boundary: one submission,
-// then independent status GETs (including a GET that times out).
-async fn resource_wait_server(
-    responses: Vec<(u16, serde_json::Value, u64)>,
-) -> (String, tokio::task::JoinHandle<Vec<String>>) {
-    let (url, server, _) = resource_wait_server_with_signal(responses).await;
-    (url, server)
-}
 
 async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
-    tokio::time::timeout(std::time::Duration::from_secs(20), future)
+    tokio::time::timeout(Duration::from_secs(20), future)
         .await
-        .expect("resource wait test exceeded 20s")
+        .expect("resource wait test timed out")
 }
 
-async fn resource_wait_server_with_signal(
-    responses: Vec<(u16, serde_json::Value, u64)>,
-) -> (
-    String,
-    tokio::task::JoinHandle<Vec<String>>,
-    oneshot::Receiver<()>,
-) {
+fn task(status: &str) -> Value {
+    json!({"status":"ok","result":{
+        "status":status, "error":null,
+        "result":{"context_count":10,"code":"MODEL_ERROR","details":{"model":"test"}}
+    }})
+}
+
+// Record real HTTP requests; delayed replies do not block accepting retries.
+async fn server(
+    responses: Vec<(u16, Value, u64)>,
+) -> (HttpClient, tokio::task::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (request_tx, request_rx) = oneshot::channel();
-    let server = tokio::spawn(bounded(async move {
-        let mut request_tx = Some(request_tx);
+    let client = HttpClient::new(
+        format!("http://{}", listener.local_addr().unwrap()),
+        None,
+        None,
+        None,
+        None,
+        1.0,
+        false,
+        None,
+    );
+    let peer = tokio::spawn(bounded(async move {
         let mut requests = Vec::new();
         let mut writers = Vec::new();
-        for (status, body, delay_ms) in responses {
-            let (mut stream, _) = listener.accept().await.unwrap();
+        for (status, body, delay) in responses {
+            let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
             loop {
-                let mut chunk = [0; 8192];
-                let size = stream.read(&mut chunk).await.unwrap();
-                assert!(size > 0, "connection ended before the request body");
-                request.extend_from_slice(&chunk[..size]);
+                let mut bytes = [0; 4096];
+                let count = socket.read(&mut bytes).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&bytes[..count]);
                 if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
                     let headers = String::from_utf8_lossy(&request[..end]);
                     let length = headers
                         .lines()
-                        .filter_map(|line| line.split_once(':'))
-                        .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
-                        .map(|(_, value)| value.trim().parse::<usize>().unwrap())
+                        .filter_map(|l| l.split_once(':'))
+                        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                        .map(|(_, v)| v.trim().parse::<usize>().unwrap())
                         .unwrap_or(0);
                     if request.len() >= end + 4 + length {
                         break;
@@ -55,20 +57,15 @@ async fn resource_wait_server_with_signal(
                 }
             }
             requests.push(String::from_utf8_lossy(&request).into_owned());
-            if let Some(tx) = request_tx.take() {
-                let _ = tx.send(());
-            }
-            // Delayed replies must not prevent accepting the next retry.
             writers.push(tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                tokio::time::sleep(Duration::from_millis(delay)).await;
                 let body = body.to_string();
                 let response = format!(
-                    "HTTP/1.1 {status} Test\r\ncontent-type: application/json\r\n\
-                     content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
-                // A timed-out status query legitimately closes its socket.
-                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = socket.write_all(response.as_bytes()).await;
             }));
         }
         for writer in writers {
@@ -76,46 +73,21 @@ async fn resource_wait_server_with_signal(
         }
         requests
     }));
-    (url, server, request_rx)
+    (client, peer)
 }
 
-fn resource_task_response(status: &str) -> serde_json::Value {
-    json!({"status": "ok", "result": {
-        "task_id": "task-import", "status": status, "stage": "embedding",
-        "error": if matches!(status, "failed" | "cancelled") {
-            Some("embedding rejected")
-        } else { None },
-        "result": {
-            "status": "success", "root_uri": "viking://resources/demo/docs",
-            "context_count": 10, "code": "MODEL_ERROR",
-            "details": {"model": "test"}
-        }
-    }})
-}
-
-async fn submit_test_resource(
+async fn submit(
     client: &HttpClient,
     path: &str,
     add_type: Option<String>,
     wait: bool,
-) -> crate::error::Result<serde_json::Value> {
-    submit_test_resource_with_to(client, path, add_type, wait, None).await
-}
-
-async fn submit_test_resource_with_to(
-    client: &HttpClient,
-    path: &str,
-    add_type: Option<String>,
-    wait: bool,
-    to: Option<String>,
-) -> crate::error::Result<serde_json::Value> {
-    let parent = to.is_none().then(|| "viking://resources/demo".into());
+) -> crate::error::Result<Value> {
     bounded(client.add_resource(
         path,
         add_type,
-        to,
+        Some("viking://resources/demo/docs".into()),
         None,
-        parent,
+        None,
         "",
         "",
         wait,
@@ -137,7 +109,7 @@ async fn submit_test_resource_with_to(
 }
 
 #[tokio::test]
-async fn add_resource_wait_polls_local_file_directory_url_and_connector() {
+async fn submits_once_and_polls_file_directory_url_and_connector() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("doc.md");
     std::fs::write(&file, "# Example").unwrap();
@@ -145,46 +117,40 @@ async fn add_resource_wait_polls_local_file_directory_url_and_connector() {
         (file.to_str().unwrap(), None, true),
         (dir.path().to_str().unwrap(), None, true),
         ("https://example.com/docs", None, false),
-        ("tos://bucket/docs", Some("tos".to_string()), false),
+        ("tos://bucket/docs", Some("tos".into()), false),
     ] {
-        let mut responses = Vec::new();
+        let mut replies = Vec::new();
         if local {
-            responses.push((
+            replies.push((
                 200,
-                json!({
-                    "status":"ok", "result":{"temp_file_id":"upload-1"}
-                }),
+                json!({"status":"ok","result":{"temp_file_id":"upload"}}),
                 0,
             ));
         }
-        responses.extend([
+        replies.extend([
             (
                 200,
-                json!({"status":"ok", "result":{"task_id":"task-import"}}),
+                json!({"status":"ok","result":{"task_id":"task-import"}}),
                 0,
             ),
-            (200, resource_task_response("pending"), 0),
-            (200, resource_task_response("running"), 0),
-            (200, resource_task_response("completed"), 0),
+            (200, task("pending"), 0),
+            (200, task("running"), 0),
+            (200, task("completed"), 0),
         ]);
-        let (url, server) = resource_wait_server(responses).await;
-        // Two polling intervals exceed the one-second per-request timeout.
-        let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-        let result = submit_test_resource(&client, path, add_type, true)
-            .await
-            .unwrap();
+        let (client, peer) = server(replies).await;
+        let result = submit(&client, path, add_type, true).await.unwrap();
         assert_eq!(result["task_id"], "task-import");
         assert_eq!(result["context_count"], 10);
-        let requests = server.await.unwrap();
+        let requests = bounded(peer).await.unwrap();
         let imports: Vec<_> = requests
             .iter()
             .filter(|r| r.starts_with("POST /api/v1/resources HTTP"))
             .collect();
-        assert_eq!(imports.len(), 1, "must never resubmit the import");
-        let body: serde_json::Value =
+        assert_eq!(imports.len(), 1);
+        let body: Value =
             serde_json::from_str(imports[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body["wait"], false);
-        assert_eq!(body["create_parent"], true);
+        assert_eq!(body["to"], "viking://resources/demo/docs");
         assert_eq!(
             requests
                 .iter()
@@ -196,212 +162,74 @@ async fn add_resource_wait_polls_local_file_directory_url_and_connector() {
 }
 
 #[tokio::test]
-async fn add_resource_wait_retries_status_timeout_without_resubmission() {
-    let (url, server) = resource_wait_server(vec![
-        (
-            200,
-            json!({"status":"ok", "result":{"task_id":"task-import"}}),
-            0,
-        ),
-        (200, resource_task_response("running"), 3000),
-        (200, resource_task_response("completed"), 0),
-    ])
-    .await;
-    let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-    let result = submit_test_resource(&client, "https://example.com/docs", None, true)
-        .await
-        .unwrap();
-    assert_eq!(result["task_id"], "task-import");
-    let requests = server.await.unwrap();
-    assert_eq!(requests.len(), 3);
-    assert!(requests[0].starts_with("POST "));
-    assert!(
-        requests[1..]
-            .iter()
-            .all(|r| r.starts_with("GET /api/v1/tasks/"))
-    );
-}
-
-#[tokio::test]
-async fn add_resource_wait_reports_failed_and_cancelled_tasks() {
-    for status in ["failed", "cancelled"] {
-        let (url, server) = resource_wait_server(vec![
-            (
-                200,
-                json!({"status":"ok", "result":{"task_id":"task-import"}}),
-                0,
-            ),
-            (200, resource_task_response(status), 0),
-        ])
-        .await;
-        let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-        let error = submit_test_resource(&client, "https://example.com/docs", None, true)
-            .await
-            .unwrap_err();
-        match error {
-            crate::error::Error::Api {
-                message,
-                code,
-                details,
-                ..
-            } => {
-                assert!(message.contains(status));
-                assert_eq!(code.as_deref(), Some("MODEL_ERROR"));
-                assert_eq!(details.unwrap()["task_id"], "task-import");
-            }
-            other => panic!("unexpected error: {other}"),
-        }
-        assert_eq!(server.await.unwrap().len(), 2);
-    }
-}
-
-#[tokio::test]
-async fn add_resource_wait_does_not_retry_auth_failure() {
-    let (url, server) = resource_wait_server(vec![
-        (
-            200,
-            json!({"status":"ok", "result":{"task_id":"task-import"}}),
-            0,
-        ),
-        (
-            403,
-            json!({"status":"error", "error":{
-                "code":"FORBIDDEN", "message":"Access denied"
-            }}),
-            0,
-        ),
-    ])
-    .await;
-    let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-    let error = submit_test_resource(&client, "https://example.com/docs", None, true)
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("ov task status task-import"));
-    match error {
-        crate::error::Error::TaskWait { source, .. } => assert!(matches!(
-            *source,
-            crate::error::Error::Api {
-                status: Some(403),
-                ..
-            }
-        )),
-        other => panic!("unexpected error: {other}"),
-    }
-    assert_eq!(server.await.unwrap().len(), 2);
-}
-
-#[tokio::test]
-async fn add_resource_wait_interrupts_an_inflight_status_query() {
-    let (url, server, request_rx) =
-        resource_wait_server_with_signal(vec![(200, resource_task_response("running"), 3000)])
-            .await;
-    let client = HttpClient::new(url, None, None, None, None, 5.0, false, None);
-    let error = bounded(client.wait_for_resource_task("task-import", async {
-        request_rx.await.unwrap();
-        Ok(())
-    }))
-    .await
-    .unwrap_err();
-    assert!(matches!(error, crate::error::Error::Interrupted { .. }));
-    assert!(error.to_string().contains("ov task status task-import"));
-    let requests = server.await.unwrap();
-    assert_eq!(requests.len(), 1);
-    assert!(
-        requests[0].starts_with("GET "),
-        "must not cancel the server task"
-    );
-}
-
-#[tokio::test]
-async fn add_resource_without_wait_returns_task_without_polling() {
-    let (url, server) = resource_wait_server(vec![(
+async fn no_wait_returns_without_polling() {
+    let (client, peer) = server(vec![(
         200,
-        json!({"status":"ok", "result":{"task_id":"task-import"}}),
+        json!({"status":"ok","result":{"task_id":"task-import"}}),
         0,
     )])
     .await;
-    let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-    let result = submit_test_resource(&client, "https://example.com/docs", None, false)
-        .await
-        .unwrap();
-    assert_eq!(result["task_id"], "task-import");
-    assert_eq!(server.await.unwrap().len(), 1);
+    assert_eq!(
+        submit(&client, "https://example.com/docs", None, false)
+            .await
+            .unwrap()["task_id"],
+        "task-import"
+    );
+    assert_eq!(bounded(peer).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
-async fn add_resource_wait_retries_gateway_errors_and_rate_limits() {
-    for status in [429, 502, 503, 504] {
-        let (url, server) = resource_wait_server(vec![
+async fn retries_timeouts_rate_limits_and_gateway_errors_without_resubmitting() {
+    for (status, delay) in [(200, 3000), (429, 0), (502, 0), (503, 0), (504, 0)] {
+        let (client, peer) = server(vec![
             (
                 200,
-                json!({"status":"ok", "result":{"task_id":"task-import"}}),
+                json!({"status":"ok","result":{"task_id":"task-import"}}),
                 0,
             ),
-            (status, json!({"error":{"message":"try again"}}), 0),
-            (200, resource_task_response("completed"), 0),
+            (status, task("running"), delay),
+            (200, task("completed"), 0),
         ])
         .await;
-        let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-        let result = submit_test_resource_with_to(
-            &client,
-            "https://example.com/docs",
-            None,
-            true,
-            Some("viking://resources/demo/docs".into()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result["task_id"], "task-import");
-        let requests = server.await.unwrap();
+        assert_eq!(
+            submit(&client, "https://example.com/docs", None, true)
+                .await
+                .unwrap()["task_id"],
+            "task-import"
+        );
+        let requests = bounded(peer).await.unwrap();
         assert_eq!(requests.len(), 3);
-        assert!(requests[0].starts_with("POST /api/v1/resources HTTP"));
+        assert!(requests[0].starts_with("POST "));
         assert!(
             requests[1..]
                 .iter()
                 .all(|r| r.starts_with("GET /api/v1/tasks/"))
         );
-        let body: serde_json::Value =
-            serde_json::from_str(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
-        assert_eq!(body["wait"], false);
-        assert_eq!(body["to"], "viking://resources/demo/docs");
-        assert!(body.get("parent").is_none());
-    }
-}
-
-fn fast_resource_wait_policy() -> super::ResourceWaitPolicy {
-    // Keep the production failure limit; shorten only scheduling delays.
-    super::ResourceWaitPolicy {
-        retry_delay: std::time::Duration::from_millis(1),
-        max_retry_delay: std::time::Duration::from_millis(5),
-        poll_interval: std::time::Duration::from_millis(1),
-        ..Default::default()
     }
 }
 
 #[tokio::test]
-async fn add_resource_wait_bounds_consecutive_errors_and_resets_after_success() {
+async fn stops_after_ten_failures_and_resets_counter_after_success() {
     for recovers in [false, true] {
-        let policy = fast_resource_wait_policy();
         let failure = (
             503,
             json!({"error":{"code":"UNAVAILABLE","message":"offline"}}),
             0,
         );
-        let mut responses = vec![failure.clone(); policy.max_failures - 1];
+        let mut replies = vec![failure.clone(); 9];
         if recovers {
-            responses.push((200, resource_task_response("running"), 0));
-            responses.extend(vec![failure; policy.max_failures - 1]);
-            responses.push((200, resource_task_response("completed"), 0));
+            replies.push((200, task("running"), 0));
+            replies.extend(vec![failure; 9]);
+            replies.push((200, task("completed"), 0));
         } else {
-            responses.push(failure);
+            replies.push(failure);
         }
-        let expected_requests = responses.len();
-        let (url, server) = resource_wait_server(responses).await;
-        let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-        let result = bounded(client.wait_for_resource_task_with_policy(
+        let count = replies.len();
+        let (client, peer) = server(replies).await;
+        let result = bounded(client.wait_for_resource_task(
             "task-import",
             std::future::pending(),
-            policy,
+            Duration::from_millis(1),
         ))
         .await;
         if recovers {
@@ -410,86 +238,91 @@ async fn add_resource_wait_bounds_consecutive_errors_and_resets_after_success() 
             let error = result.unwrap_err();
             assert_eq!(error.code(), "UNAVAILABLE");
             assert!(error.to_string().contains("ov task status task-import"));
-            match error {
-                crate::error::Error::TaskWait { source, .. } => assert!(matches!(
-                    *source,
-                    crate::error::Error::Api {
-                        status: Some(503),
-                        ..
-                    }
-                )),
-                other => panic!("unexpected error: {other}"),
-            }
         }
-        let requests = server.await.unwrap();
-        assert_eq!(requests.len(), expected_requests);
+        let requests = bounded(peer).await.unwrap();
+        assert_eq!(requests.len(), count);
         assert!(requests.iter().all(|r| r.starts_with("GET /api/v1/tasks/")));
     }
 }
 
 #[tokio::test]
-async fn add_resource_wait_bounds_connection_failures() {
+async fn authentication_and_malformed_status_errors_include_recovery_command() {
+    for (status, response) in [
+        (
+            403,
+            json!({"error":{"code":"FORBIDDEN","message":"Access denied","details":{"reason":"revoked"}}}),
+        ),
+        (200, task("unknown")),
+        (
+            200,
+            json!({"status":"ok","result":{"status":"completed","result":[]}}),
+        ),
+        (200, json!({"status":"ok","result":{"status":"completed"}})),
+    ] {
+        let (client, peer) = server(vec![(status, response, 0)]).await;
+        let error = bounded(client.wait_for_resource_task(
+            "task-import",
+            std::future::pending(),
+            Duration::from_millis(1),
+        ))
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("ov task status task-import"));
+        if status == 403 {
+            assert_eq!(error.code(), "FORBIDDEN");
+            match error {
+                crate::error::Error::Api {
+                    status, details, ..
+                } => {
+                    assert_eq!(status, Some(403));
+                    assert_eq!(details.unwrap()["details"]["reason"], "revoked");
+                }
+                other => panic!("{other}"),
+            }
+        }
+        assert_eq!(bounded(peer).await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn failed_and_cancelled_tasks_are_terminal() {
+    for status in ["failed", "cancelled"] {
+        let (client, peer) = server(vec![(200, task(status), 0)]).await;
+        let error = bounded(client.wait_for_resource_task(
+            "task-import",
+            std::future::pending(),
+            Duration::from_millis(1),
+        ))
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), "MODEL_ERROR");
+        assert!(error.to_string().contains(status));
+        assert!(!error.to_string().contains("continues"));
+        assert_eq!(bounded(peer).await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn connection_failures_are_bounded() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let client = HttpClient::new(
+        format!("http://{}", listener.local_addr().unwrap()),
+        None,
+        None,
+        None,
+        None,
+        1.0,
+        false,
+        None,
+    );
     drop(listener);
-    let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-    let error = bounded(client.wait_for_resource_task_with_policy(
+    let error = bounded(client.wait_for_resource_task(
         "task-import",
         std::future::pending(),
-        fast_resource_wait_policy(),
+        Duration::from_millis(1),
     ))
     .await
     .unwrap_err();
     assert_eq!(error.code(), "UNAVAILABLE");
     assert!(error.to_string().contains("ov task status task-import"));
-}
-
-#[tokio::test]
-async fn add_resource_wait_malformed_status_has_task_recovery_guidance() {
-    for task in [
-        json!({"status":"ok","result":{"status":"unknown"}}),
-        json!({"status":"ok","result":{"status":"completed"}}),
-        json!({"status":"ok","result":{"status":"completed","result":[]}}),
-    ] {
-        let (url, server) = resource_wait_server(vec![
-            (
-                200,
-                json!({"status":"ok", "result":{"task_id":"task-import"}}),
-                0,
-            ),
-            (200, task, 0),
-        ])
-        .await;
-        let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-        let error = submit_test_resource(&client, "https://example.com/docs", None, true)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("ov task status task-import"));
-        assert_eq!(server.await.unwrap().len(), 2);
-    }
-}
-
-#[tokio::test]
-async fn add_resource_submission_timeout_warns_before_resubmission() {
-    for wait in [false, true] {
-        let (url, server) = resource_wait_server(vec![(
-            200,
-            json!({"status":"ok", "result":{"task_id":"task-import"}}),
-            3000,
-        )])
-        .await;
-        let client = HttpClient::new(url, None, None, None, None, 1.0, false, None);
-        let error = submit_test_resource(&client, "https://example.com/docs", None, wait)
-            .await
-            .unwrap_err();
-        assert_eq!(error.code(), "DEADLINE_EXCEEDED");
-        assert!(
-            error
-                .to_string()
-                .contains("check ov task list before resubmitting")
-        );
-        let requests = server.await.unwrap();
-        assert_eq!(requests.len(), 1);
-        assert!(requests[0].starts_with("POST /api/v1/resources HTTP"));
-    }
 }

@@ -148,52 +148,6 @@ struct CompileCreateRequest<'a> {
 #[derive(Clone)]
 pub struct HttpClient {
     base: BaseClient,
-    resource_wait_reporter: Option<for<'a> fn(ResourceWaitProgress<'a>)>,
-}
-
-pub(crate) enum ResourceWaitProgress<'a> {
-    Waiting(&'a str),
-    Retrying {
-        task_id: &'a str,
-        error: &'a Error,
-        failures: usize,
-        delay: std::time::Duration,
-    },
-    Status {
-        task_id: &'a str,
-        progress: &'a str,
-    },
-}
-
-#[derive(Clone, Copy)]
-struct ResourceWaitPolicy {
-    retry_delay: std::time::Duration,
-    max_retry_delay: std::time::Duration,
-    poll_interval: std::time::Duration,
-    max_failures: usize,
-}
-
-impl Default for ResourceWaitPolicy {
-    fn default() -> Self {
-        Self {
-            retry_delay: std::time::Duration::from_secs(1),
-            max_retry_delay: std::time::Duration::from_secs(5),
-            poll_interval: std::time::Duration::from_secs(1),
-            max_failures: 10,
-        }
-    }
-}
-
-fn retryable_resource_status_error(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::Timeout(_)
-            | Error::Network(_)
-            | Error::Api {
-                status: Some(429 | 502 | 503 | 504),
-                ..
-            }
-    )
 }
 
 impl HttpClient {
@@ -218,21 +172,6 @@ impl HttpClient {
                 profile_enabled,
                 extra_headers,
             ),
-            resource_wait_reporter: None,
-        }
-    }
-
-    pub(crate) fn with_resource_wait_reporter(
-        mut self,
-        reporter: for<'a> fn(ResourceWaitProgress<'a>),
-    ) -> Self {
-        self.resource_wait_reporter = Some(reporter);
-        self
-    }
-
-    fn report_resource_wait(&self, progress: ResourceWaitProgress<'_>) {
-        if let Some(reporter) = self.resource_wait_reporter {
-            reporter(progress);
         }
     }
 
@@ -1093,16 +1032,7 @@ impl HttpClient {
             }));
 
             self.post("/api/v1/resources", &body).await
-        }
-        .map_err(|error| {
-            if matches!(error, Error::Timeout(_) | Error::Network(_)) {
-                Error::ResourceSubmission {
-                    source: Box::new(error),
-                }
-            } else {
-                error
-            }
-        })?;
+        }?;
 
         if !wait {
             return Ok(submitted);
@@ -1118,9 +1048,12 @@ impl HttpClient {
                         .to_string(),
                 )
             })?;
-        self.report_resource_wait(ResourceWaitProgress::Waiting(task_id));
-        self.wait_for_resource_task(task_id, tokio::signal::ctrl_c())
-            .await
+        self.wait_for_resource_task(
+            task_id,
+            tokio::signal::ctrl_c(),
+            std::time::Duration::from_secs(1),
+        )
+        .await
     }
 
     /// Wait without an overall deadline. Each status GET retains the ordinary
@@ -1130,46 +1063,56 @@ impl HttpClient {
         &self,
         task_id: &str,
         interrupted: impl std::future::Future<Output = std::io::Result<()>>,
-    ) -> Result<Value> {
-        self.wait_for_resource_task_with_policy(task_id, interrupted, ResourceWaitPolicy::default())
-            .await
-    }
-
-    async fn wait_for_resource_task_with_policy(
-        &self,
-        task_id: &str,
-        interrupted: impl std::future::Future<Output = std::io::Result<()>>,
-        policy: ResourceWaitPolicy,
+        interval: std::time::Duration,
     ) -> Result<Value> {
         tokio::pin!(interrupted);
-        let observation_error = |source| Error::TaskWait {
-            task_id: task_id.to_string(),
-            source: Box::new(source),
+        let observation_error = |error: Error| {
+            let code = Some(error.code().to_string());
+            let (message, details, status) = match error {
+                Error::Api {
+                    message,
+                    details,
+                    status,
+                    ..
+                } => (message, details, status),
+                other => (other.to_string(), None, None),
+            };
+            Error::Api {
+                code,
+                message: format!(
+                    "{message}; task continues on the server; check with: ov task status {task_id}"
+                ),
+                details: Some(json!({"task_id": task_id, "details": details})),
+                status,
+            }
         };
         let poll = async {
-            let mut last_progress = String::new();
-            let mut retry_delay = policy.retry_delay;
+            let mut retry_delay = interval;
             let mut failures = 0;
             loop {
                 let task = match self.get_task(task_id).await {
                     Ok(task) => {
-                        retry_delay = policy.retry_delay;
+                        retry_delay = interval;
                         failures = 0;
                         task
                     }
-                    Err(err) if retryable_resource_status_error(&err) => {
+                    Err(err)
+                        if matches!(
+                            err,
+                            Error::Timeout(_)
+                                | Error::Network(_)
+                                | Error::Api {
+                                    status: Some(429 | 502 | 503 | 504),
+                                    ..
+                                }
+                        ) =>
+                    {
                         failures += 1;
-                        if failures >= policy.max_failures {
+                        if failures >= 10 {
                             return Err(observation_error(err));
                         }
-                        self.report_resource_wait(ResourceWaitProgress::Retrying {
-                            task_id,
-                            error: &err,
-                            failures,
-                            delay: retry_delay,
-                        });
                         tokio::time::sleep(retry_delay).await;
-                        retry_delay = (retry_delay * 2).min(policy.max_retry_delay);
+                        retry_delay = (retry_delay * 2).min(interval * 5);
                         continue;
                     }
                     Err(err) => return Err(observation_error(err)),
@@ -1208,31 +1151,26 @@ impl HttpClient {
                             status: None,
                         });
                     }
-                    Some(status @ ("pending" | "running" | "cancelling")) => {
-                        let stage = task["stage"].as_str().unwrap_or("");
-                        let progress = format!("{status} {stage}").trim().to_string();
-                        if progress != last_progress {
-                            self.report_resource_wait(ResourceWaitProgress::Status {
-                                task_id,
-                                progress: &progress,
-                            });
-                            last_progress = progress;
-                        }
-                    }
+                    Some("pending" | "running" | "cancelling") => {}
                     _ => {
                         return Err(observation_error(Error::Parse(format!(
                             "Task {task_id} returned an invalid status"
                         ))));
                     }
                 }
-                tokio::time::sleep(policy.poll_interval).await;
+                tokio::time::sleep(interval).await;
             }
         };
         tokio::select! {
             result = poll => result,
             signal = &mut interrupted => {
                 signal.map_err(|error| observation_error(Error::Io(error)))?;
-                Err(Error::Interrupted { task_id: task_id.to_string() })
+                Err(Error::Api {
+                    code: Some("INTERRUPTED".into()),
+                    message: format!("Stopped waiting. The server task was not cancelled. Check progress with: ov task status {task_id}"),
+                    details: Some(json!({"task_id": task_id})),
+                    status: None,
+                })
             }
         }
     }

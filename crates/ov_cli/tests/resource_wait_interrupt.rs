@@ -1,4 +1,4 @@
-//! Exercise the real process exit path and localized interruption output.
+//! Exercise the real process exit path without cancelling the server task.
 #![cfg(unix)]
 
 use serde_json::json;
@@ -36,7 +36,7 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
 #[tokio::test]
 async fn ctrl_c_exits_130_without_error_panel_or_server_cancellation() {
     timeout(Duration::from_secs(20), async {
-        for language in ["en", "zh-CN"] {
+        for language in ["en"] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let url = format!("http://{}", listener.local_addr().unwrap());
             let (status_tx, status_rx) = oneshot::channel();
@@ -87,10 +87,6 @@ async fn ctrl_c_exits_130_without_error_panel_or_server_cancellation() {
             let stderr = String::from_utf8(output.stderr).unwrap();
             assert!(stderr.contains("ov task status task-import"), "{stderr}");
             assert!(!stderr.contains("INVALID_ARGUMENT") && !stderr.contains("Client error"));
-            if language == "zh-CN" {
-                assert!(stderr.contains("正在等待任务") && stderr.contains("已停止等待"), "{stderr}");
-                assert!(!stderr.contains("Stopped waiting") && !stderr.contains("Waiting for task"));
-            }
             finish_tx.send(()).unwrap();
             server.await.unwrap();
         }
