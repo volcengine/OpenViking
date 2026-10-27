@@ -1,0 +1,20 @@
+openviking/service/fs_service.py
+  h_b34c679d17e2ac 573,587,922,929-941,1025,1050-1069,1072-1078
+tests/server/test_compile_studio.py
+  h_b34c679d17e2ac 883-884,923,926-928,930,933-936,942,945,948,952,954-958,962-963,970,974-977,982-983,986-989,993
+tests/service/test_fs_service.py
+  h_b34c679d17e2ac 8,1097-1136
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "66c8de438f5d7891b372af08c942547cd5a9311a",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
