@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { extractCaptureTurns, parseTranscript, sanitizeCapturedText } from "./cc-transcript.mjs";
+import { CAPTURE_CURSOR_VERSION, extractCaptureTurns, mapLegacyCaptureCursor, parseTranscript, sanitizeCapturedText } from "./cc-transcript.mjs";
 import {
   commitSession,
   deriveOvSessionId,
@@ -246,6 +246,10 @@ async function main({ cfg, input, cwd }) {
 
   const state = await loadState(sessionId);
   await reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state);
+  if (state.captureCursorVersion !== CAPTURE_CURSOR_VERSION) {
+    state.capturedTurnCount = mapLegacyCaptureCursor(messages, cfg, state.capturedTurnCount);
+    state.captureCursorVersion = CAPTURE_CURSOR_VERSION;
+  }
   const newTurns = allTurns.slice(state.capturedTurnCount);
   const captureTurns = cfg.captureAssistantTurns
     ? newTurns

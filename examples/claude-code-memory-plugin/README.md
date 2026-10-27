@@ -375,6 +375,22 @@ Keep `.gitignore` from ignoring all of `.openviking/`, or `config.json` can neve
 
 Earlier plugin versions configured tuning fields under a `claude_code` block in `~/.openviking/ov.conf`. That still works for backward compatibility — every env var above has a camelCase counterpart (`OPENVIKING_RECALL_LIMIT` → `claude_code.recallLimit`, `OPENVIKING_BYPASS_SESSION_PATTERNS` → `claude_code.bypassSessionPatterns` as a JSON array, etc.). Env vars take priority. New deployments should prefer env vars and shell rc — server config files shouldn't carry per-developer-machine tuning.
 
+## Queued input and existing capture cursors
+
+Queued prompts are read from Claude's `queued_command` attachment, including SDK
+input whose interactive `humanTurn`/`origin` fields are absent. Explicit agent
+notifications remain excluded. API request snapshots are still ignored. When a
+queued delivery also appears as a normal user row, native source/delivery IDs keep
+the first representation; equal text in distinct events is not deduplicated.
+
+The first successful capture maps a pre-queued-input `capturedTurnCount` to the same
+ordinary-turn source boundary and saves `captureCursorVersion: 2`. It does not
+replay already captured ordinary turns or backfill omitted queued inputs before
+that boundary. An invalid/out-of-range old cursor stops capture for inspection.
+Cursors from before 0.7.13 can include API snapshots and need separate migration;
+do not reset them or use this mapping to infer their format. Keep the original
+cursor backup with the old runtime before upgrading or rolling back.
+
 ## Hook timeouts
 
 Defaults in `hooks/hooks.json`:

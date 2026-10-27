@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { readRequestBody, withMockOpenViking, withPendingDir, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
-import { extractCaptureTurns } from "./cc-transcript.mjs";
+import { extractCaptureTurns, mapLegacyCaptureCursor } from "./cc-transcript.mjs";
 import { enqueue, listPending } from "./lib/pending-queue.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -577,6 +577,7 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
   let commits = 0;
   const lines = [
     JSON.stringify({ role: "user", content: "first task for the subagent" }),
+    JSON.stringify({ type: "attachment", attachment: { type: "queued_command", commandMode: "prompt", source_uuid: "sub-queue", prompt: "queued subagent input" } }),
     JSON.stringify({ role: "assistant", content: "first task done" }),
   ];
   try {
@@ -619,10 +620,101 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
       (message) => message.parts.filter((p) => p.type === "text").map((p) => p.text),
     );
     assert.equal(batches.length, 2);
-    assert.deepEqual(texts(batches[0]), ["first task for the subagent", "first task done"]);
+    assert.deepEqual(texts(batches[0]), ["first task for the subagent", "queued subagent input", "first task done"]);
     assert.deepEqual(texts(batches[1]), ["follow-up from a background task"]);
     assert.equal(commits, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("queued inputs keep their own source order and identity without API snapshots", () => {
+  const queued = (id, prompt, extra = {}) => ({ type: "attachment", attachment: {
+    type: "queued_command", commandMode: "prompt", source_uuid: id, prompt, ...extra,
+  } });
+  const rows = [
+    { type: "user", uuid: "first", message: { role: "user", content: "first" } },
+    queued("q1", "same", { humanTurn: true, origin: { kind: "human" } }),
+    queued("q1", "same"),
+    { type: "api-request-blob", message: { role: "user", content: "snapshot" } },
+    { type: "user", uuid: "q1", message: { role: "user", content: "same" } },
+    queued("first", "first"),
+    queued("q2", "same"),
+    queued("agent", "not a human prompt", { humanTurn: false, origin: { kind: "agent" } }),
+    queued("agent-only", "not human", { origin: { kind: "agent" } }),
+    { type: "attachment", attachment: { type: "other", prompt: "not a command" } },
+    queued("command", "not prompt mode", { commandMode: "shell" }),
+  ];
+  const turns = extractCaptureTurns(rows);
+  assert.deepEqual(turns.map(turn => [turn.role, turn.text]), [
+    ["user", "first"], ["user", "same"], ["user", "same"],
+  ]);
+  // A canonical row appended later must not move an already captured queued turn.
+  assert.deepEqual(extractCaptureTurns(rows.slice(0, 3)), turns.slice(0, 2));
+});
+
+test("queued capture migrates an old boundary, filters input, and resumes without replay", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-queued-cursor-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const sessionId = "queued-cursor";
+  const batches = [];
+  const queued = (id, text) => ({ type: "attachment", attachment: {
+    type: "queued_command", commandMode: "prompt", source_uuid: id, prompt: text,
+  } });
+  const text = "correction token sk_SECRET";
+  const rows = [
+    { role: "user", content: "old question" }, queued("old", "old omitted input"),
+    { role: "assistant", content: "old answer" },
+    queued("new", text), { role: "assistant", content: "new answer" },
+  ];
+  try {
+    await mkdir(join(root, "openviking-cc-capture-state"));
+    const statePath = join(root, "openviking-cc-capture-state", `${sessionId}.json`);
+    await writeFile(statePath, JSON.stringify({ capturedTurnCount: 2 }));
+    await writeFile(transcriptPath, rows.map(row => JSON.stringify(row)).join("\n"));
+    await withMockOpenViking(async (req, res) => {
+      if (req.method === "POST" && req.url.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { added: batches.at(-1).messages.length } });
+      } else {
+        writeJson(res, { status: "ok", result: { healthy: true, message_count: 10 } });
+      }
+    }, async baseUrl => {
+      const env = { ...hookEnv(root, baseUrl), OPENVIKING_CAPTURE_FILTERS: "s/sk_[A-Z]+/[redacted]/g" };
+      const input = { session_id: sessionId, transcript_path: transcriptPath, cwd: root };
+      await runAutoCapture(input, env);
+      await runAutoCapture(input, env);
+      rows.push({ type: "user", uuid: "new", message: { role: "user", content: text } });
+      rows.push({ type: "user", uuid: "different-event", message: { role: "user", content: text } });
+      await writeFile(transcriptPath, rows.map(row => JSON.stringify(row)).join("\n"));
+      await runAutoCapture(input, env);
+      await runAutoCapture(input, env);
+    });
+    const texts = batch => batch.messages.map(message => message.parts.map(part => part.text).join(""));
+    assert.deepEqual(batches.map(texts), [
+      ["correction token [redacted]", "new answer"], ["correction token [redacted]"],
+    ]);
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    assert.equal(state.capturedTurnCount, 6);
+    assert.equal(state.captureCursorVersion, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("legacy cursor mapping preserves every ordinary-turn boundary and rejects truncation", () => {
+  const rows = [
+    { role: "user", content: "first" },
+    { type: "attachment", attachment: { type: "queued_command", commandMode: "prompt", prompt: "queued" } },
+    { role: "assistant", content: "answer" },
+    { role: "user", content: "next" },
+  ];
+  for (const [before, after] of [[0, 0], [1, 1], [2, 3], [3, 4]]) {
+    assert.equal(mapLegacyCaptureCursor(rows, {}, before), after);
+  }
+  for (const invalid of [-1, 1.5, 4]) {
+    assert.throws(() => mapLegacyCaptureCursor(rows, {}, invalid));
   }
 });
