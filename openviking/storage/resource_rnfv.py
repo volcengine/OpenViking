@@ -37,6 +37,7 @@ NON_PORTABLE_VECTOR_RECORD_FIELDS = frozenset(
         "acl_mode",
         "acl_direct_grants",
         "acl_inherited_grants",
+        "acl_resources_root_level",
     }
 )
 _SCALAR_MODES = frozenset({"replace", "append"})

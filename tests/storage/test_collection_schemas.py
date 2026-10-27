@@ -1353,6 +1353,9 @@ def test_context_collection_uses_acl_mode_and_excludes_parent_uri():
 
     field_names = [field["FieldName"] for field in schema["Fields"]]
     acl_mode = next(field for field in schema["Fields"] if field["FieldName"] == "acl_mode")
+    root_level = next(
+        field for field in schema["Fields"] if field["FieldName"] == "acl_resources_root_level"
+    )
 
     assert acl_mode == {
         "FieldName": "acl_mode",
@@ -1360,6 +1363,12 @@ def test_context_collection_uses_acl_mode_and_excludes_parent_uri():
         "DefaultValue": "none",
     }
     assert "acl_mode" in schema["ScalarIndex"]
+    assert root_level == {
+        "FieldName": "acl_resources_root_level",
+        "FieldType": "string",
+        "DefaultValue": "manage",
+    }
+    assert "acl_resources_root_level" not in schema["ScalarIndex"]
     assert "acl_enabled" not in field_names
     assert "acl_enabled" not in schema["ScalarIndex"]
     assert "parent_uri" not in field_names

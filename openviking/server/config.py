@@ -349,6 +349,7 @@ class ServerConfig(BaseModel):
     # connections the client still believes are reusable, causing sporadic
     # connection-reset / EOF errors.
     timeout_keep_alive: int = 5
+    resources_root_acl_level: Literal["read", "write", "manage"] = "manage"
     auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
     # OIDC/LDAP authentication configuration

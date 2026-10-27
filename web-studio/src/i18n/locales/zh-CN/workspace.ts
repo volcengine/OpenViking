@@ -1001,7 +1001,7 @@ const workspace = {
       title: '访问权限',
       accountTitle: '资源访问控制 · {{account}}',
       accountHint:
-        '作用于当前 Account 的共享资源。关闭时不执行 ACL 鉴权；开启后，共享根目录固定为全员管理，下级默认继承，可单独限制访问。',
+        '作用于当前 Account 的共享资源。关闭时不执行 ACL 鉴权；开启后，共享根目录按服务端配置授予全员权限，下级默认继承，可单独限制访问。',
       enableAction: '启用访问控制',
       disableAction: '关闭访问控制',
       enabled: '已启用',
@@ -1009,7 +1009,7 @@ const workspace = {
       enableTitle: '启用资源访问控制？',
       disableTitle: '关闭资源访问控制？',
       enableWarning:
-        '为 Account {{account}} 启用 ACL？共享根目录固定授予全员管理权限，且不可修改。新资源默认继承父目录权限，创建者没有额外授权；已有 ACL 将生效。',
+        '为 Account {{account}} 启用 ACL？共享根目录按服务端配置授予全员权限，且不能在此修改。新资源默认继承父目录权限，创建者没有额外授权；已有 ACL 将生效。',
       disableWarning:
         '关闭 Account {{account}} 的 ACL 后，所有资源授权将停止参与鉴权，资源恢复原有共享规则，可能扩大访问范围。已保存的授权不会被删除。',
       saved: '权限已更新',

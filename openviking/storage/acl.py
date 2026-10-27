@@ -48,7 +48,8 @@ _LEVEL_MASK = {
 _MASK_LEVEL = {mask: level for level, mask in _LEVEL_MASK.items()}
 ACL_GRANT_FIELDS = ("acl_direct_grants", "acl_inherited_grants")
 ACL_MODE_FIELD = "acl_mode"
-ACL_CONTEXT_FIELDS = frozenset((ACL_MODE_FIELD, *ACL_GRANT_FIELDS))
+ACL_ROOT_LEVEL_FIELD = "acl_resources_root_level"
+ACL_CONTEXT_FIELDS = frozenset((ACL_MODE_FIELD, ACL_ROOT_LEVEL_FIELD, *ACL_GRANT_FIELDS))
 _ACL_OUTPUT_FIELDS = ["uri", *sorted(ACL_CONTEXT_FIELDS)]
 
 
@@ -164,13 +165,6 @@ class EffectiveAcl:
         }
 
 
-_RESOURCES_ROOT_ACL = EffectiveAcl(
-    AclMode.INHERIT,
-    DirectAcl((AclEntry("user:*", AclLevel.MANAGE),)),
-    DirectAcl(),
-)
-
-
 def normalize_acl_principal(principal: Any) -> str:
     if not isinstance(principal, str):
         raise InvalidArgumentError("principal must be a string")
@@ -284,9 +278,45 @@ class AclManager:
         self,
         context_store: "VikingVectorIndexBackend",
         runtime_config: AccountConfigReader | None = None,
+        resources_root_acl_level: AclLevel | str = AclLevel.MANAGE,
     ) -> None:
         self._context_store = context_store
         self._runtime_config = runtime_config
+        self.set_resources_root_acl_level(resources_root_acl_level)
+
+    def set_resources_root_acl_level(self, level: AclLevel | str) -> None:
+        """Set the implicit ``user:*`` grant for ``viking://resources``."""
+        self._resources_root_acl = EffectiveAcl(
+            AclMode.INHERIT,
+            DirectAcl((AclEntry("user:*", normalize_acl_level(level)),)),
+            DirectAcl(),
+        )
+
+    @property
+    def _resources_root_level(self) -> str:
+        return self._resources_root_acl.direct.entries[0].level.value
+
+    def _records_use_current_resources_root_level(
+        self, records: Sequence[Mapping[str, Any]]
+    ) -> bool:
+        """Return whether materialized inheritance used the current root level.
+
+        Records created before the marker existed used the historical ``manage``
+        default. A mismatched marker makes the caller recompute the ancestor chain
+        from direct grants instead of trusting stale inherited grants.
+        """
+        expected = self._resources_root_level
+        return all(
+            str(record.get(ACL_ROOT_LEVEL_FIELD) or AclLevel.MANAGE.value) == expected
+            for record in records
+        )
+
+    def materialized_context_fields(self, acl: EffectiveAcl) -> dict[str, Any]:
+        """Serialize ACL fields together with their configured root-level marker."""
+        return {
+            **acl.context_fields(),
+            ACL_ROOT_LEVEL_FIELD: self._resources_root_level,
+        }
 
     def set_runtime_config_manager(self, runtime_config: AccountConfigReader) -> None:
         """Bind the authoritative account configuration reader."""
@@ -342,9 +372,7 @@ class AclManager:
         records: list[dict[str, Any]] = []
         for offset in range(0, len(unique), 100):
             conditions = [PathScope("uri", uri, depth=0) for uri in unique[offset : offset + 100]]
-            records.extend(
-                await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx)
-            )
+            records.extend(await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx))
         return records
 
     async def _scroll_all(
@@ -393,13 +421,15 @@ class AclManager:
             effective = self._effective_from_records(records)
             if not effective.enabled:
                 continue
+            if not self._records_use_current_resources_root_level(records):
+                continue
             # An update to this node or an ancestor requires recalculating inheritance.
             if update is not None and update.uri in ancestors_by_uri[uri]:
                 continue
             result[uri] = effective
 
         if "viking://resources" in ancestors_by_uri:
-            result["viking://resources"] = _RESOURCES_ROOT_ACL
+            result["viking://resources"] = self._resources_root_acl
 
         unresolved_uris = [uri for uri in unique_uris if uri not in result]
         if unresolved_uris:
@@ -411,7 +441,7 @@ class AclManager:
                 uri: self._effective_from_records(records)
                 for uri, records in ancestor_groups.items()
             }
-            acl_map["viking://resources"] = _RESOURCES_ROOT_ACL
+            acl_map["viking://resources"] = self._resources_root_acl
             for uri in unresolved_uris:
                 effective = EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
                 for ancestor in ancestors_by_uri[uri]:
@@ -456,7 +486,10 @@ class AclManager:
 
         effective = await self.resolve_many(resource_uris, ctx, update=update)
         return [
-            {**record, **effective[str(record["uri"])].context_fields()}
+            {
+                **record,
+                **self.materialized_context_fields(effective[str(record["uri"])]),
+            }
             if str(record.get("uri") or "") in effective
             else dict(record)
             for record in records
@@ -466,7 +499,9 @@ class AclManager:
         self, record: Mapping[str, Any], new_uri: str, ctx: RequestContext
     ) -> dict[str, Any]:
         if not is_acl_uri(new_uri):
-            return EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl()).context_fields()
+            return self.materialized_context_fields(
+                EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
+            )
         ancestors = acl_ancestors(new_uri)
         parent = ancestors[-2] if len(ancestors) > 1 else None
         parent_acl = (
@@ -482,9 +517,10 @@ class AclManager:
             else DirectAcl()
         )
         mode = self._effective_from_record(record).mode if is_acl_uri(source_uri) else AclMode.NONE
-        return EffectiveAcl.from_permissions(
+        effective = EffectiveAcl.from_permissions(
             direct, inherited, mode=mode, parent_mode=parent_acl.mode
-        ).context_fields()
+        )
+        return self.materialized_context_fields(effective)
 
     async def _apply_subtree(
         self,
@@ -518,7 +554,7 @@ class AclManager:
         root_depth = len(root_ancestors)
         for uri in sorted(grouped, key=lambda value: len(acl_ancestors(value))):
             if uri == "viking://resources":
-                effective_by_uri[uri] = _RESOURCES_ROOT_ACL
+                effective_by_uri[uri] = self._resources_root_acl
                 continue
             ancestors = acl_ancestors(uri)
             parent_effective = base
@@ -531,7 +567,10 @@ class AclManager:
             )
 
         updated = [
-            {**record, **effective_by_uri[str(record["uri"])].context_fields()}
+            {
+                **record,
+                **self.materialized_context_fields(effective_by_uri[str(record["uri"])]),
+            }
             for record in records
             if str(record.get("uri") or "") in effective_by_uri
         ]

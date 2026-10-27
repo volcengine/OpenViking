@@ -11,6 +11,7 @@ from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, UsageReporterConfig
 from openviking.usage_reporter import FileLogUsageSink, UsageContext, UsageEvent
 from openviking.usage_reporter.config import build_usage_reporter
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 
 @pytest.mark.asyncio
@@ -110,6 +111,7 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
     built_reporters = []
     assigned_reporters = []
     assigned_agent_evolution_configs = []
+    assigned_resources_root_acl_levels = []
 
     class Reporter:
         closed = False
@@ -137,6 +139,9 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
     class Service:
         sessions = Sessions()
 
+        def set_resources_root_acl_level(self, level):
+            assigned_resources_root_acl_levels.append(level)
+
     class TaskTracker:
         def start_cleanup_loop(self):
             return None
@@ -160,9 +165,15 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
         initialize_runtime_state,
     )
     monkeypatch.setattr("openviking.server.app.get_task_tracker", lambda: TaskTracker())
+    monkeypatch.setattr(
+        "openviking.server.app.get_openviking_config",
+        lambda: OpenVikingConfig.from_dict({}),
+    )
     monkeypatch.setattr("openviking.server.mcp_endpoint.mcp_lifespan", mcp_lifespan)
 
-    config = ServerConfig.model_validate({"agent_evolution": {"enabled": True}})
+    config = ServerConfig.model_validate(
+        {"agent_evolution": {"enabled": True}, "resources_root_acl_level": "read"}
+    )
     app = create_app(config=config, service=Service())
     async with app.router.lifespan_context(app):
         pass
@@ -170,4 +181,5 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
     assert built_reporters == [reporter]
     assert assigned_reporters == [reporter, reporter]
     assert [config.enabled for config in assigned_agent_evolution_configs] == [True, True]
+    assert assigned_resources_root_acl_levels == ["read", "read"]
     assert reporter.closed is True

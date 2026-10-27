@@ -272,6 +272,12 @@ class OpenVikingService:
         self._agent_evolution_base_config = config.model_copy(deep=True)
         self._session_service.set_agent_evolution_config(config)
 
+    def set_resources_root_acl_level(self, level: str) -> None:
+        """Set the server-wide implicit ACL level for the shared resources root."""
+        if self._vikingdb_manager is None or self._vikingdb_manager.acl_manager is None:
+            raise NotInitializedError("ACL")
+        self._vikingdb_manager.acl_manager.set_resources_root_acl_level(level)
+
     async def apply_agent_evolution_config(self) -> None:
         """Apply the legacy server value to an already initialized manager."""
         manager = self._runtime_config_manager
