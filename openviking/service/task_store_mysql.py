@@ -105,6 +105,18 @@ def _inactive_result(status: str, message: str) -> StoreOperationResult:
     )
 
 
+def _post_outcome_auth(row_auth: Any) -> Dict[str, Any]:
+    """Auth state a task keeps once its outcome has been recorded.
+
+    task.auth carries credential state (e.g. git-http or feishu tokens) the
+    task needed while running. After record_outcome the task no longer runs,
+    so only the enqueue bookkeeping markers survive - exactly what the
+    persistent file store retains in its own record_outcome.
+    """
+    markers = (row_auth or {}).get("enqueue_complete_work_ids")
+    return {"enqueue_complete_work_ids": deepcopy(markers)} if markers else {}
+
+
 @mysql_runtime_store
 class MySQLTaskWorkStore(TaskWorkStore):
     """Durable Task/Work storage with transaction-owned state transitions."""
@@ -1197,13 +1209,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     values["status"] = task.status.value
                 events = task.execution_events
 
-            markers = (row.auth or {}).get("enqueue_complete_work_ids")
-            auth = _json_copy(row.auth) or {}
-            if markers:
-                auth["enqueue_complete_work_ids"] = deepcopy(markers)
-            else:
-                auth.pop("enqueue_complete_work_ids", None)
-            values["auth"] = auth
+            values["auth"] = _post_outcome_auth(row.auth)
             await session.execute(
                 update(Task)
                 .where(*self._task_query(Task, task_id, account_id, user_id))

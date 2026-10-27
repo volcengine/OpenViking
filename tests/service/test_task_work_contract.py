@@ -60,6 +60,31 @@ async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker
         await asyncio.gather(waiting, return_exceptions=True)
 
 
+def test_record_outcome_retains_only_enqueue_markers_in_auth():
+    """Both task stores must drop credential state once an outcome is recorded.
+
+    task.auth carries the credential state a task needed while running
+    (git-http / feishu tokens). The persistent file store's record_outcome
+    keeps only the enqueue bookkeeping markers; the MySQL path used to write
+    the full auth dict back, retaining credentials on finished tasks.
+    """
+    from openviking.service.task_store_mysql import _post_outcome_auth
+
+    auth = {
+        "basic_auth": {"user": "u", "password": "p"},
+        "enqueue_complete_work_ids": ["w1", "w2"],
+    }
+    retained = _post_outcome_auth(auth)
+    assert retained == {"enqueue_complete_work_ids": ["w1", "w2"]}
+    # The markers are a copy: later mutation of the row must not leak in.
+    assert retained["enqueue_complete_work_ids"] is not auth["enqueue_complete_work_ids"]
+
+    # Credentials without markers are dropped entirely; so are empty/absent auth.
+    assert _post_outcome_auth({"basic_auth": {"user": "u", "password": "p"}}) == {}
+    assert _post_outcome_auth({}) == {}
+    assert _post_outcome_auth(None) == {}
+
+
 @pytest.mark.asyncio
 async def test_mysql_requeue_and_concurrent_completion_are_durable():
     raw = os.environ.get("OV_TEST_MYSQL")
