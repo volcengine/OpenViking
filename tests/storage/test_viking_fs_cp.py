@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -948,7 +949,7 @@ class _AclMoveAGFS(MockLocalAGFS):
 
 @pytest.fixture
 def acl_move_storage(tmp_path):
-    grants = {}
+    grants: dict[str, AclLevel] = {}
 
     async def resolve_many(uris, ctx):
         result = {}
@@ -968,7 +969,7 @@ def acl_move_storage(tmp_path):
             )
         return result
 
-    acl = SimpleNamespace(
+    acl: Any = SimpleNamespace(
         is_enabled=AsyncMock(return_value=True),
         resolve_many=resolve_many,
         refresh_context_subtree=AsyncMock(),
@@ -1158,9 +1159,10 @@ async def test_resource_file_mv_rolls_back_when_destination_lacks_manage(acl_mov
         validate_target_prefix_rewrite_internal=AsyncMock(),
         rewrite_target_prefix_internal=AsyncMock(side_effect=watch_error),
     )
+    watch_scheduler: Any = SimpleNamespace(watch_manager=watch_manager)
     service = FSService(
         viking_fs=storage.fs,
-        watch_scheduler=SimpleNamespace(watch_manager=watch_manager),
+        watch_scheduler=watch_scheduler,
     )
 
     with pytest.raises(RuntimeError, match="watch rewrite failed") as error:
