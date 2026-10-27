@@ -13,7 +13,8 @@ use crate::cache_runtime::{
 
 use super::codec::LockTokenCodec;
 use super::provider::{
-    AcquisitionChange, AtomicAcquisition, AtomicAcquisitionResult, PathLockHandleMode, PathLockProvider,
+    AcquisitionChange, AtomicAcquisition, AtomicAcquisitionResult, PathLockHandleMode,
+    PathLockProvider,
 };
 use super::types::{LockToken, PathLockError, PathLockKind, PathLockRequest, PathLockResult};
 
