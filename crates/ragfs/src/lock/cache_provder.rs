@@ -11,6 +11,7 @@ use crate::cache_runtime::{
 };
 
 use super::codec::LockTokenCodec;
+use super::path::validate_normalized_logical_path;
 use super::provider::{
     AcquisitionChange, AtomicAcquisition, AtomicAcquisitionResult, PathLockHandleMode, PathLockProvider,
 };
@@ -77,6 +78,21 @@ local function decode_token(raw)
     end
     return { owner = token_owner, time_ns = time_ns, kind = kind }
 end
+local function is_normalized_path(path)
+    if not path or string.sub(path, 1, 1) ~= "/"
+        or (path ~= "/" and string.sub(path, -1) == "/")
+        or string.find(path, "//", 1, true)
+        or string.find(path, string.char(0), 1, true) then
+        return false
+    end
+    for part in string.gmatch(path, "[^/]+") do
+        if part == "." or part == ".." then
+            return false
+        end
+    end
+    return true
+end
+
 local function ancestors(path)
     local result = {}
     if path == "/" then
@@ -125,9 +141,7 @@ local includes_tree = false
 for index = 5, #ARGV, 2 do
     local path = ARGV[index]
     local kind = ARGV[index + 1]
-    if not path or string.sub(path, 1, 1) ~= "/"
-        or (path ~= "/" and string.sub(path, -1) == "/")
-        or (kind ~= "E" and kind ~= "T") then
+    if not is_normalized_path(path) or (kind ~= "E" and kind ~= "T") then
         return { "invalid_request", "invalid path or lock kind" }
     end
     table.insert(requests, { path = path, kind = kind })
@@ -533,6 +547,7 @@ impl RedisPathLockProvider {
 
     /// Return the Redis HASH key responsible for one logical path.
     fn tokens_key_for_path(&self, path: &str) -> PathLockResult<String> {
+        validate_normalized_logical_path(path)?;
         let suffix = if path == "/" || path == "/local" {
             "global".to_string()
         } else {
@@ -1170,6 +1185,7 @@ mod tests {
     use crate::cache_runtime::{
         CacheRuntime, RedisProviderConfig, ScriptDefinition, ScriptRequest, ScriptValue,
     };
+    use crate::core::FileSystem;
     use crate::plugins::memfs::MemFileSystem;
 
     use super::super::manager::{PathLockConfig, PathLockManager};
@@ -1511,6 +1527,191 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             Err(PathLockError::InvalidRequest(_))
         ));
 
+        runtime.close().await.unwrap();
+    }
+
+    /// Real filesystem aliases must not bypass another manager's Redis Exact lock.
+    #[tokio::test]
+    async fn redis_path_aliases_cannot_write_a_locked_file() {
+        let Some((runtime, provider)) = test_provider("path-alias-write").await else {
+            return;
+        };
+        let dir = tempfile::TempDir::new().unwrap();
+        let fs = Arc::new(
+            crate::plugins::localfs::LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap(),
+        );
+        let path = "/local/account-a/file";
+        std::fs::create_dir_all(dir.path().join("local/account-a")).unwrap();
+        fs.write(path, b"original", 0, crate::core::WriteFlag::Create)
+            .await
+            .unwrap();
+        let second_provider =
+            RedisPathLockProvider::new(runtime.clone(), &provider.service_name, 1.0).unwrap();
+        let config = PathLockConfig {
+            lock_expire_secs: 1.0,
+            ..PathLockConfig::default()
+        };
+        let first = PathLockManager::new(fs.clone(), Arc::new(provider), config.clone());
+        let second = Arc::new(PathLockManager::new(
+            fs.clone(),
+            Arc::new(second_provider),
+            config,
+        ));
+        let wrapped = crate::lock::PathLockWrappedFS::new(second, fs.clone());
+        let lease = first
+            .acquire_exact(path, Duration::ZERO, None)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            wrapped
+                .write(path, b"modified", 0, crate::core::WriteFlag::Truncate)
+                .await,
+            Err(crate::core::Error::PathLock(PathLockError::Timeout { .. }))
+        ));
+        for alias in [
+            "/local/account-a/./file",
+            "/local/account-a//file",
+            "/local/./account-a/file",
+        ] {
+            assert_eq!(fs.read(alias, 0, 100).await.unwrap(), b"original");
+            assert!(
+                wrapped
+                    .write(alias, b"modified", 0, crate::core::WriteFlag::Truncate)
+                    .await
+                    .is_err(),
+                "write through alias {alias} bypassed the lock"
+            );
+            assert_eq!(fs.read(path, 0, 100).await.unwrap(), b"original");
+        }
+        first.release(&lease).await.unwrap();
+        wrapped
+            .write(path, b"modified", 0, crate::core::WriteFlag::Truncate)
+            .await
+            .unwrap();
+        assert_eq!(fs.read(path, 0, 100).await.unwrap(), b"modified");
+        runtime.close().await.unwrap();
+    }
+
+    /// Lua validates the entire batch before writing any target or cleaning stale tokens.
+    #[tokio::test]
+    async fn redis_lua_rejects_path_aliases_before_mutation() {
+        let Some((runtime, provider)) = test_provider("path-alias-lua").await else {
+            return;
+        };
+        let valid = "/local/account-a/file";
+        let stale_path = "/local/account-a/stale";
+        let stale = token("old-owner", 1, PathLockKind::Exact);
+        provider.try_create_token(stale_path, &stale).await.unwrap();
+        for path in [
+            "",
+            "relative",
+            "//",
+            "/local/account-a/file/",
+            "/local/account-a//file",
+            "/local/account-a/./file",
+            "/local/account-a/../file",
+            "/local/account-a/file\0",
+        ] {
+            for kind in ["E", "T"] {
+                let values = provider
+                    .execute_array(
+                        ACQUIRE_BATCH_ID,
+                        provider.tokens_key_for_path(valid).unwrap(),
+                        ["owner", "200", "100", "2000", valid, "E", path, kind]
+                            .iter()
+                            .map(RedisPathLockProvider::bytes)
+                            .collect(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    RedisPathLockProvider::result_status(&values, "test").unwrap(),
+                    "invalid_request",
+                    "Lua accepted {path:?}"
+                );
+                assert_eq!(provider.read_token(valid).await.unwrap(), None);
+                assert_eq!(
+                    provider.read_token(stale_path).await.unwrap(),
+                    Some(stale.clone())
+                );
+            }
+        }
+        runtime.close().await.unwrap();
+    }
+
+    /// Every Redis token entry point rejects noncanonical paths before executing scripts.
+    #[tokio::test]
+    async fn redis_provider_rejects_path_aliases_before_script_access() {
+        let mock = crate::cache_runtime::MemoryMockProvider::new()
+            .with_script_handler(|_| panic!("invalid path must not execute a Redis script"));
+        let runtime = CacheRuntime::memory_with_provider(Arc::new(mock));
+        let provider = RedisPathLockProvider::new(runtime.clone(), "path-validation", 1.0).unwrap();
+        let original = token("owner", 100, PathLockKind::Exact);
+        for path in [
+            "",
+            "relative",
+            "//",
+            "/local/account-a/file/",
+            "/local/account-a/file//",
+            "/local/account-a//file",
+            "/local/account-a/./file",
+            "/local/account-a/../file",
+            "/local/account-a/file\0",
+        ] {
+            for kind in [PathLockKind::Exact, PathLockKind::Tree] {
+                assert!(matches!(
+                    provider
+                        .try_acquire_batch_atomic(
+                            &[
+                                request("/local/account-a/valid", PathLockKind::Exact),
+                                request(path, kind)
+                            ],
+                            "owner",
+                            200,
+                            100,
+                        )
+                        .await,
+                    Err(PathLockError::InvalidRequest(_))
+                ));
+            }
+            assert!(matches!(
+                provider.try_create_token(path, &original).await,
+                Err(PathLockError::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                provider
+                    .compare_and_write_token(path, &original, &original)
+                    .await,
+                Err(PathLockError::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                provider.read_token(path).await,
+                Err(PathLockError::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                provider.refresh_token(path, "owner", 200).await,
+                Err(PathLockError::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                &provider
+                    .refresh_tokens(&[path.to_string()], "owner", 200)
+                    .await[0],
+                Err(PathLockError::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                provider.remove_token(path, "owner", false).await,
+                Err(PathLockError::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                provider.scan_descendant_locks(path).await,
+                Err(PathLockError::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                provider.is_path_locked_atomic(path, 200, 100, true).await,
+                Err(PathLockError::InvalidRequest(_))
+            ));
+        }
         runtime.close().await.unwrap();
     }
 

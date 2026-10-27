@@ -17,6 +17,7 @@ pub mod codec;
 mod cache_provder;
 pub mod manager;
 pub mod metrics;
+mod path;
 pub mod provider;
 pub mod resolver;
 pub mod sqlite_provider;

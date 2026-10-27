@@ -7,6 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
+use super::path::validate_normalized_logical_path as validate_path;
 use super::provider::{
     AcquisitionChange, AtomicAcquisition, AtomicAcquisitionResult, PathLockHandleMode,
     PathLockProvider,
@@ -48,20 +49,6 @@ fn db_error(error: rusqlite::Error) -> PathLockError {
 // Fixed-width decimal TEXT preserves the entire u128 range and lexical ordering.
 fn timestamp(time_ns: u128) -> String {
     format!("{time_ns:039}")
-}
-
-fn validate_path(path: &str) -> PathLockResult<()> {
-    if !path.starts_with('/')
-        || (path != "/" && path.ends_with('/'))
-        || path.contains("//")
-        || path.contains('\0')
-        || path.split('/').any(|part| matches!(part, "." | ".."))
-    {
-        return Err(PathLockError::InvalidRequest(format!(
-            "SQLite PathLock requires a normalized absolute logical path: {path}"
-        )));
-    }
-    Ok(())
 }
 
 fn validate_owner(owner: &str) -> PathLockResult<()> {

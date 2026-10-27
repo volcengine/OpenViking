@@ -17,6 +17,7 @@ use crate::core::internal_names::{EXACT_LOCK_FILE_PREFIX, PATH_LOCK_FILE};
 use crate::core::{FileSystem, FsContextView};
 
 use super::metrics::LockMetrics;
+use super::path::normalize_logical_path;
 use super::provider::{AcquisitionChange, AtomicAcquisition, PathLockHandleMode, PathLockProvider};
 use super::resolver::{LockPathResolver, ResolvedExactPaths};
 use super::types::{
@@ -669,10 +670,10 @@ impl PathLockManager {
     }
 
     /// Normalize, deduplicate, and sort requests with Tree taking precedence over Exact.
-    fn normalize_requests(requests: &[PathLockRequest]) -> Vec<PathLockRequest> {
+    fn normalize_requests(requests: &[PathLockRequest]) -> PathLockResult<Vec<PathLockRequest>> {
         let mut by_path: HashMap<String, PathLockKind> = HashMap::new();
         for request in requests {
-            let path = Self::normalize_path(&request.path);
+            let path = normalize_logical_path(&request.path)?.to_string();
             by_path
                 .entry(path)
                 .and_modify(|kind| {
@@ -693,17 +694,7 @@ impl PathLockManager {
                 .cmp(&b.path.len())
                 .then_with(|| a.path.cmp(&b.path))
         });
-        normalized
-    }
-
-    /// Normalize one logical path using the existing PathLock trailing-slash rule.
-    fn normalize_path(path: &str) -> String {
-        let trimmed = path.trim_end_matches('/');
-        if trimmed.is_empty() {
-            "/".to_string()
-        } else {
-            trimmed.to_string()
-        }
+        Ok(normalized)
     }
 
     /// Return the configured lock expiry in nanoseconds.
@@ -851,7 +842,7 @@ impl PathLockManager {
                 "lock request batch must not be empty".to_string(),
             ));
         }
-        let sorted = Self::normalize_requests(requests);
+        let sorted = Self::normalize_requests(requests)?;
 
         let owner = self.resolve_owner_state(owner_capability)?;
         let owner_id = owner.owner_id.clone();
@@ -1751,6 +1742,9 @@ impl PathLockManager {
                 "handoff owner_id and lock_paths must not be empty".to_string(),
             ));
         }
+        for request in &handoff.covered_paths {
+            normalize_logical_path(&request.path)?;
+        }
 
         // Local fast path: a handoff carrying lease_ref MUST be adopted from this
         // process's registry — it is never legacy. Adopt in-place (migrate to a fresh
@@ -1834,8 +1828,8 @@ impl PathLockManager {
             let expected_kind = match handle_mode {
                 PathLockHandleMode::LogicalPath => {
                     let request = &handoff.covered_paths[index];
-                    let expected_path = Self::normalize_path(&request.path);
-                    if lp != &expected_path {
+                    let expected_path = normalize_logical_path(&request.path)?;
+                    if lp != expected_path {
                         return Err(PathLockError::InvalidRequest(format!(
                             "handoff coverage '{}' does not match logical lock path '{lp}'",
                             request.path
@@ -1976,11 +1970,11 @@ impl PathLockManager {
     /// Check if a path is locked (for observability).
     pub async fn is_locked(&self, path: &str, ignore_stale: bool) -> PathLockResult<bool> {
         let now_ns = Self::now_ns();
-        let normalized_path = Self::normalize_path(path);
+        let normalized_path = normalize_logical_path(path)?;
         if let Some(locked) = self
             .provider
             .is_path_locked_atomic(
-                &normalized_path,
+                normalized_path,
                 now_ns,
                 now_ns.saturating_sub(self.lock_expire_ns()),
                 ignore_stale,
@@ -1993,7 +1987,7 @@ impl PathLockManager {
         // Check the current sidecar and the legacy in-directory token.
         let exact_paths = self
             .resolver
-            .resolve_exact_conflict_paths(&normalized_path)
+            .resolve_exact_conflict_paths(normalized_path)
             .await?;
         for lp in &exact_paths {
             if let Ok(Some(token)) = self.provider.read_token(lp).await {
@@ -2004,7 +1998,7 @@ impl PathLockManager {
         }
 
         // Check ancestor tree locks.
-        for parent in LockPathResolver::ancestor_paths(&normalized_path) {
+        for parent in LockPathResolver::ancestor_paths(normalized_path) {
             for ancestor_lock in self.resolver.resolve_tree_conflict_paths(&parent).await? {
                 if let Ok(Some(token)) = self.provider.read_token(&ancestor_lock).await {
                     // Only Tree locks propagate to descendants.
@@ -2081,6 +2075,9 @@ impl PathLockManager {
         lease_ref: &str,
         requests: &[PathLockRequest],
     ) -> PathLockResult<()> {
+        for request in requests {
+            normalize_logical_path(&request.path)?;
+        }
         let owner = self.lease_registry.resolve(lease_ref).ok_or_else(|| {
             PathLockError::InvalidRequest(format!("unknown pathlock lease ref '{lease_ref}'"))
         })?;
@@ -2109,6 +2106,9 @@ impl PathLockManager {
         if view.disable_auto_pathlock() {
             debug!(requests = ?requests, "pathlock auto action resolved to disabled");
             return Ok(AutoPathLockAction::Disabled);
+        }
+        for request in requests {
+            normalize_logical_path(&request.path)?;
         }
         let Some(lease_ref) = view.pathlock_lease_ref() else {
             debug!(requests = ?requests, "pathlock auto action resolved to acquire");

@@ -221,6 +221,13 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
 
 Exact 和 Tree 表达操作范围，文件、目录或缺失路径表达目标的当前状态，两者独立。锁保护路径名字，目标不存在也可以申请锁。
 
+锁路径必须是绝对路径。Manager 在获取锁或检查租约覆盖范围前，对空路径、
+相对路径、重复 `/`、`.` 或 `..` 路径段及 NUL 返回 `InvalidRequest`。
+非根路径末尾的单个 `/` 会被移除。Redis 和 SQLite 的 token 操作要求路径
+已完成这一规范化；Redis Lua 批量获取也会在修改 token 前校验全部请求。
+应使用 `/local/account-a/file`，避免 `/local/account-a/./file`、
+`/local/account-a//file` 等别名。
+
 以下冲突关系限定为不同 owner、同一 Provider scope 内的请求：
 
 | 已持有 | 新请求 | 冲突 |

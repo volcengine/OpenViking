@@ -224,6 +224,14 @@ The lock mechanism uses two lock types to handle different conflict patterns:
 
 Exact and Tree describe an operation's scope; file, directory, and missing describe the target's current state. These are independent. Locks protect path names, including names that do not currently exist.
 
+Lock paths must be absolute. The Manager rejects empty or relative paths, repeated
+`/`, `.` or `..` components, and NUL with `InvalidRequest` before acquiring locks
+or checking lease coverage. A single trailing `/` is stripped, except at `/`.
+Redis and SQLite token operations require this normalized form; Redis Lua batch
+acquisition also validates every request before mutating tokens. Use
+`/local/account-a/file`, rather than aliases such as `/local/account-a/./file`
+or `/local/account-a//file`.
+
 The following conflicts apply to different owners within the same provider scope:
 
 | Held lock | New request | Conflict |
