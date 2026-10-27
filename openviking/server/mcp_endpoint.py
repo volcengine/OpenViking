@@ -69,6 +69,7 @@ from openviking.server.auth import (
     _build_request_context,
     _extract_api_key,
     get_api_key_manager_or_raise,
+    is_personal_api_key_auth,
     normalize_actor_peer_header,
     resolve_identity,
     should_expose_user_key,
@@ -371,15 +372,15 @@ async def list_users(
 ) -> dict[str, Any]:
     """Find users to grant access to in the caller's account. Returns user_id and
     matching total by default, including for administrators. query matches a
-    substring of user_id. include_credentials=true requires ADMIN or ROOT and
-    returns plaintext for every key to ROOT, and to ADMIN only the caller's own
-    key with masked key_prefix for every other user; it is forbidden in trusted
-    auth mode.
+    substring of user_id. include_credentials=true returns all keys to ROOT,
+    the caller's own key and masked prefixes to ADMIN, and only the caller's own
+    key to USER authenticated with a personal API key. Other users' keys and
+    prefixes are omitted for USER. Credential disclosure is forbidden in trusted mode.
     Resource manage permission does not grant account administrator privileges.
     """
     ctx = _get_ctx()
-    if include_credentials and ctx.role not in (Role.ADMIN, Role.ROOT):
-        raise PermissionDeniedError("include_credentials requires ADMIN or ROOT role")
+    if include_credentials and ctx.role not in (Role.USER, Role.ADMIN, Role.ROOT):
+        raise PermissionDeniedError("include_credentials requires USER, ADMIN or ROOT role")
     request = context.request_context.request
     if include_credentials and not should_expose_user_key(request):
         raise PermissionDeniedError("Credential disclosure is disabled in trusted auth mode")
@@ -389,8 +390,10 @@ async def list_users(
         limit=limit,
         page=page,
         query_filter=query,
-        expose_key=include_credentials,
+        expose_key=include_credentials
+        and (ctx.role != Role.USER or is_personal_api_key_auth(request, ctx)),
         mask_keys=ctx.role != Role.ROOT,
+        hide_other_keys=ctx.role == Role.USER,
         viewer_account_id=ctx.account_id,
         viewer_user_id=ctx.user.user_id,
     )

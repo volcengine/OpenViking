@@ -1,7 +1,10 @@
 use crate::client::HttpClient;
+use crate::config::Config;
+use crate::config_wizard::ConfigStore;
 use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
 use crate::theme;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use colored::Colorize;
 use serde_json::{Value, json};
 
@@ -254,15 +257,70 @@ pub async fn regenerate_key(
     account_id: &str,
     user_id: &str,
     seed: Option<&str>,
+    active_config: Option<&Config>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
+    let request_key = client.request_api_key();
+    let update = if let Some(config) = active_config.filter(|config| {
+        config.api_key.as_deref() == client.api_key()
+            && request_key
+                .as_deref()
+                .is_some_and(|key| key_belongs_to(key, account_id, user_id))
+    }) {
+        let update = ConfigStore::new()?.prepare_api_key_update(config, request_key.as_deref().unwrap())?;
+        eprintln!(
+            "Rotating your API key will update api_key in {} and any matching authentication headers.",
+            update.path().display()
+        );
+        Some(update)
+    } else {
+        None
+    };
     let response = client
         .admin_regenerate_key(account_id, user_id, seed)
         .await?;
-    output_success(&response, output_format, compact);
-    print_admin_user_key_notice(&response, output_format, true);
+    if let Some(update) = update {
+        let path = update.path().display().to_string();
+        let Some(new_key) = response
+            .get("user_key")
+            .and_then(Value::as_str)
+            .filter(|key| key_belongs_to(key, account_id, user_id))
+        else {
+            output_success(&response, output_format, compact);
+            return Err(Error::Config(format!(
+                "Server reported key rotation without a valid user_key for {account_id}/{user_id}; {path} was not updated. Check the command output and recover the credential before retrying."
+            )));
+        };
+        let saved = update.commit(new_key).map_err(|error| Error::Config(format!(
+            "API key was rotated, but could not update {path}: {error}. Save the new user_key from the command output to api_key manually."
+        )));
+        // Persist before writing stdout (which can fail on a closed pipe), but
+        // retain the returned credential in the output even if saving failed.
+        output_success(&response, output_format, compact);
+        saved?;
+        if request_key.as_deref() == Some(new_key) {
+            eprintln!(
+                "Updated api_key in {path} and any matching authentication headers. The generated key is unchanged; use a new seed or omit --seed to rotate it."
+            );
+        } else {
+            eprintln!(
+                "Updated api_key in {path} and any matching authentication headers. The old key is invalid; update other clients using it."
+            );
+        }
+    } else {
+        output_success(&response, output_format, compact);
+        print_admin_user_key_notice(&response, output_format, true);
+    }
     Ok(())
+}
+
+fn key_belongs_to(key: &str, account_id: &str, user_id: &str) -> bool {
+    let parts: Vec<_> = key.split('.').collect();
+    parts.len() == 3
+        && !parts[2].is_empty()
+        && URL_SAFE_NO_PAD.decode(parts[0]).ok().as_deref() == Some(account_id.as_bytes())
+        && URL_SAFE_NO_PAD.decode(parts[1]).ok().as_deref() == Some(user_id.as_bytes())
 }
 
 pub async fn set_account_settings(

@@ -204,9 +204,8 @@ async function probeAdminAccess(
     }
   }
 
-  // The Root API key is the only control-plane credential. The User API key is
-  // never promoted to admin access, so management stays gated behind the root
-  // or account-admin key alone.
+  // Check the control-plane credential's authenticated role. Listing users is
+  // also available to ordinary users and cannot prove management permission.
   const controlKey = input.adminApiKey.trim()
   if (!controlKey) {
     return {
@@ -223,35 +222,25 @@ async function probeAdminAccess(
   setApiKeyHeader(headers, controlKey)
 
   try {
-    await client.get('/api/v1/admin/accounts', { headers })
-    return {
-      detailCode: 'rootAvailable',
-      state: 'ok',
+    const { data } = await client.get<unknown>('/health', { headers })
+    if (isRecord(data) && data.role === 'root') {
+      return { detailCode: 'rootAvailable', state: 'ok' }
     }
-  } catch (accountsError) {
     if (
-      !axios.isAxiosError(accountsError) ||
-      accountsError.response?.status !== 403 ||
-      !input.accountId
+      isRecord(data) &&
+      data.role === 'admin' &&
+      input.accountId.trim() &&
+      data.account_id === input.accountId.trim()
     ) {
-      return probeError(accountsError)
+      return { detailCode: 'accountAdminAvailable', state: 'ok' }
     }
-
-    try {
-      const accountId = encodeURIComponent(input.accountId)
-      await client.get(`/api/v1/admin/accounts/${accountId}/users`, {
-        headers,
-        params: {
-          limit: 1,
-        },
-      })
-      return {
-        detailCode: 'accountAdminAvailable',
-        state: 'ok',
-      }
-    } catch (usersError) {
-      return probeError(usersError)
+    return {
+      errorCode: 'PERMISSION_DENIED',
+      statusCode: 403,
+      state: 'error',
     }
+  } catch (error) {
+    return probeError(error)
   }
 }
 

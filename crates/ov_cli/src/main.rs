@@ -2254,7 +2254,7 @@ enum AdminCommands {
         #[arg(value_name = "role")]
         role: String,
     },
-    /// Regenerate a user's API key (old key immediately invalidated)
+    /// Regenerate a user's API key; self-rotation updates the active ovcli.conf
     RegenerateKey {
         /// Account ID
         #[arg(value_name = "account-id")]

@@ -732,7 +732,7 @@ ov config validate
 | GET | `/api/v1/admin/accounts` | ROOT | 列出所有工作区 |
 | DELETE | `/api/v1/admin/accounts/{id}` | ROOT | 删除工作区 |
 | POST | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 注册用户 |
-| GET | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 列出用户 |
+| GET | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN, USER | 列出用户；ADMIN/USER 仅限本账户 |
 | DELETE | `/api/v1/admin/accounts/{id}/users/{uid}` | ROOT, ADMIN | 移除用户 |
 | PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT, ADMIN | 将用户提升为 ADMIN；ADMIN 仅限本账户 |
-| POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN | 重新生成 user key |
+| POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN, USER | 重新生成 user key；USER 仅能使用个人 API Key 认证轮换自身密钥 |

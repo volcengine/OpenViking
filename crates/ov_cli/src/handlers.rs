@@ -773,6 +773,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 &account_id,
                 &user_id,
                 seed.as_deref(),
+                if ctx.sudo { None } else { Some(&ctx.config) },
                 ctx.output_format,
                 ctx.compact,
             )

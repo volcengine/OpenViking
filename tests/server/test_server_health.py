@@ -104,7 +104,7 @@ async def test_health_endpoint_without_api_key():
 
 
 @pytest.mark.parametrize(
-    "credentials", ["anonymous", "partial", "trusted", "keyed", "malformed", "asserted-root"]
+    "credentials", ["anonymous", "partial", "trusted", "keyed", "malformed", "asserted-root", "root-only", "invalid-root-only"]
 )
 async def test_health_trusted_identity_contract(credentials, caplog, service):
     app = create_app(
@@ -113,12 +113,14 @@ async def test_health_trusted_identity_contract(credentials, caplog, service):
     )
     await _initialize_auth_plugin(app, service, app.state.config)
     headers = {}
-    if credentials != "anonymous":
+    if credentials not in ("anonymous", "root-only", "invalid-root-only"):
         headers["X-OpenViking-Account"] = "account-a"
     if credentials in ("trusted", "keyed", "malformed", "asserted-root"):
         headers["X-OpenViking-User"] = "alice"
-    if credentials in ("keyed", "asserted-root"):
+    if credentials in ("keyed", "asserted-root", "root-only"):
         headers["X-API-Key"] = "test-root-key"
+    if credentials == "invalid-root-only":
+        headers["X-API-Key"] = "invalid-key"
     if credentials == "malformed":
         headers["X-OpenViking-User"] = "alice/../root"
     if credentials == "asserted-root":
@@ -128,13 +130,15 @@ async def test_health_trusted_identity_contract(credentials, caplog, service):
     ) as client:
         response = await client.get("/health", headers=headers)
     body = response.json()
-    expected_status = 401 if credentials in ("trusted", "malformed") else 200
+    expected_status = 401 if credentials in ("trusted", "malformed", "invalid-root-only") else 200
     assert response.status_code == expected_status
     if expected_status == 401:
         assert body["error"]["code"] == "UNAUTHENTICATED"
         return
     if credentials == "keyed":
         assert (body["account_id"], body["user_id"], body["role"]) == ("account-a", "alice", "user")
+    elif credentials == "root-only":
+        assert body["role"] == "root"
     else:
         assert "role" not in body
     assert body["root_api_key_required"] is True

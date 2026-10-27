@@ -148,7 +148,7 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `privacy_tree` | Check which credentials are saved; return active field metadata and references without values | `category` (optional) |
 | `privacy_resolve` | Turn a complete <code v-pre>{{ov_privacy:...}}</code> placeholder into one current field's actual value for immediate use | `reference` |
 | `privacy_upsert` | Save user-supplied credential fields with an atomic merge; return metadata and references without values | `category`, `target_key`, `values` |
-| `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true requires ADMIN/ROOT) |
+| `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true applies role-based visibility) |
 | `list_groups` | List group IDs in the caller's account without membership | None |
 | `get_acl` | Read direct, inherited and effective ACL; requires resource manage or account ADMIN | `uri` |
 | `set_acl` | Update a shared resource ACL; authorize against the permissions before the change | `uri`, `acl` |
@@ -217,9 +217,10 @@ All account users may call `list_users` and `list_groups`; neither tool accepts 
 The default output contains only user IDs and a matching total, or group IDs. Even administrators
 must explicitly set `include_credentials=true` to include credential fields: ROOT receives
 every available plaintext key in `api_key`; ADMIN receives its own plaintext key and masked
-`key_prefix` values for every other user. A USER requesting
-credentials receives `PERMISSION_DENIED`, even when the query matches no users. Trusted auth mode
-forbids credential disclosure. Group membership remains available through the admin API.
+`key_prefix` values for every other user. USER authenticated with a personal API key receives
+only its own stored key (or prefix for hash-only storage); every other row omits both credential
+fields. USER authenticated through OAuth or other methods receives no credentials. Trusted auth
+mode forbids credential disclosure. Group membership remains available through the admin API.
 
 `get_acl` and `set_acl` require resource `manage` permission. A resource manager does not gain
 account administrator privileges. `write` and `add_resource` accept an optional `acl` object;

@@ -58,6 +58,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
+    UnauthenticatedError,
 )
 from openviking_cli.session.user_id import (
     validate_account_id,
@@ -1207,13 +1208,29 @@ class MySQLAccountStore(AccountStore):
             await session.delete(group)
 
     async def replace_active_user_api_key(
-        self, account_id: str, user_id: str, api_key: str
+        self, account_id: str, user_id: str, api_key: str,
+        *, expected_api_key: str | None = None,
     ) -> None:
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
             self._require_active(account)
             user = await self._lock_user(session, account, user_id)
             self._require_active(user)
+            if expected_api_key is not None:
+                # A locking read observes the current credential, even when a
+                # concurrent reset committed after request authentication.
+                current = await session.scalar(
+                    select(Credential.credential_id)
+                    .where(
+                        Credential.service_name == self._service_name,
+                        Credential.user_pk == user.user_pk,
+                        Credential.revoked.is_(False),
+                        Credential.lookup_digest == _credential_digest(expected_api_key),
+                    )
+                    .with_for_update()
+                )
+                if current is None:
+                    raise UnauthenticatedError("API key is no longer active")
             sequence = await session.scalar(
                 select(func.coalesce(func.max(Credential.sequence), 0)).where(
                     Credential.service_name == self._service_name,

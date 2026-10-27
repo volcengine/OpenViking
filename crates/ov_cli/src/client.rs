@@ -212,6 +212,22 @@ impl HttpClient {
         self.base.api_key()
     }
 
+    /// Match the server's credential selection after custom headers are applied.
+    pub(crate) fn request_api_key(&self) -> Option<String> {
+        let headers = self.base.build_headers();
+        headers
+            .get("X-API-Key")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                headers
+                    .get(reqwest::header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.strip_prefix("Bearer "))
+            })
+            .map(str::to_owned)
+    }
+
     fn upload_mode(&self) -> Option<String> {
         match env::var("OPENVIKING_UPLOAD_MODE") {
             Ok(value) => {
