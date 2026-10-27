@@ -1,0 +1,520 @@
+.github/workflows/gateway-chart.yml
+  h_b34c679d17e2ac 1-25
+.github/workflows/gateway-e2e.yml
+  h_b34c679d17e2ac 1-72
+.github/workflows/gateway.yml
+  h_b34c679d17e2ac 4,9-20,28-60,62-65
+.github/workflows/rust-cli.yml
+  h_b34c679d17e2ac 24-38,191
+Cargo.lock
+  h_b34c679d17e2ac 3567-3589,4120-4121
+Dockerfile
+  h_b34c679d17e2ac 126-127
+MANIFEST.in
+  h_b34c679d17e2ac 27-28
+bot/docs/en/concepts/02-agent-capabilities.md
+  h_b34c679d17e2ac 41
+bot/docs/en/concepts/04-openviking-integration.md
+  h_b34c679d17e2ac 148
+bot/docs/zh/concepts/02-agent-capabilities.md
+  h_b34c679d17e2ac 41
+bot/docs/zh/concepts/04-openviking-integration.md
+  h_b34c679d17e2ac 148
+crates/ov_cli/src/commands/admin.rs
+  h_b34c679d17e2ac 8,107,114-120,358-388,392,395,397-405,408,411,413-415,417,419,423-439,524-546,548,552,554,558,565,567-596,599,601,606-648,650-651,654,656
+crates/ov_cli/src/handlers.rs
+  h_b34c679d17e2ac 651,660
+crates/ov_cli/src/main.rs
+  h_b34c679d17e2ac 2188-2190
+crates/ragfs/Cargo.toml
+  h_b34c679d17e2ac 48-51
+crates/ragfs/src/core/mountable.rs
+  h_b34c679d17e2ac 1257
+crates/ragfs/src/core/multibackend_wrapper.rs
+  h_b34c679d17e2ac 70,114-119,220,245
+crates/ragfs/src/core/stats.rs
+  h_b34c679d17e2ac 9-10,13-14,113-114,116,129-130,178,191,197-203,208-244,249
+crates/ragfs/src/core/types.rs
+  h_b34c679d17e2ac 571-573
+crates/ragfs/src/git/service.rs
+  h_b34c679d17e2ac 6705
+crates/ragfs/src/lock/manager.rs
+  h_b34c679d17e2ac 1052,1055,1058,1100,1102,1104,1255-1269,1282-1283,1840,1842,1848-1856,1867-1869,1985-1989,1999-2007,2485-2516,2563,2567-2572,2574-2578,2681,2715-2839,3102-3131,3230-3242,3246,3284-3285,3289,3300-3305
+crates/ragfs/src/lock/metrics.rs
+  h_b34c679d17e2ac 4,22-23
+crates/ragfs/src/lock/resolver.rs
+  h_b34c679d17e2ac 21-29,32,44,50,59-65,72-77,79-104,106,118-119,123-128,166-169,186,194-198,200-201,204-215,233-257
+crates/ragfs/src/metrics/duration.rs
+  h_b34c679d17e2ac 1-102
+crates/ragfs/src/metrics/mod.rs
+  h_b34c679d17e2ac 8-9,72-74,82,135,154,156-171
+crates/ragfs/src/multibackend/factory.rs
+  h_b34c679d17e2ac 191
+crates/ragfs/src/multibackend/migration/mod.rs
+  h_b34c679d17e2ac 62,73,81,100-101,109-110,137,149-155
+deploy/helm/README.md
+  h_b34c679d17e2ac 229-276
+deploy/helm/openviking-gateway/.helmignore
+  h_b34c679d17e2ac 1-3
+deploy/helm/openviking-gateway/Chart.yaml
+  h_b34c679d17e2ac 1-8
+deploy/helm/openviking-gateway/ci/redis.yaml
+  h_b34c679d17e2ac 1-14
+deploy/helm/openviking-gateway/ci/sqlite-invalid.yaml
+  h_b34c679d17e2ac 1-3
+deploy/helm/openviking-gateway/ci/sqlite.yaml
+  h_b34c679d17e2ac 1-2
+deploy/helm/openviking-gateway/templates/NOTES.txt
+  h_b34c679d17e2ac 1-7
+deploy/helm/openviking-gateway/templates/_helpers.tpl
+  h_b34c679d17e2ac 1-44
+deploy/helm/openviking-gateway/templates/configmap.yaml
+  h_b34c679d17e2ac 1-19
+deploy/helm/openviking-gateway/templates/deployment.yaml
+  h_b34c679d17e2ac 1-129
+deploy/helm/openviking-gateway/templates/networkpolicy.yaml
+  h_b34c679d17e2ac 1-23
+deploy/helm/openviking-gateway/templates/pdb.yaml
+  h_b34c679d17e2ac 1-13
+deploy/helm/openviking-gateway/templates/pvc.yaml
+  h_b34c679d17e2ac 1-18
+deploy/helm/openviking-gateway/templates/service.yaml
+  h_b34c679d17e2ac 1-22
+deploy/helm/openviking-gateway/values.yaml
+  h_b34c679d17e2ac 1-82
+docs/.vitepress/theme/docs-sections.ts
+  h_b34c679d17e2ac 180-182,261-263
+docs/en/about/02-changelog.md
+  h_b34c679d17e2ac 10-29
+docs/en/agent-integrations/01-overview.md
+  h_b34c679d17e2ac 19
+docs/en/api/01-overview.md
+  h_b34c679d17e2ac 437-443
+docs/en/api/08-admin.md
+  h_b34c679d17e2ac 1596,1614,1621-1625,1695-1696
+docs/en/api/26-rules.md
+  h_b34c679d17e2ac 1-238
+docs/en/concepts/00-overview.md
+  h_b34c679d17e2ac 20
+docs/en/concepts/02-context-types.md
+  h_b34c679d17e2ac 3,9,12
+docs/en/concepts/09-transaction.md
+  h_b34c679d17e2ac 245,250-251,253,255,265-275,335-336,349-350,353-354,359
+docs/en/concepts/12-metrics.md
+  h_b34c679d17e2ac 87,91,142-171,288,336-339
+docs/en/concepts/14-multi-write-storage.md
+  h_b34c679d17e2ac 30,32-40
+docs/en/concepts/17-rule-scenarios.md
+  h_b34c679d17e2ac 1,3,5-43,47-49,52,54-65,67,69-75,78-101
+docs/en/configuration/01-server.md
+  h_b34c679d17e2ac 225
+docs/en/gateway/01-how-it-works.md
+  h_b34c679d17e2ac 135-136
+docs/en/gateway/03-connect-clients.md
+  h_b34c679d17e2ac 7,35,37-47,49-50
+docs/en/gateway/06-manage-in-studio.md
+  h_b34c679d17e2ac 9-10
+docs/en/gateway/07-upstreams.md
+  h_b34c679d17e2ac 32-40,161-169
+docs/en/gateway/08-context-profiles.md
+  h_b34c679d17e2ac 11,13-15,31,37,106-123
+docs/en/gateway/09-gateway-keys.md
+  h_b34c679d17e2ac 19-37,93
+docs/en/gateway/10-overview-and-requests.md
+  h_b34c679d17e2ac 13-15,94
+docs/en/gateway/11-security-and-data.md
+  h_b34c679d17e2ac 7,11,15,19-20,27,40,68,73-74,78-99,111,119-120,134-136
+docs/en/gateway/12-troubleshooting.md
+  h_b34c679d17e2ac 21,82,88,145,158,216-219
+docs/en/gateway/13-configuration.md
+  h_b34c679d17e2ac 31,35,37,39-42,44,46-47,51,54-110,124,134,173,193
+docs/en/guides/01-configuration.md
+  h_b34c679d17e2ac 1381,1404
+docs/en/guides/04-authentication.md
+  h_b34c679d17e2ac 55-56
+docs/en/guides/06-mcp-integration.md
+  h_b34c679d17e2ac 218-220
+docs/en/guides/08-encryption.md
+  h_b34c679d17e2ac 104,125
+docs/en/guides/11-grafana-prometheus.md
+  h_b34c679d17e2ac 336
+docs/en/guides/13-multi-write-storage.md
+  h_b34c679d17e2ac 17,34,40,76-82
+docs/en/guides/15-gateway.md
+  h_b34c679d17e2ac 50,54
+docs/en/guides/22-gateway-operations.md
+  h_b34c679d17e2ac 28,89-99,102,119-138,167-169,172-173,176-177,245-248,278,286,300,316-327,338-398,402-408,413-414,416,424-427,440
+docs/en/reference/01-overview.md
+  h_b34c679d17e2ac 12
+docs/en/workflows/01-overview.md
+  h_b34c679d17e2ac 10
+docs/en/workflows/02-rule-validation.md
+  h_b34c679d17e2ac 1-122
+docs/images/gateway/architecture.en.svg
+  h_b34c679d17e2ac 69,109-110
+docs/images/gateway/architecture.zh.svg
+  h_b34c679d17e2ac 69,109-110
+docs/zh/about/02-changelog.md
+  h_b34c679d17e2ac 10-27
+docs/zh/agent-integrations/01-overview.md
+  h_b34c679d17e2ac 19
+docs/zh/api/01-overview.md
+  h_b34c679d17e2ac 432-438
+docs/zh/api/08-admin.md
+  h_b34c679d17e2ac 1452,1470,1477-1481,1551-1552
+docs/zh/api/26-rules.md
+  h_b34c679d17e2ac 1-238
+docs/zh/concepts/00-overview.md
+  h_b34c679d17e2ac 20
+docs/zh/concepts/02-context-types.md
+  h_b34c679d17e2ac 3,9,12
+docs/zh/concepts/09-transaction.md
+  h_b34c679d17e2ac 242,247-248,250,252,262-272,332-333,346,350,367,369
+docs/zh/concepts/12-metrics.md
+  h_b34c679d17e2ac 87,91,142-166,284,330-331
+docs/zh/concepts/14-multi-write-storage.md
+  h_b34c679d17e2ac 26,28-35
+docs/zh/concepts/17-rule-scenarios.md
+  h_b34c679d17e2ac 1,3,5-43,47-49,52,54-65,67,69-75,78-101
+docs/zh/configuration/01-server.md
+  h_b34c679d17e2ac 221
+docs/zh/gateway/01-how-it-works.md
+  h_b34c679d17e2ac 135-136
+docs/zh/gateway/03-connect-clients.md
+  h_b34c679d17e2ac 7,35,37-47,49-50
+docs/zh/gateway/06-manage-in-studio.md
+  h_b34c679d17e2ac 9-10
+docs/zh/gateway/07-upstreams.md
+  h_b34c679d17e2ac 32-40,161-169
+docs/zh/gateway/08-context-profiles.md
+  h_b34c679d17e2ac 11,13-15,31,37,106-123
+docs/zh/gateway/09-gateway-keys.md
+  h_b34c679d17e2ac 19-37,93
+docs/zh/gateway/10-overview-and-requests.md
+  h_b34c679d17e2ac 13-15,94
+docs/zh/gateway/11-security-and-data.md
+  h_b34c679d17e2ac 7,11,15,19-20,27,40,68,73-74,78-99,111,119-120,134-136
+docs/zh/gateway/12-troubleshooting.md
+  h_b34c679d17e2ac 21,82,88,145,158,216-219
+docs/zh/gateway/13-configuration.md
+  h_b34c679d17e2ac 31,35,37,39-42,44,46-47,51,54-110,124,134,173,193
+docs/zh/guides/01-configuration.md
+  h_b34c679d17e2ac 1367,1390
+docs/zh/guides/04-authentication.md
+  h_b34c679d17e2ac 54-55
+docs/zh/guides/06-mcp-integration.md
+  h_b34c679d17e2ac 206-207
+docs/zh/guides/08-encryption.md
+  h_b34c679d17e2ac 104,125
+docs/zh/guides/11-grafana-prometheus.md
+  h_b34c679d17e2ac 336
+docs/zh/guides/13-multi-write-storage.md
+  h_b34c679d17e2ac 17,34,40,71-77
+docs/zh/guides/15-gateway.md
+  h_b34c679d17e2ac 50,54
+docs/zh/guides/22-gateway-operations.md
+  h_b34c679d17e2ac 28,89-99,102,119-138,167-169,172-173,176-177,245-248,278,286,300,316-327,338-398,402-408,413-414,416,424-427,440
+docs/zh/reference/01-overview.md
+  h_b34c679d17e2ac 12
+docs/zh/workflows/01-overview.md
+  h_b34c679d17e2ac 10
+docs/zh/workflows/02-rule-validation.md
+  h_b34c679d17e2ac 1-122
+examples/claude-code-memory-plugin/scripts/shared/doctor-core.mjs
+  h_b34c679d17e2ac 174,206-208
+examples/claude-code-memory-plugin/skills/ov-memory-doctor/SKILL.md
+  h_b34c679d17e2ac 67-68
+examples/claude-code-memory-plugin/skills/ov-memory-doctor/reference.md
+  h_b34c679d17e2ac 86-88
+examples/codex-memory-plugin/scripts/shared/doctor-core.mjs
+  h_b34c679d17e2ac 174,206-208
+examples/codex-memory-plugin/skills/ov-memory-doctor/SKILL.md
+  h_b34c679d17e2ac 70-72
+examples/codex-memory-plugin/skills/ov-memory-doctor/reference.md
+  h_b34c679d17e2ac 97-99
+examples/grafana/openviking_demo_dashboard.json
+  h_b34c679d17e2ac 327-328,1589-1590,1690-1691,2222-2223,2323-2324,2626-2627,2727-2728,3044-3045,3145-3146,3861-3862,3962-3963,4265-4266,4366-4367,4898-4915,4973-4974,5074,5109,5265-5266
+examples/memory-plugin-shared/doctor-core.test.mjs
+  h_b34c679d17e2ac 66,69-71,73
+examples/memory-plugin-shared/lib/doctor-core.mjs
+  h_b34c679d17e2ac 173,205-207
+examples/ov.conf.example
+  h_b34c679d17e2ac 85
+openviking/crypto/providers.py
+  h_b34c679d17e2ac 722-731
+openviking/metrics/collectors/base.py
+  h_b34c679d17e2ac 173,182,191,344,424,537,604
+openviking/metrics/collectors/feedback.py
+  h_b34c679d17e2ac 172,182
+openviking/metrics/collectors/manager.py
+  h_b34c679d17e2ac 71-72,74-75,99,101,225,232,239
+openviking/metrics/collectors/model_usage.py
+  h_b34c679d17e2ac 142
+openviking/metrics/collectors/ragfs.py
+  h_b34c679d17e2ac 24,75,79-80
+openviking/metrics/collectors/task_tracker.py
+  h_b34c679d17e2ac 60
+openviking/metrics/core/registry.py
+  h_b34c679d17e2ac 4,6-7,15-53,57,60-65,67-68,70-109,112,114-117,119-120,122-144,146-147,149-154,156-157,159-161,163-166,168-190,193,195-196,198-199,201-203,205-215,217-229,231-266
+openviking/metrics/core/types.py
+  h_b34c679d17e2ac 19,21,38-42
+openviking/metrics/datasources/ragfs.py
+  h_b34c679d17e2ac 105
+openviking/metrics/exporters/otel.py
+  h_b34c679d17e2ac 4,10-15,24,31-39,44-45,50-59,61-71,73-83,85-90,94,97,99-101,103-106,110-115,118,124,126-129
+openviking/metrics/exporters/prometheus.py
+  h_b34c679d17e2ac 4,6,8-10,16,18,22-23,29,36-79
+openviking/metrics/global_api.py
+  h_b34c679d17e2ac 35,135
+openviking/pyagfs/async_client.py
+  h_b34c679d17e2ac 12,555-567
+openviking/server/account_stores/file.py
+  h_b34c679d17e2ac 58,88
+openviking/server/account_stores/redis_client.py
+  h_b34c679d17e2ac 72,93
+openviking/server/api_keys/new.py
+  h_b34c679d17e2ac 6,17,50-55,63-72,138-143,250-254,275-287,290-308
+openviking/server/auth/plugins/trusted.py
+  h_b34c679d17e2ac 22
+openviking/server/mcp_endpoint.py
+  h_b34c679d17e2ac 375-377,393-395
+openviking/server/routers/admin.py
+  h_b34c679d17e2ac 1016-1020,1040-1042
+openviking/server/store_assembly.py
+  h_b34c679d17e2ac 10
+openviking/service/compile_service.py
+  h_b34c679d17e2ac 985-986
+openviking/storage/errors.py
+  h_b34c679d17e2ac 68-71
+openviking/storage/queuefs/semantic_lock.py
+  h_b34c679d17e2ac 10,21-32,70,73
+openviking/storage/queuefs/semantic_processor.py
+  h_b34c679d17e2ac 52,87
+openviking/storage/viking_fs/_ops.py
+  h_b34c679d17e2ac 271-282,295,321-331
+openviking/utils/model_retry.py
+  h_b34c679d17e2ac 19,174
+openviking_cli/utils/config/encryption_config.py
+  h_b34c679d17e2ac 64
+openviking_gateway/app.py
+  h_b34c679d17e2ac 13,18,24,28-33,35-43,50,56-124,138,154,156-164,168-174,176,190-192,196,199-201,203,206-217,257-262,271-272,274-275,282-283,291-292,299,303-304,306,397-399
+openviking_gateway/capture.py
+  h_b34c679d17e2ac 24,34,317,327-330,349-362
+openviking_gateway/cli.py
+  h_b34c679d17e2ac 159
+openviking_gateway/config.py
+  h_b34c679d17e2ac 15-16,76-93,102-103,105-110,114,119,122-127,148-150,152-153,193
+openviking_gateway/lua/hash_read.lua
+  h_b34c679d17e2ac 1-7
+openviking_gateway/lua/kernel_capture_claim.lua
+  h_b34c679d17e2ac 1-18
+openviking_gateway/lua/kernel_capture_release.lua
+  h_b34c679d17e2ac 1-15
+openviking_gateway/lua/kernel_capture_swap.lua
+  h_b34c679d17e2ac 1-22
+openviking_gateway/lua/kernel_keep.lua
+  h_b34c679d17e2ac 1-4
+openviking_gateway/lua/kernel_load.lua
+  h_b34c679d17e2ac 1-30
+openviking_gateway/lua/kernel_replay_put.lua
+  h_b34c679d17e2ac 1-9
+openviking_gateway/lua/kernel_replies_prune.lua
+  h_b34c679d17e2ac 1-18
+openviking_gateway/lua/kernel_replies_read.lua
+  h_b34c679d17e2ac 1-4
+openviking_gateway/lua/kernel_state_swap.lua
+  h_b34c679d17e2ac 1-7
+openviking_gateway/lua/log_delete_user.lua
+  h_b34c679d17e2ac 1-19
+openviking_gateway/lua/log_push.lua
+  h_b34c679d17e2ac 1-5
+openviking_gateway/lua/obj_delete.lua
+  h_b34c679d17e2ac 1-12
+openviking_gateway/lua/obj_save.lua
+  h_b34c679d17e2ac 1-23
+openviking_gateway/management.py
+  h_b34c679d17e2ac 22-29,32,123,197-231,379,381,476,527,531,629-632
+openviking_gateway/models.py
+  h_b34c679d17e2ac 3,6,10-11,26-33,40-41,48,50,56,63,68,72,78-79
+openviking_gateway/protocols.py
+  h_b34c679d17e2ac 8,497-541
+openviking_gateway/proxy.py
+  h_b34c679d17e2ac 11,18,22-23,111-139,187-218,289,291,296,299-310,337-340,349,357,501,503-506,514,553,559,561-565,579
+openviking_gateway/redis_store.py
+  h_b34c679d17e2ac 1-528
+openviking_gateway/standalone.py
+  h_b34c679d17e2ac 32,35-50,127-168
+openviking_gateway/storage.py
+  h_b34c679d17e2ac 3,47,50-162,240,430,498,556-559,564-567,569-574,576,657-658,661
+openviking_gateway/tool_executor.py
+  h_b34c679d17e2ac 35,208-209,216-217,235
+pyproject.toml
+  h_b34c679d17e2ac 80-84,99,112,117,247
+scripts/gateway_chart_check.py
+  h_b34c679d17e2ac 1-98
+tests/agfs/test_fs_binding.py
+  h_b34c679d17e2ac 52-65,86-88
+tests/gateway/README.md
+  h_b34c679d17e2ac 137-226
+tests/gateway/conftest.py
+  h_b34c679d17e2ac 5-7,21,203,365-394,406-421,424-427,430-562
+tests/gateway/e2e/__init__.py
+  h_b34c679d17e2ac 1
+tests/gateway/e2e/build_overlay.py
+  h_b34c679d17e2ac 1-63
+tests/gateway/e2e/conftest.py
+  h_b34c679d17e2ac 1-50
+tests/gateway/e2e/harness.py
+  h_b34c679d17e2ac 1-587
+tests/gateway/e2e/kind.yaml
+  h_b34c679d17e2ac 1-6
+tests/gateway/e2e/load_images.py
+  h_b34c679d17e2ac 1-46
+tests/gateway/e2e/mocks/mock_ark.py
+  h_b34c679d17e2ac 1-283
+tests/gateway/e2e/mocks/mock_ov.py
+  h_b34c679d17e2ac 1-271
+tests/gateway/e2e/sdk_probe.py
+  h_b34c679d17e2ac 1-187
+tests/gateway/e2e/test_resilience.py
+  h_b34c679d17e2ac 1-425
+tests/gateway/e2e/test_sessions.py
+  h_b34c679d17e2ac 1-436
+tests/gateway/test_capture_delivery.py
+  h_b34c679d17e2ac 489-552
+tests/gateway/test_context_overrides.py
+  h_b34c679d17e2ac 1-201
+tests/gateway/test_deployment_defaults.py
+  h_b34c679d17e2ac 1-178
+tests/gateway/test_kernel.py
+  h_b34c679d17e2ac 35,464
+tests/gateway/test_kms_key_file.py
+  h_b34c679d17e2ac 1-27
+tests/gateway/test_management.py
+  h_b34c679d17e2ac 10,767,1003,1006,1008,1010-1011,1015-1018,1020-1022,1024
+tests/gateway/test_management_switch.py
+  h_b34c679d17e2ac 1-137
+tests/gateway/test_openviking_keys.py
+  h_b34c679d17e2ac 1-251
+tests/gateway/test_openviking_rejections.py
+  h_b34c679d17e2ac 1-44
+tests/gateway/test_reply_inheritance.py
+  h_b34c679d17e2ac 13,398
+tests/gateway/test_request_log_sink.py
+  h_b34c679d17e2ac 1-116
+tests/gateway/test_review_regressions.py
+  h_b34c679d17e2ac 13,40,431
+tests/gateway/test_runtime.py
+  h_b34c679d17e2ac 1-117
+tests/gateway/test_sse_heartbeat.py
+  h_b34c679d17e2ac 1-321
+tests/gateway/test_standalone_startup.py
+  h_b34c679d17e2ac 1-109
+tests/gateway/test_storage_migration.py
+  h_b34c679d17e2ac 15,139,192,208,224,241,253,259,270,280
+tests/gateway/test_storage_ports.py
+  h_b34c679d17e2ac 1,5,8-15,23,27-28,101-102,166-167,188,193-194,203-206,209-210,214-916
+tests/gateway/test_tenancy.py
+  h_b34c679d17e2ac 1-258
+tests/gateway/test_upstream_selection.py
+  h_b34c679d17e2ac 1-121
+tests/metrics/collectors/test_collector_contracts.py
+  h_b34c679d17e2ac 197-203
+tests/metrics/collectors/test_event_collectors.py
+  h_b34c679d17e2ac 71-72,78-79,81,83,85-86,124-127,415-418
+tests/metrics/collectors/test_state_collectors.py
+  h_b34c679d17e2ac 397-403,405-408,434,437,441
+tests/metrics/core/test_exporter.py
+  h_b34c679d17e2ac 5-6,9,11,15-23,26,28,32-54,58-60,62-94
+tests/metrics/core/test_refresh.py
+  h_b34c679d17e2ac 10,15-23,55,66,74,94,124
+tests/metrics/core/test_registry.py
+  h_b34c679d17e2ac 5-6,8,13-15,17,22-28,33-37,42-45,49-71,74,86-99,101-109,113,118,124,126,128-136,138-140,142-144,146
+tests/metrics/datasources/test_state_datasources.py
+  h_b34c679d17e2ac 296
+tests/metrics/integration/test_bootstrap.py
+  h_b34c679d17e2ac 6,172-175,181-184
+tests/metrics/integration/test_telemetry_bridge.py
+  h_b34c679d17e2ac 4-5,29-30,93-96,139-142
+tests/pyagfs/test_async_client_fs_ctx.py
+  h_b34c679d17e2ac 9,98,125-144
+tests/server/test_account_services.py
+  h_b34c679d17e2ac 15,17,40,44,46,49,58,68-86
+tests/server/test_admin_api.py
+  h_b34c679d17e2ac 2886-3043,3809-3817
+tests/server/test_api_key_manager.py
+  h_b34c679d17e2ac 727
+tests/server/test_compile_studio.py
+  h_b34c679d17e2ac 86-95,101-132
+tests/server/test_identity_auth.py
+  h_b34c679d17e2ac 13,101,103,106
+tests/server/test_prometheus_metrics.py
+  h_b34c679d17e2ac 7,37-43,45,47-48,50-51,53-54,56-57,62,66-67,70-75,119-122,183,186-187
+tests/server/test_store_assembly.py
+  h_b34c679d17e2ac 14
+tests/storage/test_semantic_processor_lock_ownership.py
+  h_b34c679d17e2ac 15,18,78-112
+tests/storage/test_semantic_processor_permanent_storage_error.py
+  h_b34c679d17e2ac 239-253
+tests/storage/test_session_delete_storage.py
+  h_b34c679d17e2ac 142-155
+tests/unit/crypto/test_providers_mock.py
+  h_b34c679d17e2ac 328-344
+tests/unit/test_model_retry.py
+  h_b34c679d17e2ac 18,44
+uv.lock
+  h_b34c679d17e2ac 3551,3774-3776,3778,3788,3817-3819,4360-4368
+web-studio/src/i18n/locales/en/gateway/connect.ts
+  h_b34c679d17e2ac 238-246
+web-studio/src/i18n/locales/en/gateway/keys.ts
+  h_b34c679d17e2ac 34-37,55-56,59-60
+web-studio/src/i18n/locales/en/gateway/profiles.ts
+  h_b34c679d17e2ac 69-73
+web-studio/src/i18n/locales/en/gateway/requests.ts
+  h_b34c679d17e2ac 103
+web-studio/src/i18n/locales/zh-CN/gateway/connect.ts
+  h_b34c679d17e2ac 231-239
+web-studio/src/i18n/locales/zh-CN/gateway/keys.ts
+  h_b34c679d17e2ac 33-36,54-55,58-59
+web-studio/src/i18n/locales/zh-CN/gateway/profiles.ts
+  h_b34c679d17e2ac 65-69
+web-studio/src/i18n/locales/zh-CN/gateway/requests.ts
+  h_b34c679d17e2ac 96
+web-studio/src/routes/gateway/-components/connect-page.test.tsx
+  h_b34c679d17e2ac 215
+web-studio/src/routes/gateway/-components/connect-page.tsx
+  h_b34c679d17e2ac 3-8,48-49,80,83,272-289
+web-studio/src/routes/gateway/-components/keys-page.test.tsx
+  h_b34c679d17e2ac 42-44,130-140,216-265
+web-studio/src/routes/gateway/-components/keys-page.tsx
+  h_b34c679d17e2ac 39,135-139,297-301,360-369,448-449,454-455,457-461,466-467,492-494,514-547,551,553,556-558,587-599,609
+web-studio/src/routes/gateway/-components/profiles-editor.tsx
+  h_b34c679d17e2ac 52,194,278,302-311
+web-studio/src/routes/gateway/-components/profiles-pages.test.tsx
+  h_b34c679d17e2ac 325-342,406-407,411,712-735
+web-studio/src/routes/gateway/-components/request-details.tsx
+  h_b34c679d17e2ac 21,332-334,512-518
+web-studio/src/routes/gateway/-components/requests-page.tsx
+  h_b34c679d17e2ac 42-43,90,103,215-217,228
+web-studio/src/routes/gateway/-lib/api.ts
+  h_b34c679d17e2ac 137-138,148-153,158,325-326
+web-studio/src/routes/gateway/-lib/client-guides.ts
+  h_b34c679d17e2ac 402,427
+web-studio/src/routes/gateway/-lib/localize.ts
+  h_b34c679d17e2ac 4,37-40
+web-studio/src/routes/gateway/-lib/profile-schema.ts
+  h_b34c679d17e2ac 51,105-109,116-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "421ac7ae766ee684818cb526b1c81266bf3c6549",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
