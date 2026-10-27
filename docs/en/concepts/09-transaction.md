@@ -293,8 +293,11 @@ HASH keys are isolated by path scope:
 
 All keys use `{service_name}` as the Redis Cluster hash tag. Exact acquisition
 reads the target and ancestors with `HMGET`; Tree acquisition scans only its
-scope HASH with `HGETALL`. Global `/` and `/local` locks do not scan account
-or `_system` HASHes. Cross-scope batches are rejected.
+scope HASH with `HGETALL`. Tree locks at `/` and `/local` are rejected with
+`InvalidRequest`, because their subtrees span account and `_system` HASHes.
+Use `/local/<account>` or `/local/_system` (or a descendant) as the Tree root.
+Exact locks at `/` and `/local` remain supported and protect only those paths.
+Cross-scope batches are rejected.
 
 ### Filesystem Lock Acquisition (EXACT mode)
 

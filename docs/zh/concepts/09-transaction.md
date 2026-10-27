@@ -290,8 +290,10 @@ HASH key 按路径 scope 隔离：
 
 所有 key 都使用 `{service_name}` 作为 Redis Cluster hash tag。Exact 获取使用
 `HMGET` 读取目标和祖先；Tree 获取只对所属 scope 的 HASH 执行
-`HGETALL`。`/` 和 `/local` 的 global 锁不会扫描 account 或 `_system`
-HASH。跨 scope batch 会被拒绝。
+`HGETALL`。`/` 和 `/local` 的 Tree 锁会返回 `InvalidRequest`，因为它们的
+子树跨越 account 和 `_system` HASH。Tree 根路径应使用 `/local/<account>`、
+`/local/_system` 或其后代。`/` 和 `/local` 的 Exact 锁仍然支持，只保护
+对应路径本身。跨 scope batch 会被拒绝。
 
 ### Filesystem 获取锁流程（EXACT 模式）
 
