@@ -329,6 +329,67 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             return [truncate_embedding_input(item, self.max_input_tokens) for item in text]
         return self.prepare_embedding_input(text)
 
+    @staticmethod
+    def _context_window_from_error(error: openai.APIError) -> Optional[int]:
+        """Read the provider's own context size out of an exceed-context rejection.
+
+        The token guard in :func:`truncate_embedding_input` estimates tokens from
+        character counts, which under-counts structured text (URIs, snake_case
+        identifiers, markdown bullets) by up to ~3x against a real BPE tokenizer.
+        When that happens the provider rejects the request and, for
+        OpenAI-compatible servers such as llama-server, reports the window it
+        actually enforces as ``n_ctx``. Returning it lets the caller retry with a
+        budget the provider will accept instead of failing the write.
+        """
+        body = getattr(error, "body", None)
+        if not isinstance(body, dict):
+            return None
+        detail = body.get("error")
+        if not isinstance(detail, dict):
+            return None
+        for key in ("n_ctx", "context_length", "max_context_length"):
+            value = detail.get(key)
+            if isinstance(value, int) and value > 0:
+                return value
+        return None
+
+    def _retry_input_within_context(
+        self,
+        text_input: EmbeddingInput | List[str],
+        error: openai.APIError,
+    ) -> Optional[EmbeddingInput | List[str]]:
+        """Re-truncate the input to the provider's context window, or None if unusable.
+
+        The provider's window is not compared against ``max_input_tokens``: that
+        budget is an estimate expressed in the guard's own units, and the whole
+        point of this path is that the estimate came out too low. A window the
+        provider reports is authoritative regardless of how it compares to the
+        configured value, so re-truncating to it is always the right retry.
+
+        Only the string-batch path can be re-bounded here; multimodal content
+        parts carry no comparable text budget, so they keep their original error.
+        """
+        context_window = self._context_window_from_error(error)
+        if context_window is None:
+            return None
+        if not (isinstance(text_input, list) and all(isinstance(item, str) for item in text_input)):
+            return None
+
+        retry_input = [
+            truncate_embedding_input(cast(str, item), context_window) for item in text_input
+        ]
+        if retry_input == text_input:
+            # The window is wide enough for the text as-is, so the rejection was
+            # not about length; resending the same payload would fail the same way.
+            return None
+        logger.warning(
+            "Embedding input rejected for exceeding the context window; retrying once with "
+            "provider context size %d (configured max_input_tokens=%s)",
+            context_window,
+            self.max_input_tokens,
+        )
+        return retry_input
+
     def _build_kwargs(
         self, text_input: EmbeddingInput | List[str], is_query: bool = False
     ) -> Dict[str, Any]:
@@ -383,9 +444,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         """
         embedding_input = self._prepare_embedding_input(text)
 
-        def _call() -> EmbedResult:
+        def _call(input_value: EmbeddingInput | List[str]) -> EmbedResult:
             response = self.client.embeddings.create(
-                **self._build_kwargs(embedding_input, is_query=is_query)
+                **self._build_kwargs(input_value, is_query=is_query)
             )
             self._update_telemetry_token_usage(response)
             vector = response.data[0].embedding
@@ -397,11 +458,23 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         try:
             return self._run_once(
-                _call,
+                lambda: _call(embedding_input),
                 logger=logger,
                 operation_name="OpenAI embedding",
             )
         except openai.APIError as e:
+            retry_input = self._retry_input_within_context(embedding_input, e)
+            if retry_input is not None:
+                try:
+                    return self._run_once(
+                        lambda: _call(retry_input),
+                        logger=logger,
+                        operation_name="OpenAI embedding",
+                    )
+                except openai.APIError as retry_error:
+                    raise RuntimeError(f"OpenAI API error: {retry_error.message}") from retry_error
+                except Exception as retry_error:
+                    raise RuntimeError(f"Embedding failed: {str(retry_error)}") from retry_error
             raise RuntimeError(f"OpenAI API error: {e.message}") from e
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
@@ -411,20 +484,32 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         client = self._get_async_client()
         embedding_input = self._prepare_embedding_input(text)
 
-        async def _call() -> EmbedResult:
+        async def _call(input_value: EmbeddingInput | List[str]) -> EmbedResult:
             response = await client.embeddings.create(
-                **self._build_kwargs(embedding_input, is_query=is_query)
+                **self._build_kwargs(input_value, is_query=is_query)
             )
             self._update_telemetry_token_usage(response)
             return EmbedResult(dense_vector=self._truncate_vector(response.data[0].embedding))
 
         try:
             return await self._run_once_async(
-                _call,
+                lambda: _call(embedding_input),
                 logger=logger,
                 operation_name="OpenAI async embedding",
             )
         except openai.APIError as e:
+            retry_input = self._retry_input_within_context(embedding_input, e)
+            if retry_input is not None:
+                try:
+                    return await self._run_once_async(
+                        lambda: _call(retry_input),
+                        logger=logger,
+                        operation_name="OpenAI async embedding",
+                    )
+                except openai.APIError as retry_error:
+                    raise RuntimeError(f"OpenAI API error: {retry_error.message}") from retry_error
+                except Exception as retry_error:
+                    raise RuntimeError(f"Embedding failed: {str(retry_error)}") from retry_error
             raise RuntimeError(f"OpenAI API error: {e.message}") from e
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
