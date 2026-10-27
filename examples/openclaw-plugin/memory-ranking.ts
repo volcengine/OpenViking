@@ -231,7 +231,7 @@ function lexicalOverlapBoost(tokens: string[], text: string, maxBoost = DEFAULT_
 
 function inferResourceType(item: FindResultItem): string | undefined {
   if (item.uri.startsWith("viking://resources")) return "resource";
-  if (item.uri.startsWith("viking://session/")) return "session";
+  if (/^viking:\/\/(?:user\/[^/]+|~)\/sessions(?:\/|$)/.test(item.uri)) return "session";
   if (item.uri.startsWith("viking://user/skills") || item.uri.startsWith("viking://~/skills") || item.uri.startsWith("viking://skills")) return "agent";
   if (item.uri.startsWith("viking://user/") || item.uri.startsWith("viking://~/")) return "user";
   return undefined;

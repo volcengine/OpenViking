@@ -711,7 +711,7 @@ describe("Tool: OpenViking tool result access", () => {
         total_chars: 42,
         has_more: true,
         metadata: {
-          storage_uri: "viking://session/test-session/tool-results/tr_call_abc",
+          storage_uri: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
           tool_name: "read_file",
         },
       });
@@ -723,7 +723,7 @@ describe("Tool: OpenViking tool result access", () => {
     const tool = tools.get("openviking_tool_result_read")!;
 
     const result = await tool.execute("tc-read", {
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       offset: 5,
       limit: 10,
     }) as ToolResult;
@@ -731,7 +731,7 @@ describe("Tool: OpenViking tool result access", () => {
     expect(result.content[0]!.text).toBe("raw");
     expect(result.details).toMatchObject({
       action: "read",
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       tool_result_id: "tr_call_abc",
       offset: 5,
       limit: 10,
@@ -766,7 +766,7 @@ describe("Tool: OpenViking tool result access", () => {
     const tool = tools.get("openviking_tool_result_search")!;
 
     const result = await tool.execute("tc-search", {
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       query: "needle",
       limit: 2,
       context_chars: 15,
@@ -777,7 +777,7 @@ describe("Tool: OpenViking tool result access", () => {
     expect(result.content[0]!.text).toContain("hay needle stack");
     expect(result.details).toMatchObject({
       action: "searched",
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       tool_result_id: "tr_call_abc",
       query: "needle",
       match_count: 1,
@@ -793,7 +793,7 @@ describe("Tool: OpenViking tool result access", () => {
         tool_results: [
           {
             tool_result_id: "tr_call_abc",
-            storage_uri: "viking://session/test-session/tool-results/tr_call_abc",
+            storage_uri: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
             tool_name: "read_file",
             original_chars: 42000,
             created_at: "2026-05-15T00:00:00Z",
@@ -814,7 +814,7 @@ describe("Tool: OpenViking tool result access", () => {
 
     expect(result.content[0]!.text).toContain("read_file");
     expect(result.content[0]!.text).toContain("original_chars=42000");
-    expect(result.content[0]!.text).toContain("viking://session/test-session/tool-results/tr_call_abc");
+    expect(result.content[0]!.text).toContain("viking://user/default/sessions/test-session/tool-results/tr_call_abc");
     expect(result.details).toMatchObject({
       action: "listed",
       session_id: "test-session",
@@ -829,7 +829,7 @@ describe("Tool: OpenViking tool result access", () => {
     const tool = tools.get("openviking_tool_result_read")!;
 
     const result = await tool.execute("tc-read", {
-      tool_output_ref: "viking://session/other-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/other-session/tool-results/tr_call_abc",
     }) as ToolResult;
 
     expect(result.content[0]!.text).toContain("another session");
@@ -2021,7 +2021,7 @@ describe("Tool: ov_recall_trace", () => {
         return okResponse({
           matches: [{
             line: 12,
-            uri: "viking://session/test-session/history/archive_001#L12",
+            uri: "viking://user/default/sessions/test-session/history/archive_001#L12",
             content: "discussion about recall traces",
           }],
           count: 1,
@@ -2045,7 +2045,7 @@ describe("Tool: ov_recall_trace", () => {
     const entry = (result.details.entries as any[])[0];
     expect(entry.operationType).toBe("archive_grep");
     expect(entry.selected).toEqual(expect.arrayContaining([
-      expect.objectContaining({ uri: "viking://session/test-session/history/archive_001#L12", displayed: true }),
+      expect.objectContaining({ uri: "viking://user/default/sessions/test-session/history/archive_001#L12", displayed: true }),
     ]));
   });
 });

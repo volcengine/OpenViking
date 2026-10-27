@@ -14,7 +14,7 @@ test("client sends OpenViking identity headers and preserves response trace ids"
     seen = { url, init };
     return new Response(JSON.stringify({
       status: "ok",
-      result: { trace_id: "trace-123", archive_uri: "viking://session/x" },
+      result: { trace_id: "trace-123", archive_uri: "viking://user/default/sessions/x" },
     }), {
       status: 200,
       headers: { "Content-Type": "application/json" },

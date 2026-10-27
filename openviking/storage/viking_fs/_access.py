@@ -4,7 +4,6 @@
 
 import hashlib
 import inspect
-import json
 import re
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
@@ -587,17 +586,8 @@ class _AccessMixin:
     ):
         """Yield one visible tree page after namespace and ACL filtering."""
         real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        path: Optional[str] = None
-        for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
-                continue
-            if await self._agfs_path_exists(candidate_path):
-                path = candidate_path
-                break
-        if path is None:
-            if self._is_session_root_uri(uri):
-                return
+        path = self._uri_to_path(uri, ctx=ctx)
+        if not await self._agfs_path_exists(path):
             raise NotFoundError(uri, "directory")
 
         if node_limit == 0:
@@ -632,8 +622,6 @@ class _AccessMixin:
                     real_ctx,
                     acl_enabled=acl_enabled,
                 ):
-                    continue
-                if not await self._read_path_visible(uri, entry["path"], primary_path, real_ctx):
                     continue
                 entry_uri = self._alias_uri_for_path(
                     request_uri=uri,
@@ -731,64 +719,6 @@ class _AccessMixin:
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{account_id}/{'/'.join(safe_parts)}"
 
-    def _legacy_session_path(self, uri: str, ctx: Optional[RequestContext] = None) -> str:
-        """Map a legacy viking://session URI to its pre-user-namespace path."""
-        real_ctx = self._ctx_or_default(ctx)
-        parts = self._safe_uri_parts(uri)
-        safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
-        return f"/local/{real_ctx.account_id}/{'/'.join(safe_parts)}"
-
-    def _legacy_user_session_path(
-        self, uri: str, ctx: Optional[RequestContext] = None
-    ) -> Optional[str]:
-        """Return the legacy nested /session/{user_id}/{session_id} candidate."""
-        real_ctx = self._ctx_or_default(ctx)
-        parts = self._safe_uri_parts(uri)
-        if len(parts) <= 3 or parts[0] != "user" or parts[2] != "sessions":
-            return None
-        nested_parts = ["session", parts[1], *parts[3:]]
-        safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in nested_parts]
-        return f"/local/{real_ctx.account_id}/{'/'.join(safe_parts)}"
-
-    def _legacy_session_alias(self, uri: str) -> Optional[str]:
-        """Return the old storage alias for a canonical user session URI."""
-        parts = self._safe_uri_parts(uri)
-        if len(parts) < 3 or parts[0] != "user" or parts[2] != "sessions":
-            return None
-        suffix = parts[3:]
-        return "viking://session" + (f"/{'/'.join(suffix)}" if suffix else "")
-
-    def _is_session_root_uri(self, uri: str) -> bool:
-        return self._legacy_session_alias(uri) == "viking://session"
-
-    def _read_paths(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
-        """Return read candidates for a URI, including legacy alias fallbacks."""
-        paths = [self._uri_to_path(uri, ctx=ctx)]
-
-        legacy_uri = self._legacy_session_alias(uri)
-        if legacy_uri:
-            for candidate in (
-                self._legacy_session_path(legacy_uri, ctx=ctx),
-                self._legacy_user_session_path(uri, ctx=ctx),
-            ):
-                if candidate and candidate not in paths:
-                    paths.append(candidate)
-        return paths
-
-    async def _read_path_visible(
-        self,
-        request_uri: str,
-        path: str,
-        primary_path: str,
-        ctx: RequestContext,
-    ) -> bool:
-        if path == primary_path:
-            return True
-        if self._legacy_session_alias(request_uri):
-            owner_user_id = self._safe_uri_parts(request_uri)[1]
-            return await self._legacy_session_path_visible(path, owner_user_id=owner_user_id)
-        return True
-
     def _alias_uri_for_path(
         self,
         *,
@@ -804,8 +734,6 @@ class _AccessMixin:
         if entry_path.startswith(base):
             separator = "" if request_root.endswith("://") else "/"
             candidate_uri = request_root if not rel_path else f"{request_root}{separator}{rel_path}"
-            if self._legacy_session_alias(request_uri):
-                return candidate_uri
             if preserve_request_alias:
                 return candidate_uri
             try:
@@ -824,152 +752,6 @@ class _AccessMixin:
                 return False
             raise
 
-    async def _looks_like_legacy_session_dir(self, path: str) -> bool:
-        for leaf in (".meta.json", "messages.jsonl", "history", "tool-results", "tools"):
-            if await self._agfs_path_exists(f"{path}/{leaf}"):
-                return True
-        return False
-
-    async def _legacy_session_owner(self, session_root_path: str) -> str:
-        try:
-            raw = self._handle_agfs_read(
-                await self._async_agfs.read(f"{session_root_path}/.meta.json")
-            )
-        except Exception as exc:
-            if is_not_found_error(exc):
-                return ""
-            raise
-        try:
-            data = json.loads(self._decode_bytes(raw))
-        except json.JSONDecodeError:
-            return ""
-        if not isinstance(data, dict):
-            return ""
-        for key in ("created_by_user_id", "user_id", "owner_user_id", "created_by"):
-            value = data.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return ""
-
-    async def _legacy_session_visible(
-        self,
-        session_root_path: str,
-        ctx: RequestContext,
-        *,
-        owner_hint: Optional[str] = None,
-    ) -> bool:
-        if ctx.role == Role.ROOT:
-            return True
-        owner = await self._legacy_session_owner(session_root_path)
-        if owner:
-            return owner == ctx.user.user_id
-        if owner_hint:
-            return owner_hint == ctx.user.user_id
-        return True
-
-    async def _legacy_session_path_visible(
-        self,
-        path: str,
-        *,
-        owner_user_id: str,
-    ) -> bool:
-        parts = [p for p in path.strip("/").split("/") if p]
-        try:
-            session_index = parts.index("session")
-        except ValueError:
-            return True
-        suffix = parts[session_index + 1 :]
-        if not suffix:
-            return True
-
-        root_prefix = "/" + "/".join(parts[: session_index + 1])
-        direct_root = f"{root_prefix}/{suffix[0]}"
-        if await self._looks_like_legacy_session_dir(direct_root):
-            owner = await self._legacy_session_owner(direct_root)
-            return bool(owner) and owner == owner_user_id
-
-        if len(suffix) >= 2:
-            if suffix[0] != owner_user_id:
-                return False
-            nested_root = f"{root_prefix}/{suffix[0]}/{suffix[1]}"
-            if await self._looks_like_legacy_session_dir(nested_root):
-                owner = await self._legacy_session_owner(nested_root)
-                return not owner or owner == owner_user_id
-        return True
-
-    async def _legacy_session_root_items(
-        self,
-        path: str,
-        ctx: RequestContext,
-        output_root_uri: str,
-        owner_user_id: str,
-    ) -> List[tuple[Dict[str, Any], str]]:
-        try:
-            entries = await self._ls_entries(path)
-        except Exception as exc:
-            if is_not_found_error(exc):
-                return []
-            raise
-
-        items: List[tuple[Dict[str, Any], str]] = []
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name in {".", ".."} or not entry.get("isDir"):
-                continue
-            child_path = f"{path.rstrip('/')}/{name}"
-            if await self._looks_like_legacy_session_dir(child_path):
-                legacy_owner = await self._legacy_session_owner(child_path)
-                if legacy_owner == owner_user_id:
-                    items.append((entry, f"{output_root_uri}/{name}"))
-                continue
-
-            if name != owner_user_id:
-                continue
-            try:
-                nested_entries = await self._ls_entries(child_path)
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    continue
-                raise
-            for nested in nested_entries:
-                nested_name = nested.get("name", "")
-                if not nested_name or nested_name in {".", ".."} or not nested.get("isDir"):
-                    continue
-                nested_path = f"{child_path.rstrip('/')}/{nested_name}"
-                if not await self._looks_like_legacy_session_dir(nested_path):
-                    continue
-                if await self._legacy_session_visible(nested_path, ctx, owner_hint=name):
-                    items.append((nested, f"{output_root_uri}/{nested_name}"))
-        return items
-
-    async def _session_root_items(
-        self,
-        uri: str,
-        ctx: RequestContext,
-    ) -> List[tuple[Dict[str, Any], str]]:
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        output_root_uri = uri.rstrip("/")
-        owner_user_id = self._safe_uri_parts(uri)[1]
-        by_name: Dict[str, tuple[Dict[str, Any], str]] = {}
-        try:
-            for entry in await self._ls_entries(primary_path, ctx=ctx):
-                name = entry.get("name", "")
-                if not name or name in {".", ".."}:
-                    continue
-                by_name[name] = (entry, f"{output_root_uri}/{name}")
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                raise
-
-        legacy_path = self._legacy_session_path("viking://session", ctx=ctx)
-        for entry, entry_uri in await self._legacy_session_root_items(
-            legacy_path, ctx, output_root_uri, owner_user_id
-        ):
-            name = entry.get("name", "")
-            if name and name not in by_name:
-                by_name[name] = (entry, entry_uri)
-        return list(by_name.values())
-
     async def _list_read_path_items(
         self,
         uri: str,
@@ -980,58 +762,37 @@ class _AccessMixin:
         ctx: Optional[RequestContext] = None,
     ) -> tuple[List[tuple[Dict[str, Any], str]], int, bool]:
         """Return one mapped RagFS page, consumed count, and exhaustion state."""
-        real_ctx = self._ctx_or_default(ctx)
-        if self._is_session_root_uri(uri):
-            items = await self._session_root_items(uri, real_ctx)
-            return items, len(items), True
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            raw_entries = await self._ls_entries(
+                path,
+                offset=raw_offset,
+                limit=raw_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                filter_internal=False,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            if is_not_found_error(exc):
+                raise NotFoundError(uri, "directory") from exc
+            raise
 
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        merge_paths = self._legacy_session_alias(uri) is not None
-        found_path = False
-        last_not_found: Optional[Exception] = None
-        by_uri: Dict[str, tuple[Dict[str, Any], str]] = {}
-        raw_count = 0
-
-        for path in self._read_paths(uri, ctx=ctx):
-            try:
-                entries = await self._ls_entries(
-                    path,
-                    offset=0 if merge_paths else raw_offset,
-                    limit=None if merge_paths else raw_limit,
-                    sort_by=sort_by,
-                    sort_order=sort_order,
-                    filter_internal=False,
-                    ctx=ctx,
-                )
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_not_found = exc
-                    continue
-                raise
-
-            # Missing legacy directories need no owner probes. Check visibility
-            # before merging entries from a directory that actually exists.
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
-                continue
-
-            found_path = True
-            raw_count += len(entries)
-            entries = self._filter_ls_entries(path, entries)
-            for entry in entries:
-                entry_uri = self._alias_uri_for_path(
+        entries = self._filter_ls_entries(path, raw_entries)
+        items = [
+            (
+                entry,
+                self._alias_uri_for_path(
                     request_uri=uri,
                     base_path=path,
                     entry_path=f"{path.rstrip('/')}/{entry.get('name', '')}",
                     ctx=ctx,
-                )
-                by_uri.setdefault(entry_uri, (entry, entry_uri))
-            if not merge_paths:
-                break
-
-        if found_path:
-            exhausted = raw_limit is None or merge_paths or raw_count < raw_limit
-            return list(by_uri.values()), raw_count, exhausted
-        raise NotFoundError(uri, "directory") from last_not_found
+                ),
+            )
+            for entry in entries
+        ]
+        exhausted = raw_limit is None or len(raw_entries) < raw_limit
+        return items, len(raw_entries), exhausted
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
         """/local/{account}/... -> viking://...

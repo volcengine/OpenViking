@@ -48,7 +48,6 @@ def storage():
     "request_uri",
     [
         SESSION_URI,
-        "viking://session/session-1",
         "viking://~/sessions/session-1",
         "viking://temp/alice/raw-upload-1",
     ],
