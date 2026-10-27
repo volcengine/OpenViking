@@ -1398,6 +1398,12 @@ async def write(
     content: str,
     mode: Literal["replace", "append", "create"] = "replace",
     wait: bool = False,
+    timeout: Annotated[
+        Optional[float],
+        Field(
+            deprecated=True, description="Deprecated compatibility parameter; accepted and ignored."
+        ),
+    ] = None,
     acl: Optional[AclSpec] = None,
 ) -> str:
     """Write text to a viking:// file. Use this for files you author yourself (notes, profiles, state), the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite. To store a file, document, URL, or repo the user gives you, use add_resource; for a skill, use add_skill. Do not copy its text into a file here instead.
@@ -1435,6 +1441,12 @@ async def edit(
     new_string: str,
     replace_all: bool = False,
     wait: bool = False,
+    timeout: Annotated[
+        Optional[float],
+        Field(
+            deprecated=True, description="Deprecated compatibility parameter; accepted and ignored."
+        ),
+    ] = None,
 ) -> str:
     """Replace an exact string with new text in an existing viking:// file. Use this for targeted changes instead of rewriting the whole file with the write tool. old_string must match the file's current content exactly, including indentation and newlines; use the read tool first to see it. The edit fails and the file is left unchanged if old_string is not found, or if it matches more than once and replace_all is false (pass more surrounding context to make it unique, or set replace_all=true to replace every occurrence). Pass new_string="" to delete old_string.
 

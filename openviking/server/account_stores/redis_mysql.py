@@ -9,12 +9,14 @@ import base64
 import hashlib
 import json
 import secrets
+import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from openviking.concurrency import AsyncSemaphore
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
     AccountSummary,
@@ -28,12 +30,15 @@ from openviking.server.account_stores.redis_client import (
     RedisClientHandle,
     create_redis_client,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, UnavailableError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.config_utils import normalize_service_name
 
 logger = get_logger(__name__)
 T = TypeVar("T")
+
+_MYSQL_FALLBACK_MAX_CONCURRENT = 8
+_MYSQL_FALLBACK_WAIT_SECONDS = 0.1
 
 _RELEASE_LOCK_SCRIPT = """
 -- release-lock
@@ -243,6 +248,11 @@ class RedisMySQLAccountStore(AccountStore):
             )
 
         self._mysql = mysql_store
+        pool_size = cast(int, mysql_store._engine_options.get("pool_size", 10))
+        fallback_concurrency = max(1, min(pool_size, _MYSQL_FALLBACK_MAX_CONCURRENT))
+        self._mysql_fallback_io = AsyncSemaphore(fallback_concurrency)
+        # Bound running plus queued fallbacks across all cached read methods.
+        self._mysql_fallback_admission = threading.BoundedSemaphore(fallback_concurrency * 2)
         self._index_ttl_seconds = self._ttl_seconds + self._lock_ttl_seconds
         self._service_name = normalized_service_name
         self._redis = redis_client
@@ -413,6 +423,26 @@ class RedisMySQLAccountStore(AccountStore):
         )
         return bool(result)
 
+    async def _read_mysql_fallback(self, loader: Callable[[], Awaitable[T]]) -> T:
+        """Bound Redis-failure reads without occupying a thread while waiting."""
+        if not self._mysql_fallback_admission.acquire(blocking=False):
+            raise UnavailableError("account storage", "MySQL fallback capacity exceeded")
+        acquired = False
+        try:
+            try:
+                await asyncio.wait_for(
+                    self._mysql_fallback_io.acquire(), timeout=_MYSQL_FALLBACK_WAIT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                raise UnavailableError("account storage", "MySQL fallback is busy") from None
+            acquired = True
+            return await loader()
+        finally:
+            # MySQLRuntime settles database cancellation before returning here.
+            if acquired:
+                self._mysql_fallback_io.release()
+            self._mysql_fallback_admission.release()
+
     async def _read_through(
         self,
         account_id: str,
@@ -425,17 +455,20 @@ class RedisMySQLAccountStore(AccountStore):
                 return value
         except Exception:
             logger.exception("Redis cache read failed; reading %s from MySQL", key)
-            return await loader()
+            return await self._read_mysql_fallback(loader)
 
+        mysql_started = False
         try:
             async with self._account_lock(account_id) as token:
                 owned, payload = await self._get_if_locked(account_id, token, key)
                 if not owned:
                     logger.warning("Redis cache lease expired before reading %s", key)
-                    return await loader()
+                    mysql_started = True
+                    return await self._read_mysql_fallback(loader)
                 hit, value = self._read_nullable(payload)
                 if hit:
                     return value
+                mysql_started = True
                 value = await loader()
                 try:
                     if not await self._set_if_locked(
@@ -451,8 +484,10 @@ class RedisMySQLAccountStore(AccountStore):
         except _CacheLockUnavailable:
             logger.warning("Redis cache lock unavailable; reading %s from MySQL", key)
         except Exception:
+            if mysql_started:
+                raise
             logger.exception("Redis cache read failed; reading %s from MySQL", key)
-        return await loader()
+        return await self._read_mysql_fallback(loader)
 
     async def _delete_and_unindex(self, account_id: str, *keys: str) -> None:
         assert self._redis is not None
@@ -669,10 +704,13 @@ class RedisMySQLAccountStore(AccountStore):
         account_id_hint: str | None = None,
         user_id_hint: str | None = None,
     ) -> tuple[str, str] | None:
-        if account_id_hint is None:
+        async def verify_in_mysql() -> tuple[str, str] | None:
             return await self._mysql.verify_api_key(
-                api_key, account_id_hint=None, user_id_hint=user_id_hint
+                api_key, account_id_hint=account_id_hint, user_id_hint=user_id_hint
             )
+
+        if account_id_hint is None:
+            return await self._read_mysql_fallback(verify_in_mysql)
         try:
             hit, binding = await self._cached_binding(
                 account_id_hint,
@@ -683,6 +721,8 @@ class RedisMySQLAccountStore(AccountStore):
                 return binding
         except Exception:
             logger.exception("Redis API-key cache read failed; falling back to MySQL")
+            return await self._read_mysql_fallback(verify_in_mysql)
+        mysql_started = False
         try:
             async with self._account_lock(account_id_hint) as token:
                 hit, binding = await self._cached_binding(
@@ -692,11 +732,8 @@ class RedisMySQLAccountStore(AccountStore):
                 )
                 if hit:
                     return binding
-                binding = await self._mysql.verify_api_key(
-                    api_key,
-                    account_id_hint=account_id_hint,
-                    user_id_hint=user_id_hint,
-                )
+                mysql_started = True
+                binding = await verify_in_mysql()
                 try:
                     await self._cache_binding(
                         account_id_hint,
@@ -711,10 +748,10 @@ class RedisMySQLAccountStore(AccountStore):
         except _CacheLockUnavailable:
             logger.warning("Redis cache lock unavailable; verifying API key in MySQL")
         except Exception:
+            if mysql_started:
+                raise
             logger.exception("Redis API-key cache write failed; verifying in MySQL")
-        return await self._mysql.verify_api_key(
-            api_key, account_id_hint=account_id_hint, user_id_hint=user_id_hint
-        )
+        return await self._read_mysql_fallback(verify_in_mysql)
 
     async def get_user(self, account_id: str, user_id: str) -> UserSummary | None:
         value = await self._read_through(
@@ -724,9 +761,7 @@ class RedisMySQLAccountStore(AccountStore):
         )
         return value if value is None else UserSummary(value)
 
-    async def get_user_membership(
-        self, account_id: str, user_id: str
-    ) -> UserSummary | None:
+    async def get_user_membership(self, account_id: str, user_id: str) -> UserSummary | None:
         # Bypass the read-through cache: the admin membership probe must reflect
         # the latest persisted state, which MySQL indexes directly.
         return await self._mysql.get_user_membership(account_id, user_id)

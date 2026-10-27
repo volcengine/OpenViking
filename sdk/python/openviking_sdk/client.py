@@ -10,7 +10,7 @@ import os
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, TypeVar, Union, cast
 from urllib.parse import quote
 
 import httpx
@@ -95,6 +95,7 @@ ERROR_CODE_TO_EXCEPTION = {
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 _SESSION_CONFIG_UNSET = object()
+_OptionsT = TypeVar("_OptionsT", bound=Mapping[str, Any])
 
 
 def _option_keys(options_type: Type[Any]) -> set[str]:
@@ -103,6 +104,19 @@ def _option_keys(options_type: Type[Any]) -> set[str]:
     if optional_keys is not None and required_keys is not None:
         return set(optional_keys) | set(required_keys)
     return set(getattr(options_type, "__annotations__", {}))
+
+
+def _normalize_timeout_options(timeout: Any, options: Optional[_OptionsT]) -> Optional[_OptionsT]:
+    """Accept options in the positional slot used after timeout was removed.
+
+    Timeout values are deprecated and ignored. A mapping in that slot is treated
+    as options; supplying options in both slots is an error.
+    """
+    if isinstance(timeout, Mapping):
+        if options is not None:
+            raise TypeError("options were provided in both the timeout and options slots")
+        return cast(_OptionsT, timeout)
+    return options
 
 
 def _image_mime_type(file_name: str = "") -> str:
@@ -713,9 +727,10 @@ class AsyncHTTPClient:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
-        option_values = dict(options or {})
+        option_values = dict(_normalize_timeout_options(timeout, options) or {})
         add_type = option_values.get("add_type")
         if add_type is not None:
             add_type = add_type.strip() or None
@@ -788,9 +803,10 @@ class AsyncHTTPClient:
         self,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
-        option_values = dict(options or {})
+        option_values = dict(_normalize_timeout_options(timeout, options) or {})
         if "target_uri" in option_values:
             option_values["target_uri"] = VikingURI.normalize(option_values["target_uri"])
         request_data = self._build_options_payload(
@@ -898,9 +914,10 @@ class AsyncHTTPClient:
         skill_name: str,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
-        option_values = dict(options or {})
+        option_values = dict(_normalize_timeout_options(timeout, options) or {})
         if "target_uri" in option_values:
             option_values["target_uri"] = VikingURI.normalize(option_values["target_uri"])
         request_data = self._build_options_payload(
@@ -1033,7 +1050,8 @@ class AsyncHTTPClient:
             )
         return self._handle_response(response)
 
-    async def wait_processed(self) -> Dict[str, Any]:
+    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Wait for processing; timeout is deprecated and ignored."""
         response = await self._request(
             "POST",
             "/api/v1/system/wait",
@@ -1259,6 +1277,7 @@ class AsyncHTTPClient:
         uri: str,
         recursive: bool = False,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
     ) -> None:
         params = {"uri": VikingURI.normalize(uri), "recursive": recursive, "wait": wait}
         response = await self._request("DELETE", "/api/v1/fs", params=params)
@@ -1327,10 +1346,11 @@ class AsyncHTTPClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
         payload = self._build_options_payload(
-            options,
+            _normalize_timeout_options(timeout, options),
             WriteOptions,
             fixed={
                 "uri": VikingURI.normalize(uri),
@@ -1351,6 +1371,7 @@ class AsyncHTTPClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         """Apply multiple content writes, then refresh semantics once."""
@@ -1360,7 +1381,7 @@ class AsyncHTTPClient:
             item["uri"] = VikingURI.normalize(str(item.get("uri") or ""))
             normalized_operations.append(item)
         payload = self._build_options_payload(
-            options,
+            _normalize_timeout_options(timeout, options),
             BatchWriteOptions,
             fixed={
                 "root_uri": VikingURI.normalize(root_uri),
@@ -2386,6 +2407,7 @@ class SyncHTTPClient:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
@@ -2394,7 +2416,7 @@ class SyncHTTPClient:
                 to=to,
                 parent=parent,
                 wait=wait,
-                options=options,
+                options=_normalize_timeout_options(timeout, options),
             )
         )
 
@@ -2410,9 +2432,14 @@ class SyncHTTPClient:
         self,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.add_skill(data, wait=wait, options=options))
+        return run_async(
+            self._async_client.add_skill(
+                data, wait=wait, options=_normalize_timeout_options(timeout, options)
+            )
+        )
 
     def list_skills(
         self,
@@ -2488,10 +2515,13 @@ class SyncHTTPClient:
         skill_name: str,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.update_skill(skill_name, data, wait=wait, options=options)
+            self._async_client.update_skill(
+                skill_name, data, wait=wait, options=_normalize_timeout_options(timeout, options)
+            )
         )
 
     def delete_skill(
@@ -2552,7 +2582,8 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.trigger_watch(task_id, to_uri=to_uri))
 
-    def wait_processed(self) -> Dict[str, Any]:
+    def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Wait for processing; timeout is deprecated and ignored."""
         return run_async(self._async_client.wait_processed())
 
     def ls(
@@ -2727,6 +2758,7 @@ class SyncHTTPClient:
         uri: str,
         recursive: bool = False,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
     ) -> None:
         run_async(self._async_client.rm(uri, recursive=recursive, wait=wait))
 
@@ -2754,10 +2786,17 @@ class SyncHTTPClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.write(uri, content, mode=mode, wait=wait, options=options)
+            self._async_client.write(
+                uri,
+                content,
+                mode=mode,
+                wait=wait,
+                options=_normalize_timeout_options(timeout, options),
+            )
         )
 
     def batch_write(
@@ -2765,10 +2804,16 @@ class SyncHTTPClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.batch_write(root_uri, operations, wait=wait, options=options)
+            self._async_client.batch_write(
+                root_uri,
+                operations,
+                wait=wait,
+                options=_normalize_timeout_options(timeout, options),
+            )
         )
 
     def set_tags(

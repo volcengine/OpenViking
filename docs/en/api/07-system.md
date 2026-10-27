@@ -342,7 +342,7 @@ Wait until the processing queues are drained. This check is not scoped to the ca
 
 **Parameters**
 
-None. HTTP requests use the client timeout configuration.
+No parameters are required. The optional JSON body accepts legacy `timeout`, which is deprecated and ignored. Empty-body calls continue to work. Configure HTTP timeouts on the client.
 
 #### 3. Usage Examples
 
