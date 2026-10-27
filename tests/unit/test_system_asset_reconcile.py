@@ -1,10 +1,16 @@
 import asyncio
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import Role
-from openviking.system_assets.reconcile import SystemAssetReconciler
+from openviking.storage.errors import ResourceBusyError
+from openviking.system_assets.reconcile import (
+    _SYNC_MAX_RETRIES,
+    SystemAssetReconciler,
+)
 
 
 class _FakeAGFS:
@@ -221,3 +227,138 @@ async def test_reconciler_does_not_write_manifest_when_sync_fails():
 
     assert agfs.write_calls == []
     assert agfs.release_calls == [{"lease_ref": "manifest-lease"}]
+
+
+@pytest.mark.asyncio
+async def test_reconciler_retries_busy_account_with_exponential_backoff(monkeypatch):
+    sync = AsyncMock(
+        side_effect=(
+            ResourceBusyError("busy"),
+            ResourceBusyError("busy"),
+            ResourceBusyError("busy"),
+            0,
+        )
+    )
+    synchronizer = SimpleNamespace(sync=sync)
+    sleep = AsyncMock()
+    monkeypatch.setattr("openviking.system_assets.reconcile.asyncio.sleep", sleep)
+    monkeypatch.setattr("openviking.system_assets.reconcile.random.uniform", lambda *_: 1.0)
+    reconciler = SystemAssetReconciler(
+        synchronizer,
+        _FakeAccountLister([{"account_id": "a", "status": "active"}]),
+        _FakeAGFS(),
+        user_id="system-user",
+    )
+
+    assert await reconciler.sync_all() == 1
+    assert sync.await_count == 4
+    assert [call.args[0] for call in sleep.await_args_list] == [0.2, 0.4, 0.8]
+
+
+@pytest.mark.asyncio
+async def test_reconciler_releases_concurrency_slot_during_backoff(monkeypatch):
+    other_account_synced = asyncio.Event()
+    attempts = {"a": 0}
+    call_order = []
+
+    async def sync(ctx):
+        account_id = ctx.user.account_id
+        call_order.append(account_id)
+        if account_id == "a":
+            attempts["a"] += 1
+            if attempts["a"] == 1:
+                raise ResourceBusyError("busy")
+            return 0
+        other_account_synced.set()
+        return 0
+
+    async def wait_for_other_account(_delay):
+        await other_account_synced.wait()
+
+    monkeypatch.setattr(
+        "openviking.system_assets.reconcile.asyncio.sleep",
+        wait_for_other_account,
+    )
+    reconciler = SystemAssetReconciler(
+        SimpleNamespace(sync=sync),
+        _FakeAccountLister(
+            [
+                {"account_id": "a", "status": "active"},
+                {"account_id": "b", "status": "active"},
+            ]
+        ),
+        _FakeAGFS(),
+        user_id="system-user",
+        max_concurrency=1,
+    )
+
+    assert await asyncio.wait_for(reconciler.sync_all(), timeout=1) == 2
+    assert call_order == ["a", "b", "a"]
+
+
+@pytest.mark.asyncio
+async def test_reconciler_fails_after_busy_retry_budget_is_exhausted(monkeypatch):
+    sync = AsyncMock(side_effect=ResourceBusyError("busy"))
+    synchronizer = SimpleNamespace(sync=sync)
+    sleep = AsyncMock()
+    monkeypatch.setattr("openviking.system_assets.reconcile.asyncio.sleep", sleep)
+    monkeypatch.setattr("openviking.system_assets.reconcile.random.uniform", lambda *_: 1.0)
+    reconciler = SystemAssetReconciler(
+        synchronizer,
+        _FakeAccountLister([{"account_id": "a", "status": "active"}]),
+        _FakeAGFS(),
+        user_id="system-user",
+    )
+
+    with pytest.raises(RuntimeError, match="ResourceBusyError: busy"):
+        await reconciler.sync_all()
+
+    assert sync.await_count == _SYNC_MAX_RETRIES + 1
+    assert [call.args[0] for call in sleep.await_args_list] == [
+        0.2,
+        0.4,
+        0.8,
+        1.6,
+        2.0,
+        2.0,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reconciler_does_not_retry_non_busy_failure(monkeypatch):
+    sync = AsyncMock(side_effect=OSError("storage failed"))
+    synchronizer = SimpleNamespace(sync=sync)
+    sleep = AsyncMock()
+    monkeypatch.setattr("openviking.system_assets.reconcile.asyncio.sleep", sleep)
+    reconciler = SystemAssetReconciler(
+        synchronizer,
+        _FakeAccountLister([{"account_id": "a", "status": "active"}]),
+        _FakeAGFS(),
+        user_id="system-user",
+    )
+
+    with pytest.raises(RuntimeError, match="OSError: storage failed"):
+        await reconciler.sync_all()
+
+    sync.assert_awaited_once()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconciler_propagates_cancellation_without_retry(monkeypatch):
+    sync = AsyncMock(side_effect=asyncio.CancelledError())
+    synchronizer = SimpleNamespace(sync=sync)
+    sleep = AsyncMock()
+    monkeypatch.setattr("openviking.system_assets.reconcile.asyncio.sleep", sleep)
+    reconciler = SystemAssetReconciler(
+        synchronizer,
+        _FakeAccountLister([{"account_id": "a", "status": "active"}]),
+        _FakeAGFS(),
+        user_id="system-user",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await reconciler.sync_all()
+
+    sync.assert_awaited_once()
+    sleep.assert_not_awaited()
