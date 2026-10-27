@@ -28,6 +28,7 @@ jobs:
   test:
     name: Full Test (${{ matrix.os }}, ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -80,3 +81,9 @@ jobs:
 
     - name: Build C++ extensions
       run: uv run python setup.py build_ext --inplace
+
+    # Non-blocking for now: the suite has pre-existing failures on main.
+    # Remove continue-on-error once they are fixed and the suite is clean.
+    - name: Run Python unit tests (non-blocking)
+      continue-on-error: true
+      run: uv run pytest -q -o addopts='' tests/unit
