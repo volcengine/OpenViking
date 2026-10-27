@@ -1536,10 +1536,11 @@ export function FilePreview({
 
   useEffect(() => {
     let alive = true
+    let created: string | null = null
+    setImageUrl(null)
 
     const loadWithAuthClient = async () => {
       if (!file || preview?.fileType !== 'image') {
-        setImageUrl(null)
         setImageError(null)
         setImageLoading(false)
         return
@@ -1564,13 +1565,8 @@ export function FilePreview({
           throw new Error(i18n.t('studio:errors.emptyBlob'))
         }
 
-        const nextUrl = URL.createObjectURL(blob)
-        setImageUrl((prev) => {
-          if (prev) {
-            URL.revokeObjectURL(prev)
-          }
-          return nextUrl
-        })
+        created = URL.createObjectURL(blob)
+        setImageUrl(created)
         setImageLoading(false)
       } catch (error) {
         if (!alive) {
@@ -1587,6 +1583,9 @@ export function FilePreview({
 
     return () => {
       alive = false
+      if (created) {
+        URL.revokeObjectURL(created)
+      }
     }
   }, [file, preview?.fileType])
 
