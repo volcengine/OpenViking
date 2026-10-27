@@ -307,21 +307,21 @@ async def test_externalized_output_restores_without_corrupting_metadata(service,
     session._tool_output_externalization_config = ToolOutputExternalizationConfig(
         enabled=True, threshold_chars=1024, preview_chars=200
     )
-    output = "padding\n" * 1500 + "password=session"
+    output = "padding\n" * 1500 + "password=session-secret"
     await session.add_message_async("assistant", [ToolPart(tool_id="read", tool_output=output)])
     part = session.messages[0].parts[0]
     ref = part.tool_output_ref
     assert ref
     stored = await service.viking_fs.read_file(ref + "/output.txt", ctx=ctx)
-    assert "password=session" not in stored
+    assert "password=session-secret" not in stored
     assert await service.fs.read(ref + "/output.txt", ctx=ctx) == output
     visible = await service.fs.read_visible(ref + "/output.txt", ctx=ctx)
-    assert "password=session" not in visible
+    assert "password=session-secret" not in visible
     assert "{{ov_privacy:" in visible
     metadata = json.loads(await service.viking_fs.read_file(ref + "/metadata.json", ctx=ctx))
     assert metadata["session_id"] == session.session_id
     reloaded = await service.sessions.get(session.session_id, ctx)
-    assert "password=session" not in json.dumps(
+    assert "password=session-secret" not in json.dumps(
         [message.to_dict() for message in reloaded.messages]
     )
 
