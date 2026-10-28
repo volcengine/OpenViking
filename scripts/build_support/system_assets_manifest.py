@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from openviking.core.namespace_policy import (
+from openviking.core.namespace_constants import (
     SYSTEM_EXAMPLE_SKILLS_ROOT,
     SYSTEM_FIXED_DIRECTORIES,
     SYSTEM_MEMORY_BUILTIN_ROOT,
