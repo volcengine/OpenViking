@@ -11,6 +11,7 @@ from pathlib import Path
 from setuptools import Distribution, Extension, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
+from setuptools.command.sdist import sdist
 
 try:
     from wheel.bdist_wheel import bdist_wheel
@@ -30,6 +31,9 @@ resolve_openviking_version = importlib.import_module(
 pypi_long_description = importlib.import_module(
     "scripts.build_support.readme"
 ).pypi_long_description
+write_system_assets_manifest = importlib.import_module(
+    "scripts.build_support.system_assets_manifest"
+).write_system_assets_manifest
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
 C_COMPILER_PATH = os.environ.get("CC") or shutil.which("gcc") or "gcc"
@@ -517,6 +521,7 @@ class OpenVikingBuildPy(build_py):
     def run(self):
         _build_web_studio()
         super().run()
+        write_system_assets_manifest(Path(self.build_lib) / "openviking" / "system_assets")
         package_root = Path(self.build_lib) / "vikingbot"
         for asset_name in ("workspace", "bridge"):
             source = SETUP_DIR / "bot" / asset_name
@@ -530,6 +535,12 @@ class OpenVikingBuildPy(build_py):
                 destination,
                 ignore=shutil.ignore_patterns("node_modules", "dist", "__pycache__", "*.pyc"),
             )
+
+
+class OpenVikingSdist(sdist):
+    def make_release_tree(self, base_dir, files):
+        super().make_release_tree(base_dir, files)
+        write_system_assets_manifest(Path(base_dir) / "openviking" / "system_assets")
 
 
 if bdist_wheel is not None:
@@ -552,6 +563,7 @@ class OpenVikingDistribution(Distribution):
 cmdclass = {
     "build_ext": OpenVikingBuildExt,
     "build_py": OpenVikingBuildPy,
+    "sdist": OpenVikingSdist,
 }
 if OpenVikingBdistWheel is not None:
     cmdclass["bdist_wheel"] = OpenVikingBdistWheel

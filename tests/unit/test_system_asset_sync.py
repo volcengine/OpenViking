@@ -129,22 +129,28 @@ async def test_system_asset_sync_rejects_missing_packaged_root(tmp_path, monkeyp
         )
 
 
-def test_system_asset_manifest_digest_is_stable_and_tracks_managed_assets(tmp_path):
-    compile_source = tmp_path / "compile/example-skills/demo/SKILL.md"
-    memory_source = tmp_path / "memory/memory_templates/builtin/profile.yaml"
-    compile_source.parent.mkdir(parents=True)
-    memory_source.parent.mkdir(parents=True)
-    compile_source.write_bytes(b"skill")
-    memory_source.write_bytes(b"profile")
+def test_system_asset_manifest_is_loaded_from_packaged_file(tmp_path):
+    manifest = b'{"schema_version": 1, "sha256": "' + b"a" * 64 + b'"}\n'
+    (tmp_path / "manifest.json").write_bytes(manifest)
 
-    first = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path).manifest_digest
-    second = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path).manifest_digest
-    assert first == second
+    synchronizer = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path)
 
-    compile_source.write_bytes(b"updated skill")
-    content_changed = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path).manifest_digest
-    assert content_changed != first
+    assert synchronizer.manifest == manifest
+    assert synchronizer.manifest_digest == "a" * 64
 
-    compile_source.rename(compile_source.with_name("RENAMED.md"))
-    path_changed = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path).manifest_digest
-    assert path_changed != content_changed
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        b"not-json",
+        b'{"schema_version": 2, "sha256": "' + b"a" * 64 + b'"}',
+        b'{"schema_version": 1, "sha256": "invalid"}',
+    ],
+)
+def test_system_asset_manifest_rejects_invalid_packaged_file(tmp_path, manifest):
+    (tmp_path / "manifest.json").write_bytes(manifest)
+
+    synchronizer = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path)
+
+    with pytest.raises(ValueError, match="invalid packaged system asset manifest"):
+        _ = synchronizer.manifest

@@ -3,7 +3,8 @@
 """Synchronize packaged system assets into an account's system namespace."""
 
 import base64
-import hashlib
+import json
+import re
 from dataclasses import replace
 from functools import cached_property
 from pathlib import Path
@@ -24,6 +25,9 @@ _MANAGED_ASSET_ROOTS = (
     (Path("compile/example-skills"), SYSTEM_EXAMPLE_SKILLS_ROOT),
     (Path("memory/memory_templates/builtin"), SYSTEM_MEMORY_BUILTIN_ROOT),
 )
+_MANIFEST_FILENAME = "manifest.json"
+_MANIFEST_SCHEMA_VERSION = 1
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class SystemAssetSynchronizer:
@@ -39,25 +43,26 @@ class SystemAssetSynchronizer:
         self._assets_dir = assets_dir
 
     @cached_property
-    def manifest_digest(self) -> str:
-        """Return a stable digest of all managed packaged assets."""
-        digest = hashlib.sha256()
-        for uri in sorted(SYSTEM_FIXED_DIRECTORIES):
-            self._update_digest(digest, uri.encode("utf-8"), b"")
-        for source_path, _, target_uri in self._iter_managed_assets():
-            self._update_digest(
-                digest,
-                target_uri.encode("utf-8"),
-                source_path.read_bytes(),
-            )
-        return digest.hexdigest()
+    def manifest(self) -> bytes:
+        """Return the validated manifest shipped with the current image."""
+        manifest_path = self._assets_dir / _MANIFEST_FILENAME
+        raw = manifest_path.read_bytes()
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid packaged system asset manifest: {manifest_path}") from exc
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != _MANIFEST_SCHEMA_VERSION
+            or not isinstance(payload.get("sha256"), str)
+            or not _SHA256_PATTERN.fullmatch(payload["sha256"])
+        ):
+            raise ValueError(f"invalid packaged system asset manifest: {manifest_path}")
+        return raw
 
-    @staticmethod
-    def _update_digest(digest, path: bytes, content: bytes) -> None:
-        digest.update(len(path).to_bytes(8, "big"))
-        digest.update(path)
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
+    @property
+    def manifest_digest(self) -> str:
+        return json.loads(self.manifest)["sha256"]
 
     def _iter_managed_assets(self):
         for relative_root, target_root in _MANAGED_ASSET_ROOTS:

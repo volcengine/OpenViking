@@ -57,9 +57,14 @@ class _FakeAccountLister:
 
 
 class _TrackingSynchronizer:
-    def __init__(self, failures=(), manifest_digest="digest"):
+    def __init__(self, failures=(), manifest_digest="d" * 64):
         self._failures = set(failures)
         self.manifest_digest = manifest_digest
+        self.manifest = json.dumps(
+            {"schema_version": 1, "sha256": manifest_digest},
+            indent=2,
+            sort_keys=True,
+        ).encode()
         self.accounts = []
         self.active = 0
         self.max_active = 0
@@ -158,7 +163,7 @@ async def test_reconciler_reports_all_failures_in_page():
 
 @pytest.mark.asyncio
 async def test_reconciler_skips_account_listing_when_manifest_matches():
-    marker = json.dumps({"sha256": "digest"}).encode()
+    marker = json.dumps({"sha256": "d" * 64}).encode()
     agfs = _FakeAGFS(marker=marker)
     lister = _FakeAccountLister([{"account_id": "a", "status": "active"}])
     reconciler = SystemAssetReconciler(
@@ -187,7 +192,7 @@ async def test_reconciler_syncs_and_writes_manifest_under_lock():
 
     assert await reconciler.sync_if_changed() == 1
     assert synchronizer.accounts == ["a"]
-    assert json.loads(agfs.marker) == {"sha256": "digest"}
+    assert agfs.marker == synchronizer.manifest
     assert agfs.write_calls[0][2]["lease_ref"] == "manifest-lease"
     assert agfs.write_calls[0][3] is False
     assert agfs.release_calls == [{"lease_ref": "manifest-lease"}]
@@ -195,7 +200,7 @@ async def test_reconciler_syncs_and_writes_manifest_under_lock():
 
 @pytest.mark.asyncio
 async def test_reconciler_rechecks_manifest_after_acquiring_lock():
-    marker = json.dumps({"sha256": "digest"}).encode()
+    marker = json.dumps({"sha256": "d" * 64}).encode()
     agfs = _FakeAGFS(marker_on_acquire=marker)
     lister = _FakeAccountLister([{"account_id": "a", "status": "active"}])
     reconciler = SystemAssetReconciler(

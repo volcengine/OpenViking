@@ -58,6 +58,7 @@ class SystemAssetReconciler:
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def sync_if_changed(self) -> int:
+        manifest = self._synchronizer.manifest
         digest = self._synchronizer.manifest_digest
         if await self._read_manifest_digest() == digest:
             return 0
@@ -70,7 +71,7 @@ class SystemAssetReconciler:
             if await self._read_manifest_digest() == digest:
                 return 0
             synced_accounts = await self.sync_all()
-            await self._write_manifest_digest(digest, lease)
+            await self._write_manifest(manifest, lease)
             return synced_accounts
         finally:
             await self._agfs.pathlock_release(lease)
@@ -134,13 +135,12 @@ class SystemAssetReconciler:
         digest = payload.get("sha256") if isinstance(payload, dict) else None
         return digest if isinstance(digest, str) else None
 
-    async def _write_manifest_digest(self, digest: str, lease: Any) -> None:
+    async def _write_manifest(self, manifest: bytes, lease: Any) -> None:
         fs_ctx = _lease_fs_ctx(_SYSTEM_ASSET_MANIFEST_PATH, lease)
         await self._agfs.ensure_parent_dirs(_SYSTEM_ASSET_MANIFEST_PATH, fs_ctx=fs_ctx)
-        payload = json.dumps({"sha256": digest}, sort_keys=True).encode("utf-8")
         await self._agfs.write(
             _SYSTEM_ASSET_MANIFEST_PATH,
-            payload,
+            manifest,
             fs_ctx=fs_ctx,
             auto_pathlock=False,
         )
