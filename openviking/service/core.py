@@ -750,7 +750,8 @@ class OpenVikingService:
         if self._queue_manager:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
-        await system_asset_synchronizer.sync(default_ctx)
+        if self._config.reconcile_system_assets_on_startup:
+            await system_asset_synchronizer.sync(default_ctx)
 
         compile_expiry_enabled = self._compile_scheduler is not None
         if session_expiry_enabled or compile_expiry_enabled:

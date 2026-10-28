@@ -7,12 +7,19 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import set_task_tracker
+from openviking.storage import viking_fs as viking_fs_module
 from openviking.storage.index_consistency import IndexConsistencyReport
+from openviking.system_assets.sync import SystemAssetSynchronizer
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from openviking_cli.utils.config.vlm_config import VLMConfig
+from tests.utils.mock_agfs import MockLocalAGFS
 
 
 def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None:
@@ -61,6 +68,63 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     assert storage_calls[0][1]["max_concurrent_add_resource"] == 7
     assert storage_calls[0][1]["max_concurrent_session_commit"] == 5
     assert storage_calls[0][1]["max_concurrent_external_task"] == 6
+
+
+@pytest.mark.asyncio
+async def test_initialize_skips_default_system_asset_sync_when_disabled(
+    tmp_path, monkeypatch
+) -> None:
+    class FakeEmbedder(DenseEmbedderBase):
+        def __init__(self):
+            super().__init__(model_name="test-fake-embedder")
+
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            return EmbedResult(dense_vector=[0.1] * 1024)
+
+        def get_dimension(self) -> int:
+            return 1024
+
+    previous_viking_fs = viking_fs_module._instance
+    workspace = tmp_path / "data"
+    mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
+    sync = AsyncMock()
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder())
+    monkeypatch.setattr(
+        "openviking.utils.agfs_utils.create_agfs_client",
+        lambda *args, **kwargs: mock_agfs,
+    )
+    monkeypatch.setattr(SystemAssetSynchronizer, "sync", sync)
+    OpenVikingConfigSingleton.reset_instance()
+    OpenVikingConfigSingleton.initialize(
+        config_dict={
+            "storage": {
+                "workspace": str(workspace),
+                "agfs": {"backend": "local"},
+                "vectordb": {"backend": "local"},
+            },
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "model": "test-embedder",
+                    "api_key": "test-key",
+                    "dimension": 1024,
+                }
+            },
+            "reconcile_system_assets_on_startup": False,
+        }
+    )
+    service = OpenVikingService(
+        path=str(workspace),
+        user=UserIdentifier.the_default_user(),
+    )
+    try:
+        await service.initialize()
+        sync.assert_not_awaited()
+    finally:
+        await service.close()
+        set_task_tracker(None)
+        viking_fs_module._instance = previous_viking_fs
+        OpenVikingConfigSingleton.reset_instance()
 
 
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:
