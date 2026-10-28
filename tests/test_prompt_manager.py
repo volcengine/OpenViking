@@ -174,6 +174,52 @@ def test_prompt_manager_falls_back_to_bundled_template_when_custom_dir_is_partia
     assert bundled_template.metadata.id == "vision.image_understanding"
 
 
+
+def test_prompt_manager_does_not_mutate_render_inputs(tmp_path):
+    templates_dir = tmp_path / "templates"
+    semantic_dir = templates_dir / "semantic"
+    semantic_dir.mkdir(parents=True)
+
+    def write_template(name, variables):
+        (semantic_dir / f"{name}.yaml").write_text(
+            json.dumps(
+                {
+                    "metadata": {
+                        "id": f"semantic.{name}",
+                        "name": name,
+                        "description": "Test template",
+                        "version": "1.0.0",
+                        "language": "en",
+                        "category": "semantic",
+                    },
+                    "variables": variables,
+                    "template": "{{ tone }}: {{ text }}",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    write_template(
+        "short",
+        [
+            {"name": "text", "type": "string", "description": "Input", "max_length": 4},
+            {"name": "tone", "type": "string", "description": "Tone", "default": "concise"},
+        ],
+    )
+    write_template(
+        "full",
+        [
+            {"name": "text", "type": "string", "description": "Input"},
+            {"name": "tone", "type": "string", "description": "Tone", "default": "concise"},
+        ],
+    )
+
+    manager = PromptManager(templates_dir=templates_dir, enable_caching=False)
+    variables = {"text": "Hello world"}
+
+    assert manager.render("semantic.short", variables) == "concise: Hell"
+    assert variables == {"text": "Hello world"}
+    assert manager.render("semantic.full", variables) == "concise: Hello world"
 def test_default_memory_registry_reuses_templates_until_restart(tmp_path, monkeypatch):
     resolved_templates_dir = tmp_path / "resolved-prompts"
     memory_dir = resolved_templates_dir / "memory"
