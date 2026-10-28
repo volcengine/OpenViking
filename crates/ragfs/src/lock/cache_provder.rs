@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -31,6 +32,8 @@ const IS_LOCKED_ID: &str = "pathlock.is_locked.v1";
 const SCAN_DESCENDANTS_ID: &str = "pathlock.scan_descendants.v1";
 const READ_MANY_ID: &str = "pathlock.read_many.v1";
 const CREATE_ID: &str = "pathlock.create.v1";
+// Observe requests approaching the default 20ms Redis command timeout.
+const SLOW_ACQUIRE_THRESHOLD: Duration = Duration::from_millis(10);
 
 macro_rules! token_script {
     ($body:literal) => {
@@ -852,7 +855,36 @@ impl PathLockProvider for RedisPathLockProvider {
             args.push(Self::bytes(&request.path));
             args.push(Self::bytes(Self::kind_code(request.kind)));
         }
-        let values = self.execute_array(ACQUIRE_BATCH_ID, key, args).await?;
+        let started = Instant::now();
+        let response = self
+            .execute_array(ACQUIRE_BATCH_ID, key.clone(), args)
+            .await;
+        let elapsed = started.elapsed();
+        if elapsed > SLOW_ACQUIRE_THRESHOLD {
+            let result = match &response {
+                Ok(values) => {
+                    Self::result_status(values, "acquire_batch").unwrap_or("invalid_response")
+                }
+                Err(_) => "error",
+            };
+            let scope = key
+                .split_once(":ov:pathlock:")
+                .and_then(|(_, suffix)| suffix.strip_suffix(":tokens"))
+                .unwrap_or(&key);
+            tracing::warn!(
+                script_id = ACQUIRE_BATCH_ID,
+                service_name = %self.service_name,
+                scope,
+                request_count = requests.len(),
+                includes_tree = requests.iter().any(|request| request.kind == PathLockKind::Tree),
+                elapsed_ms = elapsed.as_secs_f64() * 1_000.0,
+                threshold_ms = SLOW_ACQUIRE_THRESHOLD.as_millis() as u64,
+                result,
+                error = ?response.as_ref().err(),
+                "slow Redis pathlock acquire"
+            );
+        }
+        let values = response?;
         let status = Self::result_status(&values, "acquire_batch")?;
         if status != "ok" {
             return Err(Self::decode_error_result("acquire_batch", &values)?);
