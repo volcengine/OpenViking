@@ -37,28 +37,16 @@ mkdir -p "$RUN"
 
 ## 1. Memory 评测代码参考（VikingBot）
 
-**[locomo/vikingbot](locomo/vikingbot/) 是我们日常主要运行的 Memory 评测代码，也可作为用户复现评测流程的代码参考。** 使用 VikingBot 自己的问答、记忆工具和裁判方式，与 mem0 对照实验不同；不需要为了对齐 mem0 而替换日常评测的 prompt。执行链路为：
-
-[import_to_ov.py](locomo/vikingbot/import_to_ov.py) 写入 session 并 commit → [run_eval.py](locomo/vikingbot/run_eval.py) 调用 `vikingbot chat` 召回记忆并回答 → [judge.py](locomo/vikingbot/judge.py) → [stat_judge_result.py](locomo/vikingbot/stat_judge_result.py)。默认按样本 Peer 隔离记忆，群聊模式则按 speaker Peer；导入与问答必须使用同一模式。
-
-### 运行与结果
-
-将原始数据放在 `benchmark/locomo/data/locomo10.json`，配置好 VikingBot 和裁判凭据 `ARK_API_KEY` 或 `OPENAI_API_KEY`（前者优先），从一个完整样本开始：
+日常 Memory 评测及用户复现可直接参考[一键脚本](locomo/vikingbot/run_full_eval.sh)。配置好上文环境及裁判凭据（`ARK_API_KEY` 或 `OPENAI_API_KEY`）后执行：
 
 ```bash
 cd "$ROOT/benchmark/locomo/vikingbot"
 ./run_full_eval.sh 0 --parallel-import-sessions 1 \
   --parallel-run-eval 1 --parallel-judge 1
-# 验证后去掉位置参数 0 跑全量，并按服务限流调整并发。
+# 去掉位置参数 0 跑全量。
 ```
 
-一键脚本先检查配置、服务和身份，再执行导入、问答、评分、汇总；可能提示补充测试凭据后重跑。需自定义裁判模型时，分步调用 `judge.py --base-url ... --model ...`，不要假设一键脚本读取 `JUDGE_MODEL`。
-
-- **不要用 `0 2` 这类单题导入或 `--retry-wrong` 作为正式评测**：它们会按测试题 evidence 选择历史，仅用于排障。示例只传 sample `0`，导入完整历史。
-- 默认会重导；重复实验应使用新的测试存储，不能只换输出目录。`--skip-import` 仅用于确定对应记忆已经导入的情况。
-- 不要加 `--auto-commit`，它会提交工作区改动；脚本默认只保留最近 **10** 个实验目录，重要结果先备份，按需设置 `--keep-runs`。
-
-结果位于 `result/locomo/runs/<timestamp>/`：`locomo_result.csv`、`import_success.csv`、`summary.txt` 和 Bot 日志。先核对导入错误、Peer 和实际记忆召回，再看分数。统计排除 category 5，`Accuracy = CORRECT / (CORRECT + WRONG)`；同时报告未评分/错误数、有效题范围、耗时和 token，不能只报均值。
+注意：使用独立测试存储；脚本默认重导且只保留最近 10 个实验目录，不要加 `--auto-commit`。
 
 ## 2. 复现官网的 LoCoMo 结果
 

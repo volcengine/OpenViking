@@ -37,28 +37,16 @@ Import and QA must use the same server, account/user, and dataset version. `ovcl
 
 ## 1. Memory Evaluation Code Reference (VikingBot)
 
-**[locomo/vikingbot](locomo/vikingbot/) is our primary routine Memory evaluation code and a reference users can follow to reproduce the evaluation workflow.** It uses VikingBot’s own QA, memory tools, and judging protocol, separately from mem0 comparisons. Its prompts do not need to be replaced to match mem0. The execution path is:
-
-[import_to_ov.py](locomo/vikingbot/import_to_ov.py) writes and commits sessions → [run_eval.py](locomo/vikingbot/run_eval.py) invokes `vikingbot chat` to recall memories and answer → [judge.py](locomo/vikingbot/judge.py) → [stat_judge_result.py](locomo/vikingbot/stat_judge_result.py). By default, memories are isolated by sample Peer; group-chat mode uses speaker Peers. Import and QA must use the same mode.
-
-### Run and Inspect Results
-
-Place the original dataset at `benchmark/locomo/data/locomo10.json`, configure VikingBot, and provide judge credentials through `ARK_API_KEY` or `OPENAI_API_KEY` (the former takes precedence). Start with one complete sample:
+Use the [one-command runner](locomo/vikingbot/run_full_eval.sh) for routine Memory evaluation and as a reproduction reference. Configure the environment above and judge credentials (`ARK_API_KEY` or `OPENAI_API_KEY`), then run:
 
 ```bash
 cd "$ROOT/benchmark/locomo/vikingbot"
 ./run_full_eval.sh 0 --parallel-import-sessions 1 \
   --parallel-run-eval 1 --parallel-judge 1
-# Remove positional argument 0 for a full run; tune concurrency to service limits.
+# Remove positional argument 0 for a full run.
 ```
 
-The runner checks configuration, services, and identity before import, QA, judging, and reporting. It may request test credentials and a rerun. For a custom judge model, invoke the stages separately with `judge.py --base-url ... --model ...`; do not assume the wrapper reads `JUDGE_MODEL`.
-
-- **Do not report single-question imports such as `0 2`, or `--retry-wrong`, as full evaluation**: they select history using test-question evidence and are for debugging only. The example supplies only sample `0` and imports its complete history.
-- The default run re-imports data. Repeat experiments with fresh test storage, not just a new output directory. Use `--skip-import` only when the corresponding memories are already present.
-- Do not add `--auto-commit`: it commits workspace changes. The runner retains only the latest **10** experiment directories by default; back up important results and adjust `--keep-runs` as needed.
-
-Outputs are under `result/locomo/runs/<timestamp>/`: `locomo_result.csv`, `import_success.csv`, `summary.txt`, and Bot logs. Check import errors, Peer identity, and actual memory recall before interpreting scores. Statistics exclude category 5; `Accuracy = CORRECT / (CORRECT + WRONG)`. Also report ungraded/error counts, the valid-question subset, latency, and tokens—not just an average.
+Use isolated test storage: the runner re-imports data and retains only the latest 10 experiment directories by default. Do not add `--auto-commit`.
 
 ## 2. Reproduce the Published LoCoMo Results
 
