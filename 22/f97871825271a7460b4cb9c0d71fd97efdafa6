@@ -1,0 +1,18 @@
+openviking/service/compile_targets.py
+  h_b34c679d17e2ac 455-456
+tests/server/test_compile_studio.py
+  h_b34c679d17e2ac 821-825
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "22f97871825271a7460b4cb9c0d71fd97efdafa6",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

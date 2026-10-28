@@ -1,0 +1,30 @@
+bot/vikingbot/openviking_mount/ov_server.py
+  h_b34c679d17e2ac 728
+crates/ov_cli/src/client.rs
+  h_b34c679d17e2ac 418,3312-3341
+crates/ov_cli/src/main.rs
+  h_b34c679d17e2ac 846
+openviking/server/routers/content.py
+  h_b34c679d17e2ac 60,100
+openviking/service/compile_service.py
+  h_b34c679d17e2ac 408-410,417,429-430,432-434
+openviking/service/fs_service.py
+  h_b34c679d17e2ac 1699,1749
+tests/server/test_api_content.py
+  h_b34c679d17e2ac 89-92,111,127,135-136,152,159
+tests/server/test_compile_studio.py
+  h_b34c679d17e2ac 523
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "1c9cd445ada0a149cc6fed84be41868ee6f721eb",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

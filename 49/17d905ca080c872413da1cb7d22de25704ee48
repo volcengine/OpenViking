@@ -1,0 +1,16 @@
+openviking/utils/skill_processor.py
+  h_b34c679d17e2ac 39,224-237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "4917d905ca080c872413da1cb7d22de25704ee48",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

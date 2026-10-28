@@ -1,0 +1,28 @@
+docs/en/api/12-content.md
+  h_b34c679d17e2ac 224,236
+docs/zh/api/12-content.md
+  h_b34c679d17e2ac 224,236
+openviking/server/routers/compile.py
+  h_b34c679d17e2ac 8
+openviking/server/routers/content.py
+  h_b34c679d17e2ac 61-62,302
+openviking/service/fs_service.py
+  h_b34c679d17e2ac 1601,1607,1635
+openviking/storage/content_write.py
+  h_b34c679d17e2ac 78,105,321,353,513,611,1886,1926-1937,1946-1961
+openviking/storage/manual_conflicts.py
+  h_b34c679d17e2ac 1-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "e2b16524e0c1b3aad25be80cc20ea0602483a35e",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

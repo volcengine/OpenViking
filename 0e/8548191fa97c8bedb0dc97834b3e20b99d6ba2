@@ -1,0 +1,18 @@
+openviking/service/external_task_service.py
+  h_b34c679d17e2ac 15,17,44-47,321-346,351-353,358,360-361,366,393-394,396,427-441,443,447-461,465-479,481-488,490-493,513-529,531,546,597-605,648,653-677,679-697,708,710-711,714-724,726,728-733,738-739
+tests/server/test_bot_proxy_auth.py
+  h_b34c679d17e2ac 737
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0e8548191fa97c8bedb0dc97834b3e20b99d6ba2",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

@@ -1,0 +1,52 @@
+bot/vikingbot/compile/ops/finalize.py
+  h_b34c679d17e2ac 431-432
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 1352,1356-1357,1375-1378,1391-1393,1432-1439,1442,1477-1481,1484-1486
+bot/vikingbot/openviking_mount/ov_server.py
+  h_b34c679d17e2ac 692,699,714,716-719,723
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 223
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 223
+openviking/server/mcp_endpoint.py
+  h_b34c679d17e2ac 1416-1417,1429-1431,1440-1447,1483,1505-1507
+openviking/server/routers/content.py
+  h_b34c679d17e2ac 61-70,82,91-92,298-299
+openviking/server/routers/resources.py
+  h_b34c679d17e2ac 54-57,228
+openviking/server/routers/skills.py
+  h_b34c679d17e2ac 17,46,81-85,846-849
+openviking/server/skill_ingest.py
+  h_b34c679d17e2ac 37,43,66
+openviking/service/compile_targets.py
+  h_b34c679d17e2ac 51,1182,1192,1249-1252,1474,1486,1488-1490,1503-1505,1507-1511,1514-1515,1517-1518,1527,1530-1535,1580,1633,2003,2005-2006,2015-2017,2049,2067-2070,2077,2089-2115,2117-2132,2138,2144,2155,2226-2227,2229-2231,2235,2243-2286,2302-2303,2382-2388,2390-2409,2472-2487
+openviking/service/fs_service.py
+  h_b34c679d17e2ac 10,476,1533-1566,1572,1574,1578,1723-1724,1729,1756-1757
+openviking/service/resource_service.py
+  h_b34c679d17e2ac 2545,2553,2578,2638,2653
+openviking/storage/content_write.py
+  h_b34c679d17e2ac 317-318,349-350,509-510,515,566-567,591-592,609-610,777-784,1111-1112,1145,1887-1888,1906-1907,1924-1926,2128-2129,2150-2152,2298-2299,2317-2319,2388-2389,2394-2401,2413-2453,2673-2674,2692-2694
+openviking/utils/skill_processor.py
+  h_b34c679d17e2ac 39,139,152,183,199,201,224-232
+sdk/python/openviking_sdk/options.py
+  h_b34c679d17e2ac 90-91,96-97,101-103
+tests/server/test_compile_studio.py
+  h_b34c679d17e2ac 264,514-518,520-525,582-590,744-853
+tests/server/test_content_batch_write.py
+  h_b34c679d17e2ac 28,132-170,1339-1358,1400-1414
+tests/server/test_mcp_endpoint.py
+  h_b34c679d17e2ac 11,53,2477-2494
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2f77429c7329896a414d1367a61852606793b82e",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
