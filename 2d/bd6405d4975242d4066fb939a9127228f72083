@@ -1,0 +1,22 @@
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 143-144
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 143-144
+openviking/service/compile_targets.py
+  h_b34c679d17e2ac 126,128,361,577,581,583-585,590-593,732-741,749,751-752,770,773,775,778-783,939,941,963-965,968,1007,1026,1034-1036,1040,1046,1181,1183-1185,1216-1218,1325-1328,1361,1657-1658,1693,1849,2159,2161,2236-2237,2387
+tests/server/test_compile_studio.py
+  h_b34c679d17e2ac 13-19,71,74-78,462,493-494,513,616-618,648,718-719,721,773-774,856
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2dbd6405d4975242d4066fb939a9127228f72083",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
