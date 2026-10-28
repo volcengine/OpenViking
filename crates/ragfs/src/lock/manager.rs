@@ -2380,6 +2380,7 @@ impl PathLockManager {
         metrics.active_lock_count = self.lease_registry.active_count();
         metrics.waiting_lock_count = self.waiting_lock_count.load(AtomicOrdering::Relaxed);
         metrics.wait_duration_ns = self.wait_duration_ns.load(AtomicOrdering::Relaxed);
+        self.provider.update_metrics(&mut metrics);
         metrics
     }
 }

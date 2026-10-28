@@ -2,11 +2,14 @@
 //! system scope; global roots cannot atomically cover the separate scope HASHes.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::metrics::duration::DurationMetrics;
 use async_trait::async_trait;
 use bytes::Bytes;
+use opentelemetry::KeyValue;
 
 use crate::cache_runtime::{
     CacheError, CacheOperation, CacheRuntime, ScriptDefinition, ScriptRequest, ScriptValue,
@@ -505,6 +508,8 @@ pub struct RedisPathLockProvider {
     runtime: Arc<CacheRuntime>,
     service_name: String,
     hash_ttl_ms: i64,
+    acquire_duration: DurationMetrics,
+    slow_acquisitions: AtomicU64,
 }
 
 impl RedisPathLockProvider {
@@ -547,6 +552,8 @@ impl RedisPathLockProvider {
             runtime,
             service_name: service_name.to_string(),
             hash_ttl_ms: hash_ttl_ms as i64,
+            acquire_duration: DurationMetrics::default(),
+            slow_acquisitions: AtomicU64::new(0),
         })
     }
 
@@ -804,6 +811,11 @@ impl RedisPathLockProvider {
 
 #[async_trait]
 impl PathLockProvider for RedisPathLockProvider {
+    fn update_metrics(&self, metrics: &mut super::metrics::LockMetrics) {
+        metrics.redis_acquire = Some(self.acquire_duration.clone());
+        metrics.redis_slow_acquisitions = self.slow_acquisitions.load(Ordering::Relaxed);
+    }
+
     /// Return the provider name used by configuration and diagnostics.
     fn name(&self) -> &'static str {
         "cache"
@@ -860,13 +872,28 @@ impl PathLockProvider for RedisPathLockProvider {
             .execute_array(ACQUIRE_BATCH_ID, key.clone(), args)
             .await;
         let elapsed = started.elapsed();
+        let result = match &response {
+            Ok(values) => match Self::result_status(values, "acquire_batch") {
+                Ok("ok") => "ok",
+                Ok("conflict") => "conflict",
+                Ok("invalid_token") => "invalid_token",
+                Ok("invalid_request") => "invalid_request",
+                _ => "invalid_response",
+            },
+            Err(_) => "error",
+        };
+        let includes_tree = requests
+            .iter()
+            .any(|request| request.kind == PathLockKind::Tree);
+        self.acquire_duration.record(
+            elapsed,
+            &[
+                KeyValue::new("kind", if includes_tree { "tree" } else { "exact" }),
+                KeyValue::new("result", result),
+            ],
+        );
         if elapsed > SLOW_ACQUIRE_THRESHOLD {
-            let result = match &response {
-                Ok(values) => {
-                    Self::result_status(values, "acquire_batch").unwrap_or("invalid_response")
-                }
-                Err(_) => "error",
-            };
+            self.slow_acquisitions.fetch_add(1, Ordering::Relaxed);
             let scope = key
                 .split_once(":ov:pathlock:")
                 .and_then(|(_, suffix)| suffix.strip_suffix(":tokens"))
@@ -876,7 +903,7 @@ impl PathLockProvider for RedisPathLockProvider {
                 service_name = %self.service_name,
                 scope,
                 request_count = requests.len(),
-                includes_tree = requests.iter().any(|request| request.kind == PathLockKind::Tree),
+                includes_tree,
                 elapsed_ms = elapsed.as_secs_f64() * 1_000.0,
                 threshold_ms = SLOW_ACQUIRE_THRESHOLD.as_millis() as u64,
                 result,
@@ -1261,6 +1288,102 @@ return redis.call("HGET", KEYS[1], ARGV[2])
     enum AtomicFault {
         WriteThenIo,
         Conflict,
+    }
+
+    #[tokio::test]
+    async fn redis_acquire_metrics_export_outcomes_and_slow_calls() {
+        let calls = AtomicU64::new(0);
+        let mock = crate::cache_runtime::MemoryMockProvider::new().with_script_handler(move |_| {
+            // Inject real response latency so the slow counter follows the timed call.
+            std::thread::sleep(Duration::from_millis(15));
+            let values = match calls.fetch_add(1, Ordering::Relaxed) {
+                0 => vec!["ok", "0", "/local/account-a/file", "reentrant", "", ""],
+                1 => vec!["conflict", "/local/account-a/file", "other:100:E"],
+                2 => return Err(CacheError::Unavailable("injected failure".into())),
+                _ => panic!("unexpected Redis call"),
+            };
+            crate::cache_runtime::ScriptResult::encode(&ScriptValue::Array(
+                values
+                    .into_iter()
+                    .map(|value| ScriptValue::Bytes(value.as_bytes().to_vec()))
+                    .collect(),
+            ))
+        });
+        let runtime = CacheRuntime::memory_with_provider(Arc::new(mock));
+        let provider =
+            Arc::new(RedisPathLockProvider::new(runtime.clone(), "metrics-test", 30.0).unwrap());
+        assert!(provider
+            .try_acquire_batch_atomic(&[], "owner", 100, 0)
+            .await
+            .is_err());
+        for (index, kind) in [PathLockKind::Exact, PathLockKind::Tree, PathLockKind::Exact]
+            .into_iter()
+            .enumerate()
+        {
+            let result = provider
+                .try_acquire_batch_atomic(
+                    &[PathLockRequest {
+                        path: "/local/account-a/file".into(),
+                        kind,
+                    }],
+                    "owner",
+                    100,
+                    0,
+                )
+                .await;
+            match index {
+                0 => assert!(result.is_ok()),
+                1 => assert!(matches!(result, Err(PathLockError::Conflict { .. }))),
+                _ => assert!(matches!(result, Err(PathLockError::Io(_)))),
+            }
+        }
+        let manager = PathLockManager::new(
+            Arc::new(MemFileSystem::new()),
+            provider,
+            PathLockConfig::default(),
+        );
+        // Repeated exports must retain cumulative observations.
+        for _ in 0..2 {
+            let metrics = crate::metrics::lock_metrics(manager.metrics_snapshot().await);
+            let slow = metrics
+                .iter()
+                .find(|metric| metric.name == "lock_redis_slow_acquisitions_total")
+                .unwrap();
+            assert!(matches!(
+                slow.value,
+                crate::metrics::RagfsMetricValue::Counter { value: 3, .. }
+            ));
+            let durations = metrics
+                .iter()
+                .filter(|metric| metric.name == "lock_redis_acquire_duration_seconds")
+                .collect::<Vec<_>>();
+            assert_eq!(durations.len(), 3);
+            for (kind, result) in [("exact", "ok"), ("tree", "conflict"), ("exact", "error")] {
+                let metric = durations
+                    .iter()
+                    .find(|metric| {
+                        metric.labels["kind"] == kind && metric.labels["result"] == result
+                    })
+                    .unwrap();
+                assert_eq!(metric.labels.len(), 2);
+                match &metric.value {
+                    crate::metrics::RagfsMetricValue::Histogram {
+                        count,
+                        sum,
+                        bucket_counts,
+                        scale,
+                        ..
+                    } => {
+                        assert_eq!(*count, 1);
+                        assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
+                        assert!(*sum > 10_000_000);
+                        assert_eq!(*scale, 1e-9);
+                    }
+                    _ => panic!("expected duration histogram"),
+                }
+            }
+        }
+        runtime.close().await.unwrap();
     }
 
     /// Logical test provider for atomic Manager failure paths.

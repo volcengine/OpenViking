@@ -65,6 +65,9 @@ pub struct AtomicAcquisitionResult {
 /// Storage abstraction for lock tokens. Only `PathLockManager` should call these methods.
 #[async_trait]
 pub trait PathLockProvider: Send + Sync {
+    /// Add provider-owned observations to the manager's metrics snapshot.
+    fn update_metrics(&self, _metrics: &mut super::metrics::LockMetrics) {}
+
     /// Human-readable provider name for config/logging/metrics.
     fn name(&self) -> &'static str;
 

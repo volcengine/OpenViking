@@ -21,6 +21,10 @@ pub struct LockMetrics {
     pub stale_cleanup_failures: usize,
     /// SDK-owned descendant scan duration distribution.
     pub(crate) descendant_scan: DurationMetrics,
+    /// SDK-owned Redis acquisition round-trip durations, when using Redis.
+    pub(crate) redis_acquire: Option<DurationMetrics>,
+    /// Redis acquisitions exceeding the slow-log threshold.
+    pub redis_slow_acquisitions: u64,
     /// Total nanoseconds spent waiting for successfully acquired locks.
     pub wait_duration_ns: u64,
     /// Count of conflicts by type (exact/exact, tree/exact, etc.).

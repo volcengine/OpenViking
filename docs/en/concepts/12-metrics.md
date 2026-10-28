@@ -286,6 +286,12 @@ Notes:
 | `openviking_lock_descendant_scans_total` | Counter | none | completed descendant scans |
 | `openviking_lock_descendant_scan_duration_seconds_total` | Counter | none | cumulative descendant scan duration |
 | `openviking_lock_descendant_scan_duration_seconds` | Histogram | `bucket_schema` | completed descendant scan duration distribution, supporting mean, P95, and P99 |
+| `openviking_lock_redis_acquire_duration_seconds` | Histogram | `kind, result, bucket_schema` | Redis acquisition round trip including response decoding; `kind` is `tree` if the batch includes Tree, otherwise `exact`; `result` is `ok`, `conflict`, `invalid_token`, `invalid_request`, `invalid_response`, or `error` |
+| `openviking_lock_redis_slow_acquisitions_total` | Counter | none | Redis acquisition round trips exceeding 10ms, including failed requests |
+
+Redis acquisition metrics cover returned script calls, excluding local validation,
+manager conflict waiting and calls cancelled before a response. Scope, owner and
+service name are retained in slow logs, not metric labels.
 
 The queue duration `outcome` label is one of `success`, `failed`, `requeued`, `cancelled`, or `exception`. `failed` means the handler returned a settled failure that can be acknowledged, while `exception` means processing raised and the current message is left unacknowledged.
 

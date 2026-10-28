@@ -282,6 +282,11 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 | `openviking_lock_descendant_scans_total` | Counter | 无 | 已完成的后代锁扫描次数 |
 | `openviking_lock_descendant_scan_duration_seconds_total` | Counter | 无 | 后代锁扫描累计耗时 |
 | `openviking_lock_descendant_scan_duration_seconds` | Histogram | `bucket_schema` | 已完成后代锁扫描的耗时分布，可计算平均、P95 和 P99 |
+| `openviking_lock_redis_acquire_duration_seconds` | Histogram | `kind, result, bucket_schema` | Redis 获取往返耗时，包含响应解码；batch 包含 Tree 时 `kind=tree`，否则为 `exact`；`result` 为 `ok`、`conflict`、`invalid_token`、`invalid_request`、`invalid_response` 或 `error` |
+| `openviking_lock_redis_slow_acquisitions_total` | Counter | 无 | Redis 获取往返超过 10ms 的累计次数，包含失败请求 |
+
+Redis 获取指标统计已返回的脚本调用，不包含本地校验、manager 冲突等待，
+以及响应前被取消的调用。scope、owner 和服务名保留在慢日志中，不作为指标标签。
 
 队列耗时指标中的 `outcome` 可取 `success`、`failed`、`requeued`、`cancelled`、`exception`。其中 `failed` 表示 handler 返回了可确认的失败结果，`exception` 表示处理过程抛出异常，当前消息不会 ACK。
 
