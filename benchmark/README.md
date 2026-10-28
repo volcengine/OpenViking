@@ -12,13 +12,19 @@ English | [简体中文](README_zh.md)
 | Goal | Path |
 | --- | --- |
 | Reproduce the Memory evaluation workflow through VikingBot using our routine evaluation code | [1. VikingBot code reference](#1-memory-evaluation-code-reference-vikingbot) |
-| Reproduce the published LoCoMo results for different Agent frameworks | [2. Agent integration evaluation](#2-reproduce-the-published-locomo-results) |
+| Reproduce the published LoCoMo results for different Agent frameworks | [2. Agent integration evaluation](#2-reproduce-published-locomo-results-for-hermesopenclaw-and-other-frameworks) |
 | Single-turn memory QA with mem0 QA and LLM-judge prompts (non-agentic) | [3. mem0 single-turn comparison](#3-mem0-single-turn-qa-comparison) |
 | Evaluate knowledge-base retrieval and answering | [4. RAG evaluation](#4-rag-evaluation) |
 
 ## Before You Start
 
-Use a **dedicated test server, separate storage, and isolated Agent configuration**, never a production instance. See [server/model setup](../docs/en/getting-started/02-quickstart.md), [CLI configuration](../docs/en/getting-started/05-cli-setup.md), and the individual benchmark READMEs. Agent scripts may change configuration, restart services, or manipulate snapshots; check their targets first.
+**You can reuse an existing OV service, including production; the key is to keep evaluation reads and writes out of production data.** Use a separate test account and its user API key, and verify that import, search, and deletion permissions cover only test data (see [authentication](../docs/en/guides/04-authentication.md)). The specific risks are:
+
+- Memory evaluation writes test sessions and memories. RAG's default `all` / `del` recursively deletes the resource root accessible to the current identity. Mixing production data can contaminate results or delete real data; the RAG examples use only `gen` / `eval`.
+- Some Agent scripts modify local configuration, restart services, or restore snapshots. A test account does not isolate these process/filesystem operations; those steps must target a separate test environment, never production.
+- Batch evaluation adds load to the service and model providers. Limit concurrency when reusing production, and prefer an isolated instance for meaningful latency/throughput comparisons without interference from live traffic.
+
+See [server/model setup](../docs/en/getting-started/02-quickstart.md), [CLI configuration](../docs/en/getting-started/05-cli-setup.md), and the individual benchmark READMEs for preparation.
 
 From the repository root, with an isolated Python environment activated:
 
@@ -26,7 +32,7 @@ From the repository root, with an isolated Python environment activated:
 uv pip install -e '.[benchmark,bot]' -e ./sdk/python
 export ROOT="$PWD"
 export PYTHONPATH="$ROOT:$ROOT/sdk/python${PYTHONPATH:+:$PYTHONPATH}"
-export OPENVIKING_URL="http://127.0.0.1:1933"   # Replace with your dedicated test server
+export OPENVIKING_URL="http://127.0.0.1:1933"   # Replace with an existing service or test instance
 export DATA="$ROOT/benchmark/locomo/data/locomo10.json"  # Place the original JSON here first
 export OPENVIKING_CONFIG_FILE="/absolute/path/to/ov.eval.conf"
 export RUN="$ROOT/result/evaluation/$(date +%Y%m%d-%H%M%S)"
@@ -46,9 +52,9 @@ cd "$ROOT/benchmark/locomo/vikingbot"
 # Remove positional argument 0 for a full run.
 ```
 
-Use isolated test storage: the runner re-imports data and retains only the latest 10 experiment directories by default. Do not add `--auto-commit`.
+Use an isolated test data space: the runner re-imports data and retains only the latest 10 experiment directories by default. Do not add `--auto-commit`.
 
-## 2. Reproduce the Published LoCoMo Results
+## 2. Reproduce Published LoCoMo Results for Hermes/OpenClaw and Other Frameworks
 
 The [official report (May 29, 2026)](https://blog.openviking.ai/post/openviking-benchmark-results/) compares **Agent native memory against Agent + OpenViking**, and should not be mixed with routine VikingBot scores or the mem0 comparison in section 3:
 

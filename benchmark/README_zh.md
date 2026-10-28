@@ -12,13 +12,19 @@
 | 你想做什么 | 走哪条路径 |
 | --- | --- |
 | 参考日常评测代码，通过 VikingBot 复现 Memory 评测流程 | [1. VikingBot 代码参考](#1-memory-评测代码参考vikingbot) |
-| 复现官网公布的各种 Agent 框架的 LoCoMo 结果 | [2. Agent 接入评测](#2-复现官网的-locomo-结果) |
+| 复现官网公布的各种 Agent 框架的 LoCoMo 结果 | [2. Agent 接入评测](#2-复现官网-hermesopenclaw-等框架的-locomo-结果) |
 | 基于 mem0 问答与 LLM-judge prompt 的单轮记忆问答（非 Agentic） | [3. mem0 单轮问答对照](#3-mem0-单轮问答对照实验) |
 | 评测知识库检索与回答 | [4. RAG 评测](#4-rag-相关评测) |
 
 ## 开始前
 
-使用**专用测试服务、独立存储和独立 Agent 配置**，不要连接生产实例。准备方法见[服务与模型配置](../docs/zh/getting-started/02-quickstart.md)、[CLI 连接配置](../docs/zh/getting-started/05-cli-setup.md)及各评测目录 README。Agent 脚本可能修改配置、重启服务或操作快照，运行前先核对目标。
+**可以复用已有 OV 服务，包括生产实例；关键是不要让评测读写生产数据空间。** 使用独立测试 account 及其用户 API Key，确认导入、检索和删除权限仅覆盖测试数据（见[身份认证](../docs/zh/guides/04-authentication.md)）。具体风险是：
+
+- Memory 评测会写入测试会话和记忆；RAG 默认 `all` / `del` 会递归删除当前身份可访问的资源根目录。混用生产数据既会污染结果，也可能误删数据；RAG 示例仅运行 `gen` / `eval`。
+- 部分 Agent 脚本会修改本地配置、重启服务或恢复快照。测试 account 不能隔离这些进程/文件操作；相关步骤必须指向独立测试环境，不能作用于生产。
+- 批量评测会增加服务和模型调用负载；复用生产服务时控制并发，准确比较时延/吞吐则优先使用独立测试实例，避免与线上流量互相干扰。
+
+准备方法见[服务与模型配置](../docs/zh/getting-started/02-quickstart.md)、[CLI 连接配置](../docs/zh/getting-started/05-cli-setup.md)及各评测目录 README。
 
 在仓库根目录、已激活的独立 Python 环境中执行：
 
@@ -26,7 +32,7 @@
 uv pip install -e '.[benchmark,bot]' -e ./sdk/python
 export ROOT="$PWD"
 export PYTHONPATH="$ROOT:$ROOT/sdk/python${PYTHONPATH:+:$PYTHONPATH}"
-export OPENVIKING_URL="http://127.0.0.1:1933"   # 替换为专用测试服务
+export OPENVIKING_URL="http://127.0.0.1:1933"   # 替换为已有服务或测试实例地址
 export DATA="$ROOT/benchmark/locomo/data/locomo10.json"  # 预先将原始 JSON 放到此处
 export OPENVIKING_CONFIG_FILE="/absolute/path/to/ov.eval.conf"
 export RUN="$ROOT/result/evaluation/$(date +%Y%m%d-%H%M%S)"
@@ -46,9 +52,9 @@ cd "$ROOT/benchmark/locomo/vikingbot"
 # 去掉位置参数 0 跑全量。
 ```
 
-注意：使用独立测试存储；脚本默认重导且只保留最近 10 个实验目录，不要加 `--auto-commit`。
+注意：使用隔离的测试数据空间；脚本默认重导且只保留最近 10 个实验目录，不要加 `--auto-commit`。
 
-## 2. 复现官网的 LoCoMo 结果
+## 2. 复现官网 Hermes/OpenClaw 等框架的 LoCoMo 结果
 
 [官网报告（2026-05-29）](https://blog.openviking.ai/post/openviking-benchmark-results/)公布的是 **Agent 原生记忆 vs Agent + OpenViking**，不能与日常 VikingBot 或第 3 节的 mem0 对照分数混用：
 
