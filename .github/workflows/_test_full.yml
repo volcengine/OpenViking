@@ -94,6 +94,24 @@ jobs:
     - name: Build C++ extensions
       run: uv run python setup.py build_ext --inplace
 
+    - name: Create isolated test configuration
+      # Exercise config-dependent defaults without user files or model credentials.
+      shell: python
+      run: |
+        import json
+        import os
+        from pathlib import Path
+
+        config_path = Path(os.environ["RUNNER_TEMP"]) / "openviking-test" / "ov.conf"
+        workspace = config_path.parent / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps({"storage": {"workspace": str(workspace)}}),
+            encoding="utf-8",
+        )
+        with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
+            env_file.write(f"OPENVIKING_CONFIG_FILE={config_path}\n")
+
     - name: Run Python unit tests
       run: uv run pytest -q -o addopts='' tests/unit
 
