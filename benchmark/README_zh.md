@@ -11,7 +11,7 @@
 
 | 你想做什么 | 走哪条路径 |
 | --- | --- |
-| 日常 Memory 效果评测与回归（主要入口） | [1. VikingBot](#1-日常-memory-评测vikingbot) |
+| 参考日常评测代码，复现 Memory 评测流程 | [1. VikingBot 代码参考](#1-memory-评测代码参考vikingbot) |
 | 复现官网公布的 LoCoMo 结果 | [2. Agent 接入评测](#2-复现官网的-locomo-结果) |
 | 独立对照 mem0 的问答与 LLM-judge prompt | [3. mem0 对照实验](#3-mem0-prompt-对照实验) |
 | 评测知识库检索与回答 | [4. RAG 评测](#4-rag-相关评测) |
@@ -35,9 +35,9 @@ mkdir -p "$RUN"
 
 导入和问答必须使用同一服务、account/user 与数据版本。`ovcli.conf` 管 HTTP 连接；`ov.conf` 管服务端模型和 VikingBot 配置。按 [VikingBot 配置指南](../docs/zh/guides/17-vikingbot.md)显式设置 `bot.ov_server.server_url`，确保与导入地址一致，避免误跑 standalone；问答模型由 `bot.agents` 配置或继承根级 `vlm`。密钥勿提交到仓库。
 
-## 1. 日常 Memory 评测（VikingBot）
+## 1. Memory 评测代码参考（VikingBot）
 
-**[locomo/vikingbot](locomo/vikingbot/) 是我们日常主要运行的 Memory 评测入口。** 使用 VikingBot 自己的问答、记忆工具和裁判方式，与 mem0 对照实验不同；不需要为了对齐 mem0 而替换日常评测的 prompt。执行链路为：
+**[locomo/vikingbot](locomo/vikingbot/) 是我们日常主要运行的 Memory 评测代码，也可作为用户复现评测流程的代码参考。** 使用 VikingBot 自己的问答、记忆工具和裁判方式，与 mem0 对照实验不同；不需要为了对齐 mem0 而替换日常评测的 prompt。执行链路为：
 
 [import_to_ov.py](locomo/vikingbot/import_to_ov.py) 写入 session 并 commit → [run_eval.py](locomo/vikingbot/run_eval.py) 调用 `vikingbot chat` 召回记忆并回答 → [judge.py](locomo/vikingbot/judge.py) → [stat_judge_result.py](locomo/vikingbot/stat_judge_result.py)。默认按样本 Peer 隔离记忆，群聊模式则按 speaker Peer；导入与问答必须使用同一模式。
 
@@ -91,6 +91,8 @@ export LOCOMO_JSON="$DATA"
 ## 3. mem0 prompt 对照实验
 
 这是**独立实验口径，不是日常 VikingBot 评测的要求**。参考 [locomo/openviking](locomo/openviking/README.md) 的单次记忆检索流程，以及其中的 [问答与裁判 prompt](locomo/openviking/locomo_prompts.py)；不要修改 `locomo/vikingbot` 来迁就这套口径。
+
+**相比日常评测，本对照版本的 mem0 prompt 在 LLM-judge 判分上相对宽松**：例如接受列表答案的部分命中，以及日期/时长的一定误差；日常 VikingBot judge 没有这些显式放宽规则。两者分数不能直接比较，也不能将判分更宽松带来的高分视为记忆能力提升。
 
 - 对照固定版本的 [mem0 LoCoMo prompts](https://github.com/mem0ai/memory-benchmarks/blob/4b61c5d31b9c668a12b4f5e78064248a02c82d2b/benchmarks/locomo/prompts.py)，分别核对问答 prompt、judge prompt、参考日期、evidence 使用方式与结果解析，不能只换裁判模型。
 - 固定问题集、回答/裁判模型、检索和上下文预算；记录本地模板与上游的差异，不宣称默认逐字一致。测试集答案/evidence 不得额外注入待测记忆或问答输入。

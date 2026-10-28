@@ -11,7 +11,7 @@ English | [简体中文](README_zh.md)
 
 | Goal | Path |
 | --- | --- |
-| Routine Memory evaluation and regression checks (primary entry point) | [1. VikingBot](#1-routine-memory-evaluation-with-vikingbot) |
+| Reproduce the Memory evaluation workflow using our routine evaluation code | [1. VikingBot code reference](#1-memory-evaluation-code-reference-vikingbot) |
 | Reproduce the published LoCoMo results | [2. Agent integration evaluation](#2-reproduce-the-published-locomo-results) |
 | Separately compare mem0 QA and LLM-judge prompts | [3. mem0 comparison](#3-mem0-prompt-comparison-experiments) |
 | Evaluate knowledge-base retrieval and answering | [4. RAG evaluation](#4-rag-evaluation) |
@@ -35,9 +35,9 @@ mkdir -p "$RUN"
 
 Import and QA must use the same server, account/user, and dataset version. `ovcli.conf` controls HTTP connections; `ov.conf` controls server models and VikingBot. Follow the [VikingBot configuration guide](../docs/en/guides/17-vikingbot.md) to explicitly set `bot.ov_server.server_url` to the import target and avoid accidentally running standalone. The answer model comes from `bot.agents` or inherits the root `vlm`. Do not commit credentials.
 
-## 1. Routine Memory Evaluation with VikingBot
+## 1. Memory Evaluation Code Reference (VikingBot)
 
-**[locomo/vikingbot](locomo/vikingbot/) is our primary entry point for routine Memory evaluation.** It uses VikingBot’s own QA, memory tools, and judging protocol, separately from mem0 comparisons. Its prompts do not need to be replaced to match mem0. The execution path is:
+**[locomo/vikingbot](locomo/vikingbot/) is our primary routine Memory evaluation code and a reference users can follow to reproduce the evaluation workflow.** It uses VikingBot’s own QA, memory tools, and judging protocol, separately from mem0 comparisons. Its prompts do not need to be replaced to match mem0. The execution path is:
 
 [import_to_ov.py](locomo/vikingbot/import_to_ov.py) writes and commits sessions → [run_eval.py](locomo/vikingbot/run_eval.py) invokes `vikingbot chat` to recall memories and answer → [judge.py](locomo/vikingbot/judge.py) → [stat_judge_result.py](locomo/vikingbot/stat_judge_result.py). By default, memories are isolated by sample Peer; group-chat mode uses speaker Peers. Import and QA must use the same mode.
 
@@ -91,6 +91,8 @@ The report does not pin every runtime parameter, and current script defaults may
 ## 3. mem0 Prompt Comparison Experiments
 
 This is a **separate experimental protocol, not a requirement for routine VikingBot evaluation**. Refer to the single-search memory workflow in [locomo/openviking](locomo/openviking/README.md) and its [QA/judge prompts](locomo/openviking/locomo_prompts.py). Do not change `locomo/vikingbot` to conform to this protocol.
+
+**The mem0 prompt version used in this comparison has more permissive LLM-judge criteria than routine evaluation**: for example, it accepts partial list answers and tolerances in dates/durations that the routine VikingBot judge does not explicitly allow. Scores are not directly comparable; a higher score from more permissive judging does not establish better memory quality.
 
 - Compare with a pinned version of the [mem0 LoCoMo prompts](https://github.com/mem0ai/memory-benchmarks/blob/4b61c5d31b9c668a12b4f5e78064248a02c82d2b/benchmarks/locomo/prompts.py). Check the QA and judge prompts, reference date, evidence policy, and result parser separately; changing only the judge model is insufficient.
 - Fix the questions, answer/judge models, retrieval budget, and context budget. Record local/upstream template differences rather than claiming byte-for-byte equivalence by default. Never inject test answers/evidence annotations as extra information into memories or QA input.
