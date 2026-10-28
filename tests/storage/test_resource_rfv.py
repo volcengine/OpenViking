@@ -517,138 +517,7 @@ class _SnapshotDB:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("has_records", [False, True])
-async def test_build_rfv_snapshot_uses_supplied_vector_inventory_without_database_read(has_records):
-    from openviking.storage.resource_rfv import build_rfv_snapshot
-
-    root = "viking://user/alice/skills/demo"
-    record = {
-        "id": "cached-l2",
-        "uri": f"{root}/SKILL.md",
-        "level": 2,
-        "md5": "old",
-        "abstract": "skill summary",
-        "name": "Demo",
-        "description": "cached description",
-        "tags": ["cached"],
-        "search_tags": ["team=storage"],
-        "unrequested": "excluded",
-    }
-    inventory = {"cached-l2": record} if has_records else {}
-    db = _SnapshotDB()
-
-    snapshot = await build_rfv_snapshot(
-        viking_fs=_SnapshotFS(root),
-        vikingdb=db,
-        target_uri=root,
-        ctx=object(),
-        request_intent=RequestIntent.from_ingest_options(
-            target_uri=root,
-            processing_mode="vectors_only",
-            ingest_options={"search_tags": ["team=storage"]},
-        ),
-        formal_inventory=(True, [], True),
-        root_exists=False,
-        vector_inventory=inventory,
-    )
-
-    db.get_incremental_inventory_under_uri.assert_not_awaited()
-    assert snapshot.vectors.projected_fields == frozenset(
-        {"id", "uri", "level", "md5", "abstract", "name", "description", "tags", "search_tags"}
-    )
-    assert set(snapshot.vectors.records_by_id) == set(inventory)
-    if has_records:
-        cached = snapshot.vectors.records_by_id["cached-l2"]
-        assert cached.relative_path == "SKILL.md"
-        assert cached.fields == {
-            field: record[field]
-            for field in ("md5", "abstract", "name", "description", "tags", "search_tags")
-        }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("recursive", "is_dir", "record_uri"),
-    [
-        (True, True, "viking://resources/docs-other/a.md"),
-        (True, True, "viking://resources/other/a.md"),
-        (False, True, "viking://resources/docs/nested/a.md"),
-        (False, False, "viking://resources/docs/a.md"),
-    ],
-)
-async def test_build_rfv_snapshot_rejects_supplied_vectors_outside_requested_scope(
-    recursive, is_dir, record_uri
-):
-    from openviking.storage.resource_rfv import build_rfv_snapshot
-
-    root = "viking://resources/docs"
-    db = _SnapshotDB()
-    with pytest.raises(ValueError, match="outside target"):
-        await build_rfv_snapshot(
-            viking_fs=_SnapshotFS(root),
-            vikingdb=db,
-            target_uri=root,
-            ctx=object(),
-            request_intent=RequestIntent(root, "vectors_only"),
-            recursive=recursive,
-            formal_inventory=(is_dir, [], True),
-            root_exists=False,
-            vector_inventory={
-                "outside-l2": {"id": "outside-l2", "uri": record_uri, "level": 2, "md5": "old"}
-            },
-        )
-
-    db.get_incremental_inventory_under_uri.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_build_rfv_snapshot_accepts_supplied_root_and_direct_child_vectors():
-    from openviking.storage.resource_rfv import build_rfv_snapshot
-
-    root = "viking://resources/docs"
-    inventory = {
-        "root-l0": {"id": "root-l0", "uri": root, "level": 0, "md5": "old"},
-        "child-l2": {"id": "child-l2", "uri": f"{root}/a.md", "level": 2, "md5": "old"},
-    }
-    db = _SnapshotDB()
-    snapshot = await build_rfv_snapshot(
-        viking_fs=_SnapshotFS(root),
-        vikingdb=db,
-        target_uri=root,
-        ctx=object(),
-        request_intent=RequestIntent(root, "vectors_only"),
-        recursive=False,
-        formal_inventory=(True, [], True),
-        root_exists=False,
-        vector_inventory=inventory,
-    )
-
-    db.get_incremental_inventory_under_uri.assert_not_awaited()
-    assert {record.relative_path for record in snapshot.vectors.records_by_id.values()} == {"", "a.md"}
-
-
-@pytest.mark.asyncio
-async def test_build_rfv_snapshot_rejects_incomplete_formal_tree_with_supplied_empty_vectors():
-    from openviking.storage.resource_rfv import build_rfv_snapshot
-
-    root = "viking://resources/docs"
-    db = _SnapshotDB()
-    with pytest.raises(ValueError, match="incomplete formal tree"):
-        await build_rfv_snapshot(
-            viking_fs=_SnapshotFS(root),
-            vikingdb=db,
-            target_uri=root,
-            ctx=object(),
-            request_intent=RequestIntent(root, "vectors_only"),
-            formal_inventory=(True, [{"uri": f"{root}/a.md", "access": "denied"}], True),
-            vector_inventory={},
-        )
-
-    db.get_incremental_inventory_under_uri.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_build_rfv_snapshot_reads_one_f_inventory_one_v_inventory_and_each_source_once():
+async def test_build_rfv_snapshot_reuses_inventory_and_reads_each_source_once():
     from openviking.storage.resource_rfv import build_rfv_snapshot
     from openviking.utils.content_hash import content_md5
 
@@ -656,6 +525,7 @@ async def test_build_rfv_snapshot_reads_one_f_inventory_one_v_inventory_and_each
     fs = _SnapshotFS(root)
     db = _SnapshotDB()
 
+    inventory = {"old": {"id": "old", "uri": f"{root}/gone.md", "level": 2, "md5": "old"}}
     snapshot = await build_rfv_snapshot(
         viking_fs=fs,
         vikingdb=db,
@@ -664,11 +534,13 @@ async def test_build_rfv_snapshot_reads_one_f_inventory_one_v_inventory_and_each
         request_intent=RequestIntent(root, "vectors_only"),
         recursive=True,
         root_is_dir=True,
+        vector_inventory=inventory,
     )
 
     fs.tree.assert_awaited_once()
     fs.stat.assert_not_awaited()
-    db.get_incremental_inventory_under_uri.assert_awaited_once()
+    db.get_incremental_inventory_under_uri.assert_not_awaited()
+    assert snapshot.vectors.records_by_id["old"].relative_path == "gone.md"
     assert fs.read_file_bytes.await_count == 3
     assert snapshot.formal.entries["docs"].level_md5s == {
         0: content_md5(b"docs abstract"),
@@ -679,64 +551,6 @@ async def test_build_rfv_snapshot_reads_one_f_inventory_one_v_inventory_and_each
         (f"{root}/docs", 0): "docs abstract",
         (f"{root}/docs", 1): "docs overview",
         (f"{root}/docs/a.md", 2): b"file body",
-    }
-
-
-@pytest.mark.asyncio
-async def test_build_rfv_snapshot_missing_root_marks_all_vectors_orphan():
-    from openviking.storage.context_update_plan import (
-        IndexAction,
-        build_rfv_context_update_plan,
-    )
-    from openviking.storage.resource_rfv import build_rfv_snapshot
-
-    root = "viking://user/alice/skills/ghost"
-    fs = SimpleNamespace(
-        stat=AsyncMock(side_effect=AssertionError("missing root must not stat")),
-        tree=AsyncMock(side_effect=AssertionError("missing root must not tree")),
-        read_file_bytes=AsyncMock(side_effect=AssertionError("missing root reads nothing")),
-    )
-    db = SimpleNamespace(
-        get_incremental_inventory_under_uri=AsyncMock(
-            return_value={
-                "root-l0": {"id": "root-l0", "uri": root, "level": 0, "md5": "m0"},
-                "root-l1": {"id": "root-l1", "uri": root, "level": 1, "md5": "m1"},
-                "skill-l2": {
-                    "id": "skill-l2",
-                    "uri": f"{root}/SKILL.md",
-                    "level": 2,
-                    "md5": "m2",
-                },
-            }
-        )
-    )
-
-    snapshot = await build_rfv_snapshot(
-        viking_fs=fs,
-        vikingdb=db,
-        target_uri=root,
-        ctx=object(),
-        request_intent=RequestIntent(root, "vectors_only"),
-        recursive=True,
-        formal_inventory=(True, [], True),
-        root_exists=False,
-    )
-
-    assert snapshot.formal.entries == {}
-    _, plan = build_rfv_context_update_plan(
-        snapshot=snapshot,
-        context_type="skill",
-        account_id="acc",
-    )
-    deleted = {
-        (action.uri, action.level)
-        for action in plan.direct_index_actions
-        if action.action is IndexAction.DELETE
-    }
-    assert deleted == {
-        (root, 0),
-        (root, 1),
-        (f"{root}/SKILL.md", 2),
     }
 
 

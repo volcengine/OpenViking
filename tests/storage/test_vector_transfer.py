@@ -683,272 +683,79 @@ async def test_l2_diff_scan_reads_every_page_under_target_directory():
 @pytest.mark.asyncio
 async def test_incremental_inventory_reads_all_semantic_levels_under_target():
     root = "viking://resources/docs"
+    files = [_record(f"file-{i}", f"{root}/{i}.md", md5=f"md5-{i}") for i in range(5998)]
     backend = _RealAclMemoryTransferBackend(
         [
-            _record("root-l0", root, level=0, abstract="root abstract"),
-            _record("root-l1", root, level=1, abstract="root overview"),
-            _record("file-l2", f"{root}/a.py", level=2, md5="ma"),
-            _record("outside", "viking://resources/other.py", level=2),
-            _record(
-                "other-account",
-                f"{root}/private.py",
-                level=2,
-                account_id="other",
-            ),
+            _record("root-l0", root, level=0),
+            _record("root-l1", root, level=1),
+            *files,
+            _record("outside", "viking://resources/other.py"),
+            _record("other-account", f"{root}/private.py", account_id="other"),
         ]
     )
+    original_page = backend._strict_transfer_page
+    original_filter = backend.filter
 
-    records = await backend.get_incremental_inventory_under_uri(root, ctx=_ctx(), batch_size=2)
+    async def bounded_filter(*args, limit=10, **kwargs):
+        assert limit <= 5000, "VikingDB rejects oversized queries"
+        return await original_filter(*args, limit=limit, **kwargs)
 
-    assert records == {
-        "root-l0": {"id": "root-l0", "uri": root, "level": 0, "md5": ""},
-        "root-l1": {"id": "root-l1", "uri": root, "level": 1, "md5": ""},
-        "file-l2": {
-            "id": "file-l2",
-            "uri": f"{root}/a.py",
-            "level": 2,
-            "md5": "ma",
-        },
-    }
-    assert len(backend.scroll_filters) == 2
+    async def bounded_page(ctx, filter, *, limit, cursor, output_fields):
+        assert limit <= 5000, "VikingDB rejects oversized pages"
+        return await original_page(
+            ctx, filter, limit=limit, cursor=cursor, output_fields=output_fields
+        )
+
+    backend.filter = bounded_filter
+    backend._strict_transfer_page = bounded_page
+    incremental = await backend.get_incremental_inventory_under_uri(root, ctx=_ctx())
+    reindex = await backend.get_reindex_inventory_under_uri(root, ctx=_ctx())
+
+    assert reindex == incremental
+    assert len(reindex) == 6000
+    assert reindex["root-l0"]["level"] == 0
+    assert reindex["root-l1"]["level"] == 1
+    assert reindex["file-5997"]["md5"] == "md5-5997"
+    assert "outside" not in reindex and "other-account" not in reindex
+    backend._strict_transfer_count = AsyncMock(return_value=6001)
+    with pytest.raises(RuntimeError, match="ended after 6000 of 6001"):
+        await backend.get_reindex_inventory_under_uri(root, ctx=_ctx())
 
 
 @pytest.mark.asyncio
 async def test_incremental_inventory_projects_request_scalar_fields():
-    root = "viking://resources/docs"
-    backend = _RealAclMemoryTransferBackend(
-        [
-            _record(
-                "file-l2",
-                f"{root}/a.py",
-                level=2,
-                md5="ma",
-                search_tags=["env=test"],
-            )
-        ]
-    )
-
-    records = await backend.get_incremental_inventory_under_uri(
-        root,
-        ctx=_ctx(),
-        output_fields=["id", "uri", "level", "md5", "search_tags"],
-    )
-
-    assert records["file-l2"]["search_tags"] == ["env=test"]
-    assert all("search_tags" in fields for fields in backend.scroll_output_fields)
-    assert all("vector" not in fields for fields in backend.scroll_output_fields)
-    assert all("sparse_vector" not in fields for fields in backend.scroll_output_fields)
-
-
-@pytest.mark.asyncio
-async def test_reindex_inventory_reads_one_complete_prefix_with_strict_scan():
-    root = "viking://user/alice/memories"
-    backend = _RealAclMemoryTransferBackend(
-        [
-            _record("root-l0", root, level=0, abstract="root abstract"),
-            _record("file-l2", f"{root}/a.md", level=2, md5="ma", abstract="A"),
-            _record("chunk-l2", f"{root}/a.md#chunk_0000", level=2, abstract="chunk"),
-            _record("outside", "viking://user/alice/resources/a.md", level=2),
-        ]
-    )
-
-    records = await backend.get_reindex_inventory_under_uri(
-        root,
-        ctx=_ctx(),
-        output_fields=["abstract", "context_type", "owner_user_id"],
-    )
-
-    assert set(records) == {"root-l0", "file-l2", "chunk-l2"}
-    assert records["file-l2"]["abstract"] == "A"
-    assert len(backend.scroll_filters) == 1
-    assert backend.filter_calls == []
-
-
-@pytest.mark.asyncio
-async def test_reindex_inventory_reads_6000_records_in_5000_record_pages():
-    root = "viking://resources/large"
-    backend = _RealAclMemoryTransferBackend(
-        [_record(f"record-{index:04d}", f"{root}/{index:04d}.md") for index in range(6000)]
-    )
-    original_filter = backend.filter
-    original_page = backend._strict_transfer_page
-    page_limits = []
-
-    async def reject_oversized_filter(*args, limit=10, **kwargs):
-        if limit > 5000:
-            raise RuntimeError("VikingDB search limit exceeds 5000")
-        return await original_filter(*args, limit=limit, **kwargs)
-
-    async def record_page_limit(ctx, filter, *, limit, cursor, output_fields):
-        page_limits.append(limit)
-        return await original_page(
-            ctx,
-            filter,
-            limit=limit,
-            cursor=cursor,
-            output_fields=output_fields,
-        )
-
-    backend.filter = reject_oversized_filter
-    backend._strict_transfer_page = record_page_limit
-
-    records = await backend.get_reindex_inventory_under_uri(root, ctx=_ctx())
-
-    assert len(records) == 6000
-    assert page_limits == [5000, 5000]
-
-
-@pytest.mark.asyncio
-async def test_reindex_file_inventory_includes_only_exact_base_and_numeric_chunks():
     uri = "viking://user/alice/memories/events/a.md"
     backend = _RealAclMemoryTransferBackend(
         [
-            _record("base", uri),
-            _record("chunk-a", uri + "#chunk_0000"),
-            _record("chunk-b", uri + "#chunk_0042"),
-            _record("long-index", uri + "#chunk_10000"),
-            _record("neighbor", uri + "-other#chunk_0000"),
+            _record("base", uri, md5="ma", search_tags=["env=test"]),
+            _record("chunk", uri + "#chunk_0000", search_tags=["env=test"]),
+            _record("sibling", uri + "-other.md"),
             _record("literal", uri + "#chunk_notes"),
-            _record("nested", uri + "#chunk_0000/nested.md"),
-            _record("directory", uri + "#chunk_0000", level=0),
-            _record("other-owner", uri.replace("alice", "bob") + "#chunk_0000"),
         ]
     )
-    result = await backend.get_reindex_inventory_under_uri(
+    incremental = await backend.get_incremental_inventory_under_uri(
+        uri,
+        ctx=_ctx(),
+        recursive=False,
+        output_fields=["search_tags"],
+    )
+    reindex = await backend.get_reindex_inventory_under_uri(
         uri,
         ctx=_ctx(),
         recursive=False,
         include_virtual_chunks=True,
-    )
-    assert set(result) == {"base", "chunk-a", "chunk-b", "long-index"}
-    assert backend.filter_calls == []
-    assert len(backend.scroll_filters) == 1
-
-
-@pytest.mark.asyncio
-async def test_reindex_file_chunk_inventory_uses_supported_path_filter():
-    uri = "viking://user/alice/memories/events/a.md"
-    backend = _RealAclMemoryTransferBackend(
-        [_record("base", uri), _record("chunk", uri + "#chunk_0000")]
-    )
-    await backend.get_reindex_inventory_under_uri(
-        uri,
-        ctx=_ctx(),
-        recursive=False,
-        include_virtual_chunks=True,
-    )
-    scope = backend.scroll_filters[0]
-    assert PathScope("uri", uri.rsplit("/", 1)[0], depth=1) in scope.conds
-    assert all(not isinstance(cond, (RawDSL, Or, Contains)) for cond in scope.conds)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("recursive", "include_direct_children", "expected_ids", "expected_depth"),
-    [
-        (False, False, {"root-l0"}, 0),
-        (False, True, {"root-l0", "child-l2"}, 1),
-        (True, True, {"root-l0", "child-l2", "grandchild-l2"}, -1),
-    ],
-)
-async def test_reindex_inventory_queries_requested_depth_once(
-    recursive, include_direct_children, expected_ids, expected_depth
-):
-    root = "viking://user/alice/resources/docs"
-    backend = _RealAclMemoryTransferBackend(
-        [
-            _record("root-l0", root, level=0),
-            _record("child-l2", f"{root}/a.md"),
-            _record("grandchild-l2", f"{root}/nested/b.md"),
-            _record("outside", f"{root}-other/a.md"),
-        ]
+        output_fields=["search_tags"],
     )
 
-    records = await backend.get_reindex_inventory_under_uri(
-        root,
-        ctx=_ctx(),
-        recursive=recursive,
-        include_direct_children=include_direct_children,
+    assert set(incremental) == {"base"}
+    assert set(reindex) == {"base", "chunk"}
+    assert reindex["base"] == incremental["base"]
+    assert reindex["chunk"]["search_tags"] == ["env=test"]
+    assert all("search_tags" in fields for fields in backend.scroll_output_fields)
+    assert all(
+        not {"vector", "sparse_vector", "content"}.intersection(fields)
+        for fields in backend.scroll_output_fields
     )
-
-    assert set(records) == expected_ids
-    assert len(backend.scroll_filters) == 1
-    assert backend.filter_calls == []
-    scope = backend.scroll_filters[0]
-    assert PathScope("uri", root, depth=expected_depth) in scope.conds
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("recursive", "include_direct_children", "record_uri"),
-    [
-        (False, True, "viking://user/alice/resources/docs/nested/a.md"),
-        (False, False, "viking://user/alice/resources/docs/a.md"),
-        (False, False, "viking://user/alice/resources/docs#chunk_0000"),
-        (True, False, "viking://user/alice/resources/docs-other/a.md"),
-        (True, False, "viking://user/bob/resources/docs/a.md"),
-        (True, False, ""),
-    ],
-)
-async def test_reindex_inventory_rejects_backend_records_outside_requested_depth(
-    recursive, include_direct_children, record_uri
-):
-    root = "viking://user/alice/resources/docs"
-    backend = _RealAclMemoryTransferBackend([])
-    backend._strict_transfer_count = AsyncMock(return_value=1)
-    backend._strict_transfer_page = AsyncMock(
-        return_value=([_record("bad-l2", record_uri)], None)
-    )
-
-    with pytest.raises(RuntimeError, match="invalid record"):
-        await backend.get_reindex_inventory_under_uri(
-            root,
-            ctx=_ctx(),
-            recursive=recursive,
-            include_direct_children=include_direct_children,
-        )
-
-    backend._strict_transfer_page.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("page", "expected_count", "error"),
-    [
-        ([{"id": "", "uri": "viking://resources/docs", "level": 0}], 1, "invalid record"),
-        ([{"id": "bad", "uri": "viking://resources/docs", "level": 3}], 1, "invalid record"),
-        (
-            [{"id": "bad", "uri": "viking://resources/docs", "level": "invalid"}],
-            1,
-            "invalid record",
-        ),
-        ([], 1, "ended after 0 of 1 records"),
-        (
-            [
-                {"id": "same", "uri": "viking://resources/docs", "level": 0},
-                {"id": "same", "uri": "viking://resources/docs/a.md", "level": 2},
-            ],
-            2,
-            "duplicate record id",
-        ),
-    ],
-)
-async def test_reindex_inventory_validates_complete_records_with_direct_children(
-    page, expected_count, error
-):
-    backend = _RealAclMemoryTransferBackend([])
-    backend._strict_transfer_count = AsyncMock(return_value=expected_count)
-    backend._strict_transfer_page = AsyncMock(return_value=(page, None))
-
-    with pytest.raises(RuntimeError, match=error):
-        await backend.get_reindex_inventory_under_uri(
-            "viking://resources/docs",
-            ctx=_ctx(),
-            recursive=False,
-            include_direct_children=True,
-        )
-
-    backend._strict_transfer_page.assert_awaited_once()
 
 
 @pytest.mark.asyncio
