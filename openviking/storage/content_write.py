@@ -443,7 +443,7 @@ class ContentWriteCoordinator:
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
     ) -> str:
         context = get_task_context()
-        if context is None:
+        if context is None or root_task_factory is not None:
             if root_task_factory is None:
                 raise RuntimeError("TaskContext is required for content-write root work")
             task = await root_task_factory()

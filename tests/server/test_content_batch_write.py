@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,7 +10,8 @@ import pytest
 import openviking.storage.content_write as content_write_module
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_store import PersistentTaskStore
-from openviking.service.task_tracker import TaskTracker
+from openviking.service.task_tracker import TaskTracker, get_task_tracker
+from openviking.service.task_work_index import bind_task_context, get_task_context
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.acl import AclSpec, AclUpdate
@@ -19,6 +21,7 @@ from openviking.storage.context_update_plan import (
     ContextUpdatePlan,
     FileRefreshIntent,
 )
+from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
 from openviking.storage.queuefs.queue_middleware import EnqueueReceipt
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.telemetry.context import bind_telemetry
@@ -312,6 +315,60 @@ def _last_content_write_payload(queue_fixture):
 
 def _last_content_write_refresh(queue_fixture):
     return _last_content_write_payload(queue_fixture)["refresh"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["write", "batch_write"])
+async def test_nested_content_write_completes_its_own_task(
+    _coordinator_queue_for_unit_tests, monkeypatch, operation
+):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role("user"))
+    tracker = get_task_tracker()
+    parent = await tracker.create(
+        "rule_compile", account_id=ctx.account_id, user_id=ctx.user.user_id
+    )
+    root = "viking://user/default/memories/rules/demo"
+    uri = f"{root}/rule.md"
+    vfs: Any = _VFS(root)
+    coordinator = ContentWriteCoordinator(vfs)
+
+    with bind_task_context(parent.task_id, ctx.account_id, ctx.user.user_id):
+        if operation == "write":
+            result = await coordinator.write(uri=uri, content="rule", ctx=ctx, wait=False)
+        else:
+            result = await coordinator.batch_write(
+                root_uri=root,
+                operations=[{"uri": uri, "content": "rule"}],
+                ctx=ctx,
+                wait=False,
+            )
+        parent_context = get_task_context()
+        assert parent_context is not None
+        assert parent_context.task_id == parent.task_id
+
+    payload = _last_content_write_payload(_coordinator_queue_for_unit_tests)
+    processor = ContentWriteProcessor(vfs)
+    monkeypatch.setattr(
+        processor,
+        "_execute_refresh",
+        AsyncMock(return_value={"semantic_status": "complete", "vector_status": "complete"}),
+    )
+    await processor.on_dequeue({"data": payload})
+    child = await tracker.get(
+        result["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id
+    )
+    restored_parent = await tracker.get(
+        parent.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+    )
+
+    assert payload["task_id"] == result["task_id"] != parent.task_id
+    assert child is not None
+    assert child.status.value == "completed"
+    assert child.result is not None
+    assert child.result["task_id"] == result["task_id"]
+    assert restored_parent is not None
+    assert restored_parent.status.value == "pending"
+    assert restored_parent.result is None
 
 
 @pytest.mark.asyncio
