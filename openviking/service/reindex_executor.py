@@ -1218,11 +1218,20 @@ class ReindexExecutor:
                 ],
             )
 
-        resource_roots = [
-            directory_uri
-            for directory_uri in resource_directories
-            if directory_uri.rstrip("/").endswith("/resources")
-        ]
+        # A nested directory literally named "resources" (e.g. inside an
+        # imported repository: .../resources/<repo>/resources) is already
+        # covered by its enclosing root's recursive reindex; re-registering it
+        # as its own root would process the same files twice.
+        resource_roots: list[str] = []
+        for directory_uri in sorted(set(resource_directories)):
+            if not directory_uri.rstrip("/").endswith("/resources"):
+                continue
+            if any(
+                directory_uri.startswith(selected_root.rstrip("/") + "/")
+                for selected_root in resource_roots
+            ):
+                continue
+            resource_roots.append(directory_uri.rstrip("/"))
         covered_prefixes = tuple(root.rstrip("/") + "/" for root in resource_roots)
         for resource_root in resource_roots:
             await self._reindex_rfv(

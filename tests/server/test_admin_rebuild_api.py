@@ -43,6 +43,58 @@ def _make_reindex_run(ctx, counters):
     return _ReindexRunContext(ctx=ctx, counters=counters)
 
 
+@pytest.mark.asyncio
+async def test_reindex_user_namespace_nested_resources_dir_not_re_registered(monkeypatch):
+    """A nested ".../resources" directory must not become a second reindex root.
+
+    An imported repository often contains its own ``resources/`` folder. The
+    enclosing ``viking://user/<account>/resources`` root already reindexes that
+    subtree recursively; registering the nested directory as another root would
+    enqueue the same files for semantic generation / embedding twice.
+    """
+    from openviking.service.reindex_executor import (
+        ReindexExecutor,
+        _ReindexCounters,
+    )
+
+    outer_root = "viking://user/alice/resources"
+    nested_root = "viking://user/alice/resources/demo/resources"
+    nested_file = f"{nested_root}/guide.md"
+    entries = [
+        {"uri": outer_root, "isDir": True},
+        {"uri": nested_root, "isDir": True},
+        {"uri": nested_file, "isDir": False},
+    ]
+
+    async def fake_tree_all(self, viking_fs, uri, **kwargs):
+        return entries
+
+    monkeypatch.setattr(ReindexExecutor, "_tree_all", fake_tree_all)
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: object())
+
+    rfv_calls = []
+
+    async def fake_reindex_rfv(self, **kwargs):
+        rfv_calls.append(kwargs)
+
+    monkeypatch.setattr(ReindexExecutor, "_reindex_rfv", fake_reindex_rfv)
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="alice", user_id="alice"),
+        role=Role.ROOT,
+    )
+    await ReindexExecutor()._reindex_user_namespace(
+        uri="viking://user/alice",
+        mode="vectors_only",
+        run=_make_reindex_run(ctx, _ReindexCounters()),
+    )
+
+    # Only the enclosing root is registered, and it still covers the nested
+    # subtree through its formal entries.
+    assert [call["uri"] for call in rfv_calls] == [outer_root]
+    assert {entry["uri"] for entry in rfv_calls[0]["formal_entries"]} == {nested_root, nested_file}
+
+
 async def test_reindex_requires_admin_role(admin_client: httpx.AsyncClient):
     resp = await admin_client.post(
         "/api/v1/content/reindex",
