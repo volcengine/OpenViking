@@ -37,7 +37,7 @@ mkdir -p "$RUN"
 
 ## 1. Memory 评测代码参考（VikingBot）
 
-日常 Memory 评测及用户复现可直接参考[一键脚本](locomo/vikingbot/run_full_eval.sh)。配置好上文环境及裁判凭据（`ARK_API_KEY` 或 `OPENAI_API_KEY`）后执行：
+日常 Memory 评测使用[一键脚本](locomo/vikingbot/run_full_eval.sh)；论文复现或方案评测也可参考这一版评测代码实现。配置好上文环境及裁判凭据（`ARK_API_KEY` 或 `OPENAI_API_KEY`）后执行：
 
 ```bash
 cd "$ROOT/benchmark/locomo/vikingbot"

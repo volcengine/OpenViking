@@ -37,7 +37,7 @@ Import and QA must use the same server, account/user, and dataset version. `ovcl
 
 ## 1. Memory Evaluation Code Reference (VikingBot)
 
-Use the [one-command runner](locomo/vikingbot/run_full_eval.sh) for routine Memory evaluation and as a reproduction reference. Configure the environment above and judge credentials (`ARK_API_KEY` or `OPENAI_API_KEY`), then run:
+Use the [one-command runner](locomo/vikingbot/run_full_eval.sh) for routine Memory evaluation. Its implementation can also serve as a reference for reproducing papers or evaluating alternative approaches. Configure the environment above and judge credentials (`ARK_API_KEY` or `OPENAI_API_KEY`), then run:
 
 ```bash
 cd "$ROOT/benchmark/locomo/vikingbot"
