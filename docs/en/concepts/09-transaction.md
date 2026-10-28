@@ -375,7 +375,13 @@ Acquisition rollback and normal release clean up tokens without guaranteeing rem
 
 **Stale lock detection**: PathLockEngine checks the ownership token timestamp. Locks older than `lock_expire` (default 30s) are considered stale and are removed automatically during acquisition.
 
-**In-process cleanup**: During refresh, Rust PathLockManager checks leases that have not refreshed successfully for `2 × lock_expire` and attempts cleanup with ownership validation.
+**Lost lease authorization**: Explicit and background refresh use the same rules. A missing token or owner mismatch immediately invalidates every local lease under that owner sharing the actual token path (`lock_paths`). Losing any required token invalidates the entire lease, including a pending handoff. A Tree ancestor and an Exact descendant have different tokens and do not invalidate each other.
+
+A transport error preserves authorization only until `0.8 × lock_expire` since that token's last successful confirmation (24 seconds by default). Each token has its own monotonic deadline; partial refresh, reentry, and local handoff/adoption do not extend failed tokens. Authorization checks enforce the deadline even before the next heartbeat. Invalidated leases cannot authorize subsequent protected writes, refresh, owner reuse, or handoff/adoption, and cannot become valid again.
+
+**In-process cleanup**: Invalidated leases retain their release capability and local references while ownership-checked cleanup is retried. A missing or foreign-owned token completes cleanup without deleting a new owner's token. Tokens shared with another valid local lease remain protected. After six heartbeat intervals from the first invalidation (`2 × lock_expire`, 60 seconds by default), the manager logs remaining paths and forgets the local entry even if the provider is unavailable; remaining provider tokens rely on expiry. Cleanup retries never extend this window.
+
+These checks revoke authorization for future operations after loss is detected or the deadline passes. They do not cancel writes that already passed authorization or provide storage-side fencing.
 
 **Orphan locks**: Provider tokens left behind after a process crash are automatically removed via stale lock detection when a later acquisition checks the same path or scope.
 

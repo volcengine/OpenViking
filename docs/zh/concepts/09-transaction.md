@@ -383,7 +383,13 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 **陈旧锁检测**：PathLockEngine 检查归属 token 中的时间戳。超过 `lock_expire`（默认 30s）的锁被视为陈旧锁，在加锁过程中自动移除。
 
-**进程内清理**：Rust PathLockManager 在续期循环中检查长期未成功续期的 lease，以 `2 × lock_expire` 为阈值尝试清理，并校验归属后释放 token。
+**失锁后的授权失效**：手动和后台续租使用相同规则。token 不存在或 owner 不匹配时，同 owner 下共享实际 token 路径（`lock_paths`）的所有本地 lease 立即整份失效，包括待交接的 lease。Tree 祖先和 Exact 后代使用不同 token，不会因逻辑覆盖关系连带失效。
+
+网络等不确定错误允许短暂重试，但每个 token 距离最近一次成功确认达到 `0.8 × lock_expire`（默认 24 秒）时撤销授权。使用单调时钟分别记录各 token 的确认时间；部分续租成功、重入和本地交接/接管不会延长失败 token 的期限。写入授权检查也会检查期限，无需等待下次心跳。失效 lease 不能再授权后续受保护写入、续租、复用 owner 或交接/接管，且不会恢复有效。
+
+**进程内清理**：失效 lease 保留释放能力和本地引用，后台重试带 owner 校验的清理。token 已不存在或已被其他 owner 接管均视为清理完成，不会删除新 owner 的 token；仍被其他有效本地 lease 引用的 token 也不会被删除。从首次失效起超过六个心跳间隔（`2 × lock_expire`，默认 60 秒），即使 Provider 持续不可用也记录剩余路径并移除本地 entry，遗留的远端 token 依赖过期清理。重试不会延长该窗口。
+
+上述检查在发现失锁或达到期限后拒绝后续操作；不会中断已经通过授权检查的写入，也不提供存储侧 fencing。
 
 **孤儿锁**：进程崩溃后遗留的 Provider token，在后续 acquire 检查同一路径或 scope 时通过 stale lock 检测自动移除。
 

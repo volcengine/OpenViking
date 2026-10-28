@@ -2834,7 +2834,7 @@ impl RAGFSBindingClient {
             let ownership = ownership_ref.clone();
             async move {
                 let lease = mgr
-                    .get_owned_lease_by_capability(&lr, &ownership)
+                    .get_releasable_lease_by_capability(&lr, &ownership)
                     .await
                     .ok_or_else(|| {
                         PathLockError::InvalidRequest(format!(
@@ -2867,7 +2867,7 @@ impl RAGFSBindingClient {
             let paths = lock_paths.clone();
             async move {
                 let lease = mgr
-                    .get_owned_lease_by_capability(&lr, &ownership)
+                    .get_releasable_lease_by_capability(&lr, &ownership)
                     .await
                     .ok_or_else(|| {
                         PathLockError::InvalidRequest(format!(
