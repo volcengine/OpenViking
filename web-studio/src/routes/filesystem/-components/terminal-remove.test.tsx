@@ -12,6 +12,9 @@ import type * as OvClient from '#/lib/ov-client'
 
 const m = vi.hoisted(() => ({
   remove: vi.fn(),
+  mkdir: vi.fn(),
+  move: vi.fn(),
+  copy: vi.fn(),
   refresh: vi.fn(),
   identity: '',
 }))
@@ -32,6 +35,9 @@ vi.mock('#/routes/resources/-hooks/viking-fm', () => ({
 vi.mock('#/lib/ov-client', async (importOriginal) => ({
   ...(await importOriginal<typeof OvClient>()),
   deleteFs: m.remove,
+  postFsMkdir: m.mkdir,
+  postFsMv: m.move,
+  ovClient: { client: { post: m.copy } },
   getOvResult: async (result: Promise<unknown>) => result,
 }))
 beforeEach(() => {
@@ -41,6 +47,9 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   Element.prototype.scrollTo = vi.fn()
   m.remove.mockReset().mockResolvedValue({})
+  m.mkdir.mockReset().mockResolvedValue({})
+  m.move.mockReset().mockResolvedValue({})
+  m.copy.mockReset().mockResolvedValue({})
   m.refresh.mockReset().mockResolvedValue(undefined)
 })
 afterEach(() => {
@@ -96,4 +105,48 @@ it('shows a failed deletion without reporting success or refreshing', async () =
   expect(
     screen.queryByText('terminal.rmDeleted: viking://resources/old'),
   ).toBeNull()
+})
+
+it('creates a directory with its description and refreshes the tree', async () => {
+  submit('/mkdir "viking://resources/new docs" --description "Project notes"')
+  await waitFor(() => expect(m.refresh).toHaveBeenCalledTimes(1))
+  expect(m.mkdir).toHaveBeenCalledExactlyOnceWith({
+    body: { uri: 'viking://resources/new docs', description: 'Project notes' },
+  })
+})
+it('moves to the explicit destination and refreshes the tree', async () => {
+  submit('/mv viking://resources/old.md viking://resources/new.md')
+  await waitFor(() => expect(m.refresh).toHaveBeenCalledTimes(1))
+  expect(m.move).toHaveBeenCalledExactlyOnceWith({
+    body: {
+      from_uri: 'viking://resources/old.md',
+      to_uri: 'viking://resources/new.md',
+    },
+  })
+})
+it('copies a directory through the authenticated API client with recursion', async () => {
+  submit('/cp viking://resources/docs viking://resources/docs-copy -r')
+  await waitFor(() => expect(m.refresh).toHaveBeenCalledTimes(1))
+  expect(m.copy).toHaveBeenCalledExactlyOnceWith({
+    url: '/api/v1/fs/cp',
+    body: {
+      from_uri: 'viking://resources/docs',
+      to_uri: 'viking://resources/docs-copy',
+      recursive: true,
+    },
+    headers: { 'Content-Type': 'application/json' },
+  })
+})
+it('does not infer a missing move destination from the current directory', async () => {
+  submit('/mv viking://resources/old.md')
+  await screen.findByText('terminal.mvUsage')
+  expect(m.move).not.toHaveBeenCalled()
+  expect(m.refresh).not.toHaveBeenCalled()
+})
+it('surfaces a copy conflict without reporting success or refreshing', async () => {
+  m.copy.mockRejectedValue(new Error('destination exists'))
+  submit('/cp viking://resources/docs viking://resources/docs-copy')
+  await screen.findByText('destination exists')
+  expect(m.refresh).not.toHaveBeenCalled()
+  expect(screen.queryByText('terminal.cpCompleted')).toBeNull()
 })

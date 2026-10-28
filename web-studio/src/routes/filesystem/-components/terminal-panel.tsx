@@ -49,6 +49,9 @@ import {
   postResources,
   postContentWrite,
   postSystemWait,
+  postFsMkdir,
+  postFsMv,
+  ovClient,
 } from '#/lib/ov-client'
 import {
   addMessage,
@@ -87,6 +90,8 @@ import {
   parseAddSkill,
   parseWrite,
   parseRemove,
+  parseMkdir,
+  parseTransfer,
   submitMemoryCommand,
   taskResultDetails,
   taskResultResourceUri,
@@ -330,6 +335,9 @@ const PARAMETER_META: Partial<
   writeMode: { type: 'Text', defaultValue: 'replace' },
   writeWait: { type: 'Boolean', defaultValue: 'false' },
   recursive: { type: 'Boolean', defaultValue: 'false' },
+  targetUri: { type: 'URI', required: true },
+  sourceUri: { type: 'URI', required: true },
+  directoryDescription: { type: 'Text' },
 }
 
 function extractVikingUris(text: string): string[] {
@@ -1465,6 +1473,47 @@ export function TerminalPanel({
               refs: searchResultToRefs(result, groupLabels),
               title: `${name} ${pattern}`,
             })
+            return
+          }
+          case '/mkdir': {
+            const request = parseMkdir(trimmed)
+            await getOvResult<unknown>(postFsMkdir({ body: request }))
+            if (identityRef.current !== identityScopeKey) return
+            append({
+              kind: 'success',
+              title: `/mkdir ${request.uri}`,
+              body: t('terminal.mkdirCreated', { uri: request.uri }),
+              refs: [{ uri: request.uri }],
+            })
+            await invalidateAll()
+            return
+          }
+          case '/mv':
+          case '/cp': {
+            const action = name === '/mv' ? 'mv' : 'cp'
+            const request = parseTransfer(trimmed, action)
+            await getOvResult<unknown>(
+              action === 'mv'
+                ? postFsMv({ body: request })
+                : ovClient.client.post({
+                    url: '/api/v1/fs/cp',
+                    body: request,
+                    headers: { 'Content-Type': 'application/json' },
+                  }),
+            )
+            if (identityRef.current !== identityScopeKey) return
+            append({
+              kind: 'success',
+              title: `${name} ${request.from_uri} ${request.to_uri}`,
+              body: t(
+                action === 'mv'
+                  ? 'terminal.mvCompleted'
+                  : 'terminal.cpCompleted',
+                { from: request.from_uri, to: request.to_uri },
+              ),
+              refs: [{ uri: request.to_uri }],
+            })
+            await invalidateAll()
             return
           }
           case '/rm': {

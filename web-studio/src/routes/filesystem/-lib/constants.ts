@@ -27,6 +27,33 @@ export const FILESYSTEM_MAIN_MIN_WIDTH = 420
 
 export const TERMINAL_COMMANDS: TerminalCommandSuggestion[] = [
   {
+    command: '/mkdir',
+    executable: true,
+    examples: ['mkdir.default'],
+    group: 'filesystem',
+    key: 'mkdir',
+    insertText: '/mkdir ',
+    parameters: ['targetUri', 'directoryDescription'],
+  },
+  {
+    command: '/mv',
+    executable: true,
+    examples: ['mv.default'],
+    group: 'filesystem',
+    key: 'mv',
+    insertText: '/mv ',
+    parameters: ['sourceUri', 'targetUri'],
+  },
+  {
+    command: '/cp',
+    executable: true,
+    examples: ['cp.file', 'cp.directory'],
+    group: 'filesystem',
+    key: 'cp',
+    insertText: '/cp ',
+    parameters: ['sourceUri', 'targetUri', 'recursive'],
+  },
+  {
     command: '/rm',
     executable: true,
     examples: ['rm.file', 'rm.directory'],

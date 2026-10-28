@@ -7,7 +7,10 @@ export class TerminalActionError extends Error {
       | 'addSkillUsage'
       | 'addResourceUsage'
       | 'writeUsage'
-      | 'rmUsage',
+      | 'rmUsage'
+      | 'mkdirUsage'
+      | 'mvUsage'
+      | 'cpUsage',
   ) {
     super(code)
   }
@@ -248,4 +251,46 @@ export function parseRemove(input: string) {
   )
     throw new TerminalActionError('rmUsage')
   return { uri, recursive }
+}
+
+function isExplicitResourceUri(uri: string | undefined): uri is string {
+  return Boolean(
+    uri?.startsWith('viking://') && uri.slice(9).replaceAll('/', '').trim(),
+  )
+}
+
+export function parseMkdir(input: string) {
+  const [name, uri, ...options] = tokenize(input)
+  if (name !== 'mkdir' || !isExplicitResourceUri(uri))
+    throw new TerminalActionError('mkdirUsage')
+  if (options.length === 0) return { uri }
+  if (options.length !== 2 || options[0] !== '--description')
+    throw new TerminalActionError('mkdirUsage')
+  return { uri, description: options[1] }
+}
+
+export function parseTransfer(input: string, command: 'mv' | 'cp') {
+  const [name, ...args] = tokenize(input)
+  const error = command === 'mv' ? 'mvUsage' : 'cpUsage'
+  const targets: string[] = []
+  let recursive = false
+  if (name !== command) throw new TerminalActionError(error)
+  for (const arg of args) {
+    if (command === 'cp' && (arg === '-r' || arg === '--recursive')) {
+      if (recursive) throw new TerminalActionError(error)
+      recursive = true
+    } else if (arg.startsWith('-')) throw new TerminalActionError(error)
+    else targets.push(arg)
+  }
+  const [from_uri, to_uri] = targets
+  if (
+    targets.length !== 2 ||
+    !isExplicitResourceUri(from_uri) ||
+    !isExplicitResourceUri(to_uri) ||
+    from_uri.replace(/\/+$/, '') === to_uri.replace(/\/+$/, '')
+  )
+    throw new TerminalActionError(error)
+  return command === 'cp'
+    ? { from_uri, to_uri, recursive }
+    : { from_uri, to_uri }
 }

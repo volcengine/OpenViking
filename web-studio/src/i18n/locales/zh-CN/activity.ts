@@ -286,6 +286,13 @@ const activity = {
         '用法：/add-skill <Git URL> [-p viking://agent/skills]。本地文件请到「技能」页面上传。',
       addResourceUsage:
         '用法：/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>] [--reason <说明>]。可视化上传请点击文件系统上方的「添加资源」。',
+      mkdirUsage: '用法：/mkdir <viking://URI> [--description "描述"]',
+      mvUsage: '用法：/mv <源 viking://URI> <目标 viking://URI>',
+      cpUsage:
+        '用法：/cp <源 viking://URI> <目标 viking://URI> [-r|--recursive]',
+      mkdirCreated: '已创建目录：{{uri}}',
+      mvCompleted: '已移动：{{from}} → {{to}}',
+      cpCompleted: '已复制：{{from}} → {{to}}',
       rmUsage: '用法：/rm <viking://URI> [-r|--recursive]，必须明确指定目标。',
       rmConfirm: '确认删除 {{uri}}？此操作无法撤销。',
       rmConfirmRecursive:
@@ -403,9 +410,21 @@ const activity = {
           name: '--mode <模式>',
           description: '可选。replace、append 或 create；默认 replace。',
         },
+        sourceUri: {
+          name: '<source URI>',
+          description: '必填，明确指定源文件或目录的 Viking URI。',
+        },
+        targetUri: {
+          name: '<target URI>',
+          description: '必填，明确指定目标 Viking URI。',
+        },
+        directoryDescription: {
+          name: '--description <text>',
+          description: '可选，目录的初始描述；含空格时请加引号。',
+        },
         recursive: {
           name: '-r, --recursive',
-          description: '删除目录及其所有内容。',
+          description: '递归处理目录及其所有内容（用于复制或删除）。',
         },
         writeWait: {
           name: '--wait',
@@ -589,6 +608,28 @@ const activity = {
           remote: {
             code: `ov add-resource https://github.com/volcengine/OpenViking --to viking://resources/openviking-repo --args '{"branch":"main"}'`,
             description: '导入 OpenViking 仓库的 main 分支',
+          },
+        },
+        mkdir: {
+          default: {
+            code: '/mkdir viking://resources/new-docs --description "Project docs"',
+            description: '创建目录并设置描述',
+          },
+        },
+        mv: {
+          default: {
+            code: '/mv viking://resources/old.md viking://resources/new.md',
+            description: '移动或重命名文件或目录',
+          },
+        },
+        cp: {
+          file: {
+            code: '/cp viking://resources/notes.md viking://resources/notes-copy.md',
+            description: '复制单个文件',
+          },
+          directory: {
+            code: '/cp viking://resources/docs viking://resources/docs-copy --recursive',
+            description: '递归复制目录',
           },
         },
         rm: {
@@ -790,6 +831,18 @@ const activity = {
           description: '添加外部资源',
           usage:
             '/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>]',
+        },
+        mkdir: {
+          description: '创建目录',
+          usage: '/mkdir <URI> [--description <text>]',
+        },
+        mv: {
+          description: '移动或重命名文件或目录',
+          usage: '/mv <source URI> <target URI>',
+        },
+        cp: {
+          description: '复制文件或目录',
+          usage: '/cp <source URI> <target URI> [-r|--recursive]',
         },
         rm: {
           description: '删除文件或目录（执行前确认）',

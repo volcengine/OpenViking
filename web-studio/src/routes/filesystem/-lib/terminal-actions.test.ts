@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   parseRemove,
+  parseMkdir,
+  parseTransfer,
   parseAddMemory,
   parseAddResource,
   parseAddSkill,
@@ -214,5 +216,84 @@ describe('terminal resource deletion', () => {
     '/rm viking://resources/a -r --recursive',
   ])('rejects ambiguous or unsupported deletion: %s', (command) => {
     expect(() => parseRemove(command)).toThrow('rmUsage')
+  })
+})
+
+describe('terminal directory creation and transfers', () => {
+  it('preserves quoted paths and directory descriptions', () => {
+    expect(
+      parseMkdir(
+        'ov mkdir "viking://resources/new docs" --description "Project notes"',
+      ),
+    ).toEqual({
+      uri: 'viking://resources/new docs',
+      description: 'Project notes',
+    })
+  })
+  it.each([
+    '/mkdir',
+    '/mkdir viking://',
+    '/mkdir viking:////',
+    '/mkdir /tmp/docs',
+    '/mkdir viking://resources/docs extra',
+    '/mkdir viking://resources/docs --description',
+    '/mkdir viking://resources/docs --force',
+  ])('rejects invalid directory creation: %s', (command) => {
+    expect(() => parseMkdir(command)).toThrow('mkdirUsage')
+  })
+  it('moves a quoted file URI without adding copy-only options', () => {
+    expect(
+      parseTransfer(
+        '/mv "viking://resources/a b.md" "viking://resources/c d.md"',
+        'mv',
+      ),
+    ).toEqual({
+      from_uri: 'viking://resources/a b.md',
+      to_uri: 'viking://resources/c d.md',
+    })
+  })
+  it.each(['', '-r', '--recursive'])(
+    'copies with an optional recursion flag: %s',
+    (flag) => {
+      expect(
+        parseTransfer(
+          `ov cp ${flag} viking://resources/a viking://resources/b`,
+          'cp',
+        ),
+      ).toEqual({
+        from_uri: 'viking://resources/a',
+        to_uri: 'viking://resources/b',
+        recursive: Boolean(flag),
+      })
+    },
+  )
+  it.each(['mv', 'cp'] as const)(
+    'rejects missing, root, equal and extra %s targets',
+    (command) => {
+      for (const args of [
+        '',
+        'viking://resources/a',
+        'viking:// viking://resources/b',
+        'viking://resources/a /tmp/b',
+        'viking://resources/a viking://resources/a/',
+        'viking://resources/a viking://resources/b extra',
+        'viking://resources/a viking://resources/b --force',
+      ]) {
+        expect(() => parseTransfer(`${command} ${args}`, command)).toThrow(
+          `${command}Usage`,
+        )
+      }
+    },
+  )
+  it('rejects recursion on mv and duplicate recursion on cp', () => {
+    expect(() =>
+      parseTransfer('/mv viking://resources/a viking://resources/b -r', 'mv'),
+    ).toThrow('mvUsage')
+    expect(() =>
+      parseTransfer(
+        '/cp -r viking://resources/a viking://resources/b --recursive',
+        'cp',
+      ),
+    ).toThrow('cpUsage')
   })
 })

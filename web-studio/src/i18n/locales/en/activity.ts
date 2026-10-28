@@ -298,6 +298,13 @@ const activity = {
         'Usage: /add-skill <Git URL> [-p viking://agent/skills]. Upload local files on the Skills page.',
       addResourceUsage:
         'Usage: /add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>] [--reason <text>]. Use Add Resource above the file tree for visual import.',
+      mkdirUsage: 'Usage: /mkdir <viking://URI> [--description "text"]',
+      mvUsage: 'Usage: /mv <source viking://URI> <target viking://URI>',
+      cpUsage:
+        'Usage: /cp <source viking://URI> <target viking://URI> [-r|--recursive]',
+      mkdirCreated: 'Created directory: {{uri}}',
+      mvCompleted: 'Moved: {{from}} → {{to}}',
+      cpCompleted: 'Copied: {{from}} → {{to}}',
       rmUsage:
         'Usage: /rm <viking://URI> [-r|--recursive]. An explicit target is required.',
       rmConfirm: 'Delete {{uri}}? This cannot be undone.',
@@ -425,9 +432,24 @@ const activity = {
           description:
             'Optional replace, append, or create; defaults to replace.',
         },
+        sourceUri: {
+          name: '<source URI>',
+          description:
+            'Required explicit Viking URI of the source file or directory.',
+        },
+        targetUri: {
+          name: '<target URI>',
+          description: 'Required explicit destination Viking URI.',
+        },
+        directoryDescription: {
+          name: '--description <text>',
+          description:
+            'Optional initial directory description. Quote text containing spaces.',
+        },
         recursive: {
           name: '-r, --recursive',
-          description: 'Remove a directory and all of its contents.',
+          description:
+            'Process a directory and all of its contents when copying or deleting.',
         },
         writeWait: {
           name: '--wait',
@@ -624,6 +646,28 @@ const activity = {
           remote: {
             code: `ov add-resource https://github.com/volcengine/OpenViking --to viking://resources/openviking-repo --args '{"branch":"main"}'`,
             description: 'Import the main branch of the OpenViking repository',
+          },
+        },
+        mkdir: {
+          default: {
+            code: '/mkdir viking://resources/new-docs --description "Project docs"',
+            description: 'Create a directory with a description',
+          },
+        },
+        mv: {
+          default: {
+            code: '/mv viking://resources/old.md viking://resources/new.md',
+            description: 'Move or rename a file or directory',
+          },
+        },
+        cp: {
+          file: {
+            code: '/cp viking://resources/notes.md viking://resources/notes-copy.md',
+            description: 'Copy one file',
+          },
+          directory: {
+            code: '/cp viking://resources/docs viking://resources/docs-copy --recursive',
+            description: 'Copy a directory recursively',
           },
         },
         rm: {
@@ -829,6 +873,18 @@ const activity = {
           description: 'Add external resources',
           usage:
             '/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>]',
+        },
+        mkdir: {
+          description: 'Create a directory',
+          usage: '/mkdir <URI> [--description <text>]',
+        },
+        mv: {
+          description: 'Move or rename a file or directory',
+          usage: '/mv <source URI> <target URI>',
+        },
+        cp: {
+          description: 'Copy a file or directory',
+          usage: '/cp <source URI> <target URI> [-r|--recursive]',
         },
         rm: {
           description: 'Delete a file or directory after confirmation',
