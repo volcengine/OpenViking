@@ -31,9 +31,8 @@ async fn same_scope_refresh_uses_one_script_for_twenty_paths() {
         assert_eq!(request.script_id, REFRESH_BATCH_ID);
         assert_eq!(request.keys.len(), 1);
         assert_eq!(request.args[0], Bytes::from("owner"));
-        assert_eq!(request.args[1], Bytes::from("200"));
-        assert_eq!(request.args[2], Bytes::from("60000"));
-        assert_eq!(request.args.len(), 23);
+        assert_eq!(request.args[1], Bytes::from("30000"));
+        assert_eq!(request.args.len(), 22);
         observed.fetch_add(1, Ordering::SeqCst);
         Ok(ScriptValue::Array(vec![status("ok"); 20]))
     });
@@ -54,7 +53,7 @@ async fn refresh_groups_scopes_and_preserves_mixed_result_order() {
     let (runtime, provider) = mock_provider(move |request| {
         assert_eq!(request.script_id, REFRESH_BATCH_ID);
         observed.fetch_add(1, Ordering::SeqCst);
-        let results = request.args[3..]
+        let results = request.args[2..]
             .iter()
             .map(|path| {
                 let path = std::str::from_utf8(path).unwrap();
@@ -107,7 +106,7 @@ async fn failed_scope_does_not_prevent_other_scopes_refreshing() {
         }
         Ok(ScriptValue::Array(vec![
             status("ok");
-            request.args.len() - 3
+            request.args.len() - 2
         ]))
     });
     let paths = [
@@ -128,7 +127,7 @@ async fn large_refresh_is_split_into_bounded_scripts() {
     let sizes = Arc::new(Mutex::new(Vec::new()));
     let observed = sizes.clone();
     let (runtime, provider) = mock_provider(move |request| {
-        let size = request.args.len() - 3;
+        let size = request.args.len() - 2;
         observed.lock().unwrap().push(size);
         Ok(ScriptValue::Array(vec![status("ok"); size]))
     });
@@ -156,12 +155,12 @@ async fn malformed_batch_response_never_reports_refresh_success() {
 
 #[tokio::test]
 async fn batch_invalid_request_is_preserved_for_every_path() {
-    // Inject Lua's early-return shape; every u128 supplied by Rust is a valid time_ns.
+    // Inject Lua's early-return shape for invalid lease/owner arguments.
     let (runtime, provider) = mock_provider(|request| {
         assert_eq!(request.script_id, REFRESH_BATCH_ID);
         Ok(ScriptValue::Array(vec![
             ScriptValue::Bytes(b"invalid_request".to_vec()),
-            ScriptValue::Bytes(b"invalid time_ns".to_vec()),
+            ScriptValue::Bytes(b"invalid refresh arguments".to_vec()),
         ]))
     });
     for size in [2, 1, 3, 20, REFRESH_BATCH_SIZE + 1] {
@@ -171,7 +170,7 @@ async fn batch_invalid_request_is_preserved_for_every_path() {
         assert!(
             results.iter().all(|result| matches!(
                 result,
-                Err(PathLockError::InvalidRequest(message)) if message == "invalid time_ns"
+                Err(PathLockError::InvalidRequest(message)) if message == "invalid refresh arguments"
             )),
             "batch size {size}: {results:?}"
         );
@@ -186,12 +185,12 @@ async fn manager_uses_batch_for_manual_and_background_refresh() {
     let (runtime, provider) = mock_provider(move |request| match request.script_id.as_str() {
         ACQUIRE_BATCH_ID => {
             let owner = std::str::from_utf8(&request.args[0]).unwrap();
-            let time = std::str::from_utf8(&request.args[1]).unwrap();
+            let time = "100"; // Mock server confirmation time, independent of args.
             let mut results = vec![
                 ScriptValue::Bytes(b"ok".to_vec()),
                 ScriptValue::Bytes(b"0".to_vec()),
             ];
-            for pair in request.args[4..].chunks_exact(2) {
+            for pair in request.args[2..].chunks_exact(2) {
                 let kind = std::str::from_utf8(&pair[1]).unwrap();
                 results.extend([
                     ScriptValue::Bytes(pair[0].to_vec()),
@@ -203,7 +202,7 @@ async fn manager_uses_batch_for_manual_and_background_refresh() {
             Ok(ScriptValue::Array(results))
         }
         REFRESH_BATCH_ID => {
-            assert_eq!(request.args.len(), 23);
+            assert_eq!(request.args.len(), 22);
             observed.fetch_add(1, Ordering::SeqCst);
             Ok(ScriptValue::Array(vec![status("ok"); 20]))
         }
@@ -306,6 +305,10 @@ async fn redis_batch_preserves_kind_ownership_errors_and_hash_ttl() {
             .await
             .unwrap();
     }
+    let originals = [
+        provider.read_token(&paths[3]).await.unwrap().unwrap(),
+        provider.read_token(&paths[6]).await.unwrap().unwrap(),
+    ];
     let results = provider.refresh_tokens(&paths, "owner", u128::MAX).await;
     assert_eq!(results.len(), paths.len());
     assert!(matches!(results[0], Err(PathLockError::InvalidToken(_))));
@@ -318,12 +321,18 @@ async fn redis_batch_preserves_kind_ownership_errors_and_hash_ttl() {
     for (index, kind) in [(1, PathLockKind::Exact), (4, PathLockKind::Tree)] {
         let token = provider.read_token(&paths[index]).await.unwrap().unwrap();
         assert_eq!(token.owner_id, "owner");
-        assert_eq!(token.time_ns, u128::MAX);
+        assert_ne!(token.time_ns, u128::MAX);
+        assert!(token.time_ns > 100);
+        assert_eq!(token.time_ns % 1_000, 0);
         assert_eq!(token.lock_type, kind);
     }
     let foreign = provider.read_token(&paths[3]).await.unwrap().unwrap();
     assert_eq!(foreign.owner_id, "other");
-    assert_eq!(foreign.time_ns, 100);
+    assert_eq!(foreign, originals[0]);
+    assert_eq!(
+        provider.read_token(&paths[6]).await.unwrap().unwrap(),
+        originals[1]
+    );
     runtime
         .register_script(ScriptDefinition {
             id: "pathlock.test.batch_ttl.v1",

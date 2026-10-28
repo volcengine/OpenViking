@@ -19,18 +19,20 @@ use super::provider::{
 };
 use super::types::{LockToken, PathLockError, PathLockKind, PathLockRequest, PathLockResult};
 
-const ACQUIRE_BATCH_ID: &str = "pathlock.acquire_batch.v2";
-const ROLLBACK_BATCH_ID: &str = "pathlock.rollback_batch.v1";
-const COMPARE_WRITE_ID: &str = "pathlock.compare_write.v1";
-const COMPARE_REMOVE_ID: &str = "pathlock.compare_remove.v1";
-const REFRESH_ID: &str = "pathlock.refresh.v1";
-const REFRESH_BATCH_ID: &str = "pathlock.refresh_batch.v1";
+const ACQUIRE_BATCH_ID: &str = "pathlock.acquire_batch.v3";
+const ROLLBACK_BATCH_ID: &str = "pathlock.rollback_batch.v2";
+const COMPARE_WRITE_ID: &str = "pathlock.compare_write.v2";
+const COMPARE_REMOVE_ID: &str = "pathlock.compare_remove.v2";
+const REFRESH_ID: &str = "pathlock.refresh.v2";
+const REFRESH_BATCH_ID: &str = "pathlock.refresh_batch.v2";
 // Bound each Lua execution so large leases do not monopolize Redis.
 const REFRESH_BATCH_SIZE: usize = 256;
-const IS_LOCKED_ID: &str = "pathlock.is_locked.v1";
+const IS_LOCKED_ID: &str = "pathlock.is_locked.v2";
 const SCAN_DESCENDANTS_ID: &str = "pathlock.scan_descendants.v1";
 const READ_MANY_ID: &str = "pathlock.read_many.v1";
-const CREATE_ID: &str = "pathlock.create.v1";
+const CREATE_ID: &str = "pathlock.create.v2";
+// Keep both lease_ms and 2 * lease_ms exactly representable by Lua numbers.
+const MAX_LEASE_MS: u64 = (1_u64 << 52) - 1;
 
 macro_rules! token_script {
     ($body:literal) => {
@@ -63,6 +65,56 @@ local function decimal_less(left, right)
         return string.len(left) < string.len(right)
     end
     return left < right
+end
+
+-- Subtract decimal strings without converting nanosecond epochs to doubles.
+-- Match the manager's previous saturating subtraction near the epoch.
+local function decimal_subtract(left, right)
+    left = normalize_decimal(left)
+    right = normalize_decimal(right)
+    if not left or not right then
+        return nil
+    end
+    if decimal_less(left, right) then
+        return "0"
+    end
+    local digits = {}
+    local borrow = 0
+    local j = string.len(right)
+    for i = string.len(left), 1, -1 do
+        local digit = tonumber(string.sub(left, i, i)) - borrow
+        if j > 0 then
+            digit = digit - tonumber(string.sub(right, j, j))
+        end
+        borrow = 0
+        if digit < 0 then
+            digit = digit + 10
+            borrow = 1
+        end
+        table.insert(digits, 1, tostring(digit))
+        j = j - 1
+    end
+    return normalize_decimal(table.concat(digits))
+end
+
+local function lease_values(raw)
+    local normalized = normalize_decimal(raw)
+    local lease_ms = normalized and tonumber(normalized)
+    if not lease_ms or lease_ms < 1000 or lease_ms > 4503599627370495 then
+        return nil
+    end
+    -- String arguments avoid Redis/Lua's scientific notation for large values.
+    return normalized .. "000000", string.format("%.0f", 2 * lease_ms)
+end
+
+local function server_now_ns()
+    local time = redis.call("TIME")
+    return normalize_decimal(time[1] .. string.rep("0", 6 - string.len(time[2]))
+        .. time[2] .. "000")
+end
+
+local function valid_owner(owner)
+    return owner and owner ~= "" and not string.find(owner, ":", 1, true)
 end
 local function decode_token(raw)
     local p1 = string.find(raw, ":", 1, true)
@@ -122,9 +174,7 @@ const ACQUIRE_BATCH_SCRIPT: &str = token_script!(
     r#"
 local key = KEYS[1]
 local owner = ARGV[1]
-local now_ns = ARGV[2]
-local stale_before_ns = ARGV[3]
-local ttl_ms = tonumber(ARGV[4])
+local lease_ns, ttl_ms = lease_values(ARGV[2])
 local function is_descendant(path, root)
     if root == "/" then
         return path ~= "/"
@@ -132,15 +182,14 @@ local function is_descendant(path, root)
     return string.sub(path, 1, string.len(root) + 1) == root .. "/"
 end
 
-if not owner or owner == "" or string.find(owner, ":", 1, true)
-    or not normalize_decimal(now_ns) or not normalize_decimal(stale_before_ns)
-    or not ttl_ms or ttl_ms <= 0 or (#ARGV - 4) % 2 ~= 0 or #ARGV == 4 then
+if not valid_owner(owner) or not lease_ns
+    or (#ARGV - 2) % 2 ~= 0 or #ARGV == 2 then
     return { "invalid_request", "invalid acquire arguments" }
 end
 
 local requests = {}
 local includes_tree = false
-for index = 5, #ARGV, 2 do
+for index = 3, #ARGV, 2 do
     local path = ARGV[index]
     local kind = ARGV[index + 1]
     if not is_normalized_path(path) or (kind ~= "E" and kind ~= "T") then
@@ -150,6 +199,12 @@ for index = 5, #ARGV, 2 do
     if kind == "T" then
         includes_tree = true
     end
+end
+
+local now_ns = server_now_ns()
+local stale_before_ns = decimal_subtract(now_ns, lease_ns)
+if not stale_before_ns then
+    return { "invalid_request", "invalid Redis time" }
 end
 
 local records = {}
@@ -287,11 +342,12 @@ return result
 "#
 );
 
-const ROLLBACK_BATCH_SCRIPT: &str = r#"
+const ROLLBACK_BATCH_SCRIPT: &str = token_script!(
+    r#"
 local key = KEYS[1]
 local owner = ARGV[1]
-local ttl_ms = tonumber(ARGV[2])
-if not owner or owner == "" or not ttl_ms or ttl_ms <= 0
+local lease_ns, ttl_ms = lease_values(ARGV[2])
+if not valid_owner(owner) or not lease_ns
     or (#ARGV - 2) % 4 ~= 0 then
     return { "invalid_request", "invalid rollback arguments" }
 end
@@ -333,32 +389,67 @@ if redis.call("HLEN", key) > 0 then
     redis.call("PEXPIRE", key, ttl_ms)
 end
 return { "ok" }
-"#;
+"#
+);
 
-const COMPARE_WRITE_SCRIPT: &str = r#"
+const COMPARE_WRITE_SCRIPT: &str = token_script!(
+    r#"
+local lease_ns, ttl_ms = lease_values(ARGV[6])
+if not lease_ns or not valid_owner(ARGV[3])
+    or (ARGV[4] ~= "E" and ARGV[4] ~= "T")
+    or (ARGV[5] ~= "preserve" and ARGV[5] ~= "confirm") then
+    return redis.error_reply("invalid compare write arguments")
+end
 local current = redis.call("HGET", KEYS[1], ARGV[1])
 if current ~= ARGV[2] then
     return 0
 end
-redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
-redis.call("PEXPIRE", KEYS[1], ARGV[4])
+local token = decode_token(current)
+if not token then
+    return redis.error_reply("invalid compare write token")
+end
+local time_ns
+if ARGV[5] == "preserve" then
+    if token.owner ~= ARGV[3] then
+        return redis.error_reply("cannot preserve time across owners")
+    end
+    time_ns = token.time_ns
+else
+    time_ns = server_now_ns()
+end
+if not time_ns then
+    return redis.error_reply("invalid Redis time")
+end
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[3] .. ":" .. time_ns .. ":" .. ARGV[4])
+redis.call("PEXPIRE", KEYS[1], ttl_ms)
 return 1
-"#;
+"#
+);
 
-const COMPARE_REMOVE_SCRIPT: &str = r#"
+const COMPARE_REMOVE_SCRIPT: &str = token_script!(
+    r#"
+local lease_ns, ttl_ms = lease_values(ARGV[3])
+if not lease_ns then
+    return redis.error_reply("invalid lease_ms")
+end
 local current = redis.call("HGET", KEYS[1], ARGV[1])
 if current ~= ARGV[2] then
     return 0
 end
 redis.call("HDEL", KEYS[1], ARGV[1])
 if redis.call("HLEN", KEYS[1]) > 0 then
-    redis.call("PEXPIRE", KEYS[1], ARGV[3])
+    redis.call("PEXPIRE", KEYS[1], ttl_ms)
 end
 return 1
-"#;
+"#
+);
 
 const REFRESH_SCRIPT: &str = token_script!(
     r#"
+local lease_ns, ttl_ms = lease_values(ARGV[3])
+if not lease_ns or not valid_owner(ARGV[2]) then
+    return { "invalid_request", "invalid refresh arguments" }
+end
 local raw = redis.call("HGET", KEYS[1], ARGV[1])
 if not raw then
     return { "missing" }
@@ -370,11 +461,12 @@ end
 if token.owner ~= ARGV[2] then
     return { "owner_mismatch" }
 end
-if not normalize_decimal(ARGV[3]) then
-    return { "invalid_request", "invalid time_ns" }
+local time_ns = server_now_ns()
+if not time_ns then
+    return { "invalid_request", "invalid Redis time" }
 end
-redis.call("HSET", KEYS[1], ARGV[1], token.owner .. ":" .. ARGV[3] .. ":" .. token.kind)
-redis.call("PEXPIRE", KEYS[1], ARGV[4])
+redis.call("HSET", KEYS[1], ARGV[1], token.owner .. ":" .. time_ns .. ":" .. token.kind)
+redis.call("PEXPIRE", KEYS[1], ttl_ms)
 return { "ok" }
 "#
 );
@@ -382,14 +474,17 @@ return { "ok" }
 const REFRESH_BATCH_SCRIPT: &str = token_script!(
     r#"
 local owner = ARGV[1]
-local time_ns = ARGV[2]
-local ttl_ms = ARGV[3]
-if not normalize_decimal(time_ns) then
-    return { "invalid_request", "invalid time_ns" }
+local lease_ns, ttl_ms = lease_values(ARGV[2])
+if not lease_ns or not valid_owner(owner) then
+    return { "invalid_request", "invalid refresh arguments" }
+end
+local time_ns = server_now_ns()
+if not time_ns then
+    return { "invalid_request", "invalid Redis time" }
 end
 local results = {}
 local refreshed = false
-for index = 4, #ARGV do
+for index = 3, #ARGV do
     local path = ARGV[index]
     local raw = redis.call("HGET", KEYS[1], path)
     if not raw then
@@ -417,8 +512,15 @@ return results
 const IS_LOCKED_SCRIPT: &str = token_script!(
     r#"
 local path = ARGV[1]
-local stale_before_ns = ARGV[2]
+local lease_ns = lease_values(ARGV[2])
 local ignore_stale = ARGV[3] == "1"
+if not lease_ns then
+    return { "invalid_request", "invalid lease_ms" }
+end
+local stale_before_ns = decimal_subtract(server_now_ns(), lease_ns)
+if not stale_before_ns then
+    return { "invalid_request", "invalid Redis time" }
+end
 
 local fields = { path }
 for _, ancestor in ipairs(ancestors(path)) do
@@ -465,15 +567,26 @@ end
 return redis.call("HMGET", KEYS[1], unpack(ARGV))
 "#;
 
-const CREATE_SCRIPT: &str = r#"
+const CREATE_SCRIPT: &str = token_script!(
+    r#"
+local lease_ns, ttl_ms = lease_values(ARGV[4])
+if not lease_ns or not valid_owner(ARGV[2])
+    or (ARGV[3] ~= "E" and ARGV[3] ~= "T") then
+    return { "invalid_request", "invalid create arguments" }
+end
 local current = redis.call("HGET", KEYS[1], ARGV[1])
 if current then
     return { "exists", current }
 end
-redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
-redis.call("PEXPIRE", KEYS[1], ARGV[3])
+local time_ns = server_now_ns()
+if not time_ns then
+    return { "invalid_request", "invalid Redis time" }
+end
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[2] .. ":" .. time_ns .. ":" .. ARGV[3])
+redis.call("PEXPIRE", KEYS[1], ttl_ms)
 return { "created" }
-"#;
+"#
+);
 
 macro_rules! script {
     ($id:expr, $lua:expr) => {
@@ -501,7 +614,7 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
 pub struct RedisPathLockProvider {
     runtime: Arc<CacheRuntime>,
     service_name: String,
-    hash_ttl_ms: i64,
+    lease_ms: u64,
 }
 
 impl RedisPathLockProvider {
@@ -526,10 +639,10 @@ impl RedisPathLockProvider {
                 "pathlock lock_expire_secs must be finite and >= 1.0".to_string(),
             ));
         }
-        let hash_ttl_ms = (lock_expire_secs * 2_000.0).ceil();
-        if hash_ttl_ms > i64::MAX as f64 {
+        let lease_ms = (lock_expire_secs * 1_000.0).ceil();
+        if lease_ms > MAX_LEASE_MS as f64 {
             return Err(PathLockError::InvalidRequest(
-                "pathlock Redis HASH TTL exceeds i64 milliseconds".to_string(),
+                "pathlock Redis lease exceeds Lua's exact integer range".to_string(),
             ));
         }
         runtime
@@ -543,7 +656,7 @@ impl RedisPathLockProvider {
         Ok(Self {
             runtime,
             service_name: service_name.to_string(),
-            hash_ttl_ms: hash_ttl_ms as i64,
+            lease_ms: lease_ms as u64,
         })
     }
 
@@ -829,8 +942,8 @@ impl PathLockProvider for RedisPathLockProvider {
         &self,
         requests: &[PathLockRequest],
         owner_id: &str,
-        now_ns: u128,
-        stale_before_ns: u128,
+        _now_ns: u128,
+        _stale_before_ns: u128,
     ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
         if requests.is_empty() {
             return Err(PathLockError::InvalidRequest(
@@ -844,9 +957,7 @@ impl PathLockProvider for RedisPathLockProvider {
             self.tokens_key_for_batch(requests.iter().map(|request| request.path.as_str()))?;
         let mut args = vec![
             Self::bytes(owner_id),
-            Self::bytes(now_ns.to_string()),
-            Self::bytes(stale_before_ns.to_string()),
-            Self::bytes(self.hash_ttl_ms.to_string()),
+            Self::bytes(self.lease_ms.to_string()),
         ];
         for request in requests {
             args.push(Self::bytes(&request.path));
@@ -909,7 +1020,7 @@ impl PathLockProvider for RedisPathLockProvider {
             self.tokens_key_for_batch(acquisitions.iter().map(|item| item.handle.as_str()))?;
         let mut args = vec![
             Self::bytes(owner_id),
-            Self::bytes(self.hash_ttl_ms.to_string()),
+            Self::bytes(self.lease_ms.to_string()),
         ];
         for acquisition in acquisitions {
             args.push(Self::bytes(&acquisition.handle));
@@ -947,7 +1058,7 @@ impl PathLockProvider for RedisPathLockProvider {
         &self,
         path: &str,
         _now_ns: u128,
-        stale_before_ns: u128,
+        _stale_before_ns: u128,
         ignore_stale: bool,
     ) -> PathLockResult<Option<bool>> {
         let key = self.tokens_key_for_path(path)?;
@@ -957,7 +1068,7 @@ impl PathLockProvider for RedisPathLockProvider {
                 key,
                 vec![
                     Self::bytes(path),
-                    Self::bytes(stale_before_ns.to_string()),
+                    Self::bytes(self.lease_ms.to_string()),
                     Self::bytes(if ignore_stale { "1" } else { "0" }),
                 ],
             )
@@ -997,8 +1108,9 @@ impl PathLockProvider for RedisPathLockProvider {
                 key,
                 vec![
                     Self::bytes(lock_path),
-                    Self::bytes(LockTokenCodec::encode(token)),
-                    Self::bytes(self.hash_ttl_ms.to_string()),
+                    Self::bytes(&token.owner_id),
+                    Self::bytes(Self::kind_code(token.lock_type)),
+                    Self::bytes(self.lease_ms.to_string()),
                 ],
             )
             .await?;
@@ -1014,13 +1126,18 @@ impl PathLockProvider for RedisPathLockProvider {
                     kind: current.lock_type,
                 })
             }
+            "invalid_request" if values.len() == 2 => Err(PathLockError::InvalidRequest(
+                Self::result_string(&values[1], "create")?.to_string(),
+            )),
             _ => Err(PathLockError::Internal(format!(
                 "Redis PathLock create returned invalid status '{status}'"
             ))),
         }
     }
 
-    /// Replace one token only when its complete encoded value still matches.
+    /// Replace one complete token snapshot. Same-owner kind-only mutations retain
+    /// its time; all new confirmations use Redis TIME, ignoring replacement time.
+    /// Historical acquisition restoration uses the separate rollback script.
     async fn compare_and_write_token(
         &self,
         lock_path: &str,
@@ -1035,8 +1152,18 @@ impl PathLockProvider for RedisPathLockProvider {
             vec![
                 Self::bytes(lock_path),
                 Self::bytes(LockTokenCodec::encode(expected)),
-                Self::bytes(LockTokenCodec::encode(replacement)),
-                Self::bytes(self.hash_ttl_ms.to_string()),
+                Self::bytes(&replacement.owner_id),
+                Self::bytes(Self::kind_code(replacement.lock_type)),
+                Self::bytes(
+                    if replacement.owner_id == expected.owner_id
+                        && replacement.time_ns == expected.time_ns
+                    {
+                        "preserve"
+                    } else {
+                        "confirm"
+                    },
+                ),
+                Self::bytes(self.lease_ms.to_string()),
             ],
         )
         .await
@@ -1048,7 +1175,7 @@ impl PathLockProvider for RedisPathLockProvider {
         &self,
         lock_path: &str,
         owner_id: &str,
-        time_ns: u128,
+        _time_ns: u128,
     ) -> PathLockResult<bool> {
         let key = self.tokens_key_for_path(lock_path)?;
         let values = self
@@ -1058,8 +1185,7 @@ impl PathLockProvider for RedisPathLockProvider {
                 vec![
                     Self::bytes(lock_path),
                     Self::bytes(owner_id),
-                    Self::bytes(time_ns.to_string()),
-                    Self::bytes(self.hash_ttl_ms.to_string()),
+                    Self::bytes(self.lease_ms.to_string()),
                 ],
             )
             .await?;
@@ -1071,7 +1197,7 @@ impl PathLockProvider for RedisPathLockProvider {
         &self,
         lock_paths: &[String],
         owner_id: &str,
-        time_ns: u128,
+        _time_ns: u128,
     ) -> Vec<PathLockResult<bool>> {
         let mut results: Vec<_> = lock_paths.iter().map(|_| Ok(false)).collect();
         let mut groups: BTreeMap<String, Vec<(usize, &str)>> = BTreeMap::new();
@@ -1085,8 +1211,7 @@ impl PathLockProvider for RedisPathLockProvider {
             for batch in paths.chunks(REFRESH_BATCH_SIZE) {
                 let mut args = vec![
                     Self::bytes(owner_id),
-                    Self::bytes(time_ns.to_string()),
-                    Self::bytes(self.hash_ttl_ms.to_string()),
+                    Self::bytes(self.lease_ms.to_string()),
                 ];
                 args.extend(batch.iter().map(|(_, path)| Self::bytes(*path)));
                 match self
@@ -1156,7 +1281,7 @@ impl PathLockProvider for RedisPathLockProvider {
             vec![
                 Self::bytes(lock_path),
                 Self::bytes(LockTokenCodec::encode(&current)),
-                Self::bytes(self.hash_ttl_ms.to_string()),
+                Self::bytes(self.lease_ms.to_string()),
             ],
         )
         .await
@@ -1193,6 +1318,10 @@ impl PathLockProvider for RedisPathLockProvider {
 #[cfg(test)]
 #[path = "cache_refresh_tests.rs"]
 mod refresh_tests;
+
+#[cfg(test)]
+#[path = "cache_time_tests.rs"]
+mod time_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1457,6 +1586,29 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         }
     }
 
+    /// Seed historical/legacy timestamps without a production time injection API.
+    async fn seed_token(provider: &RedisPathLockProvider, path: &str, token: &LockToken) {
+        provider
+            .runtime
+            .register_script(ScriptDefinition {
+                id: TEST_HASH_ID,
+                redis_lua: TEST_HASH_SCRIPT,
+            })
+            .unwrap();
+        provider
+            .execute(
+                TEST_HASH_ID,
+                provider.tokens_key_for_path(path).unwrap(),
+                vec![
+                    RedisPathLockProvider::bytes("set"),
+                    RedisPathLockProvider::bytes(path),
+                    RedisPathLockProvider::bytes(LockTokenCodec::encode(token)),
+                ],
+            )
+            .await
+            .unwrap();
+    }
+
     /// Build one logical lock request.
     fn request(path: &str, kind: PathLockKind) -> PathLockRequest {
         PathLockRequest {
@@ -1620,7 +1772,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         let valid = "/local/account-a/file";
         let stale_path = "/local/account-a/stale";
         let stale = token("old-owner", 1, PathLockKind::Exact);
-        provider.try_create_token(stale_path, &stale).await.unwrap();
+        seed_token(&provider, stale_path, &stale).await;
         for path in [
             "",
             "relative",
@@ -1636,7 +1788,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
                     .execute_array(
                         ACQUIRE_BATCH_ID,
                         provider.tokens_key_for_path(valid).unwrap(),
-                        ["owner", "200", "100", "2000", valid, "E", path, kind]
+                        ["owner", "1000", valid, "E", path, kind]
                             .iter()
                             .map(RedisPathLockProvider::bytes)
                             .collect(),
@@ -1815,10 +1967,10 @@ return redis.call("HGET", KEYS[1], ARGV[2])
                                 .await
                                 .unwrap();
                         }
-                        assert_eq!(
-                            provider.read_token(&child).await.unwrap(),
-                            Some(token("owner-b", 100, kind))
-                        );
+                        let current = provider.read_token(&child).await.unwrap().unwrap();
+                        assert_eq!(current.owner_id, "owner-b");
+                        assert_eq!(current.lock_type, kind);
+                        assert_ne!(current.time_ns, 100);
                         provider
                             .remove_token(&child, "owner-b", false)
                             .await
@@ -1837,7 +1989,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             return;
         };
         let existing = token("owner-a", 1, PathLockKind::Exact);
-        provider.try_create_token("/", &existing).await.unwrap();
+        seed_token(&provider, "/", &existing).await;
         assert!(matches!(
             provider
                 .try_acquire_batch_atomic(
@@ -1919,18 +2071,20 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             return;
         };
         let path = "/local/account-a/a";
-        let original = token("owner-a", 100, PathLockKind::Exact);
-
-        provider.try_create_token(path, &original).await.unwrap();
-        assert_eq!(
-            provider.read_token(path).await.unwrap(),
-            Some(original.clone())
-        );
+        provider
+            .try_create_token(path, &token("owner-a", 100, PathLockKind::Exact))
+            .await
+            .unwrap();
+        let original = provider.read_token(path).await.unwrap().unwrap();
+        assert_eq!(original.owner_id, "owner-a");
+        assert_eq!(original.lock_type, PathLockKind::Exact);
+        assert_ne!(original.time_ns, 100);
         assert!(provider.refresh_token(path, "owner-a", 200).await.unwrap());
-        assert_eq!(
-            provider.read_token(path).await.unwrap(),
-            Some(token("owner-a", 200, PathLockKind::Exact))
-        );
+        let refreshed = provider.read_token(path).await.unwrap().unwrap();
+        assert_eq!(refreshed.owner_id, original.owner_id);
+        assert_eq!(refreshed.lock_type, original.lock_type);
+        assert!(refreshed.time_ns >= original.time_ns);
+        assert_ne!(refreshed.time_ns, 200);
 
         runtime
             .register_script(ScriptDefinition {
@@ -2055,6 +2209,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .try_acquire_batch_atomic(&exact, "owner-a", 200, 0)
             .await
             .unwrap();
+        let previous = provider.read_token(&exact[0].path).await.unwrap().unwrap();
         let tree = vec![request("/local/account-a/a", PathLockKind::Tree)];
         let upgraded = provider
             .try_acquire_batch_atomic(&tree, "owner-a", 300, 0)
@@ -2068,7 +2223,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .unwrap();
         assert_eq!(
             provider.read_token("/local/account-a/a").await.unwrap(),
-            Some(token("owner-a", 200, PathLockKind::Exact))
+            Some(previous)
         );
 
         let changed = provider
@@ -2085,6 +2240,12 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .refresh_token("/local/account-a/changed", "owner-a", 500)
             .await
             .unwrap());
+        let refreshed = provider
+            .read_token("/local/account-a/changed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(refreshed.time_ns, 500);
         assert!(matches!(
             provider
                 .rollback_acquisitions_atomic(&changed, "owner-a")
@@ -2096,7 +2257,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
                 .read_token("/local/account-a/changed")
                 .await
                 .unwrap(),
-            Some(token("owner-a", 500, PathLockKind::Exact))
+            Some(refreshed)
         );
 
         runtime.close().await.unwrap();
@@ -2211,10 +2372,12 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             return;
         };
         let same_path = "/local/account-a/same";
-        provider
-            .try_create_token(same_path, &token("owner-a", 1, PathLockKind::Exact))
-            .await
-            .unwrap();
+        seed_token(
+            &provider,
+            same_path,
+            &token("owner-a", 1, PathLockKind::Exact),
+        )
+        .await;
         let reentrant = provider
             .try_acquire_batch_atomic(
                 &[request(same_path, PathLockKind::Exact)],
@@ -2246,10 +2409,12 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         );
 
         let foreign_path = "/local/account-a/foreign";
-        provider
-            .try_create_token(foreign_path, &token("owner-b", 1, PathLockKind::Exact))
-            .await
-            .unwrap();
+        seed_token(
+            &provider,
+            foreign_path,
+            &token("owner-b", 1, PathLockKind::Exact),
+        )
+        .await;
         provider
             .try_acquire_batch_atomic(
                 &[request(foreign_path, PathLockKind::Exact)],
@@ -2391,10 +2556,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             return;
         };
         let path = "/local/account-a/old";
-        provider
-            .try_create_token(path, &token("dead", 1, PathLockKind::Exact))
-            .await
-            .unwrap();
+        seed_token(&provider, path, &token("dead", 1, PathLockKind::Exact)).await;
         let manager = PathLockManager::new(
             Arc::new(MemFileSystem::new()),
             Arc::new(provider),

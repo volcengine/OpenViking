@@ -1000,6 +1000,11 @@ async fn redis_takeover_denies_writes_and_cleanup_preserves_new_owner() {
         .compare_and_write_token(path, &old, &replacement)
         .await
         .unwrap());
+    // Redis assigns the takeover confirmation time; cleanup must preserve the
+    // actual server-written snapshot rather than the requested client token.
+    let replacement = provider.read_token(path).await.unwrap().unwrap();
+    assert_eq!(replacement.owner_id, "new-owner");
+    assert_eq!(replacement.lock_type, old.lock_type);
     assert_eq!(manager.refresh(&lease).await.unwrap(), "lost");
     let wrapped = PathLockWrappedFS::new(manager.clone(), fs.clone());
     let context = Arc::new(FsContextInner::with_pathlock(
