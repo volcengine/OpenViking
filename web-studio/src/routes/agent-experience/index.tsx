@@ -53,6 +53,7 @@ import {
   markExperiencesSeen,
 } from './-lib/experience'
 import type { ExperienceFileItem } from './-lib/types'
+import { EXPERIENCE_PAGE_SIZE_OPTIONS } from './route'
 
 export const Route = createFileRoute('/agent-experience/')({
   component: AgentExperienceRoute,
@@ -120,8 +121,6 @@ function EmptyHelpChecklist() {
     </div>
   )
 }
-
-const EXPERIENCE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 
 function ExperiencePagination({
   onPageChange,
@@ -204,21 +203,26 @@ function ExperiencePagination({
 function AgentExperienceRoute() {
   const { t, i18n } = useTranslation('agentExperiencePage')
   const { connection, identityScopeKey } = useAppConnection()
-  const [keyword, setKeyword] = React.useState('')
-  const [searchKeyword, setSearchKeyword] = React.useState('')
-  const [page, setPage] = React.useState(1)
-  const [pageSize, setPageSize] = React.useState(10)
+  const { page = 1, pageSize = 10, q: searchKeyword = '' } = Route.useSearch()
+  const navigate = Route.useNavigate()
+  const [keyword, setKeyword] = React.useState(searchKeyword)
   const [previewExperience, setPreviewExperience] =
     React.useState<ExperienceFileItem | null>(null)
 
   const experiencesUri = buildExperiencesUri(connection.userId)
   React.useEffect(() => {
+    setKeyword(searchKeyword)
+  }, [searchKeyword])
+  React.useEffect(() => {
+    if (keyword.trim() === searchKeyword) return
     const timeout = window.setTimeout(() => {
-      setSearchKeyword(keyword.trim())
-      setPage(1)
+      void navigate({
+        search: (previous) => ({ ...previous, q: keyword.trim(), page: 1 }),
+        replace: true,
+      })
     }, 300)
     return () => window.clearTimeout(timeout)
-  }, [keyword])
+  }, [keyword, searchKeyword, navigate])
   const experiencesQuery = useQuery({
     queryFn: ({ signal }) =>
       searchKeyword
@@ -517,6 +521,7 @@ function AgentExperienceRoute() {
                           render={
                             <Link
                               params={{ experienceUri: experience.uri }}
+                              search={true}
                               to="/agent-experience/$experienceUri"
                             />
                           }
@@ -544,10 +549,19 @@ function AgentExperienceRoute() {
               hasMore={hasMore}
               disabled={experiencesQuery.isFetching}
               pageSize={pageSize}
-              onPageChange={setPage}
+              onPageChange={(nextPage) => {
+                void navigate({
+                  search: (previous) => ({ ...previous, page: nextPage }),
+                })
+              }}
               onPageSizeChange={(nextPageSize) => {
-                setPageSize(nextPageSize)
-                setPage(1)
+                void navigate({
+                  search: (previous) => ({
+                    ...previous,
+                    pageSize: nextPageSize,
+                    page: 1,
+                  }),
+                })
               }}
             />
           )}
