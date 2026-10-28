@@ -288,6 +288,10 @@ class TestLocalParseOutputStore:
         assert outside.exists()
 
     async def test_case_only_names_can_coexist(self, tmp_path) -> None:
+        probe = tmp_path / "case-probe"
+        probe.touch()
+        if (tmp_path / "CASE-PROBE").exists():
+            pytest.skip("requires a case-sensitive filesystem")
         store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
         ref = await store.create_artifact(root_type="dir")
         await store.write_bytes(ref, "Readme.md", b"a")

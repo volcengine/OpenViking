@@ -2,13 +2,13 @@ import os
 import uuid
 from urllib.parse import unquote, urlparse
 
-import psycopg2
 import pytest
 
 from openviking.storage.vectordb_adapters.opengauss_adapter import OpenGaussCollectionAdapter
 from openviking_cli.utils.config.vectordb_config import OpenGaussConfig
 
 pytestmark = pytest.mark.integration
+psycopg2 = pytest.importorskip("psycopg2", reason="requires the opengauss extra")
 
 
 def _adapter_from_dsn(index_type: str, mode: str) -> OpenGaussCollectionAdapter:

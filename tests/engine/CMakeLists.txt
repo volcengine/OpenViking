@@ -36,3 +36,9 @@ target_link_libraries(test_index_engine PRIVATE
     engine_impl
     Threads::Threads
 )
+
+# AppleClang's libc++ deprecates a char_traits specialization in bundled fmt.
+# engine_impl exports -Werror; keep this third-party warning non-fatal in tests.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    target_compile_options(test_index_engine PRIVATE -Wno-error=deprecated-declarations)
+endif()

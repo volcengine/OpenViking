@@ -1,0 +1,76 @@
+name: RAGFS Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/ragfs/**'
+      - 'crates/ragfs-python/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ragfs-tests.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/ragfs/**'
+      - 'crates/ragfs-python/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ragfs-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: RAGFS (${{ matrix.features || 'default' }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ['', 'cache,test-utils']
+    services:
+      redis:
+        image: redis:7.2.7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-ragfs-${{ matrix.features }}-${{ hashFiles('Cargo.lock', 'crates/**/*.rs', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-ragfs-${{ matrix.features }}-
+      - name: Verify Redis is reachable
+        run: |
+          python - <<'PY'
+          import socket
+          with socket.create_connection(("127.0.0.1", 6379), timeout=5) as connection:
+              connection.sendall(b"*1\r\n$4\r\nPING\r\n")
+              assert connection.recv(1024) == b"+PONG\r\n"
+          PY
+      - name: Run RAGFS unit, integration and doc tests
+        env:
+          TEST_FEATURES: ${{ matrix.features }}
+        run: |
+          if [ -n "$TEST_FEATURES" ]; then
+            cargo test --locked -p ragfs --features "$TEST_FEATURES"
+          else
+            cargo test --locked -p ragfs
+          fi

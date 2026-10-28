@@ -7,6 +7,7 @@ on:
     paths:
       - 'crates/**'
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/rust-cli.yml'
     tags:
       - 'cli@*'
@@ -15,6 +16,7 @@ on:
     paths:
       - 'crates/**'
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/rust-cli.yml'
 
 permissions:

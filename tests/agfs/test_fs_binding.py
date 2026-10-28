@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import init_viking_fs
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.utils.config.agfs_config import AGFSConfig
@@ -266,7 +267,7 @@ class TestVikingFSBindingLocal:
         adopted = None
 
         try:
-            with pytest.raises(ValueError):
+            with pytest.raises(LockAcquisitionError, match="handoff/adopt failed"):
                 adopted = await vfs._async_agfs.pathlock_adopt(handoff)
         finally:
             if adopted is not None:
@@ -277,7 +278,11 @@ class TestVikingFSBindingLocal:
         self, viking_fs_binding_instance
     ):
         """Accept legacy durable handoffs that use handle_id instead of owner_id."""
+        from openviking.pyagfs.async_client import AsyncAGFSClient
+        from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+
         vfs = viking_fs_binding_instance
+        consumer = AsyncAGFSClient(create_agfs_client(RagfsBindingConfig(agfs=AGFS_CONF)))
         path = f"/local/default/temp/handoff_legacy_{uuid.uuid4().hex}.txt"
         owned = await vfs._async_agfs.pathlock_acquire_exact(path)
         handoff = await vfs._async_agfs.pathlock_to_handoff(owned)
@@ -288,13 +293,16 @@ class TestVikingFSBindingLocal:
         adopted = None
 
         try:
-            adopted = await vfs._async_agfs.pathlock_adopt(legacy_handoff)
+            await vfs._async_agfs.pathlock_handoff(owned)
+            adopted = await consumer.pathlock_adopt(legacy_handoff)
             assert adopted["owner_id"] == owned["owner_id"]
             assert adopted["owned"] is True
+            with pytest.raises(ValueError, match="owned lease capability does not match"):
+                await vfs._async_agfs.pathlock_release(owned)
         finally:
             if adopted is not None:
-                await vfs._async_agfs.pathlock_release(adopted)
-            await vfs._async_agfs.pathlock_release(owned)
+                await consumer.pathlock_release(adopted)
+            await consumer.run("close")
 
     async def test_pathlock_wait_and_cancel_release_resources(self, viking_fs_binding_instance):
         """Lock waits leave storage responsive; cancelled acquisitions release their lease."""

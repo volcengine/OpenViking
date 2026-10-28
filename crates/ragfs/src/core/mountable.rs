@@ -1753,14 +1753,16 @@ mod tests {
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn shutdown_reaches_cache_queuefs_through_stats_wrapper() {
-        use crate::cache_runtime::{CacheRuntime, MemoryMockProvider};
+        use crate::cache_runtime::{CacheRuntime, MemoryMockProvider, ScriptResult, ScriptValue};
         use crate::plugins::QueueFSPlugin;
 
         let provider = Arc::new(MemoryMockProvider::new().with_script_handler(|request| {
-            panic!(
-                "script execution is outside this shutdown test's scope: {}",
-                request.script_id
-            )
+            assert_eq!(request.script_id, "queuefs.release_recovery_leader.v1");
+            assert_eq!(request.keys.len(), 1);
+            assert_eq!(request.args.len(), 1);
+            // No recovery leader was acquired in this test. Shutdown still
+            // attempts the conditional release before deleting its heartbeat.
+            ScriptResult::encode(&ScriptValue::Integer(0))
         }));
         let runtime = CacheRuntime::memory_with_provider(provider.clone());
         let mfs = MountableFS::new();
