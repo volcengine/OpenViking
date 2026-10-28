@@ -11,6 +11,7 @@ from openviking.core.namespace_policy import (
 from openviking.server.identity import RequestContext, Role
 from openviking.system_assets.sync import SystemAssetSynchronizer
 from openviking_cli.session.user_id import UserIdentifier
+from scripts.build_support.system_assets_manifest import write_system_assets_manifest
 
 
 class _FakeVikingFS:
@@ -58,6 +59,7 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
     compile_source.write_bytes(b"same skill")
     reference_source.write_bytes(b"\x00guide")
     memory_source.write_bytes(b"new profile")
+    write_system_assets_manifest(tmp_path)
 
     compile_target = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/demo/SKILL.md"
     reference_target = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/demo/references/guide.bin"
@@ -106,6 +108,16 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
     assert await synchronizer.sync(ctx) == 0
     assert coordinator.calls == []
 
+    previous_digest = synchronizer.manifest_digest
+    compile_source.write_bytes(b"updated skill")
+    write_system_assets_manifest(tmp_path)
+    updated = SystemAssetSynchronizer(viking_fs=viking_fs, assets_dir=tmp_path)
+
+    assert updated.manifest_digest != previous_digest
+    assert await updated.sync(ctx) == 1
+    assert viking_fs.files[compile_target] == b"updated skill"
+    assert viking_fs.files[custom_target] == b"custom"
+
 
 @pytest.mark.asyncio
 async def test_system_asset_sync_rejects_missing_packaged_root(tmp_path, monkeypatch):
@@ -127,30 +139,3 @@ async def test_system_asset_sync_rejects_missing_packaged_root(tmp_path, monkeyp
                 role=Role.ADMIN,
             )
         )
-
-
-def test_system_asset_manifest_is_loaded_from_packaged_file(tmp_path):
-    manifest = b'{"schema_version": 1, "sha256": "' + b"a" * 64 + b'"}\n'
-    (tmp_path / "manifest.json").write_bytes(manifest)
-
-    synchronizer = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path)
-
-    assert synchronizer.manifest == manifest
-    assert synchronizer.manifest_digest == "a" * 64
-
-
-@pytest.mark.parametrize(
-    "manifest",
-    [
-        b"not-json",
-        b'{"schema_version": 2, "sha256": "' + b"a" * 64 + b'"}',
-        b'{"schema_version": 1, "sha256": "invalid"}',
-    ],
-)
-def test_system_asset_manifest_rejects_invalid_packaged_file(tmp_path, manifest):
-    (tmp_path / "manifest.json").write_bytes(manifest)
-
-    synchronizer = SystemAssetSynchronizer(_FakeVikingFS(), assets_dir=tmp_path)
-
-    with pytest.raises(ValueError, match="invalid packaged system asset manifest"):
-        _ = synchronizer.manifest

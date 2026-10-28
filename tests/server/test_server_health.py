@@ -331,10 +331,8 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
     """System assets reconcile after auth loading and before deletion setup."""
 
     events = []
-    monkeypatch.setattr(
-        "openviking.server.app.get_openviking_config",
-        lambda: SimpleNamespace(reconcile_system_assets_on_startup=True),
-    )
+    ov_config = SimpleNamespace(reconcile_system_assets_on_startup=True)
+    monkeypatch.setattr("openviking.server.app.get_openviking_config", lambda: ov_config)
 
     class MockService:
         def __init__(self):
@@ -384,6 +382,14 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
         "deletion",
     ]
 
+    events.clear()
+    ov_config.reconcile_system_assets_on_startup = False
+    await _initialize_runtime_state(app, service, config)
+
+    assert service._initialized is True
+    assert app.state.api_key_manager is manager
+    assert events == ["service", "agent-evolution", "auth", "deletion"]
+
 
 async def test_initialize_runtime_state_skips_reconcile_without_account_manager(monkeypatch):
     service = SimpleNamespace(
@@ -404,30 +410,3 @@ async def test_initialize_runtime_state_skips_reconcile_without_account_manager(
 
     service.reconcile_system_assets.assert_not_awaited()
     assert setup.await_args.kwargs["manager"] is None
-
-
-async def test_initialize_runtime_state_skips_reconcile_when_disabled(monkeypatch):
-    service = SimpleNamespace(
-        initialize=AsyncMock(),
-        apply_agent_evolution_config=AsyncMock(),
-        reconcile_system_assets=AsyncMock(),
-    )
-    setup = AsyncMock(return_value=None)
-    monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
-    monkeypatch.setattr(
-        "openviking.server.app.get_openviking_config",
-        lambda: SimpleNamespace(reconcile_system_assets_on_startup=False),
-    )
-
-    manager = object()
-
-    async def initialize_plugin(app, service, config):
-        app.state.api_key_manager = manager
-
-    monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
-
-    app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
-    await _initialize_runtime_state(app, service, ServerConfig())
-
-    service.reconcile_system_assets.assert_not_awaited()
-    assert setup.await_args.kwargs["manager"] is manager
