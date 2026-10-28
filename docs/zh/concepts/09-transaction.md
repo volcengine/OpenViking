@@ -302,6 +302,15 @@ HASH key 按路径 scope 隔离：
 `/local/_system` 或其后代。`/` 和 `/local` 的 Exact 锁仍然支持，只保护
 对应路径本身。跨 scope batch 会被拒绝。
 
+需要计时的 Redis 脚本每次只读取一次 `TIME`，用于生成 token 时间和过期阈值。
+时间字段保留纳秒 epoch 编码，新确认时间精度为微秒；Redis Provider 忽略
+客户端时间参数。Lua 将 HASH 的垃圾回收 TTL 固定算为调用实例租期的两倍；
+共享锁空间的所有实例仍须配置相同的 `lock_expire_secs`。
+
+编码和 key 与旧实例兼容，可以滚动升级而不清空 token。新旧版本混跑时，
+旧实例仍可能引入时钟偏差与 TTL 风险。跨 manager adopt 也暂时保留客户端
+年龄检查和分离的 read/refresh 步骤。服务器计时不提供存储侧 fencing。
+
 ### Filesystem 获取锁流程（EXACT 模式）
 
 ```
