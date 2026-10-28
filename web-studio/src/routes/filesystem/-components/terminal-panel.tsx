@@ -685,7 +685,11 @@ export function TerminalPanel({
               description: t('terminal.resourceSuggestion'),
               group: 'resource' as const,
               id: `resource:${activeCommand.command}:${uri}`,
-              insertText: `${activeCommand.command} ${uri}`,
+              insertText: `${activeCommand.command} ${
+                activeCommand.command === '/rm'
+                  ? `"${uri.replace(/["\\]/g, '\\$&')}"`
+                  : uri
+              }`,
               usage: `${activeCommand.command} ${uri}`,
             }))
         : []

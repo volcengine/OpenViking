@@ -89,6 +89,47 @@ it('does not send a deletion request when confirmation is cancelled', async () =
   expect(m.remove).not.toHaveBeenCalled()
   expect(m.refresh).not.toHaveBeenCalled()
 })
+it.each([
+  'old notes.md',
+  'old"notes.md',
+  "old'notes.md",
+  'old\\notes.md',
+  'old$notes;archive.md',
+])('preserves the selected deletion URI when completing %s', async (name) => {
+  const uri = `viking://resources/${name}`
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  render(
+    <TerminalPanel
+      currentUri="viking://resources"
+      entries={[
+        {
+          uri,
+          name,
+          isDir: false,
+          size: '',
+          sizeBytes: null,
+          modTime: '',
+          modTimestamp: null,
+          abstract: '',
+        },
+      ]}
+      openingUri={null}
+      onOpenResource={vi.fn()}
+      onSessionChange={vi.fn()}
+      toolbarContainer={null}
+    />,
+  )
+  const input = screen.getByRole('textbox')
+  fireEvent.focus(input)
+  fireEvent.change(input, { target: { value: '/rm viking://resources/old' } })
+  fireEvent.keyDown(input, { key: 'Tab' })
+  fireEvent.submit(input.closest('form')!)
+  await waitFor(() => expect(m.refresh).toHaveBeenCalledTimes(1))
+  expect(confirm).toHaveBeenCalledWith(`terminal.rmConfirm: ${uri}`)
+  expect(m.remove).toHaveBeenCalledExactlyOnceWith({
+    query: { uri, recursive: false },
+  })
+})
 it('does not fall back to deleting the current directory for a missing target', async () => {
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
   submit('/rm --recursive')
