@@ -51,7 +51,7 @@ export async function writeCredentialFiles(prefix, { ovcli = null, ov = null } =
   };
 }
 
-const isOpenVikingVar = (name) => name.startsWith("OPENVIKING_") || name === "OV_DEBUG_LOG";
+const isOpenVikingVar = (name) => name.startsWith("OPENVIKING_") || name === "OV_DEBUG_LOG" || name === "OV_HOOK_WORKER";
 
 /**
  * Clear the developer shell's `OPENVIKING_*` out of process.env, and return
@@ -156,36 +156,50 @@ export async function withMockOpenViking(handler, fn) {
 /**
  * Run a hook script as its host runs it, and never reject.
  *
+ * The child gets a throwaway home directory and none of the developer shell's
+ * `OPENVIKING_*`, so a hook that reads `~/.openviking` — the pending queue,
+ * credentials, hook state, logs — finds the test's world, never the
+ * developer's: a session-start hook replaying a real queue into a mock server
+ * deletes it. A test whose hooks must share one home passes `HOME` in `env`.
+ *
  * A hook that exits non-zero is a result a test may well be asserting on, so
  * the exit code comes back like any other output; call `expectExit` where a
  * clean exit is part of the expectation.
  */
-export function runHookScript(scriptPath, { argv = [], input, env, cwd } = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [scriptPath, ...argv], {
-      cwd,
-      env: { ...process.env, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
+export async function runHookScript(scriptPath, { argv = [], input, env, cwd } = {}) {
+  const home = await mkdtemp(join(tmpdir(), "ov-hook-home-"));
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !isOpenVikingVar(name)),
+  );
+  try {
+    return await new Promise((resolve) => {
+      const child = spawn(process.execPath, [scriptPath, ...argv], {
+        cwd,
+        env: { ...inherited, HOME: home, USERPROFILE: home, ...env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      let spawnError = null;
+      let settled = false;
+      const settle = (code, signal) => {
+        if (settled) return;
+        settled = true;
+        resolve({ code, signal, stdout, stderr, error: spawnError });
+      };
+      child.stdout.on("data", (chunk) => { stdout += chunk; });
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      child.on("error", (error) => { spawnError = error; settle(null, null); });
+      child.on("close", settle);
+      // A hook that answers without draining stdin makes this write fail EPIPE.
+      child.stdin.on("error", () => {});
+      child.stdin.end(
+        input === undefined || typeof input === "string" ? (input ?? "") : JSON.stringify(input),
+      );
     });
-    let stdout = "";
-    let stderr = "";
-    let spawnError = null;
-    let settled = false;
-    const settle = (code, signal) => {
-      if (settled) return;
-      settled = true;
-      resolve({ code, signal, stdout, stderr, error: spawnError });
-    };
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => { spawnError = error; settle(null, null); });
-    child.on("close", settle);
-    // A hook that answers without draining stdin makes this write fail EPIPE.
-    child.stdin.on("error", () => {});
-    child.stdin.end(
-      input === undefined || typeof input === "string" ? (input ?? "") : JSON.stringify(input),
-    );
-  });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 }
 
 /** Assert a `runHookScript` result exited with `code`, and return the result. */

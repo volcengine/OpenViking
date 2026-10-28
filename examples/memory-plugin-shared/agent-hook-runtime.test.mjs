@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -473,4 +473,30 @@ test("captured messages carry the effective peer in the body, and none when peer
     ],
     [{ role: "user", content: "c" }],
   ]);
+});
+
+test("runHookScript keeps a hook out of the developer's home", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-hook-home-test-"));
+  const probe = join(dir, "probe.mjs");
+  writeFileSync(probe, [
+    'import { existsSync } from "node:fs";',
+    'import { homedir } from "node:os";',
+    'process.stdout.write(JSON.stringify({ home: homedir(), exists: existsSync(homedir()), pending: process.env.OPENVIKING_PENDING_DIR ?? null }));',
+  ].join("\n"));
+  const developerQueue = process.env.OPENVIKING_PENDING_DIR;
+  process.env.OPENVIKING_PENDING_DIR = join(dir, "developer-queue");
+  try {
+    const isolated = JSON.parse(expectExit(await runHookScript(probe)).stdout);
+    assert.notEqual(isolated.home, homedir());
+    assert.equal(isolated.exists, true);
+    assert.equal(isolated.pending, null);
+    assert.equal(existsSync(isolated.home), false);
+
+    const shared = JSON.parse(expectExit(await runHookScript(probe, { env: { HOME: dir, USERPROFILE: dir } })).stdout);
+    assert.equal(shared.home, dir);
+  } finally {
+    if (developerQueue === undefined) delete process.env.OPENVIKING_PENDING_DIR;
+    else process.env.OPENVIKING_PENDING_DIR = developerQueue;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

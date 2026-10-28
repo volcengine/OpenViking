@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { readRequestBody, runHookScript, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -27,30 +26,10 @@ function writeEndedMarker(dir, id, ts) {
   return writeFile(join(dir, `${id}.ended.${ts}`), String(ts));
 }
 
-function runSessionEnd(input, env) {
-  return new Promise((resolve, reject) => {
-    const cleanEnv = { ...process.env };
-    for (const key of Object.keys(cleanEnv)) {
-      if (key.startsWith("OPENVIKING_") || key === "OV_HOOK_WORKER") delete cleanEnv[key];
-    }
-    const child = spawn(process.execPath, [join(SCRIPT_DIR, "session-end.mjs")], {
-      env: { ...cleanEnv, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`session-end exited ${code}: ${stderr}`));
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-    child.stdin.end(JSON.stringify(input));
-  });
+async function runSessionEnd(input, env) {
+  const result = await runHookScript(join(SCRIPT_DIR, "session-end.mjs"), { input, env });
+  if (result.code !== 0) throw new Error(`session-end exited ${result.code}: ${result.stderr}`);
+  return result;
 }
 
 function workerEnv(baseUrl, stateDir, extra = {}) {
@@ -401,18 +380,9 @@ test("a concurrent Stop worker and session-end worker never double-send a turn",
       return mockHandler(calls)(req, res);
     }, async (baseUrl) => {
       const env = workerEnv(baseUrl, stateDir, { OPENVIKING_WRITE_PATH_ASYNC: "0" });
-      const stop = new Promise((resolve, reject) => {
-        const cleanEnv = { ...process.env };
-        for (const key of Object.keys(cleanEnv)) {
-          if (key.startsWith("OPENVIKING_") || key === "OV_HOOK_WORKER") delete cleanEnv[key];
-        }
-        const child = spawn(process.execPath, [join(SCRIPT_DIR, "auto-capture.mjs")], {
-          env: { ...cleanEnv, ...env },
-          stdio: ["pipe", "ignore", "ignore"],
-        });
-        child.on("error", reject);
-        child.on("close", resolve);
-        child.stdin.end(JSON.stringify({ session_id: "s8", transcript_path: transcriptPath }));
+      const stop = runHookScript(join(SCRIPT_DIR, "auto-capture.mjs"), {
+        input: { session_id: "s8", transcript_path: transcriptPath },
+        env,
       });
       const end = runSessionEnd({ session_id: "s8", transcript_path: transcriptPath }, env);
       await Promise.all([stop, end]);
