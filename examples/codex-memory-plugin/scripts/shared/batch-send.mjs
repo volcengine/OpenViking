@@ -1,8 +1,8 @@
 // GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
-import { enqueue } from "./pending-queue.mjs";
+import { BATCH_LIMIT, enqueue } from "./pending-queue.mjs";
 import { isRetryableFailure } from "./retryable.mjs";
 
-export const BATCH_LIMIT = 100;
+export { BATCH_LIMIT };
 
 export function isRetryableSendFailure(res) {
   return isRetryableFailure(res);

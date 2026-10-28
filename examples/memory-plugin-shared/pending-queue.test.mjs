@@ -126,3 +126,67 @@ for (const type of ["addMessage", "commitSession"]) {
     });
   });
 }
+
+test("replayPending batches a session's queued messages and keeps its commit after them", async () => {
+  await withPendingDir(async () => {
+    const now = Date.now();
+    const one = { role: "user", content: "one" };
+    const two = { role: "assistant", content: "two" };
+    await enqueue("addMessage", "queue-batch", one, { createdAt: now + 1 });
+    await enqueue("addMessage", "queue-other", { role: "user", content: "other" }, { createdAt: now + 2 });
+    await enqueue("addMessage", "queue-batch", two, { createdAt: now + 3 });
+    await enqueue("commitSession", "queue-batch", {}, { createdAt: now + 4 });
+    await enqueue("addMessage", "queue-batch", { role: "user", content: "after" }, { createdAt: now + 5 });
+
+    const calls = [];
+    const result = await replayPending(async (path, init) => {
+      calls.push({ path, body: JSON.parse(init.body) });
+      return { ok: true };
+    }, () => {});
+
+    assert.deepEqual(result, { replayed: 5, failed: 0, skipped: 0, deferred: 0 });
+    assert.deepEqual(calls.map((c) => c.path), [
+      "/api/v1/sessions/queue-batch/messages/batch",
+      "/api/v1/sessions/queue-other/messages",
+      "/api/v1/sessions/queue-batch/commit",
+      "/api/v1/sessions/queue-batch/messages",
+    ]);
+    assert.deepEqual(calls[0].body, { messages: [one, two] });
+    assert.deepEqual(await listPending(), []);
+  });
+});
+
+test("replayPending drops only the message the server rejects from a batch", async () => {
+  await withPendingDir(async () => {
+    const now = Date.now();
+    await enqueue("addMessage", "queue-reject", { role: "user", content: "good" }, { createdAt: now + 1 });
+    await enqueue("addMessage", "queue-reject", { role: "user", content: "bad" }, { createdAt: now + 2 });
+    await enqueue("addMessage", "queue-reject", { role: "user", content: "later" }, { createdAt: now + 3 });
+
+    const calls = [];
+    const result = await replayPending(async (path, init) => {
+      calls.push(path);
+      if (path.endsWith("/messages/batch") || JSON.parse(init.body).content === "bad") {
+        return { ok: false, status: 422 };
+      }
+      return { ok: true };
+    }, () => {});
+
+    assert.deepEqual(result, { replayed: 2, failed: 0, skipped: 1, deferred: 0 });
+    assert.equal(calls.length, 4);
+    assert.deepEqual(await listPending(), []);
+  });
+});
+
+test("replayPending charges a failed batch's retry to its head entry only", async () => {
+  await withPendingDir(async () => {
+    const now = Date.now();
+    await enqueue("addMessage", "queue-down", { role: "user", content: "head" }, { createdAt: now + 1 });
+    await enqueue("addMessage", "queue-down", { role: "user", content: "tail" }, { createdAt: now + 2 });
+
+    const result = await replayPending(async () => ({ ok: false, status: 503 }), () => {});
+
+    assert.deepEqual(result, { replayed: 0, failed: 2, skipped: 0, deferred: 0 });
+    assert.deepEqual((await listPending()).map(({ entry }) => entry.retries), [1, 0]);
+  });
+});
