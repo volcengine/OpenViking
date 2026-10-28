@@ -1129,6 +1129,8 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
     "provider": "jev",
     "api_key": "your-typesafe-api-key",
     "model": "jev-latest",
+    "mode": "noul",
+    "candidates_visible": true,
     "timeout": 120,
     "log_payloads": false,
     "threshold": 0.1
@@ -1162,12 +1164,24 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 - `api_base` 必须带 `/typesafe` 后缀；`https://ai-gateway.vercel.sh/v1` 是
   Vercel 自有的 evaluate 协议，适配器不支持。
 
-Jev 适配器将 query 和候选文档作为共享的 System One `state`，支持两种模式：
+Jev 适配器支持两种评分模式：
 
 - `noul`（默认）：为每篇文档提出独立的相关性问题，返回的 yes 概率作为分数。
   所有问题放在一次 HTTP 请求中，各文档分数不要求总和为 1。
 - `choice`：用一个问题横向比较所有候选文档，以 `candidate_{index}` 对应输入
   下标，并按原文档顺序读取 `probabilities` 作为分数。
+
+候选可见性由独立开关 `rerank.candidates_visible` 控制：
+
+- `true`（默认）：query 和所有候选文档都放在共享 `state` 中。
+  Noul 独立评分不代表候选互相不可见。
+- `false`（仅限 Noul）：共享 `state` 只保留 query，每个问题通过
+  `instructions.candidate_document` 携带自己的文档；该问题及共享 state
+  不包含其他候选。所有问题仍在一次 HTTP 请求中发送，分数保持原文档顺序。
+
+启用隔离时设置 `"mode": "noul", "candidates_visible": false`。
+`"mode": "choice"` 与 `"candidates_visible": false` 的组合会在配置/客户端
+创建时被拒绝，因为 Choice 必须在一个问题中比较多个候选。
 
 通过 `rerank.mode` 选择模式；未配置或配置为 `null` 时默认使用 `noul`。Choice
 返回候选池内总和为 1 的相对概率，不是绝对相关概率，不适合使用绝对分数阈值。
@@ -1187,6 +1201,7 @@ Jev 适配器将 query 和候选文档作为共享的 System One `state`，支�
 | `api_base` | str | 完整接口地址（用于 `openai` 或 `jev`；Jev 默认为 `https://api.typesafe.ai/v1/systemone`，Vercel 使用 `https://ai-gateway.vercel.sh/typesafe/v1/systemone`；自定义 Jev URL 会原样使用） |
 | `model` | str | 模型名称（用于 OpenAI 兼容、LiteLLM 或 `jev` 提供方） |
 | `mode` | `"noul"`、`"choice"` 或 `null` | Jev Rerank 模式；省略或 `null` 时使用 `"noul"` |
+| `candidates_visible` | bool | 仅用于 Jev；默认 `true`，候选共享 state。`false` 将每个候选隔离到自己的 Noul 问题中；Choice 必须为 `true`。 |
 | `timeout` | float | HTTP Rerank provider（包括 Jev）的请求超时时间，单位为秒。默认：`30.0` |
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |
 | `log_payloads` | bool | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容。默认：`false` |
