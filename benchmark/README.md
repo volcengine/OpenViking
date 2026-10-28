@@ -1,117 +1,107 @@
-# OpenViking 评测：先选对场景
+# Evaluating OpenViking: Choose the Right Scenario
 
-> **测试 Memory 和测试 RAG 是两回事，不要用 RAG 测试记忆。**
->
-> - **Memory**：历史对话 → session 写入与 commit → 提取持久记忆 → 检索 `viking://user/.../memories` → 回答。
-> - **RAG**：资料 → `add_resource` → 检索 `viking://resources` → 读取文档 → 回答。
->
-> 即使使用同一份 LoCoMo 数据，把原始对话作为资源导入 `benchmark/RAG`，也没有评测记忆提取与跨会话保留能力。
+English | [简体中文](README_zh.md)
 
-| 你想做什么 | 走哪条路径 |
+> **Memory evaluation and RAG evaluation are different. Do not use RAG to evaluate memory.**
+>
+> - **Memory**: conversation history → session messages and commit → persistent memory extraction → recall by user / Peer → answer.
+> - **RAG**: source material → `add_resource` → search `viking://resources` → read documents → answer.
+>
+> Even with the same LoCoMo dataset, importing raw conversations as resources through `benchmark/RAG` does not evaluate memory extraction or retention across sessions.
+
+| Goal | Path |
 | --- | --- |
-| 复现官网公布的 LoCoMo 结果 | [1. Agent 接入评测](#1-复现官网的-locomo-结果) |
-| 对齐 mem0 的问答与 LLM-judge prompt 做 Memory 实验 | [2. Prompt 对齐实验](#2-对齐-mem0-prompt-的-memory-实验) |
-| 评测知识库检索与回答 | [3. RAG 评测](#3-rag-相关评测) |
+| Reproduce the published LoCoMo results | [1. Agent integration evaluation](#1-reproduce-the-published-locomo-results) |
+| Evaluate Memory with QA and LLM-judge prompts aligned to mem0 | [2. Prompt-aligned experiments](#2-memory-experiments-with-mem0-prompt-alignment) |
+| Evaluate knowledge-base retrieval and answering | [3. RAG evaluation](#3-rag-evaluation) |
 
-## 开始前
+## Before You Start
 
-使用**专用测试服务、独立存储和独立 Agent 配置**，不要连接生产实例。准备方法见[服务与模型配置](../docs/zh/getting-started/02-quickstart.md)、[CLI 连接配置](../docs/zh/getting-started/05-cli-setup.md)及各评测目录 README。Agent 脚本可能修改配置、重启服务或操作快照，运行前先核对目标。
+Use a **dedicated test server, separate storage, and isolated Agent configuration**, never a production instance. See [server/model setup](../docs/en/getting-started/02-quickstart.md), [CLI configuration](../docs/en/getting-started/05-cli-setup.md), and the individual benchmark READMEs. Agent scripts may change configuration, restart services, or manipulate snapshots; check their targets first.
 
-在仓库根目录、已激活的独立 Python 环境中执行：
+From the repository root, with an isolated Python environment activated:
 
 ```bash
-uv pip install -e '.[benchmark]' -e ./sdk/python
+uv pip install -e '.[benchmark,bot]' -e ./sdk/python
 export ROOT="$PWD"
 export PYTHONPATH="$ROOT:$ROOT/sdk/python${PYTHONPATH:+:$PYTHONPATH}"
-export OPENVIKING_URL="http://127.0.0.1:1933"   # 替换为专用测试服务
-export DATA="/absolute/path/to/locomo10.json"  # 两条 Memory 路径使用原始 JSON
+export OPENVIKING_URL="http://127.0.0.1:1933"   # Replace with your dedicated test server
+export DATA="$ROOT/benchmark/locomo/data/locomo10.json"  # Place the original JSON here first
+export OPENVIKING_CONFIG_FILE="/absolute/path/to/ov.eval.conf"
 export RUN="$ROOT/result/evaluation/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RUN"
 ```
 
-导入和问答必须使用同一服务、account 与数据版本。`ovcli.conf` 管 HTTP 连接；服务端 `ov.conf` 管提取与索引模型；第 2 条路径的本地问答进程还需要 `ov.conf` 中的 `vlm` 和可选 `rerank`。可用 `OPENVIKING_CLI_CONFIG_FILE` / `OPENVIKING_CONFIG_FILE` 指定独立配置。密钥勿提交到仓库。
+Import and QA must use the same server, account/user, and dataset version. `ovcli.conf` controls HTTP connections; `ov.conf` controls server models and VikingBot. Follow the [VikingBot configuration guide](../docs/en/guides/17-vikingbot.md) to explicitly set `bot.ov_server.server_url` to the import target and avoid accidentally running standalone. The answer model comes from `bot.agents` or inherits the root `vlm`. Do not commit credentials.
 
-## 1. 复现官网的 LoCoMo 结果
+## 1. Reproduce the Published LoCoMo Results
 
-[官网报告（2026-05-29）](https://blog.openviking.ai/post/openviking-benchmark-results/)公布的是 **Agent 原生记忆 vs Agent + OpenViking**，不是下面第 2 条路径的单次检索成绩：
+The [official report (May 29, 2026)](https://blog.openviking.ai/post/openviking-benchmark-results/) compares **Agent native memory against Agent + OpenViking**, not the prompt-alignment experiment in section 2:
 
-| Agent | 官网 Accuracy：原生 → OpenViking | 复现入口 |
+| Agent | Published accuracy: native → OpenViking | Reproduction entry point |
 | --- | --- | --- |
-| OpenClaw | 24.20% → 82.08% | [操作说明](locomo/README.md)、[运行脚本](locomo/openclaw/run_full_eval.sh) |
-| Hermes | 33.38% → 82.86% | [README](locomo/hermes/README.md)：`native` / `e2e` / `preingest` |
-| Claude Code | 57.21% → 80.32% | [README](locomo/claudecode/README.md)：`prompted` / `sdk_iso` / `sdk_noiso` / `e2e` |
+| OpenClaw | 24.20% → 82.08% | [Instructions](locomo/README.md), [runner](locomo/openclaw/run_full_eval.sh) |
+| Hermes | 33.38% → 82.86% | [README](locomo/hermes/README.md): `native` / `e2e` / `preingest` |
+| Claude Code | 57.21% → 80.32% | [README](locomo/claudecode/README.md): `prompted` / `sdk_iso` / `sdk_noiso` / `e2e` |
 
-复现步骤：
+To reproduce:
 
-1. 固定报告对应的 OpenViking / Agent 版本、模型、数据、插件配置、导入模式和该 Agent 自带的问答/裁判 prompt。`e2e` 与 SDK 预导入不是同一种实验，不要互换。
-2. 按对应 README 分别准备原生记忆与 OpenViking 实验组，从空的测试状态导入相同历史；先跑一个样本，再跑全量。
-3. 用**该 Agent 目录下**的 judge/stat 流程统计 Accuracy、耗时和 token；不要换用第 2 节的 mem0 裁判后仍称为官网结果。
+1. Pin the report's OpenViking / Agent versions, models, data, plugin configuration, import mode, and Agent-specific QA/judge prompts. End-to-end capture and SDK pre-ingestion are different experiments; do not substitute one for the other.
+2. Follow the corresponding README to prepare native-memory and OpenViking groups, importing identical history into fresh test state. Start with one sample, then run the full dataset.
+3. Use **that Agent directory's** judge/stat pipeline for accuracy, latency, and tokens. Switching to the mem0 judging protocol in section 2 changes the experiment; it is no longer the published setup.
 
-例如 Hermes 的端到端接入 smoke（前置服务与模型按其 README 配好）：
+For example, a Hermes integration smoke test, after configuring its services and models:
 
 ```bash
 cd "$ROOT/benchmark/locomo/hermes"
 export LOCOMO_JSON="$DATA"
 ./run_full_eval.sh --suite native --sample 0 --count 1
 ./run_full_eval.sh --suite e2e --sample 0 --count 1
-# 验证后去掉 --sample 0 --count 1 跑全量；如复现预导入方案，选 preingest。
+# Remove --sample 0 --count 1 for a full run; use preingest for a pre-ingested setup.
 ```
 
-官网文章没有逐项固定完整运行参数，当前脚本默认值也可能变化；上例演示接入流程，不能仅因选了 `e2e` 就声称精确复现已公布分数。保留所用 commit、配置和模式，结果从对应实验目录的逐题 CSV 与统计日志核对。
+The report does not pin every runtime parameter, and current script defaults may change. This example demonstrates the integration flow; selecting `e2e` alone does not establish an exact reproduction of the published score. Save the commit, configuration, and mode, and check each run's per-question CSV and statistics log.
 
-## 2. 对齐 mem0 prompt 的 Memory 实验
+## 2. Memory Experiments with mem0 Prompt Alignment
 
-目标是控制**问答方式和评分口径**，观察提取出的记忆是否有效，而不是测 Agent 的工具调用。使用 [locomo/openviking](locomo/openviking/README.md)：
+**Use [locomo/vikingbot](locomo/vikingbot/) for memory evaluation, not the single-search workflow in `locomo/openviking`.** The execution path is:
 
-`import_to_ov.py` 提取记忆 → `run_eval.py` 单次检索并回答 → `judge.py` → `stat_judge_result.py`。
+[import_to_ov.py](locomo/vikingbot/import_to_ov.py) writes and commits sessions → [run_eval.py](locomo/vikingbot/run_eval.py) invokes `vikingbot chat` to recall memories and answer → [judge.py](locomo/vikingbot/judge.py) → [stat_judge_result.py](locomo/vikingbot/stat_judge_result.py). By default, memories are isolated by sample Peer; group-chat mode uses speaker Peers. Import and QA must use the same mode.
 
-### 对齐哪些内容
+### Requirements for mem0 Prompt Alignment
 
-参考 mem0 官方 [memory-benchmarks LoCoMo prompts](https://github.com/mem0ai/memory-benchmarks/blob/4b61c5d31b9c668a12b4f5e78064248a02c82d2b/benchmarks/locomo/prompts.py)，本仓库对应实现是 [locomo_prompts.py](locomo/openviking/locomo_prompts.py)：
+Use a pinned version of the [mem0 LoCoMo prompts](https://github.com/mem0ai/memory-benchmarks/blob/4b61c5d31b9c668a12b4f5e78064248a02c82d2b/benchmarks/locomo/prompts.py). **The current VikingBot QA and judge prompts differ from those templates, and there is no automatic switch. A successful run does not establish mem0 alignment.**
 
-- **问答**：`get_answer_generation_prompt`，使用检索后的记忆及参考日期；固定回答模型、候选数、重排、上下文预算和记忆顺序。当前问答模板有标点差异，本地也没有上游可选的 `user_profile` 注入；严格对齐时应固定两边 prompt 版本，mem0 侧不启用该额外输入，不能把“口径对齐”说成逐字相同。
-- **裁判**：默认 `get_judge_prompt` / `get_judge_prompt_with_evidence` 与上述固定版本的 mem0 宽松模板一致；**不要加 `--strict-prompt`**。本地 CSV 有 `evidence_text` 时自动带 evidence，mem0 runner 需设置 `--with-evidence` 对齐；若不带 evidence，双方都不能提供。测试集标注的参考答案/evidence 只用于评分，不得作为额外信息注入待测记忆或问答输入。
-- **实验条件**：同一批问题、同一回答/裁判模型与参数，分别导入各自的记忆系统。`locomo/mem0` 是 OpenClaw + mem0 插件评测，不能直接当作这里的单次检索对照。
+Before reporting an aligned experiment, explicitly integrate the selected QA and judge prompts into the VikingBot evaluation and record the differences:
 
-### 运行
+- QA includes the system/user prompts, reference date, and memory input. Fix the model, retrieval budget, and tool policy. Do not treat mem0's retrieved-memory variable as a VikingBot user question.
+- Judging includes the prompt, model parameters, evidence policy, and result parser. Changing only the judge model is not prompt alignment. Never inject test answers/evidence annotations as extra information into the evaluated memories or QA input.
+- Use identical questions and scoring rules on both sides. `locomo/mem0` evaluates the OpenClaw + mem0 plugin; it is not automatically a prompt-aligned control for this experiment either.
 
-先验证完整样本中的一题；导入阶段不要按测试题 evidence 裁剪历史。单独工作目录也用于隔离导入脚本的 `result/.ingest_record.json`：
+This guide defines the entry point and alignment requirements; it does not add a prompt-switching feature. The commands below first validate the **default VikingBot evaluation flow**.
+
+### Run and Inspect Results
+
+Place the original dataset at `benchmark/locomo/data/locomo10.json`, configure VikingBot, and provide judge credentials through `ARK_API_KEY` or `OPENAI_API_KEY` (the former takes precedence). Start with one complete sample:
 
 ```bash
-mkdir -p "$RUN/memory"
-cd "$RUN/memory"
-python "$ROOT/benchmark/locomo/openviking/import_to_ov.py" \
-  --input "$DATA" --openviking-url "$OPENVIKING_URL" \
-  --sample 0 --parallel-samples 1 \
-  --success-csv ./result/import_success.csv --error-log ./result/import_errors.log
-python "$ROOT/benchmark/locomo/openviking/run_eval.py" "$DATA" \
-  --openviking-url "$OPENVIKING_URL" --output ./result/answers.csv \
-  --sample 0 --question-index 0 --threads 1 \
-  --single-search-context-limit 50 --single-search-rerank-limit 10 \
-  --single-search-max-context-chars 30000 --debug-print-model-input
+cd "$ROOT/benchmark/locomo/vikingbot"
+./run_full_eval.sh 0 --parallel-import-sessions 1 \
+  --parallel-run-eval 1 --parallel-judge 1
+# Remove positional argument 0 for a full run; tune concurrency to service limits.
 ```
 
-核对导入错误日志、实际生成的 memories、CSV 中的 prompt 和检索轨迹。以上 50 / 10 / 30000 是示例预算，不是 mem0 默认值；两边需显式对齐。`--single-search-rerank-limit 0` **不能关闭重排**，无重排对照需关闭本地 `rerank` 配置并检查轨迹。
+The runner checks configuration, services, and identity before import, QA, judging, and reporting. It may request test credentials and a rerun. For a custom judge model, invoke the stages separately with `judge.py --base-url ... --model ...`; do not assume the wrapper reads `JUDGE_MODEL`.
 
-通过安全方式设置裁判凭据 `ARK_API_KEY` 或 `OPENAI_API_KEY`（前者优先），并设置模型和地址后评分：
+- **Do not report single-question imports such as `0 2`, or `--retry-wrong`, as full evaluation**: they select history using test-question evidence and are for debugging only. The example supplies only sample `0` and imports its complete history.
+- The default run re-imports data. Repeat experiments with fresh test storage, not just a new output directory. Use `--skip-import` only when the corresponding memories are already present.
+- Do not add `--auto-commit`: it commits workspace changes. The runner retains only the latest **10** experiment directories by default; back up important results and adjust `--keep-runs` as needed.
 
-```bash
-export JUDGE_BASE_URL="https://your-provider.example/v1"
-export JUDGE_MODEL="your-judge-model-id"
-python "$ROOT/benchmark/locomo/openviking/judge.py" \
-  --input ./result/answers.csv --provider openai \
-  --base-url "$JUDGE_BASE_URL" --model "$JUDGE_MODEL" --parallel 1
-python "$ROOT/benchmark/locomo/openviking/stat_judge_result.py" \
-  --input ./result/answers.csv
-```
+Outputs are under `result/locomo/runs/<timestamp>/`: `locomo_result.csv`, `import_success.csv`, `summary.txt`, and Bot logs. Check import errors, Peer identity, and actual memory recall before interpreting scores. Statistics exclude category 5; `Accuracy = CORRECT / (CORRECT + WRONG)`. Also report ungraded/error counts, the valid-question subset, latency, and tokens—not just an average.
 
-全量时去掉导入和问答的 `--sample 0`，以及问答的 `--question-index 0`，使用新的答案文件；同一轮可复用已完成导入，换服务/提取配置则从独立空存储和新实验目录重来。LoCoMo 按数组下标映射用户，导入后不能重排数据。修改答案或裁判配置后重新评分，避免默认跳过旧 `result`。
+## 3. RAG Evaluation
 
-结果写回答案 CSV，汇总为同目录 `summary.txt`。统计排除 category 5，`Accuracy = CORRECT / (CORRECT + WRONG)`；同时报告未评分/错误数和各类别结果，不能只报均值。
-
-## 3. RAG 相关评测
-
-使用 [RAG README](RAG/README_zh.md)，评测**资源文档的检索与回答**。当前配置包括 Qasper、SyllabusQA、FinanceBench；下面以 Qasper 为例：
+Use the [RAG README](RAG/README.md) to evaluate **resource-document retrieval and answering**. Existing configurations include Qasper, SyllabusQA, and FinanceBench. For example:
 
 ```bash
 cd "$ROOT/benchmark/RAG"
@@ -119,16 +109,16 @@ python scripts/prepare_dataset.py --dataset Qasper --num-docs 2 --seed 42
 cp config/qasper_config.yaml "$RUN/rag.yaml"
 ```
 
-编辑本轮 YAML 后再运行：配置 `llm.model` / `base_url` / `api_key_env_var`（密钥走环境变量）；设置 `execution.max_queries: 5` 和低并发；将 `paths.doc_output_dir`、`output_dir`、`log_file` 指向本轮独立目录。数据相对路径从 **`benchmark/RAG/`** 解析，不是从 YAML 所在目录解析。RAG 的回答/裁判模型由这个 YAML 指定。
+Edit the run's YAML before continuing: set `llm.model` / `base_url` / `api_key_env_var` (credentials through the environment), `execution.max_queries: 5`, and low concurrency. Point `paths.doc_output_dir`, `output_dir`, and `log_file` to isolated directories for this run. Relative data paths resolve from **`benchmark/RAG/`**, not the YAML's directory. This YAML selects the RAG answer and judge model.
 
 ```bash
 python run.py --config "$RUN/rag.yaml" --step gen
 python run.py --config "$RUN/rag.yaml" --step eval
 ```
 
-- **始终显式指定 `gen` / `eval`。** 默认 `all` 和 `del` 会递归删除当前身份可访问的 `viking://resources`，不要在共享实例上使用。
-- `max_queries` 只限制问答，不限制导入量；先抽样，正式实验再固定 split/问题集并扩大规模。
-- 输出目录中查看 `generated_answers.json`、`qa_eval_detailed_results.json` 和 `benchmark_metrics_report.json`：核对题数、F1、evidence Recall、裁判分及耗时/token。这里的 Recall 不是标准文档 Recall@k，Qasper 的归一化 0–4 裁判分也不是 Memory 的二值 Accuracy。
-- **不要用 `RAG/config/locomo_config.yaml` 的成绩代表记忆效果**：它把对话当资源，没有经过 session 记忆提取。
+- **Always specify `gen` / `eval` explicitly.** The default `all`, and `del`, recursively delete the `viking://resources` tree accessible to the current identity. Do not use them on a shared instance.
+- `max_queries` limits QA, not ingestion. Sample the data first, then fix the split/question set before scaling up.
+- Inspect `generated_answers.json`, `qa_eval_detailed_results.json`, and `benchmark_metrics_report.json` for counts, F1, evidence Recall, judge scores, latency, and tokens. This Recall is not standard document Recall@k; Qasper's normalized 0–4 judge score is not Memory's binary Accuracy.
+- **Do not use results from `RAG/config/locomo_config.yaml` as memory-quality results**: that path treats conversations as resources and does not run session memory extraction.
 
-无论哪条路径，报告都应附数据/代码/prompt 版本、模型与预算、实际评分题数、逐题结果和成本口径。小样本通过只证明链路可用，不等于复现官网成绩。
+For every path, report data/code/prompt versions, models and budgets, actual graded counts, per-question results, and cost definitions. A successful smoke test proves the flow works, not that the published results have been reproduced.
