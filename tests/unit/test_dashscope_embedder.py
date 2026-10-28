@@ -5,10 +5,12 @@ Tests for DashScopeDenseEmbedder.
 Pattern: patch at module import path, use MagicMock, never make real API calls.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from openviking.concurrency import AsyncSemaphore
 from openviking.models.embedder.base import embed_compat
 from openviking.models.embedder.dashscope_embedders import (
     DashScopeDenseEmbedder,
@@ -430,9 +432,10 @@ class TestDashScopeAsync:
         client.post = AsyncMock(return_value=response)
         embedder = DashScopeDenseEmbedder("qwen3-vl-embedding", api_key="sk-test")
         embedder._get_async_httpx_client = MagicMock(return_value=client)
+        embedder._account_semaphore = AsyncSemaphore(0)
         parts = [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}]
 
-        await embed_compat(embedder, parts, is_query=True)
+        await asyncio.wait_for(embed_compat(embedder, parts, is_query=True), timeout=1)
 
         body = client.post.call_args.kwargs["json"]
         assert body["input"]["contents"] == [{"image": "https://example.com/cat.png"}]
