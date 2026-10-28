@@ -1,0 +1,74 @@
+bot/vikingbot/compile/ops/finalize.py
+  h_b34c679d17e2ac 254-255
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 1384,1475
+docs/en/api/01-overview.md
+  h_b34c679d17e2ac 400
+docs/en/api/12-content.md
+  h_b34c679d17e2ac 551-603
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 215-216,227
+docs/en/guides/07-operation-telemetry.md
+  h_b34c679d17e2ac 74
+docs/zh/api/01-overview.md
+  h_b34c679d17e2ac 395
+docs/zh/api/12-content.md
+  h_b34c679d17e2ac 551-603
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 215-216,227
+docs/zh/guides/07-operation-telemetry.md
+  h_b34c679d17e2ac 74
+openviking/server/mcp_endpoint.py
+  h_b34c679d17e2ac 1420
+openviking/server/routers/content.py
+  h_b34c679d17e2ac 56,107-119,356-380
+openviking/service/compile_targets.py
+  h_b34c679d17e2ac 1199-1200,1297-1298,1301-1302,1309-1332
+openviking/service/fs_service.py
+  h_b34c679d17e2ac 20,36,40-44,51-52,60,63,65,81,1603,1714-1956
+openviking/service/memory_compile.py
+  h_b34c679d17e2ac 38,251-270
+openviking/storage/content_write.py
+  h_b34c679d17e2ac 514,1106,1915,2141,2309,2386,2407-2408,2679
+openviking/storage/queuefs/content_write_processor.py
+  h_b34c679d17e2ac 291-311
+openviking/utils/skill_processor.py
+  h_b34c679d17e2ac 39,197,220
+sdk/go/client_test.go
+  h_b34c679d17e2ac 2066-2084
+sdk/go/filesystem.go
+  h_b34c679d17e2ac 335-356
+sdk/go/types.go
+  h_b34c679d17e2ac 268-273
+sdk/python/openviking_sdk/client.py
+  h_b34c679d17e2ac 1380-1399,2892-2902
+sdk/python/openviking_sdk/options.py
+  h_b34c679d17e2ac 99
+sdk/python/tests/test_async_client_behaviors.py
+  h_b34c679d17e2ac 1457-1475
+sdk/typescript/src/client.ts
+  h_b34c679d17e2ac 717-731
+sdk/typescript/tests/client.test.ts
+  h_b34c679d17e2ac 22-49
+tests/server/test_api_content_write.py
+  h_b34c679d17e2ac 10,12,36-66
+tests/server/test_compile_studio.py
+  h_b34c679d17e2ac 19,31-48,391,566-568,865
+tests/server/test_content_batch_write.py
+  h_b34c679d17e2ac 1345,1348,1356
+tests/session/memory/test_consolidation_compile.py
+  h_b34c679d17e2ac 202-205,217-218,770-776,806,809
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "898ef38f6e442478b4e734dcdcffd163322ab911",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
