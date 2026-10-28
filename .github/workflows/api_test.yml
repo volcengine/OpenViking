@@ -212,7 +212,7 @@ jobs:
             "vlm": {
               "provider": "volcengine",
               "api_key": "$VLM_API_KEY",
-              "model": "doubao-seed-2-0-mini-260215",
+              "model": "doubao-seed-2-1-lite-260915",
               "api_base": "https://ark.cn-beijing.volces.com/api/v3",
               "temperature": 0.1,
               "max_retries": 3
@@ -238,7 +238,7 @@ jobs:
             "vlm": {
               "provider": "volcengine",
               "api_key": "dummy-vlm-api-key",
-              "model": "doubao-seed-2-0-mini-260215",
+              "model": "doubao-seed-2-1-lite-260915",
               "api_base": "https://ark.cn-beijing.volces.com/api/v3",
               "temperature": 0.1,
               "max_retries": 3
@@ -289,7 +289,7 @@ jobs:
             "vlm": {
               "provider": "volcengine",
               "api_key": "$env:VLM_API_KEY",
-              "model": "doubao-seed-2-0-mini-260215",
+              "model": "doubao-seed-2-1-lite-260915",
               "api_base": "https://ark.cn-beijing.volces.com/api/v3",
               "temperature": 0.1,
               "max_retries": 3
@@ -315,7 +315,7 @@ jobs:
             "vlm": {
               "provider": "volcengine",
               "api_key": "dummy-vlm-api-key",
-              "model": "doubao-seed-2-0-mini-260215",
+              "model": "doubao-seed-2-1-lite-260915",
               "api_base": "https://ark.cn-beijing.volces.com/api/v3",
               "temperature": 0.1,
               "max_retries": 3
