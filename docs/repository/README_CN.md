@@ -110,7 +110,7 @@ viking://resources/my_project/
 
 OpenViking 0.3.22 的评测覆盖长对话用户记忆（LoCoMo）和多轮智能体任务（tau2-bench）。完整结果和实验设置（含知识库问答）见[评测报告](https://blog.openviking.ai/post/openviking-benchmark-results/)，复现脚本在 [./benchmark](../../benchmark)。
 
-自己运行评测，请从 [RAG 与 Memory 评测指南](../../benchmark/README_zh.md)开始：区分官网 LoCoMo 复现、mem0 prompt 对齐实验与 RAG 评测，避免用 RAG 流程评测记忆。
+自己运行评测，请从 [RAG 与 Memory 评测指南](../../benchmark/README_zh.md)开始：以 VikingBot 为日常记忆评测主入口，另列官网 LoCoMo 复现、mem0 prompt 对照和 RAG 评测，避免用 RAG 流程评测记忆。
 
 记忆评测使用 [Doubao 2.0 Pro](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-seed-2-0-pro) 作为 VLM，使用 [Doubao-embedding-vision-251215](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-embedding-vision) 作为 Embedding 模型。
 

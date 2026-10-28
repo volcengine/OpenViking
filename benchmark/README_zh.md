@@ -11,9 +11,10 @@
 
 | 你想做什么 | 走哪条路径 |
 | --- | --- |
-| 复现官网公布的 LoCoMo 结果 | [1. Agent 接入评测](#1-复现官网的-locomo-结果) |
-| 对齐 mem0 的问答与 LLM-judge prompt 做 Memory 实验 | [2. Prompt 对齐实验](#2-对齐-mem0-prompt-的-memory-实验) |
-| 评测知识库检索与回答 | [3. RAG 评测](#3-rag-相关评测) |
+| 日常 Memory 效果评测与回归（主要入口） | [1. VikingBot](#1-日常-memory-评测vikingbot) |
+| 复现官网公布的 LoCoMo 结果 | [2. Agent 接入评测](#2-复现官网的-locomo-结果) |
+| 独立对照 mem0 的问答与 LLM-judge prompt | [3. mem0 对照实验](#3-mem0-prompt-对照实验) |
+| 评测知识库检索与回答 | [4. RAG 评测](#4-rag-相关评测) |
 
 ## 开始前
 
@@ -34,51 +35,11 @@ mkdir -p "$RUN"
 
 导入和问答必须使用同一服务、account/user 与数据版本。`ovcli.conf` 管 HTTP 连接；`ov.conf` 管服务端模型和 VikingBot 配置。按 [VikingBot 配置指南](../docs/zh/guides/17-vikingbot.md)显式设置 `bot.ov_server.server_url`，确保与导入地址一致，避免误跑 standalone；问答模型由 `bot.agents` 配置或继承根级 `vlm`。密钥勿提交到仓库。
 
-## 1. 复现官网的 LoCoMo 结果
+## 1. 日常 Memory 评测（VikingBot）
 
-[官网报告（2026-05-29）](https://blog.openviking.ai/post/openviking-benchmark-results/)公布的是 **Agent 原生记忆 vs Agent + OpenViking**，不是第 2 节的 prompt 对齐实验：
-
-| Agent | 官网 Accuracy：原生 → OpenViking | 复现入口 |
-| --- | --- | --- |
-| OpenClaw | 24.20% → 82.08% | [操作说明](locomo/README.md)、[运行脚本](locomo/openclaw/run_full_eval.sh) |
-| Hermes | 33.38% → 82.86% | [README](locomo/hermes/README.md)：`native` / `e2e` / `preingest` |
-| Claude Code | 57.21% → 80.32% | [README](locomo/claudecode/README.md)：`prompted` / `sdk_iso` / `sdk_noiso` / `e2e` |
-
-复现步骤：
-
-1. 固定报告对应的 OpenViking / Agent 版本、模型、数据、插件配置、导入模式和该 Agent 自带的问答/裁判 prompt。`e2e` 与 SDK 预导入不是同一种实验，不要互换。
-2. 按对应 README 分别准备原生记忆与 OpenViking 实验组，从空的测试状态导入相同历史；先跑一个样本，再跑全量。
-3. 用**该 Agent 目录下**的 judge/stat 流程统计 Accuracy、耗时和 token；不要换用第 2 节的 mem0 裁判后仍称为官网结果。
-
-例如 Hermes 的端到端接入 smoke（前置服务与模型按其 README 配好）：
-
-```bash
-cd "$ROOT/benchmark/locomo/hermes"
-export LOCOMO_JSON="$DATA"
-./run_full_eval.sh --suite native --sample 0 --count 1
-./run_full_eval.sh --suite e2e --sample 0 --count 1
-# 验证后去掉 --sample 0 --count 1 跑全量；如复现预导入方案，选 preingest。
-```
-
-官网文章没有逐项固定完整运行参数，当前脚本默认值也可能变化；上例演示接入流程，不能仅因选了 `e2e` 就声称精确复现已公布分数。保留所用 commit、配置和模式，结果从对应实验目录的逐题 CSV 与统计日志核对。
-
-## 2. 对齐 mem0 prompt 的 Memory 实验
-
-**记忆评测使用 [locomo/vikingbot](locomo/vikingbot/)，不使用 `locomo/openviking` 的单次检索流程。** 执行链路为：
+**[locomo/vikingbot](locomo/vikingbot/) 是我们日常主要运行的 Memory 评测入口。** 使用 VikingBot 自己的问答、记忆工具和裁判方式，与 mem0 对照实验不同；不需要为了对齐 mem0 而替换日常评测的 prompt。执行链路为：
 
 [import_to_ov.py](locomo/vikingbot/import_to_ov.py) 写入 session 并 commit → [run_eval.py](locomo/vikingbot/run_eval.py) 调用 `vikingbot chat` 召回记忆并回答 → [judge.py](locomo/vikingbot/judge.py) → [stat_judge_result.py](locomo/vikingbot/stat_judge_result.py)。默认按样本 Peer 隔离记忆，群聊模式则按 speaker Peer；导入与问答必须使用同一模式。
-
-### mem0 prompt 对齐要求
-
-参考固定版本的 [mem0 LoCoMo prompts](https://github.com/mem0ai/memory-benchmarks/blob/4b61c5d31b9c668a12b4f5e78064248a02c82d2b/benchmarks/locomo/prompts.py)。**当前 VikingBot 脚本的默认问答和裁判 prompt 与该模板不同，也没有自动切换开关；跑通脚本不等于完成 mem0 对齐。**
-
-要报告对齐实验，需要先在 VikingBot 评测中显式接入选定版本的问答与 judge prompt，并记录差异：
-
-- 问答包括 system/user prompt、参考日期和记忆输入；固定模型、检索预算及工具策略。不能把 mem0 的检索结果变量直接当作 VikingBot 的用户问题。
-- 裁判包括 prompt、模型参数、是否提供 evidence 和结果解析格式；只换裁判模型不等于对齐。测试集答案/evidence 不得作为额外信息注入待测记忆或问答输入。
-- 两边使用相同问题和评分口径；`locomo/mem0` 是 OpenClaw + mem0 插件评测，也不能直接冒充上述 prompt 已对齐的对照。
-
-本文只说明脚本入口与对齐条件，不新增 prompt 切换功能。下面先跑通 VikingBot 的**默认评测链路**。
 
 ### 运行与结果
 
@@ -99,7 +60,43 @@ cd "$ROOT/benchmark/locomo/vikingbot"
 
 结果位于 `result/locomo/runs/<timestamp>/`：`locomo_result.csv`、`import_success.csv`、`summary.txt` 和 Bot 日志。先核对导入错误、Peer 和实际记忆召回，再看分数。统计排除 category 5，`Accuracy = CORRECT / (CORRECT + WRONG)`；同时报告未评分/错误数、有效题范围、耗时和 token，不能只报均值。
 
-## 3. RAG 相关评测
+## 2. 复现官网的 LoCoMo 结果
+
+[官网报告（2026-05-29）](https://blog.openviking.ai/post/openviking-benchmark-results/)公布的是 **Agent 原生记忆 vs Agent + OpenViking**，不能与日常 VikingBot 或第 3 节的 mem0 对照分数混用：
+
+| Agent | 官网 Accuracy：原生 → OpenViking | 复现入口 |
+| --- | --- | --- |
+| OpenClaw | 24.20% → 82.08% | [操作说明](locomo/README.md)、[运行脚本](locomo/openclaw/run_full_eval.sh) |
+| Hermes | 33.38% → 82.86% | [README](locomo/hermes/README.md)：`native` / `e2e` / `preingest` |
+| Claude Code | 57.21% → 80.32% | [README](locomo/claudecode/README.md)：`prompted` / `sdk_iso` / `sdk_noiso` / `e2e` |
+
+复现步骤：
+
+1. 固定报告对应的 OpenViking / Agent 版本、模型、数据、插件配置、导入模式和该 Agent 自带的问答/裁判 prompt。`e2e` 与 SDK 预导入不是同一种实验，不要互换。
+2. 按对应 README 分别准备原生记忆与 OpenViking 实验组，从空的测试状态导入相同历史；先跑一个样本，再跑全量。
+3. 用**该 Agent 目录下**的 judge/stat 流程统计 Accuracy、耗时和 token；不要换用第 3 节的 mem0 裁判后仍称为官网结果。
+
+例如 Hermes 的端到端接入 smoke（前置服务与模型按其 README 配好）：
+
+```bash
+cd "$ROOT/benchmark/locomo/hermes"
+export LOCOMO_JSON="$DATA"
+./run_full_eval.sh --suite native --sample 0 --count 1
+./run_full_eval.sh --suite e2e --sample 0 --count 1
+# 验证后去掉 --sample 0 --count 1 跑全量；如复现预导入方案，选 preingest。
+```
+
+官网文章没有逐项固定完整运行参数，当前脚本默认值也可能变化；上例演示接入流程，不能仅因选了 `e2e` 就声称精确复现已公布分数。保留所用 commit、配置和模式，结果从对应实验目录的逐题 CSV 与统计日志核对。
+
+## 3. mem0 prompt 对照实验
+
+这是**独立实验口径，不是日常 VikingBot 评测的要求**。参考 [locomo/openviking](locomo/openviking/README.md) 的单次记忆检索流程，以及其中的 [问答与裁判 prompt](locomo/openviking/locomo_prompts.py)；不要修改 `locomo/vikingbot` 来迁就这套口径。
+
+- 对照固定版本的 [mem0 LoCoMo prompts](https://github.com/mem0ai/memory-benchmarks/blob/4b61c5d31b9c668a12b4f5e78064248a02c82d2b/benchmarks/locomo/prompts.py)，分别核对问答 prompt、judge prompt、参考日期、evidence 使用方式与结果解析，不能只换裁判模型。
+- 固定问题集、回答/裁判模型、检索和上下文预算；记录本地模板与上游的差异，不宣称默认逐字一致。测试集答案/evidence 不得额外注入待测记忆或问答输入。
+- 对照结果单独报告，不替代日常 VikingBot 基线，也不标为官网复现成绩。`locomo/mem0` 是 OpenClaw + mem0 插件评测，属于另一条接入路径。
+
+## 4. RAG 相关评测
 
 使用 [RAG README](RAG/README_zh.md)，评测**资源文档的检索与回答**。当前配置包括 Qasper、SyllabusQA、FinanceBench；下面以 Qasper 为例：
 

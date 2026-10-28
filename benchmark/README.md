@@ -11,9 +11,10 @@ English | [简体中文](README_zh.md)
 
 | Goal | Path |
 | --- | --- |
-| Reproduce the published LoCoMo results | [1. Agent integration evaluation](#1-reproduce-the-published-locomo-results) |
-| Evaluate Memory with QA and LLM-judge prompts aligned to mem0 | [2. Prompt-aligned experiments](#2-memory-experiments-with-mem0-prompt-alignment) |
-| Evaluate knowledge-base retrieval and answering | [3. RAG evaluation](#3-rag-evaluation) |
+| Routine Memory evaluation and regression checks (primary entry point) | [1. VikingBot](#1-routine-memory-evaluation-with-vikingbot) |
+| Reproduce the published LoCoMo results | [2. Agent integration evaluation](#2-reproduce-the-published-locomo-results) |
+| Separately compare mem0 QA and LLM-judge prompts | [3. mem0 comparison](#3-mem0-prompt-comparison-experiments) |
+| Evaluate knowledge-base retrieval and answering | [4. RAG evaluation](#4-rag-evaluation) |
 
 ## Before You Start
 
@@ -34,51 +35,11 @@ mkdir -p "$RUN"
 
 Import and QA must use the same server, account/user, and dataset version. `ovcli.conf` controls HTTP connections; `ov.conf` controls server models and VikingBot. Follow the [VikingBot configuration guide](../docs/en/guides/17-vikingbot.md) to explicitly set `bot.ov_server.server_url` to the import target and avoid accidentally running standalone. The answer model comes from `bot.agents` or inherits the root `vlm`. Do not commit credentials.
 
-## 1. Reproduce the Published LoCoMo Results
+## 1. Routine Memory Evaluation with VikingBot
 
-The [official report (May 29, 2026)](https://blog.openviking.ai/post/openviking-benchmark-results/) compares **Agent native memory against Agent + OpenViking**, not the prompt-alignment experiment in section 2:
-
-| Agent | Published accuracy: native → OpenViking | Reproduction entry point |
-| --- | --- | --- |
-| OpenClaw | 24.20% → 82.08% | [Instructions](locomo/README.md), [runner](locomo/openclaw/run_full_eval.sh) |
-| Hermes | 33.38% → 82.86% | [README](locomo/hermes/README.md): `native` / `e2e` / `preingest` |
-| Claude Code | 57.21% → 80.32% | [README](locomo/claudecode/README.md): `prompted` / `sdk_iso` / `sdk_noiso` / `e2e` |
-
-To reproduce:
-
-1. Pin the report's OpenViking / Agent versions, models, data, plugin configuration, import mode, and Agent-specific QA/judge prompts. End-to-end capture and SDK pre-ingestion are different experiments; do not substitute one for the other.
-2. Follow the corresponding README to prepare native-memory and OpenViking groups, importing identical history into fresh test state. Start with one sample, then run the full dataset.
-3. Use **that Agent directory's** judge/stat pipeline for accuracy, latency, and tokens. Switching to the mem0 judging protocol in section 2 changes the experiment; it is no longer the published setup.
-
-For example, a Hermes integration smoke test, after configuring its services and models:
-
-```bash
-cd "$ROOT/benchmark/locomo/hermes"
-export LOCOMO_JSON="$DATA"
-./run_full_eval.sh --suite native --sample 0 --count 1
-./run_full_eval.sh --suite e2e --sample 0 --count 1
-# Remove --sample 0 --count 1 for a full run; use preingest for a pre-ingested setup.
-```
-
-The report does not pin every runtime parameter, and current script defaults may change. This example demonstrates the integration flow; selecting `e2e` alone does not establish an exact reproduction of the published score. Save the commit, configuration, and mode, and check each run's per-question CSV and statistics log.
-
-## 2. Memory Experiments with mem0 Prompt Alignment
-
-**Use [locomo/vikingbot](locomo/vikingbot/) for memory evaluation, not the single-search workflow in `locomo/openviking`.** The execution path is:
+**[locomo/vikingbot](locomo/vikingbot/) is our primary entry point for routine Memory evaluation.** It uses VikingBot’s own QA, memory tools, and judging protocol, separately from mem0 comparisons. Its prompts do not need to be replaced to match mem0. The execution path is:
 
 [import_to_ov.py](locomo/vikingbot/import_to_ov.py) writes and commits sessions → [run_eval.py](locomo/vikingbot/run_eval.py) invokes `vikingbot chat` to recall memories and answer → [judge.py](locomo/vikingbot/judge.py) → [stat_judge_result.py](locomo/vikingbot/stat_judge_result.py). By default, memories are isolated by sample Peer; group-chat mode uses speaker Peers. Import and QA must use the same mode.
-
-### Requirements for mem0 Prompt Alignment
-
-Use a pinned version of the [mem0 LoCoMo prompts](https://github.com/mem0ai/memory-benchmarks/blob/4b61c5d31b9c668a12b4f5e78064248a02c82d2b/benchmarks/locomo/prompts.py). **The current VikingBot QA and judge prompts differ from those templates, and there is no automatic switch. A successful run does not establish mem0 alignment.**
-
-Before reporting an aligned experiment, explicitly integrate the selected QA and judge prompts into the VikingBot evaluation and record the differences:
-
-- QA includes the system/user prompts, reference date, and memory input. Fix the model, retrieval budget, and tool policy. Do not treat mem0's retrieved-memory variable as a VikingBot user question.
-- Judging includes the prompt, model parameters, evidence policy, and result parser. Changing only the judge model is not prompt alignment. Never inject test answers/evidence annotations as extra information into the evaluated memories or QA input.
-- Use identical questions and scoring rules on both sides. `locomo/mem0` evaluates the OpenClaw + mem0 plugin; it is not automatically a prompt-aligned control for this experiment either.
-
-This guide defines the entry point and alignment requirements; it does not add a prompt-switching feature. The commands below first validate the **default VikingBot evaluation flow**.
 
 ### Run and Inspect Results
 
@@ -99,7 +60,43 @@ The runner checks configuration, services, and identity before import, QA, judgi
 
 Outputs are under `result/locomo/runs/<timestamp>/`: `locomo_result.csv`, `import_success.csv`, `summary.txt`, and Bot logs. Check import errors, Peer identity, and actual memory recall before interpreting scores. Statistics exclude category 5; `Accuracy = CORRECT / (CORRECT + WRONG)`. Also report ungraded/error counts, the valid-question subset, latency, and tokens—not just an average.
 
-## 3. RAG Evaluation
+## 2. Reproduce the Published LoCoMo Results
+
+The [official report (May 29, 2026)](https://blog.openviking.ai/post/openviking-benchmark-results/) compares **Agent native memory against Agent + OpenViking**, and should not be mixed with routine VikingBot scores or the mem0 comparison in section 3:
+
+| Agent | Published accuracy: native → OpenViking | Reproduction entry point |
+| --- | --- | --- |
+| OpenClaw | 24.20% → 82.08% | [Instructions](locomo/README.md), [runner](locomo/openclaw/run_full_eval.sh) |
+| Hermes | 33.38% → 82.86% | [README](locomo/hermes/README.md): `native` / `e2e` / `preingest` |
+| Claude Code | 57.21% → 80.32% | [README](locomo/claudecode/README.md): `prompted` / `sdk_iso` / `sdk_noiso` / `e2e` |
+
+To reproduce:
+
+1. Pin the report's OpenViking / Agent versions, models, data, plugin configuration, import mode, and Agent-specific QA/judge prompts. End-to-end capture and SDK pre-ingestion are different experiments; do not substitute one for the other.
+2. Follow the corresponding README to prepare native-memory and OpenViking groups, importing identical history into fresh test state. Start with one sample, then run the full dataset.
+3. Use **that Agent directory's** judge/stat pipeline for accuracy, latency, and tokens. Switching to the mem0 judging protocol in section 3 changes the experiment; it is no longer the published setup.
+
+For example, a Hermes integration smoke test, after configuring its services and models:
+
+```bash
+cd "$ROOT/benchmark/locomo/hermes"
+export LOCOMO_JSON="$DATA"
+./run_full_eval.sh --suite native --sample 0 --count 1
+./run_full_eval.sh --suite e2e --sample 0 --count 1
+# Remove --sample 0 --count 1 for a full run; use preingest for a pre-ingested setup.
+```
+
+The report does not pin every runtime parameter, and current script defaults may change. This example demonstrates the integration flow; selecting `e2e` alone does not establish an exact reproduction of the published score. Save the commit, configuration, and mode, and check each run's per-question CSV and statistics log.
+
+## 3. mem0 Prompt Comparison Experiments
+
+This is a **separate experimental protocol, not a requirement for routine VikingBot evaluation**. Refer to the single-search memory workflow in [locomo/openviking](locomo/openviking/README.md) and its [QA/judge prompts](locomo/openviking/locomo_prompts.py). Do not change `locomo/vikingbot` to conform to this protocol.
+
+- Compare with a pinned version of the [mem0 LoCoMo prompts](https://github.com/mem0ai/memory-benchmarks/blob/4b61c5d31b9c668a12b4f5e78064248a02c82d2b/benchmarks/locomo/prompts.py). Check the QA and judge prompts, reference date, evidence policy, and result parser separately; changing only the judge model is insufficient.
+- Fix the questions, answer/judge models, retrieval budget, and context budget. Record local/upstream template differences rather than claiming byte-for-byte equivalence by default. Never inject test answers/evidence annotations as extra information into memories or QA input.
+- Report these results separately. They neither replace the routine VikingBot baseline nor reproduce the published scores. `locomo/mem0` evaluates the OpenClaw + mem0 plugin and is another integration path.
+
+## 4. RAG Evaluation
 
 Use the [RAG README](RAG/README.md) to evaluate **resource-document retrieval and answering**. Existing configurations include Qasper, SyllabusQA, and FinanceBench. For example:
 
