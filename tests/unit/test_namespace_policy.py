@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openviking.core.namespace_constants import SYSTEM_ASSET_ROOT_MAPPINGS
 from openviking.core.namespace_policy import (
     SYSTEM_FIXED_DIRECTORIES,
     SYSTEM_MEMORY_CUSTOM_ROOT,
@@ -68,6 +69,15 @@ def test_fixed_and_official_system_roots_are_explicit():
         "viking://system/memory/memory_templates/custom/team.yaml"
     )
     assert not is_system_fixed_directory_uri("viking://system/memory-templates")
+
+
+def test_system_asset_mapping_covers_official_roots_without_duplicates():
+    source_roots = [source_root for source_root, _ in SYSTEM_ASSET_ROOT_MAPPINGS]
+    target_roots = [target_root for _, target_root in SYSTEM_ASSET_ROOT_MAPPINGS]
+
+    assert len(source_roots) == len(set(source_roots))
+    assert len(target_roots) == len(set(target_roots))
+    assert set(target_roots) == SYSTEM_OFFICIAL_ASSET_ROOTS
 
 
 def test_custom_asset_detection_excludes_fixed_custom_root():

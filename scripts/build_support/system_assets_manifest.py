@@ -5,18 +5,12 @@ import json
 from pathlib import Path
 
 from openviking.core.namespace_constants import (
-    SYSTEM_EXAMPLE_SKILLS_ROOT,
+    SYSTEM_ASSET_ROOT_MAPPINGS,
     SYSTEM_FIXED_DIRECTORIES,
-    SYSTEM_MEMORY_BUILTIN_ROOT,
 )
 
 MANIFEST_FILENAME = "manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
-
-_MANAGED_ASSET_ROOTS = (
-    (Path("compile/example-skills"), SYSTEM_EXAMPLE_SKILLS_ROOT),
-    (Path("memory/memory_templates/builtin"), SYSTEM_MEMORY_BUILTIN_ROOT),
-)
 
 
 def _update_digest(digest, path: bytes, content: bytes) -> None:
@@ -32,7 +26,7 @@ def build_system_assets_manifest(assets_dir: Path) -> bytes:
     for uri in sorted(SYSTEM_FIXED_DIRECTORIES):
         _update_digest(digest, uri.encode("utf-8"), b"")
 
-    for relative_root, target_root in _MANAGED_ASSET_ROOTS:
+    for relative_root, target_root in SYSTEM_ASSET_ROOT_MAPPINGS:
         source_root = assets_dir / relative_root
         if not source_root.is_dir():
             raise FileNotFoundError(f"packaged system asset directory not found: {source_root}")

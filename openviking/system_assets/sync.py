@@ -10,10 +10,9 @@ from functools import cached_property
 from pathlib import Path
 
 from openviking.core.namespace import uri_parts
+from openviking.core.namespace_constants import SYSTEM_ASSET_ROOT_MAPPINGS
 from openviking.core.namespace_policy import (
-    SYSTEM_EXAMPLE_SKILLS_ROOT,
     SYSTEM_FIXED_DIRECTORIES,
-    SYSTEM_MEMORY_BUILTIN_ROOT,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
@@ -21,10 +20,6 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking_cli.exceptions import NotFoundError
 
-_MANAGED_ASSET_ROOTS = (
-    (Path("compile/example-skills"), SYSTEM_EXAMPLE_SKILLS_ROOT),
-    (Path("memory/memory_templates/builtin"), SYSTEM_MEMORY_BUILTIN_ROOT),
-)
 _MANIFEST_FILENAME = "manifest.json"
 _MANIFEST_SCHEMA_VERSION = 1
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -65,7 +60,7 @@ class SystemAssetSynchronizer:
         return json.loads(self.manifest)["sha256"]
 
     def _iter_managed_assets(self):
-        for relative_root, target_root in _MANAGED_ASSET_ROOTS:
+        for relative_root, target_root in SYSTEM_ASSET_ROOT_MAPPINGS:
             source_root = self._assets_dir / relative_root
             if not source_root.is_dir():
                 raise FileNotFoundError(f"packaged system asset directory not found: {source_root}")
