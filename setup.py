@@ -520,8 +520,8 @@ def _build_web_studio():
 class OpenVikingBuildPy(build_py):
     def run(self):
         _build_web_studio()
+        write_system_assets_manifest(SETUP_DIR / "openviking" / "system_assets")
         super().run()
-        write_system_assets_manifest(Path(self.build_lib) / "openviking" / "system_assets")
         package_root = Path(self.build_lib) / "vikingbot"
         for asset_name in ("workspace", "bridge"):
             source = SETUP_DIR / "bot" / asset_name
