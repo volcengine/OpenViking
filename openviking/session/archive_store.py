@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Literal, Optional
 from openviking.message import Message
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.storage.abstract_overview import body_for_preview
+from openviking.storage.viking_fs import LS_ALL_NODES
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -214,6 +215,37 @@ class ArchiveStore:
             except Exception:
                 continue
         return "pending"
+
+    async def summarize(self) -> Dict[str, int]:
+        """Count persisted terminal markers without hiding storage failures."""
+        counts = {"completed": 0, "failed": 0, "pending": 0}
+        try:
+            entries = await self._viking_fs.ls(
+                f"{self._session_uri}/history", node_limit=LS_ALL_NODES, ctx=self._ctx
+            )
+        except Exception as exc:
+            if is_storage_not_found(exc):
+                return counts
+            raise
+        for entry in entries:
+            name = entry.get("name", "")
+            if not entry.get("isDir") or not re.fullmatch(r"archive_[0-9]+", name):
+                continue
+            files = await self._viking_fs.ls(
+                f"{self._session_uri}/history/{name}",
+                show_all_hidden=True,
+                node_limit=LS_ALL_NODES,
+                ctx=self._ctx,
+            )
+            markers = [item["name"] for item in files if not item.get("isDir")]
+            if ".done" in markers:
+                state = "completed"
+            elif ".failed.json" in markers:
+                state = "failed"
+            else:
+                state = "pending"
+            counts[state] += 1
+        return counts
 
     async def list_refs(self) -> List[Dict[str, Any]]:
         """List archive refs sorted by archive index descending."""

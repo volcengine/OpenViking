@@ -350,6 +350,8 @@ manifest 无法读取或校验时，本次完整 snapshot 失败，不会发布�
 | `openviking_task_cancelling` | Gauge | `task_type` | 正在取消的任务数 |
 | `openviking_task_cancelled` | Gauge | `task_type` | 已取消任务数 |
 
+这些 Gauge 是当前任务存储提供的快照，不是历史累计计数，也不统计归档标记。使用文件任务存储时，只统计已加载到当前进程缓存中的任务。当前 MySQL 任务存储不提供该快照，因此对应任务类型的时间序列可能缺失。数值为零或时间序列缺失，都不能证明没有持久化的失败任务。查询保留期内的任务请使用 [Task API](../api/17-tasks.md)；会话提交失败的排查方式见[运行观测](../api/18-observer.md)。
+
 ### Cache
 
 | 指标族 | 类型 | 常见标签 | 含义 |
