@@ -122,7 +122,38 @@ struct LeaseEntry {
     lock_kinds: HashMap<String, PathLockKind>,
     last_active_at: Instant,
     /// Irreversible; retain the capability and references until cleanup finishes.
-    invalidated_at: Option<Instant>,
+    invalidation: Option<LeaseInvalidation>,
+}
+
+/// The first irreversible authorization revocation, retained through cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LeaseInvalidation {
+    at: Instant,
+    reason: InvalidationReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InvalidationReason {
+    TokenLost,
+    ConfirmationDeadlineExceeded,
+    ReleaseFailed,
+}
+
+impl LeaseEntry {
+    /// Keep the first cause and timestamp, including during cleanup retries.
+    fn invalidate(&mut self, at: Instant, reason: InvalidationReason, paths: &[&str]) {
+        if self.invalidation.is_some() {
+            return;
+        }
+        self.invalidation = Some(LeaseInvalidation { at, reason });
+        warn!(
+            lease_ref = %self.lease.lease_ref,
+            owner_id = %self.lease.owner_id,
+            ?reason,
+            affected_paths = ?paths,
+            "pathlock lease invalidated"
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -202,7 +233,7 @@ impl OwnerRegistry {
                 pending_handoff: false,
                 lock_kinds,
                 last_active_at: Instant::now(),
-                invalidated_at: None,
+                invalidation: None,
             },
         );
         Ok(())
@@ -226,7 +257,7 @@ impl OwnerRegistry {
     fn capability_matches(&self, lease_ref: &str, ownership_ref: &str) -> bool {
         self.entries.get(lease_ref).is_some_and(|entry| {
             !entry.pending_handoff
-                && entry.invalidated_at.is_none()
+                && entry.invalidation.is_none()
                 && entry.ownership_ref == ownership_ref
         })
     }
@@ -236,7 +267,7 @@ impl OwnerRegistry {
         self.entries
             .iter()
             .filter(|(candidate_ref, _)| candidate_ref.as_str() != lease_ref)
-            .filter(|(_, entry)| entry.invalidated_at.is_none())
+            .filter(|(_, entry)| entry.invalidation.is_none())
             .filter_map(|(_, entry)| entry.lock_kinds.get(lock_path).copied())
             .max_by_key(|kind| match kind {
                 PathLockKind::Exact => 0,
@@ -280,7 +311,7 @@ impl OwnerRegistry {
             Some(entry)
                 if entry.ownership_ref == ownership_ref
                     && !entry.pending_handoff
-                    && entry.invalidated_at.is_none() =>
+                    && entry.invalidation.is_none() =>
             {
                 entry.pending_handoff = true;
                 Ok(())
@@ -311,7 +342,7 @@ impl OwnerRegistry {
         new_ownership_ref: String,
     ) -> Option<OwnedPathLockLease> {
         if !self.entries.get(lease_ref)?.pending_handoff
-            || self.entries.get(lease_ref)?.invalidated_at.is_some()
+            || self.entries.get(lease_ref)?.invalidation.is_some()
         {
             return None;
         }
@@ -354,17 +385,49 @@ impl OwnerRegistry {
     }
 
     /// Invalidate entire leases sharing an actual token, never logical ancestors.
-    fn invalidate_paths(&mut self, lost_paths: &HashSet<String>, now: Instant) {
-        for (lease_ref, entry) in &mut self.entries {
-            if entry.invalidated_at.is_none()
-                && entry
-                    .lease
-                    .lock_paths
-                    .iter()
-                    .any(|path| lost_paths.contains(path))
-            {
-                entry.invalidated_at = Some(now);
-                warn!(%lease_ref, ?lost_paths, "pathlock lease invalidated");
+    fn invalidate_paths(
+        &mut self,
+        paths: &HashSet<String>,
+        now: Instant,
+        reason: InvalidationReason,
+    ) {
+        for entry in self.entries.values_mut() {
+            if entry.invalidation.is_some() {
+                continue;
+            }
+            let affected_paths: Vec<String> = entry
+                .lease
+                .lock_paths
+                .iter()
+                .filter(|path| paths.contains(*path))
+                .cloned()
+                .collect();
+            if !affected_paths.is_empty() {
+                if reason == InvalidationReason::ConfirmationDeadlineExceeded {
+                    for path in &affected_paths {
+                        if let Some(health) = self.token_health.get(path) {
+                            warn!(
+                                lease_ref = %entry.lease.lease_ref,
+                                owner_id = %entry.lease.owner_id,
+                                ?reason,
+                                lock_path = %path,
+                                since_last_confirmation_ms = now
+                                    .saturating_duration_since(health.last_confirmed_at)
+                                    .as_millis() as u64,
+                                failures = health.consecutive_failures,
+                                "pathlock token confirmation deadline exceeded"
+                            );
+                        }
+                    }
+                }
+                entry.invalidate(
+                    now,
+                    reason,
+                    &affected_paths
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                );
             }
         }
     }
@@ -378,13 +441,17 @@ impl OwnerRegistry {
             })
             .map(|(path, _)| path.clone())
             .collect();
-        self.invalidate_paths(&expired, now);
+        self.invalidate_paths(
+            &expired,
+            now,
+            InvalidationReason::ConfirmationDeadlineExceeded,
+        );
     }
 
     fn has_only_invalid_refs(&self, path: &str) -> bool {
         self.lock_refs.contains_key(path)
             && !self.entries.values().any(|entry| {
-                entry.invalidated_at.is_none()
+                entry.invalidation.is_none()
                     && entry
                         .lease
                         .lock_paths
@@ -426,14 +493,17 @@ impl OwnerRegistry {
                 }
                 result => {
                     health.consecutive_failures = health.consecutive_failures.saturating_add(1);
-                    warn!(%lease_ref, lock_path = %path, failures = health.consecutive_failures, ?result, "pathlock refresh uncertain");
+                    warn!(%lease_ref, owner_id = %self.entries[lease_ref].lease.owner_id,
+                        lock_path = %path, failures = health.consecutive_failures,
+                        since_last_confirmation_ms = now.saturating_duration_since(health.last_confirmed_at).as_millis() as u64,
+                        ?result, "pathlock refresh uncertain");
                     all_ok = false;
                 }
             }
         }
-        self.invalidate_paths(&lost_paths, now);
+        self.invalidate_paths(&lost_paths, now, InvalidationReason::TokenLost);
         self.invalidate_expired(now, validity);
-        if self.entries[lease_ref].invalidated_at.is_some() {
+        if self.entries[lease_ref].invalidation.is_some() {
             "lost"
         } else if all_ok {
             self.touch(lease_ref);
@@ -646,7 +716,7 @@ impl PathLockManager {
                     let Some(entry) = owner_registry.entries.get(&lease_ref) else {
                         continue;
                     };
-                    if entry.invalidated_at.is_none() {
+                    if entry.invalidation.is_none() {
                         Self::refresh_entry_with(
                             &refresh_provider,
                             &mut owner_registry,
@@ -1593,11 +1663,13 @@ impl PathLockManager {
             }
         }
         if let Some(window) = cleanup_window {
-            let Some(invalidated_at) = entry.invalidated_at else {
+            let Some(invalidation) = entry.invalidation else {
                 return Ok(false);
             };
-            if invalidated_at.elapsed() >= window {
-                error!(%lease_ref, owner_id = %owner.owner_id, remaining_paths = ?entry.lease.lock_paths,
+            if invalidation.at.elapsed() >= window {
+                error!(%lease_ref, owner_id = %owner.owner_id, reason = ?invalidation.reason,
+                    invalidated_for_ms = invalidation.at.elapsed().as_millis() as u64,
+                    remaining_paths = ?entry.lease.lock_paths,
                     "pathlock cleanup retry window exhausted; forgetting local lease");
                 lease_registry.unpublish(lease_ref, &owner)?;
                 owner_registry.rollback_insert(lease_ref);
@@ -1634,7 +1706,7 @@ impl PathLockManager {
                 })?;
             let released_kind = entry.lock_kinds.get(&lock_path).copied();
             let remaining_kind = owner_registry.strongest_kind_excluding(lease_ref, &lock_path);
-            let invalidated = entry.invalidated_at.is_some();
+            let invalidated = entry.invalidation.is_some();
 
             if ref_count == 1 {
                 let result = if invalidated {
@@ -1650,6 +1722,7 @@ impl PathLockManager {
                             owner_registry.invalidate_paths(
                                 &HashSet::from([lock_path.clone()]),
                                 Instant::now(),
+                                InvalidationReason::TokenLost,
                             );
                         }
                         if owner_registry.entries[lease_ref]
@@ -1665,7 +1738,14 @@ impl PathLockManager {
                     Err(release_error) => {
                         // Stop authorizing writes while failed release is retried.
                         if let Some(entry) = owner_registry.entries.get_mut(lease_ref) {
-                            entry.invalidated_at.get_or_insert_with(Instant::now);
+                            entry.invalidate(
+                                Instant::now(),
+                                InvalidationReason::ReleaseFailed,
+                                &[&lock_path],
+                            );
+                            warn!(%lease_ref, owner_id = %owner.owner_id, lock_path = %lock_path,
+                                reason = ?entry.invalidation.unwrap().reason, error = %release_error,
+                                "pathlock release failed; retaining lease for cleanup");
                         }
                         if first_error.is_none() {
                             first_error = Some(release_error);
@@ -1707,8 +1787,11 @@ impl PathLockManager {
                     owner_registry.remove_path(lease_ref, &lock_path);
                 }
                 Ok(false) => {
-                    owner_registry
-                        .invalidate_paths(&HashSet::from([lock_path.clone()]), Instant::now());
+                    owner_registry.invalidate_paths(
+                        &HashSet::from([lock_path.clone()]),
+                        Instant::now(),
+                        InvalidationReason::TokenLost,
+                    );
                     if owner_registry.entries[lease_ref]
                         .lease
                         .lock_paths
@@ -1726,11 +1809,21 @@ impl PathLockManager {
                             if current_owner != &owner.owner_id
                     );
                     if owner_mismatch {
-                        owner_registry
-                            .invalidate_paths(&HashSet::from([lock_path.clone()]), Instant::now());
+                        owner_registry.invalidate_paths(
+                            &HashSet::from([lock_path.clone()]),
+                            Instant::now(),
+                            InvalidationReason::TokenLost,
+                        );
                     }
                     if let Some(entry) = owner_registry.entries.get_mut(lease_ref) {
-                        entry.invalidated_at.get_or_insert_with(Instant::now);
+                        entry.invalidate(
+                            Instant::now(),
+                            InvalidationReason::ReleaseFailed,
+                            &[&lock_path],
+                        );
+                        warn!(%lease_ref, owner_id = %owner.owner_id, lock_path = %lock_path,
+                            reason = ?entry.invalidation.unwrap().reason, error = %release_error,
+                            "pathlock release failed; retaining lease for cleanup");
                     }
                     if first_error.is_none() {
                         first_error = Some(release_error);
@@ -1846,7 +1939,7 @@ impl PathLockManager {
                     .invalidate_expired(Instant::now(), Self::lease_validity(&self.config));
                 if owner_registry
                     .get_by_ref(lease_ref)
-                    .is_some_and(|entry| entry.invalidated_at.is_some())
+                    .is_some_and(|entry| entry.invalidation.is_some())
                 {
                     return Err(PathLockError::HandoffFailed(format!(
                         "pathlock lease '{lease_ref}' is invalidated"
@@ -2159,7 +2252,7 @@ impl PathLockManager {
         owner_registry
             .entries
             .values()
-            .find(|entry| !entry.pending_handoff && entry.invalidated_at.is_none())
+            .find(|entry| !entry.pending_handoff && entry.invalidation.is_none())
             .map(|entry| OwnedPathLockLease {
                 lease: entry.lease.clone(),
                 ownership_ref: entry.ownership_ref.clone(),
@@ -2173,7 +2266,7 @@ impl PathLockManager {
         owner_registry.invalidate_expired(Instant::now(), Self::lease_validity(&self.config));
         owner_registry
             .get_by_ref(lease_ref)
-            .filter(|entry| !entry.pending_handoff && entry.invalidated_at.is_none())
+            .filter(|entry| !entry.pending_handoff && entry.invalidation.is_none())
             .map(|entry| OwnedPathLockLease {
                 lease: entry.lease.clone(),
                 ownership_ref: entry.ownership_ref.clone(),
@@ -2193,7 +2286,7 @@ impl PathLockManager {
             .get_by_ref(lease_ref)
             .filter(|entry| {
                 !entry.pending_handoff
-                    && entry.invalidated_at.is_none()
+                    && entry.invalidation.is_none()
                     && entry.ownership_ref == ownership_ref
             })
             .map(|entry| OwnedPathLockLease {
@@ -2235,7 +2328,7 @@ impl PathLockManager {
         owner_registry.invalidate_expired(Instant::now(), Self::lease_validity(&self.config));
         let entry = owner_registry
             .get_by_ref(lease_ref)
-            .filter(|entry| !entry.pending_handoff && entry.invalidated_at.is_none())
+            .filter(|entry| !entry.pending_handoff && entry.invalidation.is_none())
             .ok_or_else(|| {
                 PathLockError::InvalidRequest(format!("unknown pathlock lease ref '{lease_ref}'"))
             })?;

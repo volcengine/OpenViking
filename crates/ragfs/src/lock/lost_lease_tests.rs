@@ -123,6 +123,20 @@ async fn age_token(
         .last_confirmed_at = Instant::now() - age;
 }
 
+async fn lease_invalidation(
+    manager: &PathLockManager,
+    lease: &OwnedPathLockLease,
+) -> LeaseInvalidation {
+    let owner = manager
+        .lease_registry
+        .resolve(&lease.lease.lease_ref)
+        .unwrap();
+    let registry = owner.registry.lock().await;
+    registry.entries[&lease.lease.lease_ref]
+        .invalidation
+        .unwrap()
+}
+
 #[tokio::test]
 async fn loss_invalidates_whole_leases_sharing_tokens_but_not_exact_descendants() {
     let (manager, provider) = fixture().await;
@@ -151,6 +165,10 @@ async fn loss_invalidates_whole_leases_sharing_tokens_but_not_exact_descendants(
         .insert(tree.lease.lock_paths[0].clone(), false);
     assert_eq!(manager.refresh(&tree).await.unwrap(), "lost");
     for lease in [&tree, &shared] {
+        assert_eq!(
+            lease_invalidation(&manager, lease).await.reason,
+            InvalidationReason::TokenLost
+        );
         assert!(manager
             .get_owned_lease_by_ref(&lease.lease.lease_ref)
             .await
@@ -232,6 +250,29 @@ async fn uncertain_partial_refresh_preserves_short_jitter_but_not_failed_token_d
         .require_covered_lease_ref(&lease.lease.lease_ref, &lease.lease.covered_paths)
         .await
         .is_err());
+    let invalidation = lease_invalidation(&manager, &lease).await;
+    assert_eq!(
+        invalidation.reason,
+        InvalidationReason::ConfirmationDeadlineExceeded
+    );
+    // A later definite-loss result must retain the initial deadline cause.
+    {
+        let mut registry = owner.registry.lock().await;
+        assert_eq!(
+            registry.apply_refresh_results(
+                &lease.lease.lease_ref,
+                &lease.lease.lock_paths,
+                vec![Ok(false), Ok(true)],
+                Instant::now(),
+                PathLockManager::lease_validity(&manager.config),
+            ),
+            "lost"
+        );
+        assert_eq!(
+            registry.entries[&lease.lease.lease_ref].invalidation,
+            Some(invalidation)
+        );
+    }
     provider.failures.lock().unwrap().clear();
     assert!(
         manager.refresh(&lease).await.is_err(),
@@ -340,7 +381,8 @@ async fn failed_cleanup_keeps_capability_and_refs_until_recovery() {
         .lease_registry
         .resolve(&lease.lease.lease_ref)
         .unwrap();
-    let invalidated_at = owner.registry.lock().await.entries[&lease.lease.lease_ref].invalidated_at;
+    let invalidation = lease_invalidation(&manager, &lease).await;
+    assert_eq!(invalidation.reason, InvalidationReason::ReleaseFailed);
     assert!(manager
         .get_owned_lease_by_ref(&lease.lease.lease_ref)
         .await
@@ -351,8 +393,8 @@ async fn failed_cleanup_keeps_capability_and_refs_until_recovery() {
         .is_none());
     assert!(manager.release(&lease).await.is_err());
     assert_eq!(
-        owner.registry.lock().await.entries[&lease.lease.lease_ref].invalidated_at,
-        invalidated_at
+        owner.registry.lock().await.entries[&lease.lease.lease_ref].invalidation,
+        Some(invalidation)
     );
     assert_eq!(
         owner.registry.lock().await.lock_refs[&lease.lease.lock_paths[0]],
@@ -389,8 +431,11 @@ async fn bounded_cleanup_forgets_only_local_refs_and_preserves_valid_shared_toke
         .unwrap()
         .insert(lease.lease.lock_paths[0].clone(), false);
     assert_eq!(manager.refresh(&lease).await.unwrap(), "lost");
+    let invalidation = lease_invalidation(&manager, &lease).await;
+    assert_eq!(invalidation.reason, InvalidationReason::TokenLost);
     provider.fail_remove.store(true, Ordering::SeqCst);
     assert!(manager.release(&lease).await.is_err());
+    assert_eq!(lease_invalidation(&manager, &lease).await, invalidation);
     let owner = manager
         .lease_registry
         .resolve(&lease.lease.lease_ref)
@@ -462,7 +507,7 @@ async fn delayed_result_for_old_handoff_ref_cannot_update_the_adopted_lease() {
         before
     );
     assert!(registry.entries[&adopted.lease.lease_ref]
-        .invalidated_at
+        .invalidation
         .is_none());
     drop(registry);
     assert!(manager.release(&lease).await.is_err());
@@ -569,7 +614,7 @@ async fn background_refresh_invalidates_and_bounds_cleanup_during_outage() {
                     .await
                     .entries
                     .get(&lease.lease.lease_ref)
-                    .is_some_and(|e| e.invalidated_at.is_some())
+                    .is_some_and(|e| e.invalidation.is_some())
                 {
                     break;
                 }
@@ -848,7 +893,7 @@ async fn redis_20ms_renew_timeout_preserves_lease_and_recovers_after_network_del
     {
         let registry = owner.registry.lock().await;
         assert!(registry.entries[&lease.lease.lease_ref]
-            .invalidated_at
+            .invalidation
             .is_none());
         assert_eq!(
             registry.token_health[path].last_confirmed_at,
@@ -885,7 +930,7 @@ async fn redis_20ms_renew_timeout_preserves_lease_and_recovers_after_network_del
     {
         let registry = owner.registry.lock().await;
         assert!(registry.entries[&lease.lease.lease_ref]
-            .invalidated_at
+            .invalidation
             .is_none());
         assert!(registry.token_health[path].last_confirmed_at > confirmed_before);
         assert_eq!(registry.token_health[path].consecutive_failures, 0);

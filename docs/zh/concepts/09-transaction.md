@@ -389,6 +389,8 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 **进程内清理**：失效 lease 保留释放能力和本地引用，后台重试带 owner 校验的清理。token 已不存在或已被其他 owner 接管均视为清理完成，不会删除新 owner 的 token；仍被其他有效本地 lease 引用的 token 也不会被删除。从首次失效起超过六个心跳间隔（`2 × lock_expire`，默认 60 秒），即使 Provider 持续不可用也记录剩余路径并移除本地 entry，遗留的远端 token 依赖过期清理。重试不会延长该窗口。
 
+**失效诊断**：manager 在清理期间保留首次失效的时间与原因。`pathlock lease invalidated` 日志包含 `reason`、`lease_ref`、`owner_id` 和 `affected_paths`。`TokenLost` 表示必要 token 缺失或归属不符，应检查 token 过期、删除和接管情况；`ConfirmationDeadlineExceeded` 表示安全期限内未能确认归属，应检查 Provider 健康、网络延迟和续租调度，对应 token 日志还包含 `since_last_confirmation_ms` 和 `failures`；`ReleaseFailed` 表示释放或降级错误导致撤销授权并进入清理重试，释放日志会记录具体错误。后续响应和清理失败不会覆盖首次原因或重置时间，清理窗口耗尽的日志也会保留该原因。
+
 上述检查在发现失锁或达到期限后拒绝后续操作；不会中断已经通过授权检查的写入，也不提供存储侧 fencing。
 
 **孤儿锁**：进程崩溃后遗留的 Provider token，在后续 acquire 检查同一路径或 scope 时通过 stale lock 检测自动移除。
