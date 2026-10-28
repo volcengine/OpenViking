@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import pytest
+from unittest.mock import patch
 
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
@@ -25,10 +26,11 @@ def test_embedding_text_source_validation_accepts_supported_values():
         assert cfg.text_source == value
 
 
-def test_embedding_legacy_summary_only_normalizes_and_round_trips(caplog):
-    cfg = _cfg(text_source="summary_only")
+def test_embedding_legacy_summary_only_normalizes_and_round_trips():
+    with patch("openviking_cli.utils.config.embedding_config.logger.warning") as warn:
+        cfg = _cfg(text_source="summary_only")
     assert cfg.text_source == "summary_first"
-    assert "summary_only is deprecated" in caplog.text
+    assert "summary_only is deprecated" in warn.call_args.args[0]
     assert EmbeddingConfig.model_validate_json(cfg.model_dump_json()).text_source == "summary_first"
 
 

@@ -11,8 +11,16 @@ import pytest
 from openviking.config.embedding import AccountEmbeddingProvider
 from openviking.config.vector import VectorRuntimeSettings
 from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import set_task_tracker
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+
+
+class _NoopTaskTracker:
+    """Stand-in for the tracker installed during storage initialization."""
+
+    async def close(self) -> None:
+        return None
 
 
 @pytest.mark.asyncio
@@ -70,6 +78,9 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
     service._resource_service = _ResourceService()
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
+    service._compile_scheduler = None
+    service._expiry_runtime = None
+    service._session_service = None
     service._queue_manager = _QueueManager()
     service._vikingdb_manager = _VikingDBManager()
     service._agfs_client = None
@@ -80,6 +91,7 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
 
     pending = asyncio.create_task(provider.embed("account-a", "query", is_query=True))
     await started.wait()
+    set_task_tracker(_NoopTaskTracker())
     closing = asyncio.create_task(service.close())
     try:
         await storage_closing.wait()
@@ -92,6 +104,7 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
     finally:
         pending.cancel()
         await asyncio.gather(pending, closing, return_exceptions=True)
+        set_task_tracker(None)
 
     assert events == [
         "background",

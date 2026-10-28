@@ -186,4 +186,5 @@ async def test_openai_async_completion_with_empty_tools_preserves_usage(monkeypa
         "completion_tokens": 4,
         "total_tokens": 15,
         "prompt_tokens_details": None,
+        "completion_tokens_details": None,
     }

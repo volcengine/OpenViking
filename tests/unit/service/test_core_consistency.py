@@ -9,16 +9,25 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import set_task_tracker
 from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
+class _NoopTaskTracker:
+    """Stand-in for the tracker installed during storage initialization."""
+
+    async def close(self) -> None:
+        return None
+
+
 def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None:
     storage_calls = []
     embedder = SimpleNamespace(is_sparse=False)
     config = SimpleNamespace(
+        service_name="test-service",
         default_account="default",
         default_user="default",
         storage=object(),
@@ -30,11 +39,13 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
         vlm=SimpleNamespace(max_concurrent=32),
         parser_api=SimpleNamespace(),
         compile_api=SimpleNamespace(base_url=""),
+        agent_evolution=SimpleNamespace(model_copy=lambda **kwargs: SimpleNamespace()),
         queue_workers=SimpleNamespace(
             external_parse=SimpleNamespace(max_concurrent=9),
             add_resource=SimpleNamespace(max_concurrent=7),
             session_commit=SimpleNamespace(max_concurrent=5),
             external_task=SimpleNamespace(max_concurrent=6),
+            reindex=SimpleNamespace(max_concurrent=4),
         ),
         git=object(),
     )
@@ -61,6 +72,8 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     assert storage_calls[0][1]["max_concurrent_add_resource"] == 7
     assert storage_calls[0][1]["max_concurrent_session_commit"] == 5
     assert storage_calls[0][1]["max_concurrent_external_task"] == 6
+    assert storage_calls[0][1]["max_concurrent_reindex"] == 4
+    assert storage_calls[0][1]["service_name"] == "test-service"
 
 
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:
@@ -135,6 +148,7 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
     service._runtime_config_manager = None
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
+    service._compile_scheduler = None
     service._queue_manager = QueueManager()
     service._vikingdb_manager = None
     service._agfs_client = RagfsClient()
@@ -151,7 +165,11 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
         lambda self: events.append("data_dir_lock"),
     )
 
-    await service.close()
+    set_task_tracker(_NoopTaskTracker())
+    try:
+        await service.close()
+    finally:
+        set_task_tracker(None)
 
     assert events.index("queue_manager") < events.index("ragfs_binding")
     assert events[-1] == "data_dir_lock"
