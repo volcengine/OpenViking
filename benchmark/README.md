@@ -1,298 +1,134 @@
-# OpenViking RAG 与 Memory 评测指南
+# OpenViking 评测：先选对场景
 
-本文介绍如何用仓库中的脚本评测 OpenViking：准备数据、导入、运行问答、评分，再检查质量与成本。先跑小样本验证链路，再做完整实验；下面的参数是起跑配置，不是最优配置或性能承诺。
+> **测试 Memory 和测试 RAG 是两回事，不要用 RAG 测试记忆。**
+>
+> - **Memory**：历史对话 → session 写入与 commit → 提取持久记忆 → 检索 `viking://user/.../memories` → 回答。
+> - **RAG**：资料 → `add_resource` → 检索 `viking://resources` → 读取文档 → 回答。
+>
+> 即使使用同一份 LoCoMo 数据，把原始对话作为资源导入 `benchmark/RAG`，也没有评测记忆提取与跨会话保留能力。
 
-## 1. 选择评测路径
+| 你想做什么 | 走哪条路径 |
+| --- | --- |
+| 复现官网公布的 LoCoMo 结果 | [1. Agent 接入评测](#1-复现官网的-locomo-结果) |
+| 对齐 mem0 的问答与 LLM-judge prompt 做 Memory 实验 | [2. Prompt 对齐实验](#2-对齐-mem0-prompt-的-memory-实验) |
+| 评测知识库检索与回答 | [3. RAG 评测](#3-rag-相关评测) |
 
-| 目标 | 入口 | 实际评测的链路 |
-| --- | --- | --- |
-| 知识库 RAG：从资料中找到依据并回答 | [RAG](RAG/README_zh.md) | 文档 → `add_resource` → `find(viking://resources)` → 读取上下文 → 生成答案 → 评分 |
-| 长对话 Memory：跨会话保留并使用信息 | [LoCoMo / OpenViking](locomo/openviking/README.md) | 对话 → session 消息与 commit → 记忆提取 → 按用户检索 memories → 回答 → 评分 |
-| 更长历史中的 Memory 问答 | [LongMemEval / OpenViking](longmemeval/openviking/README.md) | 导入 haystack sessions → 记忆提取 → 按用户检索 → 回答 → 按问题类型统计 |
+## 开始前
 
-RAG 支持 Qasper、SyllabusQA、FinanceBench 和 LoCoMo。**`RAG` 中的 LoCoMo 把对话当作资源文档，并不经过 session 记忆提取；不能把它的结果称为 Memory 评测结果。** 本文用 Qasper 演示 RAG，用 LoCoMo 演示 Memory。
+使用**专用测试服务、独立存储和独立 Agent 配置**，不要连接生产实例。准备方法见[服务与模型配置](../docs/zh/getting-started/02-quickstart.md)、[CLI 连接配置](../docs/zh/getting-started/05-cli-setup.md)及各评测目录 README。Agent 脚本可能修改配置、重启服务或操作快照，运行前先核对目标。
 
-上面两条 Memory 路径都是单次检索问答，不等于 Agent 的多轮工具调用效果。需要评测真实 Agent 接入时，参见 [LoCoMo Agent 入口](locomo/README.md)、[Hermes](locomo/hermes/README.md)、[Claude Code](locomo/claudecode/README.md)；需要看任务执行与经验学习，参见 [tau2 VikingBot](tau2/vikingbot/README.md) 和 [tau2 训练流程](tau2/train/README.md)。不要直接对比不同 Agent、模型或上下文预算下的分数。
-
-## 2. 公共准备
-
-### 2.1 环境与独立服务
-
-从**仓库根目录**开始，在本 worktree 的独立 Python 环境中安装依赖；已有环境可跳过 `uv venv`：
+在仓库根目录、已激活的独立 Python 环境中执行：
 
 ```bash
-uv venv .venv
-source .venv/bin/activate
 uv pip install -e '.[benchmark]' -e ./sdk/python
-
 export ROOT="$PWD"
 export PYTHONPATH="$ROOT:$ROOT/sdk/python${PYTHONPATH:+:$PYTHONPATH}"
-export RUN_ROOT="$ROOT/result/evaluation/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$RUN_ROOT"
-git rev-parse HEAD > "$RUN_ROOT/commit.txt"
+export OPENVIKING_URL="http://127.0.0.1:1933"   # 替换为专用测试服务
+export DATA="/absolute/path/to/locomo10.json"  # 两条 Memory 路径使用原始 JSON
+export RUN="$ROOT/result/evaluation/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$RUN"
 ```
 
-源码构建的工具链要求见[贡献指南](../docs/repository/CONTRIBUTING_CN.md)。`PYTHONPATH` 保证后续切换工作目录时仍使用本 worktree 的代码。
+导入和问答必须使用同一服务、account 与数据版本。`ovcli.conf` 管 HTTP 连接；服务端 `ov.conf` 管提取与索引模型；第 2 条路径的本地问答进程还需要 `ov.conf` 中的 `vlm` 和可选 `rerank`。可用 `OPENVIKING_CLI_CONFIG_FILE` / `OPENVIKING_CONFIG_FILE` 指定独立配置。密钥勿提交到仓库。
 
-准备一个**专用的 OpenViking 测试服务和独立存储目录**，不要连接生产或日常使用的实例。服务启动方法见[快速开始](../docs/zh/getting-started/02-quickstart.md)，模型和存储设置见[配置指南](../docs/zh/guides/01-configuration.md)。记录服务端与评测端各自的代码版本，避免只升级脚本而误认为服务端也已升级。
+## 1. 复现官网的 LoCoMo 结果
 
-在评测终端设置连接；替换示例路径和地址后执行：
+[官网报告（2026-05-29）](https://blog.openviking.ai/post/openviking-benchmark-results/)公布的是 **Agent 原生记忆 vs Agent + OpenViking**，不是下面第 2 条路径的单次检索成绩：
 
-```bash
-export OPENVIKING_URL="http://127.0.0.1:1933"
-export OPENVIKING_CLI_CONFIG_FILE="/absolute/path/to/ovcli.eval.conf"
-export OPENVIKING_CONFIG_FILE="/absolute/path/to/ov.eval.conf"
-curl --fail "$OPENVIKING_URL/health"
-```
-
-- `ovcli.eval.conf`：HTTP 连接及身份配置（`url`、`api_key`、`account` 等），见 [CLI 配置](../docs/zh/getting-started/05-cli-setup.md)。导入与问答必须连接同一个服务、同一个 account；启用鉴权时确认测试凭据允许访问对应用户空间，见[身份认证](../docs/zh/guides/04-authentication.md)。
-- `ov.eval.conf`：OpenViking 模型配置。服务端使用 Embedding / VLM 提取和索引；Memory 评测进程还会从本地配置读取 `vlm` 生成答案，以及可选的 `rerank` 做重排。**只配远程服务的模型，不足以运行本地 Memory 问答。**
-- RAG 的回答和裁判模型来自 benchmark YAML 的 `llm`，不是服务端 VLM。Memory 裁判模型由 `judge.py` 的参数单独指定。
-- `health` 成功仅说明服务可响应；后面的小样本导入和问答才验证模型、权限与数据链路。
-
-模型调用、数据下载和完整评测可能产生费用，先设低并发。密钥通过环境变量或本地配置提供，不提交配置原文、数据、答案和日志；分享结果前脱敏。
-
-### 2.2 隔离每轮实验
-
-- `RUN_ROOT`、结果文件和服务端存储都应能对应到同一轮实验；换模型、数据或服务时新建实验目录。
-- Memory 导入脚本还在**当前工作目录**下的 `result/` 保存隐藏导入记录。仅更换 `--success-csv` 不足以隔离缓存，所以下文为每种评测单独 `cd` 到实验目录。
-- 本地导入记录不证明新服务上已有数据。更换服务/存储后不要沿用旧记录；反过来，仅清理本地记录也不会删除服务端记忆。
-- `--force-ingest` 会重新导入，不是重置服务。只有明确需要重导时才使用；不要用它掩盖身份或存储不一致。
-
-## 3. RAG：以 Qasper 为例
-
-### 3.1 下载与抽样
-
-```bash
-cd "$ROOT/benchmark/RAG"
-python scripts/prepare_dataset.py --dataset Qasper --num-docs 2 --seed 42
-```
-
-原始数据放在 `raw_data/Qasper/`，抽样结果及 `sampling_metadata.json` 放在 `datasets/Qasper/`。正式实验可以使用 `--full`，或固定同一份子集；保存数据版本、文件校验和、抽样参数及实际问题列表。
-
-| 数据集 | 配置模板 | 模板中的数据路径（相对 `benchmark/RAG/`） |
+| Agent | 官网 Accuracy：原生 → OpenViking | 复现入口 |
 | --- | --- | --- |
-| Qasper | [qasper_config.yaml](RAG/config/qasper_config.yaml) | `datasets/Qasper/` |
-| SyllabusQA | [syllabusqa_config.yaml](RAG/config/syllabusqa_config.yaml) | `datasets/SyllabusQA/` |
-| FinanceBench | [financebench_config.yaml](RAG/config/financebench_config.yaml) | `datasets/FinanceBench/financebench_open_source.jsonl`，并保留准备脚本生成的配套文件 |
-| LoCoMo（资源模式） | [locomo_config.yaml](RAG/config/locomo_config.yaml) | `datasets/Locomo/locomo10.json` |
+| OpenClaw | 24.20% → 82.08% | [操作说明](locomo/README.md)、[运行脚本](locomo/openclaw/run_full_eval.sh) |
+| Hermes | 33.38% → 82.86% | [README](locomo/hermes/README.md)：`native` / `e2e` / `preingest` |
+| Claude Code | 57.21% → 80.32% | [README](locomo/claudecode/README.md)：`prompted` / `sdk_iso` / `sdk_noiso` / `e2e` |
 
-准备脚本的 `--dataset` 大小写与上表一致。不要直接使用占位模板 `config/config.yaml`。Qasper 目录可能包含多个 split，适配器会读取其中的 JSON；如果报告某个特定 split 的成绩，应让 `dataset_path` 指向该 split 文件，并固定相应语料范围，不能把混合目录的成绩当作官方测试集成绩。
+复现步骤：
 
-### 3.2 生成本轮配置
+1. 固定报告对应的 OpenViking / Agent 版本、模型、数据、插件配置、导入模式和该 Agent 自带的问答/裁判 prompt。`e2e` 与 SDK 预导入不是同一种实验，不要互换。
+2. 按对应 README 分别准备原生记忆与 OpenViking 实验组，从空的测试状态导入相同历史；先跑一个样本，再跑全量。
+3. 用**该 Agent 目录下**的 judge/stat 流程统计 Accuracy、耗时和 token；不要换用第 2 节的 mem0 裁判后仍称为官网结果。
 
-以下命令从 Qasper 模板生成独立配置，不修改仓库模板。运行前通过安全方式设置 `EVAL_LLM_API_KEY`，并把 `EVAL_LLM_MODEL`、`EVAL_LLM_BASE_URL` 换成可用模型及其兼容接口地址：
+例如 Hermes 的端到端接入 smoke（前置服务与模型按其 README 配好）：
 
 ```bash
-: "${EVAL_LLM_API_KEY:?请先设置 EVAL_LLM_API_KEY}"
-export EVAL_LLM_MODEL="your-model-id"
-export EVAL_LLM_BASE_URL="https://your-provider.example/v1"
-
-python - <<'PY'
-import os
-from pathlib import Path
-import yaml
-
-root = Path(os.environ["ROOT"])
-run = Path(os.environ["RUN_ROOT"]) / "rag"
-run.mkdir(parents=True, exist_ok=True)
-config = yaml.safe_load((root / "benchmark/RAG/config/qasper_config.yaml").read_text())
-config["execution"].update(max_workers=1, ingest_workers=1, max_queries=5,
-                           retrieval_topk=5, skip_ingestion=False)
-config["paths"].update(doc_output_dir=str(run / "processed_docs"),
-                       output_dir=str(run / "output"),
-                       log_file=str(run / "output/benchmark.log"))
-config["llm"].update(model=os.environ["EVAL_LLM_MODEL"],
-                     base_url=os.environ["EVAL_LLM_BASE_URL"], api_key="",
-                     api_key_env_var="EVAL_LLM_API_KEY")
-(run / "config.yaml").write_text(yaml.safe_dump(config, allow_unicode=True))
-PY
+cd "$ROOT/benchmark/locomo/hermes"
+export LOCOMO_JSON="$DATA"
+./run_full_eval.sh --suite native --sample 0 --count 1
+./run_full_eval.sh --suite e2e --sample 0 --count 1
+# 验证后去掉 --sample 0 --count 1 跑全量；如复现预导入方案，选 preingest。
 ```
 
-`paths` 中的相对路径统一相对 **`benchmark/RAG/`** 解析，不是相对 YAML 文件位置。上例保持模板的数据路径，并将产物写入绝对路径。若 `benchmark/RAG/ov.conf` 存在，`run.py` 会用它覆盖进程的 `OPENVIKING_CONFIG_FILE`，运行前也要核对该文件。
+官网文章没有逐项固定完整运行参数，当前脚本默认值也可能变化；上例演示接入流程，不能仅因选了 `e2e` 就声称精确复现已公布分数。保留所用 commit、配置和模式，结果从对应实验目录的逐题 CSV 与统计日志核对。
 
-### 3.3 分阶段运行
+## 2. 对齐 mem0 prompt 的 Memory 实验
 
-```bash
-python run.py --config "$RUN_ROOT/rag/config.yaml" --step gen
-python run.py --config "$RUN_ROOT/rag/config.yaml" --step eval
-```
+目标是控制**问答方式和评分口径**，观察提取出的记忆是否有效，而不是测 Agent 的工具调用。使用 [locomo/openviking](locomo/openviking/README.md)：
 
-**不要在共享实例上省略 `--step`，也不要随手使用 `--step all` 或 `--step del`。** 当前默认值是 `all`，它在生成和评分后调用 `rm("viking://resources", recursive=True)`，递归删除当前身份可访问的资源根目录，而不仅是本轮数据。上例明确拆成 `gen` 和 `eval`，不执行删除。
+`import_to_ov.py` 提取记忆 → `run_eval.py` 单次检索并回答 → `judge.py` → `stat_judge_result.py`。
 
-- `gen`：准备并导入文档 → 检索 → 生成答案。`max_queries: 5` 只限制问答数量，**不会限制导入文档量**，所以应先抽样数据。
-- `eval`：读取同一输出目录中的 `generated_answers.json` 再评分。先确认生成文件存在且问题数非零；不要只凭退出码判断评测完成。
-- 小样本通过后，将本轮配置的 `max_queries` 设为 `null`、调整并发，使用完整或固定子集重新评测；正式结果使用新输出目录。若只改回答/裁判且确认索引、数据、模型与身份均未改变，才可用 `skip_ingestion: true` 复用索引。
-- 当前检索范围是 `viking://resources`，不是单个样本的资源子树；测试服务不能混入其他实验或私人资料。
+### 对齐哪些内容
 
-### 3.4 查看结果与指标
+参考 mem0 官方 [memory-benchmarks LoCoMo prompts](https://github.com/mem0ai/memory-benchmarks/blob/4b61c5d31b9c668a12b4f5e78064248a02c82d2b/benchmarks/locomo/prompts.py)，本仓库对应实现是 [locomo_prompts.py](locomo/openviking/locomo_prompts.py)：
 
-结果在 `$RUN_ROOT/rag/output/`：
+- **问答**：`get_answer_generation_prompt`，使用检索后的记忆及参考日期；固定回答模型、候选数、重排、上下文预算和记忆顺序。当前问答模板有标点差异，本地也没有上游可选的 `user_profile` 注入；严格对齐时应固定两边 prompt 版本，mem0 侧不启用该额外输入，不能把“口径对齐”说成逐字相同。
+- **裁判**：默认 `get_judge_prompt` / `get_judge_prompt_with_evidence` 与上述固定版本的 mem0 宽松模板一致；**不要加 `--strict-prompt`**。本地 CSV 有 `evidence_text` 时自动带 evidence，mem0 runner 需设置 `--with-evidence` 对齐；若不带 evidence，双方都不能提供。测试集标注的参考答案/evidence 只用于评分，不得作为额外信息注入待测记忆或问答输入。
+- **实验条件**：同一批问题、同一回答/裁判模型与参数，分别导入各自的记忆系统。`locomo/mem0` 是 OpenClaw + mem0 插件评测，不能直接当作这里的单次检索对照。
 
-| 文件 | 用途 |
-| --- | --- |
-| `generated_answers.json` | 实际问题、参考答案、检索 URI、生成答案、检索耗时和 token 估算 |
-| `qa_eval_detailed_results.json` | 逐题 F1、Recall、裁判分数及理由 |
-| `benchmark_metrics_report.json` | 汇总质量、导入效率和查询效率 |
-| `benchmark.log` | 定位导入、生成和评分错误 |
+### 运行
 
-指标以[实现](RAG/src/core/metrics.py)和[流水线](RAG/src/pipeline.py)为准：
-
-- **F1**：答案归一化后的词级重合度；有多个参考答案时取最大值。
-- **Recall**：参考 evidence 在检索文本中的命中比例。先做子串匹配，较长 evidence 再按词覆盖率软匹配；没有 evidence 时返回 0。它不是按文档 ID 计算的标准 Recall@k，也不是 MRR / nDCG。
-- **Accuracy**：裁判给出的 0–4 分；汇总的 `Average Accuracy (normalization)` 是均分除以 4。Qasper 等分级评分**不是答对题数占比**；RAG LoCoMo 的裁判 prompt 使用 0 / 4 二值评分，也不能与 Memory 的独立裁判口径直接混用。另外存在双方都拒答时的启发式满分处理。
-- **效率**：导入耗时与 token、平均检索耗时、回答输入/输出 token。检索计时只包围 `find`，不含后续读取和生成；问答 token 为本地 tokenizer 估算，不能当作含裁判在内的完整 API 账单。
-
-比较生成题数、评分题数和日志。部分评分异常会被记录后继续，裁判失败也可能留下默认 0 分；缺失评分不能被当作有效的模型质量下降。当前每条检索文本最多取前 8000 字符用于回答，而 Recall 在截断前计算，排障时要区分“检索到证据”和“答案模型看到了证据”。
-
-## 4. Memory：以 LoCoMo 为例
-
-### 4.1 准备原始对话
+先验证完整样本中的一题；导入阶段不要按测试题 evidence 裁剪历史。单独工作目录也用于隔离导入脚本的 `result/.ingest_record.json`：
 
 ```bash
-cd "$ROOT/benchmark/RAG"
-python scripts/download_dataset.py --dataset Locomo
-export LOCOMO_DATA="$ROOT/benchmark/RAG/raw_data/Locomo/locomo10.json"
-
-mkdir -p "$RUN_ROOT/locomo"
-cd "$RUN_ROOT/locomo"
-```
-
-直接使用下载的原始 JSON，不要使用 RAG 生成的 Markdown。导入和问答按**数据数组下标**生成 `sample_0` 等用户身份，因此必须使用同一份数据、同一顺序。需要抽样时优先使用 `--sample` / `--count`，不要导入后再重排或裁剪数据文件。
-
-### 4.2 先导入一个完整样本并验证单题
-
-```bash
+mkdir -p "$RUN/memory"
+cd "$RUN/memory"
 python "$ROOT/benchmark/locomo/openviking/import_to_ov.py" \
-  --input "$LOCOMO_DATA" --openviking-url "$OPENVIKING_URL" \
+  --input "$DATA" --openviking-url "$OPENVIKING_URL" \
   --sample 0 --parallel-samples 1 \
   --success-csv ./result/import_success.csv --error-log ./result/import_errors.log
-
-python "$ROOT/benchmark/locomo/openviking/run_eval.py" "$LOCOMO_DATA" \
-  --openviking-url "$OPENVIKING_URL" --output ./result/smoke.csv \
+python "$ROOT/benchmark/locomo/openviking/run_eval.py" "$DATA" \
+  --openviking-url "$OPENVIKING_URL" --output ./result/answers.csv \
   --sample 0 --question-index 0 --threads 1 \
   --single-search-context-limit 50 --single-search-rerank-limit 10 \
   --single-search-max-context-chars 30000 --debug-print-model-input
 ```
 
-导入脚本创建 session、写入消息并 commit，等待返回的后台任务。核对成功 CSV、错误日志以及实际生成的记忆，再开始问答；进程退出不等于所有 session 都导入成功。LoCoMo 默认把 `blip_caption` 作为图片的文本证据；仅在明确做多模态实验时启用 `--use-image-url`，并在报告中注明。
+核对导入错误日志、实际生成的 memories、CSV 中的 prompt 和检索轨迹。以上 50 / 10 / 30000 是示例预算，不是 mem0 默认值；两边需显式对齐。`--single-search-rerank-limit 0` **不能关闭重排**，无重排对照需关闭本地 `rerank` 配置并检查轨迹。
 
-`run_eval.py` 对 `viking://user/sample_0/memories` 做一次检索，读取记忆后回答。检查 `smoke.csv` 中的 `context_uris`、`retrieved_uris_by_iteration` 和 `model_input_prompt`，确认用户、内容和上下文预算符合预期。完整 prompt 可能含原始记忆，不要直接公开调试 CSV。
-
-**导入阶段不要使用基于测试答案的筛选。** 例如导入器的 `--question-index` 会根据该题 evidence 选择 session，适合定位单题问题，不适合作为完整 Memory 成绩。上例的 `--question-index` 只传给问答脚本；导入的是该用户的完整历史。
-
-### 4.3 全量导入、问答与评分
-
-保持相同目录、数据和服务，去掉导入的 `--sample` 后继续；同轮实验可复用已完成的导入记录：
-
-```bash
-python "$ROOT/benchmark/locomo/openviking/import_to_ov.py" \
-  --input "$LOCOMO_DATA" --openviking-url "$OPENVIKING_URL" \
-  --parallel-samples 4 \
-  --success-csv ./result/import_success.csv --error-log ./result/import_errors.log
-
-python "$ROOT/benchmark/locomo/openviking/run_eval.py" "$LOCOMO_DATA" \
-  --openviking-url "$OPENVIKING_URL" --output ./result/answers.csv --threads 4 \
-  --single-search-context-limit 50 --single-search-rerank-limit 10 \
-  --single-search-max-context-chars 30000
-```
-
-裁判与回答模型可不同，但 A/B 实验必须使用同一裁判模型和 prompt。通过安全方式设置 `OPENAI_API_KEY`（脚本读取兼容接口凭据）或 `ARK_API_KEY`，再指定裁判地址和模型；**两者都存在时脚本优先使用 `ARK_API_KEY`**，应确认实际使用的凭据与地址匹配：
+通过安全方式设置裁判凭据 `ARK_API_KEY` 或 `OPENAI_API_KEY`（前者优先），并设置模型和地址后评分：
 
 ```bash
 export JUDGE_BASE_URL="https://your-provider.example/v1"
 export JUDGE_MODEL="your-judge-model-id"
-
 python "$ROOT/benchmark/locomo/openviking/judge.py" \
   --input ./result/answers.csv --provider openai \
-  --base-url "$JUDGE_BASE_URL" --model "$JUDGE_MODEL" --parallel 4
+  --base-url "$JUDGE_BASE_URL" --model "$JUDGE_MODEL" --parallel 1
 python "$ROOT/benchmark/locomo/openviking/stat_judge_result.py" \
   --input ./result/answers.csv
 ```
 
-`judge.py` 将 `result` 写回原 CSV；默认跳过已有评分，修改答案、裁判模型或 prompt 后，需要新的结果文件或明确使用 `--force` 重评。默认是宽松 prompt，`--strict-prompt` 切换严格口径；比较时不能混用。
+全量时去掉导入和问答的 `--sample 0`，以及问答的 `--question-index 0`，使用新的答案文件；同一轮可复用已完成导入，换服务/提取配置则从独立空存储和新实验目录重来。LoCoMo 按数组下标映射用户，导入后不能重排数据。修改答案或裁判配置后重新评分，避免默认跳过旧 `result`。
 
-统计输出到终端，并写入 CSV 所在目录的 `summary.txt`（同目录再次统计会覆盖它）：
+结果写回答案 CSV，汇总为同目录 `summary.txt`。统计排除 category 5，`Accuracy = CORRECT / (CORRECT + WRONG)`；同时报告未评分/错误数和各类别结果，不能只报均值。
 
-- **Accuracy = CORRECT / (CORRECT + WRONG)**；未评分或异常值不进入该分母。同步报告总题数、已评分数、异常/未评分数，不能只报 Accuracy。
-- LoCoMo 的 judge/stat 排除 category 5；其余按 multi-hop、temporal、open-domain、single-hop 分组。若使用 `--errors` 标记无效题，还应说明无效题列表版本及有效题子集口径，不要与全体口径混报。
-- 同时查看平均耗时、prompt / completion tokens、`memory_prompt_tokens` 和 `memory_chars`。Memory 上下文成本不等于包括导入、Embedding、重排及裁判在内的完整成本。
+## 3. RAG 相关评测
 
-### 4.4 重排和上下文预算的实际语义
-
-- `--single-search-context-limit`：检索与读取的候选数量上限。
-- `--single-search-rerank-limit`：**有可用 reranker 且重排成功时**保留的条数；未配置或重排出错时，不保证裁成这个数量。以调试轨迹中的启用状态、错误和最终 URI 为准。
-- 当前实现中，**`--single-search-rerank-limit 0` 不是关闭重排开关**；成功重排后使用 `max(1, limit)` 截取。做无重排对照应使用不启用 `rerank` 的独立本地配置，并检查轨迹，而不是仅设置 0。
-- `--single-search-max-context-chars` 按**整份记忆文件**预算：放不下就跳过，不是逐字符截断；小于等于 0 取消预算。若命中但上下文为空，先检查单个文件是否超过预算。
-
-## 5. 扩展到 LongMemEval
-
-从作者发布的 [LongMemEval cleaned 数据集](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/tree/main)下载 `longmemeval_s_cleaned.json`，保存到本地。固定版本及校验和，勿将 oracle、S、M 等不同数据文件的结果混为一个口径。
-
-原始 JSON 需保留 `question_id`、`question`、`answer`、`question_type`、`question_date` 以及 `haystack_sessions`、`haystack_dates`、`haystack_session_ids`；导入与问答都使用原始 `question_id` 派生的 `lm_user_<hash>` 用户空间。
+使用 [RAG README](RAG/README_zh.md)，评测**资源文档的检索与回答**。当前配置包括 Qasper、SyllabusQA、FinanceBench；下面以 Qasper 为例：
 
 ```bash
-export LONGMEMEVAL_DATA="/absolute/path/to/longmemeval_s_cleaned.json"
-mkdir -p "$RUN_ROOT/longmemeval"
-cd "$RUN_ROOT/longmemeval"
-
-python "$ROOT/benchmark/longmemeval/openviking/import_to_ov.py" \
-  --input "$LONGMEMEVAL_DATA" --openviking-url "$OPENVIKING_URL" \
-  --sample 0 --parallel 1 --submit-parallel 1 --wait-mode deferred \
-  --success-csv ./result/import_success.csv --error-log ./result/import_errors.log
-
-python "$ROOT/benchmark/longmemeval/openviking/run_eval.py" "$LONGMEMEVAL_DATA" \
-  --openviking-url "$OPENVIKING_URL" --output ./result/smoke.csv \
-  --sample 0 --count 1 --threads 1 --timeout 900 \
-  --single-search-context-limit 50 --single-search-rerank-limit 10 \
-  --single-search-max-context-chars 30000 --debug-print-model-input
+cd "$ROOT/benchmark/RAG"
+python scripts/prepare_dataset.py --dataset Qasper --num-docs 2 --seed 42
+cp config/qasper_config.yaml "$RUN/rag.yaml"
 ```
 
-`deferred` 将提交与等待分开，但仍需等导入命令完成，并核对任务与错误日志后再问答。不要仅导入答案所在的 session，或先读取测试答案再生成记忆。
-
-小样本通过后：重新执行导入命令，去掉 `--sample 0`；随后执行问答命令，去掉 `--sample 0 --count 1 --debug-print-model-input`，输出改为 `./result/answers.csv`。按服务限流适当增加并发。最后使用上一节设置的裁判环境：
+编辑本轮 YAML 后再运行：配置 `llm.model` / `base_url` / `api_key_env_var`（密钥走环境变量）；设置 `execution.max_queries: 5` 和低并发；将 `paths.doc_output_dir`、`output_dir`、`log_file` 指向本轮独立目录。数据相对路径从 **`benchmark/RAG/`** 解析，不是从 YAML 所在目录解析。RAG 的回答/裁判模型由这个 YAML 指定。
 
 ```bash
-python "$ROOT/benchmark/longmemeval/openviking/judge.py" \
-  --input ./result/answers.csv --provider openai \
-  --base-url "$JUDGE_BASE_URL" --model "$JUDGE_MODEL" --parallel 4
-python "$ROOT/benchmark/longmemeval/openviking/stat_judge_result.py" \
-  --input ./result/answers.csv
+python run.py --config "$RUN/rag.yaml" --step gen
+python run.py --config "$RUN/rag.yaml" --step eval
 ```
 
-这里同样是 CSV 原地评分、按已评分题计算 Accuracy，并按 `question_type` 汇总；统计打印到终端，并写入 CSV 所在目录的 `longmemeval_summary.txt`（重复统计会覆盖）。重排、上下文预算和实验隔离原则与 LoCoMo 相同，细节见 [LongMemEval README](longmemeval/openviking/README.md)。
+- **始终显式指定 `gen` / `eval`。** 默认 `all` 和 `del` 会递归删除当前身份可访问的 `viking://resources`，不要在共享实例上使用。
+- `max_queries` 只限制问答，不限制导入量；先抽样，正式实验再固定 split/问题集并扩大规模。
+- 输出目录中查看 `generated_answers.json`、`qa_eval_detailed_results.json` 和 `benchmark_metrics_report.json`：核对题数、F1、evidence Recall、裁判分及耗时/token。这里的 Recall 不是标准文档 Recall@k，Qasper 的归一化 0–4 裁判分也不是 Memory 的二值 Accuracy。
+- **不要用 `RAG/config/locomo_config.yaml` 的成绩代表记忆效果**：它把对话当资源，没有经过 session 记忆提取。
 
-## 6. 怎样得到可比较的结论
-
-### 6.1 固定变量与对照
-
-| 对照 | 保持不变 | 只改变 |
-| --- | --- | --- |
-| RAG 检索参数 A/B | 数据、索引、回答/裁判模型、prompt、并发 | `retrieval_topk` 或检索指令中的一项 |
-| Memory 提取策略 A/B | 原始历史、问题、回答/裁判、检索与上下文预算 | 提取配置；每组从独立空存储重新导入 |
-| Memory 重排 A/B | 相同记忆快照、候选数量、回答/裁判 | 本地 `rerank` 配置；核对实际启用状态 |
-| 有记忆与无记忆 / 全上下文 | 相同问题、回答模型、裁判与统计口径 | 输入上下文来源及其预算 |
-
-最后一行是实验设计，不是上述脚本已有的模式开关；无记忆或全上下文基线需要另行准备对应 harness。不要把空召回、导入失败当作无记忆基线。调参用开发集，最终成绩用预先固定的保留集；禁止把 QA 参考答案、裁判结果或测试题答案定向写入待测记忆。
-
-### 6.2 报告最少保留什么
-
-- **版本与数据**：服务端/评测端 commit、数据来源与校验和、split、抽样 seed、实际样本/问题 ID、排除项。
-- **配置**：脱敏后的模型 ID、Embedding 维度、提取配置、重排、top-k、prompt 版本、上下文预算、并发和是否复用索引。
-- **质量**：RAG F1 / evidence Recall / 归一化裁判分；Memory 总体及各类别 Accuracy；明确分母与评分完成率。
-- **成本与稳定性**：导入耗时、问答耗时、token 口径、异常/超时/重试数；需要总费用或 P50/P95 时另外采集相应调用记录，不将现有平均值当作这些指标。
-- **证据**：逐题答案、检索 URI、裁判理由、导入成功记录和错误日志。抽查成功题和失败题，区分提取遗漏、检索未命中、预算丢弃、回答错误与裁判问题。
-- **重复性**：质量对照使用相同问题列表，成本对照保持相同并发与缓存条件；多次运行报告波动。小样本 smoke 通过只能证明链路可用，不能替代完整成绩。
-
-## 7. 常见问题
-
-| 现象 | 先检查 |
-| --- | --- |
-| 导入全部被跳过，但服务里没有记忆 | 当前目录的隐藏导入记录及 success CSV 是否来自另一服务；为新服务使用新实验目录 |
-| 检索为空或串入别的用户 | URL、account、权限、LoCoMo 数组顺序 / LongMemEval question_id、实际 memories URI、后台任务状态 |
-| RAG 分数异常高或 Recall 与答案不一致 | 资源根目录是否混入其他资料；evidence 是否只出现在被截掉的文本中；是否混入参考答案 |
-| 换了模型，分数却没变 | 是否重跑生成；judge 是否跳过已有结果；RAG 是否指向旧输出目录；Memory 本地模型配置是否真的切换 |
-| 成功进程但结果不完整 | 非零题数、导入错误日志、CSV 的未评分项、RAG 生成/评分题数是否一致 |
-| 声称重排 10 条，实际条数不符 | reranker 是否配置可用、是否报错、字符预算是否跳过整份文件 |
-
-更多参数以对应脚本的 `--help` 和当前实现为准；基准分数应来自记录完整配置与证据的实际运行。
+无论哪条路径，报告都应附数据/代码/prompt 版本、模型与预算、实际评分题数、逐题结果和成本口径。小样本通过只证明链路可用，不等于复现官网成绩。

@@ -110,7 +110,7 @@ viking://resources/my_project/
 
 OpenViking 0.3.22 has been evaluated on long-conversation user memory (LoCoMo) and multi-turn agent tasks (tau2-bench). Full results and setup details, including knowledge-base QA, are in the [benchmark report](https://blog.openviking.ai/post/openviking-benchmark-results/); reproduction scripts live in [./benchmark](./benchmark).
 
-To run your own experiments, follow the [RAG and Memory evaluation guide (中文)](benchmark/README.md) for setup, smoke tests, scoring, and reproducible comparisons.
+To run your own experiments, follow the [RAG and Memory evaluation guide (中文)](benchmark/README.md) to choose between published LoCoMo reproduction, mem0 prompt-aligned memory experiments, and RAG evaluation.
 
 The memory evaluation used [Doubao 2.0 Pro](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-seed-2-0-pro) as the VLM and [Doubao-embedding-vision-251215](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-embedding-vision) as the embedding model.
 
