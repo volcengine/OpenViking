@@ -48,6 +48,7 @@ export type TerminalCommandParameterKey =
   | 'writeContent'
   | 'writeMode'
   | 'writeWait'
+  | 'recursive'
   | 'nodeLimit'
   | 'threshold'
   | 'searchSessionId'

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  parseRemove,
   parseAddMemory,
   parseAddResource,
   parseAddSkill,
@@ -174,5 +175,44 @@ describe('resource task completion', () => {
       status: 'failed',
       error: 'Source URL returned HTTP 404',
     })
+  })
+})
+
+describe('terminal resource deletion', () => {
+  it.each(['/rm', 'rm', 'ov rm'])(
+    'accepts %s with an explicit target',
+    (prefix) => {
+      expect(
+        parseRemove(`${prefix} "viking://resources/old notes.md"`),
+      ).toEqual({
+        uri: 'viking://resources/old notes.md',
+        recursive: false,
+      })
+    },
+  )
+  it.each(['-r', '--recursive'])(
+    'accepts recursive flag %s on either side of the target',
+    (flag) => {
+      for (const args of [
+        `${flag} viking://resources/old`,
+        `viking://resources/old ${flag}`,
+      ]) {
+        expect(parseRemove(`/rm ${args}`)).toEqual({
+          uri: 'viking://resources/old',
+          recursive: true,
+        })
+      }
+    },
+  )
+  it.each([
+    '/rm',
+    '/rm --recursive',
+    '/rm viking://',
+    '/rm /tmp/file',
+    '/rm viking://resources/a viking://resources/b',
+    '/rm viking://resources/a --force',
+    '/rm viking://resources/a -r --recursive',
+  ])('rejects ambiguous or unsupported deletion: %s', (command) => {
+    expect(() => parseRemove(command)).toThrow('rmUsage')
   })
 })

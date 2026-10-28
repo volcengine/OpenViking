@@ -286,6 +286,12 @@ const activity = {
         '用法：/add-skill <Git URL> [-p viking://agent/skills]。本地文件请到「技能」页面上传。',
       addResourceUsage:
         '用法：/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>] [--reason <说明>]。可视化上传请点击文件系统上方的「添加资源」。',
+      rmUsage: '用法：/rm <viking://URI> [-r|--recursive]，必须明确指定目标。',
+      rmConfirm: '确认删除 {{uri}}？此操作无法撤销。',
+      rmConfirmRecursive:
+        '确认删除 {{uri}} 及其所有子文件和子目录？此操作无法撤销。',
+      rmCancelled: '已取消删除',
+      rmDeleted: '已删除：{{uri}}',
       writeUsage:
         '用法：/write <URI> --content "文本" [--mode replace|append|create] [--wait]',
       waitUsage: '用法：/wait（当前开源 API 不接收超时参数）',
@@ -396,6 +402,10 @@ const activity = {
         writeMode: {
           name: '--mode <模式>',
           description: '可选。replace、append 或 create；默认 replace。',
+        },
+        recursive: {
+          name: '-r, --recursive',
+          description: '删除目录及其所有内容。',
         },
         writeWait: {
           name: '--wait',
@@ -579,6 +589,16 @@ const activity = {
           remote: {
             code: `ov add-resource https://github.com/volcengine/OpenViking --to viking://resources/openviking-repo --args '{"branch":"main"}'`,
             description: '导入 OpenViking 仓库的 main 分支',
+          },
+        },
+        rm: {
+          file: {
+            code: '/rm viking://resources/notes.md',
+            description: '删除单个文件（需确认）',
+          },
+          directory: {
+            code: '/rm viking://resources/old-docs --recursive',
+            description: '删除目录及其内容（需确认）',
           },
         },
         write: {
@@ -770,6 +790,10 @@ const activity = {
           description: '添加外部资源',
           usage:
             '/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>]',
+        },
+        rm: {
+          description: '删除文件或目录（执行前确认）',
+          usage: '/rm <URI> [-r|--recursive]',
         },
         write: {
           description: '写入或追加资源文件',

@@ -6,7 +6,8 @@ export class TerminalActionError extends Error {
       | 'addMemoryUsage'
       | 'addSkillUsage'
       | 'addResourceUsage'
-      | 'writeUsage',
+      | 'writeUsage'
+      | 'rmUsage',
   ) {
     super(code)
   }
@@ -224,4 +225,27 @@ export function parseWrite(input: string) {
   }
   if (content === undefined) throw new TerminalActionError('writeUsage')
   return { uri: tokens[1], content, mode, wait }
+}
+
+export function parseRemove(input: string) {
+  const tokens = tokenize(input)
+  const targets: string[] = []
+  let recursive = false
+  if (tokens[0] !== 'rm') throw new TerminalActionError('rmUsage')
+  for (const token of tokens.slice(1)) {
+    if (token === '-r' || token === '--recursive') {
+      if (recursive) throw new TerminalActionError('rmUsage')
+      recursive = true
+    } else if (token.startsWith('-')) {
+      throw new TerminalActionError('rmUsage')
+    } else targets.push(token)
+  }
+  const uri = targets[0]
+  if (
+    targets.length !== 1 ||
+    !uri.startsWith('viking://') ||
+    !uri.slice(9).trim()
+  )
+    throw new TerminalActionError('rmUsage')
+  return { uri, recursive }
 }

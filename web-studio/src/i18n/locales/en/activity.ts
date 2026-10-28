@@ -298,6 +298,13 @@ const activity = {
         'Usage: /add-skill <Git URL> [-p viking://agent/skills]. Upload local files on the Skills page.',
       addResourceUsage:
         'Usage: /add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>] [--reason <text>]. Use Add Resource above the file tree for visual import.',
+      rmUsage:
+        'Usage: /rm <viking://URI> [-r|--recursive]. An explicit target is required.',
+      rmConfirm: 'Delete {{uri}}? This cannot be undone.',
+      rmConfirmRecursive:
+        'Delete {{uri}} and all files and subdirectories inside it? This cannot be undone.',
+      rmCancelled: 'Deletion cancelled',
+      rmDeleted: 'Deleted: {{uri}}',
       writeUsage:
         'Usage: /write <URI> --content "text" [--mode replace|append|create] [--wait]',
       waitUsage: 'Usage: /wait (the current open-source API takes no timeout)',
@@ -417,6 +424,10 @@ const activity = {
           name: '--mode <mode>',
           description:
             'Optional replace, append, or create; defaults to replace.',
+        },
+        recursive: {
+          name: '-r, --recursive',
+          description: 'Remove a directory and all of its contents.',
         },
         writeWait: {
           name: '--wait',
@@ -615,6 +626,17 @@ const activity = {
             description: 'Import the main branch of the OpenViking repository',
           },
         },
+        rm: {
+          file: {
+            code: '/rm viking://resources/notes.md',
+            description: 'Delete a file after confirmation',
+          },
+          directory: {
+            code: '/rm viking://resources/old-docs --recursive',
+            description:
+              'Delete a directory and its contents after confirmation',
+          },
+        },
         write: {
           default: {
             code: '/write viking://resources/notes.md --content "New content"',
@@ -807,6 +829,10 @@ const activity = {
           description: 'Add external resources',
           usage:
             '/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>]',
+        },
+        rm: {
+          description: 'Delete a file or directory after confirmation',
+          usage: '/rm <URI> [-r|--recursive]',
         },
         write: {
           description: 'Write or append resource content',

@@ -27,6 +27,15 @@ export const FILESYSTEM_MAIN_MIN_WIDTH = 420
 
 export const TERMINAL_COMMANDS: TerminalCommandSuggestion[] = [
   {
+    command: '/rm',
+    executable: true,
+    examples: ['rm.file', 'rm.directory'],
+    group: 'filesystem',
+    key: 'rm',
+    insertText: '/rm ',
+    parameters: ['uri', 'recursive'],
+  },
+  {
     command: '/status',
     executable: true,
     examples: ['status.default'],

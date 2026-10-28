@@ -41,6 +41,7 @@ import {
 } from '#/components/ui/dialog'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
+  deleteFs,
   getHealth,
   getOvResult,
   getSystemStatus,
@@ -85,6 +86,7 @@ import {
   parseAddResource,
   parseAddSkill,
   parseWrite,
+  parseRemove,
   submitMemoryCommand,
   taskResultDetails,
   taskResultResourceUri,
@@ -130,6 +132,7 @@ const URI_ARGUMENT_COMMANDS = new Set([
   '/ls',
   '/overview',
   '/read',
+  '/rm',
   '/stat',
   '/tree',
 ])
@@ -326,6 +329,7 @@ const PARAMETER_META: Partial<
   writeContent: { type: 'Text', required: true },
   writeMode: { type: 'Text', defaultValue: 'replace' },
   writeWait: { type: 'Boolean', defaultValue: 'false' },
+  recursive: { type: 'Boolean', defaultValue: 'false' },
 }
 
 function extractVikingUris(text: string): string[] {
@@ -1461,6 +1465,32 @@ export function TerminalPanel({
               refs: searchResultToRefs(result, groupLabels),
               title: `${name} ${pattern}`,
             })
+            return
+          }
+          case '/rm': {
+            const request = parseRemove(trimmed)
+            if (
+              !window.confirm(
+                t(
+                  request.recursive
+                    ? 'terminal.rmConfirmRecursive'
+                    : 'terminal.rmConfirm',
+                  { uri: request.uri },
+                ),
+              )
+            ) {
+              append({ kind: 'info', title: t('terminal.rmCancelled') })
+              return
+            }
+            if (identityRef.current !== identityScopeKey) return
+            await getOvResult<unknown>(deleteFs({ query: request }))
+            if (identityRef.current !== identityScopeKey) return
+            append({
+              kind: 'success',
+              title: `/rm ${request.uri}`,
+              body: t('terminal.rmDeleted', { uri: request.uri }),
+            })
+            await invalidateAll()
             return
           }
           case '/write': {
