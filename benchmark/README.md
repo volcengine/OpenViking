@@ -11,9 +11,9 @@ English | [简体中文](README_zh.md)
 
 | Goal | Path |
 | --- | --- |
-| Reproduce the Memory evaluation workflow using our routine evaluation code | [1. VikingBot code reference](#1-memory-evaluation-code-reference-vikingbot) |
-| Reproduce the published LoCoMo results | [2. Agent integration evaluation](#2-reproduce-the-published-locomo-results) |
-| Separately compare mem0 QA and LLM-judge prompts | [3. mem0 comparison](#3-mem0-prompt-comparison-experiments) |
+| Reproduce the Memory evaluation workflow through VikingBot using our routine evaluation code | [1. VikingBot code reference](#1-memory-evaluation-code-reference-vikingbot) |
+| Reproduce the published LoCoMo results for different Agent frameworks | [2. Agent integration evaluation](#2-reproduce-the-published-locomo-results) |
+| Single-turn memory QA with mem0 QA and LLM-judge prompts (non-agentic) | [3. mem0 single-turn comparison](#3-mem0-single-turn-qa-comparison) |
 | Evaluate knowledge-base retrieval and answering | [4. RAG evaluation](#4-rag-evaluation) |
 
 ## Before You Start
@@ -76,9 +76,9 @@ export LOCOMO_JSON="$DATA"
 
 The report does not pin every runtime parameter, and current script defaults may change. This example demonstrates the integration flow; selecting `e2e` alone does not establish an exact reproduction of the published score. Save the commit, configuration, and mode, and check each run's per-question CSV and statistics log.
 
-## 3. mem0 Prompt Comparison Experiments
+## 3. mem0 Single-Turn QA Comparison
 
-This is a **separate experimental protocol, not a requirement for routine VikingBot evaluation**. Refer to the single-search memory workflow in [locomo/openviking](locomo/openviking/README.md) and its [QA/judge prompts](locomo/openviking/locomo_prompts.py). Do not change `locomo/vikingbot` to conform to this protocol.
+This is a **single-turn, non-agentic memory QA comparison**. The workflow in [locomo/openviking](locomo/openviking/README.md) and its [QA/judge prompts](locomo/openviking/locomo_prompts.py) searches memories extracted from sessions once, reads and optionally reranks them, then generates an answer. It does not let an Agent choose tools over multiple turns. It is separate from routine VikingBot agentic evaluation and from RAG over raw conversation resources; do not change `locomo/vikingbot` to conform to this protocol.
 
 **The mem0 prompt version used in this comparison has more permissive LLM-judge criteria than routine evaluation**: for example, it accepts partial list answers and tolerances in dates/durations that the routine VikingBot judge does not explicitly allow. Scores are not directly comparable; a higher score from more permissive judging does not establish better memory quality.
 

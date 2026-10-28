@@ -11,9 +11,9 @@
 
 | 你想做什么 | 走哪条路径 |
 | --- | --- |
-| 参考日常评测代码，复现 Memory 评测流程 | [1. VikingBot 代码参考](#1-memory-评测代码参考vikingbot) |
-| 复现官网公布的 LoCoMo 结果 | [2. Agent 接入评测](#2-复现官网的-locomo-结果) |
-| 独立对照 mem0 的问答与 LLM-judge prompt | [3. mem0 对照实验](#3-mem0-prompt-对照实验) |
+| 参考日常评测代码，通过 VikingBot 复现 Memory 评测流程 | [1. VikingBot 代码参考](#1-memory-评测代码参考vikingbot) |
+| 复现官网公布的各种 Agent 框架的 LoCoMo 结果 | [2. Agent 接入评测](#2-复现官网的-locomo-结果) |
+| 基于 mem0 问答与 LLM-judge prompt 的单轮记忆问答（非 Agentic） | [3. mem0 单轮问答对照](#3-mem0-单轮问答对照实验) |
 | 评测知识库检索与回答 | [4. RAG 评测](#4-rag-相关评测) |
 
 ## 开始前
@@ -76,9 +76,9 @@ export LOCOMO_JSON="$DATA"
 
 官网文章没有逐项固定完整运行参数，当前脚本默认值也可能变化；上例演示接入流程，不能仅因选了 `e2e` 就声称精确复现已公布分数。保留所用 commit、配置和模式，结果从对应实验目录的逐题 CSV 与统计日志核对。
 
-## 3. mem0 prompt 对照实验
+## 3. mem0 单轮问答对照实验
 
-这是**独立实验口径，不是日常 VikingBot 评测的要求**。参考 [locomo/openviking](locomo/openviking/README.md) 的单次记忆检索流程，以及其中的 [问答与裁判 prompt](locomo/openviking/locomo_prompts.py)；不要修改 `locomo/vikingbot` 来迁就这套口径。
+这是**单轮、非 Agentic 的记忆问答对照**。参考 [locomo/openviking](locomo/openviking/README.md) 及其 [问答与裁判 prompt](locomo/openviking/locomo_prompts.py)：对 session 提取后的记忆做一次检索、读取与可选重排，再生成答案，不由 Agent 多轮自主调用工具。它与日常 VikingBot 的 Agentic 评测独立，也不是把原始对话当资源的 RAG 评测；不要修改 `locomo/vikingbot` 来迁就这套口径。
 
 **相比日常评测，本对照版本的 mem0 prompt 在 LLM-judge 判分上相对宽松**：例如接受列表答案的部分命中，以及日期/时长的一定误差；日常 VikingBot judge 没有这些显式放宽规则。两者分数不能直接比较，也不能将判分更宽松带来的高分视为记忆能力提升。
 
