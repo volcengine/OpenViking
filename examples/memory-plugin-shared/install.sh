@@ -2,7 +2,7 @@
 #
 # OpenViking Memory Plugin shared installer for Claude Code, Codex, Cursor,
 # TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, CodeBuddy Code,
-# OpenCode, pi and DeepSeek Harness (dsh).
+# OpenCode, pi, DeepSeek Harness (dsh) and DeepSeek Harness Desktop.
 #
 # In short:
 #   - Open source. This script and every OpenViking file it installs are
@@ -48,7 +48,7 @@
 #       the API key.
 #   The npm registry npm is configured with: the CLI (@openviking/cli and its
 #       binary for this platform), pi's dependencies (npm ci) and the dsh
-#       package (dsh plugin add).
+#       package (dsh plugin add, for DeepSeek Harness Desktop too).
 # docs.openviking.ai is hosted on GitHub Pages. The script itself never
 # contacts github.com and never runs git.
 #
@@ -68,6 +68,8 @@
 #   opencode   ~/.config/opencode/plugins/openviking, openviking.js, opencode.json(c)
 #   pi         ~/.pi/agent/extensions/openviking
 #   dsh        dsh plugin add into the chosen profile
+#   dsh-desktop (macOS) dsh plugin add into Desktop's profile, with the dsh
+#              command inside DeepSeek Harness.app, while Desktop is quit
 #   cli        npm install -g @openviking/cli: ov in npm's global bin directory,
 #              or in ~/.local/bin when that needs sudo
 # Cursor, TRAE, TRAE CN and ZCode run their hooks from
@@ -155,6 +157,13 @@ CODEX_BINS_ARG="${OPENVIKING_CODEX_BINS:-${OPENVIKING_CODEX_BIN:-}}"
 DSH_PROFILE_ARG="${OPENVIKING_DSH_PROFILE:-}"
 DSH_PROFILE_DEFAULT="web"
 DSH_PROFILE=""
+# DeepSeek Harness Desktop keeps its own profile, which only the dsh command
+# inside its app bundle may change (npm dsh refuses it), and no dsh can boot it.
+DSH_DESKTOP_APP="DeepSeek Harness.app"
+DSH_DESKTOP_LAUNCHER="Contents/Resources/runtime/cli/bin/dsh"
+DSH_DESKTOP_CLI=""        # Desktop's dsh command; set by select_dsh_profile
+DSH_DESKTOP_INSTALLED=0   # 1 once its plugin add succeeded
+DSH_DESKTOP_QUIT_WAIT=20  # seconds a quit Desktop gets to shut its Host down
 SOURCE_ARG=""
 DIST_ARG=""
 LANG_ARG=""
@@ -226,12 +235,13 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, opencode, pi, dsh, cli.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, opencode, pi, dsh, dsh-desktop, cli.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
+                     dsh is the dsh CLI from npm; dsh-desktop is DeepSeek Harness Desktop (macOS only).
                      cli is the OpenViking CLI (ov), installed from npm. Without --harness: the detected ones and cli.
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
   --codex-bin LIST   Comma-separated Codex-format CLI commands (default: codex).
-  --dsh-profile NAME DeepSeek Harness profile to install into (default: web).
+  --dsh-profile NAME DeepSeek Harness profile to install into (default: web). desktop selects dsh-desktop instead.
   --lang LANG        en | zh (default: asked first, with the system locale preselected;
                      with --yes or no terminal, the system locale).
   --source MODE      Advanced: archive (the OpenViking release) | dev (this checkout's plugins).
@@ -245,7 +255,7 @@ Options:
   --no-statusline    Skip the statusline prompt.
   --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode, Kimi Code and CodeBuddy Code integrations,
                      plus any legacy TraeCode CLI hook config. Claude Code, Codex, OpenCode,
-                     pi and dsh are removed with the commands the install prints at the end.
+                     pi, dsh and dsh-desktop are removed with the commands the install prints at the end.
   --yes, -y          Ask nothing: use defaults and install without asking for confirmation.
 
 Environment:
@@ -255,6 +265,9 @@ Environment:
   OPENVIKING_CLAUDE_BINS                Same as --claude-bin.
   OPENVIKING_CODEX_BINS                 Same as --codex-bin.
   OPENVIKING_DSH_PROFILE                Same as --dsh-profile.
+  OPENVIKING_DSH_DESKTOP_CLI            The dsh command inside DeepSeek Harness.app to use for dsh-desktop
+                                        (default: found under /Applications, ~/Applications or on PATH).
+  DSH_HOME                              DeepSeek Harness home holding Desktop's profile (default: ~/.dsh).
   OPENVIKING_DOWNLOAD_BASE              Download locations, separated by spaces; the first to answer is used
                                         (default: https://docs.openviking.net/dl https://docs.openviking.ai/dl).
                                         OPENVIKING_TOS_BASE is read as well.
@@ -499,8 +512,58 @@ EOF
   return 1
 }
 
+dsh_home() { printf '%s' "${DSH_HOME:-$HOME/.dsh}"; }
+
+follow_symlinks() { # follow_symlinks <path> -> the file it finally points at
+  local path="$1" dir target hops=0
+  while [ -L "$path" ] && [ "$hops" -lt 40 ]; do
+    dir="$(cd "$(dirname "$path")" && pwd -P)" || break
+    target="$(readlink "$path")" || break
+    case "$target" in
+      /*) path="$target" ;;
+      *) path="$dir/$target" ;;
+    esac
+    hops=$((hops + 1))
+  done
+  printf '%s' "$path"
+}
+
+# Desktop's "Manage dsh Command…" links /usr/local/bin/dsh to the launcher in
+# its app bundle. That dsh is Desktop, not the npm CLI: what it adds to the
+# CLI's profiles never reaches Desktop.
+is_dsh_desktop_launcher() { # is_dsh_desktop_launcher <path>
+  case "$(follow_symlinks "$1")" in
+    *.app/"$DSH_DESKTOP_LAUNCHER") return 0 ;;
+  esac
+  return 1
+}
+
+have_npm_dsh() {
+  local found
+  found="$(command -v dsh 2>/dev/null)" || return 1
+  ! is_dsh_desktop_launcher "$found"
+}
+
+# The launcher works from its absolute path, so registering it on PATH is
+# optional. Desktop ships for macOS and Windows only.
+resolve_dsh_desktop_cli() {
+  [ "$DSH_DESKTOP_OFFERED" -eq 1 ] || return 1
+  local candidate
+  for candidate in "${OPENVIKING_DSH_DESKTOP_CLI:-}" \
+    "/Applications/$DSH_DESKTOP_APP/$DSH_DESKTOP_LAUNCHER" \
+    "$HOME/Applications/$DSH_DESKTOP_APP/$DSH_DESKTOP_LAUNCHER"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  candidate="$(command -v dsh 2>/dev/null)" || return 1
+  is_dsh_desktop_launcher "$candidate" || return 1
+  printf '%s' "$candidate"
+}
+
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_CODEBUDDY=0; HAVE_DSH=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_CODEBUDDY=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
@@ -509,7 +572,8 @@ refresh_available_harnesses() {
   { command -v trae-cli >/dev/null 2>&1 || command -v traecli >/dev/null 2>&1 || command -v traex >/dev/null 2>&1; } && HAVE_TRAE_CLI=1
   command -v opencode >/dev/null 2>&1 && HAVE_OPENCODE=1
   command -v pi >/dev/null 2>&1 && HAVE_PI=1
-  command -v dsh >/dev/null 2>&1 && HAVE_DSH=1
+  have_npm_dsh && HAVE_DSH=1
+  { resolve_dsh_desktop_cli >/dev/null || { [ "$DSH_DESKTOP_OFFERED" -eq 1 ] && [ -d "$(dsh_home)/profiles/desktop" ]; }; } && HAVE_DSH_DESKTOP=1
   { command -v zcode >/dev/null 2>&1 || [ -d "$HOME/.zcode" ]; } && HAVE_ZCODE=1
   { command -v kimi >/dev/null 2>&1 || [ -d "$HOME/.kimi-code" ]; } && HAVE_KIMICODE=1
   { command -v codebuddy >/dev/null 2>&1 || [ -d "$HOME/.codebuddy" ]; } && HAVE_CODEBUDDY=1
@@ -637,7 +701,11 @@ NODE
 CLAUDE_BINS="$(normalize_bin_list "$CLAUDE_BINS_ARG" claude)"
 CODEX_BINS="$(normalize_bin_list "$CODEX_BINS_ARG" codex)"
 
-HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0
+HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
+# DeepSeek Harness Desktop is released for macOS and Windows; of the systems
+# this script runs on, only macOS ever offers it.
+DSH_DESKTOP_OFFERED=0
+[ "$(uname -s)" != "Darwin" ] || DSH_DESKTOP_OFFERED=1
 refresh_available_harnesses
 
 TUI_CLAUDE_BINS="$CLAUDE_BINS"
@@ -649,6 +717,7 @@ SEL_CODEX_BINS=""
 SEL_OPENCODE=0
 SEL_PI=0
 SEL_DSH=0
+SEL_DSH_DESKTOP=0
 SEL_CURSOR_APP=0
 SEL_TRAE=0
 SEL_TRAE_CN=0
@@ -669,7 +738,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 10 ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 10 + DSH_DESKTOP_OFFERED ))
 }
 
 tui_total_count() {
@@ -698,6 +767,10 @@ EOF
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'dsh|dsh'; return 0; fi
   i=$((i + 1))
+  if [ "$DSH_DESKTOP_OFFERED" -eq 1 ]; then
+    if [ "$i" -eq "$idx" ]; then printf 'dsh-desktop|dsh-desktop'; return 0; fi
+    i=$((i + 1))
+  fi
   if [ "$i" -eq "$idx" ]; then printf 'cursor|cursor'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'trae|trae'; return 0; fi
@@ -739,6 +812,7 @@ tui_bin_label() {
     opencode:*) printf 'OpenCode' ;;
     pi:*) printf 'pi' ;;
     dsh:*) printf 'DeepSeek Harness' ;;
+    dsh-desktop:*) printf 'DeepSeek Harness Desktop' ;;
     cursor:*) printf 'Cursor' ;;
     trae:*) printf 'TRAE' ;;
     trae-cn:*) printf 'TRAE CN' ;;
@@ -763,6 +837,8 @@ tui_bin_selected() {
     [ "$SEL_PI" -eq 1 ]
   elif [ "$kind" = "dsh" ]; then
     [ "$SEL_DSH" -eq 1 ]
+  elif [ "$kind" = "dsh-desktop" ]; then
+    [ "$SEL_DSH_DESKTOP" -eq 1 ]
   elif [ "$kind" = "cursor" ]; then
     [ "$SEL_CURSOR_APP" -eq 1 ]
   elif [ "$kind" = "trae" ]; then
@@ -790,6 +866,8 @@ tui_bin_detected() { # tui_bin_detected <kind> <bin>
     zcode) [ "$HAVE_ZCODE" -eq 1 ] ;;
     kimicode) [ "$HAVE_KIMICODE" -eq 1 ] ;;
     codebuddy) [ "$HAVE_CODEBUDDY" -eq 1 ] ;;
+    dsh) [ "$HAVE_DSH" -eq 1 ] ;;
+    dsh-desktop) [ "$HAVE_DSH_DESKTOP" -eq 1 ] ;;
     *) command -v "$2" >/dev/null 2>&1 ;;
   esac
 }
@@ -800,6 +878,7 @@ tui_set_all_bins() {
   SEL_OPENCODE=1
   SEL_PI=1
   SEL_DSH=1
+  SEL_DSH_DESKTOP="$DSH_DESKTOP_OFFERED"
   SEL_CURSOR_APP=1
   SEL_TRAE=1
   SEL_TRAE_CN=1
@@ -824,6 +903,8 @@ tui_toggle_bin() {
   elif [ "$kind" = "dsh" ]; then
     SEL_DSH=$((1 - SEL_DSH))
     return 0
+  elif [ "$kind" = "dsh-desktop" ]; then
+    SEL_DSH_DESKTOP=$((1 - SEL_DSH_DESKTOP)); return 0
   elif [ "$kind" = "cursor" ]; then
     SEL_CURSOR_APP=$((1 - SEL_CURSOR_APP)); return 0
   elif [ "$kind" = "trae" ]; then
@@ -915,6 +996,7 @@ tui_reset_bin_selection() {
   SEL_OPENCODE=0
   SEL_PI=0
   SEL_DSH=0
+  SEL_DSH_DESKTOP=0
   SEL_CURSOR_APP=0
   SEL_TRAE=0
   SEL_TRAE_CN=0
@@ -942,7 +1024,8 @@ $TUI_CODEX_BINS
 EOF
   if command -v opencode >/dev/null 2>&1; then SEL_OPENCODE=1; any=1; fi
   if command -v pi >/dev/null 2>&1; then SEL_PI=1; any=1; fi
-  if command -v dsh >/dev/null 2>&1; then SEL_DSH=1; any=1; fi
+  if [ "$HAVE_DSH" -eq 1 ]; then SEL_DSH=1; any=1; fi
+  if [ "$HAVE_DSH_DESKTOP" -eq 1 ]; then SEL_DSH_DESKTOP=1; any=1; fi
   if [ "$HAVE_CURSOR" -eq 1 ]; then SEL_CURSOR_APP=1; any=1; fi
   if [ "$HAVE_TRAE" -eq 1 ]; then SEL_TRAE=1; any=1; fi
   if [ "$HAVE_TRAE_CN" -eq 1 ]; then SEL_TRAE_CN=1; any=1; fi
@@ -1035,7 +1118,7 @@ tui_add_compatible_cli() {
 
 tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
-    || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
+    || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_DSH_DESKTOP" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
     || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
     || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CODEBUDDY" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
 }
@@ -1049,6 +1132,7 @@ tui_finish_selection() {
   [ "$SEL_OPENCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}opencode"
   [ "$SEL_PI" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}pi"
   [ "$SEL_DSH" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}dsh"
+  [ "$SEL_DSH_DESKTOP" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}dsh-desktop"
   [ "$SEL_CURSOR_APP" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cursor"
   [ "$SEL_TRAE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae"
   [ "$SEL_TRAE_CN" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae-cn"
@@ -1127,6 +1211,7 @@ select_harnesses() {
   [ "$HAVE_OPENCODE" -eq 1 ] && detected="${detected:+$detected,}opencode"
   [ "$HAVE_PI" -eq 1 ] && detected="${detected:+$detected,}pi"
   [ "$HAVE_DSH" -eq 1 ] && detected="${detected:+$detected,}dsh"
+  [ "$HAVE_DSH_DESKTOP" -eq 1 ] && detected="${detected:+$detected,}dsh-desktop"
   [ "$HAVE_ZCODE" -eq 1 ] && detected="${detected:+$detected,}zcode"
   [ "$HAVE_KIMICODE" -eq 1 ] && detected="${detected:+$detected,}kimicode"
   [ "$HAVE_CODEBUDDY" -eq 1 ] && detected="${detected:+$detected,}codebuddy"
@@ -1150,7 +1235,31 @@ select_harnesses() {
   fi
 }
 
+route_dsh_to_desktop() { # route_dsh_to_desktop <harness-list> -> the list with dsh-desktop for dsh
+  local h out=""
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    if [ "$h" = "dsh" ]; then h="dsh-desktop"; fi
+    case ",$out," in
+      *",$h,"*) ;;
+      *) out="${out:+$out,}$h" ;;
+    esac
+  done <<EOF
+$(split_harnesses "$1")
+EOF
+  printf '%s' "$out"
+}
+
 select_dsh_profile() {
+  # npm dsh refuses Desktop's profile, so `--dsh-profile desktop` means the
+  # dsh-desktop harness, which goes through Desktop's own dsh command.
+  if [ "$DSH_PROFILE_ARG" = "desktop" ] && contains_harness dsh; then
+    SELECTED_HARNESSES="$(route_dsh_to_desktop "$SELECTED_HARNESSES")"
+    [ -z "$PUBLIC_SELECTED_HARNESSES" ] || PUBLIC_SELECTED_HARNESSES="$(route_dsh_to_desktop "$PUBLIC_SELECTED_HARNESSES")"
+  fi
+  if contains_harness dsh-desktop; then
+    DSH_DESKTOP_CLI="$(resolve_dsh_desktop_cli || true)"
+  fi
   contains_harness dsh || return 0
   if [ -n "$DSH_PROFILE_ARG" ]; then
     DSH_PROFILE="$DSH_PROFILE_ARG"
@@ -1159,38 +1268,123 @@ select_dsh_profile() {
   DSH_PROFILE="$DSH_PROFILE_DEFAULT"
 }
 
-install_dsh() {
-  step_heading "$(t 'DeepSeek Harness bundle' 'DeepSeek Harness 插件')"
-  if ! command -v dsh >/dev/null 2>&1; then
-    warn "$(t 'dsh CLI not found; skipping DeepSeek Harness install.' '未找到 dsh 命令，跳过 DeepSeek Harness 安装。')"
-    return 0
-  fi
+# Sets DSH_SPEC and DSH_ORIGIN to what `<command> plugin add` installs.
+dsh_select_spec() { # dsh_select_spec <dsh-command> <profile>
+  local cmd="$1" profile="$2" local_dir packed
   # `@latest` rather than a bare name: pnpm keeps an already-satisfying install
   # when the name carries no version, so a profile holding a dev build would
   # never fall back to the published package.
-  local profile="${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" spec="$DSH_PACKAGE@latest" origin="npm" local_dir
+  DSH_SPEC="$DSH_PACKAGE@latest"
+  DSH_ORIGIN="npm"
   # npm is the bundle's only distribution channel; only dev mode installs
   # something other than the published package. It still has to arrive as a
   # real package rather than a link: a linked source tree resolves its dsh
   # peers from its own realpath and misses the profile's hoisted node_modules,
   # so the checkout gets packed first.
   if [ "$SOURCE_MODE" = "dev" ] && ensure_bundle && local_dir="$(plugin_dir_on_disk dsh-memory-plugin)"; then
-    local packed
     if packed="$(dsh_pack_local "$local_dir")"; then
-      spec="$packed"
-      origin="$local_dir"
+      DSH_SPEC="$packed"
+      DSH_ORIGIN="$local_dir"
       # A dev re-install usually carries the same version, and pnpm treats an
       # already-satisfied version as a no-op no matter which tarball it is
       # pointed at, so the edited sources would never reach the profile.
       # Dropping the package first forces the reinstall. Only done for local
       # sources: it is a downgrade in robustness when `add` can fail on network.
-      dsh plugin --profile "$profile" rm "$DSH_PACKAGE" >/dev/null 2>&1 || true
+      "$cmd" plugin --profile "$profile" rm "$DSH_PACKAGE" >/dev/null 2>&1 || true
     fi
   fi
-  if dsh plugin --profile "$profile" add "$spec" >/dev/null 2>&1; then
-    info "$(t 'DeepSeek Harness bundle installed into profile:' 'DeepSeek Harness 插件已安装到 profile：') $profile ($(t 'source' '来源'): $origin)"
+}
+
+install_dsh() {
+  step_heading "$(t 'DeepSeek Harness bundle' 'DeepSeek Harness 插件')"
+  if ! have_npm_dsh; then
+    if command -v dsh >/dev/null 2>&1; then
+      warn "$(t 'The dsh on PATH is the one inside DeepSeek Harness Desktop, not the npm dsh CLI; skipping DeepSeek Harness install (use --harness dsh-desktop for Desktop).' 'PATH 中的 dsh 是 DeepSeek Harness Desktop 自带的，不是 npm 安装的 dsh CLI，跳过 DeepSeek Harness 安装（Desktop 请用 --harness dsh-desktop）。')"
+    else
+      warn "$(t 'dsh CLI not found; skipping DeepSeek Harness install.' '未找到 dsh 命令，跳过 DeepSeek Harness 安装。')"
+    fi
+    return 0
+  fi
+  local profile="${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}"
+  dsh_select_spec dsh "$profile"
+  if dsh plugin --profile "$profile" add "$DSH_SPEC" >/dev/null 2>&1; then
+    info "$(t 'DeepSeek Harness bundle installed into profile:' 'DeepSeek Harness 插件已安装到 profile：') $profile ($(t 'source' '来源'): $DSH_ORIGIN)"
   else
-    warn "$(t 'dsh plugin add failed; run it manually:' 'dsh plugin add 失败；请手动执行：') dsh plugin --profile $profile add $spec"
+    warn "$(t 'dsh plugin add failed; run it manually:' 'dsh plugin add 失败；请手动执行：') dsh plugin --profile $profile add $DSH_SPEC"
+  fi
+}
+
+# Desktop creates its profile on first launch; its dsh refuses to run before.
+dsh_desktop_initialized() { [ -f "$(dsh_home)/profiles/desktop/package.json" ]; }
+
+# Closing Desktop's window only hides it. The main process runs the app's
+# executable with no arguments (older macOS adds -psn_*); its Host and any dsh
+# command pass some. Only this user's Desktop counts.
+dsh_desktop_running() {
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -u "$(id -u)" -f "DeepSeek Harness\.app/Contents/MacOS/DeepSeek Harness( -psn_[0-9_]+)?\$" >/dev/null 2>&1
+  elif command -v osascript >/dev/null 2>&1; then
+    [ "$(osascript -e 'application "DeepSeek Harness" is running' 2>/dev/null)" = "true" ]
+  else
+    return 1
+  fi
+}
+
+# Desktop does not lock its profile against the dsh command, and only loads
+# a change when it starts, so it should be quit first. Fails when it is still
+# running after the user was asked to quit it.
+dsh_desktop_quit_first() {
+  local reply waited=0
+  dsh_desktop_running || return 0
+  if [ "$INTERACTIVE" -ne 1 ]; then
+    warn "$(t 'DeepSeek Harness Desktop is running; installing anyway. Quit it with ⌘Q (closing the window only hides it) and reopen it to load the plugin.' 'DeepSeek Harness Desktop 正在运行，仍继续安装。请用 ⌘Q 退出（关闭窗口只是隐藏）后重新打开，插件才会加载。')"
+    return 0
+  fi
+  warn "$(t 'DeepSeek Harness Desktop is running. Closing its window only hides it.' 'DeepSeek Harness Desktop 正在运行。关闭窗口只是隐藏它。')"
+  ask "$(t 'Quit it with ⌘Q, then press Enter: ' '请用 ⌘Q 退出后按回车：')"
+  read_tty reply
+  # Quitting first shuts its Host down, which may take it a few seconds.
+  while dsh_desktop_running && [ "$waited" -lt "$DSH_DESKTOP_QUIT_WAIT" ]; do
+    [ "$waited" -gt 0 ] || info "$(t 'Waiting for DeepSeek Harness Desktop to exit...' '等待 DeepSeek Harness Desktop 退出…')"
+    sleep 1
+    waited=$((waited + 1))
+  done
+  dsh_desktop_running || return 0
+  warn "$(t 'DeepSeek Harness Desktop is still running; it was not changed.' 'DeepSeek Harness Desktop 仍在运行，未做修改。')"
+  return 1
+}
+
+dsh_desktop_plugins_page_steps() {
+  info "$(t 'Install it from DeepSeek Harness Desktop instead: Plugins → Add plugin → enter' '也可以在 DeepSeek Harness Desktop 中安装：插件 → 添加插件 → 输入') $DSH_PACKAGE → $(t 'Install, then turn it on if its switch is off' '安装，开关未打开时再打开')"
+}
+
+install_dsh_desktop() {
+  step_heading "$(t 'DeepSeek Harness Desktop bundle' 'DeepSeek Harness Desktop 插件')"
+  local cli="$DSH_DESKTOP_CLI" output
+  if [ -z "$cli" ]; then
+    warn "$(t "The dsh command inside $DSH_DESKTOP_APP was not found (set OPENVIKING_DSH_DESKTOP_CLI to it)." "未找到 $DSH_DESKTOP_APP 中的 dsh 命令（可用 OPENVIKING_DSH_DESKTOP_CLI 指定）。")"
+    dsh_desktop_plugins_page_steps
+    return 0
+  fi
+  if ! dsh_desktop_initialized; then
+    warn "$(t 'DeepSeek Harness Desktop has not set up its profile yet: open it once, quit it with ⌘Q and re-run this installer.' 'DeepSeek Harness Desktop 尚未初始化其 profile：请先打开一次，用 ⌘Q 退出后重新运行本安装脚本。') ($(t 'not found:' '未找到：') $(short_path "$(dsh_home)/profiles/desktop/package.json"))"
+    dsh_desktop_plugins_page_steps
+    return 0
+  fi
+  if ! dsh_desktop_quit_first; then
+    dsh_desktop_plugins_page_steps
+    return 0
+  fi
+  dsh_select_spec "$cli" desktop
+  if output="$("$cli" plugin --profile desktop add "$DSH_SPEC" 2>&1)"; then
+    DSH_DESKTOP_INSTALLED=1
+    info "$(t 'DeepSeek Harness Desktop bundle installed' 'DeepSeek Harness Desktop 插件已安装') ($(t 'source' '来源'): $DSH_ORIGIN)"
+    info "$(t 'Reopen DeepSeek Harness Desktop to load it.' '重新打开 DeepSeek Harness Desktop 后生效。')"
+  else
+    warn "$(t 'dsh plugin add failed for DeepSeek Harness Desktop:' 'DeepSeek Harness Desktop 的 dsh plugin add 失败：')"
+    printf '%s\n' "$output" | tail -n 5 | sed 's/^/      /'
+    warn "$(t 'With Desktop quit, run it manually:' '退出 Desktop 后手动执行：') \"$cli\" plugin --profile desktop add $DSH_SPEC"
+    dsh_desktop_plugins_page_steps
   fi
 }
 
@@ -1280,6 +1474,11 @@ validate_selected_harnesses() {
   while IFS= read -r h; do
     case "$h" in
       claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|codebuddy|dsh|cli) ;;
+      dsh-desktop)
+        [ "$DSH_DESKTOP_OFFERED" -eq 1 ] || {
+          err "$(t 'DeepSeek Harness Desktop (dsh-desktop) is installed by this script on macOS only; on Windows, add the plugin from its Plugins page.' '本脚本仅在 macOS 上安装 DeepSeek Harness Desktop（dsh-desktop）；Windows 上请在其“插件”页添加。')"
+          bad=1
+        } ;;
       trae-cli) [ "$UNINSTALL" -eq 1 ] || bad=1 ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
@@ -1317,7 +1516,9 @@ EOF
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then ok=1; fi
   if contains_harness pi && command -v pi >/dev/null 2>&1; then ok=1; fi
-  if contains_harness dsh && command -v dsh >/dev/null 2>&1; then ok=1; fi
+  if contains_harness dsh && have_npm_dsh; then ok=1; fi
+  # Without its dsh command, Desktop still gets the steps for its Plugins page.
+  if contains_harness dsh-desktop; then ok=1; fi
   if contains_harness cli; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
@@ -1633,12 +1834,15 @@ reexec_release_installer() { # reexec_release_installer <original-args...>
 }
 
 # The names the release resolver knows: a Codex-format CLI counts as the
-# TraeCode CLI when it is one, otherwise as Codex.
+# TraeCode CLI when it is one, otherwise as Codex, and Desktop installs the
+# same dsh package.
 resolver_harnesses() {
   local h bin out=""
   while IFS= read -r h; do
     [ -n "$h" ] && [ "$h" != "cli" ] || continue
-    if [ "$h" = "codex" ]; then
+    if [ "$h" = "dsh-desktop" ]; then
+      out="$(append_csv_list "$out" dsh)"
+    elif [ "$h" = "codex" ]; then
       while IFS= read -r bin; do
         [ -n "$bin" ] || continue
         case "$(bin_basename "$bin")" in
@@ -3135,7 +3339,7 @@ EOF
       node --check "$HOME/.pi/agent/extensions/openviking/shared/mcp-proxy-config.mjs" || ok=0
     fi
   fi
-  if contains_harness dsh && command -v dsh >/dev/null 2>&1; then
+  if contains_harness dsh && have_npm_dsh; then
     local dsh_profile="${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}"
     if dsh plugin --profile "$dsh_profile" ls 2>/dev/null | grep -q "$DSH_PACKAGE"; then
       info "dsh: $DSH_PACKAGE $(t 'installed in profile' '已安装到 profile') $dsh_profile"
@@ -3147,6 +3351,25 @@ EOF
       info "dsh: $(t 'plugin composed into the profile' '插件已合入 profile')"
     else
       warn "dsh: $(t 'plugin not present in the composed profile' '合成后的 profile 中没有该插件')"
+      ok=0
+    fi
+  fi
+  if contains_harness dsh-desktop && [ "$DSH_DESKTOP_INSTALLED" -eq 1 ]; then
+    if str_contains "$("$DSH_DESKTOP_CLI" plugin --profile desktop ls 2>/dev/null || true)" "$DSH_PACKAGE"; then
+      info "dsh-desktop: $DSH_PACKAGE $(t 'installed in DeepSeek Harness Desktop' '已安装到 DeepSeek Harness Desktop')"
+    else
+      warn "dsh-desktop: $DSH_PACKAGE $(t 'not found in DeepSeek Harness Desktop' '未在 DeepSeek Harness Desktop 中找到')"
+      ok=0
+    fi
+    # No dsh boots Desktop's profile, so there is no --dump-config to read;
+    # Desktop loads the bundles its profile manifest lists.
+    if "$NODE_BIN" -e '
+      const m = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+      process.exit((m.dsh?.profile?.bundles ?? []).includes(process.argv[2]) ? 0 : 1);
+    ' "$(dsh_home)/profiles/desktop/package.json" "$DSH_PACKAGE" 2>/dev/null; then
+      info "dsh-desktop: $(t 'plugin enabled in the Desktop profile' '插件已在 Desktop profile 中启用')"
+    else
+      warn "dsh-desktop: $(t 'plugin not enabled in the Desktop profile; enable it on the Plugins page' 'Desktop profile 中未启用该插件；请在“插件”页启用')"
       ok=0
     fi
   fi
@@ -3237,7 +3460,7 @@ count_steps() {
   STEP_TOTAL=3
   if contains_harness claude; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CLAUDE_BINS"))); fi
   if contains_harness codex; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CODEX_BINS"))); fi
-  for h in cursor trae trae-cn zcode kimicode codebuddy opencode pi dsh cli; do
+  for h in cursor trae trae-cn zcode kimicode codebuddy opencode pi dsh dsh-desktop cli; do
     if contains_harness "$h"; then STEP_TOTAL=$((STEP_TOTAL + 1)); fi
   done
 }
@@ -3255,6 +3478,7 @@ print_selection() {
   if [ -n "$TRAECODE_CLI_BIN" ]; then info "TraeCode CLI 2.0: $TRAECODE_CLI_BIN"; fi
   if contains_harness codex && [ -z "$TRAECODE_CLI_BIN" ]; then info "$(t 'Codex-format commands:' 'Codex 格式命令：') $(list_words "$CODEX_BINS")"; fi
   if contains_harness dsh; then info "$(t 'DeepSeek Harness profile:' 'DeepSeek Harness profile：') ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}"; fi
+  if contains_harness dsh-desktop && [ -n "$DSH_DESKTOP_CLI" ]; then info "$(t 'DeepSeek Harness Desktop command:' 'DeepSeek Harness Desktop 命令：') $(short_path "$DSH_DESKTOP_CLI")"; fi
 }
 
 plan_item() { printf '      %s\n' "$*"; }
@@ -3378,8 +3602,15 @@ EOF
   if contains_harness pi && command -v pi >/dev/null 2>&1; then
     plan_paths pi "$HOME/.pi/agent/extensions/openviking"
   fi
-  if contains_harness dsh && command -v dsh >/dev/null 2>&1; then
+  if contains_harness dsh && have_npm_dsh; then
     plan_item "dsh plugin --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT} add $DSH_PACKAGE@latest"
+  fi
+  if contains_harness dsh-desktop; then
+    if [ -n "$DSH_DESKTOP_CLI" ] && dsh_desktop_initialized; then
+      plan_item "\"$(short_path "$DSH_DESKTOP_CLI")\" plugin --profile desktop add $DSH_PACKAGE@latest ($(t 'DeepSeek Harness Desktop, which must be quit' 'DeepSeek Harness Desktop，需先退出'))"
+    else
+      plan_item "DeepSeek Harness Desktop: $(t 'nothing; the steps for its Plugins page are printed' '不修改；改为给出其“插件”页的安装步骤')"
+    fi
   fi
   if contains_harness cli && [ -n "$CLI_PREFIX" ]; then
     plan_item "npm install -g $CLI_PACKAGE@latest ($(short_path "$CLI_PREFIX/bin/ov"))"
@@ -3495,9 +3726,21 @@ EOF
   if contains_harness pi && command -v pi >/dev/null 2>&1; then
     next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" "" "rm -rf ~/.pi/agent/extensions/openviking"
   fi
-  if contains_harness dsh && command -v dsh >/dev/null 2>&1; then
+  if contains_harness dsh && have_npm_dsh; then
     next_steps "DeepSeek Harness" "$(t 'start a new dsh session' '新开一个 dsh 会话')" "$rerun" "" \
       "dsh plugin --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT} rm $DSH_PACKAGE"
+  fi
+  if contains_harness dsh-desktop && [ "$DSH_DESKTOP_INSTALLED" -eq 1 ]; then
+    next_steps "DeepSeek Harness Desktop" \
+      "$(t 'quit DeepSeek Harness Desktop with ⌘Q if it is open, reopen it and start a new conversation' '如 DeepSeek Harness Desktop 已打开，用 ⌘Q 退出后重新打开，再新建对话')" \
+      "$(t 're-run this installer, or update it on the Plugins page' '重新运行本安装脚本，或在“插件”页更新')" \
+      "\"$DSH_DESKTOP_CLI\" plugin --profile desktop ls" \
+      "$(t "with Desktop quit, \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE; or Plugins page → $DSH_PACKAGE → Uninstall" "退出 Desktop 后运行 \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE；或在“插件”页 → $DSH_PACKAGE → 卸载")"
+  elif contains_harness dsh-desktop; then
+    next_steps "DeepSeek Harness Desktop" \
+      "$(t "open DeepSeek Harness Desktop: Plugins → Add plugin → enter $DSH_PACKAGE → Install, then turn it on if its switch is off" "打开 DeepSeek Harness Desktop：插件 → 添加插件 → 输入 $DSH_PACKAGE → 安装，开关未打开时再打开")" \
+      "$(t 'on the Plugins page' '在“插件”页')" "" \
+      "$(t "Plugins page → $DSH_PACKAGE → Uninstall" "“插件”页 → $DSH_PACKAGE → 卸载")"
   fi
   if [ "$CLI_INSTALLED" -eq 1 ]; then
     next_steps "CLI (ov)" "$(t 'run ov health, which uses the same credentials' '运行 ov health，它使用同一份凭据')" "$rerun" "" \
@@ -3519,16 +3762,24 @@ case "$(uname -s)" in
   Darwin|Linux) ;;
   *) err "Unsupported OS: $(uname -s). Only macOS and Linux are supported."; exit 1 ;;
 esac
-command -v node >/dev/null 2>&1 || { err "$(t 'node not found. Install Node.js 18+.' '未找到 node，请先安装 Node.js 18+。')"; exit 1; }
+command -v node >/dev/null 2>&1 || {
+  err "$(t 'node not found. Install Node.js 18+.' '未找到 node，请先安装 Node.js 18+。')"
+  # Desktop brings its own runtime, so a Mac with only Desktop has no Node.js.
+  if [ "$HAVE_DSH_DESKTOP" -eq 1 ]; then
+    dsh_desktop_plugins_page_steps
+    info "$(t 'Then write the server to' '再把服务写入') $OVCLI_CONF: {\"url\": \"<server-url>\", \"api_key\": \"<api-key>\"}"
+  fi
+  exit 1
+}
 NODE_BIN="$(command -v node)"
 NODE_MAJOR="$("$NODE_BIN" -p 'Number(process.versions.node.split(".")[0])')"
 [ "$NODE_MAJOR" -ge 18 ] || { err "Node.js 18+ required; found $("$NODE_BIN" --version)."; exit 1; }
 command -v curl >/dev/null 2>&1 || warn "$(t 'curl not found; the server check is skipped and downloads will fail.' '未找到 curl：将跳过服务检查，下载也会失败。')"
 
 select_harnesses
+select_dsh_profile
 validate_selected_harnesses
 select_compatible_bins
-select_dsh_profile
 refresh_available_harnesses
 validate_selected_bins
 if [ "$UNINSTALL" -eq 1 ]; then
@@ -3576,6 +3827,7 @@ if contains_harness codebuddy; then install_codebuddy; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
 if contains_harness dsh; then install_dsh; fi
+if contains_harness dsh-desktop; then install_dsh_desktop; fi
 if contains_harness cli; then install_cli; fi
 validate_install
 print_next_steps

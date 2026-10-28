@@ -1303,10 +1303,13 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 
 Task 记录默认使用本地 FileStore。需要多个 OpenViking 进程共享
 Task/Work 状态时，先在 MySQL 中执行
-`openviking/service/sql/task_store_init.sql`，再选择关系型后端：
+`openviking/service/sql/task_store_init.sql`，再按顺序执行
+`openviking/service/sql/changes/` 下的变更脚本，配置稳定的顶层
+`service_name` 后选择关系型后端：
 
 ```json
 {
+  "service_name": "production",
   "storage": {
     "task_store": {
       "provider": "mysql",
@@ -1329,7 +1332,11 @@ Task/Work 状态时，先在 MySQL 中执行
 
 MySQL 后端需要安装 `openviking[mysql]` extra。Task mutation、Task
 最终化和 execution event 更新在同一个数据库事务中提交。`task_id`
-是全局唯一身份；`account_id` 和 `user_id` 用于鉴权和查询范围。同一部署
+在同一个 `service_name` 分区内唯一；顶层 `service_name` 会写入每条
+Task/Work/Event 记录，用于隔离共用同一套表的多个 OpenViking 部署。
+`account_id` 和 `user_id` 用于鉴权和查询范围。新库需要先执行 init SQL，
+再按顺序执行变更脚本；升级使用旧 TaskStore 表的库前，先执行
+`openviking/service/sql/changes/0001_task_store_service_name.sql`。同一部署
 不要同时让 FileStore 和 MySQL 表作为写入端。
 
 #### agfs (RAGFS)
@@ -1422,9 +1429,19 @@ Redis 命名空间。
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | `filesystem`、`memory` 或 `cache`；`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`、`memory`、`sqlite` 或 `cache`；`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `sqlite_path` | str / null | 可显式覆盖本地共享锁数据库的绝对路径。见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
 | `lock_timeout_secs` | float | 已废弃且忽略；运行时等待超时固定为 `0.0` | `0.0` |
+
+SQLite PathLock 仅适用于同一主机上的进程共享同一个本地磁盘数据库文件。
+不能将数据库放在 EFS/NFS/SMB，也不能为每个副本配置独立的容器本地数据库。
+workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
+详见 [SQLite 部署限制](../configuration/01-server.md#storage)。
+
+多个容器或主机共享 EFS 时，使用下面的共享 Redis PathLock 配置。
+所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
+示例同时使用 Redis QueueFS，避免默认的 SQLite 队列数据库落在 EFS。
 
 ```json
 {
@@ -2192,7 +2209,7 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
 | `provider` | str | 密钥提供程序：`"local"`、`"vault"` 或 `"volcengine_kms"` | - |
 | `api_key_hashing.enabled` | bool | 仅 File Provider：是否对 API key 字段启用 Argon2id 单向哈希（与文件级 `enabled` 独立控制），详见 [加密指南](./08-encryption.md) | `false` |
 
-### Local（本地文件）
+### Local
 
 适合开发环境和单节点部署：
 
@@ -2211,6 +2228,10 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `local.key_file` | str | 根密钥文件路径 | `~/.openviking/master.key` |
+| `local.root_key` | str | 直接配置的 32 字节根密钥，必须编码为恰好 64 个十六进制字符 | - |
+
+不要同时配置 `local.key_file` 和 `local.root_key`。如果两者都省略，`local.key_file` 默认使用
+`~/.openviking/master.key`。内联密钥的管理和安全要求详见[加密指南](./08-encryption.md)。
 
 ### Vault（HashiCorp Vault）
 

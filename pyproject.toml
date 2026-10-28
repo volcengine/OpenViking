@@ -256,6 +256,10 @@ openviking = [
     "lib/ragfs_python*.pyd",
     "bin/ov",
     "bin/ov.exe",
+    "server/account_stores/sql/*.sql",
+    "server/account_stores/sql/changes/*.sql",
+    "service/sql/*.sql",
+    "service/sql/changes/*.sql",
     "storage/vectordb/engine/*.abi3.so",
     "storage/vectordb/engine/*.pyd",
 ]

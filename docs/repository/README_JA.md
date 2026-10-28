@@ -427,5 +427,5 @@ OpenViking プロジェクトは、コンポーネントごとに異なるライ
 - **メインプロジェクト**: AGPLv3 - 詳細は [LICENSE](../../LICENSE) ファイルを参照してください
 - **crates/ov\_cli**: Apache 2.0 - 詳細は [LICENSE](../../crates/LICENSE) を参照してください
 - **examples**: Apache 2.0 - 詳細は [LICENSE](../../examples/LICENSE) を参照してください。`examples/hermes-plugin` の Hermes プラグインは元の [MIT ライセンス](../../examples/hermes-plugin/LICENSE) を保持します。
-- **integrations/frameworks**: アダプターのパッケージメタデータとソースヘッダーは AGPLv3 を宣言しています。各パッケージの `LICENSE` を参照してください。実行可能なサンプルは Apache 2.0 を維持し、各パッケージの `examples/LICENSE` に記載されています。
+- **integrations/frameworks**: LangChain/LangGraph アダプターは AGPLv3、Microsoft Agent Framework アダプターは MIT を採用しています。各パッケージの `LICENSE` を参照してください。実行可能なサンプルは Apache 2.0 を維持し、各パッケージの `examples/LICENSE` に記載されています。
 - **third\_party**: 各サードパーティプロジェクトの元のライセンス

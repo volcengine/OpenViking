@@ -31,7 +31,7 @@ With `tenancy: account` (the default), keys for the same OpenViking account and 
 
 Rotating an OpenViking key in key tenancy starts a new partition and new conversations. For troubleshooting, derive its partition without printing the key: `"k_" + hashlib.sha256(("openviking\0" + key).encode()).hexdigest()`. The OpenViking account identity is kept separately for revocation checks.
 
-The stored OpenViking key and its user record expire after the configured `session_ttl_days`, measured from creation. Requests do not renew them. The next request confirms the key with OpenViking and recreates the records with the same partition and conversation scope. Issued gateway keys have no such TTL. See [Retention](11-security-and-data.md#retention) for pending capture and cleanup behavior.
+The stored OpenViking key and its user record expire after the configured `session_ttl_seconds`, measured from creation. Requests do not renew them. The next request confirms the key with OpenViking and recreates the records with the same partition and conversation scope. Issued gateway keys have no such TTL. See [Retention](11-security-and-data.md#retention) for pending capture and cleanup behavior.
 
 Use gateway keys when clients need their own context profile, upstreams or allowed models, or must be revocable on their own.
 

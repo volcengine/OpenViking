@@ -26,7 +26,7 @@ use crate::cache_runtime::{
 use crate::lock::RedisPathLockProvider;
 use crate::lock::{
     FilesystemPathLockProvider, MemoryPathLockProvider, PathLockConfig, PathLockManager,
-    PathLockProvider, PathLockWrappedFS,
+    PathLockProvider, PathLockWrappedFS, SQLitePathLockProvider,
 };
 
 #[cfg(feature = "s3")]
@@ -233,6 +233,39 @@ async fn build_stack_with_mountable_and_runtime(
             config.pathlock.lock_expire_secs,
         )),
         "memory" => Arc::new(MemoryPathLockProvider::new()),
+        "sqlite" => {
+            let path = config.pathlock.sqlite_path.as_deref().ok_or_else(|| {
+                Error::config("pathlock.sqlite_path is required for SQLite PathLock")
+            })?;
+            let namespace = config.pathlock.service_name.as_deref().ok_or_else(|| {
+                Error::config("pathlock.service_name is required for SQLite PathLock")
+            })?;
+            let path = path.to_string();
+            let namespace = namespace.to_string();
+            let provider = tokio::task::spawn_blocking(move || {
+                let database = std::path::Path::new(&path);
+                if !database.is_absolute() || namespace.trim().is_empty() {
+                    return Err(crate::lock::types::PathLockError::InvalidRequest(
+                        "SQLite PathLock requires an absolute sqlite_path and nonempty service_name"
+                            .to_string(),
+                    ));
+                }
+                if let Some(parent) = database.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| {
+                        crate::lock::types::PathLockError::Io(format!(
+                            "failed to create SQLite PathLock parent directory: {error}"
+                        ))
+                    })?;
+                }
+                SQLitePathLockProvider::new(&path, &namespace)
+            })
+            .await
+            .map_err(|error| Error::config(format!("SQLite PathLock worker failed: {error}")))?
+            .map_err(|error| {
+                Error::config(format!("SQLite PathLock initialization failed: {error}"))
+            })?;
+            Arc::new(provider)
+        }
         #[cfg(feature = "cache")]
         "cache" => {
             let runtime = runtime.clone().ok_or_else(|| {
@@ -353,6 +386,7 @@ mod tests {
             pathlock: PathLockConfig {
                 provider: "filesystem".to_string(),
                 service_name: None,
+                sqlite_path: None,
                 lock_timeout_secs: 0.0,
                 lock_expire_secs: 30.0,
             },
@@ -532,6 +566,45 @@ mod tests {
             .unwrap();
 
         assert!(stack.cache_runtime.is_none());
+    }
+
+    #[tokio::test]
+    async fn default_stack_builds_sqlite_pathlock_without_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RagfsConfig {
+            pathlock: PathLockConfig {
+                provider: "sqlite".into(),
+                service_name: Some("builder-test".into()),
+                sqlite_path: Some(dir.path().join("locks.db").to_str().unwrap().into()),
+                ..PathLockConfig::default()
+            },
+            ..RagfsConfig::default()
+        };
+        let stack = build_default_stack(config).await.unwrap();
+        let lease = stack
+            .pathlock_manager
+            .acquire_tree("/missing", std::time::Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert_eq!(lease.lease.lock_paths, vec!["/missing"]);
+        stack.pathlock_manager.release(&lease).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn default_stack_rejects_sqlite_pathlock_without_shared_database() {
+        let config = RagfsConfig {
+            pathlock: PathLockConfig {
+                provider: "sqlite".into(),
+                service_name: Some("builder-test".into()),
+                ..PathLockConfig::default()
+            },
+            ..RagfsConfig::default()
+        };
+        let error = match build_default_stack(config).await {
+            Ok(_) => panic!("SQLite PathLock unexpectedly built without database"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("sqlite_path"));
     }
 
     #[tokio::test]

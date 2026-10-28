@@ -124,6 +124,11 @@ class TestContentEdgeCases:
             assert write_resp.status_code == 200, (
                 f"write empty content with create mode should return 200, got {write_resp.status_code}: {write_resp.text[:200]}"
             )
+            assert write_resp.json().get("status") == "ok"
+
+            read_resp = api_client.fs_read(test_uri)
+            assert read_resp.status_code == 200
+            assert read_resp.json().get("result") == ""
         finally:
             try:
                 api_client.fs_rm(test_uri.rsplit("/", 1)[0], recursive=True)

@@ -128,7 +128,7 @@ helm upgrade --install gateway ./deploy/helm/openviking-gateway \
 
 The default is one SQLite replica with a persistent volume and `Recreate` updates. A default StorageClass, or `persistence.storageClass`/`persistence.existingClaim`, must be available. Setting `persistence.enabled: false` loses SQLite state when a Pod is replaced; Helm NOTES warns about this. PVCs are retained on uninstall. Use both Redis providers before scaling; see [Scaling](#scaling).
 
-The chart sets `session_ttl_days: 7` and `response_ttl_seconds: 604800`, shorter than the gateway's 30-day defaults; override `config.*` to change them. Each Pod requests 500m CPU and 1Gi of memory, with limits of 2 CPUs and 4Gi; set `resources` for your load.
+The chart sets `session_ttl_seconds: 604800` and `response_ttl_seconds: 604800`, shorter than the gateway's 30-day defaults; override `config.*` to change them. Each Pod requests 500m CPU and 1Gi of memory, with limits of 2 CPUs and 4Gi; set `resources` for your load.
 
 The standalone chart's `existingSecret` accepts `management-key`, `redis-password` and `root-key`. The first two become `OPENVIKING_GATEWAY_MANAGEMENT_KEY` and `OPENVIKING_GATEWAY_REDIS_PASSWORD`; `config.storage.redis.password_env` names the latter. Local and KMS encryption mount `root-key` read-only at `/etc/openviking-gateway/keys/root-key` and set the provider's `key_file` to it. Generate the key before installing, as described under [Encryption](#encryption). For upstream credentials and KMS AK/SK, use `$VAR` in `config` and `extraEnv` with `secretKeyRef`; never put plaintext credentials in a ConfigMap.
 

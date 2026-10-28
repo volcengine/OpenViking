@@ -221,6 +221,13 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
 
 Exact 和 Tree 表达操作范围，文件、目录或缺失路径表达目标的当前状态，两者独立。锁保护路径名字，目标不存在也可以申请锁。
 
+锁路径必须是绝对路径。Manager 在获取锁或检查租约覆盖范围前，对空路径、
+相对路径、重复 `/`、`.` 或 `..` 路径段及 NUL 返回 `InvalidRequest`。
+非根路径末尾的单个 `/` 会被移除。Redis 和 SQLite 的 token 操作要求路径
+已完成这一规范化；Redis Lua 批量获取也会在修改 token 前校验全部请求。
+应使用 `/local/account-a/file`，避免 `/local/account-a/./file`、
+`/local/account-a//file` 等别名。
+
 以下冲突关系限定为不同 owner、同一 Provider scope 内的请求：
 
 | 已持有 | 新请求 | 冲突 |
@@ -290,8 +297,10 @@ HASH key 按路径 scope 隔离：
 
 所有 key 都使用 `{service_name}` 作为 Redis Cluster hash tag。Exact 获取使用
 `HMGET` 读取目标和祖先；Tree 获取只对所属 scope 的 HASH 执行
-`HGETALL`。`/` 和 `/local` 的 global 锁不会扫描 account 或 `_system`
-HASH。跨 scope batch 会被拒绝。
+`HGETALL`。`/` 和 `/local` 的 Tree 锁会返回 `InvalidRequest`，因为它们的
+子树跨越 account 和 `_system` HASH。Tree 根路径应使用 `/local/<account>`、
+`/local/_system` 或其后代。`/` 和 `/local` 的 Exact 锁仍然支持，只保护
+对应路径本身。跨 scope batch 会被拒绝。
 
 ### Filesystem 获取锁流程（EXACT 模式）
 
@@ -374,7 +383,15 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 **陈旧锁检测**：PathLockEngine 检查归属 token 中的时间戳。超过 `lock_expire`（默认 30s）的锁被视为陈旧锁，在加锁过程中自动移除。
 
-**进程内清理**：Rust PathLockManager 在续期循环中检查长期未成功续期的 lease，以 `2 × lock_expire` 为阈值尝试清理，并校验归属后释放 token。
+**失锁后的授权失效**：手动和后台续租使用相同规则。token 不存在或 owner 不匹配时，同 owner 下共享实际 token 路径（`lock_paths`）的所有本地 lease 立即整份失效，包括待交接的 lease。Tree 祖先和 Exact 后代使用不同 token，不会因逻辑覆盖关系连带失效。
+
+网络等不确定错误允许短暂重试，但每个 token 距离最近一次成功确认达到 `0.8 × lock_expire`（默认 24 秒）时撤销授权。使用单调时钟分别记录各 token 的确认时间；部分续租成功、重入和本地交接/接管不会延长失败 token 的期限。写入授权检查也会检查期限，无需等待下次心跳。失效 lease 不能再授权后续受保护写入、续租、复用 owner 或交接/接管，且不会恢复有效。
+
+**进程内清理**：失效 lease 保留释放能力和本地引用，后台重试带 owner 校验的清理。token 已不存在或已被其他 owner 接管均视为清理完成，不会删除新 owner 的 token；仍被其他有效本地 lease 引用的 token 也不会被删除。从首次失效起超过六个心跳间隔（`2 × lock_expire`，默认 60 秒），即使 Provider 持续不可用也记录剩余路径并移除本地 entry，遗留的远端 token 依赖过期清理。重试不会延长该窗口。
+
+**失效诊断**：manager 在清理期间保留首次失效的时间与原因。`pathlock lease invalidated` 日志包含 `reason`、`lease_ref`、`owner_id` 和 `affected_paths`。`TokenLost` 表示必要 token 缺失或归属不符，应检查 token 过期、删除和接管情况；`ConfirmationDeadlineExceeded` 表示安全期限内未能确认归属，应检查 Provider 健康、网络延迟和续租调度，对应 token 日志还包含 `since_last_confirmation_ms` 和 `failures`；`ReleaseFailed` 表示释放或降级错误导致撤销授权并进入清理重试，释放日志会记录具体错误。后续响应和清理失败不会覆盖首次原因或重置时间，清理窗口耗尽的日志也会保留该原因。
+
+上述检查在发现失锁或达到期限后拒绝后续操作；不会中断已经通过授权检查的写入，也不提供存储侧 fencing。
 
 **孤儿锁**：进程崩溃后遗留的 Provider token，在后续 acquire 检查同一路径或 scope 时通过 stale lock 检测自动移除。
 
@@ -448,8 +465,13 @@ Redis 配置：
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | `filesystem`、`memory` 或 `cache` | `filesystem` |
+| `provider` | str | `filesystem`、`memory`、`sqlite` 或 `cache` | `filesystem` |
+| `sqlite_path` | str / null | 使用 `sqlite` 时可覆盖本地数据库绝对路径；见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数 | `30.0` |
+
+跨容器或主机共享 EFS 的副本应使用 `provider="cache"`，连接共享 Redis。
+SQLite 仅支持同机共享同一个本地磁盘数据库文件，不支持 EFS/NFS/SMB
+或各容器独立的本地数据库。参见[部署限制与 Provider 选择](../configuration/01-server.md#storage)。
 
 兼容旧写法：
 

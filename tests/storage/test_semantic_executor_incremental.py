@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import re
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,7 +9,6 @@ import pytest
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
-    deterministic_sample,
     freshness_metadata,
     parse_abstract_overview,
     render_abstract_overview,
@@ -283,10 +281,6 @@ async def test_semantic_plan_repair_regenerates_and_reembeds_directory(monkeypat
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
     processor = _FakeProcessor(fake_fs)
     plan = SemanticPlan(
         root_uri,
@@ -343,10 +337,6 @@ async def test_skill_plan_repair_regenerates_and_reembeds_skill_root(monkeypatch
     fake_fs = _FakeVikingFS(tree={root_uri: []}, file_contents={})
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
     processor = _FakeProcessor(fake_fs)
     processor._skill_root_semantics = AsyncMock(return_value=("skill overview", "skill abstract"))
@@ -422,10 +412,6 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -477,10 +463,6 @@ async def test_direct_incremental_created_file_forces_vector_upsert(monkeypatch)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
         processor=processor,
@@ -530,10 +512,6 @@ async def test_modified_file_with_same_abstract_still_propagates(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
@@ -578,10 +556,6 @@ async def test_modified_file_with_different_abstract_still_propagates(monkeypatc
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
@@ -615,10 +589,6 @@ async def test_added_file_with_matching_stale_abstract_still_propagates(monkeypa
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
     processor = _FakeProcessor(fake_fs)
@@ -657,10 +627,6 @@ async def test_deleted_last_nested_file_still_refreshes_existing_ancestor(monkey
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
@@ -696,10 +662,6 @@ async def test_artifact_files_drive_tree_structure_when_target_listing_is_empty(
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
     processor = _FakeProcessor(fake_fs)
@@ -737,10 +699,6 @@ async def test_direct_incremental_reuses_vector_abstract_without_overview(monkey
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
@@ -772,10 +730,6 @@ async def test_missing_target_file_fails_instead_of_using_empty_summary(tmp_path
     fake_fs = _MissingFileVikingFS(tree={}, file_contents={})
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
     executor = SemanticTreeExecutor(
         processor=_FakeProcessor(fake_fs),
@@ -815,10 +769,6 @@ async def test_content_write_tags_apply_only_to_changed_file(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -852,10 +802,6 @@ async def test_content_write_uses_per_file_ingest_options(monkeypatch):
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
     processor = _FakeProcessor(fake_fs)
     first_options = IngestOptions(search_tags=["team=search"])
@@ -900,10 +846,6 @@ async def test_content_write_with_same_abstract_updates_file_and_parent(monkeypa
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     tag_options = IngestOptions(search_tags=["team=search"])
@@ -941,10 +883,6 @@ async def test_content_write_keeps_matching_upstream_md5(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
@@ -977,10 +915,6 @@ async def test_semantic_generate_hashes_read_content_when_manifest_md5_is_missin
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
@@ -1001,11 +935,10 @@ async def test_semantic_generate_hashes_read_content_when_manifest_md5_is_missin
 
 
 @pytest.mark.asyncio
-async def test_pending_refresh_rebuilds_every_sampled_file_summary(monkeypatch):
+async def test_pending_refresh_rebuilds_every_file_summary(monkeypatch):
     root_uri = "viking://resources/wide"
     file_names = [f"file-{idx:03}.txt" for idx in range(40)]
     file_paths = [f"{root_uri}/{name}" for name in file_names]
-    sampled_paths = deterministic_sample(file_paths, 4)
     changed_path = f"{root_uri}/file-020.txt"
     old_overview = "FILES:\n" + "\n".join(f"- {name}: old-summary" for name in file_names)
     metadata = {"freshness": freshness_metadata(40, 4, pending=4)}
@@ -1026,10 +959,6 @@ async def test_pending_refresh_rebuilds_every_sampled_file_summary(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=4)),
-    )
 
     processor = _FakeProcessor(fake_fs)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -1047,7 +976,7 @@ async def test_pending_refresh_rebuilds_every_sampled_file_summary(monkeypatch):
 
     await executor.run(root_uri)
 
-    assert set(processor.summarized_files) == set(sampled_paths) | {changed_path}
+    assert set(processor.summarized_files) == set(file_paths)
     assert processor.vectorized_files == [changed_path]
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
     assert overview.metadata["freshness"]["pending_child_changes"] == 0
@@ -1063,10 +992,6 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
     processor = _FakeProcessor(fake_fs)
@@ -1132,10 +1057,6 @@ async def test_content_copy_rebuilds_target_overview_from_target_l2_summaries(mo
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
     processor = _FakeProcessor(
         fake_fs,
         transfer_summaries={
@@ -1181,10 +1102,6 @@ async def test_transfer_rebuild_generates_file_summary_and_vector(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
         processor=processor,
@@ -1227,10 +1144,6 @@ async def test_recursive_transfer_rebuild_generates_subtree_vectors(monkeypatch)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
         processor=processor,
@@ -1250,7 +1163,7 @@ async def test_recursive_transfer_rebuild_generates_subtree_vectors(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_content_copy_samples_before_loading_summaries(monkeypatch):
+async def test_content_copy_loads_all_existing_summaries(monkeypatch):
     root_uri = "viking://resources/archive"
     file_paths = [f"{root_uri}/{name}.txt" for name in "abcde"]
     fake_fs = _FakeVikingFS(
@@ -1259,10 +1172,6 @@ async def test_content_copy_samples_before_loading_summaries(monkeypatch):
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=2)),
     )
     processor = _FakeProcessor(
         fake_fs,
@@ -1282,16 +1191,16 @@ async def test_content_copy_samples_before_loading_summaries(monkeypatch):
 
     await executor.run(root_uri)
 
-    assert processor.transfer_summary_calls == [[file_paths[0], file_paths[-1]]]
+    assert processor.transfer_summary_calls == [file_paths]
     assert processor.summarized_files == []
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
     assert "a.txt" in overview
     assert "e.txt" in overview
-    assert "c.txt" not in overview
+    assert "c.txt" in overview
 
 
 @pytest.mark.asyncio
-async def test_content_copy_does_not_backfill_missing_sample_summary(monkeypatch):
+async def test_content_copy_reports_missing_summary_among_all_children(monkeypatch):
     root_uri = "viking://resources/archive"
     file_paths = [f"{root_uri}/{name}.txt" for name in "abcde"]
     fake_fs = _FakeVikingFS(
@@ -1300,10 +1209,6 @@ async def test_content_copy_does_not_backfill_missing_sample_summary(monkeypatch
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=2)),
     )
     processor = _FakeProcessor(
         fake_fs,
@@ -1323,12 +1228,12 @@ async def test_content_copy_does_not_backfill_missing_sample_summary(monkeypatch
 
     await executor.run(root_uri)
 
-    assert processor.transfer_summary_calls == [[file_paths[0], file_paths[-1]]]
+    assert processor.transfer_summary_calls == [file_paths]
     overview_doc = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"])
     assert "a.txt" not in overview_doc.body
-    assert "b.txt" not in overview_doc.body
+    assert "b.txt" in overview_doc.body
     assert "e.txt" in overview_doc.body
-    assert overview_doc.metadata["freshness"].get("missing_summary_entries") is None
+    assert overview_doc.metadata["freshness"].get("missing_summary_entries") == 1
 
 
 @pytest.mark.asyncio
@@ -1347,10 +1252,6 @@ async def test_content_copy_with_no_ready_summaries_preserves_existing_sidecars(
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
@@ -1388,10 +1289,6 @@ async def test_content_copy_rebuilds_semantics_when_move_leaves_source_directory
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
     processor = _FakeProcessor(fake_fs)
     executor = SemanticTreeExecutor(
         processor=processor,
@@ -1425,10 +1322,6 @@ async def test_content_copy_propagates_vector_summary_read_failure(monkeypatch):
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
     processor = _FakeProcessor(fake_fs)
 

@@ -32,8 +32,8 @@ ACL 条目使用带类型的 principal：
 | Level | 允许的操作 |
 |-------|------------|
 | `read` | 读取、列目录、`find/search/grep` |
-| `write` | `read` 的能力，以及写入、创建、删除文件、修改 tags |
-| `manage` | `write` 的能力，以及移动文件、移动时覆盖已有资源、删除或移动目录、管理 ACL |
+| `write` | `read` 的能力，以及写入、创建、修改 tags |
+| `manage` | `write` 的能力，以及删除或移动文件和目录、管理 ACL |
 
 高等级包含低等级能力。授予 `manage`，等价于同时授予 `read` 和 `write`。
 
@@ -90,16 +90,12 @@ read user:carol on viking://resources/A/B/C/report.md
 |------|----------|
 | read、stat、list、tree、find、search、grep、glob | read |
 | write、create、mkdir、set tags | write |
-| 删除文件 | write |
-| 移动文件 | 共享资源 ACL 开启时，源文件的 manage |
+| 删除或移动文件 | manage |
 | 删除或移动目录 | 目录及完整子树的 manage |
 | 管理 ACL | manage |
-| move 目标为新建共享资源 | ACL 开启时，目标父目录的 write |
-| move 覆盖已有共享资源 | ACL 开启时，目标资源的 manage |
+| move 目标父目录 | write |
 
 服务端会先 canonicalize URI，再在同一个鉴权入口中依次执行 account/owner/actor peer 等硬边界、开启时的有效 ACL 或关闭时的原有 namespace 规则，以及写入和删除的 namespace 防护。
-
-账号开启 `acl.enabled` 时，从 `viking://resources/...` 移动文件需要源文件的 `manage`。目标位于共享区时，新建资源要求目标父目录的 `write`；覆盖已有资源要求目标资源的 `manage`，无论源文件是否已有索引。目录合并会对每个受影响的目标节点执行相同检查，已有目标节点均要求 `manage`。ACL 关闭，或源、目标中的某一端不在共享区时，该端继续使用原有 namespace 规则。
 
 账号开启 `acl.enabled` 时，普通共享节点继承根目录的全员 `manage`，成员可据此
 修改节点 ACL。restricted 下的创建者只有父目录授予的权限，不会自动获得 `manage`。

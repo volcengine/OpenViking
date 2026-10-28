@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.message import ContextPart, ImagePart, TextPart, ToolPart
+from openviking.privacy import session_extractor
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.privacy.session_extractor import (
     build_session_placeholder,
@@ -29,6 +30,61 @@ def ctx():
     return RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
 
+@pytest.fixture
+def enable_session_privacy_discovery(monkeypatch):
+    """Keep coverage of the retained discovery code while production disables it."""
+    monkeypatch.setattr(session_extractor, "_SESSION_PRIVACY_DISCOVERY_ENABLED", True)
+
+
+@pytest.mark.parametrize("batch", [False, True], ids=["single", "batch"])
+async def test_http_skips_discovery_but_protects_registered_values(
+    client, service, ctx, monkeypatch, batch
+):
+    sid = "discovery-disabled"
+    session = await service.sessions.create(ctx, sid)
+    service.sessions.set_tool_output_externalization_config(
+        ToolOutputExternalizationConfig(enabled=True, threshold_chars=1024, preview_chars=200)
+    )
+    await service.privacy_configs.upsert(ctx, "credential", "github", {"pat": "registered-secret"})
+    reference = build_privacy_field_reference(ctx.user.user_id, "credential", "github", "pat")
+    insert = AsyncMock(wraps=service.privacy_configs.insert_values)
+    monkeypatch.setattr(service.privacy_configs, "insert_values", insert)
+    output = "padding\n" * 1500 + "password=example-password registered-secret"
+    message = {
+        "role": "assistant",
+        "parts": [
+            {"type": "text", "text": "password=example-password registered-secret"},
+            {
+                "type": "tool",
+                "tool_id": "read",
+                "tool_input": {
+                    "password": "example-password",
+                    "credentials": {"api_key": "registered-secret", "token": 1234},
+                },
+                "tool_output": output,
+            },
+        ],
+    }
+    endpoint = f"/api/v1/sessions/{sid}/messages" + ("/batch" if batch else "")
+    response = await client.post(endpoint, json={"messages": [message]} if batch else message)
+    assert response.status_code == 200, response.text
+    insert.assert_not_awaited()
+    assert await service.privacy_configs.get_current(ctx, "session", sid) is None
+    disk = await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx)
+    assert "registered-secret" not in disk
+    parts = json.loads(disk)["parts"]
+    assert parts[0]["text"] == f"password=example-password {reference}"
+    assert parts[1]["tool_input"] == {
+        "password": "example-password",
+        "credentials": {"api_key": reference, "token": 1234},
+    }
+    output_uri = parts[1]["tool_output_ref"] + "/output.txt"
+    stored_output = await service.viking_fs.read_file(output_uri, ctx=ctx)
+    assert stored_output == output.replace("registered-secret", reference)
+    assert await service.fs.read(output_uri, ctx=ctx) == output
+
+
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_http_preserves_protected_content_and_restores_only_raw_reads(client, service, ctx):
     sid = "http-privacy"
     response = await client.post("/api/v1/sessions", json={"session_id": sid})
@@ -79,6 +135,7 @@ async def test_http_preserves_protected_content_and_restores_only_raw_reads(clie
     assert (await client.get(f"/api/v1/privacy-configs/session/{sid}")).status_code == 200
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_default_read_keeps_escaped_short_and_container_values_protected(
     client, service, ctx
 ):
@@ -101,6 +158,7 @@ async def test_default_read_keeps_escaped_short_and_container_values_protected(
     assert json.loads(raw.json()["result"])["parts"][0]["tool_input"] == original
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_new_equal_fields_keep_independent_references_when_one_rotates(service, ctx):
     session = await service.sessions.create(ctx, "equal-new-fields")
     original = {"password": "same-new-value", "api_key": "same-new-value"}
@@ -119,6 +177,7 @@ async def test_new_equal_fields_keep_independent_references_when_one_rotates(ser
     }
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_batch_repeated_text_values_allow_later_messages(service, ctx):
     session = await service.sessions.create(ctx, "batch-repeat")
     texts = [
@@ -156,6 +215,7 @@ async def test_basic_prose_does_not_register_words_for_later_messages(service, c
 
 
 @pytest.mark.parametrize("sid", ["markdown-restatement", "中文会话"])
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_markdown_restatement_reuses_references_without_new_versions(service, ctx, sid):
     session = await service.sessions.create(ctx, sid)
     user_text = "API_KEY=demo-api-secret\nAuthorization: Bearer demo-bearer-secret\nsk-abcdefghijklmnopqrstuv"
@@ -222,6 +282,7 @@ async def test_session_and_skill_require_explicit_reference_for_ambiguous_value(
         assert restored["parts"][0]["text"] == "same-registered-value same-registered-value"
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_batch_discovery_protects_all_payloads_without_mutating_inputs(service, ctx):
     await service.privacy_configs.upsert(ctx, "credential", "github", {"pat": "registered-value"})
     fresh = "alpha-987654"
@@ -280,6 +341,7 @@ async def test_batch_discovery_protects_all_payloads_without_mutating_inputs(ser
     assert json.loads(restored) == json.loads(expected)
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_batch_discovery_rejects_key_collision_before_message_write(
     service, ctx, monkeypatch
 ):
@@ -302,6 +364,7 @@ async def test_batch_discovery_rejects_key_collision_before_message_write(
     assert await service.viking_fs.read_file(session.uri + "/messages.jsonl", ctx=ctx) == ""
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_externalized_output_restores_without_corrupting_metadata(service, ctx):
     session = await service.sessions.create(ctx, "externalized")
     session._tool_output_externalization_config = ToolOutputExternalizationConfig(
@@ -326,6 +389,7 @@ async def test_externalized_output_restores_without_corrupting_metadata(service,
     )
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_auto_created_session_extracts_before_persistence(service, ctx):
     session = await service.sessions.get("auto-created", ctx, auto_create=True)
     await session.add_message_async("user", [TextPart("password=default-secret")])
@@ -341,6 +405,7 @@ async def test_auto_created_session_extracts_before_persistence(service, ctx):
     "sid",
     ["中文会话", "team session@@group", " leading and trailing ", "x" * 300, "group:100%~"],
 )
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_custom_session_ids_support_privacy_and_cross_session_reuse(service, ctx, sid):
     session = await service.sessions.create(ctx, sid)
     await session.add_message_async("user", [TextPart("password=custom-session-secret")])
@@ -363,6 +428,7 @@ async def test_custom_session_ids_support_privacy_and_cross_session_reuse(servic
     assert json.loads(restored)["parts"][0]["text"] == "password=custom-session-secret"
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_concurrent_writers_preserve_messages_and_independent_fields(
     service, ctx, monkeypatch
 ):
@@ -400,6 +466,7 @@ async def test_concurrent_writers_preserve_messages_and_independent_fields(
 @pytest.mark.parametrize(
     "error", [ResourceExhaustedError, OSError], ids=["id-exhaustion", "storage"]
 )
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_privacy_write_failure_rejects_batch_before_externalization(
     service, ctx, monkeypatch, error
 ):
@@ -428,6 +495,7 @@ async def test_privacy_write_failure_rejects_batch_before_externalization(
     assert await service.privacy_configs.list_versions(ctx, "session", session.session_id) == [1]
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_values_equal_to_json_keys_do_not_change_message_identity(service, ctx):
     session = await service.sessions.create(ctx, "identity")
     original = {"password": "tool_input", "token": "assistant", "secret": "default"}
@@ -496,6 +564,7 @@ async def test_restore_leaves_foreign_missing_and_nested_references_unchanged(
     read.assert_any_await(ctx, "credential", "absent")
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_later_credential_registration_preserves_session_reference_identity(
     client, service, ctx
 ):
@@ -533,6 +602,7 @@ async def test_later_credential_registration_preserves_session_reference_identit
     assert await service.viking_fs.read_file(first_uri, ctx=ctx) == stored
 
 
+@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_cross_session_reuse_requires_full_reference_but_short_reference_stays_local(
     service, ctx
 ):

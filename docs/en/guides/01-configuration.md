@@ -1315,10 +1315,12 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 
 Task records use the local FileStore by default. To share Task/Work state across
 OpenViking processes, provision `openviking/service/sql/task_store_init.sql` in
-MySQL and select the relational backend:
+MySQL, apply the SQL changes under `openviking/service/sql/changes/`, configure
+a stable top-level `service_name`, and select the relational backend:
 
 ```json
 {
+  "service_name": "production",
   "storage": {
     "task_store": {
       "provider": "mysql",
@@ -1342,9 +1344,15 @@ Replace `ov_tasks` consistently in the provisioning SQL when using a custom pref
 
 The MySQL backend requires the `openviking[mysql]` extra. Its mutations,
 Task finalization, and execution-event updates commit in one database
-transaction. `task_id` is globally unique; `account_id` and `user_id` scope
-authorization and queries. Do not use the FileStore tables and MySQL tables as
-active writers for the same deployment.
+transaction. Top-level `service_name` is stored on every Task/Work/Event row and
+isolates multiple OpenViking deployments that share one table set. Within one
+`service_name`, `task_id` is unique; `account_id` and `user_id` scope
+authorization and queries. Fresh deployments should run the init SQL and then
+the change scripts in order; existing TaskStore tables created before
+`service_name` must run
+`openviking/service/sql/changes/0001_task_store_service_name.sql` before
+upgrading. Do not use the FileStore tables and MySQL tables as active writers
+for the same deployment.
 
 #### agfs (RAGFS)
 
@@ -1437,9 +1445,20 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `sqlite_path` | str / null | Optional absolute local shared lock database path. See [local SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
 | `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
+
+SQLite PathLock is limited to processes sharing one actual database file on the
+same machine's local disk. Do not put it on EFS/NFS/SMB or give each replica its
+own container-local database. A workspace on EFS also puts the default
+`sqlite_path` on EFS. See [SQLite deployment limits](../configuration/01-server.md#storage).
+
+For multiple containers or hosts sharing EFS, use shared Redis PathLock as in
+the example below. All replicas must use the same Redis deployment, top-level
+`service_name`, and lock expiry setting. The example also uses Redis QueueFS
+so its default SQLite database is not placed on EFS.
 
 ```json
 {
@@ -2276,7 +2295,7 @@ At-rest encryption protects newly written files with account-specific keys throu
 | `provider` | str | Key provider: `"local"`, `"vault"`, or `"volcengine_kms"` | - |
 | `api_key_hashing.enabled` | bool | File-provider only: whether to apply Argon2id one-way hashing to API key values (independent of file-level `enabled`); see [Encryption Guide](./08-encryption.md) | `false` |
 
-### Local (File)
+### Local
 
 Suitable for development environments and single-node deployments:
 
@@ -2295,6 +2314,11 @@ Suitable for development environments and single-node deployments:
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `local.key_file` | str | Root key file path | `~/.openviking/master.key` |
+| `local.root_key` | str | Inline 32-byte root key encoded as exactly 64 hexadecimal characters | - |
+
+Do not configure `local.key_file` and `local.root_key` together. If both are omitted,
+`local.key_file` defaults to `~/.openviking/master.key`. See the [Encryption Guide](./08-encryption.md)
+for inline-key handling and security requirements.
 
 ### Vault (HashiCorp Vault)
 

@@ -86,7 +86,7 @@ description: Studio 中 OpenViking 网关页面的使用方法：各标签页、
 对话在第一个请求时记下当时的上下文配置并一直沿用，因为中途改变模型看到的内容会破坏服务商的[提示词缓存](01-how-it-works.md#replay)。所以客户端多快能用上新的上下文配置，取决于它多久开始一次新对话：
 
 - 每次聊天都新开对话的客户端，很快就能用上新设置。
-- Claude Code、Codex 以及发送固定会话请求头的客户端，会把一段对话延续很多天。它们一直沿用旧设置，直到开始新对话，或者这段对话闲置满 30 天（`session_ttl_days`），此时网关会删除这段对话的状态。
+- Claude Code、Codex 以及发送固定会话请求头的客户端，会把一段对话延续很多天。它们一直沿用旧设置，直到开始新对话，或者这段对话闲置满 30 天（`session_ttl_seconds`），此时网关会删除这段对话的状态。
 
 网关如何区分不同的对话，见[网关如何识别对话](03-connect-clients.md#how-conversations-are-recognized)。
 

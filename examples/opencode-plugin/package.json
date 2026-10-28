@@ -1,6 +1,6 @@
 {
   "name": "@openviking/opencode-plugin",
-  "version": "0.5.20",
+  "version": "0.5.21",
   "author": "@openviking",
   "description": "Unified OpenCode plugin for OpenViking repository retrieval and long-term memory",
   "type": "module",

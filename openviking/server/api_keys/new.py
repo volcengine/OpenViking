@@ -180,12 +180,14 @@ class APIKeyManager:
         await self._store.create_user_with_api_key(account_id, user_id, role, key)
         return key
 
-    async def regenerate_key(self, account_id, user_id, seed=None):
+    async def regenerate_key(self, account_id, user_id, seed=None, *, expected_api_key=None):
         if not self._issue_user_keys:
             raise FailedPreconditionError("Personal API keys are disabled in trusted mode")
         await self._require_manageable_user(account_id, user_id)
         key = generate_api_key(account_id, user_id, seed)
-        await self._store.replace_active_user_api_key(account_id, user_id, key)
+        await self._store.replace_active_user_api_key(
+            account_id, user_id, key, expected_api_key=expected_api_key
+        )
         return key
 
     async def get_registered_user_role(self, account_id: str, user_id: str) -> Role | None:
@@ -248,6 +250,7 @@ class APIKeyManager:
     async def list_users_page(self, account_id, **filters):
         expose_key = filters.pop("expose_key", True)
         mask_keys = filters.pop("mask_keys", False)
+        hide_other_keys = filters.pop("hide_other_keys", False)
         # The masked view still shows the caller's own stored key in plaintext,
         # but only when account and user match the key's embedded identity.
         viewer_account_id = filters.pop("viewer_account_id", None)
@@ -272,8 +275,14 @@ class APIKeyManager:
             for user in page["users"]:
                 user.pop("api_key", None)
                 user.pop("key_prefix", None)
-        elif mask_keys:
+        elif mask_keys or hide_other_keys:
             for user in page["users"]:
+                if hide_other_keys and (
+                    account_id != viewer_account_id or user.get("user_id") != viewer_user_id
+                ):
+                    user.pop("api_key", None)
+                    user.pop("key_prefix", None)
+                    continue
                 if api_key := user.pop("api_key", None):
                     if self._is_viewer_own_key(
                         api_key,
@@ -283,8 +292,10 @@ class APIKeyManager:
                         viewer_user_id,
                     ):
                         user["api_key"] = api_key
-                    else:
+                    elif not hide_other_keys:
                         user["key_prefix"] = mask_api_key(api_key)
+                    else:
+                        user.pop("key_prefix", None)
         return page
 
     @staticmethod

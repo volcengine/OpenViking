@@ -60,7 +60,7 @@ viking://user/{user_id}/privacy/{category}/{target_key}/
 
 ## Skill Privacy Extraction and Restore
 
-### Automatic Extraction (Write Path)
+### Registered-Value Protection (Write Path)
 
 When adding a Skill via `add_skill`, sensitive values are extracted and replaced with placeholders.
 
@@ -135,26 +135,25 @@ Placeholders that reference the current user's Privacy fields are also restored.
 
 ### Automatic Extraction (Write Path)
 
-When writing messages to a Session, common credential rules extract sensitive values and replace them with placeholders before tool output externalization and message persistence.
+When writing messages to a Session, values matching registered Privacy entries are replaced with placeholders before tool output externalization and message persistence. Automatic discovery of new sensitive values is temporarily disabled in code because false positives create excessive invalid entries. It will be revisited later; there is currently no runtime configuration switch.
 
 ```
 Session.add_messages_async
   -> extract_and_store_session_privacy
     -> PrivacySanitizer (protect registered personal credentials)
-    -> PrivacyExtractor (extract new values using rules and replace them with placeholders)
-    -> privacy.insert_values(category="session", target_key=session_id, updates=...)
+    -> skip new-value discovery; do not add Session Privacy fields
   -> externalize tool output
   -> write placeholderized messages
 ```
 
 #### Key Points
 
-1. **Extraction source**: fixed rules identify sensitive values without model calls; the results are used as privacy key-value pairs.
-2. **Coverage**: TextPart text, ContextPart abstracts, and ToolPart input and output. Values under sensitive tool input keys are stored and masked as a whole.
+1. **Matching source**: only registered Privacy values are matched; fixed rules and sensitive field names no longer trigger new-value extraction.
+2. **Coverage**: TextPart text, ContextPart abstracts, and ToolPart input and output. Tool inputs are traversed recursively to match registered values; field names no longer cause entire values to be stored and masked.
 3. **Content replacement**: sensitive spans in the original content are replaced with placeholders:
    - Sensitive values belonging to the current Session use the same placeholder format, with the Session ID or its hash value: <code>&#123;&#123;ov_privacy:session:&#123;session_id&#125;:&#123;field_name&#125;&#125;&#125;</code>.
    - If a sensitive span matches registered personal credentials (`credential`), prefer the uniquely matching field's placeholder, for example <code>&#123;&#123;ov_privacy:alice:viking://~/privacy/credential/github#/values/pat&#125;&#125;</code>.
-4. **Persisted content**: matched spans are saved as placeholders; unmatched content remains unchanged. Newly extracted privacy values are saved in the current Session's config.
+4. **Persisted content**: matched spans are saved as placeholders; unmatched content remains unchanged. No new Session Privacy data is created. Existing configs and restoration of historical placeholders remain supported.
 
 ---
 

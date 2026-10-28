@@ -8,6 +8,7 @@ OpenViking 的发版目标不是单一产物，而是围绕不同使用入口发
 
 - `openviking` Python 主包：面向本地运行时、服务端、CLI 及完整功能用户。
 - Python SDK `openviking-sdk`：面向只通过 HTTP 调用已有 OpenViking 服务的轻量客户端用户。
+- Microsoft Agent Framework 适配包 `openviking-ms-agent-framework`：面向连接已有 OpenViking 服务的 MAF 应用。
 - Docker 镜像：面向容器化部署，发布到 GHCR 和 Docker Hub。
 - TOS 发布资产：面向源码包、安装脚本和稳定下载路径。
 - Rust CLI / npm 包：面向通过 npm 安装 `ov` CLI 的用户。
@@ -24,6 +25,7 @@ OpenViking 的发版目标不是单一产物，而是围绕不同使用入口发
 | --- | --- | --- |
 | `openviking` 主包 | `vX.Y.Z` | 主 release tag，例如 `v0.3.26`。 |
 | `openviking-sdk` | `python-sdk@X.Y.Z` | SDK 专用 tag，例如 `python-sdk@0.1.3`。 |
+| `openviking-ms-agent-framework` | `openviking-ms-agent-framework@X.Y.Z` | 必须与 `integrations/frameworks/microsoft-agent-framework/pyproject.toml` 中的版本一致。 |
 | Rust CLI / npm CLI | `cli@X.Y.Z` | CLI 专用 tag，例如 `cli@0.2.0`。 |
 | ClawHub 插件 latest | `YYYY.M.D` 或 `YYYY.M.D-N` | 由 workflow 自动生成或手动指定。 |
 | ClawHub 插件 dev | `YYYY.M.D-dev.N` | dev channel 使用。 |
@@ -128,6 +130,18 @@ python-sdk@X.Y.Z
 6. workflow 构建 `sdk/python` 并发布到 PyPI。
 
 SDK workflow 也支持手动触发，并可选择 `testpypi`、`pypi` 或 `both`。手动触发适合验证和补发；正式 SDK 发版建议使用 `python-sdk@X.Y.Z` tag。
+
+## Microsoft Agent Framework 发版流程
+
+适配包位于 `integrations/frameworks/microsoft-agent-framework`，版本在该目录的 `pyproject.toml` 中独立维护。
+
+1. 合入适配包改动，并确认集成检查通过。
+2. 手动运行 `Microsoft Agent Framework Integration Release`，选择 `testpypi`，验证发布的 wheel 可以安装和导入。
+3. 在已测试的提交上创建 `openviking-ms-agent-framework@X.Y.Z` tag，并基于它发布 GitHub Release，使用 `gh release create <tag> --latest=false` 避免替换主包的 latest Release。workflow 会校验 tag 与包版本一致，运行离线契约测试、构建产物并发布到 PyPI。
+
+手动触发还支持 `pypi` 和 `both`，用于发布和补发。仅推送 tag 不会触发此 workflow。
+
+分别在 PyPI 和 TestPyPI 配置 GitHub Trusted Publisher：仓库为 `volcengine/OpenViking`，workflow 文件名为 `python-agent-framework-release.yml`，environment 分别为 `pypi` 和 `testpypi`。首次发版时，以包名 `openviking-ms-agent-framework` 注册 pending publisher。发布通过 OIDC 完成认证。
 
 ## Rust CLI / npm 发版流程
 

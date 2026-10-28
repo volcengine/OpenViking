@@ -9,7 +9,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 import asyncio
 from collections.abc import Coroutine
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
 
@@ -576,6 +576,7 @@ class FSService:
     ) -> Optional[Dict[str, Any]]:
         """Remove resource."""
         viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.MANAGE)
         namespace_policy = namespace_policy_for_uri(uri)
         if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
             result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx, no_vector=True)
@@ -997,7 +998,9 @@ class FSService:
             target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
             target_is_dir = bool(target_stat.get("isDir"))
             rebuild_root_uri = (
-                to_uri if target_is_dir else self._semantic_refresh_parent_uri(to_uri, context_type)
+                to_uri
+                if target_is_dir
+                else self._semantic_refresh_parent_uri(to_uri, context_type)
             )
             if not rebuild_root_uri:
                 result["semantic_status"] = "skipped"
@@ -1069,6 +1072,7 @@ class FSService:
     ) -> None:
         """Commit move/watch state and enqueue all affected parent refreshes."""
         viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
         watch_manager = self._get_watch_manager()
         use_watch_transaction = (
             watch_manager is not None
@@ -1118,14 +1122,7 @@ class FSService:
                             )
                         except Exception as commit_error:
                             try:
-                                # The authorized move may leave the file inheriting only
-                                # write at its destination; rollback must still restore it.
-                                await viking_fs.mv(
-                                    to_uri,
-                                    from_uri,
-                                    ctx=replace(ctx, bypass_acl=True),
-                                    **options,
-                                )
+                                await viking_fs.mv(to_uri, from_uri, ctx=ctx, **options)
                             except Exception as rollback_error:
                                 logger.exception("Move rollback failed: %s -> %s", to_uri, from_uri)
                                 raise rollback_error from commit_error
@@ -1154,7 +1151,9 @@ class FSService:
             target_is_dir = bool(target_stat.get("isDir"))
             context_type = context_type_for_uri(to_uri)
             rebuild_root_uri = (
-                to_uri if target_is_dir else self._semantic_refresh_parent_uri(to_uri, context_type)
+                to_uri
+                if target_is_dir
+                else self._semantic_refresh_parent_uri(to_uri, context_type)
             )
             if rebuild_root_uri:
                 try:
@@ -1210,11 +1209,10 @@ class FSService:
             return
         if move:
             await versions.before_move(from_uri.rstrip("/"), to_uri.rstrip("/"), ctx)
-            await viking_fs._ensure_move_source_access(from_uri, ctx)
-            await viking_fs._ensure_move_target_access(to_uri, ctx)
+            await viking_fs._ensure_access(from_uri, ctx, action=AclAction.WRITE)
         else:
             await viking_fs._ensure_copy_source_access(from_uri, recursive=recursive, ctx=ctx)
-            await viking_fs._ensure_access(to_uri, ctx, action=AclAction.WRITE)
+        await viking_fs._ensure_access(to_uri, ctx, action=AclAction.WRITE)
         source_path = viking_fs._uri_to_path(from_uri, ctx=ctx)
         target_path = viking_fs._uri_to_path(to_uri, ctx=ctx)
         viking_fs._validate_transfer_paths(source_path, target_path)

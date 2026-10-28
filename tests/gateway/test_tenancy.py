@@ -24,7 +24,7 @@ def gateway_config(request, gateway_backend):
         "default_upstreams": default_upstreams(gateway_backend[0]),
         "openviking_keys": True,
         "tenancy": "key",
-        "session_ttl_days": 7,
+        "session_ttl_seconds": 7 * 86400,
         "default_profile": {"gateway_tools": False},
         **getattr(request, "param", {}),
     }

@@ -29,7 +29,7 @@ class ParserConfig:
         enabled: Whether the parser is enabled
         max_content_length: Maximum content length to process (characters)
         encoding: Default file encoding
-        max_section_size: Maximum tokens per section before splitting
+        max_section_size: Legacy option, ignored by native Markdown splitting
         section_size_flexibility: Allow overflow to maintain coherence (0.0-1.0)
         max_section_chars: Target character limit per section. A single oversized
             Markdown table row may remain intact to preserve table semantics.
@@ -40,9 +40,9 @@ class ParserConfig:
     encoding: str = "utf-8"
 
     # Smart splitting configuration
-    max_section_size: int = 2048  # Maximum tokens per section before splitting
+    max_section_size: int = 2048  # Legacy compatibility; splitting uses max_section_chars
     section_size_flexibility: float = 0.3  # Allow 30% overflow to maintain coherence
-    max_section_chars: int = 6000  # Target character limit per section
+    max_section_chars: int = 2000  # Target character limit per section
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ParserConfig":
@@ -707,7 +707,7 @@ class SemanticConfig:
     """Maximum number of file summaries per batch when splitting oversized prompts."""
 
     overview_sample_limit: int = 32
-    """Maximum direct-child summaries used in one generated directory sidecar."""
+    """Small-directory threshold for freshness scheduling; not a summary count cap."""
 
     freshness_refresh_ratio: float = 0.10
     """Pending direct-child change ratio that refreshes a wide directory."""

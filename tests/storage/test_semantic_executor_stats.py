@@ -163,7 +163,7 @@ class _ScheduledExecutor:
 
 def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
         lambda: SimpleNamespace(
             semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)
         ),
@@ -255,7 +255,7 @@ async def test_semantic_executor_bounds_active_node_work(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_incremental_wide_directory_samples_before_summary_work(monkeypatch):
+async def test_incremental_wide_directory_includes_all_summary_inputs(monkeypatch):
     root_uri = "viking://resources/wide"
     tree = {
         root_uri: [{"name": f"file-{idx:03}.txt", "isDir": False} for idx in range(40)],
@@ -282,14 +282,13 @@ async def test_incremental_wide_directory_samples_before_summary_work(monkeypatc
 
     await executor.run(root_uri)
 
-    # Four deterministic aggregation inputs plus the changed file, when it is
-    # outside that sample, are the only files that need summary preparation.
-    assert len(processor.summarized_files) <= 5
-    assert executor.get_stats().total_nodes <= 6
+    assert len(processor.summarized_files) == 40
+    assert executor.get_stats().total_nodes == 41
+    assert len(processor.overview_inputs[-1][1]) == 40
 
 
 @pytest.mark.asyncio
-async def test_non_recursive_memory_samples_files_and_reads_child_abstracts(monkeypatch):
+async def test_non_recursive_memory_includes_files_and_reads_child_abstracts(monkeypatch):
     root_uri = "viking://user/alice/memories"
     child_a = f"{root_uri}/a-child"
     child_d = f"{root_uri}/d-child"
@@ -325,13 +324,16 @@ async def test_non_recursive_memory_samples_files_and_reads_child_abstracts(monk
 
     await executor.run(root_uri)
 
-    assert processor.summarized_files == [f"{root_uri}/c.md", f"{root_uri}/f.md"]
-    assert executor.get_stats().total_nodes == 3
+    assert processor.summarized_files == [f"{root_uri}/{name}.md" for name in ("b", "c", "e", "f")]
+    assert executor.get_stats().total_nodes == 5
     assert processor.vectorized_files == []
     assert processor.vectorized_dirs == []
     _, file_summaries, child_abstracts, coverage = processor.overview_inputs[-1]
-    assert [item["name"] for item in file_summaries] == ["c.md", "f.md"]
-    assert child_abstracts == [{"name": "a-child", "abstract": "child a abstract"}]
+    assert [item["name"] for item in file_summaries] == ["b.md", "c.md", "e.md", "f.md"]
+    assert child_abstracts == [
+        {"name": "a-child", "abstract": "child a abstract"},
+        {"name": "d-child", "abstract": ""},
+    ]
     assert coverage["total_files"] == 4
     assert coverage["total_children"] == 2
 

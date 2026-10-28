@@ -295,11 +295,57 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
+| `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`cache` | `filesystem` | 路径锁存储 |
+| `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | 使用 `sqlite` 时为 `{workspace}/_system/pathlock/pathlock.db` | SQLite 共享锁数据库，可显式覆盖 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
+
+同机本地磁盘上的路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
+`{"provider":"sqlite"}`。数据库默认位于
+`{storage.workspace}/_system/pathlock/pathlock.db`，初始化运行时 binding 时
+根据最终 workspace 解析为绝对路径。显式指定的绝对路径 `sqlite_path` 优先，
+数据库父目录会自动创建。
+直接通过 `RAGFSBindingClient(config_path=..., config={"service_name": ...})` 构造时，
+省略 `sqlite_path` 或将其设为 `null` 也会使用上述默认路径。
+所有参与进程必须访问同一个实际的本地数据库文件，并使用相同的顶层 `service_name` 和锁过期配置。
+同一主机上的容器必须共享该本地文件；不同容器文件系统中相同的路径字符串指向独立数据库，
+不能互相协调路径锁。
+SQLite 是锁状态的唯一存储，通过路径索引查询，并在事务中原子检查及获取 Exact/Tree 锁；
+数据库阻塞操作在异步执行器之外运行。
+SQLite 每次尝试对瞬时数据库写竞争最多等待 100 毫秒，即使逻辑锁等待超时为零也会执行该等待。
+仅 Busy 会在 provider 内重试，最多尝试 3 次，重试前分别退避 1、4 毫秒；
+数据库等待可累计约 300 毫秒，另加 5 毫秒退避及执行、调度开销。
+重试耗尽仍向 manager 返回 Busy；逻辑锁 Conflict 不重试。
+WAL 使用 `synchronous=FULL` 保证崩溃后已提交锁记录的持久性，
+代价是比 `NORMAL` 更多的同步 I/O。
+租约心跳在一次 SQLite 事务中批量刷新所属路径，大租约按有限大小分批执行。
+`stale_locks_removed` 包含 SQLite/Redis 原子加锁事务实际回收的锁数量，
+失败并回滚的事务不会增加计数。
+
+SQLite 加锁会完整删除其他 owner 持有、已过期且与本次请求冲突的记录：
+目标路径、祖先 Tree 锁，以及请求 Tree 锁时的全部后代锁。
+清理与加锁在同一事务内完成，旧 owner 在接管后无法通过续租恢复这些记录。
+全局增量清理每次加锁最多删除 256 条记录；冲突记录清理不受此上限限制，
+因此过期子树较大时仍会增加事务开销。
+
+不能将数据库放在 EFS、NFS 或 SMB 上。SQLite WAL 要求参与者位于同一主机，不支持网络文件系统；
+频繁更新锁记录还会增加同步 I/O。如果 `storage.workspace` 位于 EFS，默认数据库路径也会落在 EFS。
+将数据库改到各容器本地磁盘会形成独立的锁状态，无法协调多个副本。
+
+多个容器或主机共享 EFS 时，使用共享 Redis PathLock：
+设置 `storage.agfs.pathlock.provider="cache"` 和顶层 `cache.provider="redis"`。
+所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
+参见[共享 Redis 配置示例](../guides/01-configuration.md)。
+共享 QueueFS 也需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；
+仅修改 PathLock 不会改变默认的 SQLite 队列后端。
+
+切换 provider 前需停止全部参与进程，
+SQLite 与 filesystem 锁文件不共享协议。进程运行期间不能删除数据库及其 WAL/SHM 文件。
+崩溃进程的锁在 `lock_expire_secs`（默认 30 秒）后可被接管。
+此配置不会改变 workspace 进程锁或其他后端的并发限制。
 
 远程存储后端还需要配置 endpoint、bucket/collection、鉴权和超时等字段。完整后端示例见[配置指南](../guides/01-configuration.md#storage)。
 

@@ -218,6 +218,7 @@ ov read viking://resources/docs/api.md
 | content | str | 是 | - | 要写入的新内容 |
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 是 `replace` 的兼容别名 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
 | tag_mode | string | 否 | `replace` | 标签更新方式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空已有标签且不要求传 `tags` |
 
@@ -345,6 +346,7 @@ ov write viking://resources/docs/api.md \
 | `root_uri` | string | 是 | - | 包含所有写入目标的已存在 Resource 或 Memory 目录 |
 | `operations` | array | 是 | - | 要校验并执行的文件写入 |
 | `wait` | boolean | 否 | `true` | 是否等待语义/向量刷新 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | `telemetry` | boolean/object | 否 | `false` | 是否返回操作遥测信息 |
 | `processing_mode` | string | 否 | `semantic_and_vectors` | 整批统一的处理模式：`semantic_and_vectors` 或 `vectors_only` |
 | `defer_processing` | boolean | 否 | `false` | 只保存文件，不派发语义和向量处理；后处理由调用方安排 |

@@ -18,6 +18,10 @@ path = "src/lib.rs"
 name = "ragfs-shell"
 path = "src/shell/main.rs"
 
+[[bench]]
+name = "pathlock_perf"
+harness = false
+
 [[test]]
 name = "cache_runtime"
 path = "tests/cache_runtime.rs"

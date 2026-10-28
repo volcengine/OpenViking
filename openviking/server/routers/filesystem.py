@@ -303,6 +303,11 @@ async def rm(
     uri: str = Query(..., description="Viking URI"),
     recursive: bool = Query(False, description="Remove recursively"),
     wait: bool = Query(False, description="Wait for semantic refresh to complete"),
+    timeout: Optional[float] = Query(
+        None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove resource."""

@@ -518,7 +518,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户记忆策略 |
 | PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户记忆策略 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 将用户提升为 ADMIN |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 在 USER 与 ADMIN 之间变更用户角色 |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建用户组 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出用户组 |

@@ -138,7 +138,7 @@ class StorageConfig(BaseModel):
         upload_temp_dir.mkdir(parents=True, exist_ok=True)
         return upload_temp_dir
 
-    def build_task_tracker(self, agfs: Any):
+    def build_task_tracker(self, agfs: Any, *, service_name: str | None = None):
         """Build the persistent TaskTracker from storage config."""
         from openviking.service.task_store import TaskWorkStore
         from openviking.service.task_tracker import TaskTracker
@@ -147,7 +147,7 @@ class StorageConfig(BaseModel):
         if self.task_store.provider == "mysql":
             from openviking.service.task_store_mysql import MySQLTaskWorkStore
 
-            store = MySQLTaskWorkStore(params=self.task_store.params)
+            store = MySQLTaskWorkStore(params=self.task_store.params, service_name=service_name)
         else:
             from openviking.service.task_store import PersistentTaskStore
 

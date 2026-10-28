@@ -86,7 +86,7 @@ Saved changes to an upstream or a context profile apply to every gateway key tha
 A conversation records its context profile at its first request and keeps it, because changing what the model sees mid-conversation would break the provider's [prompt cache](01-how-it-works.md#replay). How soon a client picks up a profile change therefore depends on how often it starts a new conversation:
 
 - Clients that open a new conversation for every chat pick up changes quickly.
-- Claude Code, Codex and clients that send a fixed session header can continue one conversation for days. They keep the old settings until they start a new conversation, or until the conversation has been idle for 30 days (`session_ttl_days`), when the gateway deletes its state.
+- Claude Code, Codex and clients that send a fixed session header can continue one conversation for days. They keep the old settings until they start a new conversation, or until the conversation has been idle for 30 days (`session_ttl_seconds`), when the gateway deletes its state.
 
 How the gateway tells conversations apart is explained in [How conversations are recognized](03-connect-clients.md#how-conversations-are-recognized).
 

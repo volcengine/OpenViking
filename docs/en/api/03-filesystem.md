@@ -602,6 +602,7 @@ Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or 
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to remove |
 | wait | bool | No | False | Wait for the semantic refresh after deletion |
+| timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | recursive | bool | No | False | Remove directory recursively |
 
 

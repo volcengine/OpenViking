@@ -2242,7 +2242,7 @@ enum AdminCommands {
         #[arg(value_name = "user-id")]
         user_id: String,
     },
-    /// Change a user's role (ROOT only)
+    /// Change a user's role for identity management (ROOT or own-account ADMIN)
     SetRole {
         /// Account ID
         #[arg(value_name = "account-id")]
@@ -2250,11 +2250,11 @@ enum AdminCommands {
         /// User ID
         #[arg(value_name = "user-id")]
         user_id: String,
-        /// New role: admin or user
+        /// New role: admin or user (case-insensitive)
         #[arg(value_name = "role")]
         role: String,
     },
-    /// Regenerate a user's API key (old key immediately invalidated)
+    /// Regenerate a user's API key; self-rotation updates the active ovcli.conf
     RegenerateKey {
         /// Account ID
         #[arg(value_name = "account-id")]
@@ -4046,6 +4046,20 @@ async fn main() {
     };
 
     if let Err(e) = result {
+        if e.code() == "INTERRUPTED" {
+            if matches!(output_format, OutputFormat::Json) {
+                error_ui::print_runtime_error(
+                    &command_display,
+                    &e,
+                    output_format,
+                    compact,
+                    verbose_errors,
+                );
+            } else if let Error::Api { message, .. } = &e {
+                eprintln!("{message}");
+            }
+            std::process::exit(130);
+        }
         if !matches!(e, Error::AlreadyReported) {
             error_ui::print_runtime_error(
                 &command_display,

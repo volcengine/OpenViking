@@ -69,8 +69,8 @@ SQLite 文件只有运行网关的系统用户能读取；Redis 由网络和 ACL
 
 | 数据 | 保留时长 | 设置 |
 | --- | --- | --- |
-| 对话状态 | 最后一次使用后 30 天 | `session_ttl_days` |
-| 缓存的 OpenViking 密钥及其用户记录 | 从创建时起经过配置的 TTL，不续期 | `session_ttl_days` |
+| 对话状态 | 最后一次使用后 30 天 | `session_ttl_seconds` |
+| 缓存的 OpenViking 密钥及其用户记录 | 从创建时起经过配置的 TTL，不续期 | `session_ttl_seconds` |
 | 存储的请求日志 | 30 天 | `log_retention_days` |
 | Responses 响应与上游的对应关系 | 30 天 | `response_ttl_seconds` |
 | OpenViking 中的会话和记忆 | 遵循 OpenViking 自己的规则 | — |
@@ -83,7 +83,7 @@ Redis 每个账号最多保留 10,000 条请求日志。读取时跳过早于 `l
 
 ## Redis 对话状态 {#redis-conversation-state}
 
-配置 `storage.kernel: redis` 后，对话状态按缓存保存，TTL 使用 `session_ttl_days`。写入会续期，只读记录不会续期。
+配置 `storage.kernel: redis` 后，对话状态按缓存保存，TTL 使用 `session_ttl_seconds`。写入会续期，只读记录不会续期。
 
 驱逐会产生以下影响：
 
@@ -108,7 +108,7 @@ Redis 异步主从切换可能丢失最近的写入或 lease，偶尔导致 capt
 | root | 调用 `DELETE /gateway/admin/account/data?account_id=<account>` | 整个账号的网关数据 |
 | 嵌入部署，自动进行 | 在 OpenViking 中删除用户或账号 | 对应的网关数据 |
 
-独立部署没有自动删除这一步，数据会一直保留，直到被显式删除或[过期](#retention)。设置 [`management_api: false`](13-configuration.md#gateway-fields) 后，删除 API 也不可用：在 OpenViking 中删除用户不会通知独立网关，对话状态只能等 `session_ttl_days` 到期后清理。请求日志和响应映射按各自的保留期限过期。按账号隔离的嵌入部署仍保留 Server 的自动删除钩子。按密钥隔离时，钩子无法根据 OpenViking 的账号和用户 ID 找到 `k_` 分区，其缓存数据按上述保留期限清理。
+独立部署没有自动删除这一步，数据会一直保留，直到被显式删除或[过期](#retention)。设置 [`management_api: false`](13-configuration.md#gateway-fields) 后，删除 API 也不可用：在 OpenViking 中删除用户不会通知独立网关，对话状态只能等 `session_ttl_seconds` 到期后清理。请求日志和响应映射按各自的保留期限过期。按账号隔离的嵌入部署仍保留 Server 的自动删除钩子。按密钥隔离时，钩子无法根据 OpenViking 的账号和用户 ID 找到 `k_` 分区，其缓存数据按上述保留期限清理。
 
 已存入 OpenViking 的记忆和会话不受这些操作影响。反过来，在 OpenViking 中删除一条记忆后，网关为进行中的对话保存的那份副本仍会被原样放回，直到对话过期；要立即清除，删除该用户的网关数据。
 

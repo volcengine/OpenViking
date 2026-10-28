@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Extract Session credentials before externalization and message persistence."""
+"""Protect registered Session credentials before externalization and persistence."""
 
 import asyncio
 import hashlib
@@ -32,6 +32,10 @@ MAX_BATCH_CHARS = 16 * 1024 * 1024
 MAX_DEPTH = 32
 MAX_NODES = 100_000
 MAX_FIELD_ID_ATTEMPTS = 8
+# TODO: Revisit new-value discovery after fixing false positives that pollute
+# Session privacy storage. Keep registered-value matching and restoration active.
+# This is intentionally disabled in code, not exposed as a runtime setting.
+_SESSION_PRIVACY_DISCOVERY_ENABLED = False
 _Matcher = Callable[[str], list[PrivacyReplacement]]
 _Text = TypeVar("_Text", str, None)
 _HASHED_TARGET = re.compile(r"_[0-9a-f]{24}")
@@ -44,7 +48,7 @@ async def extract_and_store_session_privacy(
     privacy: UserPrivacyConfigService,
     sanitizer: PrivacySanitizer | None,
 ) -> list[dict]:
-    """Extract on copies, persist discoveries, then protect remaining registered values."""
+    """Protect copies with registered values; new-value discovery is paused."""
     target_key = session_privacy_target(session_id)
     labels = None if target_key == session_id else {"session_id": session_id}
     matcher = await _prepare_session_matcher(sanitizer, ctx, target_key)
@@ -246,7 +250,7 @@ class _SessionExtraction(_PayloadTransformer):
         return super().transform_part(replace(part))
 
     def transform_field(self, key: str, value: Any, depth: int) -> Any:
-        if not is_sensitive_key(key):
+        if not _SESSION_PRIVACY_DISCOVERY_ENABLED or not is_sensitive_key(key):
             return self.transform_value(value, depth)
         copied = self.literal.transform_value(value, depth)
         # Empty strings, references and environment variables retain their meaning.
@@ -276,7 +280,8 @@ class _SessionExtraction(_PayloadTransformer):
         spans: list[tuple[int, int, str | None]] = [
             (match.start, match.end, match.reference) for match in self.value_matcher(text)
         ]
-        spans.extend((match.start, match.end, None) for match in find_privacy_matches(text))
+        if _SESSION_PRIVACY_DISCOVERY_ENABLED:
+            spans.extend((match.start, match.end, None) for match in find_privacy_matches(text))
         replacements = []
         for start, end, reference in _merge_spans(spans):
             if reference is None:

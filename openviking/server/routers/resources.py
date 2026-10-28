@@ -44,6 +44,11 @@ class AddSkillRequest(BaseModel):
     skills: list[str] = Field(default_factory=list)
     list_only: bool = False
     wait: bool = False
+    timeout: float | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    )
     source_metadata: Optional[Dict[str, Any]] = None
     target_uri: Optional[str] = None
     telemetry: TelemetryRequest = False
