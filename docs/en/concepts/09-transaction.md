@@ -307,19 +307,6 @@ Use `/local/<account>` or `/local/_system` (or a descendant) as the Tree root.
 Exact locks at `/` and `/local` remain supported and protect only those paths.
 Cross-scope batches are rejected.
 
-Redis scripts use one `TIME` sample per timed operation for token timestamps
-and stale thresholds. Timestamps keep the nanosecond epoch encoding, with
-microsecond precision for new confirmations. Client clock values are ignored
-by the Redis provider. Lua computes the HASH garbage-collection TTL as twice
-the calling instance's lease; all instances sharing a lock namespace must
-still configure the same `lock_expire_secs`.
-
-The wire format and keys remain compatible with old instances, allowing a
-rolling upgrade without clearing tokens. While versions are mixed, old
-instances can still introduce clock-skew and TTL risks. Cross-manager adopt
-also retains its client-side age check and separate read/refresh steps.
-Server-clock timing does not provide storage-side fencing.
-
 ### Filesystem Lock Acquisition (EXACT mode)
 
 ```
