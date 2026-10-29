@@ -108,7 +108,7 @@ read user:carol on viking://resources/A/B/C/report.md
 
 目录 `stat` 的 `count` 使用相同的路径和 ACL 标量过滤，表示当前用户可见的 context 数量。
 
-列表的摘要和概览复用本次已通过的读取授权；内容写入保留锁前预检和锁后 write 复验。递归标签只检查实际选中的目标，快照 commit/log 按指定范围检查 write/read，并保留显式请求的已删除路径的权限检查。
+列表的摘要和概览复用本次已通过的读取授权，不再为每个条目重复查询 ACL。
 
 ## 检索过滤
 

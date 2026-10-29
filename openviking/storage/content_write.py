@@ -739,15 +739,9 @@ class ContentWriteCoordinator:
         write_error: Exception | None = None
         lock_settled = False
         try:
-            await self._viking_fs._ensure_access_many(
-                [normalized_root, *[operation["uri"] for operation in normalized_operations]],
-                ctx,
-                action=AclAction.WRITE,
-            )
-            write_ctx = replace(ctx, bypass_acl=True)
             for operation in normalized_operations:
                 uri = operation["uri"]
-                stat = await self._safe_stat(uri, ctx=write_ctx, allow_not_found=True)
+                stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
                 exists = not stat.get("not_found")
                 if exists and stat.get("isDir") and not skip_conflicts:
                     raise InvalidArgumentError(f"batch-write target must be a file: {uri}")
@@ -771,7 +765,7 @@ class ContentWriteCoordinator:
                     if expected is not None:
                         if not exists:
                             raise ConflictError(f"Expected content no longer exists: {uri}")
-                        current = await self._viking_fs.read_file_bytes(uri, ctx=write_ctx)
+                        current = await self._viking_fs.read_file_bytes(uri, ctx=ctx)
                         if hashlib.sha256(current).hexdigest() != expected:
                             raise ConflictError(f"Content revision changed: {uri}")
                         desired = operation["content"]
@@ -829,7 +823,7 @@ class ContentWriteCoordinator:
                                 uri,
                                 operation["content"],
                                 mode=write_mode,
-                                ctx=write_ctx,
+                                ctx=ctx,
                                 lease_ref=lease,
                                 is_new_file=not existed,
                             )
@@ -1026,7 +1020,7 @@ class ContentWriteCoordinator:
         ):
             raise InvalidArgumentError("batch-write root must be inside a resource directory")
         await self._viking_fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
-        stat = await self._safe_stat(root_uri, ctx=replace(ctx, bypass_acl=True))
+        stat = await self._safe_stat(root_uri, ctx=ctx)
         if not stat.get("isDir"):
             raise InvalidArgumentError(
                 f"batch-write root must be an existing directory: {root_uri}"
@@ -1059,6 +1053,7 @@ class ContentWriteCoordinator:
                     f"batch-write target has a different context type: {uri}"
                 )
             self._ensure_content_write_policy(uri)
+            await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
             namespace_policy = namespace_policy_for_uri(uri)
             if (
                 namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY
@@ -1140,9 +1135,6 @@ class ContentWriteCoordinator:
                     "ingest_options": ingest_options,
                 }
             )
-        await self._viking_fs._ensure_access_many(
-            [operation["uri"] for operation in normalized], ctx, action=AclAction.WRITE
-        )
         return sorted(normalized, key=lambda operation: operation["uri"])
 
     async def _refresh_batch(
@@ -1435,9 +1427,9 @@ class ContentWriteCoordinator:
         if not namespace_policy_for_uri(normalized_uri).supports_tags:
             raise InvalidArgumentError(f"tags are not supported for namespace: {normalized_uri}")
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
-        stat = await self._safe_stat(normalized_uri, ctx=replace(ctx, bypass_acl=True))
+        stat = await self._safe_stat(normalized_uri, ctx=ctx)
         context_type = context_type_for_uri(normalized_uri)
-        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx, target_stat=stat)
+        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
         if requested_mode == "replace" and not normalized_tags:
             return self._build_tags_result(
                 uri=normalized_uri,
@@ -1461,7 +1453,6 @@ class ContentWriteCoordinator:
         else:
             result = await self._set_single_uri_tags(
                 uri=normalized_uri,
-                root_uri=root_uri,
                 tags=normalized_tags,
                 mode=storage_mode,
                 recursive=recursive,
@@ -1598,9 +1589,7 @@ class ContentWriteCoordinator:
             uri = operation["uri"]
             existing_raw: str | bytes | None = None
             if write_mode == "append" and existed:
-                existing_raw = await self._viking_fs.read_file(
-                    uri, ctx=replace(ctx, bypass_acl=True)
-                )
+                existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
             final_bytes = self._render_final_bytes(
                 uri,
                 operation["content"],
@@ -1654,7 +1643,7 @@ class ContentWriteCoordinator:
         target = AgfsResourceTarget(
             viking_fs=self._viking_fs,
             root_uri=uri,
-            ctx=replace(ctx, bypass_acl=True),
+            ctx=ctx,
             lease_ref=lease,
         )
         rnfv = await build_rnfv_snapshot(
@@ -1918,11 +1907,10 @@ class ContentWriteCoordinator:
         lock_guard = PathLockGuard(self._viking_fs._async_agfs, lease)
         try:
             target_state = await self._classify_locked_write_target(uri, ctx=ctx)
-            write_ctx = replace(ctx, bypass_acl=True)
             target_preexisting = target_state.preexisting
             is_new_file = target_state.is_new_file
             if mode == "append" and target_preexisting:
-                previous_content = await self._viking_fs.read_file(uri, ctx=write_ctx)
+                previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             final_bytes = self._render_final_bytes(
                 uri,
                 content,
@@ -2141,15 +2129,9 @@ class ContentWriteCoordinator:
             # Preserve the public invariant that generated sidecars cannot be
             # materialized, while keeping the state check inside the exact lock.
             await self._classify_locked_write_target(uri, ctx=ctx)
-            write_ctx = replace(ctx, bypass_acl=True)
-            previous_content = await self._viking_fs.read_file(uri, ctx=write_ctx)
+            previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             await self._write_in_place(
-                uri,
-                content,
-                mode=mode,
-                ctx=write_ctx,
-                lease_ref=lease,
-                existing_raw=previous_content,
+                uri, content, mode=mode, ctx=ctx, lease_ref=lease, existing_raw=previous_content
             )
             result = self._build_write_result(
                 uri=uri,
@@ -2310,12 +2292,11 @@ class ContentWriteCoordinator:
 
         try:
             target_state = await self._classify_locked_write_target(uri, ctx=ctx)
-            write_ctx = replace(ctx, bypass_acl=True)
             final_bytes = await self._write_in_place(
                 uri,
                 content,
                 mode=mode,
-                ctx=write_ctx,
+                ctx=ctx,
                 lease_ref=lease,
                 is_new_file=target_state.is_new_file,
             )
@@ -2381,8 +2362,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
     ) -> _LockedWriteTarget:
         """Read target state exactly once after its exact write lock is held."""
-        await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
-        stat = await self._safe_stat(uri, ctx=replace(ctx, bypass_acl=True), allow_not_found=True)
+        stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
         preexisting = not stat.get("not_found")
         if preexisting:
             if stat.get("isDir"):
@@ -2632,11 +2612,10 @@ class ContentWriteCoordinator:
 
         try:
             target_state = await self._classify_locked_write_target(uri, ctx=ctx)
-            write_ctx = replace(ctx, bypass_acl=True)
             is_new_file = target_state.is_new_file
             write_kwargs = {
                 "mode": mode,
-                "ctx": write_ctx,
+                "ctx": ctx,
                 "lease_ref": lease,
             }
             if is_new_file:
@@ -2703,7 +2682,6 @@ class ContentWriteCoordinator:
         self,
         *,
         uri: str,
-        root_uri: str,
         tags: list[str],
         mode: str,
         recursive: bool,
@@ -2711,6 +2689,7 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         del recursive
         context_type = context_type_for_uri(uri)
+        root_uri = await self._resolve_root_uri(uri, ctx=ctx)
         target_uri = uri
         levels: list[int] | None = None
         if uri.endswith("/.abstract.md"):
@@ -2768,13 +2747,11 @@ class ContentWriteCoordinator:
         if not updated_targets:
             raise NotFoundError(uri, "semantic file")
 
-        targets = [str(target["uri"]) for target in updated_targets]
-        update_ctx = replace(ctx, bypass_acl=True)
-        await self._viking_fs._ensure_access_many(targets, update_ctx, action=AclAction.WRITE)
-        if recursive:
-            await self._viking_fs._ensure_descendant_access(
-                uri, ctx, action=AclAction.WRITE, targets=targets
-            )
+        await self._viking_fs._ensure_access_many(
+            [str(target["uri"]) for target in updated_targets],
+            ctx,
+            action=AclAction.WRITE,
+        )
 
         applied_uris: list[str] = []
         skipped_count = 0
@@ -2783,7 +2760,7 @@ class ContentWriteCoordinator:
                 uri=target["uri"],
                 tags=tags,
                 mode=mode,
-                ctx=update_ctx,
+                ctx=ctx,
                 levels=target.get("levels"),
             )
             if updated_uris:
@@ -2815,7 +2792,7 @@ class ContentWriteCoordinator:
 
         entries = await self._viking_fs.tree(
             uri,
-            ctx=replace(ctx, bypass_acl=True),
+            ctx=ctx,
             output="original",
             show_all_hidden=True,
         )
@@ -2882,7 +2859,6 @@ class ContentWriteCoordinator:
         _allow_not_found: bool = False,
         anchor_to_parent: bool = False,
         validate_storage: bool = True,
-        target_stat: dict[str, Any] | None = None,
     ) -> str:
         parsed = VikingURI(uri)
         parts = [part for part in parsed.full_path.split("/") if part]
@@ -2944,11 +2920,7 @@ class ContentWriteCoordinator:
                     root_uri = parent.uri
 
         if validate_storage:
-            stat = (
-                target_stat
-                if root_uri == uri and target_stat is not None
-                else await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
-            )
+            stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
             if stat.get("not_found") or not stat.get("isDir"):
                 parent = VikingURI(uri).parent
                 if parent is None:

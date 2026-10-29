@@ -325,22 +325,20 @@ class _AccessMixin:
                 )
 
     async def _ensure_descendant_access(
-        self,
-        uri: str,
-        ctx: Optional[RequestContext],
-        *,
-        action: AclAction,
-        targets: Sequence[str] | None = None,
+        self, uri: str, ctx: Optional[RequestContext], *, action: AclAction
     ) -> None:
-        """Check descendants or exact selected targets after the root was authorized."""
-        if self.acl_manager is None:
-            return
+        """Check shared descendants after the requested node has been authorized."""
         real_ctx = self._ctx_or_default(ctx)
-        async for denied in self.acl_manager.iter_denied_uris(
-            [uri], real_ctx, action=action, targets=targets
+        if (
+            not is_acl_uri(uri)
+            or real_ctx.bypass_acl
+            or has_implicit_manage(real_ctx, uri)
+            or not await self._acl_enabled(real_ctx)
         ):
-            # Explicit targets remain authoritative even if they have just been removed.
-            if targets is not None or await self.exists(denied, ctx=real_ctx):
+            return
+        async for denied in self.acl_manager.iter_denied_uris(uri, real_ctx, action=action):
+            # A leftover index entry or virtual chunk is not copied filesystem content.
+            if await self.exists(denied, ctx=real_ctx):
                 raise PermissionDeniedError(
                     f"Access denied for {denied}: {action.value} permission required",
                     resource=denied,
@@ -469,13 +467,9 @@ class _AccessMixin:
         real_ctx, _ = await self._ensure_acl_manage(uri, ctx)
         lease = await self._acquire_acl_target_lock(uri, real_ctx)
         try:
-            _, effective = await self._ensure_acl_manage(uri, real_ctx)
+            await self._ensure_acl_manage(uri, real_ctx)
             await self._ensure_acl_target_exists(uri, real_ctx)
-            direct = (
-                effective.direct
-                if effective is not None
-                else await self.acl_manager.get_direct(uri, real_ctx)
-            )
+            direct = await self.acl_manager.get_direct(uri, real_ctx)
             entries = {entry.principal: entry for entry in direct.entries}
             if normalized_level is None:
                 entries.pop(principal, None)

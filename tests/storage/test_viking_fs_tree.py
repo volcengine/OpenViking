@@ -800,7 +800,6 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
     assert result[2]["overview"] == "L1 overview"
     summary.assert_awaited_once_with("viking://resources/docs", "overview", ctx=_default_ctx())
 
-
 @pytest.mark.asyncio
 async def test_tree_filters_and_paginates_before_summary_reads(monkeypatch, fs):
     """Only selected directories consume node slots and summary reads."""

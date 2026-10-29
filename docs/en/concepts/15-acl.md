@@ -113,7 +113,7 @@ Delete and move authorize the specified file or directory without checking desce
 
 For a directory, `stat.count` uses the same path and ACL scalar filter and reports the number of context records visible to the caller.
 
-Listing summaries reuse the read authorization already completed for that page. Content writes retain preflight checks and revalidate write permission after acquiring locks. Recursive tags authorize only selected targets; snapshot commit/log check write/read over their requested scopes while retaining authorization for explicitly requested deleted paths.
+Listing summaries reuse read authorization already completed for that page, without querying ACL again for each entry.
 
 ## Retrieval Filtering
 

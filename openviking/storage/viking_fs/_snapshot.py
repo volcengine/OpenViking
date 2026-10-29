@@ -83,31 +83,6 @@ class _SnapshotMixin:
             result.append(uri)
         return list(dict.fromkeys(result))
 
-    async def _ensure_snapshot_access(
-        self, paths: List[str], ctx: RequestContext, *, action: AclAction
-    ) -> None:
-        # Explicit roots may be deleted paths and must retain ordinary ACL resolution.
-        await self._ensure_access_many(paths, ctx, action=action)
-        scope_uris = await self._snapshot_scope_uris(paths, ctx)
-        await self._ensure_access_many(scope_uris, replace(ctx, bypass_acl=True), action=action)
-        if self.acl_manager is None:
-            return
-        selected = set(scope_uris)
-        shared_scopes = []
-        for uri in dict.fromkeys(paths):
-            canonical_uri = self._path_to_uri(self._uri_to_path(uri, ctx=ctx), ctx=ctx)
-            # Account-root logs also cover the shared resource namespace.
-            if canonical_uri == "viking://":
-                canonical_uri = "viking://resources"
-            if any(target.startswith(canonical_uri + "/") for target in selected):
-                shared_scopes.append(canonical_uri)
-        async for denied in self.acl_manager.iter_denied_uris(shared_scopes, ctx, action=action):
-            if denied in selected:
-                raise PermissionDeniedError(
-                    f"Access denied for {denied}: {action.value} permission required",
-                    resource=denied,
-                )
-
     async def _ensure_restore_plan_access(
         self,
         plan: Dict[str, Any],
@@ -324,7 +299,8 @@ class _SnapshotMixin:
                     uri=paths[0],
                 ) from exc
         try:
-            await self._ensure_snapshot_access(paths, real_ctx, action=AclAction.WRITE)
+            scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
+            await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.WRITE)
             return await self._async_agfs.run("git_commit", **kwargs)
         finally:
             if lease is not None:
@@ -800,7 +776,8 @@ class _SnapshotMixin:
                     "Snapshot log requires explicit paths",
                     resource="viking://",
                 )
-            await self._ensure_snapshot_access(paths, real_ctx, action=AclAction.READ)
+            scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
+            await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.READ)
         account = real_ctx.account_id
         tree_paths = (
             None if not paths else [self._uri_to_tree_path(path, ctx=real_ctx) for path in paths]
