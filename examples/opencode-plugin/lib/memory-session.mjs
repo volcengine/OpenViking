@@ -1,5 +1,6 @@
 import fs from "fs"
 import path from "path"
+import { randomUUID } from "node:crypto"
 import {
   extractTextFromPayload,
   isCaptureEnabled,
@@ -26,6 +27,7 @@ import {
 } from "./utils.mjs"
 
 const STALE_SESSION_STATE_MS = 7 * 24 * 60 * 60 * 1000
+const stateSaveChains = new Map()
 
 export function createMemorySessionManager({ config, pluginRoot }) {
   const sessions = new Map()
@@ -33,18 +35,17 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
   let initBackground = Promise.resolve()
-  // Serialize saves: concurrent saveState() calls (a debounced save racing
-  // with flushAll / flushSession / session deletion) all share the same
-  // `${statePath}.tmp` temp file, so one rename can fail with ENOENT after
-  // another already moved it. Chaining through a promise queue keeps at most
-  // one write+rename in flight. Each queued save re-serializes the in-memory
-  // `sessions` map at execution time, so the last save always persists the
-  // latest state.
-  let saveChain = Promise.resolve()
-
+  // Serialize saves within this manager. Separate OpenCode locations can load
+  // separate managers that share statePath, so saveState() also uses a unique
+  // temp file for each atomic replacement.
   function enqueueSave() {
-    const run = saveChain.then(() => saveState())
-    saveChain = run.catch(() => {})
+    const previous = stateSaveChains.get(statePath) ?? Promise.resolve()
+    const run = previous.then(() => saveState())
+    const settled = run.catch(() => {})
+    stateSaveChains.set(statePath, settled)
+    settled.finally(() => {
+      if (stateSaveChains.get(statePath) === settled) stateSaveChains.delete(statePath)
+    })
     return run
   }
 
@@ -99,17 +100,19 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   async function saveState() {
+    const tempPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`
     try {
       const persisted = {}
       for (const [opencodeSessionId, state] of sessions.entries()) {
         persisted[opencodeSessionId] = serializeSessionState(state)
       }
-      const tempPath = `${statePath}.tmp`
       await fs.promises.writeFile(tempPath, JSON.stringify({ version: 2, sessions: persisted, lastSaved: Date.now() }, null, 2), "utf8")
       await fs.promises.rename(tempPath, statePath)
       log("DEBUG", "persistence", "Session state saved", { count: sessions.size })
     } catch (error) {
       log("ERROR", "persistence", "Failed to save session state", { error: error?.message })
+    } finally {
+      await fs.promises.rm(tempPath, { force: true }).catch(() => {})
     }
   }
 
