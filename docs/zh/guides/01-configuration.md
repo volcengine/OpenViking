@@ -1042,6 +1042,8 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru`（远程 MinerU API）、`auto`（先本地、失败回退 MinerU）。
 
+本地转换会拒绝包含未映射字形的页面，即 pdfplumber 以 `(cid:N)` 表示的字符，避免将占位符作为正文存储。配置 `mineru_endpoint` 时，`auto` 使用现有 MinerU 回退；否则解析失败并报告受影响页号。此检查不能识别错误 Unicode 映射产生的普通字符。
+
 ```json
 {
   "pdf": {

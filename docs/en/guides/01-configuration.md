@@ -1050,6 +1050,8 @@ needs those platform-specific URL semantics. Add other Git hosts to
 
 PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
 
+Local conversion rejects pages with unmapped glyphs that pdfplumber represents as `(cid:N)`, instead of storing those placeholders as document text. `auto` uses its existing MinerU fallback when `mineru_endpoint` is configured; otherwise parsing fails with the affected page number. This does not detect incorrect Unicode mappings that produce ordinary characters.
+
 ```json
 {
   "pdf": {

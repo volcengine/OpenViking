@@ -322,6 +322,12 @@ class PDFParser(BaseParser):
 
                         # Extract text
                         text = page.extract_text()
+                        # Check glyphs so literal text such as "(cid:123)" remains valid.
+                        if any(re.fullmatch(r"\(cid:\d+\)", char["text"]) for char in page.chars):
+                            raise ValueError(
+                                f"Page {page_num} contains unmapped PDF characters; "
+                                "use an OCR-capable PDF parser"
+                            )
                         if text and text.strip():
                             # Add page marker as HTML comment
                             parts.append(f"<!-- Page {page_num} -->\n{text.strip()}")

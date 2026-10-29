@@ -13,11 +13,13 @@ from contextlib import nullcontext
 from pathlib import Path
 from threading import Barrier, Lock
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from openviking.parse.parsers.pdf import PDFParser
+from openviking_cli.utils.config.parser_config import PDFConfig
+from openviking_cli.utils.storage import StoragePath
 
 
 def _make_page(*, pageid=None, objid=None):
@@ -97,6 +99,7 @@ class _FakePage:
 
     def __init__(self, text: str):
         self._text = text
+        self.chars = [{"text": char} for char in text]
         self.images = []
         self.close_count = 0
         self.flush_count = 0
@@ -556,3 +559,98 @@ class TestExtractImages:
             )
             is None
         )
+
+
+@pytest.fixture
+def pdf_text_source(tmp_path):
+    def write(*, unmapped):
+        font = (
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /Missing /Encoding /Identity-H "
+            b"/DescendantFonts [5 0 R] >>"
+            if unmapped
+            else b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+        )
+        text = b"<0001000200030004>" if unmapped else rb"(Healthy text and literal \(cid:123\))"
+        stream = b"BT /F1 12 Tf 30 100 Td " + text + b" Tj ET\n"
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 6 0 R >>",
+            font,
+            b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Missing "
+            b"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+            b"/FontDescriptor << /Type /FontDescriptor /FontName /Missing /Flags 4 "
+            b"/FontBBox [0 -200 1000 900] >> "
+            b"/DW 500 >>",
+            b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"endstream",
+        ]
+        data = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for number, obj in enumerate(objects, 1):
+            offsets.append(len(data))
+            data.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
+        xref = len(data)
+        data.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
+        for offset in offsets[1:]:
+            data.extend(f"{offset:010} 00000 n \n".encode())
+        data.extend(
+            f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+        )
+        source = tmp_path / "text.pdf"
+        source.write_bytes(data)
+        return source
+
+    return write
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["local", "auto"])
+async def test_pdf_rejects_unmapped_characters_before_writing_markdown(
+    pdf_text_source, tmp_path, monkeypatch, strategy
+):
+    pytest.importorskip("pdfplumber")
+    source = pdf_text_source(unmapped=True)
+    parser = PDFParser(PDFConfig(strategy=strategy, heading_detection="none"))
+    monkeypatch.setattr("openviking_cli.utils.storage.get_storage", lambda: StoragePath(tmp_path))
+
+    monkeypatch.setattr(
+        parser,
+        "_markdown_parser",
+        SimpleNamespace(
+            parse_content=AsyncMock(side_effect=AssertionError("PDF reached Markdown storage"))
+        ),
+    )
+
+    result = await parser.parse(source)
+
+    assert result.temp_dir_path is None
+    assert any("Page 1" in warning and "unmapped" in warning for warning in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_pdf_auto_uses_existing_remote_fallback_for_unmapped_characters(
+    pdf_text_source, tmp_path, monkeypatch
+):
+    pytest.importorskip("pdfplumber")
+    parser = PDFParser(
+        PDFConfig(strategy="auto", mineru_endpoint="http://127.0.0.1:1", heading_detection="none")
+    )
+    monkeypatch.setattr("openviking_cli.utils.storage.get_storage", lambda: StoragePath(tmp_path))
+    monkeypatch.setattr(parser, "_convert_mineru", AsyncMock(return_value=("Recovered text", {})))
+
+    markdown, _meta = await parser._convert_to_markdown(pdf_text_source(unmapped=True))
+
+    assert markdown == "Recovered text"
+
+
+@pytest.mark.asyncio
+async def test_pdf_keeps_literal_cid_text(pdf_text_source, tmp_path):
+    pytest.importorskip("pdfplumber")
+    parser = PDFParser(PDFConfig(strategy="local", heading_detection="none"))
+
+    markdown, _meta = await parser._convert_local(
+        pdf_text_source(unmapped=False), storage=StoragePath(tmp_path)
+    )
+
+    assert "Healthy text and literal (cid:123)" in markdown
