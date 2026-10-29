@@ -157,7 +157,7 @@ class WorkflowContractTests(unittest.TestCase):
                 with self.subTest(workflow=workflow, path=path):
                     self.assertFalse(any(fnmatch.fnmatchcase(path, p) for p in patterns))
 
-    def test_only_official_main_saves_stable_compiler_cache_keys(self):
+    def test_only_official_main_saves_compiler_caches(self):
         text = (ROOT / ".github/actions/compiler-cache/action.yml").read_text()
         steps = re.findall(
             r"    - uses: (actions/cache(?:/restore)?@v5)\n(.*?)(?=\n    - |\Z)",
@@ -188,7 +188,8 @@ class WorkflowContractTests(unittest.TestCase):
                 condition = condition.replace("||", "or").replace("&&", "and")
                 if eval(condition, {"__builtins__": {}}):
                     enabled.append(action)
-                self.assertNotIn("github.sha", body)
+                self.assertIn("${{ github.sha }}", re.search(r"        key: (.+)", body).group(1))
+                self.assertNotIn("github.sha", body.split("restore-keys:", 1)[1])
             with self.subTest(repository=repository, ref=ref, event=event):
                 self.assertEqual(
                     enabled,
@@ -208,6 +209,114 @@ class WorkflowContractTests(unittest.TestCase):
             "name: Lite Test (${{ matrix.os }}, ${{ matrix.python-version }})",
             reusable,
         )
+
+
+class CompilerCacheTests(unittest.TestCase):
+    """Exercise the configured keys against immutable, prefix-restored snapshots."""
+
+    def setUp(self):
+        text = (ROOT / ".github/actions/compiler-cache/action.yml").read_text()
+        self.steps = re.findall(
+            r"    - uses: (actions/cache(?:/restore)?@v5)\n(.*?)(?=\n    - |\Z)",
+            text,
+            re.S,
+        )
+        self.snapshots = {}
+
+    def run_cache(self, sha, *, main=False, built=None, overrides=None):
+        values = {
+            "github.sha": sha,
+            "runner.os": "Linux",
+            "runner.arch": "X64",
+            "inputs.target": "host",
+            "steps.toolchain.outputs.hash": "toolchain-a",
+            "hashFiles('Cargo.lock')": "lock-a",
+        }
+        values.update(overrides or {})
+        restored, keys = [], []
+        context = {
+            "github.repository": "volcengine/OpenViking",
+            "github.ref": "refs/heads/main" if main else "refs/pull/6751/merge",
+            "github.event_name": "push" if main else "pull_request",
+        }
+        for action, body in self.steps:
+            condition = re.search(r"      if: (.+)", body).group(1)
+            for variable, value in context.items():
+                condition = condition.replace(variable, repr(value))
+            condition = condition.replace("||", "or").replace("&&", "and")
+            if not eval(condition, {"__builtins__": {}}):
+                continue
+            rendered = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: values[m.group(1)], body)
+            key = re.search(r"        key: (.+)", rendered).group(1)
+            prefixes = re.search(r"        restore-keys: \|\n((?:          .+\n?)+)", rendered)
+            found = key if key in self.snapshots else None
+            if found is None:
+                for prefix in prefixes.group(1).splitlines() if prefixes else ():
+                    found = next(
+                        (k for k in reversed(self.snapshots) if k.startswith(prefix.strip())),
+                        None,
+                    )
+                    if found is not None:
+                        break
+            restored.append(self.snapshots.get(found))
+            keys.append(key)
+            # actions/cache's post-job save uses the primary key, not the
+            # restored prefix match. An exact hit cannot overwrite an entry.
+            if action == "actions/cache@v5" and key not in self.snapshots:
+                self.snapshots[key] = built
+        self.assertEqual(len(keys), 2)
+        return restored, keys
+
+    def test_later_main_saves_new_compiler_output_and_pr_restores_it(self):
+        restored, first_keys = self.run_cache("commit-a", main=True, built="compiled-a")
+        self.assertEqual(restored, [None, None])
+        restored, second_keys = self.run_cache("commit-b", main=True, built="compiled-b")
+        self.assertEqual(restored, ["compiled-a"] * 2)
+        self.assertTrue(
+            all(first != second for first, second in zip(first_keys, second_keys, strict=True))
+        )
+        self.assertEqual([self.snapshots[key] for key in second_keys], ["compiled-b"] * 2)
+
+        # A rerun of the same main commit gets an exact hit without overwriting.
+        before = self.snapshots.copy()
+        restored, _ = self.run_cache("commit-b", main=True, built="rerun")
+        self.assertEqual(restored, ["compiled-b"] * 2)
+        self.assertEqual(self.snapshots, before)
+        restored, _ = self.run_cache("pr-merge", built="pr-output")
+        self.assertEqual(restored, ["compiled-b"] * 2)
+        self.assertEqual(self.snapshots, before)
+
+    def test_restore_never_crosses_runner_or_toolchain_boundaries(self):
+        self.run_cache("commit-a", main=True, built="compiled-a")
+        for overrides in (
+            {"runner.os": "Windows"},
+            {"runner.arch": "ARM64"},
+            {"steps.toolchain.outputs.hash": "toolchain-b"},
+            {"inputs.target": "cross-target", "steps.toolchain.outputs.hash": "cross-toolchain"},
+        ):
+            with self.subTest(overrides=overrides):
+                restored, _ = self.run_cache("pr-merge", overrides=overrides)
+                self.assertEqual(restored, [None, None])
+        self.assertEqual(len(self.snapshots), 2)
+
+    def test_cargo_prefers_same_lockfile_before_newer_toolchain_cache(self):
+        self.run_cache("commit-a", main=True, built="compiled-lock-a")
+        restored, _ = self.run_cache(
+            "commit-b",
+            main=True,
+            built="compiled-lock-b",
+            overrides={"hashFiles('Cargo.lock')": "lock-b"},
+        )
+        self.assertEqual(restored, ["compiled-lock-a"] * 2)
+        restored, _ = self.run_cache("pr-merge")
+        self.assertEqual(restored, ["compiled-lock-a", "compiled-lock-b"])
+
+    def test_legacy_cache_keys_can_seed_new_commit_entries(self):
+        _, keys = self.run_cache("a" * 40)
+        self.snapshots = {key.rsplit("-", 1)[0]: "legacy" for key in keys}
+        restored, new_keys = self.run_cache("commit-b", main=True, built="compiled-b")
+        self.assertEqual(restored, ["legacy"] * 2)
+        self.assertEqual([self.snapshots[key] for key in new_keys], ["compiled-b"] * 2)
 
 
 class BundleTests(unittest.TestCase):

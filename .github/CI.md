@@ -24,12 +24,15 @@ previous PR workflow. The caller job ID, reusable job name, Python version and
 test list are preserved, so ordinary required status checks need no migration.
 
 Cargo intermediates and ccache outputs are keyed by runner OS/architecture,
-target and compiler fingerprint. Cargo also includes the lockfile. Neither key
-contains the commit SHA. Only non-PR runs on the official repository's `main`
+target and compiler fingerprint. Cargo also includes the lockfile. Both primary
+keys end with the commit SHA so later main builds can save updated compiler
+output into new immutable entries. Prefix restores select the newest compatible
+cache, preferring the same Cargo lockfile before other entries for that toolchain.
+Only non-PR runs on the official repository's `main`
 branch save these caches; PR, fork and tag runs restore only. Ccache is capped at
-256 MiB per entry and Cargo incremental output is disabled. Cache entries are
-immutable: a compiler or dependency-key change creates a new entry; source
-changes still rebuild correctly through Cargo/ccache input validation.
+256 MiB per entry and Cargo incremental output is disabled. Older main entries
+remain subject to GitHub's cache quota and eviction. Source changes still rebuild
+correctly through Cargo/ccache input validation.
 Wheel building compiles each native component once.
 Studio is built once per distribution workflow and downloaded by each wheel job.
 Bootstrap/version/repair/test commands use `uv run --no-sync`; test environments

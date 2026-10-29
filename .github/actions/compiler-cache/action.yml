@@ -45,7 +45,8 @@ runs:
         echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
         echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
     # Only official main runs populate shared caches. PRs, forks and tag builds
-    # restore without registering a post-job save.
+    # restore without registering a post-job save. Commit suffixes allow each
+    # main revision to save new compiler output into immutable cache entries.
     - uses: actions/cache/restore@v5
       if: github.repository != 'volcengine/OpenViking' || github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
       with:
@@ -53,8 +54,9 @@ runs:
           ~/.cargo/registry
           ~/.cargo/git/db
           target
-        key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
+        key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
         restore-keys: |
+          cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}-
           cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-
     - uses: actions/cache@v5
       if: github.repository == 'volcengine/OpenViking' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -63,16 +65,23 @@ runs:
           ~/.cargo/registry
           ~/.cargo/git/db
           target
-        key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}
+        key: cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
         restore-keys: |
+          cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Cargo.lock') }}-
           cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ steps.toolchain.outputs.hash }}-
     - uses: actions/cache/restore@v5
       if: github.repository != 'volcengine/OpenViking' || github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
       with:
         path: .cache/ccache
-        key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}
+        key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}-${{ github.sha }}
+        restore-keys: |
+          ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}-
+          ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}
     - uses: actions/cache@v5
       if: github.repository == 'volcengine/OpenViking' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
       with:
         path: .cache/ccache
-        key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}
+        key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}-${{ github.sha }}
+        restore-keys: |
+          ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}-
+          ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.hash }}
