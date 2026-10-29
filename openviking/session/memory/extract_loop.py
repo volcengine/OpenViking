@@ -409,16 +409,12 @@ class ExtractLoop:
                 # retry would only hit the budget again, and replaying the
                 # truncated output just grows the prompt. Fail fast with the
                 # dedicated error recorded by _call_llm().
-                raise RuntimeError(
-                    f"Memory extraction aborted: {parse_error or failure_kind}"
-                )
+                raise RuntimeError(f"Memory extraction aborted: {parse_error or failure_kind}")
 
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                retry_reason = (
-                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
-                )
+                retry_reason = "refusal_text" if failure_kind == "refusal_text" else "format_retry"
                 tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
@@ -500,9 +496,7 @@ class ExtractLoop:
         """
         usage = getattr(response, "usage", None)
         completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
-        details = (
-            f"finish_reason='length', output cap={self._effective_max_output_tokens} tokens"
-        )
+        details = f"finish_reason='length', output cap={self._effective_max_output_tokens} tokens"
         if completion_tokens:
             details += f", completion_tokens={completion_tokens}"
         return (
@@ -880,71 +874,87 @@ class ExtractLoop:
                     resolution_skip=identity_resolution_skip,
                 )
 
-                if is_event:
-                    # Event page_ids are temporary link anchors. They must never select an
-                    # existing memory file; URI collision handling remains unchanged downstream.
-                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
-                        memory_type_schema=schema,
-                        operation=resolved_op,
-                        extract_context=self._extract_context,
-                    )
-                elif requested_page_id is not None and page_id_map is not None:
-                    resolved_uri = page_id_map.resolve(requested_page_id)
-                    if resolved_uri:
-                        old_content = self.context_provider.read_file_contents.get(resolved_uri)
-                        belongs_to_schema = self._uri_belongs_to_schema(resolved_uri, schema)
-                        if belongs_to_schema is False:
-                            invalid_reference_page_ids.add(requested_page_id)
-                            existing_memory_type = self._memory_type_for_uri(resolved_uri)
-                            resolved_op.resolution_skip = MemoryOperationSkip(
-                                reason_code=MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
-                                reason=(
-                                    f"page_id {page_id} belongs to memory type "
-                                    f"{existing_memory_type or 'another schema'}, not {memory_type}"
-                                ),
-                            )
+                try:
+                    if is_event:
+                        # Event page_ids are temporary link anchors. They must never select an
+                        # existing memory file; URI collision handling remains unchanged downstream.
+                        resolved_op.uris = self._isolation_handler.calculate_memory_uris(
+                            memory_type_schema=schema,
+                            operation=resolved_op,
+                            extract_context=self._extract_context,
+                        )
+                    elif requested_page_id is not None and page_id_map is not None:
+                        resolved_uri = page_id_map.resolve(requested_page_id)
+                        if resolved_uri:
+                            old_content = self.context_provider.read_file_contents.get(resolved_uri)
+                            belongs_to_schema = self._uri_belongs_to_schema(resolved_uri, schema)
+                            if belongs_to_schema is False:
+                                invalid_reference_page_ids.add(requested_page_id)
+                                existing_memory_type = self._memory_type_for_uri(resolved_uri)
+                                resolved_op.resolution_skip = MemoryOperationSkip(
+                                    reason_code=MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
+                                    reason=(
+                                        f"page_id {page_id} belongs to memory type "
+                                        f"{existing_memory_type or 'another schema'}, not {memory_type}"
+                                    ),
+                                )
+                            else:
+                                resolved_op.uris = [resolved_uri]
+                                # Existing page IDs retain their historical precedence over
+                                # an invalid peer hint. Keep the hint runtime-only and do
+                                # not persist it into memory metadata.
+                                resolved_op.resolution_skip = None
+                            if old_content is not None and resolved_op.uris:
+                                resolved_op.old_memory_file_content = old_content
+                                immutable_fields = {
+                                    field.name
+                                    for field in schema.fields
+                                    if field.merge_op == MergeOp.IMMUTABLE
+                                }
+                                preserved_fields = set(immutable_fields)
+                                preserved_fields.update(
+                                    schema.identity_fields(include_peer_id=False)
+                                )
+                                for field_name in preserved_fields:
+                                    old_value = old_content.extra_fields.get(field_name)
+                                    if not ImmutableOp.is_set(old_value):
+                                        continue
+                                    new_value = resolved_op.memory_fields.get(field_name)
+                                    if field_name in immutable_fields or not ImmutableOp.is_set(
+                                        new_value
+                                    ):
+                                        resolved_op.memory_fields[field_name] = old_value
+                                target_uri = await self._updated_uri_for_existing_operation(
+                                    resolved_op,
+                                    schema=schema,
+                                    source_uri=resolved_uri,
+                                )
+                                if target_uri != resolved_uri:
+                                    resolved_op.uris = [target_uri]
                         else:
-                            resolved_op.uris = [resolved_uri]
-                            # Existing page IDs retain their historical precedence over
-                            # an invalid peer hint. Keep the hint runtime-only and do
-                            # not persist it into memory metadata.
-                            resolved_op.resolution_skip = None
-                        if old_content is not None and resolved_op.uris:
-                            resolved_op.old_memory_file_content = old_content
-                            immutable_fields = {
-                                field.name
-                                for field in schema.fields
-                                if field.merge_op == MergeOp.IMMUTABLE
-                            }
-                            preserved_fields = set(immutable_fields)
-                            preserved_fields.update(schema.identity_fields(include_peer_id=False))
-                            for field_name in preserved_fields:
-                                old_value = old_content.extra_fields.get(field_name)
-                                if not ImmutableOp.is_set(old_value):
-                                    continue
-                                new_value = resolved_op.memory_fields.get(field_name)
-                                if field_name in immutable_fields or not ImmutableOp.is_set(
-                                    new_value
-                                ):
-                                    resolved_op.memory_fields[field_name] = old_value
-                            target_uri = await self._updated_uri_for_existing_operation(
-                                resolved_op,
-                                schema=schema,
-                                source_uri=resolved_uri,
+                            resolved_op.uris = self._isolation_handler.calculate_memory_uris(
+                                memory_type_schema=schema,
+                                operation=resolved_op,
+                                extract_context=self._extract_context,
                             )
-                            if target_uri != resolved_uri:
-                                resolved_op.uris = [target_uri]
                     else:
                         resolved_op.uris = self._isolation_handler.calculate_memory_uris(
                             memory_type_schema=schema,
                             operation=resolved_op,
                             extract_context=self._extract_context,
                         )
-                else:
-                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
-                        memory_type_schema=schema,
-                        operation=resolved_op,
-                        extract_context=self._extract_context,
+                except ValueError as exc:
+                    resolved_op.uris = []
+                    resolved_op.resolution_skip = MemoryOperationSkip(
+                        reason_code=MemoryOperationSkipCode.INVALID_URI_TEMPLATE_VARS,
+                        reason=str(exc),
+                    )
+                    logger.warning(
+                        "Skipping memory operation with unrenderable URI: "
+                        "memory_type=%s page_id=%s error=%s",
+                        memory_type,
+                        page_id,
+                        exc,
                     )
 
                 upsert_operations.append(resolved_op)

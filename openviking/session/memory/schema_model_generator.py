@@ -202,7 +202,7 @@ class SchemaModelGenerator:
             if not isinstance(data, dict):
                 return data
             try:
-                is_new = int(data.get("page_id")) >= 100
+                is_new = memory_type.operation_mode == "add_only" or int(data.get("page_id")) >= 100
             except (TypeError, ValueError):
                 return data
             missing = [name for name in required_on_create if data.get(name) is None]
