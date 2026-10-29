@@ -494,12 +494,19 @@ SQLite 仅支持同机共享同一个本地磁盘数据库文件，不支持 EFS
 
 重启恢复要求队列内容已持久化。QueueFS 默认使用 SQLite；使用 cache 后端时，持久性取决于所配置的 Provider。memory 后端不保留进程退出后的任务。
 
-### 单实例切换 filesystem → Redis
+### 单实例路径锁 Provider 切换：filesystem → Redis
 
-暂停入口并停止旧进程，确认它已完全退出，然后保持原有数据和持久化队列，
-将 `storage.agfs.pathlock.provider` 改为 `cache`、配置 Redis 并重启。
-无需排空队列或等待旧租约过期。此流程要求整个服务只有一个实例，
-切换期间不能存在仍使用 filesystem 锁的写入者。
+这里切换的是 **路径锁的存储与协调后端**：从 filesystem Provider 使用的
+`.ovlock` 锁文件，切换为 cache Provider 使用的 Redis 锁记录。
+业务文件仍保存在原有文件存储中，QueueFS 仍使用原有持久化队列后端
+（例如 SQLite）；业务数据和队列消息无需迁入 Redis。
+
+暂停入口并停止旧进程，确认它已完全退出，保留原有文件存储和持久化队列。
+将 `storage.agfs.pathlock.provider` 从 `filesystem` 改为 `cache`，
+并将该 cache Provider 配置为使用 Redis，然后重启服务。
+新进程从原队列恢复积压任务，为任务在 Redis 中重新取得路径锁后继续消费。
+无需排空队列或等待旧 filesystem 锁租约过期。此流程要求整个服务只有一个实例，
+切换期间不能存在仍使用 filesystem 路径锁的写入者。
 
 新 handoff 包含 `handle_mode`；旧消息缺少该字段时仍可恢复。
 消费者遇到 Provider 变化或旧 token 不可用时，按完整逻辑路径和 Exact/Tree
