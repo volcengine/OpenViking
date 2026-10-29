@@ -82,11 +82,22 @@ class ReindexProcessor(DequeueHandlerBase):
             return await self._on_dequeue_bound(data)
 
     async def _on_dequeue_bound(self, data: Dict[str, Any]) -> ProcessResult:
-        payload = data.get("data", data)
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        msg = ReindexMsg.from_dict(payload)
-        ctx = self._ctx(msg)
+        # Same guard as on_cancelled and the sibling processors: an
+        # unparseable durable message can never succeed, and NamedQueue
+        # never ACKs a delivery whose handler raises - RecoverStale would
+        # re-deliver it forever.
+        try:
+            if not isinstance(data, dict):
+                raise ValueError("Queue message must be an object")
+            payload = data.get("data", data)
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            if not isinstance(payload, dict):
+                raise ValueError("Reindex queue payload must be an object")
+            msg = ReindexMsg.from_dict(payload)
+            ctx = self._ctx(msg)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            return ProcessResult.failed(str(exc))
         tracker = get_task_tracker()
         task = await tracker.get(
             msg.task_id,

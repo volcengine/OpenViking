@@ -8,6 +8,7 @@ from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker, set_task_tracker
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
+from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
@@ -68,3 +69,24 @@ async def test_content_write_processor_recovers_dispatch_result_from_checkpoint(
         assert processor._execute_refresh.await_count == 1
     finally:
         set_task_tracker(None)
+
+
+@pytest.mark.asyncio
+async def test_malformed_durable_message_fails_delivery_instead_of_raising():
+    processor = ContentWriteProcessor(SimpleNamespace(_async_agfs=SimpleNamespace()))
+
+    # Missing required fields (e.g. a pre-upgrade payload predating the
+    # result/refresh contract): must fail the delivery, not raise out of
+    # on_dequeue - NamedQueue never ACKs deliveries whose handler raises,
+    # so an exception here would re-deliver the same poison message forever.
+    result = await processor.on_dequeue({"data": {"task_id": "t1"}})
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error
+
+    # Truncated JSON payload.
+    result = await processor.on_dequeue({"data": '{"task_id": '})
+    assert result.outcome is ProcessOutcome.FAILED
+
+    # Payload that is not an object at all.
+    result = await processor.on_dequeue({"data": 42})
+    assert result.outcome is ProcessOutcome.FAILED
