@@ -7,6 +7,7 @@ Following PageIndex philosophy: preserve natural document structure
 rather than arbitrary chunking.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -19,6 +20,39 @@ if TYPE_CHECKING:
 # ============================================================================
 # Common utility functions
 # ============================================================================
+
+_TABLE_INLINE_TOKEN_RE = re.compile(r"(?<!\\)(\\*)(`+|\|)")
+
+
+def _escape_table_pipes(cell: str) -> str:
+    tokens = list(_TABLE_INLINE_TOKEN_RE.finditer(cell))
+    next_ticks: dict[int, int] = {}
+    closing_ticks: dict[int, int] = {}
+    # Code spans retain literal backslashes. Index their matching delimiters
+    # once, so unmatched backticks do not cause repeated scans of the cell.
+    for index in range(len(tokens) - 1, -1, -1):
+        delimiter = tokens[index].group(2)
+        if delimiter != "|":
+            width = len(delimiter)
+            if width in next_ticks:
+                closing_ticks[index] = next_ticks[width]
+            next_ticks[width] = index
+
+    parts = []
+    position = 0
+    code_end = -1
+    for index, token in enumerate(tokens):
+        parts.append(cell[position : token.start()])
+        backslashes, delimiter = token.groups()
+        if delimiter == "|":
+            parts.append(backslashes * (1 if index < code_end else 2) + r"\|")
+        else:
+            if index > code_end and len(backslashes) % 2 == 0:
+                code_end = closing_ticks.get(index, -1)
+            parts.append(token.group())
+        position = token.end()
+    parts.append(cell[position:])
+    return "".join(parts)
 
 
 def calculate_media_strategy(image_count: int, line_count: int) -> str:
@@ -56,7 +90,7 @@ def format_table_to_markdown(rows: List[List[str]], has_header: bool = True) -> 
 
     # Escape pipes and fold line breaks so each cell stays inside its column and row
     rows = [
-        ["<br>".join(str(cell).replace("|", "\\|").splitlines()) for cell in row] for row in rows
+        ["<br>".join(_escape_table_pipes(str(cell)).splitlines()) for cell in row] for row in rows
     ]
 
     # Calculate maximum width for each column; a delimiter cell needs at least "---"

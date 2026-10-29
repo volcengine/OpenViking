@@ -11,6 +11,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from lark_oapi.api.docx.v1 import Block
 
 from openviking.parse.accessors.feishu_accessor import (
     _MAX_MEDIA_DOWNLOAD_CONTEXTS,
@@ -31,6 +32,62 @@ class _SuccessResponse:
     @staticmethod
     def success():
         return True
+
+
+@pytest.mark.parametrize(
+    "content, style, expected",
+    [
+        ("left|right", {}, r"left\|right"),
+        (r"left\|right", {}, r"left\\\|right"),
+        (r"left\\|right", {}, r"left\\\\\|right"),
+        (r"left\|right", {"bold": True}, r"**left\\\|right**"),
+        (r"left\|right", {"inline_code": True}, r"`left\\|right`"),
+        (r"`left\|right", {}, r"`left\\\|right"),
+        ("left\\|right\nnext", {}, r"left\\\|right<br>next"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_docx_table_preserves_backslashes(content, style, expected, monkeypatch):
+    blocks = [
+        Block(
+            {
+                "block_id": "table",
+                "block_type": 31,
+                "children": ["header-cell", "value-cell"],
+                "table": {"property": {"row_size": 2, "column_size": 1}},
+            }
+        )
+    ]
+    for name, value in (("header", "Value"), ("value", content)):
+        blocks.extend(
+            [
+                Block(
+                    {
+                        "block_id": f"{name}-cell",
+                        "block_type": 32,
+                        "children": [f"{name}-text"],
+                        "table_cell": {},
+                    }
+                ),
+                Block(
+                    {
+                        "block_id": f"{name}-text",
+                        "block_type": 2,
+                        "text": {
+                            "elements": [
+                                {"text_run": {"content": value, "text_element_style": style}}
+                            ]
+                        },
+                    }
+                ),
+            ]
+        )
+    accessor = FeishuAccessor()
+    monkeypatch.setattr(accessor, "_fetch_all_blocks", lambda *_args, **_kwargs: blocks)
+
+    document = await accessor._fetch_document("https://example.feishu.cn/docx/test")
+
+    assert f"| {expected} " in document.markdown_content
 
 
 def test_generated_doc_url_uses_account_feishu_domain():
