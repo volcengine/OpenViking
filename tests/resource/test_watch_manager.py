@@ -474,6 +474,68 @@ class TestWatchManager:
         assert updated.is_active is False
         assert updated.next_execution_time is None
 
+        before_rejection = task.model_dump(mode="python")
+        with pytest.raises(ValueError, match="watch_interval must be > 0"):
+            await watch_manager.update_task(
+                task.task_id,
+                TEST_ACCOUNT_ID,
+                TEST_USER_ID,
+                TEST_ROLE,
+                reason="rejected",
+                watch_interval=0,
+                is_active=True,
+            )
+        assert task.model_dump(mode="python") == before_rejection
+
+    @pytest.mark.asyncio
+    async def test_failed_update_keeps_live_and_stored_watch(
+        self, watch_manager: WatchManager, mock_viking_fs: MockVikingFS, monkeypatch
+    ):
+        old_uri = "viking://resources/original"
+        new_uri = "viking://resources/changed"
+        task = await watch_manager.create_task(path="/test/path", to_uri=old_uri, reason="saved")
+        original = task.model_dump(mode="python")
+        write_file = mock_viking_fs.write_file
+
+        async def fail_write(*args, **kwargs):
+            raise OSError("storage unavailable")
+
+        monkeypatch.setattr(mock_viking_fs, "write_file", fail_write)
+        with pytest.raises(OSError, match="storage unavailable"):
+            await watch_manager.update_task(
+                task.task_id,
+                TEST_ACCOUNT_ID,
+                TEST_USER_ID,
+                TEST_ROLE,
+                to_uri=new_uri,
+                reason="unsaved",
+                is_active=False,
+            )
+
+        assert task.model_dump(mode="python") == original
+        assert await watch_manager.get_task(task.task_id) is task
+        assert (
+            await watch_manager.get_task_by_uri(old_uri, TEST_ACCOUNT_ID, TEST_USER_ID, TEST_ROLE)
+            is task
+        )
+        assert (
+            await watch_manager.get_task_by_uri(new_uri, TEST_ACCOUNT_ID, TEST_USER_ID, TEST_ROLE)
+            is None
+        )
+
+        monkeypatch.setattr(mock_viking_fs, "write_file", write_file)
+        reloaded = WatchManager(viking_fs=mock_viking_fs)
+        await reloaded.initialize()
+        saved = await reloaded.get_task(task.task_id)
+        assert saved is not None
+        assert saved.model_dump(mode="python") == original
+
+        retried = await watch_manager.update_task(
+            task.task_id, TEST_ACCOUNT_ID, TEST_USER_ID, TEST_ROLE, reason="retried"
+        )
+        assert retried.reason == "retried"
+        assert retried.to_uri == old_uri
+
     @pytest.mark.asyncio
     async def test_update_task_not_found(self, watch_manager: WatchManager):
         """Test updating a non-existent task."""
@@ -604,9 +666,7 @@ class TestWatchManager:
         assert tasks[0].is_active is True
 
     @pytest.mark.asyncio
-    async def test_get_all_tasks_admin_scoped_to_own_tasks(
-        self, watch_manager: WatchManager
-    ):
+    async def test_get_all_tasks_admin_scoped_to_own_tasks(self, watch_manager: WatchManager):
         """ADMIN is scoped to its own tasks; ROOT still sees the whole account."""
         await watch_manager.create_task(path="/test/alice1", user_id="alice")
         await watch_manager.create_task(path="/test/bob1", user_id="bob")
@@ -626,9 +686,7 @@ class TestWatchManager:
         assert len(alice_tasks) == 2
 
     @pytest.mark.asyncio
-    async def test_get_all_tasks_isolates_same_account_users(
-        self, watch_manager: WatchManager
-    ):
+    async def test_get_all_tasks_isolates_same_account_users(self, watch_manager: WatchManager):
         """Same account, different user_id → each caller sees only its own tasks."""
         await watch_manager.create_task(path="/test/alice1", user_id="alice")
         await watch_manager.create_task(path="/test/bob1", user_id="bob")

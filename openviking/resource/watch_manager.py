@@ -617,67 +617,83 @@ class WatchManager:
                 resource=to_uri,
             )
 
+        # Validate the update on a copy so rejected values cannot dirty the live task.
+        updated = task.model_copy()
         old_to_uri = task.to_uri
         if path is not None:
-            task.path = path
+            updated.path = path
         if source_type is not None:
-            task.source_type = source_type
+            updated.source_type = source_type
         if to_uri is not None:
-            task.to_uri = to_uri
+            updated.to_uri = to_uri
         if to_is_directory is not None:
-            task.to_is_directory = to_is_directory
+            updated.to_is_directory = to_is_directory
         if parent_uri is not None:
-            task.parent_uri = parent_uri
+            updated.parent_uri = parent_uri
         if reason is not None:
-            task.reason = reason
+            updated.reason = reason
         if instruction is not None:
-            task.instruction = instruction
+            updated.instruction = instruction
         if watch_interval is not None:
             if watch_interval <= 0:
                 if is_active is True:
                     raise ValueError("watch_interval must be > 0 for active tasks")
-                task.watch_interval = watch_interval
-                task.is_active = False
-                task.next_execution_time = None
+                updated.watch_interval = watch_interval
+                updated.is_active = False
+                updated.next_execution_time = None
             else:
-                task.watch_interval = watch_interval
+                updated.watch_interval = watch_interval
         if build_index is not None:
-            task.build_index = build_index
+            updated.build_index = build_index
         if summarize is not None:
-            task.summarize = summarize
+            updated.summarize = summarize
         if processing_mode is not None:
-            task.processing_mode = processing_mode
+            updated.processing_mode = processing_mode
         if processor_kwargs is not None:
-            task.processor_kwargs = processor_kwargs
+            updated.processor_kwargs = processor_kwargs
         if auth_state is not _UNSET:
-            task.auth_state = auth_state
+            updated.auth_state = auth_state
         if connector_states is not _UNSET:
             if connector_states is not None and not isinstance(connector_states, dict):
                 raise ValueError("connector_states must be an object")
-            task.connector_states = connector_states
+            updated.connector_states = connector_states
         if is_active is not None:
-            task.is_active = is_active
+            updated.is_active = is_active
 
         if watch_interval is not None:
-            if task.is_active and task.watch_interval > 0:
-                task.next_execution_time = task.calculate_next_execution_time()
+            if updated.is_active and updated.watch_interval > 0:
+                updated.next_execution_time = updated.calculate_next_execution_time()
             else:
-                task.next_execution_time = None
+                updated.next_execution_time = None
         if is_active is not None and watch_interval is None:
-            if task.is_active:
-                if task.watch_interval <= 0:
+            if updated.is_active:
+                if updated.watch_interval <= 0:
                     raise ValueError("watch_interval must be > 0 for active tasks")
-                if task.next_execution_time is None:
-                    task.next_execution_time = task.calculate_next_execution_time()
+                if updated.next_execution_time is None:
+                    updated.next_execution_time = updated.calculate_next_execution_time()
             else:
-                task.next_execution_time = None
+                updated.next_execution_time = None
+
+        original = task.model_copy()
+        task.__dict__.update(updated.__dict__)
+        task.__pydantic_fields_set__ = updated.__pydantic_fields_set__
 
         if to_uri is not None:
             if old_to_uri and old_to_uri != to_uri:
                 self._index_remove(task.account_id, old_to_uri, task_id)
             self._index_add(task.account_id, to_uri, task_id)
 
-        await self._save_tasks()
+        try:
+            await self._save_tasks()
+        except Exception:
+            # Keep existing WatchTask references and URI lookups at the last
+            # successfully saved state when persistence fails before commit.
+            task.__dict__.update(original.__dict__)
+            task.__pydantic_fields_set__ = original.__pydantic_fields_set__
+            if to_uri is not None and to_uri != old_to_uri:
+                self._index_remove(task.account_id, to_uri, task_id)
+                self._index_add(task.account_id, old_to_uri, task_id)
+            raise
         logger.info(f"[WatchManager] Updated task {task_id} by user {account_id}/{user_id}")
         return task
 

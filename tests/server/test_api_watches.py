@@ -197,6 +197,27 @@ async def test_not_found_404(client: httpx.AsyncClient):
     assert resp.status_code == 404
 
 
+async def test_failed_patch_keeps_last_saved_watch_visible(app, watch_manager, monkeypatch):
+    task = await _seed(watch_manager, to_uri="viking://resources/test/failed-patch")
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        path = f"/api/v1/watches/{task.task_id}"
+        saved = await client.patch(path, json={"reason": "saved"})
+        assert saved.status_code == 200
+
+        async def fail_save():
+            raise OSError("storage unavailable")
+
+        monkeypatch.setattr(watch_manager, "_save_tasks", fail_save)
+        failed = await client.patch(path, json={"reason": "unsaved", "is_active": False})
+        assert failed.status_code == 500
+
+        live = await client.get(path)
+        assert live.status_code == 200
+        assert live.json()["result"]["reason"] == "saved"
+        assert live.json()["result"]["is_active"] is True
+
+
 async def test_patch_rejects_non_positive_watch_interval(client: httpx.AsyncClient, watch_manager):
     """REST PATCH must reject `watch_interval <= 0` at the request boundary.
 
