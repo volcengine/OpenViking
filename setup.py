@@ -453,6 +453,11 @@ class OpenVikingBuildExt(build_ext):
             f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}",
         ]
 
+        for language in ("C", "CXX"):
+            launcher = os.environ.get(f"CMAKE_{language}_COMPILER_LAUNCHER")
+            if launcher:
+                cmake_args.append(f"-DCMAKE_{language}_COMPILER_LAUNCHER={launcher}")
+
         if sys.platform == "darwin":
             cmake_args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15")
             target_arch = os.environ.get("CMAKE_OSX_ARCHITECTURES")

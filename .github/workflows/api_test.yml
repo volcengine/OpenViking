@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - 'main'
+      - 'develop'
     paths-ignore:
       - 'docs/**'
       - '**.md'
@@ -24,21 +25,81 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      api_changed: ${{ steps.plan.outputs.api_changed }}
+      cuvs_changed: ${{ steps.plan.outputs.cuvs_changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            python3 .github/scripts/ci_plan.py --base "$BASE_SHA" --output "$GITHUB_OUTPUT"
+          else
+            python3 .github/scripts/ci_plan.py --full --output "$GITHUB_OUTPUT"
+          fi
+
+  native-runtime:
+    needs: prepare
+    if: >-
+      (needs.prepare.outputs.api_changed == 'true' || needs.prepare.outputs.cuvs_changed == 'true') &&
+      (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ||
+       (github.repository == 'volcengine/OpenViking' &&
+        (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: ./.github/actions/native-runtime
+      - name: Pack stable-ABI runtime
+        run: uv run --no-sync python .github/scripts/native_bundle.py pack runtime.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-runtime-linux-x64-cp310-abi3
+          path: runtime.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  cuvs-tests:
+    needs: [prepare, native-runtime]
+    if: needs.prepare.outputs.cuvs_changed == 'true'
+    uses: ./.github/workflows/_test_lite.yml
+    with:
+      os_json: '["ubuntu-24.04"]'
+      python_json: '["3.11"]'
+      native_artifact: native-runtime-linux-x64-cp310-abi3
+
   api-tests:
+    needs: [prepare, native-runtime]
     name: API & CLI Integration Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'pull_request' ||
-      (github.repository == 'volcengine/OpenViking' &&
-        (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')))
+      needs.prepare.outputs.api_changed == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'pull_request' ||
+       (github.repository == 'volcengine/OpenViking' &&
+        (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))))
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 3
       matrix:
         os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'release') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
@@ -91,93 +152,10 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install build dependencies (system pip)
-        run: |
-          python -m pip install --upgrade pip
-          pip install "setuptools>=70.1" setuptools_scm cmake wheel
-          echo "---"
-          python -c "import setuptools; print(f'setuptools version: {setuptools.__version__}')"
-
-      - name: Install dependencies using uv sync
-        run: |
-          echo "Installing dependencies using uv sync..."
-          uv sync --frozen
-
-      - name: Install build dependencies (uv pip)
-        run: |
-          echo "Installing build dependencies to uv environment..."
-          uv pip install setuptools setuptools_scm cmake wheel maturin
-
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+      - name: Prepare native runtime
+        uses: ./.github/actions/native-runtime
         with:
-          toolchain: stable
-
-      - name: Build C++ extensions
-        shell: bash
-        run: |
-          export OV_SKIP_OV_BUILD=1
-          mkdir -p openviking/bin
-          touch openviking/bin/ov
-          chmod +x openviking/bin/ov
-          echo "OV_SKIP_OV_BUILD=1 set, skipping ov CLI Rust build (ragfs build still needed for server)"
-          
-          if [ -z "$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" ]; then
-            PRETEND_VERSION=$(git describe --tags --always 2>/dev/null | sed -E 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1.dev0/' || echo "0.0.0.dev0")
-            echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$PRETEND_VERSION" >> $GITHUB_ENV
-            echo "Using pretend version: $PRETEND_VERSION"
-          fi
-          
-          uv run python setup.py build_ext --inplace
-
-      - name: Build ragfs-python native extension
-        shell: bash
-        run: |
-          RAGFS_LIB_DIR="openviking/lib"
-          RAGFS_SO_COUNT=$(ls -1 "$RAGFS_LIB_DIR"/ragfs_python*.so "$RAGFS_LIB_DIR"/ragfs_python*.pyd "$RAGFS_LIB_DIR"/ragfs_python*.dylib 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")
-          
-          if [ "$RAGFS_SO_COUNT" -gt 0 ]; then
-            echo "✅ ragfs_python native extension already exists:"
-            ls -la "$RAGFS_LIB_DIR"/ragfs_python*
-            exit 0
-          fi
-          
-          echo "ragfs_python native lib not found after build_ext, building via maturin..."
-          TMPDIR_RAGFS=$(mktemp -d)
-          cd crates/ragfs-python
-          uv run --no-project maturin build --release --features s3 --out "$TMPDIR_RAGFS"
-          cd ../..
-          
-          WHL_FILE=$(ls -1 "$TMPDIR_RAGFS"/ragfs_python-*.whl 2>/dev/null | head -1)
-          if [ -z "$WHL_FILE" ]; then
-            echo "❌ ERROR: maturin build produced no wheel"
-            ls -la "$TMPDIR_RAGFS"/
-            exit 1
-          fi
-          
-          echo "Extracting ragfs_python from wheel: $WHL_FILE"
-          mkdir -p "$RAGFS_LIB_DIR"
-          WHL_FILE_PY=$(echo "$WHL_FILE" | sed 's/\\/\\\\/g')
-          RAGFS_LIB_DIR_PY=$(echo "$RAGFS_LIB_DIR" | sed 's/\\/\\\\/g')
-          uv run python -c "
-          import zipfile, os, sys, stat
-          with zipfile.ZipFile('${WHL_FILE_PY}') as zf:
-              for name in zf.namelist():
-                  bn = os.path.basename(name)
-                  if bn.startswith('ragfs_python') and (bn.endswith('.so') or bn.endswith('.pyd') or bn.endswith('.dylib')):
-                      dst = os.path.join('${RAGFS_LIB_DIR_PY}', bn)
-                      with zf.open(name) as src, open(dst, 'wb') as f:
-                          f.write(src.read())
-                      os.chmod(dst, 0o755)
-                      print(f'  [OK] ragfs-python: extracted {bn} -> {dst}')
-                      sys.exit(0)
-          print('[ERROR] No ragfs_python native library found in wheel')
-          sys.exit(1)
-          "
-          rm -rf "$TMPDIR_RAGFS"
-          
-          echo "Verifying ragfs_python native extension:"
-          ls -la "$RAGFS_LIB_DIR"/ragfs_python*
+          artifact: ${{ runner.os == 'Linux' && 'native-runtime-linux-x64-cp310-abi3' || '' }}
 
       - name: Install API test dependencies
         run: |
@@ -363,7 +341,7 @@ jobs:
           if [ "$HAS_SECRETS" != "true" ]; then
             SERVER_MODULE=tests.api_test.mock_embedding_server
           fi
-          nohup uv run python -m "$SERVER_MODULE" --workers 1 > openviking-server.log 2>&1 &
+          nohup uv run --no-sync python -m "$SERVER_MODULE" --workers 1 > openviking-server.log 2>&1 &
           echo $! > openviking-server.pid
           echo "SERVER_PID=$(cat openviking-server.pid)" >> $GITHUB_ENV
           
@@ -403,7 +381,7 @@ jobs:
           if ($env:HAS_SECRETS -ne "true") {
             $serverModule = "tests.api_test.mock_embedding_server"
           }
-          $batchContent = "@echo off`r`nset ROOT_API_KEY=test-root-api-key`r`nset SERVER_PORT=$port`r`nuv run python -m $serverModule --workers 1`r`n"
+          $batchContent = "@echo off`r`nset ROOT_API_KEY=test-root-api-key`r`nset SERVER_PORT=$port`r`nuv run --no-sync python -m $serverModule --workers 1`r`n"
           Set-Content -Path $batchFile -Value $batchContent -Encoding ASCII
           
           Write-Host "Batch file created at: $batchFile"
@@ -460,21 +438,21 @@ jobs:
           
           if [ "${{ env.HAS_SECRETS }}" = "true" ]; then
             echo "Running serial tests (filesystem + resource operations)..."
-            uv run python -m pytest filesystem/ scenarios/resources_retrieval/ -v --tb=short \
+            uv run --no-sync python -m pytest filesystem/ scenarios/resources_retrieval/ -v --tb=short \
               --ignore=filesystem/slow/ --ignore=scenarios/resources_retrieval/slow/
             echo "Running full test suite with VLM/Embedding (parallel, excluding serial and slow tests)..."
-            uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
+            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
               --ignore=scenarios/resources_retrieval_slow/ --ignore=filesystem/ --ignore=scenarios/resources_retrieval/ \
               --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ \
               --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ \
               --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
           else
             echo "Running filesystem tests (serial)..."
-            uv run python -m pytest filesystem/ -v --tb=short \
+            uv run --no-sync python -m pytest filesystem/ -v --tb=short \
               --ignore=retrieval/ --ignore=resources/ --ignore=admin/ --ignore=skills/ --ignore=system/ --ignore=scenarios/ \
               --ignore=filesystem/slow/
             echo "Running basic tests only (parallel, excluding filesystem and slow tests)..."
-            uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
+            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html \
               --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
               --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py \
               --ignore=scenarios/ --ignore=filesystem/ -k "not test_observer" \
@@ -492,10 +470,10 @@ jobs:
           
           if ($env:HAS_SECRETS -eq "true") {
             Write-Host "Running full test suite with VLM/Embedding (Windows: skipping filesystem and slow tests)"
-            uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/ --ignore=scenarios/resources_retrieval/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
+            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=filesystem/ --ignore=scenarios/resources_retrieval_slow/ --ignore=scenarios/resources_retrieval/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=retrieval/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ --ignore=scenarios/slow/ --ignore=scenarios/stability_error/slow/
           } else {
             Write-Host "Running basic tests only (mock embedding and VLM, Windows: skipping filesystem and slow tests)"
-            uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ -k "not test_observer"
+            uv run --no-sync python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ -k "not test_observer"
           }
       - name: Install released OpenViking CLI for compatibility tests (Unix)
         if: runner.os != 'Windows'
@@ -529,14 +507,13 @@ jobs:
           export OPENVIKING_ROOT_API_KEY="test-root-api-key"
 
           echo "Running CLI compatibility tests (serial)..."
-          uv run python -m pytest test_cli_compatibility.py -v --tb=short -m cli_remote
+          uv run --no-sync python -m pytest test_cli_compatibility.py -v --tb=short -m cli_remote
 
-      - name: Build OpenViking CLI from current source (Unix)
+      - name: Use OpenViking CLI built from current source (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          cargo build --locked --package ov_cli --bin ov
-          CURRENT_CLI_BIN="$GITHUB_WORKSPACE/target/debug/ov"
+          CURRENT_CLI_BIN="$GITHUB_WORKSPACE/openviking/bin/ov"
           "$CURRENT_CLI_BIN" language en
           "$CURRENT_CLI_BIN" version
           echo "OPENVIKING_CLI_BIN=$CURRENT_CLI_BIN" >> $GITHUB_ENV
@@ -555,7 +532,7 @@ jobs:
           export OPENVIKING_ROOT_API_KEY="test-root-api-key"
 
           echo "Running CLI integration tests (serial to avoid resource conflicts)..."
-          uv run python -m pytest \
+          uv run --no-sync python -m pytest \
             test_cli_filesystem.py \
             test_cli_content.py \
             test_cli_resources.py \

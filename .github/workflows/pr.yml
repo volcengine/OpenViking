@@ -17,8 +17,14 @@ on:
       - '.gitignore'
       - '.editorconfig'
 
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   plugin-tests:
+    needs: check-deps
+    if: needs.check-deps.outputs.plugins_changed == 'true'
     runs-on: ubuntu-24.04
     env:
       # The tests that fork whole installs, named once: the step below runs
@@ -118,8 +124,9 @@ jobs:
           --exclude "**/node_modules/**"
 
   plugin-versions:
+    needs: check-deps
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'pull_request' }}
+    if: github.event_name == 'pull_request' && needs.check-deps.outputs.plugins_changed == 'true'
     steps:
       - uses: actions/checkout@v6
         with:
@@ -138,7 +145,8 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
-      cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
+      wheel_os: ${{ steps.check.outputs.wheel_os }}
+      plugins_changed: ${{ steps.check.outputs.plugins_changed }}
       langchain_changed: ${{ steps.check.outputs.langchain_changed }}
       openclaw_changed: ${{ steps.check.outputs.openclaw_changed }}
       sdk_python_changed: ${{ steps.check.outputs.sdk_python_changed }}
@@ -149,78 +157,23 @@ jobs:
 
       - name: Check for dependency changes
         id: check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch origin ${{ github.base_ref }}
-          
-          # Define grep pattern for dependency files
-          PATTERN="pyproject\.toml|setup\.py|uv\.lock|src/CMakeLists\.txt|third_party/|crates/|\.github/workflows/_build\.yml"
-          
-          # Check for changes
-          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$PATTERN" || true)
-          
-          if [ -n "$CHANGED_FILES" ]; then
-            echo "Dependency changes detected:"
-            echo "$CHANGED_FILES"
-            echo "deps_changed=true" >> $GITHUB_OUTPUT
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            python3 .github/scripts/ci_plan.py --base "$BASE_SHA" --output "$GITHUB_OUTPUT"
           else
-            echo "No dependency changes detected."
-            echo "deps_changed=false" >> $GITHUB_OUTPUT
+            python3 .github/scripts/ci_plan.py --full --output "$GITHUB_OUTPUT"
           fi
-
-          # Run the CPU-only cuVS regression suite when the optional backend,
-          # its native filter bridge, or its focused tests are modified.
-          CUVS_PATTERN="crates/|openviking/storage/vectordb/|openviking/storage/vectordb_adapters/(factory|local_adapter)\.py|openviking_cli/utils/config/vectordb_config\.py|src/|tests/(vectordb/test_cuvs_|benchmark/test_cuvs_)|benchmark/cuvs/|examples/cuvs_smoke\.py|\.github/workflows/_test_lite\.yml"
-          CUVS_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$CUVS_PATTERN" || true)
-
-          if [ -n "$CUVS_CHANGED_FILES" ]; then
-            echo "cuVS-related changes detected:"
-            echo "$CUVS_CHANGED_FILES"
-            echo "cuvs_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "No cuVS-related changes detected."
-            echo "cuvs_changed=false" >> $GITHUB_OUTPUT
-          fi
-
-          LANGCHAIN_PATTERN="integrations/frameworks/langchain/|^openviking/integrations/|^tests/unit/test_langchain_[^/]*\.py$|^tests/integration/langchain_langgraph/|^examples/(langchain|langchain-langgraph|agent-framework)/|^pyproject\.toml$|^uv\.lock$|\.github/workflows/(pr|python-langchain-release)\.yml"
-          LANGCHAIN_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$LANGCHAIN_PATTERN" || true)
-
-          if [ -n "$LANGCHAIN_CHANGED_FILES" ]; then
-            echo "LangChain integration changes detected:"
-            echo "$LANGCHAIN_CHANGED_FILES"
-            echo "langchain_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "No LangChain integration changes detected."
-            echo "langchain_changed=false" >> $GITHUB_OUTPUT
-          fi
-
-          OPENCLAW_PATTERN="examples/openclaw-plugin/|examples/memory-plugin-shared/(lib/|sync\.mjs)|\.github/workflows/pr\.yml"
-          OPENCLAW_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$OPENCLAW_PATTERN" || true)
-
-          if [ -n "$OPENCLAW_CHANGED_FILES" ]; then
-            echo "OpenClaw plugin changes detected:"
-            echo "$OPENCLAW_CHANGED_FILES"
-            echo "openclaw_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "No OpenClaw plugin changes detected."
-            echo "openclaw_changed=false" >> $GITHUB_OUTPUT
-          fi
-
-          SDK_PYTHON_PATTERN="sdk/python/|\.github/workflows/pr\.yml"
-          SDK_PYTHON_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$SDK_PYTHON_PATTERN" || true)
-
-          if [ -n "$SDK_PYTHON_CHANGED_FILES" ]; then
-            echo "Standalone Python SDK-related changes detected:"
-            echo "$SDK_PYTHON_CHANGED_FILES"
-            echo "sdk_python_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "No standalone Python SDK-related changes detected."
-            echo "sdk_python_changed=false" >> $GITHUB_OUTPUT
-          fi
+      - name: Test CI selection and artifact validation
+        run: python3 -m unittest discover -s .github/scripts -p 'test_ci_helpers.py' -v
 
   build:
     needs: check-deps
     if: ${{ needs.check-deps.outputs.deps_changed == 'true' }}
     uses: ./.github/workflows/_build.yml
+    with:
+      os_json: ${{ needs.check-deps.outputs.wheel_os }}
 
   sdk-python-tests:
     needs: check-deps
@@ -259,14 +212,6 @@ jobs:
           /tmp/openviking-sdk-wheel/bin/python -m pip install "$WHEEL_PATH"
           cd /tmp
           /tmp/openviking-sdk-wheel/bin/python -c "import openviking_sdk"
-
-  cuvs-tests:
-    needs: check-deps
-    if: ${{ needs.check-deps.outputs.cuvs_changed == 'true' }}
-    uses: ./.github/workflows/_test_lite.yml
-    with:
-      os_json: '["ubuntu-24.04"]'
-      python_json: '["3.11"]'
 
   langchain-tests:
     needs: check-deps
