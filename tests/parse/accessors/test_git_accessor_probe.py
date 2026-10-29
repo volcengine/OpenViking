@@ -105,23 +105,20 @@ class TestLsRemoteOutputParsers:
 
 class TestProbeGitRemoteHead:
     @pytest.mark.asyncio
-    async def test_initial_tracked_head_timeout_fails_open(self, monkeypatch):
+    async def test_branch_without_hint_downloads_by_name_without_checkpoint(
+        self, monkeypatch
+    ):
+        # Without a commit pin or git_head_sha_hint the accessor must NOT issue
+        # its own ls-remote: it downloads the moving branch by name and records
+        # no exact-revision checkpoint (fail-open to the legacy path).
         accessor = GitAccessor()
-        accessor.DEFAULT_REMOTE_HEAD_TIMEOUT = 0.01
-        cancelled = asyncio.Event()
-
-        async def blocking_probe(*_args, **_kwargs):
-            try:
-                await asyncio.Event().wait()
-            finally:
-                cancelled.set()
-
         local_dir = Path("/tmp/openviking-test-repository")
-        monkeypatch.setattr(accessor, "_resolve_tracked_head", blocking_probe)
+        zip_download = AsyncMock(return_value=(local_dir, "volcengine/OpenViking"))
+        monkeypatch.setattr(accessor, "_github_zip_download", zip_download)
         monkeypatch.setattr(
             accessor,
-            "_github_zip_download",
-            AsyncMock(return_value=(local_dir, "volcengine/OpenViking")),
+            "probe_git_remote_head",
+            AsyncMock(side_effect=AssertionError("accessor must not self-probe")),
         )
 
         resource = await accessor.access(
@@ -129,12 +126,12 @@ class TestProbeGitRemoteHead:
             branch="main",
         )
 
-        assert cancelled.is_set()
+        assert zip_download.await_args.args[1] == "main"
         assert resource.path == local_dir
         assert resource.meta.get("resolved_head_sha") is None
 
     @pytest.mark.asyncio
-    async def test_initial_tracked_head_uses_parser_network_adapter(self, monkeypatch):
+    async def test_probe_applies_parser_network_adapter(self, monkeypatch):
         accessor = GitAccessor()
         run_git = AsyncMock(return_value=f"{'a' * 40}\trefs/heads/main\n")
         monkeypatch.setattr(accessor, "_run_git", run_git)
@@ -145,9 +142,9 @@ class TestProbeGitRemoteHead:
             )
         )
         try:
-            result = await accessor._resolve_tracked_head(
+            result = await accessor.probe_git_remote_head(
                 "https://github.com/volcengine/OpenViking.git",
-                "main",
+                branch="main",
             )
         finally:
             reset_parser_network_adapter()

@@ -161,16 +161,6 @@ class TestGitAccessor:
         ):
             yield
 
-    @pytest.fixture(autouse=True)
-    def _disable_remote_head_probe(self):
-        """Keep accessor unit tests offline; probe behavior has dedicated tests."""
-        with patch.object(
-            GitAccessor,
-            "_resolve_tracked_head",
-            new=AsyncMock(return_value=None),
-        ):
-            yield
-
     @pytest.fixture
     def accessor(self) -> GitAccessor:
         """Create a GitAccessor instance."""
@@ -575,11 +565,6 @@ class TestGitAccessor:
             ),
             patch.object(
                 accessor,
-                "_resolve_tracked_head",
-                new_callable=AsyncMock,
-            ) as resolve_tracked_head,
-            patch.object(
-                accessor,
                 "_github_zip_download",
                 new=AsyncMock(side_effect=RuntimeError("archive unavailable")),
             ) as zip_download,
@@ -600,7 +585,6 @@ class TestGitAccessor:
                 commit=commit,
             )
 
-        resolve_tracked_head.assert_not_awaited()
         zip_download.assert_awaited_once_with(
             source,
             commit,
@@ -619,7 +603,7 @@ class TestGitAccessor:
         assert resource.meta["repo_commit"] == commit
         assert "repo_ref" not in resource.meta
 
-    async def test_archive_success_records_downloaded_sha_without_reading_local_head(
+    async def test_archive_success_records_hint_sha_without_reading_local_head(
         self,
         accessor: GitAccessor,
         tmp_path: Path,
@@ -634,32 +618,38 @@ class TestGitAccessor:
             ),
             patch.object(
                 accessor,
-                "_resolve_tracked_head",
-                new=AsyncMock(return_value=("refs/heads/main", probed_sha)),
-            ),
-            patch.object(
-                accessor,
                 "_github_zip_download",
                 new=AsyncMock(return_value=(extracted, "org/repo")),
-            ),
+            ) as zip_download,
             patch.object(
                 accessor,
                 "_resolve_local_head",
                 new_callable=AsyncMock,
             ) as resolve_local_head,
         ):
-            resource = await accessor.access(source, branch="main")
+            resource = await accessor.access(
+                source,
+                branch="main",
+                git_head_sha_hint=probed_sha,
+            )
 
+        zip_download.assert_awaited_once_with(
+            source,
+            probed_sha,
+            str(tmp_path),
+            github_token=None,
+        )
         resolve_local_head.assert_not_awaited()
         assert resource.path == extracted
         assert resource.meta["resolved_head_sha"] == probed_sha
 
-    async def test_github_token_is_available_to_initial_head_probe(
+    async def test_github_token_archive_download_uses_hint_without_self_probe(
         self,
         accessor: GitAccessor,
         tmp_path: Path,
     ) -> None:
         source = "https://github.com/org/private.git"
+        probed_sha = "a" * 40
         extracted = tmp_path / "repo"
         with (
             patch(
@@ -668,9 +658,9 @@ class TestGitAccessor:
             ),
             patch.object(
                 accessor,
-                "_resolve_tracked_head",
-                new=AsyncMock(return_value=("refs/heads/main", "a" * 40)),
-            ) as resolve_tracked_head,
+                "_git_ls_remote_head",
+                new_callable=AsyncMock,
+            ) as ls_remote,
             patch.object(
                 accessor,
                 "_github_zip_download",
@@ -680,18 +670,15 @@ class TestGitAccessor:
             await accessor.access(
                 source,
                 branch="main",
+                commit=None,
                 github_token="account-token",
+                git_head_sha_hint=probed_sha,
             )
 
-        probe_env = resolve_tracked_head.await_args.args[2]
-        assert probe_env["GIT_TERMINAL_PROMPT"] == "0"
-        assert any(
-            value.startswith("Authorization: Basic ")
-            for value in _git_config_entries(probe_env).values()
-        )
+        ls_remote.assert_not_awaited()
         zip_download.assert_awaited_once_with(
             source,
-            "a" * 40,
+            probed_sha,
             str(tmp_path),
             github_token="account-token",
         )
@@ -711,9 +698,9 @@ class TestGitAccessor:
             ),
             patch.object(
                 accessor,
-                "_resolve_tracked_head",
+                "_git_ls_remote_head",
                 new_callable=AsyncMock,
-            ) as resolve_tracked_head,
+            ) as ls_remote,
             patch.object(
                 accessor,
                 "_github_zip_download",
@@ -727,7 +714,7 @@ class TestGitAccessor:
         ):
             resource = await accessor.access(source, commit=commit)
 
-        resolve_tracked_head.assert_not_awaited()
+        ls_remote.assert_not_awaited()
         zip_download.assert_awaited_once_with(
             source,
             commit,

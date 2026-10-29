@@ -393,6 +393,12 @@ class TestWatchTaskCreation:
     def test_watch_persists_clear_without_tags(self, resource_service: ResourceService):
         assert resource_service._watch_processor_kwargs({}, None, "clear") == {"tag_mode": "clear"}
 
+    def test_watch_kwargs_strip_transient_head_sha_hint(self, resource_service: ResourceService):
+        sanitized = resource_service._sanitize_watch_processor_kwargs(
+            {"git_head_sha_hint": "a" * 40, "branch": "main"}
+        )
+        assert sanitized == {"branch": "main"}
+
     def test_add_resource_message_round_trip_preserves_clear_without_tags(self):
         message = AddResourceMsg(
             task_id="task-clear",
@@ -924,6 +930,7 @@ class TestAddResourceArgs:
                 source_name="private",
                 source_path=repo_url,
                 source_format="repository",
+                head_sha=None,
             )
         )
         resource_service._plan_source_job_target = AsyncMock(

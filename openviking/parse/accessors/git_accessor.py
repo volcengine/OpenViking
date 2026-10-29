@@ -62,7 +62,6 @@ class GitAccessor(DataAccessor):
     """
 
     PRIORITY = 80  # Higher than generic HTTP, lower than specific services
-    DEFAULT_REMOTE_HEAD_TIMEOUT = 30.0
     # Upper bound for reaping the git process tree after cancellation. The
     # tree is SIGKILLed as a group, so this only guards pathological reap
     # delays and must stay short to avoid pinning the caller's slot.
@@ -170,27 +169,14 @@ class GitAccessor(DataAccessor):
                 if commit:
                     resolved_sha = commit
                 else:
-                    # Watch refresh path: reuse the revision the scheduler
-                    # already probed to avoid a second serial ls-remote.
-                    hint_sha = kwargs.get("git_head_sha_hint")
-                    if hint_sha:
-                        resolved_sha = hint_sha
-                    else:
-                        try:
-                            tracked = await asyncio.wait_for(
-                                self._resolve_tracked_head(repo_url, branch, git_env),
-                                timeout=self.DEFAULT_REMOTE_HEAD_TIMEOUT,
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                f"[GitAccessor] git head probe timed out for {repo_url}; "
-                                "fetching ref by name without an exact-revision checkpoint"
-                            )
-                            tracked = None
-                        if tracked is not None:
-                            _, resolved_sha = tracked
+                    # Watch refresh / add_resource first round pass the revision
+                    # they already resolved (scheduler probe or preflight) here.
+                    # Without a hint the ref is fetched by its moving branch name
+                    # and no exact-revision checkpoint is recorded; this accessor
+                    # never issues its own ls-remote.
+                    resolved_sha = kwargs.get("git_head_sha_hint") or None
                 # Fetch an immutable per-SHA archive when resolved; fall back to
-                # the moving branch/commit name only when the probe was skipped.
+                # the moving branch/commit name only when no revision was supplied.
                 download_ref = resolved_sha or commit or branch
                 if self._is_github_url(repo_url) and auth_config is None:
                     # Try GitHub ZIP API first, fall back to git clone
@@ -629,30 +615,6 @@ class GitAccessor(DataAccessor):
             )
             return None
         return head_sha.strip() or None
-
-    async def _resolve_tracked_head(
-        self,
-        url: str,
-        branch: Optional[str],
-        env: Optional[dict[str, str]] = None,
-    ) -> Optional[Tuple[str, str]]:
-        """Return ``(ref, sha)`` for the tracked branch tip, or None on failure.
-
-        Failures are non-fatal: callers fetch the branch by name and simply
-        skip recording an exact-revision checkpoint.
-        """
-        try:
-            network_env = overlay_parser_subprocess_env(
-                ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, url),
-                env,
-            )
-            return await self._git_ls_remote_head(url, branch, network_env)
-        except Exception as exc:
-            logger.warning(
-                f"[GitAccessor] git head probe failed for {url}: {exc}; "
-                "fetching ref by name without an exact-revision checkpoint"
-            )
-            return None
 
     async def _git_ls_remote_head(
         self,
