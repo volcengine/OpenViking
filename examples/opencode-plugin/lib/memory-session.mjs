@@ -35,9 +35,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
   let initBackground = Promise.resolve()
-  // Serialize saves within this manager. Separate OpenCode locations can load
-  // separate managers that share statePath, so saveState() also uses a unique
-  // temp file for each atomic replacement.
+  // Serialize saves across managers that share statePath. Separate OpenCode
+  // processes cannot share this promise chain, so saveState() also uses a
+  // unique temp file for each atomic replacement.
   function enqueueSave() {
     const previous = stateSaveChains.get(statePath) ?? Promise.resolve()
     const run = previous.then(() => saveState())
