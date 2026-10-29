@@ -1420,6 +1420,7 @@ async def write(
     - mode="create": compatibility alias for replace; overwrite an existing file or create it if missing.
     - Any new file (whether created by "replace", "append", or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
+    - A URI whose whitespace would change the storage target is rejected; rename the file or choose the intended target explicitly.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL
       requires manage on the target, or its parent for a new file. Omit to preserve

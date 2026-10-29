@@ -8,18 +8,45 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.acl import AclMode
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from tests.utils.mock_agfs import MockLocalAGFS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["replace", "append", "create"])
+@pytest.mark.parametrize(
+    ("relative", "normalized_relative"),
+    [("a b.md", "a_b.md"), ("nested folder/note.md", "nested_folder/note.md")],
+)
+async def test_write_rejects_redirecting_a_whitespace_target(
+    tmp_path, mode, relative, normalized_relative
+):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role(Role.USER))
+    agfs = MockLocalAGFS(root_path=tmp_path)
+    fs = VikingFS(agfs=agfs)
+    requested = f"viking://user/default/memories/preferences/{relative}"
+    normalized = f"viking://user/default/memories/preferences/{normalized_relative}"
+    agfs.write(fs._uri_to_path(requested, ctx), "Original preference")
+    agfs.write(fs._uri_to_path(normalized, ctx), "Separate preference")
+
+    with pytest.raises(InvalidArgumentError, match="would change the write target"):
+        await FSService(viking_fs=fs).write(requested, "Updated preference", ctx, mode=mode)
+
+    assert await fs.read_file(requested, ctx=ctx) == "Original preference"
+    assert await fs.read_file(normalized, ctx=ctx) == "Separate preference"
 
 
 @pytest.mark.asyncio
@@ -692,7 +719,6 @@ async def test_write_lock_storage_error_is_not_mapped_to_resource_busy(file_uri)
         )
 
 
-
 class _AnyDirVikingFS:
     """Stats the given file uri as a file and every other uri as a directory."""
 
@@ -740,7 +766,6 @@ async def test_resource_write_anchors_nested_file_to_direct_parent(
 
     assert write_anchor == parent_uri
     assert set_tags_anchor == project_root
-
 
 
 @pytest.mark.asyncio

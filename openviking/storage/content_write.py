@@ -507,9 +507,13 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         self._validate_mode(mode)
         processing_mode = normalize_processing_mode(processing_mode)
-        normalized_uri = normalize_storage_target_uri(
-            self._validate_uri_path(uri, field_name="uri")
-        )
+        requested_uri = self._validate_uri_path(uri, field_name="uri")
+        normalized_uri = normalize_storage_target_uri(requested_uri)
+        if normalized_uri != requested_uri:
+            raise InvalidArgumentError(
+                f"URI whitespace would change the write target from {requested_uri!r} "
+                f"to {normalized_uri!r}; rename the file or use an explicit target URI."
+            )
         self._ensure_content_write_policy(normalized_uri)
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
         namespace_policy = namespace_policy_for_uri(normalized_uri)
