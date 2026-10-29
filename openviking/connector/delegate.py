@@ -26,7 +26,14 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from openviking.connector.auth import OAUTH_REF_ARG, project_auth_config
+from openviking.connector.auth import (
+    OAUTH_REF_ARG,
+    confluence_auth_config,
+    document_auth_config,
+    extract_credential_reference,
+    project_auth_config,
+    resolve_connector_auth_config,
+)
 from openviking.connector.client import ConnectorClient
 from openviking.connector.routing import (
     CONNECTOR_ARGS_AUTH_CONFIG_KEY,
@@ -59,6 +66,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 _TOS_BUCKET_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
+CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG = "resource_config"
 
 
 def _safe_http_response(response: httpx.Response) -> Any:
@@ -168,6 +176,7 @@ class ConnectorDelegate:
         add_type: str,
         path: str,
         connector_args: Optional[Dict[str, Any]],
+        connector_auth_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build the private request state needed to replay a Connector watch."""
         if not api_key:
@@ -179,6 +188,10 @@ class ConnectorDelegate:
             "path": path,
             "connector_args": dict(connector_args or {}),
         }
+        # Watches persist only the secret-free credential reference; the actual
+        # auth_config is resolved anew each round so refreshed tokens stay current.
+        if connector_auth_config:
+            payload["connector_auth_config"] = dict(connector_auth_config)
         encryptor = getattr(self._viking_fs, "_encryptor", None)
         if encryptor is None:
             return {
@@ -215,8 +228,13 @@ class ConnectorDelegate:
         *,
         account_id: str,
         path: str,
-    ) -> Tuple[str, str, Dict[str, Any]]:
-        """Restore and validate a source-bound Connector watch request."""
+    ) -> Tuple[str, str, Dict[str, Any], Optional[Dict[str, Any]]]:
+        """Restore and validate a source-bound Connector watch request.
+
+        Returns ``(api_key, add_type, connector_args, connector_auth_config)``;
+        ``connector_auth_config`` is the secret-free credential reference and is
+        None for watches that predate it or use the legacy args channel.
+        """
         try:
             provider = auth_state.get("provider")
             if provider == self._WATCH_PLAINTEXT_AUTH_PROVIDER:
@@ -241,15 +259,23 @@ class ConnectorDelegate:
             api_key = payload.get("api_key")
             add_type = payload.get("add_type")
             connector_args = payload.get("connector_args")
+            connector_auth_config = payload.get("connector_auth_config")
             if (
                 not isinstance(api_key, str)
                 or not api_key
                 or not isinstance(add_type, str)
                 or not add_type
                 or not isinstance(connector_args, dict)
+                or (connector_auth_config is not None
+                    and not isinstance(connector_auth_config, dict))
             ):
                 raise ValueError("invalid watch request")
-            return api_key, add_type, dict(connector_args)
+            return (
+                api_key,
+                add_type,
+                dict(connector_args),
+                dict(connector_auth_config) if connector_auth_config else None,
+            )
         except InvalidArgumentError:
             raise
         except Exception as exc:
@@ -469,7 +495,9 @@ class ConnectorDelegate:
             supported_args = CONNECTOR_SUPPORTED_ARGS.get(
                 add_type, frozenset()
             ) | CONNECTOR_CREDENTIAL_ARGS.get(add_type, frozenset())
-            unknown_args = sorted(set(connector_args) - supported_args)
+            unknown_args = sorted(
+                set(connector_args) - supported_args - {CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG}
+            )
             if unknown_args:
                 supported_hint = (
                     f"supported: {sorted(supported_args)}"
@@ -494,6 +522,7 @@ class ConnectorDelegate:
         reason: str = "",
         declared_add_type: Optional[str] = None,
         connector_args: Optional[Dict[str, Any]] = None,
+        connector_auth_config: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
         wait_for_completion: bool = False,
@@ -555,10 +584,14 @@ class ConnectorDelegate:
             # semantics, so they travel wholesale through param_config. The
             # caller supplies credentials under the reserved args.auth_config
             # key, lifted into the top-level auth_config field.
+            display_only_args = {
+                CONNECTOR_ARGS_AUTH_CONFIG_KEY,
+                CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG,
+            }
             forwarded_args = {
                 key: value
                 for key, value in (connector_args or {}).items()
-                if key != CONNECTOR_ARGS_AUTH_CONFIG_KEY and value is not None
+                if key not in display_only_args and value is not None
             }
             declared_auth = (connector_args or {}).get(CONNECTOR_ARGS_AUTH_CONFIG_KEY)
             if declared_auth is not None and not isinstance(declared_auth, dict):
@@ -572,6 +605,25 @@ class ConnectorDelegate:
         if add_type in {"meego", "feishu_project"} and OAUTH_REF_ARG in (connector_args or {}):
             auth_config = await project_auth_config(connector_args or {}, ctx)
             forwarded_args.pop(OAUTH_REF_ARG, None)
+        if add_type == "feishu_doc" and OAUTH_REF_ARG in (connector_args or {}):
+            auth_config = await document_auth_config(connector_args or {}, ctx)
+            forwarded_args.pop(OAUTH_REF_ARG, None)
+        if add_type == "confluence" and OAUTH_REF_ARG in (connector_args or {}):
+            auth_config = await confluence_auth_config(connector_args or {}, ctx)
+            forwarded_args.pop(OAUTH_REF_ARG, None)
+
+        # Imports carrying an OpenViking-managed credential reference resolve the
+        # full auth_config through the unified resolver just before forwarding,
+        # so a refreshed token is always current. This is platform-agnostic:
+        # the kernel forwards whatever auth_config the resolver assembled for the
+        # target Connector without inspecting its fields.
+        credential_reference = extract_credential_reference(connector_auth_config)
+        if credential_reference is not None:
+            if add_type in CONNECTOR_SUPPORTED_ARGS:
+                raise InvalidArgumentError(
+                    f"add_type '{add_type}' does not accept a managed credential reference."
+                )
+            auth_config = await resolve_connector_auth_config(credential_reference, ctx)
 
         tos_path: Optional[str] = None
         param_config: Optional[Dict[str, Any]] = None

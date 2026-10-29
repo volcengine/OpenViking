@@ -18,6 +18,7 @@ import {
 import {
   captureReasonLabel,
   degradationInfo,
+  keyName,
   recallReasonLabel,
   toolSkipReasonLabel,
   toolStopReasonLabel,
@@ -328,7 +329,9 @@ export function RequestDetails({
           <DetailItem label={t('requests.details.key')}>
             {gatewayKey ? (
               <span className="flex min-w-0 items-baseline gap-2">
-                <span className="truncate font-medium">{gatewayKey.name}</span>
+                <span className="truncate font-medium">
+                  {keyName(t, gatewayKey)}
+                </span>
                 <span className="font-mono text-xs text-muted-foreground">
                   {gatewayKey.prefix}…
                 </span>
@@ -504,6 +507,13 @@ export function RequestDetails({
                 {toolStopReasonLabel(t, record.tool_stop_reason)}
               </span>
             ) : null}
+          </DetailItem>
+        ) : null}
+        {record.context_override?.length ? (
+          <DetailItem label={t('requests.details.contextOverride')}>
+            <span className="font-mono text-xs">
+              {record.context_override.join(', ')}
+            </span>
           </DetailItem>
         ) : null}
       </dl>

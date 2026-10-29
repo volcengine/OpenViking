@@ -14,7 +14,7 @@ import os
 import signal
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -160,6 +160,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
 )
 _ADD_RESOURCE_TRANSIENT_ARGS = frozenset({"tos_signature", "tos_access"})
 _ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append", "clear"})
+_DISPLAY_RESOURCE_CONFIG_FIELDS = frozenset({"resource_name", "resource_tag"})
 
 _INTERNAL_INGESTION_FIELDS = frozenset(
     {
@@ -206,6 +207,17 @@ class _SourcePlan:
     understanding_response_id: Optional[str] = None
     understanding_file_id: Optional[str] = None
     defer_unnamed_target: bool = False
+
+
+def _normalized_resource_config(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    result: Dict[str, str] = {}
+    for key in _DISPLAY_RESOURCE_CONFIG_FIELDS:
+        item = value.get(key)
+        if isinstance(item, str) and item.strip():
+            result[key] = item.strip()
+    return result
 
 
 class ResourceService:
@@ -666,6 +678,7 @@ class ResourceService:
         resource_lock: Dict[str, Any],
     ) -> bool:
         """Remove a newly reserved target only while it is still empty."""
+        ctx = replace(ctx, bypass_acl=True)
         try:
             if not await self._viking_fs.exists(root_uri, ctx=ctx):
                 return True
@@ -1621,6 +1634,7 @@ class ResourceService:
         add_type: Optional[str] = None,
         internal_task: bool = False,
         args: Optional[Dict[str, Any]] = None,
+        connector_auth_config: Optional[Dict[str, Any]] = None,
         shared_source: Optional["SharedSource"] = None,
         acl: AclSpec | dict[str, Any] | None = None,
         **kwargs,
@@ -1656,6 +1670,7 @@ class ResourceService:
             enforce_public_remote_targets=enforce_public_remote_targets,
             internal_task=internal_task,
             args=args,
+            connector_auth_config=connector_auth_config,
             shared_source=shared_source,
             **kwargs,
         )
@@ -1678,6 +1693,7 @@ class ResourceService:
         add_type: Optional[str] = None,
         args: Optional[Dict[str, Any]] = None,
         connector_states: Optional[Dict[str, Any]] = None,
+        connector_auth_config: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Submit a scheduled refresh without changing its watch task."""
@@ -1700,6 +1716,7 @@ class ResourceService:
             add_type=add_type,
             args=args,
             connector_states=connector_states,
+            connector_auth_config=connector_auth_config,
             **kwargs,
         )
 
@@ -1728,6 +1745,7 @@ class ResourceService:
         internal_task: bool = False,
         args: Optional[Dict[str, Any]] = None,
         connector_states: Optional[Dict[str, Any]] = None,
+        connector_auth_config: Optional[Dict[str, Any]] = None,
         shared_source: Optional["SharedSource"] = None,
         acl: AclSpec | dict[str, Any] | None = None,
         **kwargs,
@@ -1794,7 +1812,10 @@ class ResourceService:
             )
         processing_mode = normalize_processing_mode(processing_mode)
         self._validate_add_resource_tag_policy(tags=tags, tag_mode=tag_mode)
-        from openviking.connector.delegate import ConnectorDelegate
+        from openviking.connector.delegate import (
+            CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG,
+            ConnectorDelegate,
+        )
 
         allowed_reserved_fields = ConnectorDelegate.supported_args(path, add_type).intersection(
             _ADD_RESOURCE_ARGS_RESERVED_FIELDS
@@ -1888,6 +1909,17 @@ class ResourceService:
             connector_args=normalized_args.processor_kwargs,
             kwargs=kwargs,
         )
+        if not delegate_to_connector and connector_auth_config:
+            # A managed credential reference only resolves inside Connector
+            # delegation; never drop it and silently degrade to an unauthorized
+            # standard-pipeline import.
+            from openviking.connector.auth import extract_credential_reference
+
+            if extract_credential_reference(connector_auth_config) is not None:
+                raise InvalidArgumentError(
+                    "connector_auth_config requires a Connector import; the source or "
+                    "parameters did not route to the Connector integration."
+                )
         if delegate_to_connector:
             resolved = connector.resolve_add_type(path, add_type)
             if resolved is None:  # pragma: no cover - should_delegate already resolved it
@@ -1901,12 +1933,15 @@ class ResourceService:
             watch_auth_state = None
             create_watch = bool(watch_manager and manage_watch and watch_interval > 0)
             if create_watch:
+                connector_watch_auth_args = dict(normalized_args.processor_kwargs)
+                connector_watch_auth_args.pop(CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG, None)
                 watch_auth_state = await connector.create_watch_auth_state(
                     api_key=ctx.api_key or "",
                     account_id=ctx.account_id,
                     add_type=resolved[0],
                     path=path,
-                    connector_args=normalized_args.processor_kwargs,
+                    connector_args=connector_watch_auth_args,
+                    connector_auth_config=connector_auth_config,
                 )
             connector_watch_processor_kwargs = self._watch_processor_kwargs(
                 {
@@ -1917,6 +1952,13 @@ class ResourceService:
                 tags,
                 tag_mode,
             )
+            resource_config = _normalized_resource_config(
+                normalized_args.processor_kwargs.get(CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG)
+            )
+            if resource_config:
+                connector_watch_processor_kwargs[CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG] = (
+                    resource_config
+                )
             on_success: Optional[Callable[[Optional[Dict[str, Any]]], Awaitable[None]]] = None
             on_complete: Optional[
                 Callable[[str, Optional[str], Optional[str]], Awaitable[None]]
@@ -2006,6 +2048,7 @@ class ResourceService:
                     to=target_to,
                     reason=reason,
                     connector_args=normalized_args.processor_kwargs,
+                    connector_auth_config=connector_auth_config,
                     tags=tags,
                     tag_mode=tag_mode,
                     wait_for_completion=not manage_watch and watch_interval > 0,
@@ -2030,6 +2073,8 @@ class ResourceService:
             # target alone: many imports share one folder, so the native
             # "watch_interval=0 cancels the watch" rule would pause it as a side
             # effect. Connector watches are paused or deleted only via the watches API.
+            if create_watch:
+                result["watch_id"] = watch_task_id
             return result
 
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor

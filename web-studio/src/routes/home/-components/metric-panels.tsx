@@ -109,7 +109,7 @@ function MetricPanel({
         ) : isError ? (
           <p className="mt-4 text-sm text-destructive">{value}</p>
         ) : (
-          <div className="mt-4 text-4xl font-bold leading-none tracking-normal tabular-nums text-foreground">
+          <div className="mt-4 wrap-anywhere text-4xl font-bold leading-none tracking-normal tabular-nums text-foreground">
             <span ref={valueRef}>{value}</span>
           </div>
         )}

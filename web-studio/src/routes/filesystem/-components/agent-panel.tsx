@@ -204,6 +204,9 @@ export function AgentPanel({
         onNewSession={() => void handleNewSession()}
         onOpenHistory={() => setHistoryOpen(true)}
         sessionTitle={displayedSessionTitle}
+        showNewSession={Boolean(
+          persistedSessionId || chat.messages.length || sessionError,
+        )}
       />
       <div className="flex min-h-0 flex-1 flex-col">
         <div
@@ -385,6 +388,7 @@ export function AgentToolbar({
   onNewSession,
   onOpenHistory,
   sessionTitle,
+  showNewSession,
 }: {
   container: HTMLDivElement | null
   historyLabel: string
@@ -393,6 +397,7 @@ export function AgentToolbar({
   onNewSession: () => void
   onOpenHistory: () => void
   sessionTitle: string
+  showNewSession: boolean
 }) {
   if (!container) return null
 
@@ -414,21 +419,24 @@ export function AgentToolbar({
       >
         <HistoryIcon className="size-3.5" />
       </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        className="size-7 shrink-0"
-        title={newSessionLabel}
-        disabled={isCreatingSession}
-        onClick={onNewSession}
-      >
-        {isCreatingSession ? (
-          <Loader2Icon className="size-3.5 animate-spin" />
-        ) : (
-          <SquarePenIcon className="size-3.5" />
-        )}
-      </Button>
+      {showNewSession ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7 shrink-0"
+          title={newSessionLabel}
+          aria-label={newSessionLabel}
+          disabled={isCreatingSession}
+          onClick={onNewSession}
+        >
+          {isCreatingSession ? (
+            <Loader2Icon className="size-3.5 animate-spin" />
+          ) : (
+            <SquarePenIcon className="size-3.5" />
+          )}
+        </Button>
+      ) : null}
     </>,
     container,
   )

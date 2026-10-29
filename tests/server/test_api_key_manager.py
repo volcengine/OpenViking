@@ -5,6 +5,7 @@
 
 import asyncio
 import hashlib
+import threading
 import uuid
 from types import SimpleNamespace
 
@@ -101,6 +102,61 @@ async def test_create_duplicate_account_raises(manager: APIKeyManager):
     await manager.create_account(acct, "alice")
     with pytest.raises(AlreadyExistsError):
         await manager.create_account(acct, "bob")
+
+
+async def test_account_reads_and_mutations_cross_loops_after_waiter_cancellation(
+    manager: APIKeyManager, manager_service, monkeypatch
+):
+    acct = _uid()
+    await manager.create_account(acct, "admin")
+    agfs = manager_service.viking_fs.agfs
+    entered, release, readers_waiting = threading.Event(), threading.Event(), threading.Event()
+    write = agfs.write
+
+    def delayed_write(path, *args, **kwargs):
+        if path == f"/local/{acct}/_system/users.json" and not entered.is_set():
+            entered.set()
+            if not release.wait(timeout=10):
+                raise TimeoutError("account write was not released")
+        return write(path, *args, **kwargs)
+
+    async def worker_operations():
+        tasks = [
+            asyncio.create_task(manager.get_account(acct)),
+            asyncio.create_task(manager.get_user_membership(acct, "alice")),
+            asyncio.create_task(manager.register_user(acct, "bob")),
+        ]
+        await asyncio.sleep(0)
+        readers_waiting.set()
+        return await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+
+    monkeypatch.setattr(agfs, "write", delayed_write)
+    writer = asyncio.create_task(manager.register_user(acct, "alice"))
+    worker = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        worker = asyncio.create_task(asyncio.to_thread(lambda: asyncio.run(worker_operations())))
+        assert await asyncio.to_thread(readers_waiting.wait, 5)
+        cancelled = asyncio.create_task(manager.get_account(acct))
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+    finally:
+        release.set()
+        results = await asyncio.gather(
+            writer, *([worker] if worker is not None else []), return_exceptions=True
+        )
+    assert not any(isinstance(result, BaseException) for result in results)
+    account, membership, bob_key = results[1]
+    assert account["status"] == "active"
+    assert membership == {"user_id": "alice", "role": Role.USER}
+    assert (await manager.resolve_identity(bob_key)).user_id == "bob"
+    assert {item["user_id"] for item in await _list_users(manager, acct)} == {
+        "admin",
+        "alice",
+        "bob",
+    }
 
 
 async def test_ensure_trusted_identities_creates_missing_users_once(
@@ -454,6 +510,49 @@ async def test_regenerate_key(manager: APIKeyManager):
     assert identity.account_id == acct
 
 
+@pytest.mark.parametrize("hashing", [False, True])
+@pytest.mark.parametrize("mutation", ["reset", "revoke"])
+async def test_conditional_rotation_checks_persisted_key(manager_service, hashing, mutation):
+    from openviking.server.api_keys import generate_api_key
+
+    managers = [
+        build_api_key_manager(
+            root_key=ROOT_KEY,
+            viking_fs=manager_service.viking_fs,
+            api_key_hashing_enabled=hashing,
+        )
+        for _ in range(2)
+    ]
+    writer, stale = managers
+    try:
+        await writer.load()
+        account = _uid()
+        await writer.create_account(account, "owner")
+        initial_key = await writer.register_user(account, "alice")
+        old_key = await writer.regenerate_key(account, "alice", expected_api_key=initial_key)
+        await stale.load()
+        if mutation == "reset":
+            reset_key = await writer.regenerate_key(account, "alice")
+        else:
+            await writer._store.revoke_active_api_keys(account, "alice")
+        rejected_key = generate_api_key(account, "alice")
+        # This store still has the old credential in memory. Its conditional
+        # write must validate the persisted registry under the shared lease.
+        with pytest.raises(UnauthenticatedError):
+            await stale._store.replace_active_user_api_key(
+                account, "alice", rejected_key, expected_api_key=old_key
+            )
+        await stale.load()
+        for key in (old_key, rejected_key):
+            with pytest.raises(UnauthenticatedError):
+                await stale.resolve_identity(key)
+        if mutation == "reset":
+            assert (await stale.resolve_identity(reset_key)).user_id == "alice"
+    finally:
+        for manager in managers:
+            await manager.close()
+
+
 async def test_get_user_key_fingerprint_changes_on_rotation(manager: APIKeyManager):
     """fp must change when the key is regenerated and disappear when user is removed."""
     acct = _uid()
@@ -724,7 +823,7 @@ async def test_is_new_format_key_validation():
     valid_key = generate_api_key("account", "user")
     assert is_new_format_key(valid_key)
 
-    # Legacy format (64 hex chars)
+    # Bare single-segment keys are not accepted
     assert not is_new_format_key("a" * 64)
 
     # Empty string

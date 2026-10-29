@@ -14,10 +14,11 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from jinja2 import Environment, TemplateSyntaxError
 
+from openviking.core.namespace_policy import SYSTEM_MEMORY_CUSTOM_ROOT
 from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.session.memory.dataclass import MemoryTypeSchema
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry, get_default_registry
 from openviking.session.memory.utils.content_template import (
     CONTENT_TEMPLATE_FIELDS,
     ContentTemplateError,
@@ -41,6 +42,19 @@ _MAX_CONFIG_BYTES = 1024 * 1024
 _TEMPLATE_LOCK_TIMEOUT_SECONDS = 10.0
 _TEMPLATE_LOCK_RETRY_SECONDS = 0.05
 
+
+class _ReadableTemplateDumper(yaml.SafeDumper):
+    pass
+
+
+def _represent_template_string(dumper: yaml.SafeDumper, value: str) -> yaml.nodes.ScalarNode:
+    style = "|" if "\n" in value else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+_ReadableTemplateDumper.add_representer(str, _represent_template_string)
+
+
 # Field names select existing fields; only their descriptions are editable.
 EDITABLE_MEMORY_TEMPLATE_FIELDS = {
     "profile": ("content",),
@@ -53,16 +67,125 @@ EDITABLE_MEMORY_TEMPLATE_FIELDS = {
 _EDITABLE_CONTENT_TEMPLATES = set(CONTENT_TEMPLATE_FIELDS)
 
 
-def account_memory_template_path(account_id: str, memory_type: str) -> str:
-    error = validate_account_id(account_id)
-    if error:
-        raise InvalidArgumentError(error)
+def _validate_memory_type(memory_type: str) -> None:
     if (
         not memory_type
         or any(c in memory_type for c in ("/", "\\", "\0"))
         or memory_type in {".", ".."}
     ):
         raise InvalidArgumentError("memory_type must be a single file name")
+
+
+def account_memory_template_uri(memory_type: str) -> str:
+    _validate_memory_type(memory_type)
+    return f"{SYSTEM_MEMORY_CUSTOM_ROOT}/{memory_type}.yaml"
+
+
+def _managed_memory_type_for_uri(uri: str) -> str | None:
+    prefix = f"{SYSTEM_MEMORY_CUSTOM_ROOT}/"
+    if not uri.startswith(prefix):
+        return None
+    filename = uri.removeprefix(prefix)
+    if "/" in filename or not filename.endswith(".yaml"):
+        return None
+    memory_type = filename.removesuffix(".yaml")
+    return memory_type or None
+
+
+def normalize_account_memory_template_write(
+    uri: str,
+    content: str | bytes,
+    mode: str,
+    *,
+    registry: MemoryTypeRegistry | None = None,
+) -> str | bytes:
+    """Enforce managed template rules and replace server-owned metadata."""
+    memory_type = _managed_memory_type_for_uri(uri)
+    if memory_type is None:
+        return content
+    registry = registry or get_default_registry()
+    schema = registry.get(memory_type)
+    if schema is None:
+        return content
+    if memory_type not in EDITABLE_MEMORY_TEMPLATE_FIELDS:
+        raise InvalidArgumentError(f"Memory template is not editable: {memory_type}")
+    if mode == "append":
+        raise InvalidArgumentError("append is not supported for managed memory templates")
+
+    try:
+        raw = content.encode("utf-8") if isinstance(content, str) else content
+        if len(raw) > _MAX_CONFIG_BYTES:
+            raise ValueError("A memory template must not exceed 1 MiB")
+        data = yaml.safe_load(raw)
+        if not isinstance(data, dict):
+            raise ValueError("Expected a YAML mapping")
+        supplied = dict(data)
+        supplied.pop("_updated_at", None)
+        defaults = memory_template_data(schema)
+        complete = _complete_template(defaults, supplied, memory_type)
+        if complete != supplied:
+            raise ValueError("generic writes require the complete deployment template")
+        complete["_updated_at"] = datetime.now(timezone.utc).isoformat()
+        normalized = yaml.dump(
+            complete,
+            Dumper=_ReadableTemplateDumper,
+            allow_unicode=True,
+            sort_keys=False,
+        )
+        normalized_raw = normalized.encode("utf-8")
+        if len(normalized_raw) > _MAX_CONFIG_BYTES:
+            raise ValueError("A memory template must not exceed 1 MiB")
+        return normalized if isinstance(content, str) else normalized_raw
+    except DescriptionTemplateError as exc:
+        raise InvalidArgumentError(
+            str(exc),
+            details={"field": exc.field, "reason": exc.reason, "line": exc.line},
+        ) from exc
+    except ContentTemplateError as exc:
+        raise InvalidArgumentError(
+            str(exc),
+            details={"field": "content_template", "reason": exc.reason, "line": exc.line},
+        ) from exc
+    except (
+        UnicodeDecodeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        yaml.YAMLError,
+        TemplateSyntaxError,
+    ) as exc:
+        raise InvalidArgumentError(f"Invalid memory template: {exc}") from exc
+
+
+def validate_account_memory_template_transfer(
+    uri: str, *, registry: MemoryTypeRegistry | None = None
+) -> None:
+    """Reject cp/mv targets that would bypass a registered template contract."""
+    memory_type = _managed_memory_type_for_uri(uri)
+    if memory_type is None:
+        return
+    registry = registry or get_default_registry()
+    if registry.get(memory_type) is not None:
+        raise InvalidArgumentError(
+            f"Registered memory templates must be updated through write or the admin API: {uri}"
+        )
+
+
+def account_memory_template_path(account_id: str, memory_type: str) -> str:
+    error = validate_account_id(account_id)
+    if error:
+        raise InvalidArgumentError(error)
+    _validate_memory_type(memory_type)
+    relative_root = SYSTEM_MEMORY_CUSTOM_ROOT.removeprefix("viking://")
+    return f"/local/{account_id}/{relative_root}/{memory_type}.yaml"
+
+
+def legacy_account_memory_template_path(account_id: str, memory_type: str) -> str:
+    error = validate_account_id(account_id)
+    if error:
+        raise InvalidArgumentError(error)
+    _validate_memory_type(memory_type)
     return f"/local/{account_id}/_system/memory_templates/{memory_type}.yaml"
 
 
@@ -176,6 +299,13 @@ def _complete_template(defaults: dict, supplied: dict, memory_type: str) -> dict
 
 
 async def _read_raw(client: AsyncAGFSClient, path: str) -> bytes | None:
+    raw = await _read_unchecked_raw(client, path)
+    if raw is not None and len(raw) > _MAX_CONFIG_BYTES:
+        raise FailedPreconditionError("Invalid persisted account memory template")
+    return raw
+
+
+async def _read_unchecked_raw(client: AsyncAGFSClient, path: str) -> bytes | None:
     try:
         result = await client.read(path)
     except AGFSNotFoundError:
@@ -183,7 +313,7 @@ async def _read_raw(client: AsyncAGFSClient, path: str) -> bytes | None:
     raw = getattr(result, "content", result)
     if isinstance(raw, str):
         raw = raw.encode("utf-8")
-    if not isinstance(raw, bytes) or len(raw) > _MAX_CONFIG_BYTES:
+    if not isinstance(raw, bytes):
         raise FailedPreconditionError("Invalid persisted account memory template")
     return raw
 
@@ -239,23 +369,20 @@ async def _finish_storage_call(
         raise
 
 
-async def _acquire_template_lock(
-    client: AsyncAGFSClient, path: str, staging_path: str | None = None
-):
+async def _acquire_template_lock(client: AsyncAGFSClient, paths: list[str], uri: str):
     # Keep the cross-process lock, but never wait for contention in a worker:
     # the holder needs that same executor to finish its I/O and release the lease.
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _TEMPLATE_LOCK_TIMEOUT_SECONDS
+    primary_path = paths[0]
 
     async def release_cancelled_acquire(lease):
-        await client.pathlock_release(lease, fs_ctx=fs_ctx_from_agfs_path(path))
+        await client.pathlock_release(lease, fs_ctx=fs_ctx_from_agfs_path(primary_path))
 
     while True:
         try:
             return await _finish_storage_call(
-                client.pathlock_acquire_exact_batch([path, staging_path], timeout_secs=0.0)
-                if staging_path is not None
-                else client.pathlock_acquire_exact(path, timeout_secs=0.0),
+                client.pathlock_acquire_exact_batch(paths, timeout_secs=0.0),
                 on_cancel=release_cancelled_acquire,
             )
         except LockAcquisitionError as exc:
@@ -266,7 +393,7 @@ async def _acquire_template_lock(
                     continue
             raise ResourceBusyError(
                 "Another memory template operation is in progress. Please retry.",
-                uri=path,
+                uri=uri,
                 conflict_type="memory_templates_busy",
             ) from exc
 
@@ -275,10 +402,14 @@ async def read_account_memory_template(
     viking_fs: VikingFS, account_id: str, memory_type: str
 ) -> dict | None:
     path = account_memory_template_path(account_id, memory_type)
+    legacy_path = legacy_account_memory_template_path(account_id, memory_type)
     client = AsyncAGFSClient(viking_fs.agfs)
     # Publication switches a fully-written staging file into place. Readers may
     # see either complete version (or no override after DELETE), without a lock.
-    return _parse_template(await _read_raw(client, path), memory_type)
+    raw = await _read_raw(client, path)
+    if raw is not None:
+        return _parse_template(raw, memory_type)
+    return _parse_template(await _read_raw(client, legacy_path), memory_type)
 
 
 def memory_template_result(
@@ -329,16 +460,38 @@ async def update_account_memory_template(
             complete = None
         else:
             complete["_updated_at"] = datetime.now(timezone.utc).isoformat()
-            encoded = yaml.safe_dump(complete, allow_unicode=True, sort_keys=False).encode("utf-8")
+            encoded = yaml.dump(
+                complete,
+                Dumper=_ReadableTemplateDumper,
+                allow_unicode=True,
+                sort_keys=False,
+            ).encode("utf-8")
             if len(encoded) > _MAX_CONFIG_BYTES:
                 raise InvalidArgumentError("A memory template must not exceed 1 MiB")
 
     path = account_memory_template_path(account_id, memory_type)
+    legacy_path = legacy_account_memory_template_path(account_id, memory_type)
+    backup_path = f"{path}.backup"
     staging_path = f"{path}.{uuid.uuid4().hex}.tmp" if complete is not None else None
     client = AsyncAGFSClient(viking_fs.agfs)
-    lease = await _acquire_template_lock(client, path, staging_path)
+    lock_paths = [path, legacy_path, backup_path]
+    if staging_path is not None:
+        lock_paths.append(staging_path)
+    lease = await _acquire_template_lock(
+        client, lock_paths, account_memory_template_uri(memory_type)
+    )
     return await _finish_storage_call(
-        _update_locked_template(client, path, staging_path, memory_type, complete, encoded, lease)
+        _update_locked_template(
+            client,
+            path,
+            legacy_path,
+            backup_path,
+            staging_path,
+            memory_type,
+            complete,
+            encoded,
+            lease,
+        )
     )
 
 
@@ -381,6 +534,8 @@ async def _publish_template(
 async def _update_locked_template(
     client: AsyncAGFSClient,
     path: str,
+    legacy_path: str,
+    backup_path: str,
     staging_path: str | None,
     memory_type: str,
     complete: dict | None,
@@ -394,30 +549,94 @@ async def _update_locked_template(
     if lease_ref:
         fs_ctx["lease_ref"] = lease_ref
     try:
-        raw = await _read_raw(client, path)
-        current = _parse_template(raw, memory_type)
-        if complete is None and current is None:
+        raw = await _read_unchecked_raw(client, path)
+        legacy_raw = await _read_unchecked_raw(client, legacy_path)
+        active_raw = raw if raw is not None else legacy_raw
+        current = None
+        if active_raw is not None and len(active_raw) <= _MAX_CONFIG_BYTES:
+            try:
+                current = _parse_template(active_raw, memory_type)
+            except FailedPreconditionError:
+                # Explicit PUT/DELETE is the recovery path for damaged persisted
+                # content, so allow the operation to replace or remove it.
+                pass
+        if complete is None and active_raw is None:
+            await _remove_obsolete_backup(client, backup_path, fs_ctx)
             return None
-        if complete is not None and current is not None:
+        if complete is not None and raw is not None and current is not None:
             if {k: v for k, v in current.items() if k != "_updated_at"} == {
                 k: v for k, v in complete.items() if k != "_updated_at"
             }:
+                if legacy_raw is not None:
+                    try:
+                        await client.rm(legacy_path, fs_ctx=fs_ctx)
+                    except AGFSNotFoundError:
+                        pass
+                    except Exception as exc:
+                        raise FailedPreconditionError(
+                            "Memory template is published, but legacy cleanup failed. "
+                            "Retry the request.",
+                            details={
+                                "published": True,
+                                "legacy_cleanup_pending": True,
+                                "retryable": True,
+                            },
+                        ) from exc
+                await _remove_obsolete_backup(client, backup_path, fs_ctx)
                 return current
         try:
             await client.ensure_parent_dirs(path)
         except AGFSAlreadyExistsError:
             pass
-        if raw is not None:
-            await client.write(path + ".backup", raw)
         if complete is None:
-            await client.rm(path, fs_ctx=fs_ctx)
+            try:
+                await client.rm(legacy_path, fs_ctx=fs_ctx)
+            except AGFSNotFoundError:
+                pass
+            except Exception as exc:
+                raise FailedPreconditionError(
+                    "Failed to remove the legacy memory template. Retry the request.",
+                    details={"legacy_cleanup_pending": True, "retryable": True},
+                ) from exc
+            try:
+                await client.rm(path, fs_ctx=fs_ctx)
+            except AGFSNotFoundError:
+                pass
+            except Exception as exc:
+                raise FailedPreconditionError(
+                    "Failed to remove the current memory template. Retry the request.",
+                    details={"current_cleanup_pending": True, "retryable": True},
+                ) from exc
         else:
             assert staging_path is not None and encoded is not None
             await _publish_template(client, path, staging_path, encoded, fs_ctx)
+            try:
+                await client.rm(legacy_path, fs_ctx=fs_ctx)
+            except AGFSNotFoundError:
+                pass
+            except Exception as exc:
+                raise FailedPreconditionError(
+                    "Memory template is published, but legacy cleanup failed. Retry the request.",
+                    details={
+                        "published": True,
+                        "legacy_cleanup_pending": True,
+                        "retryable": True,
+                    },
+                ) from exc
+        await _remove_obsolete_backup(client, backup_path, fs_ctx)
         logger.info("Updated account memory template: %s reset=%s", path, complete is None)
         return complete
     finally:
         await client.pathlock_release(lease, fs_ctx=fs_ctx_from_agfs_path(path))
+
+
+async def _remove_obsolete_backup(client: AsyncAGFSClient, backup_path: str, fs_ctx: dict) -> None:
+    try:
+        await client.rm(backup_path, fs_ctx=fs_ctx)
+    except AGFSNotFoundError:
+        pass
+    except Exception:
+        logger.warning("Failed to remove obsolete memory template backup: %s", backup_path)
 
 
 async def resolve_account_memory_registry(

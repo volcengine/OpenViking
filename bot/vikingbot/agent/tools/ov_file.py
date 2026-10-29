@@ -587,6 +587,64 @@ class VikingSearchTool(OVFileTool):
             await self._release_client(tool_context, client)
 
 
+class VikingRuleSearchTool(OVFileTool):
+    """Tool to retrieve compiled Rules applicable to a task."""
+
+    @property
+    def name(self) -> str:
+        return "openviking_rule_search"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Use this tool when a concrete task may be governed by OpenViking Rules. "
+            "It searches the rule set using the task context and returns every relevant Rule "
+            "the backend determines applicable, with complete applies_when, exception, and "
+            "application protocol details. Returned Rules must be strictly evaluated against "
+            "their applies_when, exception, and content."
+        )
+
+    @property
+    def preserve_complete_result(self) -> bool:
+        return True
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "task_context": {
+                    "type": "string",
+                    "description": (
+                        "Concrete task, object, evidence, and scenario used to determine which "
+                        "compiled Rules apply."
+                    ),
+                },
+            },
+            "required": ["task_context"],
+            "additionalProperties": False,
+        }
+
+    async def execute(
+        self,
+        tool_context: ToolContext,
+        task_context: str,
+        **kwargs: Any,
+    ) -> str:
+        client = None
+        try:
+            client = await self._get_client(tool_context)
+            result = await client.rule_search(task_context)
+            rendered = result.get("rendered") if isinstance(result, dict) else None
+            if isinstance(rendered, str) and rendered.strip():
+                return rendered
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            return f"Error searching OpenViking Rules: {str(e)}"
+        finally:
+            await self._release_client(tool_context, client)
+
+
 class VikingAddResourceTool(OVFileTool):
     """Tool to add a resource to Viking."""
 

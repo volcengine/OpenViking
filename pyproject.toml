@@ -33,7 +33,7 @@ dependencies = [
     "async-timeout>=5.0.1",
     "orjson>=3.11.7",
     "packaging>=24.0",
-    "openviking-sdk>=0.1.15",
+    "openviking-sdk>=0.1.17",
     "pydantic>=2.0.0",
     "typing-extensions>=4.5.0",
     "pyyaml>=6.0",
@@ -77,10 +77,11 @@ dependencies = [
     "tree-sitter-php==0.24.1",
     "tree-sitter-lua==0.5.0",
     # OpenTelemetry
-    "opentelemetry-api>=1.14",
-    "opentelemetry-sdk>=1.14",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.14",
-    "opentelemetry-exporter-otlp-proto-http>=1.14",
+    "prometheus-client>=0.24,<1",
+    "opentelemetry-api>=1.40,<2",
+    "opentelemetry-sdk>=1.40,<2",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.40,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.40,<2",
     "opentelemetry-instrumentation-asyncio>=0.61b0",
     "loguru>=0.7.3",
     "cryptography>=48.0.1",
@@ -95,7 +96,7 @@ dependencies = [
 
 [project.optional-dependencies]
 expiry = [
-  "redis>=5,<7",
+  "redis>=5.3.1,<7",
 ]
 gateway-fast = [
     "uvloop>=0.21; sys_platform != 'win32'",
@@ -108,12 +109,12 @@ mysql = [
 ]
 redis-mysql = [
   "aiomysql>=0.2.0,<1",
-  "redis>=5.0,<7",
+  "redis>=5.3.1,<7",
   "SQLAlchemy[asyncio]>=2.0.54,<2.1",
 ]
 test = [
   "SQLAlchemy[asyncio]>=2.0,<2.1",
-  "redis>=5.0,<7",
+  "redis>=5.3.1,<7",
   "pytest>=7.0.0",
   "pytest-asyncio>=0.21.0",
   "pytest-xdist>=3.5.0",
@@ -243,17 +244,22 @@ include = ["openviking*", "vikingbot*"]
 exclude = ["tests*", "docs*", "examples*"]
 
 [tool.setuptools.package-data]
-openviking_gateway = ["client-rules.json"]
+openviking_gateway = ["client-rules.json", "lua/*.lua"]
 "openviking.scheduling.expiry" = ["lua/*.lua"]
 "vikingbot.studio.providers.feishu" = ["icon.png"]
 openviking = [
     "prompts/templates/**/*.yaml",
+    "system_assets/**/*",
     "server/static/**/*",
     "web_studio/dist/**/*",
     "lib/ragfs_python*.so",
     "lib/ragfs_python*.pyd",
     "bin/ov",
     "bin/ov.exe",
+    "server/account_stores/sql/*.sql",
+    "server/account_stores/sql/changes/*.sql",
+    "service/sql/*.sql",
+    "service/sql/changes/*.sql",
     "storage/vectordb/engine/*.abi3.so",
     "storage/vectordb/engine/*.pyd",
 ]

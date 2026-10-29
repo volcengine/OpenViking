@@ -128,3 +128,44 @@ test("Interrupt shares one two-second request budget across capture and commit",
   assert.ok(elapsed < 2100, `Interrupt took ${elapsed}ms`);
   assert.equal(requests, 1, "commit started after the remaining budget was below one request quantum");
 });
+
+test("SessionEnd commits turns a Stop already sent below the commit threshold", async (t) => {
+  const paths = [];
+  const server = createServer((request, response) => {
+    paths.push(new URL(request.url, "http://localhost").pathname);
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end('{"result":{}}');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const home = mkdtempSync(join(tmpdir(), "ov-kimi-session-end-"));
+  const sessionId = "session-end";
+  const sessionDir = join(home, "sessions", "wd", sessionId);
+  mkdirSync(join(sessionDir, "agents", "main"), { recursive: true });
+  writeFileSync(join(home, "session_index.jsonl"), `${JSON.stringify({ sessionId, sessionDir })}\n`);
+  writeFileSync(join(sessionDir, "agents", "main", "wire.jsonl"), [
+    JSON.stringify({ type: "turn.prompt", input: [{ type: "text", text: "question" }] }),
+    JSON.stringify({ type: "context.append_loop_event", event: { type: "content.part", turnId: "1", part: { type: "text", text: "answer" } } }),
+  ].join("\n") + "\n");
+  const env = {
+    HOME: home,
+    KIMI_CODE_HOME: home,
+    OPENVIKING_HOOK_STATE_DIR: join(home, "state"),
+    OPENVIKING_PENDING_DIR: join(home, "pending"),
+    OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
+    OPENVIKING_WRITE_PATH_ASYNC: "0",
+  };
+  const run = async (event) => {
+    paths.length = 0;
+    const result = await runHook([event, "kimicode"], { session_id: sessionId, cwd: home }, env);
+    assert.equal(result.status, 0, result.stderr);
+    return paths.filter((path) => path.includes("/sessions/"));
+  };
+
+  const stop = await run("stop");
+  assert.ok(stop.some((path) => path.endsWith("/messages/batch")), stop.join(", "));
+  assert.ok(!stop.some((path) => path.endsWith("/commit")), stop.join(", "));
+  assert.deepEqual(await run("session-end"), [`/api/v1/sessions/kc-${sessionId}/commit`]);
+  assert.deepEqual(await run("session-end"), []);
+});

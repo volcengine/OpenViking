@@ -40,7 +40,7 @@ Parser 负责文档格式转换和结构化，在临时目录创建文件结构�
 
 ### 文档分节
 
-Markdown 解析器按标题和大小组织章节，合并较短小节，拆分过长内容。默认 `max_section_size` 为 2048 tokens，`max_section_chars` 为 6000 字符。配置还定义了 `section_size_flexibility=0.3`，但当前 Markdown 分节代码未使用该值。过长的单个表格行可以保持完整。这些值是分节目标，不能当作每个输出文件的绝对上限。
+Markdown 解析器按标题和字符数组织章节，合并较短小节，拆分过长内容。默认 `max_section_chars` 为 2000 字符；`max_section_size` 和 `section_size_flexibility` 仅保留配置兼容，不参与分节。普通文本遵守字符上限，过长的单个表格行仍保持完整。显式 `no_split` 模式不拆分正文。
 
 不同解析器和 `parse_mode` 的行为不同。需要保持单文件时，可在支持的导入中使用 `parse_mode="no_split"`，详见[资源管理](../api/02-resources.md)。
 
@@ -92,7 +92,7 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 
 ### Freshness、采样与父级刷新
 
-每次生成都会记录直接子项覆盖情况，超过 `semantic.overview_sample_limit`（默认 32）时使用稳定采样。resource/skill 的父级刷新取决于子目录 L0 正文变化和 freshness 阈值，L0 正文不变时不向上传播。`pending_child_changes` 统计等待刷新的变化事件，同一子项重复变化也会分别计数。阈值、手动刷新和延后更新的规则见[上下文层级](03-context-layers.md)。
+每次生成都会收集全部直接子项摘要，不再按 32 条采样；保留原有 `semantic.max_overview_prompt_chars`（默认 60000 字符）预算及分批、截断逻辑。resource/skill 的父级刷新取决于子目录 L0 正文变化和 freshness 阈值，L0 正文不变时不向上传播。`pending_child_changes` 统计等待刷新的变化事件，同一子项重复变化也会分别计数。阈值、手动刷新和延后更新的规则见[上下文层级](03-context-layers.md)。
 
 ### 处理限制
 
@@ -101,7 +101,7 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 | `vlm.max_concurrent` | 32 | 语义处理并发上限，传入 `SemanticProcessor.max_concurrent_llm` |
 | `max_images_per_call` | 10 | `VLMProcessor` 构造参数：单次最大图片数，非 `ov.conf` 字段 |
 | `max_sections_per_call` | 20 | `VLMProcessor` 构造参数：单次最大章节数，非 `ov.conf` 字段 |
-| `semantic.overview_sample_limit` | 32 | 单个目录摘要使用的直接子项样本上限 |
+| `semantic.overview_sample_limit` | 32 | freshness 调度的小目录阈值，不限制摘要输入条数 |
 
 ## 代码骨架提取
 

@@ -12,8 +12,8 @@ viking://user/{user_id}/sessions/{session_id}
 ```
 
 Session APIs are scoped to the authenticated user and return canonical user
-session URIs. URI-based APIs may also accept the backward-compatible
-`viking://session/{session_id}` alias, resolved in the same user context.
+session URIs. URI-based APIs also accept the `viking://~/sessions/{session_id}`
+home alias for the authenticated user.
 
 ## API Reference
 
@@ -589,7 +589,7 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results \
 
 ### read_tool_result()
 
-Read one externalized tool result by Unicode character range.
+Read one externalized tool result by Unicode character range. The returned content may contain placeholders for sensitive values. To restore them, read the corresponding file through the [Content API](12-content.md).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -927,7 +927,7 @@ If the archive does not exist, is incomplete, or does not belong to the session,
 
 #### 1. API Implementation Introduction
 
-Delete the session directory, including messages, archives, and session audit records. Long-term memories already extracted into user or Peer memory directories remain; locate and delete those URIs separately when needed. This endpoint has no automatic undo.
+Delete the session directory, including messages, archives, and session audit records. Long-term memories already extracted into user or Peer memory directories remain; locate and delete those URIs separately when needed. This endpoint has no automatic undo. The corresponding Privacy config (`category=session`, `target_key=session_id`) is retained.
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:delete_session()` - HTTP route

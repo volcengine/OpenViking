@@ -131,19 +131,12 @@ class ReindexProcessor(DequeueHandlerBase):
             await tracker.start(
                 msg.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id, stage="queued"
             )
-            from openviking.server.dependencies import get_service
             from openviking.service.reindex_executor import ReindexExecutor
 
-            service = get_service()
-            executor = ReindexExecutor(
-                vlm_resolver=service._vlm_resolver,
-                vector_config_resolver=service._vector_config_resolver,
-            )
+            executor = ReindexExecutor()
             with bind_telemetry(telemetry):
-                # _run owns an existing lease and releases or hands it off on
-                # every exit path. Clear this consumer's reference before the
-                # call so an exception cannot release the same lease twice.
-                executor_lease = lock_guard.detach()
+                # Share ownership state so even argument/initialization failures
+                # release the lease once, while handoff clears both references.
                 result = await executor._run(
                     uri=msg.uri,
                     object_type=msg.object_type,
@@ -154,7 +147,7 @@ class ReindexProcessor(DequeueHandlerBase):
                         mode=msg.mode, tags=msg.tags, tag_mode=msg.tag_mode
                     ),
                     ctx=ctx,
-                    existing_lease=executor_lease,
+                    lease_guard=lock_guard,
                 )
             metadata = extract_task_metadata(data)
             await tracker.wait_for_task_work(

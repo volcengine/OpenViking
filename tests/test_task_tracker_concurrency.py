@@ -265,29 +265,56 @@ async def test_keyed_lock_registry_is_cleaned_after_waiter_cancellation():
 
 
 @pytest.mark.asyncio
-async def test_file_store_concurrent_fixed_id_create_is_idempotent():
+@pytest.mark.parametrize("failure", ["none", "identity-query", "cancel"])
+async def test_file_store_concurrent_fixed_id_create_is_idempotent(failure):
     from openviking.service.task_store import PersistentTaskStore
-    from openviking.service.task_tracker import TaskTracker
+    from openviking.service.task_tracker import TaskStatus, TaskTracker
     from tests.test_task_tracker import _FakeAgfs
 
-    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
-    first, second = await asyncio.gather(
-        tracker.create(
-            "add_resource",
-            task_id="fixed",
-            account_id="acme",
-            user_id="alice",
-        ),
-        tracker.create(
-            "add_resource",
-            task_id="fixed",
-            account_id="acme",
-            user_id="alice",
-        ),
-    )
+    store = PersistentTaskStore(_FakeAgfs())
+    writer, replay = TaskTracker(store), TaskTracker(store)
+    entered, release = asyncio.Event(), asyncio.Event()
+    create = store.create
 
-    assert first.task_id == second.task_id == "fixed"
-    assert len(await tracker.list_tasks(account_id="acme", user_id="alice")) == 1
+    async def delayed_create(task, **kwargs):
+        if task.meta.get("delayed"):
+            entered.set()
+            await release.wait()
+        return await create(task, **kwargs)
+
+    store.create = delayed_create
+    checks = 0
+
+    async def guard(account_id, user_id):
+        nonlocal checks
+        checks += 1
+        if checks > 1 and failure == "identity-query":
+            raise ConnectionError("Identity storage unavailable")
+        return False
+
+    replay.set_deletion_guard(guard)
+    owner = {"account_id": "acme", "user_id": "alice"}
+    duplicate = asyncio.create_task(
+        replay.create("add_resource", task_id="fixed", meta={"delayed": True}, **owner)
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        first = await writer.create("add_resource", task_id="fixed", **owner)
+        await writer.start(first.task_id, **owner)
+        await writer.register_work(first.task_id, "work", "Semantic", **owner)
+        if failure == "cancel":
+            duplicate.cancel()
+    finally:
+        release.set()
+    if failure == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await duplicate
+    else:
+        second = await duplicate
+        assert first.task_id == second.task_id == "fixed"
+    assert (await writer.get("fixed", **owner)).status is TaskStatus.RUNNING
+    assert await writer.has_work("fixed", **owner)
+    assert len(await writer.list_tasks(**owner)) == 1
 
 
 @pytest.mark.asyncio

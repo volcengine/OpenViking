@@ -319,11 +319,13 @@ func (c *Client) BatchWrite(
 		"operations": normalized,
 	}
 	if opts != nil {
-		setAny(payload, "wait", opts.Wait)
+		if opts.Wait != nil {
+			payload["wait"] = *opts.Wait
+		}
 		setAny(payload, "defer_processing", opts.DeferProcessing)
 		setAny(payload, "telemetry", opts.Telemetry)
 		setString(payload, "processing_mode", opts.ProcessingMode)
-		if err := mergeExtra(payload, opts.Extra); err != nil {
+		if err := mergeExtraProtected(payload, opts.Extra, "wait"); err != nil {
 			return nil, err
 		}
 	}

@@ -38,6 +38,7 @@ A Skill may orchestrate several tools, but it does not receive additional permis
 | Commands | `exec` | Execute shell commands through the sandbox backend |
 | Web | `web_search`, `web_fetch` | Search and read web pages |
 | OpenViking | `openviking_list/search/grep/glob/multi_read` | Browse, retrieve, and read context |
+| OpenViking | `openviking_rule_search` (Beta) | Retrieve compiled constraints applicable to a concrete task |
 | OpenViking | `openviking_add_resource`, `openviking_memory_commit` | Add resources and commit memory |
 | Delivery | `message`, `generate_image` | Send messages proactively or generate images |
 | Automation | `cron` | Manage scheduled Agent tasks; disabled by default |

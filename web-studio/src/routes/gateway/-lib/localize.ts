@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next'
 
 import { toGatewayError } from './api'
+import type { GatewayKey } from './api'
 
 /** `t` from `useTranslation('gateway')`. */
 export type Translate = TFunction<'gateway'>
@@ -32,6 +33,10 @@ export const vendorLabel = (t: Translate, vendor: string) =>
 
 export const authModeLabel = (t: Translate, mode: string) =>
   label(t, 'authMode', mode)
+
+/** OpenViking API keys used directly have no name of their own. */
+export const keyName = (t: Translate, key: GatewayKey) =>
+  key.source === 'openviking' ? t('keys.openviking.name') : key.name
 
 /** Request type: new message, tool step, housekeeping, memory sync… */
 export const kindLabel = (t: Translate, kind: string) => label(t, 'kind', kind)

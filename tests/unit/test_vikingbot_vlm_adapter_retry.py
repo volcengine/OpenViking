@@ -16,6 +16,7 @@ from volcenginesdkarkruntime._exceptions import (
 from volcenginesdkarkruntime._streaming import AsyncStream
 
 from openviking.models.model_error import ModelError, ModelErrorKind, model_error_kind
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking.models.vlm.backends.volcengine_vlm import (
     VOLCENGINE_CLIENT_REQUEST_ID,
@@ -157,12 +158,17 @@ async def test_chat_accepts_string_response_from_openai_backend_with_tools(monke
 
 
 @pytest.mark.asyncio
-async def test_chat_without_tools_preserves_usage_from_openai_backend(monkeypatch):
+@pytest.mark.parametrize("vlm_type", [OpenAIVLM, VolcEngineVLM, LiteLLMVLMProvider])
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+async def test_chat_without_tools_preserves_clean_content_and_metadata(
+    monkeypatch, vlm_type, finish_reason
+):
+    raw_content = "<think>internal reasoning</think>\nplain response"
     raw_response = SimpleNamespace(
         choices=[
             SimpleNamespace(
-                message=SimpleNamespace(content="plain response", tool_calls=None),
-                finish_reason="stop",
+                message=SimpleNamespace(content=raw_content, tool_calls=None),
+                finish_reason=finish_reason,
             )
         ],
         usage=SimpleNamespace(
@@ -181,15 +187,19 @@ async def test_chat_without_tools_preserves_usage_from_openai_backend(monkeypatc
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
     )
-    vlm = OpenAIVLM({"provider": "openai", "model": "gpt-5.6-terra"})
-    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+    vlm = vlm_type({"model": "gpt-5.6-terra", "api_key": "test-key"})
+    if vlm_type is LiteLLMVLMProvider:
+        monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", create)
+    else:
+        monkeypatch.setattr(vlm, "get_async_client", lambda: client)
     adapter = VLMProviderAdapter(vlm, "gpt-5.6-terra", langfuse_client=_DisabledLangfuse())
 
     response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
 
     assert response.content == "plain response"
     assert response.tool_calls == []
-    assert response.finish_reason == "stop"
+    assert response.finish_reason == finish_reason
+    assert raw_response.choices[0].message.content == raw_content
     assert response.usage == {
         "prompt_tokens": 13,
         "completion_tokens": 5,

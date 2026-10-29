@@ -71,18 +71,25 @@ class DeletionService:
         oauth_store: Any = None,
         usage_audit_runtime: Any = None,
         gateway_app: Any = None,
+        require_registered_identity: bool = True,
     ) -> None:
         self._service = service
         self._manager = manager
         self._service_loop = service_loop
+        self._manager_dispatcher = OwnerLoopDispatcher(service_loop)
         self._oauth_store = oauth_store
         self._usage_audit_runtime = usage_audit_runtime
         self._gateway_app = gateway_app
+        self._require_registered_identity = require_registered_identity
         self._request_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """Bind the queue consumer and reconcile persisted deletion fences."""
         self._service.viking_fs.set_deletion_guard(self._is_deleting)
+        creation_guard = (
+            self._creation_blocked if self._require_registered_identity else self._is_deleting
+        )
+        get_task_tracker().set_deletion_guard(creation_guard)
         queue_manager = self._service._queue_manager
         queue = queue_manager.get_queue(queue_manager.DATA_CLEANUP)
         queued_task_ids = {
@@ -128,7 +135,19 @@ class DeletionService:
                 queued_task_ids.add(task_id)
 
     async def _is_deleting(self, account_id: str, user_id: str | None = None) -> bool:
-        return await self._manager.get_deletion(account_id, user_id) is not None
+        deletion = await self._manager_dispatcher.run(
+            lambda: self._manager.get_deletion(account_id, user_id)
+        )
+        return deletion is not None
+
+    async def _creation_blocked(self, account_id: str, user_id: str) -> bool:
+        """Reject missing registered identities, also after their deletion fence is gone."""
+        if account_id == SYSTEM_TASK_ACCOUNT_ID:
+            return False
+        if await self._is_deleting(account_id, user_id):
+            return True
+        user = await self._manager.get_user(account_id, user_id)
+        return user is None
 
     async def delete(
         self,
@@ -416,9 +435,16 @@ class DeletionService:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Timed out waiting for tasks to stop")
-            await tracker.wait(
-                task.task_id, account_id=task.account_id, user_id=task.user_id, timeout=remaining
-            )
+            try:
+                await tracker.wait(
+                    task.task_id,
+                    account_id=task.account_id,
+                    user_id=task.user_id,
+                    timeout=remaining,
+                )
+            except KeyError:
+                # A Task created concurrently with this deletion withdraws itself.
+                continue
 
     async def _delete_uploads(self, ctx: RequestContext) -> None:
         viking_fs = self._service.viking_fs
@@ -509,6 +535,7 @@ async def setup_deletion(
     oauth_store: Any = None,
     usage_audit_runtime: Any = None,
     gateway_app: Any = None,
+    require_registered_identity: bool = True,
 ) -> Optional[DeletionService]:
     """Create the deletion service after storage and authentication are ready."""
     if manager is None or service.viking_fs is None or service._queue_manager is None:
@@ -520,6 +547,7 @@ async def setup_deletion(
         oauth_store=oauth_store,
         usage_audit_runtime=usage_audit_runtime,
         gateway_app=gateway_app,
+        require_registered_identity=require_registered_identity,
     )
     await deletion_service.initialize()
     return deletion_service

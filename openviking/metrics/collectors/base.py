@@ -170,7 +170,7 @@ class CollectorMetricWriter:
             kwargs["buckets"] = buckets
         self._registry.observe_histogram(name, value, **kwargs)
 
-    def gauge_delete_matching(
+    def delete_matching(
         self,
         name: str,
         *,
@@ -179,7 +179,7 @@ class CollectorMetricWriter:
     ) -> None:
         """Delete matching gauge series while preserving the current account partition."""
         if not metric_supports_account_dimension(name):
-            self._registry.gauge_delete_matching(name, match_labels=dict(match_labels))
+            self._registry.delete_matching(name, match_labels=dict(match_labels))
             return
         final_account_id = resolve_metric_account_label(
             metric_name=name,
@@ -188,7 +188,7 @@ class CollectorMetricWriter:
         )
         labels = dict(match_labels)
         labels["account_id"] = final_account_id
-        self._registry.gauge_delete_matching(name, match_labels=labels)
+        self._registry.delete_matching(name, match_labels=labels)
 
     def _with_account_labels(
         self,
@@ -341,7 +341,7 @@ class StateMetricCollector(MetricCollector, Refreshable, ABC):
         label_names: tuple[str, ...] = (),
     ) -> None:
         """Replace the full gauge series selected by `match_labels` with one fresh value."""
-        registry.gauge_delete_matching(str(metric_name), match_labels=match_labels)
+        registry.delete_matching(str(metric_name), match_labels=match_labels)
         if labels is None:
             registry.set_gauge(str(metric_name), float(value))
             return
@@ -421,7 +421,7 @@ class DomainStatsMetricCollector(MetricCollector, Refreshable, ABC):
     ) -> None:
         """Replace all existing global gauge series for the provided metric names in one pass."""
         for metric_name, value in zip(metric_names, values, strict=True):
-            registry.gauge_delete_matching(str(metric_name), match_labels={})
+            registry.delete_matching(str(metric_name), match_labels={})
             registry.set_gauge(
                 str(metric_name),
                 float(value),
@@ -534,7 +534,7 @@ class ProbeMetricCollector(MetricCollector, Refreshable, ABC):
         label_names: tuple[str, ...] = (),
     ) -> None:
         """Replace the selected gauge series with one fresh readiness-style value."""
-        registry.gauge_delete_matching(str(metric_name), match_labels=match_labels)
+        registry.delete_matching(str(metric_name), match_labels=match_labels)
         if labels is None:
             registry.set_gauge(str(metric_name), float(value))
             return
@@ -601,4 +601,4 @@ class ProbeMetricCollector(MetricCollector, Refreshable, ABC):
     ) -> None:
         """Delete all gauge series whose label values are listed in `values`."""
         for value in values:
-            registry.gauge_delete_matching(str(metric_name), match_labels={label_key: str(value)})
+            registry.delete_matching(str(metric_name), match_labels={label_key: str(value)})

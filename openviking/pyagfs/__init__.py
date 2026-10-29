@@ -40,6 +40,7 @@ from .exceptions import (
     GitRestoreWritebackPartialError,
 )
 from .helpers import cp, download, upload
+from .leader import LeaderCandidate, Leadership
 from .protocols import AGFSSyncClientProtocol
 
 _logger = logging.getLogger(__name__)
@@ -158,6 +159,16 @@ def get_privacy_matcher_class():
         ) from exc
 
 
+def get_privacy_extractor_class():
+    """Return the native fixed-rule credential extractor."""
+    try:
+        return _load_rust_module().PrivacyExtractor
+    except (ImportError, AttributeError) as exc:
+        raise ImportError(
+            "ragfs_python PrivacyExtractor is not available; rebuild the native extension"
+        ) from exc
+
+
 def reopen_rust_tracing_file() -> None:
     """Reopen the Rust tracing log file after Python rotates the active file."""
     try:
@@ -194,6 +205,8 @@ except Exception:
 
 __all__ = [
     "AsyncAGFSClient",
+    "LeaderCandidate",
+    "Leadership",
     "AGFSSyncClientProtocol",
     "AGFSBindingClient",
     "RAGFSBindingClient",

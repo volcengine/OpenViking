@@ -212,6 +212,7 @@ describe('ConnectPage', () => {
     ).toEqual([
       gatewayDocsUrl('conversations', 'en'),
       gatewayDocsUrl('providerKey', 'en'),
+      gatewayDocsUrl('contextHeader', 'en'),
       gatewayDocsUrl('pluginDetected', 'en'),
     ])
   })

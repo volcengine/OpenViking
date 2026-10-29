@@ -6,6 +6,8 @@ description: Find your way around the OpenViking Gateway pages in Studio, see wh
 
 This page is for anyone who uses the gateway pages in Studio: what each tab is for, who can change what, and when saved changes take effect. Open Studio with your OpenViking API key (a server in [local dev mode](02-quickstart.md#local-server-no-api-key) needs none) and choose **OpenViking Gateway** in the sidebar; a standalone gateway serves its own Studio at `/studio/`. Upstreams and context profiles are shared by everyone in an OpenViking account, while gateway keys and request logs belong to each user.
 
+With [`management_api: false`](13-configuration.md#gateway-fields), gateway administration is unavailable and the standalone gateway no longer serves Studio. In embedded deployments, OpenViking Server still serves its own Studio, but the gateway pages show an error because `/gateway/admin/access` returns 404. Restart the host after changing this setting.
+
 ## Studio tabs {#studio-tabs}
 
 The gateway pages have six tabs. Each row links the page that explains the tab in detail.
@@ -84,7 +86,7 @@ Saved changes to an upstream or a context profile apply to every gateway key tha
 A conversation records its context profile at its first request and keeps it, because changing what the model sees mid-conversation would break the provider's [prompt cache](01-how-it-works.md#replay). How soon a client picks up a profile change therefore depends on how often it starts a new conversation:
 
 - Clients that open a new conversation for every chat pick up changes quickly.
-- Claude Code, Codex and clients that send a fixed session header can continue one conversation for days. They keep the old settings until they start a new conversation, or until the conversation has been idle for 30 days (`session_ttl_days`), when the gateway deletes its state.
+- Claude Code, Codex and clients that send a fixed session header can continue one conversation for days. They keep the old settings until they start a new conversation, or until the conversation has been idle for 30 days (`session_ttl_seconds`), when the gateway deletes its state.
 
 How the gateway tells conversations apart is explained in [How conversations are recognized](03-connect-clients.md#how-conversations-are-recognized).
 

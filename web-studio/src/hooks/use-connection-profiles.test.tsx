@@ -14,9 +14,12 @@ import { ovClient } from '#/lib/ov-client'
 import { PROFILES_STORAGE_KEY } from '#/lib/connection/profiles'
 import type * as ServerModeModule from '#/lib/connection/health'
 
-const { health } = vi.hoisted(() => ({ health: vi.fn() }))
+const { health, navigate } = vi.hoisted(() => ({
+  health: vi.fn(),
+  navigate: vi.fn(),
+}))
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigate,
   useRouterState: () => '/settings',
 }))
 vi.mock('#/lib/connection/health', async (original) => ({

@@ -2570,6 +2570,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
             uri = str(item.get("uri") or "").strip()
             if not uri or uri in seen_uri or cls._clamp_score(item.get("score")) < score_threshold:
                 continue
+            # The session-start block already carries the profile; context mode drops it server-side.
+            if uri.rstrip("/").endswith("/memories/profile.md"):
+                continue
             abstract = " ".join(cls._recall_abstract(item).lower().split())
             if abstract and "/events/" not in uri.lower() and "/cases/" not in uri.lower():
                 key = f"abstract:{str(item.get('category') or '').strip().lower() or 'unknown'}:{abstract}"

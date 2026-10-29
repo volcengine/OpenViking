@@ -48,6 +48,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from openviking.core.namespace import classify_uri
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.pyagfs.exceptions import (
@@ -1058,26 +1059,31 @@ class CompileLifecycle:
     async def _begin_run(
         self, task: Any, record: Dict[str, Any], run: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
+        """Return the persisted run planned from a task, target record and optional queued run.
+
+        System Skills use live reads and URI identity; other Skills use snapshots.
+        An unavailable current source snapshot requires full execution; busy scopes raise ResourceBusyError.
+        """
         meta, request = task.meta["request"]["compile"], task.meta["request"]
         ctx = task_ctx(task.account_id, task.user_id)
         incremental = meta["mode"] == "incremental"
+        system_skill = classify_uri(request["skill"]).is_system
         run = run or new_compile_operation(task, record)
         run_meta = run["meta"]
         run["actor"] = task.user_id
         run["status"] = "running"
         run["started_at"] = time.time()
-        async with self._locked_output(request["skill"], ctx) as lease:
-            run_meta["skill_snapshot"] = {
-                "uri": request["skill"],
-                "snapshot_id": await commit_snapshot(
+        run_meta["skill_snapshot"] = {"uri": request["skill"], "snapshot_id": None}
+        if not system_skill:
+            async with self._locked_output(request["skill"], ctx) as lease:
+                run_meta["skill_snapshot"]["snapshot_id"] = await commit_snapshot(
                     self._fs,
                     [request["skill"]],
                     f"compile {task.task_id} skill",
                     ctx,
                     wait_busy=False,
                     lease_ref=lease,
-                ),
-            }
+                )
         progress_key = "scheduled_progress" if meta["trigger"] == "scheduled" else "progress"
         progress = record.get(progress_key) or {}
         previous_skill = progress.get("skill_snapshot") or {}
@@ -1088,20 +1094,20 @@ class CompileLifecycle:
             incremental
             and (request.get("instruction") or "").strip() == progress.get("instruction")
             and previous_skill.get("uri") == request["skill"]
-            and skill_base
-            and skill_head
         ):
-            # Skill dependencies include package files filtered from ordinary source diffs.
-            skill_changes = await self._fs._async_agfs.run(
-                "git_diff_paths",
-                account=ctx.account_id,
-                base=skill_base,
-                head=skill_head,
-                paths=[self._fs._uri_to_tree_path(request["skill"], ctx=ctx)],
-            )
-            if not skill_changes:
+            if system_skill:
                 mode = "incremental"
-        run_meta["execution"] = {"mode": mode}
+            elif skill_base and skill_head:
+                # Skill dependencies include package files filtered from ordinary source diffs.
+                skill_changes = await self._fs._async_agfs.run(
+                    "git_diff_paths",
+                    account=ctx.account_id,
+                    base=skill_base,
+                    head=skill_head,
+                    paths=[self._fs._uri_to_tree_path(request["skill"], ctx=ctx)],
+                )
+                if not skill_changes:
+                    mode = "incremental"
         paths = [request["to"], *request["from"]]
         async with self._locked_output(request["to"], ctx) as lease:
             run_meta["target_base"] = await commit_snapshot(
@@ -1112,6 +1118,9 @@ class CompileLifecycle:
                 wait_busy=False,
                 lease_ref=lease,
             )
+            if not run_meta["target_base"]:
+                mode = "full"
+            run_meta["execution"] = {"mode": mode}
             await self.versions.record_external(
                 task.account_id, record, run_meta["target_base"], ctx
             )
@@ -1159,7 +1168,7 @@ class CompileLifecycle:
     async def runtime_changes(
         self, payload: Mapping[str, Any], account_id: str, task_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Return the frozen Skill and effective execution mode with the persisted source plan."""
+        """Return Skill identity and effective execution mode with the persisted source plan."""
         meta = payload.get("compile")
         if not meta:
             return None

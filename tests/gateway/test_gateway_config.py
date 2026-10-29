@@ -51,6 +51,13 @@ def test_removed_fields_are_ignored_with_one_warning(caplog):
         StandaloneGatewayConfig(openviking_url="http://localhost:1933", url="http://other")
 
 
+def test_session_ttl_ignores_legacy_days_and_rejects_under_an_hour():
+    assert GatewayConfig(session_ttl_days=7).session_ttl_seconds == 30 * 86400
+    assert GatewayConfig(session_ttl_seconds=7200).session_ttl_seconds == 7200
+    with pytest.raises(ValidationError):
+        GatewayConfig(session_ttl_seconds=600)
+
+
 def test_standalone_requires_own_url_and_rejects_server_config():
     with pytest.raises(ValidationError):
         StandaloneGatewayConfig()

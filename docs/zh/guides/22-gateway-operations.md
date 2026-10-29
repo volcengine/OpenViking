@@ -25,7 +25,7 @@ description: 把 OpenViking 网关嵌入 Server、用 Docker Compose 或 Helm �
 | OpenViking 版本 | 嵌入运行时和 Server 同版本发布，无需额外检查；独立运行时要求 OpenViking Server 0.4.16 或更高版本。 |
 | 安装 | 网关包含在 OpenViking 核心包中。可选的 `gateway-fast` extra（`pip install "openviking[gateway-fast]"`）装上更快的事件循环和 HTTP 解析器。 |
 | 登录身份 | 远程部署需要 OpenViking API 密钥，普通用户、账号管理员和 root 都能登录 Studio 的网关页面。本地 dev 模式不需要密钥，固定使用 `default/default` 身份。 |
-| 存储 | 本地磁盘。网关的 SQLite 数据库只供一台主机使用，不支持网络文件系统或跨主机共享存储。 |
+| 存储 | 单机使用本地磁盘上的 SQLite，多副本使用共享 Redis。Redis 需要 `pip install "openviking[expiry]"`，官方镜像已包含。 |
 
 ## 选择部署方式 {#deployment-options}
 
@@ -86,9 +86,20 @@ docker run -d -p 1933:1933 -v ~/.openviking:/app/.openviking \
 
 自带的 Caddy 把所有路径转发到 `openviking:1933`。可以继续用兼容端口 1934，也可以直接访问 Server 的 1933。配置 HTTPS 时，一条 `reverse_proxy openviking:1933` 就能承载 Studio、管理接口和模型流量，见[公网访问](12-public-access.md)。
 
+独立容器需要挂载 `gateway.conf` 并使用网关命令。在文件中设置 `host: "0.0.0.0"`，以及启用 API key 认证的 `openviking_url`。选择包含所配置功能的镜像：
+
+```bash
+docker run -d --no-healthcheck -p 1935:1935 \
+  -v "$PWD/gateway.conf:/etc/openviking/gateway.conf:ro" \
+  -v gateway-data:/app/.openviking \
+  ghcr.io/volcengine/openviking:'<gateway-image-tag>' openviking-gateway
+```
+
+`--no-healthcheck` 关闭镜像自带的 1933 端口 Server 探针。独立网关改用 `http://localhost:1935/health` 探测。
+
 ## Helm {#helm}
 
-用 Helm chart 部署时，在 chart values 中设置 `gateway.enabled: true`。网关嵌入 server 容器，数据保存在 `<persistence.mountPath>/gateway`，Service 和 Ingress 都使用 Server 端口。保持 `replicaCount: 1`。
+用嵌入式 `deploy/helm/openviking` chart 部署时，在 chart values 中设置 `gateway.enabled: true`。网关嵌入 server 容器，数据保存在 `<persistence.mountPath>/gateway`，Service 和 Ingress 都使用 Server 端口。保持 `replicaCount: 1`。
 
 ```yaml
 gateway:
@@ -104,6 +115,26 @@ config:
 - 模型请求是流式的：Ingress 要关闭响应缓冲，允许至少 32 MiB 的请求体和 600 秒超时（见[反向代理和 HTTPS](#reverse-proxy-and-https)）。
 
 NGINX annotations、创建 Secret 的命令和从 sidecar 版本升级的说明见 [chart README](https://github.com/volcengine/OpenViking/blob/main/deploy/helm/README.md#openviking-gateway)。
+
+独立部署使用 `deploy/helm/openviking-gateway`。它有自己的 80 端口 Service，转发到 1935，并运行 `openviking-gateway`。`config` 值是独立的 `gateway.conf` 对象，chart 固定 `host`、`port` 和 `storage_path`。
+
+在包含这些功能的版本发布之前，需要把 `image.tag` 设为包含它们的构建，见 [chart README](https://github.com/volcengine/OpenViking/blob/main/deploy/helm/README.md#standalone-openviking-gateway)。
+
+```bash
+helm upgrade --install gateway ./deploy/helm/openviking-gateway \
+  --set-string image.tag='<gateway-image-tag>' \
+  --set-string config.openviking_url=https://ov.example.com
+```
+
+默认使用单副本 SQLite、持久卷和 `Recreate` 更新策略。集群必须有默认 StorageClass，或配置 `persistence.storageClass`/`persistence.existingClaim`。设置 `persistence.enabled: false` 后，更换 Pod 会丢失 SQLite 状态，Helm NOTES 会显示警告。卸载会保留 PVC。扩容前必须把两个 provider 都改成 Redis，见[扩展](#scaling)。
+
+chart 设置了 `session_ttl_seconds: 604800` 和 `response_ttl_seconds: 604800`，比网关 30 天的默认值短；需要其他值时覆盖 `config.*`。每个 Pod 请求 500m CPU 和 1Gi 内存，上限为 2 CPU 和 4Gi；可按负载设置 `resources`。
+
+独立 chart 的 `existingSecret` 接受 `management-key`、`redis-password` 和 `root-key`。前两项分别注入 `OPENVIKING_GATEWAY_MANAGEMENT_KEY` 和 `OPENVIKING_GATEWAY_REDIS_PASSWORD`；`config.storage.redis.password_env` 指向后者。local 和 KMS 加密把 `root-key` 只读挂载到 `/etc/openviking-gateway/keys/root-key`，并将 provider 的 `key_file` 指向它。安装前先按[加密](#encryption)生成密钥。上游凭证和 KMS AK/SK 在 `config` 中写 `$VAR`，通过 `extraEnv` 的 `secretKeyRef` 注入，不要将明文凭证写入 ConfigMap。
+
+`extraVolumes` 和 `extraVolumeMounts` 支持私有 CA 文件；`extraEnv`、`podLabels`、`podAnnotations`、`nodeSelector`、`affinity`、`tolerations`、`imagePullSecrets` 用于部署环境的其他设置。ConfigMap 变化通过 `checksum/config` 触发滚动更新。外部 Secret 改动后需要重启 Deployment，让所有副本加载一致的凭证。
+
+chart 不创建 Ingress。把代理指向它的 Service，并保持 `fullnameOverride`、`nameOverride` 和 release 名不变：Service 和 Deployment 同名，selector 是 `app.kubernetes.io/name` 与 `app.kubernetes.io/instance`。直接对外开放时，配置 `service.type: LoadBalancer` 和 `service.loadBalancerSourceRanges`。可选的 `networkPolicy.enabled` 将 1935 端口入站限制为 `networkPolicy.ingressFrom`，空列表会拒绝入站。放行代理实际的来源网段或 Pod selector，并在所用 CNI 上验证 kubelet 探针。
 
 ## 独立部署 {#standalone-deployment}
 
@@ -133,11 +164,16 @@ NGINX annotations、创建 Secret 的命令和从 sidecar 版本升级的说明�
 
 ### 启动检查 {#startup-checks}
 
-独立网关启动前会先访问一次 OpenViking：
+选择 Redis 后端时，启动 PING 必须成功。地址、凭据错误或 Redis 不可达会使启动失败，Kubernetes 会重启容器；滚动发布使用 `maxUnavailable: 0`。运行时 Redis 故障不会改变 `/health`；鉴权阶段存储失败返回纯文本 HTTP 500，并在 stderr 输出异常栈。
+
+独立网关开始监听前会先检查 OpenViking 的认证模式：
 
 - OpenViking 使用 trusted 认证时，网关拒绝启动。
-- 绑定非回环地址时，必须确认 OpenViking 使用 `api_key` 认证才会启动；OpenViking 连不上或处于本地 dev 模式时，网关直接退出。请先启动 OpenViking，或者只绑定 `127.0.0.1`。
+- 绑定非回环地址时，必须确认 OpenViking 使用 `api_key` 认证才会启动。连接失败或 HTTP 5xx 响应会输出告警，并在 1、2、4、8、16、30 秒后依次重试，后续等待上限为 30 秒。dev 模式、未知认证模式以及 HTTP 404 等其他错误仍会立即退出。
+- 回环地址（`127.0.0.1`、`::1`、`localhost`）只探测一次，OpenViking 不可达时也能启动；仍然拒绝 trusted 认证。
 - 跨主机连接 OpenViking 时，请使用 TLS 或私有网络。
+
+等待期间 HTTP 端口尚未监听。Kubernetes 的启动探针此时仍会失败，应按预期的 OpenViking 中断时长设置 `startupProbe` 预算（`periodSeconds × failureThreshold`）。例如 `periodSeconds: 2`、`failureThreshold: 150` 允许等待约 300 秒，之后 kubelet 会重启容器。网关自身不另设启动等待期限。
 
 ### 连接公共 OpenViking 服务 {#public-openviking-service}
 
@@ -206,6 +242,10 @@ ov.example.com {
 | 读取超时 | 至少 600 秒 | 网关默认最多等待服务商 600 秒 |
 | `/gateway/uploads` 和 `/gateway/downloads` 的日志 | 不记录查询字符串 | 其中带有一次性令牌 |
 
+独立网关的 `keep_alive_seconds`（默认 75）应大于负载均衡器的后端空闲超时。
+
+响应头发出后，空闲事件流每 15 秒发送一条 SSE 注释（`: keep-alive`），包括执行 OpenViking 工具期间。SSE 客户端会忽略注释，模型事件和捕获的回复不受影响。代理的空闲超时应大于 15 秒，并关闭响应缓冲。心跳只在完整事件的边界发送，上游压缩流禁用心跳，因此仍需保留上面的较长读取超时，以覆盖事件传到一半或响应头尚未到达时的等待。心跳间隔固定，不会延长服务商超时或工具的总时间限制。
+
 对外发布前，先配置好认证和[对外地址](#public-address)，见[公网访问](12-public-access.md)。
 
 ## 密钥和凭证 {#keys-and-credentials}
@@ -235,7 +275,7 @@ ov.example.com {
 - **`openviking-gateway init`**（独立）：回答 **Require a management key to change upstreams and profiles?** 时选 yes，init 会生成一个 `ovgm_` 开头的值，只打印一次，并写入 `gateway.conf` 的 `management_key`。
 - **Studio**（嵌入，root）：点**开启网关**后弹出的确认对话框里有一个复选框**只有持有网关管理密钥的人才能修改上游和上下文配置**，默认不勾选。勾选后，Studio 会生成一个 `ovgm_` 开头的值，写入 `ov.conf` 的 `gateway.management_key`（同时写入 `gateway.enabled: true`），并且只显示一次。
 - **手动设置**：值至少 32 个字符，可以用 `openssl rand -base64 32` 生成。写进 `management_key`，或者设置环境变量 `OPENVIKING_GATEWAY_MANAGEMENT_KEY`；两种部署下环境变量都优先于配置文件，见[配置参考](../gateway/13-configuration.md#configuration-reference)。
-- **Compose 和 Helm**：Compose 会把 `OPENVIKING_GATEWAY_MANAGEMENT_KEY` 传进容器；Helm 从 `gateway.existingSecret` 指定的 Secret 中读取 `management-key` 字段。见 [Docker Compose](#docker-compose) 和 [Helm](#helm)。
+- **Compose 和 Helm**：Compose 会把 `OPENVIKING_GATEWAY_MANAGEMENT_KEY` 传进容器；Helm 从 `gateway.existingSecret`（嵌入）或 `existingSecret`（独立）指定的 Secret 中读取 `management-key` 字段。见 [Docker Compose](#docker-compose) 和 [Helm](#helm)。
 
 管理密钥不提供命令行参数，因为命令行参数会出现在进程列表和 shell 历史里。设置、更换或去掉管理密钥后需要重启，这不会吊销已签发的网关密钥，也不会改动已有的上游和上下文配置。
 
@@ -243,7 +283,7 @@ ov.example.com {
 
 没人记得[网关管理密钥](#gateway-management-key)时，按网关读取它的顺序查找：
 
-1. 环境变量 `OPENVIKING_GATEWAY_MANAGEMENT_KEY`，它优先于配置文件。Compose 部署一般写在 `docker-compose.yml` 旁边的 `.env` 里；Helm 从 `gateway.existingSecret` 指定的 Secret 中读取 `management-key` 字段。
+1. 环境变量 `OPENVIKING_GATEWAY_MANAGEMENT_KEY`，它优先于配置文件。Compose 部署一般写在 `docker-compose.yml` 旁边的 `.env` 里；Helm 从 `gateway.existingSecret`（嵌入）或 `existingSecret`（独立）指定的 Secret 中读取 `management-key` 字段。
 2. 没有设置环境变量时，看 `ov.conf` 的 `gateway.management_key`（嵌入）或 `gateway.conf` 的 `management_key`（独立）。值写成 `$VAR` 时，密钥在对应的环境变量里。
 
 嵌入部署的 root 还可以在 Studio 的**设置** → **服务端配置** → **文件编辑**中查看 `ov.conf`。`openviking-server init` 和 Studio **开启网关**生成的密钥都以明文保存在这里。
@@ -257,7 +297,7 @@ ov.example.com {
 
 ## 加密 {#encryption}
 
-网关用 OpenViking 自己的加密功能保护已存的凭证和对话状态（见[加密指南](08-encryption.md)）。加密关闭或没有配置时，网关以明文存储，只靠文件权限保护。
+网关用 OpenViking 自己的加密功能保护已存的凭证和对话状态（见[加密指南](08-encryption.md)）。加密关闭或没有配置时，网关以明文存储，依靠存储访问控制保护。
 
 - **嵌入**：网关沿用 Server 在 `ov.conf` 中的 `encryption` 段，不需要为网关单独设置。
 - **独立**：在 `gateway.conf` 中加一个 `encryption` 块，字段和 `ov.conf` 的 `encryption` 段完全相同，例如：
@@ -273,6 +313,18 @@ ov.example.com {
   }
   ```
 
+共享部署的每个副本必须只读挂载同一份 root key。local provider 使用**十六进制文本**，不要生成原始字节：
+
+```bash
+umask 077
+openssl rand -hex 32 > gateway-root-key
+kubectl create secret generic gateway-credentials --from-file=root-key=gateway-root-key
+```
+
+设置 `existingSecret: gateway-credentials`、`config.encryption.enabled: true` 和 `config.encryption.provider: local`。需要时，在同一个 Secret 中添加 `management-key` 和 `redis-password`。
+
+使用 `provider: volcengine_kms` 时，`root-key` 是 **KMS 密文文件**，不是十六进制文本。在受保护的本地可写目录中，把 `encryption.volcengine_kms.key_file` 设为绝对路径，通过环境变量引用提供 KMS 凭证，启动一次网关。启动成功后停止，将生成的文件放入 Secret 的 `root-key`。各副本使用一致的 KMS key ID 和凭证。文件不存在时，provider 会在首次使用时生成；只读 Secret 挂载下生成失败，网关会拒绝启动。Vault 将加密 root key 保存在 Vault 中，不使用这个文件挂载。
+
 之后修改加密设置时：
 
 - **开启加密**不会出问题：已有的明文值照常可读，新写入的值会加密。
@@ -283,25 +335,95 @@ v0.5 网关用自己的密钥加密数据，这些数据会在首次启动时转
 
 ## 扩展 {#scaling}
 
-一个存储目录只供一台主机上的一套部署使用，嵌入网关和独立网关不能共用同一目录。嵌入网关跟随 Server 的 worker 设置；独立网关用 `workers` 设置，取值 1–64。需要在服务商之间负载均衡、故障转移或限流时，把 LiteLLM 这类服务添加为上游。
+SQLite 供一台主机上的一套部署使用，不要跨主机共享目录，也不要让嵌入网关和独立网关共用。独立进程支持 `workers: 1–64`，Kubernetes 中建议 `workers: 1`，通过增加 Pod 扩容。嵌入网关遵循 Server 的 worker 和副本限制。
+
+独立网关使用多副本时，必须把 **`storage.kernel` 和 `storage.management` 都设为 `redis`**，共享同一份 `storage.redis` 连接与 `storage.key_prefix`，并只读挂载同一份加密 root key。任一 provider 是 SQLite 时，chart 会拒绝多副本。下面是双副本的起点，需要合并你的 URL 和 Secret 设置：
+
+```yaml
+replicaCount: 2
+existingSecret: gateway-credentials
+config:
+  capture_concurrency: 4
+  storage:
+    kernel: redis
+    management: redis
+    key_prefix: "ovgw:"
+    redis:
+      mode: standalone
+      endpoints: ["redis://redis:6379"]
+      password_env: OPENVIKING_GATEWAY_REDIS_PASSWORD
+  encryption:
+    enabled: true
+    provider: local
+```
+
+无管理面、按密钥隔离的部署再加上 `management_api: false`、`openviking_keys: true`、`tenancy: key`、`default_upstreams` 和 `request_log_sink: stdout`，见[直接使用 OpenViking API 密钥](../gateway/09-gateway-keys.md#openviking-keys)和[部署默认上游](../gateway/07-upstreams.md#deployment-default-upstreams)。没有管理 API 时，在 OpenViking 中删除用户不会通知网关，该用户的网关数据按[保留期限](../gateway/11-security-and-data.md#retention)过期。部署在它前面的服务遵循[宿主集成约定](#host-integration-contract)。
+
+Redis `mode: standalone` 用于单个端点，包括托管代理；`mode: cluster` 用 Redis Cluster 端点且数据库必须为 0。TLS 用 `rediss://`，端点 URL 中不要写凭证。`pool_size` 限制每个进程同时执行的 Redis 命令数，超出的命令等待空闲连接。保持 `pool_size >= capture_concurrency + 8`。Redis 位于鉴权路径，整体不可用时请求返回 HTTP 500；需要高可用时使用主从和自动切换，内存和持久化按 [Redis 内存策略](#redis-memory-policy)配置。
+
+Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`；多副本时创建 `maxUnavailable: 1` 的 PDB。通过 `affinity` 把副本分散到不同节点。各进程缓存管理记录，所以修改管理配置或吊销签发密钥后，其他副本最多 **2 秒**后生效。
+
+所有探针都不带凭证访问 `/health`，只返回本地状态，不调用 OpenViking 或 Redis。startupProbe 预算为 300 秒（`2 × 150`）。启动完成后，OpenViking 故障不会使 Pod 摘流。
+
+停机预算是 `15s preStop + upstream_timeout_seconds + 最多 100s capture 排空`。chart 默认的 `terminationGracePeriodSeconds: 660` 覆盖 preStop 和一条持续到默认 600 秒上游超时的流；capture 尚未排空就被 Kubernetes 终止时，其他副本会在 lease 到期后接手。要让 capture 在 Pod 被终止前排空，把它调到 `15 + upstream_timeout_seconds + 100`（默认超时下为 715）。
+
+### 宿主集成约定 {#host-integration-contract}
+
+部署在无管理面网关前面的服务（例如为每个请求选择模型端点的服务）转发客户端请求时，设置这些请求头：
+
+| 请求头 | 取值 |
+| --- | --- |
+| `X-API-Key` 或 `Authorization: Bearer` | 客户端的 OpenViking API 密钥，原样透传 |
+| `X-OpenViking-Upstream-URL` | 选中的端点，必须与某个 `default_upstreams` 条目的 `base_url` 相同；其他值返回 403，且不发出任何请求。见[按请求指定上游](../gateway/07-upstreams.md#upstream-url-header) |
+| `X-OpenViking-Upstream-Key` | 服务商 API Key，用于 `auth_mode: passthrough` 的上游 |
+| 其他请求头 | 客户端自己的请求头，例如 `X-OpenViking-Session` 和 `X-OpenViking-Context`，原样透传 |
+
+网关把请求转发给服务商之前，会去掉所有 `X-OpenViking-*` 请求头、客户端凭证和逐跳请求头。
+
+## Redis 内存策略 {#redis-memory-policy}
+
+为网关单独准备 Redis 实例，不要与 OpenViking 的 `expiry_redis_host` 定时器存储共用。从下面的 `redis.conf` 开始，按负载设置 `maxmemory`：
+
+```conf
+maxmemory 2gb
+maxmemory-policy volatile-lru
+appendonly yes
+appendfsync everysec
+```
+
+`volatile-lru` 只驱逐本来就会过期的数据：对话状态、replay、待投递 capture 和 OpenViking 密钥记录。每类数据丢失的影响见 [Redis 对话状态](../gateway/11-security-and-data.md#redis-conversation-state)。不要使用 `allkeys-*`：它也会驱逐没有 TTL 的数据，导致签发的密钥、上游和上下文配置消失，已删除的对话状态可能重新出现，待投递 capture 不再被调度。`noeviction` 也能运行，但内存满后写入失败，请求无法获得记忆增强。
+
+监控 `evicted_keys` 的增速和内存用量；容量充足时不会发生驱逐。网关不检查驱逐策略或其他任何 Redis 设置。观察 capture 积压可用 `ZCARD <key_prefix>v1:k:{cap}:ready`，它统计已调度或正在处理的 capture，其中可能有少量稍后才清理的过期条目。Redis Cluster 中所有 capture 数据位于同一个分片，应为 OpenViking 故障期间的积压预留该分片容量。capture lease 使用 Redis 时钟，调度时间则来自网关宿主，各宿主应通过 NTP 保持时钟同步。
+
+未启用持久化时，Redis 重启会删除网关的全部管理数据：已签发的网关密钥失效，上游和上下文配置需要重新设置。AOF 让这些数据、待投递 capture 和删除操作在重启后保留。在 Redis 7.2 上，禁用的 `default` 用户也要保留命令权限（例如 `user default off ~* &* +@all`）：AOF 回放事务时会检查这些权限，缺少时回放的写入会因 `NOPERM` 失败。`appendfsync everysec` 仍可能丢失约一秒的写入，异步主从切换也可能丢失最近的写入。AOF 重写和快照期间需为写时复制预留内存。备份中可能保留其生成之后才删除的数据。
 
 ## 观测与例行检查 {#monitoring}
 
-网关不导出 Prometheus 之类的监控指标，也不写 HTTP 访问日志。运行状态通过 Studio 的[概览和请求日志](../gateway/10-overview-and-requests.md#overview)标签页查看，或者调用管理 API 的 `/gateway/admin/overview` 和 `/gateway/admin/logs`。
+网关不导出 Prometheus 之类的监控指标。请求日志默认写入存储，可通过 Studio 的[概览和请求日志](../gateway/10-overview-and-requests.md#overview)标签页查看，或者调用管理 API 的 `/gateway/admin/overview` 和 `/gateway/admin/logs`。
+
+在网关配置中设置 `request_log_sink: "stdout"`，或设置 `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`，重启后新记录只写到 stdout。每个完成的模型请求和后台保存状态变更各产生一行 JSON，即使 stdout 接到管道也会立即刷新。每条记录包含 `time`（写入时的 Unix 秒数）、`account`、`user_id`（旧保存状态可能为 `null`），以及位于顶层的现有请求指标，如 `kind`、`status`、`input_tokens` 和 `cached_tokens`。不包含凭证、提示词或回复。采集系统负责这些记录的保留期限和访问权限；`log_retention_days` 只作用于存储中的日志。
+
+当 `management_api: false` 关闭 Studio 和管理接口时，配置 stdout sink 并采集进程或容器日志进行观测。管理面开启但选择 stdout sink 时也采用同样流程：请求日志页和概览中的请求统计不会收到新记录。之前已存储的记录仍可见，直到过期。
+
+从请求日志的顶层字段统计 reason 和首调缓存结果。对 capture 暂停（`kind: capture`）、队列增长、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。identify 拒绝发生在代理请求记录之前，所以从代理访问日志统计 401/402/403 和 Redis 故障引发的 500，具体 traceback 看网关 stderr。代理并发连接数可以近似表示在途流数。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
 
 ### 例行检查 {#day-to-day-operations}
 
 - **进程存活：** `/health`。嵌入部署用的是 Server 的健康检查，独立部署用的是网关自己的。
-- **网关健康：** **概览**标签页上的**首次调用缓存命中率**（[含义](../gateway/10-overview-and-requests.md#overview)）。明显下降时，见[首次调用缓存命中率下降](../gateway/12-troubleshooting.md#the-first-call-cache-hit-rate-dropped)。
-- **单个请求：** 在**请求日志**标签页展开对应的行，见[请求日志](../gateway/10-overview-and-requests.md#requests)。
+- **网关健康：** **概览**标签页上的**首次调用缓存命中率**（[含义](../gateway/10-overview-and-requests.md#overview)），或从 stdout 指标计算：在同一账号和时间窗口内，筛选 `kind: "user"` 的记录，将 `first_upstream_cached_tokens` 的总和除以 `first_upstream_input_tokens` 的总和。某个字段缺失时，用该条记录的 `cached_tokens` 或 `input_tokens` 代替（未报告的用量按 0 计）。分母为零表示没有报告输入用量。这些字段位于顶层，不在嵌套的 `metrics` 对象中。命中率明显下降时，见[首次调用缓存命中率下降](../gateway/12-troubleshooting.md#the-first-call-cache-hit-rate-dropped)。
+- **单个请求：** 在**请求日志**标签页展开对应的行，或按 `account`、`user_id` 和 `request_id` 查找 stdout 记录；见[请求日志](../gateway/10-overview-and-requests.md#requests)。后台保存事件的 `kind` 为 `capture`，通过哈希后的 `session` 标识对话。
 - **对外地址：** `public_url` 仍是客户端访问的地址，见[对外地址](#public-address)。
-- **备份：** 存储目录；开启加密时还有加密根密钥，见[备份与恢复](../gateway/11-security-and-data.md#backups)。
+- **备份：** SQLite 目录或 Redis 持久化/备份；开启加密时还有加密根密钥，见[备份与恢复](../gateway/11-security-and-data.md#backups)。
 
 ## 升级 {#upgrades}
 
 - 升级前读发布说明。新版本的网关读不了旧的存储格式时，启动会报 `Unsupported gateway schema`，见[网关无法启动](../gateway/12-troubleshooting.md#the-gateway-does-not-start)。
 - 独立网关要求 OpenViking Server 不低于 `min_server_version`（0.4.16），否则无法签发密钥，保存重试也会以 `openviking_version_mismatch` 失败；记忆检索也可能失败，显示为 `openviking_http_<status>`。两者分开升级时，先升级 OpenViking，再升级网关。嵌入网关和 Server 同版本发布，不做这项检查。
 - 从 sidecar 或旧版独立网关升级，见[迁移](#migration)。
+
+- SQLite 切换到 Redis 后，会话缓存从空开始。management 存储中的已签发 `ovgw_` 密钥、上游和上下文配置需要重建，没有提供迁移命令。使用 OpenViking key 时，可以通过部署默认值提供上游和上下文配置。
+- Redis 键包含布局版本（`<storage.key_prefix>v1:`）。布局相同时，回滚可以继续读现有状态。将来布局版本变化时从空开始：会话数据按缓存处理，OpenViking key 记录在访问时重建，使用签发密钥的部署需要重新配置。不要假设存在跨版本数据迁移。
+- 紧急停用时移除代理路由，或将网关 Deployment 缩到零。客户端可以把 Base URL 改回模型服务商，继续使用原模型凭证，此时没有网关记忆能力。`helm rollback` 的目标构建必须兼容当前配置字段和 Redis 布局。
 
 ## 从早期版本迁移 {#migration}
 
@@ -315,7 +437,7 @@ v0.5 网关用自己的密钥加密数据，这些数据会在首次启动时转
 4. **改客户端地址和部署配置。** 网关的所有 URL 现在都在 `/gateway` 下，所以客户端要同时改端口和路径，旧路径不再提供服务，见[新地址](#new-addresses)。移除旧的 1935 Service 和 Ingress 路由、Compose 的 `gateway` 服务和 profile，以及 Helm 的 sidecar 配置 `gateway.workers`、`gateway.port`、`gateway.resources`。
 5. **首次启动会转换已存数据。** v0.5 网关用自己的密钥加密数据。新版网关（嵌入或独立）首次启动时，用这把旧密钥解密，再按当前的[加密](#encryption)设置重新写入；加密关闭时写成明文，所以想让数据继续加密，要在这次启动前开启 OpenViking 加密。
 
-   旧密钥从环境变量 `OPENVIKING_GATEWAY_ENCRYPTION_KEY` 读取，或者从 `storage_path` 下的 `encryption.key` 读取。`encryption_key_env` 会被忽略：如果你曾用它指向别的环境变量，这次启动时把密钥导出为 `OPENVIKING_GATEWAY_ENCRYPTION_KEY`。存在旧的加密数据、两处却都没有密钥时，网关拒绝启动，错误信息会写明这两个位置。用 Helm 时，只在这次升级的版本中保留 `existingSecret` 里的 `encryption-key` 字段。启动成功后旧密钥不会再被读取，可以删掉这个环境变量、Secret 字段和 `encryption.key`。
+   旧密钥从环境变量 `OPENVIKING_GATEWAY_ENCRYPTION_KEY` 读取，或者从 `storage_path` 下的 `encryption.key` 读取。`encryption_key_env` 会被忽略：如果你曾用它指向别的环境变量，这次启动时把密钥导出为 `OPENVIKING_GATEWAY_ENCRYPTION_KEY`。存在旧的加密数据、两处却都没有密钥时，网关拒绝启动，错误信息会写明这两个位置。用嵌入式 Helm chart 时，只在这次升级的版本中保留 `gateway.existingSecret` 里的 `encryption-key` 字段。独立 chart 在这次升级时通过 `extraEnv` 注入迁移变量。启动成功后旧密钥不会再被读取，可以删掉这个环境变量、Secret 字段和 `encryption.key`。
 6. **移除共享 admin token。** `OPENVIKING_GATEWAY_ADMIN_TOKEN` **不会**被当作管理密钥。需要限制谁能修改上游和上下文配置时，显式设置 `management_key`，见[网关管理密钥](#gateway-management-key)。
 7. **核对上游地址。** 首次启动时，网关会改写一次已存上游的 Base URL，让每个上游继续请求升级前的同一个地址，见[已存上游地址的变化](#upstream-address-rewrite)。在**上游**标签页对每个上游点**测试**，确认它仍然可用。
 8. **了解日志和吊销的变化。** 请求日志新增用户列，没有用户的旧记录只出现在账号管理员和 root 的视图中。吊销密钥不再删除用户数据，显式删除和保留期照常生效。

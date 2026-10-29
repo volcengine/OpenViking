@@ -752,6 +752,85 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
 
 
 @pytest.mark.asyncio
+async def test_patch_merge_policy_optimizer_thinking_defaults_to_config_passthrough(
+    monkeypatch,
+):
+    """The optimizer must not force per-call thinking for experiences/trajectories.
+
+    Regression test for issue #6096: an operator-configured ``thinking=False`` VLM
+    still received ``thinking=True`` on every patch-merge call.
+    """
+    from openviking.session.memory.dataclass import ResolvedOperations
+
+    captured = {}
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            return ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[]), []
+
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop",
+        FakeExtractLoop,
+    )
+
+    policy_set = _experience_set()
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri,
+        before="stale content",
+        after="merged content",
+    )
+    await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+        [gradient],
+        policy_set,
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
+    )
+
+    assert captured["thinking"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thinking", [True, False])
+async def test_patch_merge_policy_optimizer_explicit_thinking_is_forwarded(monkeypatch, thinking):
+    from openviking.session.memory.dataclass import ResolvedOperations
+
+    captured = {}
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            return ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[]), []
+
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop",
+        FakeExtractLoop,
+    )
+
+    policy_set = _experience_set()
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri,
+        before="stale content",
+        after="merged content",
+    )
+    optimizer = PatchMergePolicyOptimizer(
+        viking_fs=FakeVikingFS({}),
+        vlm=object(),
+        thinking=thinking,
+    )
+    await optimizer.plan(
+        [gradient],
+        policy_set,
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
+    )
+
+    assert captured["thinking"] is thinking
+
+
+@pytest.mark.asyncio
 async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monkeypatch):
     from openviking.session.memory.dataclass import (
         ResolvedOperation,

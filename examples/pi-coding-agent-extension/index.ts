@@ -380,7 +380,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- session_before_compact ---
   pi.on("session_before_compact", async (event, ctx) => {
-    if (!connected || bypassed) return;
+    if (!connected || bypassed || !isCaptureEnabled(config)) return;
 
     if (config.takeoverEnabled) {
       const deadline = Date.now() + HANDLER_BUDGET_MS;
@@ -426,7 +426,7 @@ export default async function (pi: ExtensionAPI) {
     await sync.shutdown();
     if (config.takeoverEnabled) {
       await takeover.shutdown();
-    } else {
+    } else if (isCaptureEnabled(config)) {
       await sync.commit();
     }
   });

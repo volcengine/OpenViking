@@ -49,6 +49,7 @@ import {
 } from './profiles-settings'
 import { BackLink, SectionHeader } from './section-header'
 import { SettingField } from './setting-field'
+import { ToggleRow } from './toggle-row'
 
 /** Key-order-independent copy, so reordered objects still compare equal. */
 function canonical(value: unknown): unknown {
@@ -190,6 +191,7 @@ function ProfileEditorForm({
       ...current,
       ...PROFILE_DEFAULTS,
       name: current.name,
+      client_overrides: current.client_overrides,
     }))
     toast.success(t('profiles.toast.reset'))
   }
@@ -273,7 +275,7 @@ function ProfileEditorForm({
               <SectionNav settings={draft} errors={errors} />
               <div className="grid min-w-0 gap-4">
                 <Card className="gap-0 py-0">
-                  <CardContent className="py-5">
+                  <CardContent className="grid gap-4 py-5">
                     <SettingField
                       label={t('profiles.name.label')}
                       htmlFor="profile-name"
@@ -297,6 +299,16 @@ function ProfileEditorForm({
                         }
                       />
                     </SettingField>
+                    <ToggleRow
+                      id="profile-client_overrides"
+                      label={t('profiles.clientOverrides.label')}
+                      description={t('profiles.clientOverrides.description')}
+                      docs="clientOverrides"
+                      checked={draft.client_overrides}
+                      onCheckedChange={(client_overrides) =>
+                        update({ client_overrides })
+                      }
+                    />
                   </CardContent>
                 </Card>
                 <ProfileSettingsForm

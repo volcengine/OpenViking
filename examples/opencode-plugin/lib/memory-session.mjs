@@ -125,6 +125,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   function serializeSessionState(state) {
     return {
       ovSessionId: state.ovSessionId,
+      parentId: state.parentId ?? "",
       createdAt: state.createdAt,
       lastActivityAt: state.lastActivityAt,
       lastCommitTime: state.lastCommitTime,
@@ -151,6 +152,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   function deserializeSessionState(persisted) {
     return {
       ovSessionId: persisted.ovSessionId,
+      parentId: persisted.parentId ?? "",
       createdAt: persisted.createdAt,
       lastActivityAt: persisted.lastActivityAt,
       lastCommitTime: persisted.lastCommitTime,
@@ -209,6 +211,13 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       opencode_session: sessionId,
       openviking_session: state.ovSessionId,
     })
+    if (shouldSkipSubagentSession(state)) {
+      log("INFO", "capture", "Skipping capture for subagent session", {
+        opencode_session: sessionId,
+        openviking_session: state.ovSessionId,
+        parent_session: state.parentId,
+      })
+    }
   }
 
   async function handleSessionDeleted(event) {
@@ -255,6 +264,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId || !messageId) return
 
     const state = getOrCreateSession(sessionId, event)
+    if (shouldSkipSubagentSession(state)) return
     const captured = state.messages.get(messageId)
     const next = captured ?? createMessageState()
     if (role === "user") {
@@ -276,6 +286,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId || !messageId) return
 
     const state = getOrCreateSession(sessionId, event)
+    if (shouldSkipSubagentSession(state)) return
     const message = state.messages.get(messageId) ?? createMessageState()
     if (message.captured) return
     const partId = part.id ?? `${messageId}:${message.parts.size}`
@@ -315,7 +326,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     // not send the same pending messages twice.
     const run = (state.flushChain ?? Promise.resolve()).then(async () => {
       const added = await flushPendingMessages(opencodeSessionId, state)
-      if (commit && isCaptureEnabled(config)) {
+      if (commit && isCaptureEnabled(config) && !shouldSkipSubagentSession(state)) {
         const result = await commitOvSession(state.ovSessionId, { force: true, reason })
         // Server lost the session (reset/reinstall); drop the stale mapping.
         if (result.status === "not_found" && sessions.get(opencodeSessionId) === state) {
@@ -359,12 +370,20 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       : deriveHarnessSessionId("oc-", opencodeSessionId)
     return {
       ovSessionId,
+      // Kept on the state (and persisted) so capture, commit, and the
+      // replay/recovery paths can all tell a spawned child session from a
+      // primary one — #6027.
+      parentId,
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       lastCommitTime: undefined,
       compactedAt: undefined,
       messages: new Map(),
     }
+  }
+
+  function shouldSkipSubagentSession(state) {
+    return Boolean(config.skipSubagentSessions) && Boolean(state?.parentId)
   }
 
   function createMessageState() {
@@ -428,6 +447,11 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   async function flushPendingMessages(opencodeSessionId, state) {
     if (!isCaptureEnabled(config)) return 0
+    // Recovery/replay paths (idle flush, dispose flushAll, tool commit, a
+    // state file reloaded after a restart) come through here too, so the
+    // child-session gate has to hold at this boundary — not just at the
+    // message events. See #6027.
+    if (shouldSkipSubagentSession(state)) return 0
     const toSend = []
     for (const [messageId, message] of state.messages.entries()) {
       if (message.captured) continue

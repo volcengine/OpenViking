@@ -28,18 +28,27 @@ import {
   useSessionListByRecency,
 } from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
+import { normalizeOvClientError } from '#/lib/ov-client'
 import { cn } from '#/lib/utils'
 
 interface ThreadListProps {
   activeSessionId?: string
+  className?: string
 }
 
-export function ThreadList({ activeSessionId }: ThreadListProps) {
+export function ThreadList({ activeSessionId, className }: ThreadListProps) {
   const { i18n, t } = useTranslation('sessions')
   const { provider } = useStudioService()
   const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
-  const { data: sessions, isLoading } = useSessionListByRecency()
+  const {
+    data: sessions,
+    error: listError,
+    isError,
+    isFetching,
+    isPending,
+    refetch,
+  } = useSessionListByRecency()
   const { getTitle, removeTitle, setTitle } = useSessionTitles(identityScopeKey)
   const createSession = useCreateSession()
   const deleteSession = useDeleteSession()
@@ -90,7 +99,12 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
   ])
 
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-border/70 bg-muted/20">
+    <aside
+      className={cn(
+        'flex h-full w-72 shrink-0 flex-col border-r border-border/70 bg-muted/20',
+        className,
+      )}
+    >
       <div className="flex h-16 shrink-0 items-center justify-between border-b border-border/70 px-4">
         <div className="min-w-0">
           <h1 className="text-sm font-semibold text-foreground">
@@ -98,7 +112,7 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
               ? t('studio:sessionRecords')
               : t('threadList.title')}
           </h1>
-          {!isLoading ? (
+          {!isPending && (!isError || sessions.length > 0) ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t('threadList.count', { count: sessions.length })}
             </p>
@@ -124,25 +138,50 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        {isLoading ? (
+        {isError ? (
+          <div
+            role="alert"
+            className="mb-2 grid gap-2 rounded-lg border border-destructive/30 p-3 text-sm"
+          >
+            <p className="font-medium text-destructive">
+              {t('threadList.loadFailed')}
+            </p>
+            <p className="wrap-anywhere text-xs text-muted-foreground">
+              {normalizeOvClientError(listError).message}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="justify-self-start"
+              disabled={isFetching}
+              onClick={() => void refetch()}
+            >
+              {t('threadList.retry')}
+            </Button>
+          </div>
+        ) : null}
+        {isPending ? (
           <div className="flex h-28 items-center justify-center gap-2 text-sm text-muted-foreground">
             <LoaderCircleIcon className="size-4 animate-spin" />
             <span>{t('threadList.loading')}</span>
           </div>
         ) : sessions.length === 0 ? (
-          <div className="flex h-40 flex-col items-center justify-center px-6 text-center">
-            <div className="flex size-9 items-center justify-center rounded-xl bg-muted">
-              <MessageSquareIcon className="size-4 text-muted-foreground" />
+          isError ? null : (
+            <div className="flex h-40 flex-col items-center justify-center px-6 text-center">
+              <div className="flex size-9 items-center justify-center rounded-xl bg-muted">
+                <MessageSquareIcon className="size-4 text-muted-foreground" />
+              </div>
+              <p className="mt-3 text-sm font-medium text-foreground">
+                {t('threadList.emptyTitle')}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {provider === 'opensource'
+                  ? t('threadList.emptyDescription')
+                  : t('studio:noSessionRecords')}
+              </p>
             </div>
-            <p className="mt-3 text-sm font-medium text-foreground">
-              {t('threadList.emptyTitle')}
-            </p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {provider === 'opensource'
-                ? t('threadList.emptyDescription')
-                : t('studio:noSessionRecords')}
-            </p>
-          </div>
+          )
         ) : (
           <div className="space-y-1">
             {sessions.map((session) => {

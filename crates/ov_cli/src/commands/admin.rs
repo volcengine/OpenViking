@@ -1,11 +1,14 @@
 use crate::client::HttpClient;
+use crate::config::Config;
+use crate::config_wizard::ConfigStore;
 use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
 use crate::theme;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use colored::Colorize;
 use serde_json::{Value, json};
 
-const SECRET_PLACEHOLDER: &str = "********";
+const SECRET_MASK_NOTICE: &str = "Note: API keys are masked by default. Pass --reveal-api-keys to reveal plaintext (ROOT sees every key; ADMIN/USER only its own).";
 
 pub async fn create_account(
     client: &HttpClient,
@@ -104,13 +107,20 @@ pub async fn list_users(
     name: Option<String>,
     role: Option<String>,
     page: u32,
+    reveal_api_keys: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let response = client
         .admin_list_users(account_id, limit, name, role, page)
         .await?;
-    let response = list_users_response_for_output(response, output_format);
+    let (mut response, masked) = list_users_response_for_output(response, reveal_api_keys);
+    if matches!(output_format, OutputFormat::Table) {
+        merge_key_prefix_into_api_key(&mut response);
+    }
+    if masked {
+        eprintln!("{SECRET_MASK_NOTICE}");
+    }
     output_success(&response, output_format, compact);
     Ok(())
 }
@@ -247,15 +257,70 @@ pub async fn regenerate_key(
     account_id: &str,
     user_id: &str,
     seed: Option<&str>,
+    active_config: Option<&Config>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
+    let request_key = client.request_api_key();
+    let update = if let Some(config) = active_config.filter(|config| {
+        config.api_key.as_deref() == client.api_key()
+            && request_key
+                .as_deref()
+                .is_some_and(|key| key_belongs_to(key, account_id, user_id))
+    }) {
+        let update = ConfigStore::new()?.prepare_api_key_update(config, request_key.as_deref().unwrap())?;
+        eprintln!(
+            "Rotating your API key will update api_key in {} and any matching authentication headers.",
+            update.path().display()
+        );
+        Some(update)
+    } else {
+        None
+    };
     let response = client
         .admin_regenerate_key(account_id, user_id, seed)
         .await?;
-    output_success(&response, output_format, compact);
-    print_admin_user_key_notice(&response, output_format, true);
+    if let Some(update) = update {
+        let path = update.path().display().to_string();
+        let Some(new_key) = response
+            .get("user_key")
+            .and_then(Value::as_str)
+            .filter(|key| key_belongs_to(key, account_id, user_id))
+        else {
+            output_success(&response, output_format, compact);
+            return Err(Error::Config(format!(
+                "Server reported key rotation without a valid user_key for {account_id}/{user_id}; {path} was not updated. Check the command output and recover the credential before retrying."
+            )));
+        };
+        let saved = update.commit(new_key).map_err(|error| Error::Config(format!(
+            "API key was rotated, but could not update {path}: {error}. Save the new user_key from the command output to api_key manually."
+        )));
+        // Persist before writing stdout (which can fail on a closed pipe), but
+        // retain the returned credential in the output even if saving failed.
+        output_success(&response, output_format, compact);
+        saved?;
+        if request_key.as_deref() == Some(new_key) {
+            eprintln!(
+                "Updated api_key in {path} and any matching authentication headers. The generated key is unchanged; use a new seed or omit --seed to rotate it."
+            );
+        } else {
+            eprintln!(
+                "Updated api_key in {path} and any matching authentication headers. The old key is invalid; update other clients using it."
+            );
+        }
+    } else {
+        output_success(&response, output_format, compact);
+        print_admin_user_key_notice(&response, output_format, true);
+    }
     Ok(())
+}
+
+fn key_belongs_to(key: &str, account_id: &str, user_id: &str) -> bool {
+    let parts: Vec<_> = key.split('.').collect();
+    parts.len() == 3
+        && !parts[2].is_empty()
+        && URL_SAFE_NO_PAD.decode(parts[0]).ok().as_deref() == Some(account_id.as_bytes())
+        && URL_SAFE_NO_PAD.decode(parts[1]).ok().as_deref() == Some(user_id.as_bytes())
 }
 
 pub async fn set_account_settings(
@@ -348,35 +413,86 @@ fn contains_non_empty_user_key(value: &Value) -> bool {
     }
 }
 
-fn list_users_response_for_output(mut response: Value, output_format: OutputFormat) -> Value {
-    if matches!(output_format, OutputFormat::Table) {
-        redact_plaintext_api_keys(&mut response);
+fn list_users_response_for_output(mut response: Value, reveal_api_keys: bool) -> (Value, bool) {
+    if reveal_api_keys {
+        return (response, false);
     }
-    response
+    let masked = mask_plaintext_api_keys(&mut response);
+    (response, masked)
 }
 
-fn redact_plaintext_api_keys(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            for (key, child) in object {
-                if key == "api_key"
-                    && child
-                        .as_str()
-                        .is_some_and(|api_key| !api_key.trim().is_empty())
-                {
-                    *child = Value::String(SECRET_PLACEHOLDER.to_string());
-                } else {
-                    redact_plaintext_api_keys(child);
-                }
+/// Collapse the server's `key_prefix`/`api_key` fields into a single `api_key`
+/// table column; the JSON response shape is left untouched.
+fn merge_key_prefix_into_api_key(value: &mut Value) {
+    fn normalize_row(row: &mut Value) {
+        let Some(object) = row.as_object_mut() else {
+            return;
+        };
+        if !object.contains_key("api_key") {
+            if let Some(prefix) = object.remove("key_prefix") {
+                object.insert("api_key".to_string(), prefix);
             }
+        } else {
+            object.remove("key_prefix");
         }
-        Value::Array(items) => {
-            for item in items {
-                redact_plaintext_api_keys(item);
+    }
+    match value {
+        Value::Array(users) => users.iter_mut().for_each(normalize_row),
+        Value::Object(object) => {
+            if let Some(users) = object.get_mut("users").and_then(Value::as_array_mut) {
+                users.iter_mut().for_each(normalize_row);
             }
         }
         _ => {}
     }
+}
+
+fn mask_plaintext_api_keys(value: &mut Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            let mut masked = false;
+            for (key, child) in object {
+                if key == "api_key" {
+                    if let Some(api_key) = child.as_str() {
+                        if !api_key.trim().is_empty() {
+                            *child = Value::String(mask_api_key(api_key));
+                            masked = true;
+                        }
+                    }
+                } else if mask_plaintext_api_keys(child) {
+                    masked = true;
+                }
+            }
+            masked
+        }
+        Value::Array(items) => {
+            let mut masked = false;
+            for item in items {
+                if mask_plaintext_api_keys(item) {
+                    masked = true;
+                }
+            }
+            masked
+        }
+        _ => false,
+    }
+}
+
+/// Match `openviking/server/api_keys/new.py:mask_api_key` so CLI and API output look the same.
+fn mask_api_key(api_key: &str) -> String {
+    let parts: Vec<&str> = api_key.split('.').collect();
+    if api_key.is_empty() || parts.len() != 3 {
+        return "*".repeat(api_key.chars().count());
+    }
+
+    let secret_chars: Vec<char> = parts[2].chars().collect();
+    let visible_length = if secret_chars.len() > 4 { 4 } else { 0 };
+    let hidden_length = secret_chars.len() - visible_length;
+
+    let mut masked = format!("{}.{}.", parts[0], parts[1]);
+    masked.push_str(&"*".repeat(hidden_length));
+    masked.push_str(&secret_chars[hidden_length..].iter().collect::<String>());
+    masked
 }
 
 #[cfg(test)]
@@ -463,43 +579,139 @@ mod tests {
     }
 
     #[test]
-    fn list_users_table_output_redacts_plaintext_api_keys() {
+    fn mask_api_key_matches_server_format() {
+        let cases = [
+            (
+                "YWNtZQ.YWxpY2U.abcdefghijklmnop",
+                "YWNtZQ.YWxpY2U.************mnop",
+            ),
+            ("YWNtZQ.YWxpY2U.abcdefgh", "YWNtZQ.YWxpY2U.****efgh"),
+            ("YWNtZQ.YWxpY2U.abcde", "YWNtZQ.YWxpY2U.*bcde"),
+            ("YWNtZQ.YWxpY2U.abcd", "YWNtZQ.YWxpY2U.****"),
+            ("YWNtZQ.YWxpY2U.a", "YWNtZQ.YWxpY2U.*"),
+            ("legacy-secret", "*************"),
+            ("two.parts", "*********"),
+            ("abcd", "****"),
+            ("a", "*"),
+        ];
+
+        for (key, expected) in cases {
+            assert_eq!(mask_api_key(key), expected, "masking {key}");
+        }
+    }
+
+    #[test]
+    fn list_users_table_output_masks_plaintext_api_keys() {
         let response = json!([
-            {"user_id": "alice", "role": "admin", "api_key": "plain-secret"},
+            {"user_id": "alice", "role": "admin", "api_key": "YWNtZQ.YWxpY2U.abcdefgh"},
             {"user_id": "bob", "role": "user", "key_prefix": "prefix123"}
         ]);
 
-        let sanitized = list_users_response_for_output(response, OutputFormat::Table);
+        let (sanitized, masked) = list_users_response_for_output(response, false);
 
+        assert!(masked);
         assert_eq!(
             sanitized,
             json!([
-                {"user_id": "alice", "role": "admin", "api_key": "********"},
+                {"user_id": "alice", "role": "admin", "api_key": "YWNtZQ.YWxpY2U.****efgh"},
                 {"user_id": "bob", "role": "user", "key_prefix": "prefix123"}
             ])
         );
     }
 
     #[test]
-    fn list_users_table_output_preserves_empty_api_keys() {
+    fn list_users_json_output_uses_the_same_masking() {
+        let response = json!([
+            {"user_id": "alice", "role": "admin", "api_key": "YWNtZQ.YWxpY2U.abcdefgh"}
+        ]);
+
+        let (sanitized, masked) = list_users_response_for_output(response, false);
+
+        assert!(masked);
+        assert_eq!(
+            sanitized,
+            json!([
+                {"user_id": "alice", "role": "admin", "api_key": "YWNtZQ.YWxpY2U.****efgh"}
+            ])
+        );
+    }
+
+    #[test]
+    fn list_users_reveal_flag_preserves_plaintext_api_keys() {
+        let response = json!([
+            {"user_id": "alice", "role": "admin", "api_key": "YWNtZQ.YWxpY2U.abcdefgh"}
+        ]);
+
+        let (sanitized, masked) = list_users_response_for_output(response.clone(), true);
+
+        assert!(!masked);
+        assert_eq!(sanitized, response);
+    }
+
+    #[test]
+    fn list_users_admin_prefixes_are_not_remasked() {
+        let response = json!([
+            {"user_id": "alice", "role": "admin", "key_prefix": "YWNtZQ.YWxpY2U.****efgh"}
+        ]);
+
+        let (sanitized, masked) = list_users_response_for_output(response.clone(), false);
+
+        assert!(!masked);
+        assert_eq!(sanitized, response);
+    }
+
+    #[test]
+    fn list_users_table_merges_key_prefix_into_api_key_column() {
+        let mut response = json!([
+            {"user_id": "alice", "role": "admin", "api_key": "YWNtZQ.YWxpY2U.plaintext-secret"},
+            {"user_id": "bob", "role": "user", "key_prefix": "YWNtZQ.Ym9i.****wxyz"},
+            {"user_id": "carol", "role": "user"}
+        ]);
+
+        merge_key_prefix_into_api_key(&mut response);
+
+        assert_eq!(
+            response,
+            json!([
+                {"user_id": "alice", "role": "admin", "api_key": "YWNtZQ.YWxpY2U.plaintext-secret"},
+                {"user_id": "bob", "role": "user", "api_key": "YWNtZQ.Ym9i.****wxyz"},
+                {"user_id": "carol", "role": "user"}
+            ])
+        );
+    }
+
+    #[test]
+    fn list_users_table_merges_key_prefix_inside_summary_object() {
+        let mut response = json!({
+            "total": 1,
+            "users": [
+                {"user_id": "bob", "role": "user", "key_prefix": "YWNtZQ.Ym9i.****wxyz"}
+            ]
+        });
+
+        merge_key_prefix_into_api_key(&mut response);
+
+        assert_eq!(
+            response,
+            json!({
+                "total": 1,
+                "users": [
+                    {"user_id": "bob", "role": "user", "api_key": "YWNtZQ.Ym9i.****wxyz"}
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn list_users_masking_preserves_empty_api_keys() {
         let response = json!([
             {"user_id": "alice", "role": "admin", "api_key": ""},
             {"user_id": "bob", "role": "user", "api_key": "   "}
         ]);
 
-        let sanitized = list_users_response_for_output(response.clone(), OutputFormat::Table);
+        let (sanitized, masked) = list_users_response_for_output(response.clone(), false);
 
-        assert_eq!(sanitized, response);
-    }
-
-    #[test]
-    fn list_users_json_output_preserves_plaintext_api_keys() {
-        let response = json!([
-            {"user_id": "alice", "role": "admin", "api_key": "plain-secret"}
-        ]);
-
-        let sanitized = list_users_response_for_output(response.clone(), OutputFormat::Json);
-
+        assert!(!masked);
         assert_eq!(sanitized, response);
     }
 }

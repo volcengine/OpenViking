@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
 
 from openviking.core.namespace import context_type_for_uri
+from openviking.core.namespace_policy import namespace_policy_for_uri
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
@@ -228,14 +229,16 @@ async def attrs(
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
         stat_result = await service.fs.stat(uri, ctx=_ctx, skip_count=True)
+        namespace_policy = namespace_policy_for_uri(uri)
+        tags = (
+            await _tags_attr(service, uri, _ctx, is_dir=stat_result.get("isDir", False))
+            if namespace_policy.supports_tags
+            else []
+        )
         result = {
             "uri": uri,
             "context_type": context_type_for_uri(uri),
-            "attrs": {
-                "tags": await _tags_attr(
-                    service, uri, _ctx, is_dir=stat_result.get("isDir", False)
-                ),
-            },
+            "attrs": {"tags": tags},
         }
         if result["context_type"] == "memory" and not stat_result.get("isDir", False):
             result["attrs"]["memory"] = _clean_memory_attrs(await service.fs.read(uri, ctx=_ctx))
@@ -300,6 +303,11 @@ async def rm(
     uri: str = Query(..., description="Viking URI"),
     recursive: bool = Query(False, description="Remove recursively"),
     wait: bool = Query(False, description="Wait for semantic refresh to complete"),
+    timeout: Optional[float] = Query(
+        None,
+        deprecated=True,
+        description="Deprecated compatibility parameter; accepted and ignored.",
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove resource."""

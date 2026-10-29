@@ -18,7 +18,7 @@ OpenViking 当前的 prompt 主要分为两类：
    - 存放在 `openviking/prompts/templates/<category>/*.yaml`
    - 用于给模型下发任务，例如做图片理解、文档总结、记忆提取、检索意图分析等
 2. memory schema 模板
-   - 存放在 `openviking/prompts/templates/memory/*.yaml`
+   - 存放在 `openviking/system_assets/memory/memory_templates/builtin/*.yaml`
    - 用于定义某类记忆的字段、文件名模板、内容模板和目录规则
 
 从使用角度看，这些模板主要服务于以下处理环节：

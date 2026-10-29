@@ -10,7 +10,7 @@ from conftest import make_due, replay_records
 from openviking_gateway.capture import MAX_ATTEMPTS, CaptureWorker
 from openviking_gateway.client import VikingError
 from openviking_gateway.protocols import plugin_present
-from openviking_gateway.storage import ManagementStore, SQLiteKernelStore
+from openviking_gateway.storage import SQLiteKernelStore, SQLiteManagementStore
 from openviking_gateway.tool_protocols import ResponseCapture
 
 
@@ -37,7 +37,7 @@ def history(turns):
 
 
 async def worker_for(store, encryption, credential, viking):
-    management = ManagementStore(store.path.parent / "management.sqlite3", encryption)
+    management = SQLiteManagementStore(store.path.parent / "management.sqlite3", encryption)
     await management.initialize()
     await management.save("tenant", "keys", credential["id"], credential)
     return CaptureWorker(store, management, viking)
@@ -428,7 +428,7 @@ async def test_anonymous_greetings_cannot_share_capture_or_archive(
 
 async def test_management_get_uses_one_row_and_response_expiry(setup_kernel, monkeypatch):
     _, store, _, encryption = setup_kernel
-    management = ManagementStore(store.path.parent / "management.sqlite3", encryption)
+    management = SQLiteManagementStore(store.path.parent / "management.sqlite3", encryption)
     await management.initialize()
     for i in range(30):
         await management.save("tenant", "responses", str(i), {"upstream_id": "test"}, ttl=100)

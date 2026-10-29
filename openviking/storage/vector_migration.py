@@ -17,6 +17,7 @@ from openviking.storage.abstract_overview import (
     rewrite_abstract_overview_for_transfer,
     rewrite_viking_uri_references,
 )
+from openviking.storage.acl import ACL_CONTEXT_FIELDS
 from openviking.storage.expr import And, Contains, Eq, Or, PathScope
 from openviking.storage.vector_ids import vector_record_id
 from openviking_cli.session.user_id import UserIdentifier
@@ -82,7 +83,11 @@ def rewrite_vector_record(
         raise ValueError("Vector record is missing a string URI")
 
     rewritten_uri = rewrite_transfer_uri(record_uri, source_uri, target_uri)
-    payload = {key: value for key, value in record.items() if key != "_score"}
+    payload = {
+        key: value
+        for key, value in record.items()
+        if key != "_score" and key not in ACL_CONTEXT_FIELDS
+    }
     owner_fields = owner_fields_for_uri(rewritten_uri)
     payload.update(
         {

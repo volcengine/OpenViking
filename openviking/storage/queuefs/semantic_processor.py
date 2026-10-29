@@ -42,14 +42,13 @@ from openviking.service.task_work_index import detach_task_context, get_task_con
 from openviking.storage.abstract_overview import (
     AbstractOverviewWriteResult,
     body_for_preview,
-    deterministic_sample,
     freshness_metadata,
     markdown_safe_viking_uri,
     parse_overview_file_summaries,
     plan_abstract_overview_refresh,
     write_abstract_overview,
 )
-from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.errors import InvalidPathLockRequestError, LockAcquisitionError
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -84,6 +83,7 @@ _PERMANENT_STORAGE_ERRORS = (
     IsADirectoryError,
     NotADirectoryError,
     AGFSNotADirectoryError,
+    InvalidPathLockRequestError,
 )
 
 
@@ -1071,15 +1071,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
         completed_summaries = [s for s in file_summaries if s is not None]
-        sample_limit = getattr(
-            get_openviking_config().semantic,
-            "overview_sample_limit",
-            32,
-        )
-        sampled_summaries = deterministic_sample(completed_summaries, sample_limit)
         generated_content = await self._generate_overview(
             dir_uri,
-            sampled_summaries,
+            completed_summaries,
             [],
             llm_sem=llm_sem,
             total_files=len(file_paths),
@@ -1097,7 +1091,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 ctx=ctx,
                 lock=lock,
                 total_entries=len(file_paths),
-                sampled_entries=len(sampled_summaries),
+                sampled_entries=len(completed_summaries),
             )
         except LockAcquisitionError:
             raise

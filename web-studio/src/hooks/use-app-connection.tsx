@@ -9,7 +9,11 @@ import { useNavigate, useRouterState } from '@tanstack/react-router'
 import i18n from '#/i18n'
 import { identifyServiceProvider } from '#/lib/studio-service'
 import { fetchAdminAccounts } from '#/lib/admin'
-import { isOvClientError, ovClient } from '#/lib/ov-client'
+import {
+  isOvClientError,
+  normalizeOvClientError,
+  ovClient,
+} from '#/lib/ov-client'
 import {
   readConnectionProfiles,
   activateIdentityProfile,
@@ -602,6 +606,9 @@ export function AppConnectionProvider({
       void navigate({ to: '/settings' })
     }
   }, [navigate, pathname])
+  const onBootstrapAuthError = React.useEffectEvent(() => {
+    openConnectionSettings()
+  })
 
   React.useEffect(() => {
     applyConnection(connection, serverMode)
@@ -661,8 +668,13 @@ export function AppConnectionProvider({
           connection.baseUrl,
           createConnectionHealthHeaders(connection, 'data'),
         )
-      } catch {
-        if (!isCancelled()) setServerMode('offline')
+      } catch (error) {
+        if (!isCancelled()) {
+          setServerMode('offline')
+          if (shouldRedirectToLoginOnApiError(normalizeOvClientError(error))) {
+            onBootstrapAuthError()
+          }
+        }
         return
       }
       if (!isCancelled()) {

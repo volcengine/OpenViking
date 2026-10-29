@@ -356,6 +356,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         try:
             return await self._run_once_async(
                 _embed_call,
+                is_query=is_query,
                 logger=logger,
                 operation_name="Volcengine async embedding",
             )
@@ -513,6 +514,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         try:
             return await self._run_once_async(
                 _embed_call,
+                is_query=is_query,
                 logger=logger,
                 operation_name="Volcengine async sparse embedding",
             )
@@ -707,6 +709,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         try:
             return await self._run_once_async(
                 _embed_call,
+                is_query=is_query,
                 logger=logger,
                 operation_name="Volcengine async hybrid embedding",
             )

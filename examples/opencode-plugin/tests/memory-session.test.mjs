@@ -167,6 +167,128 @@ test("autoCapture=false skips lifecycle commits but preserves explicit commits",
   })
 })
 
+test("skipSubagentSessions=true keeps child-session prompts out of capture and commit (#6027)", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-subagent-", async (dir) => {
+      const statePath = join(dir, "openviking-session-state.json")
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), skipSubagentSessions: true },
+        pluginRoot: dir,
+      })
+
+      await manager.init()
+
+      // The child prompt and the primary prompt carry the same text: only the
+      // session's parentID distinguishes a spawned agent task from a human one.
+      const text = "You are a subagent spawned by another session. Classify the review items."
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-child-1", parentID: "oc-parent-1" } } })
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: { info: { id: "msg-child-1", sessionID: "oc-child-1", role: "user" } },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: { part: { id: "part-child-1", messageID: "msg-child-1", sessionID: "oc-child-1", type: "text", text } },
+      })
+
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-primary-1" } } })
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: { info: { id: "msg-primary-1", sessionID: "oc-primary-1", role: "user" } },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: { part: { id: "part-primary-1", messageID: "msg-primary-1", sessionID: "oc-primary-1", type: "text", text } },
+      })
+
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-child-1" })
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-primary-1" })
+      await manager.flushAll({ commit: true })
+
+      const childUrls = requests.filter((request) => request.url?.includes("__subagent-")).map((request) => request.url)
+      assert.deepEqual(childUrls, [], "child-session capture and commit must never reach OpenViking")
+      assert.equal(
+        requests.some((request) =>
+          request.method === "POST" &&
+          request.url?.startsWith("/api/v1/sessions/oc-oc-primary-1/") &&
+          request.url?.endsWith("/messages/batch") &&
+          request.body?.includes("Classify the review items."),
+        ),
+        true,
+        "the same text in a primary session must still be captured",
+      )
+
+      // Lifecycle commit for the child session is part of the same ownership gate.
+      const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"))
+      assert.equal(persisted.sessions["oc-child-1"].parentId, "oc-parent-1")
+
+      // Recovery path: the persisted parentID must survive a restart so a
+      // reloaded manager keeps skipping the child session without relying on
+      // a fresh session.created event.
+      const reloaded = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), skipSubagentSessions: true },
+        pluginRoot: dir,
+      })
+      await reloaded.init()
+      await reloaded.handleEvent({
+        type: "message.updated",
+        properties: { info: { id: "msg-child-2", sessionID: "oc-child-1", role: "user" } },
+      })
+      await reloaded.handleEvent({
+        type: "message.part.updated",
+        properties: { part: { id: "part-child-2", messageID: "msg-child-2", sessionID: "oc-child-1", type: "text", text: "More child-agent output." } },
+      })
+      await reloaded.flushAll({ commit: true })
+      assert.deepEqual(
+        requests.filter((request) => request.url?.includes("__subagent-")).map((request) => request.url),
+        [],
+        "recovered child session must stay excluded from capture",
+      )
+
+      requests.splice(0, requests.length)
+      await manager.handleEvent({ type: "session.deleted", properties: { info: { id: "oc-child-1" } } })
+      assert.deepEqual(
+        requests.filter((request) => request.url?.includes("__subagent-")).map((request) => request.url),
+        [],
+        "child-session deletion must not commit the child OpenViking session",
+      )
+    })
+  })
+})
+
+test("skipSubagentSessions=false preserves child-session capture", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-subagent-off-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), skipSubagentSessions: false },
+        pluginRoot: dir,
+      })
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-child-off", parentID: "oc-parent-off" } } })
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: { info: { id: "msg-child-off", sessionID: "oc-child-off", role: "user" } },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: { part: { id: "part-child-off", messageID: "msg-child-off", sessionID: "oc-child-off", type: "text", text: "Child capture stays on by default." } },
+      })
+      await manager.flushAll({ commit: true })
+
+      assert.equal(
+        requests.some((request) =>
+          request.url?.includes("__subagent-") &&
+          request.url?.endsWith("/messages/batch") &&
+          request.body?.includes("Child capture stays on by default."),
+        ),
+        true,
+        "the default must keep capturing child sessions",
+      )
+    })
+  })
+})
+
 test("a session first seen via message.updated keeps its own session id (#6222)", async () => {
   await withCaptureServer(async ({ endpoint, requests }) => {
     await withTempDir("ov-oc-session-", async (dir) => {

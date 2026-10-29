@@ -10,7 +10,7 @@ import os
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, TypeVar, Union, cast
 from urllib.parse import quote
 
 import httpx
@@ -58,6 +58,8 @@ from .options import (
     PreflightAssetOptions,
     ReindexOptions,
     ResolveAssetsOptions,
+    RuleCompileOptions,
+    RuleSearchOptions,
     SearchContextOptions,
     SearchContextResult,
     SearchOptions,
@@ -95,6 +97,7 @@ ERROR_CODE_TO_EXCEPTION = {
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 _SESSION_CONFIG_UNSET = object()
+_OptionsT = TypeVar("_OptionsT", bound=Mapping[str, Any])
 
 
 def _option_keys(options_type: Type[Any]) -> set[str]:
@@ -103,6 +106,19 @@ def _option_keys(options_type: Type[Any]) -> set[str]:
     if optional_keys is not None and required_keys is not None:
         return set(optional_keys) | set(required_keys)
     return set(getattr(options_type, "__annotations__", {}))
+
+
+def _normalize_timeout_options(timeout: Any, options: Optional[_OptionsT]) -> Optional[_OptionsT]:
+    """Accept options in the positional slot used after timeout was removed.
+
+    Timeout values are deprecated and ignored. A mapping in that slot is treated
+    as options; supplying options in both slots is an error.
+    """
+    if isinstance(timeout, Mapping):
+        if options is not None:
+            raise TypeError("options were provided in both the timeout and options slots")
+        return cast(_OptionsT, timeout)
+    return options
 
 
 def _image_mime_type(file_name: str = "") -> str:
@@ -713,9 +729,10 @@ class AsyncHTTPClient:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
-        option_values = dict(options or {})
+        option_values = dict(_normalize_timeout_options(timeout, options) or {})
         add_type = option_values.get("add_type")
         if add_type is not None:
             add_type = add_type.strip() or None
@@ -788,9 +805,10 @@ class AsyncHTTPClient:
         self,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
-        option_values = dict(options or {})
+        option_values = dict(_normalize_timeout_options(timeout, options) or {})
         if "target_uri" in option_values:
             option_values["target_uri"] = VikingURI.normalize(option_values["target_uri"])
         request_data = self._build_options_payload(
@@ -898,9 +916,10 @@ class AsyncHTTPClient:
         skill_name: str,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
-        option_values = dict(options or {})
+        option_values = dict(_normalize_timeout_options(timeout, options) or {})
         if "target_uri" in option_values:
             option_values["target_uri"] = VikingURI.normalize(option_values["target_uri"])
         request_data = self._build_options_payload(
@@ -1033,7 +1052,8 @@ class AsyncHTTPClient:
             )
         return self._handle_response(response)
 
-    async def wait_processed(self) -> Dict[str, Any]:
+    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Wait for processing; timeout is deprecated and ignored."""
         response = await self._request(
             "POST",
             "/api/v1/system/wait",
@@ -1259,6 +1279,7 @@ class AsyncHTTPClient:
         uri: str,
         recursive: bool = False,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
     ) -> None:
         params = {"uri": VikingURI.normalize(uri), "recursive": recursive, "wait": wait}
         response = await self._request("DELETE", "/api/v1/fs", params=params)
@@ -1327,10 +1348,11 @@ class AsyncHTTPClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
         payload = self._build_options_payload(
-            options,
+            _normalize_timeout_options(timeout, options),
             WriteOptions,
             fixed={
                 "uri": VikingURI.normalize(uri),
@@ -1351,6 +1373,7 @@ class AsyncHTTPClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         """Apply multiple content writes, then refresh semantics once."""
@@ -1360,7 +1383,7 @@ class AsyncHTTPClient:
             item["uri"] = VikingURI.normalize(str(item.get("uri") or ""))
             normalized_operations.append(item)
         payload = self._build_options_payload(
-            options,
+            _normalize_timeout_options(timeout, options),
             BatchWriteOptions,
             fixed={
                 "root_uri": VikingURI.normalize(root_uri),
@@ -1665,6 +1688,102 @@ class AsyncHTTPClient:
             fixed={"from": list(from_uris), "to": to, "skill": skill},
         )
         response = await self._request("POST", "/api/v1/compile", json=payload)
+        return self._handle_response(response)
+
+    async def rule_compile(
+        self,
+        instruction: Optional[str] = None,
+        options: Optional[RuleCompileOptions] = None,
+    ) -> Dict[str, Any]:
+        """Compile inline instructions and resource-backed files into durable rules."""
+        option_values = dict(options or {})
+        raw_sources: Any = option_values.pop("sources", [])
+        if option_values:
+            names = ", ".join(sorted(option_values))
+            raise ValueError(f"Unsupported rule compile options: {names}")
+        if not isinstance(raw_sources, list):
+            raise ValueError("Rule compile sources must be a list")
+
+        sources: List[Dict[str, Any]] = []
+        for source in raw_sources:
+            if isinstance(source, dict):
+                normalized = dict(source)
+                if normalized.get("resource_uri"):
+                    normalized["resource_uri"] = VikingURI.normalize(
+                        str(normalized["resource_uri"])
+                    )
+                    sources.append(normalized)
+                    continue
+                for target_field in ("to", "parent"):
+                    if normalized.get(target_field):
+                        normalized[target_field] = VikingURI.normalize(
+                            str(normalized[target_field])
+                        )
+                path_value = normalized.get("path")
+                if isinstance(path_value, str):
+                    local_path = Path(path_value).expanduser()
+                    if local_path.exists() and not normalized.get("add_type"):
+                        normalized.pop("path")
+                        normalized.setdefault("source_name", local_path.name)
+                        if local_path.is_dir():
+                            zip_path = self._zip_directory(str(local_path))
+                            try:
+                                normalized["temp_file_id"] = await self._upload_temp_file(zip_path)
+                            finally:
+                                Path(zip_path).unlink(missing_ok=True)
+                        else:
+                            normalized["temp_file_id"] = await self._upload_temp_file(
+                                str(local_path)
+                            )
+                sources.append(normalized)
+                continue
+
+            value = os.fspath(source)
+            if value.startswith("viking://"):
+                sources.append({"resource_uri": VikingURI.normalize(value)})
+                continue
+            path = Path(value).expanduser()
+            if path.is_dir():
+                zip_path = self._zip_directory(str(path))
+                try:
+                    temp_file_id = await self._upload_temp_file(zip_path)
+                finally:
+                    Path(zip_path).unlink(missing_ok=True)
+                sources.append(
+                    {
+                        "temp_file_id": temp_file_id,
+                        "source_name": path.name,
+                    }
+                )
+            elif path.is_file():
+                sources.append(
+                    {
+                        "temp_file_id": await self._upload_temp_file(str(path)),
+                        "source_name": path.name,
+                    }
+                )
+            else:
+                sources.append({"path": value})
+
+        payload = {"instruction": instruction, "sources": sources}
+        response = await self._request(
+            "POST",
+            "/api/v1/rules/compile",
+            json=self._compact_request_body(payload),
+        )
+        return self._handle_response(response)
+
+    async def rule_search(
+        self,
+        task_context: str,
+        options: Optional[RuleSearchOptions] = None,
+    ) -> Dict[str, Any]:
+        payload = self._build_options_payload(
+            options,
+            RuleSearchOptions,
+            fixed={"task_context": task_context},
+        )
+        response = await self._request("POST", "/api/v1/rules/search", json=payload)
         return self._handle_response(response)
 
     async def cancel_task(self, task_id: str) -> Dict[str, Any]:
@@ -2386,6 +2505,7 @@ class SyncHTTPClient:
         to: Optional[str] = None,
         parent: Optional[str] = None,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddResourceOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
@@ -2394,7 +2514,7 @@ class SyncHTTPClient:
                 to=to,
                 parent=parent,
                 wait=wait,
-                options=options,
+                options=_normalize_timeout_options(timeout, options),
             )
         )
 
@@ -2410,9 +2530,14 @@ class SyncHTTPClient:
         self,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[AddSkillOptions] = None,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.add_skill(data, wait=wait, options=options))
+        return run_async(
+            self._async_client.add_skill(
+                data, wait=wait, options=_normalize_timeout_options(timeout, options)
+            )
+        )
 
     def list_skills(
         self,
@@ -2488,10 +2613,13 @@ class SyncHTTPClient:
         skill_name: str,
         data: Any,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[UpdateSkillOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.update_skill(skill_name, data, wait=wait, options=options)
+            self._async_client.update_skill(
+                skill_name, data, wait=wait, options=_normalize_timeout_options(timeout, options)
+            )
         )
 
     def delete_skill(
@@ -2552,7 +2680,8 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.trigger_watch(task_id, to_uri=to_uri))
 
-    def wait_processed(self) -> Dict[str, Any]:
+    def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Wait for processing; timeout is deprecated and ignored."""
         return run_async(self._async_client.wait_processed())
 
     def ls(
@@ -2727,6 +2856,7 @@ class SyncHTTPClient:
         uri: str,
         recursive: bool = False,
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
     ) -> None:
         run_async(self._async_client.rm(uri, recursive=recursive, wait=wait))
 
@@ -2754,10 +2884,17 @@ class SyncHTTPClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[WriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.write(uri, content, mode=mode, wait=wait, options=options)
+            self._async_client.write(
+                uri,
+                content,
+                mode=mode,
+                wait=wait,
+                options=_normalize_timeout_options(timeout, options),
+            )
         )
 
     def batch_write(
@@ -2765,10 +2902,16 @@ class SyncHTTPClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
+        timeout: Optional[float] = None,  # Deprecated and ignored.
         options: Optional[BatchWriteOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.batch_write(root_uri, operations, wait=wait, options=options)
+            self._async_client.batch_write(
+                root_uri,
+                operations,
+                wait=wait,
+                options=_normalize_timeout_options(timeout, options),
+            )
         )
 
     def set_tags(
@@ -2946,6 +3089,20 @@ class SyncHTTPClient:
         options: Optional[CompileOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(self._async_client.compile(from_uris, to, skill, options))
+
+    def rule_compile(
+        self,
+        instruction: Optional[str] = None,
+        options: Optional[RuleCompileOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.rule_compile(instruction, options))
+
+    def rule_search(
+        self,
+        task_context: str,
+        options: Optional[RuleSearchOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.rule_search(task_context, options))
 
     def cancel_task(self, task_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.cancel_task(task_id))

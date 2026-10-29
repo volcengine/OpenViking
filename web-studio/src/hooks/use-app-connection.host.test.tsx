@@ -8,13 +8,16 @@ import {
 import { afterEach, expect, it, vi } from 'vitest'
 import { AppConnectionProvider, useAppConnection } from './use-app-connection'
 
-const { health } = vi.hoisted(() => ({ health: vi.fn() }))
+const { health, navigate } = vi.hoisted(() => ({
+  health: vi.fn(),
+  navigate: vi.fn(),
+}))
 vi.mock('#/lib/connection/health', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   fetchServerHealth: health,
 }))
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigate,
   useRouterState: () => '/',
 }))
 afterEach(() => {

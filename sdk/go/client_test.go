@@ -351,7 +351,7 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 	}))
 	defer closeServer()
 
-	listPage, err := client.ListPage(context.Background(), "viking://session", &ListOptions{
+	listPage, err := client.ListPage(context.Background(), "viking://~/sessions", &ListOptions{
 		NodeLimit:       200,
 		Offset:          4,
 		Limit:           5,
@@ -370,9 +370,9 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 	if !listPage.HasMore || !reflect.DeepEqual(listPage.Result, entries) {
 		t.Fatalf("list page = %#v", listPage)
 	}
-	legacyList, err := client.List(context.Background(), "viking://session", nil)
-	if err != nil || !reflect.DeepEqual(legacyList, entries) {
-		t.Fatalf("list = %#v, err = %v", legacyList, err)
+	sessionList, err := client.List(context.Background(), "viking://~/sessions", nil)
+	if err != nil || !reflect.DeepEqual(sessionList, entries) {
+		t.Fatalf("list = %#v, err = %v", sessionList, err)
 	}
 	treePage, err := client.TreePage(context.Background(), "viking://resources/docs", &TreeOptions{
 		NodeLimit:       200,
@@ -948,10 +948,16 @@ func TestFilesystemTagProjectionOptionsAreSent(t *testing.T) {
 }
 
 func TestBatchWriteAndDownloadBytes(t *testing.T) {
+	var wait *bool
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/content/batch-write":
 			body := readJSONBody(t, r)
+			if wait == nil {
+				requireBodyKeysAbsent(t, body, "wait")
+			} else if body["wait"] != *wait {
+				t.Errorf("wait = %#v, want %v", body["wait"], *wait)
+			}
 			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != true {
 				t.Fatalf("body = %#v", body)
 			}
@@ -985,7 +991,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 	}))
 	defer closeServer()
 
-	if _, err := client.BatchWrite(context.Background(), "resources/project", []BatchWriteOperation{
+	operations := []BatchWriteOperation{
 		{
 			URI:     "resources/project/a.txt",
 			Content: String("hello"),
@@ -994,8 +1000,16 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			TagMode: "append",
 			ACL:     &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
 		},
-	}, &BatchWriteOptions{ProcessingMode: "vectors_only", DeferProcessing: true, Extra: map[string]any{"future_flag": 0}}); err != nil {
-		t.Fatal(err)
+	}
+	for _, wait = range []*bool{nil, Bool(false), Bool(true)} {
+		opts := &BatchWriteOptions{Wait: wait, ProcessingMode: "vectors_only", DeferProcessing: true, Extra: map[string]any{"future_flag": 0}}
+		if _, err := client.BatchWrite(context.Background(), "resources/project", operations, opts); err != nil {
+			t.Fatal(err)
+		}
+		opts.Extra = map[string]any{"wait": true}
+		if _, err := client.BatchWrite(context.Background(), "resources/project", operations, opts); err == nil || !strings.Contains(err.Error(), `extra cannot override "wait"`) {
+			t.Fatalf("expected wait conflict, got %v", err)
+		}
 	}
 	data, err := client.DownloadBytes(context.Background(), "resources/project/a.txt")
 	if err != nil {
@@ -1007,20 +1021,34 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 }
 
 func TestAddResourceExtra(t *testing.T) {
+	var body map[string]any
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := readJSONBody(t, r)
-		if body["future_flag"] != false {
-			t.Fatalf("body = %#v", body)
-		}
+		body = readJSONBody(t, r)
 		writeOK(t, w, map[string]any{"root_uri": "viking://resources/a"})
 	}))
 	defer closeServer()
 
-	if _, err := client.AddResource(context.Background(), "https://example.com/a.md", &AddResourceOptions{
-		CreateParent: Bool(false),
-		Extra:        map[string]any{"future_flag": false},
-	}); err != nil {
-		t.Fatal(err)
+	for _, opts := range []*AddResourceOptions{nil, {}, {CreateParent: Bool(false)}, {CreateParent: Bool(true)}} {
+		if opts != nil {
+			opts.Extra = map[string]any{"future_flag": false}
+		}
+		if _, err := client.AddResource(context.Background(), "https://example.com/a.md", opts); err != nil {
+			t.Fatal(err)
+		}
+		if opts == nil || opts.CreateParent == nil {
+			requireBodyKeysAbsent(t, body, "create_parent")
+		} else if body["create_parent"] != *opts.CreateParent {
+			t.Fatalf("create_parent = %#v, want %v", body["create_parent"], *opts.CreateParent)
+		}
+		if opts != nil {
+			if body["future_flag"] != false {
+				t.Fatalf("body = %#v", body)
+			}
+			opts.Extra = map[string]any{"create_parent": true}
+			if _, err := client.AddResource(context.Background(), "https://example.com/a.md", opts); err == nil || !strings.Contains(err.Error(), `extra cannot override "create_parent"`) {
+				t.Fatalf("expected create_parent conflict, got %v", err)
+			}
+		}
 	}
 }
 
@@ -1104,19 +1132,48 @@ func TestSessionSendsLatestMessageAndRetentionFields(t *testing.T) {
 }
 
 func TestCreateSessionSendsExtra(t *testing.T) {
+	var body map[string]any
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := readJSONBody(t, r)
-		if body["future_flag"] != false {
-			t.Fatalf("body = %#v", body)
-		}
+		body = readJSONBody(t, r)
 		writeOK(t, w, map[string]any{"session_id": "session-1"})
 	}))
 	defer closeServer()
 
-	if _, err := client.CreateSession(context.Background(), &CreateSessionOptions{
-		Extra: map[string]any{"future_flag": false},
-	}); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		opts *CreateSessionOptions
+		want map[string]any
+	}{
+		{nil, map[string]any{}},
+		{&CreateSessionOptions{}, map[string]any{}},
+		{&CreateSessionOptions{SessionID: "s1"}, map[string]any{"session_id": "s1"}},
+		{&CreateSessionOptions{Extra: map[string]any{"future_flag": false}}, map[string]any{"future_flag": false}},
+		{
+			&CreateSessionOptions{MemoryPolicy: map[string]any{}, AutoCommitPolicy: map[string]any{}, MemoryExtractionConfig: map[string]any{}},
+			map[string]any{"memory_policy": map[string]any{}, "auto_commit_policy": map[string]any{}, "memory_extraction_config": map[string]any{}},
+		},
+		{
+			&CreateSessionOptions{AutoCommitPolicy: map[string]any{"message_count_threshold": 25}},
+			map[string]any{"auto_commit_policy": map[string]any{"message_count_threshold": float64(25)}},
+		},
+		{
+			&CreateSessionOptions{DisableAutoCommit: true, AutoCommitPolicy: map[string]any{"message_count_threshold": 25}},
+			map[string]any{"auto_commit_policy": nil},
+		},
+	} {
+		if _, err := client.CreateSession(context.Background(), tc.opts); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(body, tc.want) {
+			t.Fatalf("body = %#v, want %#v", body, tc.want)
+		}
+		if tc.opts != nil {
+			for _, field := range []string{"memory_policy", "auto_commit_policy", "memory_extraction_config"} {
+				tc.opts.Extra = map[string]any{field: map[string]any{}}
+				if _, err := client.CreateSession(context.Background(), tc.opts); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("extra cannot override %q", field)) {
+					t.Fatalf("expected %s conflict, got %v", field, err)
+				}
+			}
+		}
 	}
 }
 

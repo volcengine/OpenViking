@@ -1,8 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from types import SimpleNamespace
-
 import pytest
 
 from openviking.server.identity import RequestContext, Role
@@ -109,10 +107,6 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -148,10 +142,6 @@ async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -182,10 +172,6 @@ async def test_unlistable_semantic_root_is_not_materialized_as_directory(
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
-    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -210,10 +196,6 @@ async def test_empty_semantic_directory_still_receives_sidecars(monkeypatch):
     fake_fs = _FakeVikingFS({root_uri: []})
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
-    )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
     processor = _FakeProcessor()

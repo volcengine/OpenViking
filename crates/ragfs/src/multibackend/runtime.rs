@@ -280,6 +280,7 @@ pub struct FlushWorker {
     router: AccountRouter,
     initial_partitions: u32,
     backup_names: Vec<String>,
+    initialized_accounts: HashSet<String>,
 }
 
 impl FlushWorker {
@@ -298,6 +299,7 @@ impl FlushWorker {
             primary,
             initial_partitions,
             backup_names,
+            initialized_accounts: HashSet::new(),
         }
     }
 
@@ -324,6 +326,7 @@ impl FlushWorker {
         let mut accounts = HashMap::<String, Vec<PendingEvent>>::new();
         for event in batch {
             if matches!(event.kind, PendingEventKind::DeleteAccount) {
+                self.initialized_accounts.remove(&event.account_id);
                 accounts
                     .entry(SYSTEM_DIR.to_string())
                     .or_default()
@@ -347,34 +350,34 @@ impl FlushWorker {
                 }
                 Ok(true) => {}
             }
-            match self
-                .store
-                .initialize_account(&account, self.initial_partitions, &self.backup_names)
-                .await
-            {
-                Ok(partitions) => {
-                    if let Err(error) = bootstrap_account(
-                        self.provider.as_ref(),
-                        self.store.as_ref(),
-                        &account,
-                        &partitions,
-                    )
+            if !self.initialized_accounts.contains(&account) {
+                match self
+                    .store
+                    .initialize_account(&account, self.initial_partitions, &self.backup_names)
                     .await
-                    {
+                {
+                    Ok(partitions) => {
+                        if let Err(error) = bootstrap_account(
+                            self.provider.as_ref(),
+                            self.store.as_ref(),
+                            &account,
+                            &partitions,
+                        )
+                        .await
+                        {
+                            failed = true;
+                            error!(account = %account, error = %error,
+                                "multi-write provider bootstrap failed");
+                            continue;
+                        }
+                        self.initialized_accounts.insert(account.clone());
+                    }
+                    Err(error) => {
                         failed = true;
                         error!(account = %account, error = %error,
-                            "multi-write provider bootstrap failed");
+                            "multi-write account initialization failed");
                         continue;
                     }
-                }
-                Err(error) => {
-                    failed = true;
-                    error!(
-                        account = %account,
-                        error = %error,
-                        "multi-write account initialization failed"
-                    );
-                    continue;
                 }
             }
 

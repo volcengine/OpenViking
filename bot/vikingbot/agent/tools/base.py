@@ -165,6 +165,11 @@ class Tool(ABC):
         """
         return {}
 
+    @property
+    def preserve_complete_result(self) -> bool:
+        """Whether the model must receive this tool's result without preview truncation."""
+        return False
+
     @abstractmethod
     async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str | MultimodalToolResult:
         """

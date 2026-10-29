@@ -18,15 +18,19 @@ func (c *Client) CreateSession(ctx context.Context, opts *CreateSessionOptions) 
 	}
 	payload := map[string]any{}
 	setString(payload, "session_id", opts.SessionID)
-	setAny(payload, "memory_policy", opts.MemoryPolicy)
+	if opts.MemoryPolicy != nil {
+		payload["memory_policy"] = opts.MemoryPolicy
+	}
 	if opts.DisableAutoCommit {
 		payload["auto_commit_policy"] = nil
-	} else {
-		setAny(payload, "auto_commit_policy", opts.AutoCommitPolicy)
+	} else if opts.AutoCommitPolicy != nil {
+		payload["auto_commit_policy"] = opts.AutoCommitPolicy
 	}
-	setAny(payload, "memory_extraction_config", opts.MemoryExtractionConfig)
+	if opts.MemoryExtractionConfig != nil {
+		payload["memory_extraction_config"] = opts.MemoryExtractionConfig
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
-	if err := mergeExtra(payload, opts.Extra); err != nil {
+	if err := mergeExtraProtected(payload, opts.Extra, "memory_policy", "auto_commit_policy", "memory_extraction_config"); err != nil {
 		return nil, err
 	}
 	var result map[string]any

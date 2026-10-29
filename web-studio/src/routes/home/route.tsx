@@ -98,7 +98,7 @@ function HomePage() {
 
   return (
     <div className="flex flex-col gap-5 pb-8">
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-4">
         <ContextDataPanel
           data={summary?.context_counts}
           disabled={metricsUnavailable}

@@ -24,6 +24,7 @@ from openviking.retrieve.context_assembler.params import (
 from openviking.retrieve.context_assembler.pipeline import assemble_context
 from openviking.retrieve.context_assembler.render import render_entry
 from openviking.retrieve.context_assembler.tiers import tier_window
+from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -1149,3 +1150,348 @@ async def test_full_buckets_keep_their_quotas_when_one_bucket_scores_highest():
     )
 
     assert Counter(entry.category for entry in result.entries) == quotas
+
+
+class _FakeRerankClient:
+    """Scores each document by its text; unknown text scores 0."""
+
+    def __init__(self, scores, *, error=None, result=None):
+        self.scores = scores
+        self.error = error
+        self.result = result
+        self.calls = []
+
+    def rerank_batch(self, query, documents):
+        self.calls.append((query, list(documents)))
+        if self.error is not None:
+            raise self.error
+        if self.result is not None:
+            return self.result
+        return [self.scores.get(document, 0.0) for document in documents]
+
+
+def _rerank_service(service, client, *, threshold=0.1):
+    service.search.context_reranker = lambda: Reranker(client=client, threshold=threshold)
+    return service
+
+
+def _flat_service(hits, finds=None):
+    """Answers every flat find from ``hits``, honouring the requested limit."""
+
+    async def fake_find(**kwargs):
+        if finds is not None:
+            finds.append(kwargs)
+        return _FakeFindResult(memories=list(hits[: kwargs["limit"]]))
+
+    return SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=None),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+
+
+PREFERENCES = f"{USER_ROOT}/memories/preferences"
+FLAT_HITS = [
+    _hit(f"{PREFERENCES}/{name}.md", score, f"text {name}")
+    for name, score in (("a", 0.9), ("b", 0.8), ("c", 0.7), ("d", 0.6))
+]
+
+
+async def _assemble_flat(service, **overrides):
+    params = {"query": "q", "limit": 2, "peer_scope": "actor", "max_tokens": 8000}
+    params.update(overrides)
+    return await assemble_context(service=service, ctx=_ctx(), params=AssembleParams(**params))
+
+
+def _scored(result):
+    return [(entry.uri.rsplit("/", 1)[-1], entry.score) for entry in result.entries]
+
+
+async def test_context_rerank_off_leaves_the_assembly_unchanged():
+    plain_finds, off_finds = [], []
+    plain = await _assemble_flat(_flat_service(FLAT_HITS, plain_finds))
+    off_service = _flat_service(FLAT_HITS, off_finds)
+    off_service.search.context_reranker = lambda: None
+    off = await _assemble_flat(off_service)
+
+    assert _scored(plain) == _scored(off) == [("a.md", 0.9), ("b.md", 0.8)]
+    assert plain.stats == off.stats
+    assert "rerank" not in off.stats
+    assert [call["limit"] for call in off_finds] == [call["limit"] for call in plain_finds] == [2]
+
+
+async def test_flat_context_rerank_widens_recall_and_reorders_the_cut():
+    finds = []
+    client = _FakeRerankClient({"text a": 0.3, "text b": 0.2, "text c": 0.5, "text d": 0.95})
+    service = _rerank_service(_flat_service(FLAT_HITS, finds), client)
+
+    result = await _assemble_flat(service)
+
+    assert [call["limit"] for call in finds] == [4]
+    assert client.calls == [("q", ["text a", "text b", "text c", "text d"])]
+    # d sat outside the vector cut of 2; its rerank score now reports as its score.
+    assert _scored(result) == [("d.md", 0.95), ("c.md", 0.5)]
+    assert result.stats["rerank"] == {"used": True, "candidates": 4, "capped": 0}
+
+
+async def test_context_rerank_scores_against_the_expanded_queries_once(monkeypatch):
+    async def fake_expand(*, query, session, mode, **kwargs):
+        del session, mode, kwargs
+        return [query, "fix for Redis OOM incident"], "used"
+
+    redis = _hit(f"{PREFERENCES}/redis.md", 0.6, "redis oom fix")
+    finds = []
+
+    async def fake_find(**kwargs):
+        finds.append(kwargs)
+        # Only the expansion names the topic, so only it recalls the memory.
+        if "Redis" in kwargs["query"]:
+            return _FakeFindResult(memories=[redis])
+        return _FakeFindResult(memories=[_hit(f"{PREFERENCES}/a.md", 0.5, "text a")])
+
+    class _QueryAwareClient(_FakeRerankClient):
+        def rerank_batch(self, query, documents):
+            self.calls.append((query, list(documents)))
+            return [0.9 if "redis" in d and "Redis" in query else 0.03 for d in documents]
+
+    monkeypatch.setattr(pipeline_module, "expand_queries", fake_expand)
+    client = _QueryAwareClient({})
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=None),
+        sessions=SimpleNamespace(get=lambda *args, **kwargs: _async_value(_fake_session())),
+        viking_fs=None,
+        vlm_resolver=_DEFAULT_VLM_RESOLVER,
+    )
+
+    result = await _assemble_flat(
+        _rerank_service(service, client), query="how did we fix it?", session_id="s1"
+    )
+
+    assert [call["query"] for call in finds] == ["how did we fix it?", "fix for Redis OOM incident"]
+    assert [query for query, _ in client.calls] == [
+        "how did we fix it?\nfix for Redis OOM incident"
+    ]
+    # Scored against the raw query alone, it would fall under rerank.threshold.
+    assert _scored(result) == [("redis.md", 0.9)]
+
+
+async def _async_value(value):
+    return value
+
+
+async def test_bucketed_context_rerank_runs_before_quotas():
+    events = f"{USER_ROOT}/memories/events"
+    entities = f"{USER_ROOT}/memories/entities"
+    finds = []
+    service = _bucket_service(
+        {
+            events: [_hit(f"{events}/e0.md", 0.9, "e0"), _hit(f"{events}/e1.md", 0.5, "e1")],
+            entities: [_hit(f"{entities}/n0.md", 0.8, "n0")],
+        },
+        finds=finds,
+    )
+    params = {"quotas": {"events": 1, "entities": 1}}
+
+    before = await _assemble_flat(service, **params)
+    client = _FakeRerankClient({"e0": 0.2, "e1": 0.95, "n0": 0.6})
+    after = await _assemble_flat(_rerank_service(service, client), **params)
+
+    assert _scored(before) == [("e0.md", 0.9), ("n0.md", 0.8)]
+    # e1 was beyond the events quota on vector scores; reranked, it takes the slot.
+    assert _scored(after) == [("e1.md", 0.95), ("n0.md", 0.6)]
+    assert len(client.calls) == 1
+    assert sorted(client.calls[0][1]) == ["e0", "e1", "n0"]
+
+
+async def test_a_lone_bucket_recalls_past_its_quota_for_rerank():
+    events = f"{USER_ROOT}/memories/events"
+    hits = [_hit(f"{events}/{i}.md", 0.9 - i * 0.1, f"e{i}") for i in range(4)]
+    plain_finds, finds = [], []
+
+    await _assemble_flat(_bucket_service({events: hits}, finds=plain_finds), quotas={"events": 2})
+    client = _FakeRerankClient({"e3": 0.9, "e2": 0.8})
+    result = await _assemble_flat(
+        _rerank_service(_bucket_service({events: hits}, finds=finds), client),
+        quotas={"events": 2},
+    )
+
+    assert {call["limit"] for call in plain_finds} == {2}
+    assert {call["limit"] for call in finds} == {4}
+    assert [entry.uri.rsplit("/", 1)[-1] for entry in result.entries] == ["3.md", "2.md"]
+
+
+async def test_bucketed_rerank_pool_is_capped_per_quota_and_reports_it():
+    events = f"{USER_ROOT}/memories/events"
+
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"] != events:
+            return _FakeFindResult()
+        # Ignores the limit, as overfetch for cooled URIs can return more.
+        return _FakeFindResult(
+            memories=[_hit(f"{events}/{i}.md", 0.9 - i * 0.1, f"e{i}") for i in range(5)]
+        )
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=lambda uri, **kwargs: _async_value(f"# Summary\n{uri}")),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    client = _FakeRerankClient({"e3": 0.9})
+
+    result = await _assemble_flat(
+        _rerank_service(service, client), quotas={"events": 1, "entities": 1}
+    )
+
+    # 2 x quota per bucket, and the empty entities bucket's room goes to events.
+    assert client.calls == [("q", ["e0", "e1", "e2", "e3"])]
+    assert result.stats["rerank"] == {"used": True, "candidates": 4, "capped": 1}
+    assert [entry.uri.rsplit("/", 1)[-1] for entry in result.entries][0] == "3.md"
+
+
+async def test_context_rerank_scores_skills_on_their_package_abstract():
+    reads = []
+    service = _skill_service(
+        [
+            _skill_hit(f"{DEPLOY}/scripts/run.py", 0.4, "run script"),
+            _skill_hit(f"{REVIEW}/SKILL.md", 0.7, "review file abstract"),
+        ],
+        {DEPLOY: "name: deploy"},
+        reads=reads,
+    )
+    client = _FakeRerankClient({"name: deploy": 0.9})
+
+    result = await _assemble_skills(_rerank_service(service, client))
+
+    # The package without an abstract is not sent and keeps its vector score.
+    assert client.calls == [("how do I deploy", ["name: deploy"])]
+    assert [(entry.uri, entry.score, entry.text) for entry in result.entries] == [
+        (f"{DEPLOY}/SKILL.md", 0.9, "name: deploy"),
+        (f"{REVIEW}/SKILL.md", 0.7, ""),
+    ]
+    assert sorted(reads) == [DEPLOY, REVIEW]
+
+
+async def test_image_query_skips_context_rerank():
+    finds = []
+    client = _FakeRerankClient({"text d": 0.95})
+    service = _rerank_service(_flat_service(FLAT_HITS, finds), client)
+
+    result = await _assemble_flat(service, image_url="https://example.com/shot.png")
+
+    assert client.calls == []
+    assert [call["limit"] for call in finds] == [2]
+    assert _scored(result) == [("a.md", 0.9), ("b.md", 0.8)]
+    assert "rerank" not in result.stats
+
+
+async def test_filter_only_query_skips_context_rerank():
+    finds = []
+    client = _FakeRerankClient({"text d": 0.95})
+    service = _rerank_service(_flat_service(FLAT_HITS, finds), client)
+
+    result = await _assemble_flat(
+        service, query="", filter={"op": "must", "field": "tags", "conds": ["ops"]}
+    )
+
+    assert client.calls == []
+    assert [call["limit"] for call in finds] == [2]
+    assert "rerank" not in result.stats
+
+
+async def test_an_unavailable_context_reranker_keeps_vector_order():
+    def broken_factory():
+        raise RuntimeError("bad rerank provider config")
+
+    service = _flat_service(FLAT_HITS)
+    service.search.context_reranker = broken_factory
+
+    result = await _assemble_flat(service)
+
+    assert _scored(result) == [("a.md", 0.9), ("b.md", 0.8)]
+    assert "rerank" not in result.stats
+
+
+async def test_context_rerank_failure_keeps_vector_order():
+    for client in (
+        _FakeRerankClient({}, error=RuntimeError("rerank down")),
+        _FakeRerankClient({}, result=[0.9]),
+    ):
+        result = await _assemble_flat(_rerank_service(_flat_service(FLAT_HITS), client))
+
+        assert len(client.calls) == 1
+        assert _scored(result) == [("a.md", 0.9), ("b.md", 0.8)]
+        assert result.stats["rerank"] == {"used": False, "candidates": 4, "capped": 0}
+
+
+async def test_a_reranker_that_raises_does_not_fail_the_assembly():
+    class BrokenReranker:
+        threshold = 0.1
+
+        async def score(self, query, documents, fallback_scores):
+            raise RuntimeError("unexpected")
+
+    service = _flat_service(FLAT_HITS)
+    service.search.context_reranker = BrokenReranker
+
+    result = await _assemble_flat(service)
+
+    assert _scored(result) == [("a.md", 0.9), ("b.md", 0.8)]
+    assert result.stats["rerank"]["used"] is False
+
+
+async def test_context_rerank_moves_the_score_threshold_after_reranking():
+    hits = [
+        _hit(f"{PREFERENCES}/low.md", 0.9, "low"),
+        _hit(f"{PREFERENCES}/high.md", 0.2, "high"),
+        _hit(f"{PREFERENCES}/mid.md", 0.8, "mid"),
+        {"uri": f"{PREFERENCES}/blank.md", "score": 0.05, "abstract": "", "level": 2},
+    ]
+    scores = {"low": 0.05, "high": 0.9, "mid": 0.4}
+
+    finds = []
+    service = _rerank_service(_flat_service(hits, finds), _FakeRerankClient(scores))
+    default = await _assemble_flat(service, limit=4)
+    # rerank.threshold (0.1) filters model scores only; the blank candidate was
+    # not reranked, so its 0.05 vector score stays.
+    assert _scored(default) == [("high.md", 0.9), ("mid.md", 0.4), ("blank.md", 0.05)]
+
+    explicit = await _assemble_flat(service, limit=4, score_threshold=0.3)
+    # A request threshold filters every final score, and never pre-filters recall.
+    assert _scored(explicit) == [("high.md", 0.9), ("mid.md", 0.4)]
+    assert {call["score_threshold"] for call in finds} == {None}
+
+    failing = _rerank_service(
+        _flat_service(hits), _FakeRerankClient({}, error=RuntimeError("down"))
+    )
+    fallback = await _assemble_flat(failing, limit=4, score_threshold=0.3)
+    assert _scored(fallback) == [("low.md", 0.9), ("mid.md", 0.8)]
+
+
+async def test_context_rerank_keeps_the_other_peer_penalty():
+    own = f"{PREFERENCES}/own.md"
+    other = f"{USER_ROOT}/peers/other/memories/preferences/theirs.md"
+
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"] == f"{USER_ROOT}/peers":
+            return _FakeFindResult(memories=[_hit(other, 0.5, "theirs")])
+        return _FakeFindResult(memories=[_hit(own, 0.6, "own")])
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=None),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    client = _FakeRerankClient({"own": 0.85, "theirs": 0.9})
+
+    result = await _assemble_flat(
+        _rerank_service(service, client),
+        limit=1,
+        peer_scope="all",
+        other_peer_penalty={"preferences": 0.1},
+    )
+
+    assert [(entry.uri, entry.score) for entry in result.entries] == [(own, 0.85)]

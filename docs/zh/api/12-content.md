@@ -144,14 +144,14 @@ ov overview viking://resources/docs/
 | uri | str | 是 | - | Viking URI（如 `viking://resources/docs/api.md`）或 32 字符十六进制向量记录 `id`（由 `stat()` 返回） |
 | offset | int | 否 | 0 | 起始行号（0 开始） |
 | limit | int | 否 | -1 | 读取的行数，`-1` 表示读到结尾 |
-| raw | bool | 否 | false | 返回未过滤 MEMORY_FIELDS 的原始存储内容；Python 中使用 `client.read_raw(uri)` 读取此格式。 |
+| raw | bool | 否 | false | 跳过默认脱敏和 MEMORY_FIELDS 过滤，并尝试还原占位符；Python 中使用 `client.read_raw(uri)`。 |
 
 **说明**
 
 - `read()` 只接受文件 URI。传入已存在的目录时返回 `INVALID_ARGUMENT`（HTTP `400`）。HTTP 响应的 `details` 包含 `expected: "file"`、`actual: "directory"` 和目标 `resource` URI，客户端可据此改用目录列表接口，无需解析错误消息。
 - 除 Viking URI 外，还可以传入 `stat()` 返回的 32 字符十六进制文件 `id`。服务端通过向量索引查找对应 URI 并执行相同的权限校验。由于索引是异步生成的，新返回的 ID 可能暂时无法解析；对应向量记录被删除后，按 ID 查询也会失败。这两种情况下，服务端都会返回 `NOT_FOUND`，并提示数据可能尚未索引或已经删除。
-- 公开 URI 参数接受 `resources`、`user` 和 `agent` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}/messages.jsonl`，也可以使用向后兼容的 `viking://session/{session_id}/messages.jsonl` 别名。`temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
-
+- 公开 URI 参数接受 `resources`、`user` 和 `agent` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}/messages.jsonl`，或表示当前用户的 `viking://~/sessions/{session_id}/messages.jsonl`。旧的 `viking://session/...` 以及 `temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
+- 敏感信息的处理：默认读取（`raw=false`）保留已有占位符，并对残留的已登记明文脱敏；`raw=true` 跳过默认脱敏，返回加载还原后的内容，该还原只影响返回内容，不修改存储文件，详见[隐私配置](../concepts/13-privacy.md)。
 
 **Python SDK**
 
@@ -218,6 +218,7 @@ ov read viking://resources/docs/api.md
 | content | str | 是 | - | 要写入的新内容 |
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 是 `replace` 的兼容别名 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
 | tag_mode | string | 否 | `replace` | 标签更新方式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空已有标签且不要求传 `tags` |
 
@@ -345,6 +346,7 @@ ov write viking://resources/docs/api.md \
 | `root_uri` | string | 是 | - | 包含所有写入目标的已存在 Resource 或 Memory 目录 |
 | `operations` | array | 是 | - | 要校验并执行的文件写入 |
 | `wait` | boolean | 否 | `true` | 是否等待语义/向量刷新 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | `telemetry` | boolean/object | 否 | `false` | 是否返回操作遥测信息 |
 | `processing_mode` | string | 否 | `semantic_and_vectors` | 整批统一的处理模式：`semantic_and_vectors` 或 `vectors_only` |
 | `defer_processing` | boolean | 否 | `false` | 只保存文件，不派发语义和向量处理；后处理由调用方安排 |
@@ -645,7 +647,7 @@ ov set-tags viking://resources/project/ \
 
 ### reindex()
 
-对已经存储在 OpenViking 中的现有内容，校验并修复语义产物和/或向量索引。resource 和 skill 默认使用 RFV（Request / Formal / Vector）增量收敛：文件内容指纹、目录 L0/L1 可见正文指纹和请求标量都未变化时直接跳过。需要无条件重建时使用 `force=true`。
+对已经存储在 OpenViking 中的现有内容，校验并修复语义产物和/或向量索引。对于 resource 和 skill，reindex 会比较正式内容与已有向量记录：缺失或过期的记录会被重建，内容已不存在的孤儿向量会被删除，状态一致的记录会被跳过。只有完整读取两边状态后才允许删除；需要无条件重建现有内容时使用 `force=true`，但完整性检查仍会执行。
 
 这个接口面向已有的 `viking://...` 内容，不负责导入新文件。常规导入请使用 [Resources](02-resources.md)。
 
@@ -683,20 +685,28 @@ HTTP 请求体会忽略未知字段，便于客户端与服务端在字段演进
 `viking://user/<user_id>/sessions/...` 会被拒绝；重建更大的 user 命名空间时，
 session 子树会被跳过。
 
+具体 user 根的 namespace reindex 会处理 `resources`、skill package、memory shard、peer 的 resources/memories，以及其他已索引的直属文件和自定义一级目录。宽范围操作使用分页浅层发现，跳过 session、privacy、内部 settings 与存储控制子树。带 actor-peer 视图的请求应指定明确可见的内容目标，因为更大的 namespace 无法提供完整的正式内容视图。
+
+namespace 会结合正式内容和已有向量记录发现目标，并按受支持的 URI 前缀一次读取、复用完整的轻量向量记录清单，因此可以清理已经缺失的内容根。可重试错误或记录数量变化最多触发三次整份重读；读取不完整时不执行删除。直接请求已经缺失的目标仍返回 `NOT_FOUND`，应从仍存在的父范围或 namespace 清理其残留向量；具体内容请求不会扩大到兄弟范围。
+
+memory 使用原文件的 L2，不再生成虚拟 `#chunk_NNNN` 记录。reindex 会清理全部孤儿记录和历史 chunk；显式文件请求也会清理自身旧 chunk。原 memory 文件处理失败时保留其已有 L2，名称类似 chunk URI 的真实文件也不会被误删。
+
+memory 目录 L0/L1 分别要求有效且非空的 `.abstract.md`/`.overview.md` 来源。确认来源缺失或为空时删除该 level 的旧记录；IO 或格式错误时保留旧记录，增加 `failed_records` 并报告 warning。另一 level 与健康文件继续处理。
+
+`semantic_and_vectors` 模式中，memory 目录目标先清理孤儿记录，再复用与 `add_resources` 相同的处理流程，并等待相关语义和向量任务完成。精确 memory 文件目标只重建自身 L2 和清理历史 chunk，不重新生成目录语义。
+
 **模式说明**
 
-- `vectors_only`：通过 RFV 对比当前 source MD5 与向量记录 MD5，只重建缺失或过期的 L0/L1/L2；不会重写 `.abstract.md` 和 `.overview.md`
-- `semantic_and_vectors`：通过同一 RFV 状态和 `ContextUpdatePlan` 驱动语义修复及 L0/L1/L2 向量更新，不再执行第二次手工向量扫描
+- `vectors_only`：比较当前内容指纹与向量记录指纹，只重建缺失或过期的 L0/L1/L2；不会重写 `.abstract.md` 和 `.overview.md`
+- `semantic_and_vectors`：先修复语义产物，再更新对应的 L0/L1/L2 向量
 
-对于 `resource` 和 `skill`，`semantic_and_vectors` 会刷新目录/文件语义产物，包括 `.abstract.md` 和 `.overview.md`。对于 `memory`，它会重建当前已持久化 memory 子树的语义和向量，但不会回放历史记忆抽取顺序。
+对于 `resource` 和 `skill`，`semantic_and_vectors` 会刷新目录/文件语义产物，包括 `.abstract.md` 和 `.overview.md`。对于 `memory`，它会重建当前已持久化 memory 子树的语义和向量。
 
-resource/skill 的 `vectors_only` 和 `semantic_and_vectors` 共用一次 F 遍历和一次窄字段 V inventory。每个 source 在状态解析时读取一次，实际处理复用本次读取结果，不会为了执行 Plan 再读取一次 F。`force=true` 会跳过 MD5 相等判断并重新处理作用域内全部可用 level；完整性检查仍然执行。
+resource/skill 的两种模式共用一次正式内容扫描和一次轻量向量记录读取。每个来源只读取一次，并在后续处理中复用。`force=true` 会跳过指纹相等判断并重新处理范围内全部可用 level；完整性检查仍然执行。
 
-对 resource/skill 目录设置 `recursive=false` 时，两种模式都只处理目标目录自身的 L0/L1。直接 children 只作为目标聚合的既有 REUSE 输入读取，不扫描或重建下级内容。namespace 容器自身没有索引记录，因此 namespace 目标不接受 `recursive=false`，避免请求静默成为 no-op。memory 仍使用原有 reindex 链路。
+对 resource/skill 目录设置 `recursive=false` 时，两种模式都只处理目标目录自身的 L0/L1。直接子项只用于聚合目标目录，不会被扫描或重建。namespace 容器自身没有索引记录，因此 namespace 目标不接受 `recursive=false`，避免请求静默成为 no-op。memory 仍使用原有 reindex 链路。
 
-F snapshot 完整时，RFV 差分会把 V 中存在但 F 中不存在的记录识别为 orphan，并在同一次 reindex 中清理；F snapshot 不完整时 fail-closed，不执行删除。
-
-传入非空 `tags` 时，标签会随 reindex 生成的向量记录在同一次 upsert 中写入，不会在完成后额外调用 `set_tags`。目录或 namespace reindex 会把标签应用到本次成功重建的目录 L0/L1 和叶子 L2 记录。`replace` 覆盖已有标签，`append` 按 key 合并；`replace` 配合空数组时不修改已有标签。`clear` 不要求传 `tags`，会清空已有标签；即使同时传入标签值也会忽略。
+传入非空 `tags` 时，标签会随 reindex 生成的向量记录在同一次写入中保存，不会在完成后额外调用 `set_tags`。目录或 namespace reindex 会把标签应用到本次成功重建的目录 L0/L1 和叶子 L2 记录。`replace` 覆盖已有标签，`append` 按 key 合并；`replace` 配合空数组时不修改已有标签。`clear` 不要求传 `tags`，会清空已有标签；即使同时传入标签值也会忽略。
 
 子树 reindex 不是事务性操作。如果部分记录因缺少语义来源或 embedding 失败而未重建，只有成功写入的记录会更新标签。
 
@@ -832,7 +842,7 @@ GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 | mode | 实际执行的 reindex 模式 |
 | scanned_records | 被检查的记录或语义源数量 |
 | rebuilt_records | 成功重建的向量记录数量 |
-| deleted_records | RFV 差分确认并删除的 orphan 向量记录数量 |
+| deleted_records | 已确认没有对应内容并删除的向量记录数量 |
 | unsupported_records | 因没有可用向量来源而跳过的记录数量 |
 | failed_records | 重建失败的记录数量 |
 | duration_ms | 同步执行耗时，单位毫秒 |
@@ -841,11 +851,7 @@ GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 
 **行为说明**
 
-- `vectors_only` 和 `semantic_and_vectors` 是非破坏式的，采用重建/覆盖写入，不需要先 drop 向量集合。
-- 对 `viking://` 发起 reindex 时，会向下分发到支持的顶层命名空间，并显式排除 `session`。
-- 命名空间级 reindex，例如 `viking://user`，会继续传播到其支持的子内容类型。
-- 如果只是 embedding 模型或向量索引需要刷新，应使用 `vectors_only`。
-- 如果语义产物本身也需要重建，再做重向量化，应使用 `semantic_and_vectors`。
+- Reindex 不会删除整个向量集合；它覆盖有效内容的向量记录，并只删除已确认没有对应内容的记录。
 - 同一个 URI 和 owner 同时只能运行一个 reindex 任务。对同一目标的并发请求会返回 conflict。
 - 对 resource 文件，文本文件在没有 summary 时可以使用文件正文；非文本文件需要已生成的 summary 或已有向量记录 fallback，否则会计为 unsupported。
 

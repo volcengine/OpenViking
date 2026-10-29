@@ -427,6 +427,13 @@ JSON 输出 - 错误：
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | 分页查询应用过指定 Experience 的 Trajectory |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | 聚合应用过指定 Experience 的 Trajectory 结果分布 |
 
+### [规则（Beta）](26-rules.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/rules/compile` | 提交规则编译后台任务 |
+| POST | `/api/v1/rules/search` | 按任务上下文召回适用的 active 规则 |
+
 ### [检索](06-retrieval.md)
 
 | 方法 | 路径 | 说明 |
@@ -511,7 +518,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户记忆策略 |
 | PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户记忆策略 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 将用户提升为 ADMIN |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 在 USER 与 ADMIN 之间变更用户角色 |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建用户组 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出用户组 |

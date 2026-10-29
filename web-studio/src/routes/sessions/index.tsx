@@ -1,12 +1,14 @@
 import { useCallback, useEffect } from 'react'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { CompassIcon } from 'lucide-react'
+import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
+import { ArrowLeftIcon, CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { useCreateSession } from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
+import { Button } from '#/components/ui/button'
+import { cn } from '#/lib/utils'
 import { Thread } from './-components/thread'
 import { ThreadList } from './-components/thread-list'
 
@@ -51,11 +53,38 @@ function SessionsPage() {
   }, [handleNewSession, provider])
 
   return (
-    <div className="-mx-4 -my-6 flex h-[calc(100svh-3rem)] min-w-0 overflow-hidden md:-mx-6">
-      <ThreadList activeSessionId={activeSessionId} />
-      <section className="min-w-0 flex-1 bg-background">
+    <div className="@container/sessions -mx-4 -my-6 flex h-[calc(100svh-3rem)] min-w-0 overflow-hidden md:-mx-6">
+      <ThreadList
+        activeSessionId={activeSessionId}
+        className={
+          activeSessionId
+            ? 'hidden @min-[40rem]/sessions:flex'
+            : 'w-full @min-[40rem]/sessions:w-72'
+        }
+      />
+      <section
+        className={cn(
+          'min-w-0 flex-1 flex-col bg-background',
+          activeSessionId ? 'flex' : 'hidden @min-[40rem]/sessions:flex',
+        )}
+      >
         {activeSessionId ? (
-          <Thread sessionId={activeSessionId} />
+          <>
+            <div className="shrink-0 border-b border-border/70 px-4 py-2 @min-[40rem]/sessions:hidden">
+              <Button
+                render={<Link to="/sessions" search={{ s: undefined }} />}
+                nativeButton={false}
+                variant="ghost"
+                size="sm"
+              >
+                <ArrowLeftIcon />
+                {t('threadList.backToList')}
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <Thread sessionId={activeSessionId} />
+            </div>
+          </>
         ) : (
           <SessionsEmpty />
         )}

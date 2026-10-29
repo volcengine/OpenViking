@@ -32,7 +32,7 @@ from openviking_gateway.protocols import (
     prefix_chain,
     text_content,
 )
-from openviking_gateway.storage import ManagementStore, SQLiteKernelStore
+from openviking_gateway.storage import SQLiteKernelStore, SQLiteManagementStore
 from openviking_gateway.tool_protocols import ResponseCapture
 
 
@@ -461,7 +461,7 @@ async def test_plugin_stop_is_sticky_but_replays_existing_prefix(setup_kernel, c
 
 async def test_capture_confirms_branch_and_isolates_forks(setup_kernel, credential, policy):
     kernel, store, viking, key = setup_kernel
-    management = ManagementStore(store.path.parent / "management.sqlite3", key)
+    management = SQLiteManagementStore(store.path.parent / "management.sqlite3", key)
     await management.initialize()
     await management.save("tenant", "keys", credential["id"], credential)
     body = {"messages": [{"role": "user", "content": "How do I deploy?"}]}

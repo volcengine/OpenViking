@@ -24,8 +24,7 @@ viking://{scope}/{path}
 | **upload** | Temporary upload files | Temporary | Internal |
 
 Public API and CLI filesystem/content operations accept the public scopes
-`resources`, `user`, and `agent`, plus the root URI `viking://`. `session` is retained
-as a backward-compatible alias for user session paths; new session data lives
+`resources`, `user`, and `agent`, plus the root URI `viking://`. Session data lives
 under `viking://user/{user_id}/sessions`.
 `temp`, `queue`, and `upload` are internal implementation
 scopes and cannot be addressed directly through public API URI parameters.
@@ -170,9 +169,7 @@ viking://user/{user_id}/sessions/{session_id}/history   # Archived history
 viking://~/sessions/{session_id}/                       # Your own session, via the home alias
 ```
 
-`viking://session/{session_id}` is accepted as a backward-compatible alias for
-the current user's session path. It is not a separate storage root for new
-session data.
+The old `viking://session/{session_id}` URI is no longer accepted.
 
 ## Path Variables
 

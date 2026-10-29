@@ -648,6 +648,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             name,
             role,
             page,
+            reveal_api_keys,
         } => {
             commands::admin::list_users(
                 &client,
@@ -656,6 +657,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 name,
                 role,
                 page,
+                reveal_api_keys,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -771,6 +773,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 &account_id,
                 &user_id,
                 seed.as_deref(),
+                if ctx.sudo { None } else { Some(&ctx.config) },
                 ctx.output_format,
                 ctx.compact,
             )

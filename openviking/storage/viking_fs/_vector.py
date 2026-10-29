@@ -65,6 +65,7 @@ class _VectorMixin:
         recursive: bool,
         ctx: Optional[RequestContext] = None,
         source_uris: List[str] | None = None,
+        restore_acl: dict[str, dict[str, Any]] | None = None,
     ) -> Any:
         """Move a vector URI scope, overwriting matching target records.
 
@@ -80,6 +81,7 @@ class _VectorMixin:
             recursive=recursive,
             target_entry_exists=partial(self.exists, ctx=ctx),  # type: ignore[attr-defined]
             **({"source_uris": source_uris} if source_uris is not None else {}),
+            **({"restore_acl": restore_acl} if restore_acl is not None else {}),
         )
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:

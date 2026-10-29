@@ -8,6 +8,10 @@
  *   viking://user/<space>/memories/entities/      (ls with abstracts)
  *   GET /api/v1/skills                            (own + account-shared skills)
  *
+ * With an actorPeerId the same three paths under
+ * viking://user/<space>/peers/<peer>/memories/ are read too, and each section
+ * lists the user root first, then the peer root, under one shared budget.
+ *
  * Budget enforced via the CJK-aware estimateTokens() below — codepoint >=
  * 0x3000 counts at 1.5 tokens, else chars/4. The estimator is exported so
  * callers (e.g. session-start.mjs) can log token counts that match what
@@ -240,6 +244,57 @@ function formatListing(headerUri, entries, budgetTokens, moreHint = MEMORY_MORE_
   return { lines, used, dropped: 0 };
 }
 
+/**
+ * Preferences and entities of each root in order, user root first. A root
+ * with any entry takes its fair share of what is left, and within a root the
+ * preferences get half and the entities the rest. With one root this is the
+ * single-scope split unchanged.
+ */
+function formatListingGroups(scopes, budgetTokens) {
+  const populated = scopes.filter((s) => s.prefs.length > 0 || s.ents.length > 0);
+  const lines = [];
+  let used = 0;
+  let droppedPref = 0;
+  let droppedEnt = 0;
+  for (let i = 0; i < populated.length; i++) {
+    const s = populated[i];
+    const share = Math.floor(Math.max(0, budgetTokens - used) / (populated.length - i));
+    const prefBlock = formatListing(s.prefUri, s.prefs, Math.floor(share / 2));
+    const entBlock = formatListing(s.entUri, s.ents, Math.max(0, share - prefBlock.used));
+    lines.push(...prefBlock.lines, ...entBlock.lines);
+    used += prefBlock.used + entBlock.used;
+    droppedPref += prefBlock.dropped;
+    droppedEnt += entBlock.dropped;
+  }
+  return { lines, used, droppedPref, droppedEnt };
+}
+
+// Below this a trimmed peer profile is mostly elision markers; point at it instead.
+const PEER_PROFILE_MIN_TOKENS = 200;
+const PEER_PROFILE_POINTER = "Omitted for length; read this uri with the read tool.";
+
+/**
+ * Drop peer-profile lines that already appear in the user profile, so the
+ * shared budget is not spent twice on the same fact. Returns null when no
+ * non-empty line is left.
+ */
+function dedupeProfileLines(peerProfile, userProfile) {
+  const seen = new Set(
+    String(userProfile || "").split("\n").map((l) => l.trim()).filter(Boolean),
+  );
+  const kept = [];
+  for (const line of peerProfile.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed && seen.has(trimmed)) continue;
+    // Removed lines must not leave runs of blank lines behind.
+    if (!trimmed && (kept.length === 0 || !kept[kept.length - 1].trim())) continue;
+    kept.push(line);
+  }
+  // Headings alone carry nothing worth a second <user-profile> element.
+  const hasContent = kept.some((l) => l.trim() && !/^#{1,6}\s/.test(l.trim()));
+  return hasContent ? kept.join("\n").trim() : null;
+}
+
 const AGENT_SKILLS_ROOT = "viking://agent/skills";
 // The server caps each skill root at node_limit, so the two roots together
 // can return twice this many; the token budget below decides what fits.
@@ -349,24 +404,26 @@ function formatSkillCatalog(groups, budgetTokens) {
 /**
  * Build the profile injection block.
  *
- * Returns null when neither profile.md, either listing, nor the skill catalog
- * has any content. The returned `block` is just the inner
+ * Returns null when no profile, no listing, and no skill catalog has any
+ * content. The returned `block` is just the inner
  * <user-profile>/<available-memories>/<available-skills> payload — the caller
  * wraps it in <openviking-context source="...">.
  *
  * @param {Function} fetchJSON  ov-session.mjs:makeFetchJSON closure
- * @param {number} totalBudgetTokens  budget for the profile and memory listings
- * @param {string} [actorPeerId]
+ * @param {number} totalBudgetTokens  budget for the profiles and memory listings
+ * @param {string} [actorPeerId]  adds the peer root alongside the user root
  * @param {{ skillCatalog?: boolean, skillCatalogTokenBudget?: number, sessionStartMaxBytes?: number }} [options]
  *   callers pass their resolved plugin config: its skillCatalog knob adds
  *   <available-skills>, budgeted separately by skillCatalogTokenBudget.
  *   Without it the block is unchanged.
  * @returns {Promise<null | {
  *   block: string, chars: number, tokens: number, profileUri: string,
- *   profileChars: number, prefCount: number, entCount: number,
+ *   profileChars: number, peerProfileUri: string, peerProfileChars: number,
+ *   prefCount: number, entCount: number,
  *   droppedPref: number, droppedEnt: number,
  *   skillCount: number, droppedSkill: number, skillTokens: number,
  * }>}
+ *   Counts are summed across both roots; profileChars covers both raw profiles.
  */
 export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerId = "", options = {}) {
   const { skillCatalog = false, skillCatalogTokenBudget = 0, sessionStartMaxBytes = 0 } = options;
@@ -378,42 +435,79 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
     : Infinity;
   const skillBudget = Math.min(skillCatalogTokenBudget, Math.floor(capTokens / 4));
   const space = await resolveUserSpace(fetchJSON, actorPeerId);
-  const profileUri = `viking://user/${space}/memories/profile.md`;
-  const prefUri = `viking://user/${space}/memories/preferences`;
-  const entUri = `viking://user/${space}/memories/entities`;
 
-  const [profile, prefs, ents, skillGroups] = await Promise.all([
-    readProfile(fetchJSON, profileUri, actorPeerId),
-    lsDir(fetchJSON, prefUri, actorPeerId),
-    lsDir(fetchJSON, entUri, actorPeerId),
+  // Profile, preferences and entities carry no message range, so extraction
+  // writes the user's own facts to the user root even inside a peer session:
+  // with an actor peer both roots hold memories, and both are read.
+  const roots = [`viking://user/${space}/memories`];
+  if (actorPeerId) roots.push(`viking://user/${space}/peers/${actorPeerId}/memories`);
+  const scopes = roots.map((root) => ({
+    profileUri: `${root}/profile.md`,
+    prefUri: `${root}/preferences`,
+    entUri: `${root}/entities`,
+  }));
+
+  // Every read is independent, and a hook on the SessionStart path pays for
+  // every round trip.
+  const reads = await Promise.all([
+    ...scopes.flatMap((s) => [
+      readProfile(fetchJSON, s.profileUri, actorPeerId),
+      lsDir(fetchJSON, s.prefUri, actorPeerId),
+      lsDir(fetchJSON, s.entUri, actorPeerId),
+    ]),
     skillCatalog && skillBudget > 0
       ? fetchSkillCatalog(fetchJSON, actorPeerId)
       : [],
   ]);
+  const skillGroups = reads.pop();
+  scopes.forEach((s, i) => {
+    [s.profile, s.prefs, s.ents] = reads.slice(i * 3, i * 3 + 3);
+  });
+  const [user, peer] = scopes;
   const skills = formatSkillCatalog(skillGroups, skillBudget);
 
-  if (!profile && prefs.length === 0 && ents.length === 0 && skills.lines.length === 0) {
+  const peerProfile = peer?.profile ? dedupeProfileLines(peer.profile, user.profile) : null;
+  if (
+    !user.profile && !peerProfile
+    && scopes.every((s) => s.prefs.length === 0 && s.ents.length === 0)
+    && skills.lines.length === 0
+  ) {
     return null;
   }
 
   const memoryBudget = Math.min(totalBudgetTokens, Math.max(0, capTokens - skills.used));
-  // Profile gets up to half the total budget; listings split the rest.
+  // The profiles get up to half the total budget; listings split the rest.
   // Sub-cap protects against a runaway profile blowing the listing budget.
+  // The user profile comes first; the peer profile only gets what it leaves.
   const profileBudget = Math.floor(memoryBudget / 2);
-  const profileTrunc = profile ? elideProfile(profile, profileBudget) : null;
+  const profileTrunc = user.profile ? elideProfile(user.profile, profileBudget) : null;
   const profileTokens = estimateTokens(profileTrunc || "");
-
-  const listingBudget = Math.max(0, memoryBudget - profileTokens);
-  const halfListing = Math.floor(listingBudget / 2);
-  const prefBlock = formatListing(prefUri, prefs, halfListing);
-  const entBudget = Math.max(0, listingBudget - prefBlock.used);
-  const entBlock = formatListing(entUri, ents, entBudget);
-
   const profileLines = profileTrunc
-    ? [`<user-profile uri="${profileUri}">`, profileTrunc, `</user-profile>`]
+    ? [`<user-profile uri="${user.profileUri}">`, profileTrunc, `</user-profile>`]
     : [];
-  let memoryLines = prefBlock.lines.length > 0 || entBlock.lines.length > 0
-    ? [`<available-memories>`, ...prefBlock.lines, ...entBlock.lines, `</available-memories>`]
+  let peerProfileTokens = 0;
+  if (peerProfile) {
+    const peerBudget = profileBudget - profileTokens;
+    // elideProfile keeps at least 400 chars (~600 tokens of CJK), so a trim
+    // that still overruns the peer's share falls back to the pointer.
+    const peerTrunc = estimateTokens(peerProfile) <= peerBudget || peerBudget >= PEER_PROFILE_MIN_TOKENS
+      ? elideProfile(peerProfile, peerBudget)
+      : null;
+    if (peerTrunc !== null && estimateTokens(peerTrunc) <= peerBudget) {
+      profileLines.push(`<user-profile uri="${peer.profileUri}">`, peerTrunc, `</user-profile>`);
+      peerProfileTokens = estimateTokens(peerTrunc);
+    } else {
+      const pointer = `<user-profile uri="${peer.profileUri}">${PEER_PROFILE_POINTER}</user-profile>`;
+      profileLines.push(pointer);
+      peerProfileTokens = estimateTokens(pointer);
+    }
+  }
+
+  const listingBudget = Math.max(0, memoryBudget - profileTokens - peerProfileTokens);
+  const listings = formatListingGroups(scopes, listingBudget);
+
+  let memoryLines = listings.lines.length > 0
+    ? [`<available-memories>`, ...listings.lines, `</available-memories>`]
     : [];
   let skillLines = skills.lines;
   const render = () => [...profileLines, ...memoryLines, ...skillLines].join("\n");
@@ -430,16 +524,20 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
   }
   if (!block) return null;
 
+  const prefCount = scopes.reduce((n, s) => n + s.prefs.length, 0);
+  const entCount = scopes.reduce((n, s) => n + s.ents.length, 0);
   return {
     block,
     chars: block.length,
     tokens: estimateTokens(block),
-    profileUri,
-    profileChars: profile?.length ?? 0,
-    prefCount: prefs.length,
-    entCount: ents.length,
-    droppedPref: memoryLines.length ? prefBlock.dropped : prefs.length,
-    droppedEnt: memoryLines.length ? entBlock.dropped : ents.length,
+    profileUri: user.profileUri,
+    profileChars: (user.profile?.length ?? 0) + (peer?.profile?.length ?? 0),
+    peerProfileUri: peer?.profileUri ?? "",
+    peerProfileChars: peer?.profile?.length ?? 0,
+    prefCount,
+    entCount,
+    droppedPref: memoryLines.length ? listings.droppedPref : prefCount,
+    droppedEnt: memoryLines.length ? listings.droppedEnt : entCount,
     skillCount: skills.count,
     droppedSkill: skillLines.length ? skills.dropped : skills.count,
     skillTokens: skillLines.length ? skills.used : 0,

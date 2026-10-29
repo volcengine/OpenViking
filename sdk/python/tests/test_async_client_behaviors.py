@@ -21,6 +21,59 @@ from openviking_sdk.errors import NotFoundError
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+@pytest.mark.parametrize(
+    "method_name,args",
+    [
+        ("add_resource", ("https://example.com/doc.md", None, None, True)),
+        ("add_skill", ({"name": "demo"}, True)),
+        ("update_skill", ("demo", {"name": "demo"}, True)),
+        ("write", ("viking://resources/demo.md", "hello", "replace", True)),
+        (
+            "batch_write",
+            (
+                "viking://resources/demo",
+                [{"uri": "viking://resources/demo/a.md", "content": "hello"}],
+                True,
+            ),
+        ),
+    ],
+)
+async def test_write_clients_preserve_options_when_timeout_is_ignored(
+    client_type, method_name, args
+):
+    client = client_type(url="http://localhost:1933")
+    async_client = client if client_type is AsyncHTTPClient else client._async_client
+    async_client._request = AsyncMock(return_value=object())
+    async_client._handle_response_data = lambda _response: {"result": {"ok": True}}
+    method = getattr(client, method_name)
+    options = {"telemetry": {"enabled": True}}
+
+    async def invoke(*positional, **keywords):
+        result = method(*positional, **keywords)
+        return await result if client_type is AsyncHTTPClient else result
+
+    assert await invoke(*args, options=options) == {"ok": True}
+    expected_request = async_client._request.await_args
+    assert expected_request.kwargs["json"]["telemetry"] == options["telemetry"]
+    assert "timeout" not in expected_request.kwargs["json"]
+    for positional, keywords in (
+        ((*args, options), {}),
+        ((*args, 30, options), {}),
+        (args, {"timeout": 30, "options": options}),
+    ):
+        async_client._request.reset_mock()
+        assert await invoke(*positional, **keywords) == {"ok": True}
+        assert async_client._request.await_args == expected_request
+
+    async_client._request.reset_mock()
+    with pytest.raises(TypeError, match="options were provided in both"):
+        await invoke(*args, options, options=options)
+    async_client._request.assert_not_awaited()
+    assert options == {"telemetry": {"enabled": True}}
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_initialize_forwards_event_hooks():
     async def request_hook(_request):
         return None
@@ -1216,9 +1269,7 @@ async def test_admin_get_user_reads_membership_from_point_read_path():
     client._handle_response = lambda _response: {"user_id": "alice", "role": "admin"}
 
     result = await client.admin_get_user("acct", "alice")
-    client._request.assert_awaited_once_with(
-        "GET", "/api/v1/admin/accounts/acct/users/alice"
-    )
+    client._request.assert_awaited_once_with("GET", "/api/v1/admin/accounts/acct/users/alice")
     assert result == {"user_id": "alice", "role": "admin"}
     assert "api_key" not in result and "key_prefix" not in result
 

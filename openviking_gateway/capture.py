@@ -21,6 +21,7 @@ import orjson
 
 from .archives import TERMINAL, observe_archive
 from .capture_store import Document, LeaseLost
+from .client import VikingError
 from .models import Policy
 from .notices import without_notices
 from .protocols import clean_text, is_user, string_type, text_content, unwrap_client
@@ -30,6 +31,7 @@ from .tool_protocols import reply_chain
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
 RECOVERY_SECONDS = 300
+DELIVERY_SECONDS = 100  # below the 120 s claim lease
 MAX_PREVIOUS = 5
 SOURCE = "gateway:"
 
@@ -312,7 +314,7 @@ class CaptureWorker:
         if item is None:
             return False
         try:
-            async with async_timeout.timeout(100):
+            async with async_timeout.timeout(DELIVERY_SECONDS):
                 await self.deliver(item)
         except (BranchChanged, LeaseLost):
             pass
@@ -322,6 +324,10 @@ class CaptureWorker:
                 previous = old.value.get("error", {})
                 attempts = previous.get("attempts", 0) + 1
                 reason = getattr(error, "reason", "delivery_failed")
+                if reason == "openviking_http_401" and await self.revoked(old.value):
+                    await self.management.delete(
+                        old.value["account"], "keys", old.value["credential_id"]
+                    )
                 failure = {
                     "attempts": attempts,
                     "reason": reason,
@@ -339,6 +345,20 @@ class CaptureWorker:
         finally:
             await self.queue.release(item)
         return True
+
+    async def revoked(self, state):
+        """Confirm a delivery 401 on /health, as authentication does, before dropping the key.
+
+        OpenViking also answers 401 for upstream model failures such as an invalid VLM key.
+        """
+        key = await self.management.get(state["account"], "keys", state["credential_id"])
+        if not key:
+            return False
+        try:
+            await self.viking.identify(key["openviking_key"])
+        except VikingError as error:
+            return error.reason == "openviking_http_401"
+        return False
 
     async def log(self, item, state, status, reason):
         await self.management.log(

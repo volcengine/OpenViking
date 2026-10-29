@@ -35,6 +35,14 @@ class RerankConfig(BaseModel):
         description="Jev rerank mode: 'noul' or 'choice'",
     )
 
+    candidates_visible: bool = Field(
+        default=True,
+        description=(
+            "Jev rerank candidate visibility: true shares all candidates in state; "
+            "false places each candidate in its own question (noul mode only)"
+        ),
+    )
+
     extra_headers: Optional[Dict[str, str]] = Field(
         default=None, description="Extra HTTP headers for OpenAI-compatible providers"
     )
@@ -92,6 +100,8 @@ class RerankConfig(BaseModel):
             self.mode = self.mode.strip().lower()
             if self.mode not in ("noul", "choice"):
                 raise ValueError("Jev rerank mode must be one of ['noul', 'choice']")
+            if self.mode == "choice" and not self.candidates_visible:
+                raise ValueError("Jev choice rerank requires candidates_visible=True")
 
         if provider and provider not in [
             "vikingdb",

@@ -47,6 +47,7 @@ from openviking.server.routers import (
     pack_router,
     privacy_configs_router,
     resources_router,
+    rules_router,
     search_router,
     sessions_router,
     skills_router,
@@ -171,6 +172,9 @@ async def _initialize_runtime_state(
     await service.apply_agent_evolution_config()
     await _initialize_auth_plugin(app, service, config)
     manager = getattr(app.state, "api_key_manager", None)
+    if manager is not None and get_openviking_config().reconcile_system_assets_on_startup:
+        account_count = await service.reconcile_system_assets(manager)
+        logger.info("Reconciled system assets for %d active accounts", account_count)
     compile_scheduler = getattr(service, "compile_scheduler", None)
     if manager is not None and compile_scheduler is not None:
         # Scheduled Compile re-verifies its saved key before every submission.
@@ -185,6 +189,7 @@ async def _initialize_runtime_state(
         oauth_store=getattr(app.state, "oauth_store", None),
         usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
         gateway_app=getattr(app.state, "gateway_app", None),
+        require_registered_identity=config.get_effective_auth_mode() == "api_key",
     )
     logger.info("OpenVikingService initialization complete")
 
@@ -636,6 +641,7 @@ def create_app(
     app.include_router(agent_evolution_router)
     app.include_router(compile_router)
     app.include_router(resources_router)
+    app.include_router(rules_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)
     app.include_router(console_router)

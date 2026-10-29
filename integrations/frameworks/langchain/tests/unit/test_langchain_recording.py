@@ -15,6 +15,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from openviking_sdk.errors import UnavailableError
 
 import langchain_openviking.recording as recording_module
 from langchain_openviking import (
@@ -321,22 +322,48 @@ def test_recorder_ignores_filtered_only_batch_without_initializing_client():
     assert client._initialized is False
 
 
-def test_recorder_applies_commit_policy_once_after_all_batches():
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "override", [None, "always", "never", "threshold-met", "threshold-not-met"]
+)
+@pytest.mark.asyncio
+async def test_recorder_applies_commit_policy_once_after_all_batches(asynchronous, override):
     client = TrackingOpenVikingClient()
-    recorder = OpenVikingSessionRecorder(
-        client=client,
-        commit_policy=OpenVikingCommitPolicy(mode="always"),
-    )
+    default = OpenVikingCommitPolicy(mode="always" if override in (None, "never") else "never")
+    recorder = OpenVikingSessionRecorder(client=client, commit_policy=default)
+    policy = None
+    if override in ("always", "never"):
+        policy = OpenVikingCommitPolicy(mode=override)
+    elif override is not None:
+        policy = OpenVikingCommitPolicy(
+            mode="pending_tokens",
+            pending_token_threshold=1 if override == "threshold-met" else 100_000,
+        )
 
-    recorder.record(
+    async def record(session_id, messages, **kwargs):
+        if asynchronous:
+            return await recorder.arecord(session_id, messages, **kwargs)
+        return recorder.record(session_id, messages, **kwargs)
+
+    await record(
         "recorder-commit",
         [HumanMessage(content=f"Message {index}") for index in range(101)],
+        **({"commit_policy": policy} if override is not None else {}),
     )
 
+    commits = override not in ("never", "threshold-not-met")
     assert client.batch_sizes == [100, 1]
-    assert client.commit_calls == ["recorder-commit"]
-    assert client.sessions["recorder-commit"] == []
-    assert len(client.archives["recorder-commit"][0]["messages"]) == 101
+    assert client.commit_calls == (["recorder-commit"] if commits else [])
+    if commits:
+        assert client.sessions["recorder-commit"] == []
+        assert len(client.archives["recorder-commit"][0]["messages"]) == 101
+    else:
+        assert len(client.sessions["recorder-commit"]) == 101
+        assert not client.archives["recorder-commit"]
+
+    await record("recorder-default", [HumanMessage(content="Use the default again.")])
+    assert bool(client.archives["recorder-default"]) == (default.mode == "always")
+    await recorder.aclose()
 
 
 def test_recorder_reports_partial_progress_and_retries_only_unwritten_suffix():
@@ -387,7 +414,12 @@ def test_recorder_reports_partial_progress_and_retries_only_unwritten_suffix():
     ]
 
 
-def test_recorder_reports_commit_failure_and_retries_without_duplicate_writes():
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("override", [False, True])
+@pytest.mark.asyncio
+async def test_recorder_reports_commit_failure_and_retries_without_duplicate_writes(
+    asynchronous, override
+):
     class FailFirstCommitClient(TrackingOpenVikingClient):
         def commit_session(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
             self.commit_calls.append(session_id)
@@ -398,15 +430,22 @@ def test_recorder_reports_commit_failure_and_retries_without_duplicate_writes():
     client = FailFirstCommitClient()
     recorder = OpenVikingSessionRecorder(
         client=client,
-        commit_policy=OpenVikingCommitPolicy(mode="always"),
+        commit_policy=OpenVikingCommitPolicy(mode="never" if override else "always"),
     )
+
+    async def record(messages, policy):
+        kwargs = {"commit_policy": OpenVikingCommitPolicy(mode=policy)} if override else {}
+        if asynchronous:
+            return await recorder.arecord("recorder-failed-commit", messages, **kwargs)
+        return recorder.record("recorder-failed-commit", messages, **kwargs)
+
     messages = [
         HumanMessage(content="Remember this turn."),
         AIMessage(content="Remembered."),
     ]
 
     with pytest.raises(OpenVikingPartialWriteError, match="commit failed") as exc_info:
-        recorder.record("recorder-failed-commit", messages)
+        await record(messages, "always")
 
     assert exc_info.value.stage == "commit"
     assert exc_info.value.commit_pending is True
@@ -415,15 +454,14 @@ def test_recorder_reports_commit_failure_and_retries_without_duplicate_writes():
     assert client.batch_sizes == [2]
     assert len(client.sessions["recorder-failed-commit"]) == 2
 
-    recorder.record(
-        "recorder-failed-commit",
-        messages[exc_info.value.input_messages_consumed :],
-    )
+    await record(messages[exc_info.value.input_messages_consumed :], "never")
 
     assert client.batch_sizes == [2]
     assert client.commit_calls == ["recorder-failed-commit", "recorder-failed-commit"]
     assert client.sessions["recorder-failed-commit"] == []
     assert len(client.archives["recorder-failed-commit"][0]["messages"]) == 2
+
+    await recorder.aclose()
 
 
 def test_recorder_preserves_first_batch_exception_type():
@@ -851,3 +889,78 @@ def test_responses_text_used_for_recall_and_tool_output():
     recorder = OpenVikingSessionRecorder(client=client)
     recorder.record("tools", [tool])
     assert client.sessions["tools"][0]["parts"][0]["tool_output"] == "tool result"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("failure", [None, "create-unavailable", "create-denied", "delete"])
+async def test_history_clear_reports_reset_failures_before_acknowledging_context(
+    async_mode, failure
+):
+    error = (
+        UnavailableError("recreation unavailable")
+        if failure == "create-unavailable"
+        else PermissionError("reset denied")
+    )
+    calls = []
+    acknowledged = []
+    resetting = False
+
+    class ResetClient(InMemoryOpenVikingClient):
+        def delete_session(self, session_id):
+            calls.append("delete")
+            if failure == "delete":
+                raise error
+            return super().delete_session(session_id)
+
+        def create_session(self, session_id=None):
+            calls.append("create")
+            if resetting and failure and failure.startswith("create"):
+                raise error
+            return super().create_session(session_id)
+
+    class AsyncResetClient(ResetClient):
+        async def delete_session(self, session_id):
+            return super().delete_session(session_id)
+
+        async def create_session(self, session_id=None):
+            return super().create_session(session_id)
+
+    client = AsyncResetClient() if async_mode else ResetClient()
+    history = OpenVikingChatMessageHistory(
+        "reset-session",
+        **({"async_client": client} if async_mode else {"client": client}),
+        context_parts_provider=lambda _: [{"type": "context", "uri": "viking://resources/a"}],
+        context_parts_acknowledger=acknowledged.append,
+    )
+    InMemoryOpenVikingClient.create_session(client, "reset-session")
+    if async_mode:
+        await history.aadd_messages([HumanMessage("old turn")])
+    else:
+        history.add_messages([HumanMessage("old turn")])
+
+    resetting = True
+
+    async def clear():
+        if async_mode:
+            await history.aclear()
+        else:
+            history.clear()
+
+    if failure:
+        with pytest.raises(type(error)) as caught:
+            await clear()
+        assert caught.value is error
+        assert acknowledged == []
+        assert ("reset-session" in client.sessions) == (failure == "delete")
+    else:
+        await clear()
+        assert client.sessions["reset-session"] == []
+        assert acknowledged == ["reset-session"]
+        if async_mode:
+            await history.aadd_messages([HumanMessage("new turn")])
+        else:
+            history.add_messages([HumanMessage("new turn")])
+        assert len(client.sessions["reset-session"]) == 1
+    assert calls == (["delete"] if failure == "delete" else ["delete", "create"])
+    await history.aclose()

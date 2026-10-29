@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: AGPL-3.0
+# SPDX-License-Identifier: MIT
 """Recall and conversation capture through MAF's public context provider interface."""
 
 from __future__ import annotations

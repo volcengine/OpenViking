@@ -18,6 +18,10 @@ path = "src/lib.rs"
 name = "ragfs-shell"
 path = "src/shell/main.rs"
 
+[[bench]]
+name = "pathlock_perf"
+harness = false
+
 [[test]]
 name = "cache_runtime"
 path = "tests/cache_runtime.rs"
@@ -44,6 +48,10 @@ serde_json = "1.0"
 
 # Logging
 tracing = "0.1"
+
+# Metrics aggregation; the binding reads cumulative SDK snapshots on demand.
+opentelemetry = { version = "0.33", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics", "experimental_metrics_custom_reader"] }
 
 # Git (gitoxide)
 gix-hash = "0.14"

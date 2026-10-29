@@ -340,13 +340,16 @@ function SkillsRoute() {
                         size="sm"
                         className="h-full transition-colors hover:bg-muted/35"
                       >
-                        <CardHeader>
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex min-w-0 items-center gap-2.5">
+                        <CardHeader className="min-w-0 grid-cols-[minmax(0,1fr)]">
+                          <div className="flex min-w-0 items-start justify-between gap-3">
+                            <div className="flex min-w-0 flex-1 items-center gap-2.5">
                               <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                                 <SparklesIcon className="size-4" />
                               </div>
-                              <CardTitle className="truncate">
+                              <CardTitle
+                                className="truncate"
+                                title={skill.name}
+                              >
                                 {skill.name}
                               </CardTitle>
                             </div>
@@ -359,14 +362,17 @@ function SkillsRoute() {
                             </Badge>
                           </div>
                           {skill.description ? (
-                            <CardDescription className="line-clamp-2 pt-1 leading-5">
+                            <CardDescription className="line-clamp-2 pt-1 leading-5 wrap-anywhere">
                               {skill.description}
                             </CardDescription>
                           ) : null}
                         </CardHeader>
                         <CardContent className="mt-auto">
                           <div className="flex items-center justify-between gap-3">
-                            <code className="min-w-0 truncate text-xs text-muted-foreground">
+                            <code
+                              className="min-w-0 truncate text-xs text-muted-foreground"
+                              title={skill.uri}
+                            >
                               {skill.uri}
                             </code>
                             <span className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-primary">
@@ -404,12 +410,18 @@ function SkillsRoute() {
               <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <SparklesIcon className="size-4" />
               </div>
-              <SheetTitle className="truncate text-lg">
+              <SheetTitle
+                className="min-w-0 truncate text-lg"
+                title={selectedSkill?.name}
+              >
                 {selectedSkill?.name}
               </SheetTitle>
             </div>
-            <div className="flex items-center gap-2 pr-10">
-              <SheetDescription className="min-w-0 flex-1 truncate font-mono text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <SheetDescription
+                className="min-w-0 flex-[1_1_12rem] truncate font-mono text-xs"
+                title={selectedSkill?.uri}
+              >
                 {selectedSkill?.uri}
               </SheetDescription>
               {selectedSkill ? (
@@ -425,6 +437,7 @@ function SkillsRoute() {
                   nativeButton={false}
                   size="xs"
                   variant="outline"
+                  className="h-auto min-h-6 max-w-full whitespace-normal"
                 >
                   {t('openFilesystem')}
                   <ExternalLinkIcon />
@@ -447,7 +460,7 @@ function SkillsRoute() {
                 </p>
               </div>
             ) : detailQuery.data ? (
-              <div className="grid gap-6">
+              <div className="grid min-w-0 gap-6">
                 <div className="grid grid-cols-2 gap-2">
                   <DetailMetric
                     icon={<UserRoundIcon />}
@@ -463,7 +476,7 @@ function SkillsRoute() {
 
                 {detailQuery.data.description ? (
                   <DetailSection title={t('sections.description')}>
-                    <p className="leading-6 text-muted-foreground">
+                    <p className="leading-6 text-muted-foreground wrap-anywhere">
                       {detailQuery.data.description}
                     </p>
                   </DetailSection>
@@ -471,7 +484,7 @@ function SkillsRoute() {
 
                 {detailQuery.data.overview ? (
                   <DetailSection title={t('sections.overview')}>
-                    <pre className="whitespace-pre-wrap font-sans text-sm leading-6 text-muted-foreground">
+                    <pre className="whitespace-pre-wrap font-sans text-sm leading-6 text-muted-foreground wrap-anywhere">
                       {detailQuery.data.overview}
                     </pre>
                   </DetailSection>
@@ -502,7 +515,10 @@ function SkillsRoute() {
                           className="flex items-center gap-2 border-b px-3 py-2 last:border-b-0"
                         >
                           <FileCode2Icon className="size-4 shrink-0 text-muted-foreground" />
-                          <span className="min-w-0 flex-1 truncate">
+                          <span
+                            className="min-w-0 flex-1 truncate"
+                            title={file.path}
+                          >
                             {file.path}
                           </span>
                           {file.isDir ? (
@@ -518,7 +534,7 @@ function SkillsRoute() {
 
                 {detailQuery.data.content ? (
                   <DetailSection title={t('sections.content')}>
-                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-4 font-mono text-xs leading-5">
+                    <pre className="min-w-0 overflow-x-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-4 font-mono text-xs leading-5">
                       {detailQuery.data.content}
                     </pre>
                   </DetailSection>
@@ -560,7 +576,7 @@ function DetailSection({
   title: string
 }) {
   return (
-    <section className="grid gap-2">
+    <section className="grid min-w-0 gap-2">
       <h3 className="text-sm font-semibold">{title}</h3>
       {children}
     </section>
@@ -581,7 +597,11 @@ function DetailTagList({
       {values.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {values.map((value) => (
-            <Badge key={value} variant="secondary" className="font-normal">
+            <Badge
+              key={value}
+              variant="secondary"
+              className="h-auto max-w-full whitespace-normal text-left font-normal wrap-anywhere"
+            >
               {value}
             </Badge>
           ))}

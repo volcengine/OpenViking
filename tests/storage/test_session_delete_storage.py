@@ -10,6 +10,7 @@ import pytest
 
 from openviking.core.namespace import resolve_request_uri
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
@@ -48,7 +49,6 @@ def storage():
     "request_uri",
     [
         SESSION_URI,
-        "viking://session/session-1",
         "viking://~/sessions/session-1",
         "viking://temp/alice/raw-upload-1",
     ],
@@ -139,6 +139,20 @@ async def test_session_rm_releases_its_tree_lease_when_backend_delete_fails(stor
     assert storage.agfs.rm.await_args.kwargs["fs_ctx"]["lease_ref"] == "delete-lease"
 
 
+async def test_session_rm_rechecks_existence_after_waiting_for_tree_lock(storage):
+    storage.agfs.stat.side_effect = [
+        {"isDir": True},
+        FileNotFoundError(SESSION_PATH),
+    ]
+
+    result = await storage.fs.rm(SESSION_URI, recursive=True, ctx=storage.ctx, no_vector=True)
+
+    assert result == {"estimated_deleted_count": 0}
+    storage.agfs.pathlock_acquire_tree.assert_awaited_once_with(SESSION_PATH)
+    storage.agfs.rm.assert_not_awaited()
+    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
+
+
 async def test_session_rm_reuses_outer_lease_without_releasing_it(storage):
     outer_lease = {"lease_ref": "outer-lease"}
 
@@ -203,13 +217,12 @@ async def test_default_rm_still_cleans_vector_records(storage, missing, uri):
         storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
 
 
-@pytest.mark.parametrize("no_vector", [False, True])
-@pytest.mark.parametrize("child_allowed", [False, True])
-async def test_resource_rm_still_checks_descendant_manage_acl(storage, no_vector, child_allowed):
+@pytest.mark.parametrize("allowed", [False, True])
+async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, allowed):
     child_uri = f"{RESOURCE_URI}/restricted.md"
     storage.fs._collect_uris.return_value = [child_uri]
     storage.acl.is_enabled.return_value = True
-    allowed = EffectiveAcl(
+    managed = EffectiveAcl(
         AclMode.RESTRICTED,
         DirectAcl((AclEntry("user:alice", AclLevel.MANAGE),)),
         DirectAcl(),
@@ -217,28 +230,19 @@ async def test_resource_rm_still_checks_descendant_manage_acl(storage, no_vector
     denied = EffectiveAcl(AclMode.RESTRICTED, DirectAcl(), DirectAcl())
 
     async def resolve_many(uris, ctx):
-        return {uri: denied if uri == child_uri and not child_allowed else allowed for uri in uris}
+        return {uri: managed if uri == RESOURCE_URI and allowed else denied for uri in uris}
 
     storage.acl.resolve_many.side_effect = resolve_many
-
-    if child_allowed:
-        result = await storage.fs.rm(
-            RESOURCE_URI, recursive=True, ctx=storage.ctx, no_vector=no_vector
-        )
-        assert result == {"estimated_deleted_count": 0 if no_vector else 7}
+    service = FSService(viking_fs=storage.fs)
+    service._enqueue_delete_refresh = AsyncMock(return_value="queued")
+    if allowed:
+        await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
         storage.agfs.rm.assert_awaited_once()
+        storage.vector.delete_uris.assert_awaited_once()
+        assert not storage.ctx.bypass_acl
     else:
-        with pytest.raises(PermissionDeniedError, match="restricted.md"):
-            await storage.fs.rm(RESOURCE_URI, recursive=True, ctx=storage.ctx, no_vector=no_vector)
+        with pytest.raises(PermissionDeniedError):
+            await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
         storage.agfs.rm.assert_not_awaited()
-
-    storage.fs._collect_uris.assert_awaited_once_with(
-        RESOURCE_PATH, True, ctx=storage.ctx, strict=True
-    )
-    if no_vector or not child_allowed:
-        storage.vector.count.assert_not_awaited()
         storage.vector.delete_uris.assert_not_awaited()
-    else:
-        storage.vector.count.assert_awaited_once()
-        storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [child_uri, RESOURCE_URI])
-    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
+    storage.acl.resolve_many.assert_awaited_once_with([RESOURCE_URI], storage.ctx)

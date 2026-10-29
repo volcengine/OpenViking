@@ -23,12 +23,17 @@ from openviking.retrieve.context_assembler.params import (
     OTHER_PEER_OVERFETCH,
     READ_CONCURRENCY,
     REPORTED_CATEGORY_KEYS,
+    RERANK_CANDIDATE_MULTIPLIER,
 )
+from openviking.retrieve.rerank_scoring import Reranker, RerankScores
 from openviking.retrieve.skill_results import package_abstract, skill_root_uri
 from openviking.server.identity import RequestContext
 from openviking.utils.search_filters import merge_context_type_filter
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 LEVEL_SUFFIXES = (".abstract.md", ".overview.md")
 
@@ -218,8 +223,14 @@ async def gather_candidates(
     penalties: Optional[Mapping[str, float]] = None,
     excluded: Optional[Set[str]] = None,
     cooled: Optional[Set[str]] = None,
+    reranker: Optional[Reranker] = None,
+    rerank_query: str = "",
 ) -> Tuple[List[Candidate], Dict[str, Any]]:
-    """Retrieve and rank candidates, returning ``(candidates, stats)``."""
+    """Retrieve and rank candidates, returning ``(candidates, stats)``.
+
+    With a ``reranker``, the merged candidate pool is rescored against
+    ``rerank_query`` in one call before quotas, backfill and the flat cut run.
+    """
     peer_scope = "actor" if peer_scope == "actor" else "all"
     user_root = canonical_user_root(ctx)
     open_ctx = replace(ctx, actor_peer_id=None)
@@ -228,9 +239,13 @@ async def gather_candidates(
     cooled = cooled or set()
     planned = [q for q in queries if q] or [""]
     preset_dirs = preset_directory_uris(ctx)
+    # A request threshold is meant for final scores, so with a reranker it
+    # filters after reranking instead of pre-filtering vector recall.
+    recall_threshold = score_threshold if reranker is None else None
 
     searched: Dict[str, int] = {}
     retrieval_errors: List[str] = []
+    rerank_stats: Dict[str, Any] = {}
     excluded_count = 0
 
     def _build(items: Sequence[Tuple[Any, Optional[str]]]) -> List[Candidate]:
@@ -310,7 +325,7 @@ async def gather_candidates(
             ctx=find_ctx,
             target_uri=target_uri,
             limit=find_limit,
-            score_threshold=score_threshold,
+            score_threshold=recall_threshold,
             filter=find_filter if find_filter is not None else filter,
             image_url=image_url,
             search_type=search_type,
@@ -344,7 +359,7 @@ async def gather_candidates(
                             ctx=ctx,
                             target_uri=targets,
                             limit=_overfetch(width),
-                            score_threshold=score_threshold,
+                            score_threshold=recall_threshold,
                             filter=bucket_filter,
                             search_type=search_type,
                         )
@@ -405,12 +420,15 @@ async def gather_candidates(
         return candidates
 
     async def gather_flat() -> List[Candidate]:
+        nonlocal rerank_stats
+        # Rerank recalls past the cut, as search() does, so it can promote hits.
+        width = limit * RERANK_CANDIDATE_MULTIPLIER if reranker is not None else limit
         searches = [
             _find(
                 query=query,
                 find_ctx=ctx,
                 target_uri="",
-                find_limit=_overfetch(limit),
+                find_limit=_overfetch(width),
             )
             for query in planned
         ]
@@ -452,6 +470,14 @@ async def gather_candidates(
             candidates = [c for c in candidates if c.category != "skills"]
             candidates.extend(_dedupe_candidates(skills))
         candidates.sort(key=_rank_key, reverse=True)
+        if reranker is not None:
+            # Several planned queries and the peer scan can return more than
+            # one search's worth; the vector-best `width` of them are reranked.
+            capped = max(0, len(candidates) - width)
+            [candidates], rerank_stats = await _rerank_groups(
+                service, reranker, rerank_query, [candidates[:width]], score_threshold
+            )
+            rerank_stats["capped"] = capped
         return candidates[: max(0, limit)]
 
     if quotas is None:
@@ -459,7 +485,21 @@ async def gather_candidates(
     else:
         active = [(bucket, quota) for bucket, quota in quotas.items() if quota > 0]
         total = sum(quota for _, quota in active)
-        buckets = await asyncio.gather(*(gather_bucket(b, q, total) for b, q in active))
+
+        def width(quota: int) -> int:
+            # The quota total is already the over-fetch; a dominant bucket still
+            # needs room past its own quota for rerank to promote hits.
+            if reranker is None:
+                return total
+            return max(total, quota * RERANK_CANDIDATE_MULTIPLIER)
+
+        buckets = await asyncio.gather(*(gather_bucket(b, q, width(q)) for b, q in active))
+        if reranker is not None:
+            pool, capped = _cap_rerank_pool(active, buckets)
+            buckets, rerank_stats = await _rerank_groups(
+                service, reranker, rerank_query, pool, score_threshold
+            )
+            rerank_stats["capped"] = capped
         # Each quota is a first-pass ceiling; slots a bucket leaves unused go to
         # the best remaining hits of the other buckets.
         first: List[Candidate] = []
@@ -477,7 +517,8 @@ async def gather_candidates(
                 candidates.append(candidate)
         candidates.sort(key=_rank_key, reverse=True)
 
-    candidates = await _fill_skill_abstracts(service, candidates)
+    if reranker is None:
+        candidates = await _fill_skill_abstracts(service, candidates)
 
     origins = dict.fromkeys(ORIGIN_ORDER, 0)
     for candidate in candidates:
@@ -493,6 +534,8 @@ async def gather_candidates(
     }
     if retrieval_errors:
         stats["retrieval_errors"] = retrieval_errors[:5]
+    if reranker is not None:
+        stats["rerank"] = rerank_stats
     return candidates, stats
 
 
@@ -519,6 +562,79 @@ async def _fill_skill_abstracts(service: Any, candidates: List[Candidate]) -> Li
         if abstract:
             candidates[index] = replace(candidates[index], abstract=abstract)
     return candidates
+
+
+def _cap_rerank_pool(
+    active: Sequence[Tuple[str, int]], buckets: Sequence[List[Candidate]]
+) -> Tuple[List[List[Candidate]], int]:
+    """Bound rerank input to ``RERANK_CANDIDATE_MULTIPLIER`` x quota per bucket.
+
+    Room a short bucket leaves goes to the vector-best remaining hits of the
+    others, so the pool keeps the total width backfill could reach. Returns the
+    capped buckets and how many candidates the cap left out.
+    """
+    kept = [
+        found[: quota * RERANK_CANDIDATE_MULTIPLIER]
+        for (_, quota), found in zip(active, buckets, strict=True)
+    ]
+    rest = sorted(
+        (
+            (index, candidate)
+            for index, found in enumerate(buckets)
+            for candidate in found[len(kept[index]) :]
+        ),
+        key=lambda pair: _rank_key(pair[1]),
+        reverse=True,
+    )
+    room = sum(quota for _, quota in active) * RERANK_CANDIDATE_MULTIPLIER
+    room = max(0, room - sum(len(found) for found in kept))
+    for index, candidate in rest[:room]:
+        kept[index].append(candidate)
+    return kept, max(0, len(rest) - room)
+
+
+async def _rerank_groups(
+    service: Any,
+    reranker: Reranker,
+    query: str,
+    groups: Sequence[List[Candidate]],
+    score_threshold: Optional[float],
+) -> Tuple[List[List[Candidate]], Dict[str, Any]]:
+    """Rescore every group with one rerank call over their distinct candidates.
+
+    A model score replaces the candidate's score, keeping its other-peer
+    penalty, and meets the request threshold, else ``rerank.threshold``. A
+    candidate the model did not score keeps its vector score and meets only the
+    request threshold, which recall left to this step. Each group comes back
+    re-sorted, so quotas and the flat cut apply to the new order.
+    """
+    pool: Dict[str, Candidate] = {}
+    for group in groups:
+        for candidate in group:
+            pool.setdefault(candidate.uri, candidate)
+    # Skills are scored on their package abstract, so it is read here instead
+    # of after the cut.
+    unique = await _fill_skill_abstracts(service, list(pool.values()))
+    fallback = [candidate.score for candidate in unique]
+    try:
+        result = await reranker.score(query, [c.abstract for c in unique], fallback)
+    except Exception as exc:
+        logger.warning("Context rerank failed, keeping vector scores: %s", exc)
+        result = RerankScores(fallback, [False] * len(unique))
+
+    kept: Dict[str, Candidate] = {}
+    for candidate, score, from_model in zip(unique, result.scores, result.reranked, strict=True):
+        threshold = score_threshold
+        if threshold is None:
+            threshold = reranker.threshold if from_model else 0.0
+        if score > threshold:
+            penalty = candidate.score - candidate.ranked_score
+            kept[candidate.uri] = replace(candidate, score=score, ranked_score=score - penalty)
+    rescored = [
+        sorted((kept[c.uri] for c in group if c.uri in kept), key=_rank_key, reverse=True)
+        for group in groups
+    ]
+    return rescored, {"used": result.model_used, "candidates": len(unique)}
 
 
 def _rank_key(candidate: Candidate) -> Tuple[float, int]:

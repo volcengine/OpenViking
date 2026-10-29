@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_store import (
+    SYSTEM_TASK_ACCOUNT_ID,
     PersistentTaskStore,
     _task_from_payload,
     _task_to_payload,
@@ -28,9 +29,10 @@ from openviking.service.task_tracker import (
     get_task_tracker,
     run_tracked_operation,
     set_task_tracker,
+    task_admission,
 )
 from openviking.service.task_work_index import get_task_context
-from openviking_cli.exceptions import DeadlineExceededError
+from openviking_cli.exceptions import DeadlineExceededError, FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.asyncio
@@ -175,6 +177,178 @@ async def test_create_task(tracker: TaskTracker):
     assert task.task_type == "session_commit"
     assert task.resource_id == "sess-123"
     assert task.status == TaskStatus.PENDING
+
+
+async def test_deletion_guard_refuses_new_tasks_for_deleting_identities(tracker: TaskTracker):
+    existing = await tracker.create("add_resource", task_id="replayed", **_owner_kwargs())
+    deleting = {("acme", "alice")}
+
+    async def guard(account_id, user_id):
+        return (account_id, user_id) in deleting
+
+    tracker.set_deletion_guard(guard)
+
+    with pytest.raises(FailedPreconditionError):
+        await tracker.create("add_resource", task_id="late", **_owner_kwargs())
+    assert await tracker.get("late", **_owner_kwargs()) is None
+    replayed = await tracker.create("add_resource", task_id="replayed", **_owner_kwargs())
+    assert replayed.task_id == existing.task_id
+    assert await tracker.create("add_resource", **_owner_kwargs(user_id="bob"))
+    assert await tracker.create("account_delete", account_id=SYSTEM_TASK_ACCOUNT_ID, user_id="root")
+
+
+async def test_identity_cleanup_task_creation_allows_deleting_owner(tracker: TaskTracker):
+    async def guard(account_id, user_id):
+        return (account_id, user_id) == ("acc", "alice")
+
+    tracker.set_deletion_guard(guard)
+
+    task = await tracker.create(
+        "user_delete",
+        task_id="cleanup",
+        account_id="acc",
+        user_id="alice",
+    )
+    assert task.task_id == "cleanup"
+    with pytest.raises(FailedPreconditionError):
+        await tracker.create("add_resource", account_id="acc", user_id="alice")
+
+
+async def test_wait_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
+    task = await tracker.create("add_resource", task_id="task", **_owner_kwargs())
+    delays = []
+
+    async def sleep(delay):
+        delays.append(delay)
+        await tracker.complete(task.task_id, {}, **_owner_kwargs())
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    assert (await tracker.wait(task.task_id, **_owner_kwargs())).status is TaskStatus.COMPLETED
+    assert delays == [0.05]
+
+
+async def test_wait_for_task_work_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
+    task = await tracker.create("add_resource", task_id="task", **_owner_kwargs())
+    await tracker.start(task.task_id, **_owner_kwargs())
+    await tracker.register_work(task.task_id, "work", "Semantic", **_owner_kwargs())
+    delays = []
+
+    async def sleep(delay):
+        delays.append(delay)
+        await tracker.mark_work_done(task.task_id, "work", **_owner_kwargs())
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    await tracker.wait_for_task_work(task.task_id, **_owner_kwargs())
+    assert delays == [0.05]
+
+
+@pytest.mark.parametrize("failure", ["deletion", "identity-query", "watch-admission"])
+async def test_creation_rejected_after_insert_withdraws_the_task(tracker, failure):
+    deleting = set()
+    store_create = tracker._store.create
+    error = ConnectionError("Admission storage unavailable")
+
+    async def guard(account_id, user_id):
+        if (account_id, user_id) not in deleting:
+            return False
+        if failure == "identity-query":
+            raise error
+        return failure == "deletion"
+
+    async def admitted():
+        if deleting and failure == "watch-admission":
+            raise error
+        return True
+
+    async def create_after_cleanup(task, **kwargs):
+        # The check has passed; deletion fences the identity and finishes
+        # listing Tasks before this insert lands.
+        deleting.add((task.account_id, task.user_id))
+        assert await tracker.list_tasks(**_owner_kwargs(), limit=None) == []
+        return await store_create(task, **kwargs)
+
+    tracker.set_deletion_guard(guard)
+    tracker._store.create = create_after_cleanup
+
+    with task_admission("late", admitted):
+        with pytest.raises(
+            FailedPreconditionError if failure == "deletion" else ConnectionError
+        ) as raised:
+            await tracker.create(
+                "connector_import", resource_id="resource", task_id="late", **_owner_kwargs()
+            )
+    if failure != "deletion":
+        assert raised.value is error
+    assert await tracker.get("late", **_owner_kwargs()) is None
+    tracker._store.create = store_create
+    deleting.clear()
+    assert await tracker.create_if_no_running("connector_import", "resource", **_owner_kwargs())
+
+
+@pytest.mark.parametrize("cancel_at", ["insert", "identity-query", "watch-admission"])
+async def test_cancel_during_task_creation_withdraws_the_unaccepted_task(cancel_at):
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    class BlockingAgfs(_FakeAgfs):
+        def write(self, path, data, *args, **kwargs):
+            if cancel_at == "insert" and json.loads(data)["status"] == "pending":
+                loop.call_soon_threadsafe(entered.set)
+                assert release.wait(3)
+            return super().write(path, data, *args, **kwargs)
+
+    agfs = BlockingAgfs()
+    tracker = TaskTracker(PersistentTaskStore(agfs))
+    checks = 0
+
+    async def check():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            entered.set()
+            await asyncio.Event().wait()
+
+    async def guard(account_id, user_id):
+        if cancel_at == "identity-query":
+            await check()
+        return False
+
+    async def admitted():
+        if cancel_at == "watch-admission":
+            await check()
+        return True
+
+    tracker.set_deletion_guard(guard)
+    with task_admission("late", admitted):
+        running = asyncio.create_task(
+            tracker.create("connector_import", task_id="late", **_owner_kwargs())
+        )
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        running.cancel()
+        await asyncio.sleep(0)
+        running.cancel()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(running, 1)
+
+    assert await TaskTracker(PersistentTaskStore(agfs)).list_tasks(**_owner_kwargs()) == []
+
+
+async def test_admission_gates_only_its_own_task_id(tracker: TaskTracker):
+    async def refused():
+        return False
+
+    with task_admission("run-1", refused):
+        with pytest.raises(FailedPreconditionError):
+            await tracker.create("add_resource", task_id="run-1", **_owner_kwargs())
+        assert await tracker.create("add_resource", task_id="other", **_owner_kwargs())
+    assert await tracker.get("run-1", **_owner_kwargs()) is None
+    assert await tracker.create("add_resource", task_id="run-1", **_owner_kwargs())
 
 
 async def test_start_task(tracker: TaskTracker):

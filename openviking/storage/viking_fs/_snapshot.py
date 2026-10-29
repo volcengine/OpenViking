@@ -308,14 +308,16 @@ class _SnapshotMixin:
 
     @staticmethod
     def _snapshot_missing_target_lock_kind() -> Optional[str]:
-        """Lock kind for a missing commit target: Tree on Redis, none on filesystem."""
+        """Logical-path providers can protect a missing commit target with a Tree lock."""
         try:
             from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
             provider = get_openviking_config().storage.agfs.pathlock.provider
         except Exception:
             provider = "filesystem"
-        return "tree" if provider == "cache" else None
+        # TODO: query the provider's LogicalPath capability through the binding
+        # instead of extending this list for each new logical-path backend.
+        return "tree" if provider in {"cache", "sqlite"} else None
 
     async def restore(
         self,
@@ -881,10 +883,7 @@ class _SnapshotMixin:
         if not tasks:
             return
 
-        executor = ReindexExecutor(
-            vlm_resolver=self._vlm_resolver,
-            vector_config_resolver=self._vector_config_resolver,
-        )
+        executor = ReindexExecutor()
         with detach_task_context():
             for op, uri, level in tasks:
                 loop.create_task(
@@ -929,10 +928,7 @@ class _SnapshotMixin:
                 user_id=ctx.user.user_id,
                 stage="reindexing",
             )
-            executor = ReindexExecutor(
-                vlm_resolver=self._vlm_resolver,
-                vector_config_resolver=self._vector_config_resolver,
-            )
+            executor = ReindexExecutor()
             reindex_ctx = self._restore_reindex_context(ctx)
             with bind_task_context(
                 task_id,

@@ -1610,8 +1610,14 @@ async def filter_valid_links(
         try:
             content = await viking_fs.read_file(uri, ctx=ctx)
             exists = bool(content)
-        except Exception:
+        except (NotFoundError, FileNotFoundError):
             exists = False
+        except Exception:
+            # A transient probe failure says nothing about the endpoint's
+            # existence. Keep the link so the rewrite below either lands it
+            # or surfaces the real storage error, instead of silently
+            # dropping the link forever.
+            exists = True
         endpoint_exists_cache[uri] = exists
         return exists
 

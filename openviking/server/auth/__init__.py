@@ -357,7 +357,7 @@ _DEV_MODE_ADMIN_API_MESSAGE = (
 )
 
 
-def require_auth_role(*allowed_roles: Role):
+def require_auth_role(*allowed_roles: str):
     """Decorator for Admin API routes with mode-aware errors.
 
     Usage:
@@ -442,3 +442,13 @@ def should_expose_user_key(request: Request) -> bool:
     if not isinstance(config, ServerConfig):
         return True
     return config.get_effective_auth_mode() != "trusted"
+
+
+def is_personal_api_key_auth(request: Request | None, ctx: RequestContext) -> bool:
+    """Self-service credentials require a personal key, not a delegated token."""
+    return (
+        request is not None
+        and _auth_mode(request) == "api_key"
+        and not ctx.from_oauth
+        and bool(ctx.api_key)
+    )

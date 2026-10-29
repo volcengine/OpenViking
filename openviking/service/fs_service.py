@@ -9,20 +9,26 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 import asyncio
 from collections.abc import Coroutine
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
+    canonical_session_root,
     classify_uri,
     context_type_for_uri,
     is_session_uri,
     uri_leaf_name,
     uri_parts,
 )
+from openviking.core.namespace_policy import (
+    NamespaceProcessingMode,
+    namespace_policy_for_uri,
+)
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
+from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_storage import is_watch_task_control_uri
@@ -30,9 +36,13 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
+from openviking.session.memory.account_templates import (
+    validate_account_memory_template_transfer,
+)
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.abstract_overview import (
+    is_abstract_overview_uri,
     mark_abstract_overview_pending,
     plan_abstract_overview_refresh,
     render_abstract_overview,
@@ -301,6 +311,24 @@ class FSService:
         """
         viking_fs = self._ensure_initialized()
         extra_fields = extra_fields or []
+        if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            await viking_fs._ensure_access(uri, ctx)
+            unsupported_fields = {"id", "count", "abstract", "overview", "tags"}.intersection(
+                extra_fields
+            )
+            if tags or include_tags:
+                raise InvalidArgumentError(f"tags are not supported for namespace: {uri}")
+            if include_abstract is True or include_overview is True:
+                raise InvalidArgumentError(
+                    f"semantic listing output is not supported for namespace: {uri}"
+                )
+            if unsupported_fields:
+                raise InvalidArgumentError(
+                    f"fields are not supported for namespace {uri}: "
+                    + ", ".join(sorted(unsupported_fields))
+                )
+            include_abstract = False
+            include_overview = False
         use_simple_paths = simple and not extra_fields
 
         async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
@@ -390,6 +418,13 @@ class FSService:
         if any(is_storage_internal_name(part) for part in uri_parts(uri)):
             raise InvalidArgumentError(f"cannot create storage internal name: {uri}")
 
+    @staticmethod
+    def _reject_file_only_semantic_sidecar_target(uri: str) -> None:
+        if namespace_policy_for_uri(
+            uri
+        ).processing_mode is NamespaceProcessingMode.FILE_ONLY and is_abstract_overview_uri(uri):
+            raise InvalidArgumentError(f"semantic sidecars are not supported for namespace: {uri}")
+
     async def mkdir(
         self,
         uri: str,
@@ -401,6 +436,19 @@ class FSService:
         viking_fs = self._ensure_initialized()
         self._reject_storage_internal_target(uri)
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
+        namespace_policy = namespace_policy_for_uri(directory_uri)
+        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
+            if acl is not None and not namespace_policy.supports_acl:
+                raise InvalidArgumentError(f"ACL is not supported for namespace: {directory_uri}")
+            if description is not None:
+                raise InvalidArgumentError(
+                    f"directory descriptions are not supported for namespace: {directory_uri}"
+                )
+            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [directory_uri]):
+                await viking_fs.mkdir(uri, ctx=ctx)
+                return
+
         versions = self.compile_versions
         managed = versions is not None and await versions.owning_target(
             ctx.account_id, directory_uri
@@ -528,6 +576,16 @@ class FSService:
     ) -> Optional[Dict[str, Any]]:
         """Remove resource."""
         viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.MANAGE)
+        delete_ctx = replace(ctx, bypass_acl=True)
+        namespace_policy = namespace_policy_for_uri(uri)
+        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            result = await viking_fs.rm(uri, recursive=recursive, ctx=delete_ctx, no_vector=True)
+            if isinstance(result, dict):
+                result["semantic_status"] = "skipped"
+                result["vector_status"] = "skipped"
+            return result
+
         cleanup_result: Optional[Dict[str, Any]] = None
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
@@ -539,7 +597,7 @@ class FSService:
                     result = await viking_fs.rm(
                         uri,
                         recursive=recursive,
-                        ctx=ctx,
+                        ctx=delete_ctx,
                         **({"lease_ref": lease} if lease is not None else {}),
                     )
                     await self.compile_versions.record_effects(
@@ -559,7 +617,7 @@ class FSService:
                     else await record_remove()
                 )
         else:
-            result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+            result = await viking_fs.rm(uri, recursive=recursive, ctx=delete_ctx)
         await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
         # A refresh on a parent that no longer exists would lock its sidecar
         # paths and thereby recreate the deleted directory. Nothing to
@@ -639,6 +697,8 @@ class FSService:
 
     @staticmethod
     def _semantic_refresh_parent_uri(uri: str, context_type: str) -> Optional[str]:
+        if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            return None
         if context_type not in {"resource", "skill"}:
             return None
         parent = VikingURI(uri).parent
@@ -793,6 +853,58 @@ class FSService:
         await semantic_queue.enqueue(msg)
         return "queued"
 
+    async def _enqueue_transfer_rebuild(
+        self,
+        *,
+        root_uri: str,
+        target_uri: str,
+        recursive: bool,
+        context_type: str,
+        ctx: RequestContext,
+    ) -> str:
+        """Queue fresh semantic processing when the source has no index artifacts."""
+        if not recursive:
+            await mark_abstract_overview_pending(
+                viking_fs=self._viking_fs,
+                dir_uri=root_uri,
+                changed_entries=1,
+                ctx=ctx,
+            )
+        try:
+            queue_manager = get_queue_manager()
+        except RuntimeError as exc:
+            logger.warning("QueueManager not available, skipping transfer rebuild: %s", exc)
+            return "skipped"
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        telemetry_id = get_current_telemetry().telemetry_id
+        msg = SemanticMsg(
+            uri=root_uri,
+            context_type=context_type,
+            recursive=recursive,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            group_ids=ctx.group_ids,
+            peer_id=ctx.user.user_id,
+            role=str(ctx.role),
+            skip_vectorization=False,
+            telemetry_id=telemetry_id,
+            coalesce_key=(
+                ""
+                if recursive
+                else build_semantic_coalesce_key(
+                    context_type=context_type,
+                    uri=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    peer_id=ctx.user.user_id,
+                )
+            ),
+            changes=None if recursive else {"added": [target_uri]},
+            generation_trigger="content_transfer_rebuild",
+        )
+        await semantic_queue.enqueue(msg)
+        return "queued"
+
     async def _wait_for_refresh(self) -> Dict[str, Any]:
         context = get_task_context()
         if context is None:
@@ -825,6 +937,8 @@ class FSService:
         from_uri = VikingFS._normalize_transfer_uri(from_uri)
         to_uri = VikingFS._normalize_transfer_uri(to_uri)
         self._reject_storage_internal_target(to_uri)
+        self._reject_file_only_semantic_sidecar_target(to_uri)
+        validate_account_memory_template_transfer(to_uri)
         return await self._finish_transfer_after_caller_cancel(
             self._cp_and_refresh(from_uri, to_uri, recursive=recursive, ctx=ctx),
             operation="copy",
@@ -840,18 +954,28 @@ class FSService:
     ) -> Dict[str, Any]:
         """Commit copy and enqueue its parent refresh as one cancellation-safe unit."""
         viking_fs = self._ensure_initialized()
+        source_policy = namespace_policy_for_uri(from_uri)
+        target_policy = namespace_policy_for_uri(to_uri)
+        source_indexed = source_policy.processing_mode is NamespaceProcessingMode.INDEXED
+        target_indexed = target_policy.processing_mode is NamespaceProcessingMode.INDEXED
 
         async def copy() -> Dict[str, Any]:
             async with self._uri_mutation_coordinator.mutation(ctx.account_id, [from_uri, to_uri]):
                 async with self._record_transfer(
                     from_uri, to_uri, ctx, recursive=recursive
                 ) as lease:
+                    options = {"lease_ref": lease} if lease is not None else {}
+                    if not (source_indexed and target_indexed):
+                        options.update(
+                            maintain_vectors=False,
+                            copy_semantic_sidecars=False,
+                        )
                     return await viking_fs.cp(
                         from_uri,
                         to_uri,
                         recursive=recursive,
                         ctx=ctx,
-                        **({"lease_ref": lease} if lease is not None else {}),
+                        **options,
                     )
 
         if self.compile_versions is None:
@@ -871,8 +995,42 @@ class FSService:
         result.setdefault("to", to_uri)
         result.setdefault("recursive", recursive)
         context_type = context_type_for_uri(to_uri)
+        if not source_indexed and target_indexed:
+            target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
+            target_is_dir = bool(target_stat.get("isDir"))
+            rebuild_root_uri = (
+                to_uri
+                if target_is_dir
+                else self._semantic_refresh_parent_uri(to_uri, context_type)
+            )
+            if not rebuild_root_uri:
+                result["semantic_status"] = "skipped"
+                result["vector_status"] = "skipped"
+                return result
+            result["semantic_root_uri"] = rebuild_root_uri
+            try:
+                result["semantic_status"] = await self._enqueue_transfer_rebuild(
+                    root_uri=rebuild_root_uri,
+                    target_uri=to_uri,
+                    recursive=target_is_dir,
+                    context_type=context_type,
+                    ctx=ctx,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Copy committed but semantic rebuild failed for %s: %s",
+                    to_uri,
+                    exc,
+                )
+                result["semantic_status"] = "failed"
+                result["semantic_error"] = str(exc)
+            return result
+
         refresh_parent_uri = self._semantic_refresh_parent_uri(to_uri, context_type)
         if not refresh_parent_uri:
+            if target_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
+                result["semantic_status"] = "skipped"
+                result["vector_status"] = "skipped"
             return result
 
         result["semantic_root_uri"] = refresh_parent_uri
@@ -899,6 +1057,8 @@ class FSService:
         from_uri = VikingFS._normalize_transfer_uri(from_uri)
         to_uri = VikingFS._normalize_transfer_uri(to_uri)
         self._reject_storage_internal_target(to_uri)
+        self._reject_file_only_semantic_sidecar_target(to_uri)
+        validate_account_memory_template_transfer(to_uri)
         await self._finish_transfer_after_caller_cancel(
             self._mv_and_refresh(from_uri, to_uri, ctx=ctx),
             operation="move",
@@ -913,14 +1073,31 @@ class FSService:
     ) -> None:
         """Commit move/watch state and enqueue all affected parent refreshes."""
         viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
+        await viking_fs._ensure_destination_access(to_uri, ctx)
+        move_ctx = replace(ctx, bypass_acl=True)
         watch_manager = self._get_watch_manager()
         use_watch_transaction = (
             watch_manager is not None
             and context_type_for_uri(from_uri) == "resource"
             and context_type_for_uri(to_uri) == "resource"
+            and namespace_policy_for_uri(from_uri).processing_mode
+            is NamespaceProcessingMode.INDEXED
+            and namespace_policy_for_uri(to_uri).processing_mode is NamespaceProcessingMode.INDEXED
             and not is_watch_task_control_uri(from_uri)
             and not is_watch_task_control_uri(to_uri)
         )
+        source_policy = namespace_policy_for_uri(from_uri)
+        target_policy = namespace_policy_for_uri(to_uri)
+        source_indexed = source_policy.processing_mode is NamespaceProcessingMode.INDEXED
+        target_indexed = target_policy.processing_mode is NamespaceProcessingMode.INDEXED
+        vector_mode: Literal["transfer", "delete_source", "none"]
+        if source_indexed and target_indexed:
+            vector_mode = "transfer"
+        elif source_indexed:
+            vector_mode = "delete_source"
+        else:
+            vector_mode = "none"
 
         async def move() -> None:
             async with self._uri_mutation_coordinator.mutation(ctx.account_id, [from_uri, to_uri]):
@@ -928,12 +1105,17 @@ class FSService:
                     await watch_manager.validate_target_prefix_rewrite_internal(
                         from_uri, to_uri, account_id=ctx.account_id
                     )
-                async with self._record_transfer(from_uri, to_uri, ctx, move=True) as lease:
+                async with self._record_transfer(from_uri, to_uri, move_ctx, move=True) as lease:
                     options = {"lease_ref": lease} if lease is not None else {}
-                    await viking_fs.mv(
+                    if vector_mode != "transfer":
+                        options.update(
+                            vector_mode=vector_mode,
+                            copy_semantic_sidecars=False,
+                        )
+                    result = await viking_fs.mv(
                         from_uri,
                         to_uri,
-                        ctx=ctx,
+                        ctx=move_ctx,
                         **options,
                     )
                     if use_watch_transaction:
@@ -943,7 +1125,13 @@ class FSService:
                             )
                         except Exception as commit_error:
                             try:
-                                await viking_fs.mv(to_uri, from_uri, ctx=ctx, **options)
+                                await viking_fs.mv(
+                                    to_uri,
+                                    from_uri,
+                                    ctx=move_ctx,
+                                    restore_acl=result.get("source_acl", {}),
+                                    **options,
+                                )
                             except Exception as rollback_error:
                                 logger.exception("Move rollback failed: %s -> %s", to_uri, from_uri)
                                 raise rollback_error from commit_error
@@ -960,7 +1148,39 @@ class FSService:
                 move,
                 recursive=True,
             )
-        await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
+        rebuild_target = not source_indexed and target_indexed
+        if rebuild_target:
+            await self._refresh_move_parents(
+                from_uri=from_uri,
+                to_uri=to_uri,
+                ctx=ctx,
+                refresh_target=False,
+            )
+            target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
+            target_is_dir = bool(target_stat.get("isDir"))
+            context_type = context_type_for_uri(to_uri)
+            rebuild_root_uri = (
+                to_uri
+                if target_is_dir
+                else self._semantic_refresh_parent_uri(to_uri, context_type)
+            )
+            if rebuild_root_uri:
+                try:
+                    await self._enqueue_transfer_rebuild(
+                        root_uri=rebuild_root_uri,
+                        target_uri=to_uri,
+                        recursive=target_is_dir,
+                        context_type=context_type,
+                        ctx=ctx,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Move committed but semantic rebuild failed for %s: %s",
+                        to_uri,
+                        exc,
+                    )
+        else:
+            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
 
     @asynccontextmanager
     async def _record_transfer(
@@ -1001,7 +1221,9 @@ class FSService:
             await viking_fs._ensure_access(from_uri, ctx, action=AclAction.WRITE)
         else:
             await viking_fs._ensure_copy_source_access(from_uri, recursive=recursive, ctx=ctx)
-        await viking_fs._ensure_access(to_uri, ctx, action=AclAction.WRITE)
+        await viking_fs._ensure_access(
+            to_uri, replace(ctx, bypass_acl=True), action=AclAction.WRITE
+        )
         source_path = viking_fs._uri_to_path(from_uri, ctx=ctx)
         target_path = viking_fs._uri_to_path(to_uri, ctx=ctx)
         viking_fs._validate_transfer_paths(source_path, target_path)
@@ -1078,6 +1300,7 @@ class FSService:
         from_uri: str,
         to_uri: str,
         ctx: RequestContext,
+        refresh_target: bool = True,
     ) -> None:
         """Queue transfer refreshes for both affected parents after mv commits."""
         if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
@@ -1091,7 +1314,7 @@ class FSService:
         refreshes: List[tuple[str, str, Literal["added", "deleted"], str]] = []
         if source_parent_uri and source_parent_uri != target_parent_uri:
             refreshes.append((source_parent_uri, from_uri, "deleted", source_context_type))
-        if target_parent_uri:
+        if target_parent_uri and refresh_target:
             refreshes.append((target_parent_uri, to_uri, "added", target_context_type))
 
         for parent_uri, changed_uri, change_kind, context_type in refreshes:
@@ -1148,6 +1371,24 @@ class FSService:
     ) -> ListingPage:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
+        if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            await viking_fs._ensure_access(uri, ctx)
+            unsupported_fields = {"id", "count", "abstract", "overview", "tags"}.intersection(
+                extra_fields or []
+            )
+            if tags or include_tags:
+                raise InvalidArgumentError(f"tags are not supported for namespace: {uri}")
+            if include_abstract is True or include_overview is True:
+                raise InvalidArgumentError(
+                    f"semantic listing output is not supported for namespace: {uri}"
+                )
+            if unsupported_fields:
+                raise InvalidArgumentError(
+                    f"fields are not supported for namespace {uri}: "
+                    + ", ".join(sorted(unsupported_fields))
+                )
+            include_abstract = False
+            include_overview = False
 
         async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
             """Fetch and return one pre-tag tree page."""
@@ -1217,24 +1458,25 @@ class FSService:
     ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.stat(
-            uri,
-            ctx=ctx,
-            skip_count=skip_count,
-            include_lock_status=include_lock_status,
-        )
+        namespace_policy = namespace_policy_for_uri(uri)
+        kwargs = {
+            "ctx": ctx,
+            "skip_count": skip_count,
+            "include_lock_status": include_lock_status,
+        }
+        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            kwargs["skip_count"] = True
+            kwargs["include_vector_fields"] = False
+        return await viking_fs.stat(uri, **kwargs)
 
     async def ensure_write_access(self, uri: str, ctx: RequestContext) -> None:
         """Validate write access without mutating the target."""
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
-    async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
-        """Read file content. Accepts a Viking URI or a 32-char hex vector record id."""
+    async def _read_content(self, uri: str, ctx: RequestContext) -> tuple[str, str]:
+        """Resolve the URI and read stored content without Privacy restoration."""
         viking_fs = self._ensure_initialized()
-        # Resolve ids to URIs so that downstream helpers (get_skill_name_from_uri)
-        # always see a real viking:// URI. VikingFS.read_file also resolves, which
-        # is harmless defense-in-depth when the input was already a URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
         try:
             content = await viking_fs.read_file(resolved_uri, ctx=ctx)
@@ -1244,15 +1486,29 @@ class FSService:
             legacy_uri = validate_safe_viking_uri_path(resolved_uri.replace("%20", " "))
             content = await viking_fs.read_file(legacy_uri, ctx=ctx)
             resolved_uri = legacy_uri
-        skill_name = get_skill_name_from_uri(resolved_uri)
-        if skill_name and self._privacy_config_service:
-            current = await self._privacy_config_service.get_current(
-                ctx=ctx,
-                category="skill",
-                target_key=skill_name,
-            )
-            if current:
-                content = restore_skill_content(content, skill_name, current.values)
+        return resolved_uri, content
+
+    async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
+        """Read file content, restoring Privacy references for Skills and Sessions."""
+        resolved_uri, content = await self._read_content(uri, ctx)
+        if self._privacy_config_service is not None:
+            skill_name = get_skill_name_from_uri(resolved_uri)
+            session_id = get_session_id_from_uri(resolved_uri, canonical_session_root(ctx))
+            if skill_name is not None:
+                content = await restore_skill_content(
+                    self._privacy_config_service,
+                    content,
+                    ctx,
+                    skill_name=skill_name,
+                )
+            elif session_id is not None:
+                content = await restore_session_content(
+                    self._privacy_config_service,
+                    content,
+                    ctx,
+                    session_id=session_id,
+                    jsonl=resolved_uri.endswith("/messages.jsonl"),
+                )
 
         if offset == 0 and limit == -1:
             return content
@@ -1290,12 +1546,20 @@ class FSService:
                         "max_bytes": self._privacy_sanitizer.max_content_bytes,
                     },
                 )
-        content = await self.read(resolved_uri, ctx=ctx)
+        resolved_uri, content = await self._read_content(resolved_uri, ctx)
         if classify_uri(resolved_uri).is_memory:
             content = visible_content(content, uri=resolved_uri)
         if self._privacy_sanitizer is not None:
             content = (
-                await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=resolved_uri)
+                await self._privacy_sanitizer.sanitize(
+                    content,
+                    ctx=ctx,
+                    uri=resolved_uri,
+                    prefer_credentials=(
+                        get_session_id_from_uri(resolved_uri, canonical_session_root(ctx))
+                        is not None
+                    ),
+                )
             ).content
         if offset == 0 and limit == -1:
             return content
@@ -1306,11 +1570,17 @@ class FSService:
     async def abstract(self, uri: str, ctx: RequestContext) -> str:
         """Read L0 abstract (.abstract.md)."""
         viking_fs = self._ensure_initialized()
+        if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            await viking_fs._ensure_access(uri, ctx)
+            raise InvalidArgumentError(f"abstract is not supported for namespace: {uri}")
         return await viking_fs.abstract(uri, ctx=ctx)
 
     async def overview(self, uri: str, ctx: RequestContext) -> str:
         """Read L1 overview (.overview.md)."""
         viking_fs = self._ensure_initialized()
+        if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            await viking_fs._ensure_access(uri, ctx)
+            raise InvalidArgumentError(f"overview is not supported for namespace: {uri}")
         return await viking_fs.overview(uri, ctx=ctx)
 
     async def grep(
@@ -1329,6 +1599,11 @@ class FSService:
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
+        namespace_policy = namespace_policy_for_uri(uri)
+        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            await viking_fs._ensure_access(uri, ctx)
+            if tags or include_tags:
+                raise InvalidArgumentError(f"tags are not supported for namespace: {uri}")
         normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         tag_filter = None
         if normalized_tags:
@@ -1345,6 +1620,7 @@ class FSService:
             "include_tags": include_tags or bool(normalized_tags),
             "before_context": before_context,
             "after_context": after_context,
+            "force_fs": namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY,
         }
         if _may_include_memory_content(uri):
             kwargs["content_transform"] = _visible_grep_content
@@ -1368,6 +1644,21 @@ class FSService:
     ) -> Dict:
         """File pattern matching."""
         viking_fs = self._ensure_initialized()
+        namespace_policy = namespace_policy_for_uri(uri)
+        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            await viking_fs._ensure_access(uri, ctx)
+            if tags or include_tags:
+                raise InvalidArgumentError(f"tags are not supported for namespace: {uri}")
+        unsupported_fields = {"id", "count", "abstract", "overview", "tags"}.intersection(
+            extra_fields or []
+        )
+        if unsupported_fields and (
+            namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY
+        ):
+            raise InvalidArgumentError(
+                f"fields are not supported for namespace {uri}: "
+                + ", ".join(sorted(unsupported_fields))
+            )
         normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         project_tags = bool(normalized_tags) or include_tags
         tag_filter = None
@@ -1385,6 +1676,7 @@ class FSService:
                 if extra_fields is not None
                 else ([] if project_tags else None),
                 tag_filter=tag_filter,
+                force_fs=namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY,
             )
         )
         if not project_tags:

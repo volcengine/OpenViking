@@ -587,7 +587,7 @@ Requires `traceRecall=true`; persisted lookup also requires `traceRecallPersist=
 
 ### Externalized Tool Result Tools
 
-Use these when a preview contains a `viking://session/<session_id>/tool-results/<tool_result_id>` ref.
+Use these when a preview contains a `viking://user/{user_id}/sessions/<session_id>/tool-results/<tool_result_id>` ref.
 
 | Tool | Parameters |
 |---|---|

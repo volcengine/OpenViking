@@ -16,6 +16,8 @@ from openviking.server.api_keys.models import validate_account_user_role
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
     get_request_context,
+    is_personal_api_key_auth,
+    require_auth_role,
     require_auth_root,
     require_auth_root_or_admin,
     should_expose_user_key,
@@ -240,9 +242,9 @@ def _get_runtime_config_manager():
 
 
 def _check_account_access(ctx: RequestContext, account_id: str) -> None:
-    """ADMIN can only operate on their own account."""
-    if ctx.role == Role.ADMIN and ctx.account_id != account_id:
-        raise PermissionDeniedError(f"ADMIN can only manage account: {ctx.account_id}")
+    """Non-ROOT callers can only operate on their own account."""
+    if ctx.role != Role.ROOT and ctx.account_id != account_id:
+        raise PermissionDeniedError(f"{ctx.role} can only access account: {ctx.account_id}")
 
 
 async def _check_account_exists(request: Request, account_id: str):
@@ -1006,14 +1008,18 @@ async def register_user(
 
 
 @router.get("/accounts/{account_id}/users")
-@require_auth_root_or_admin
+@require_auth_role(Role.ROOT, Role.ADMIN, Role.USER)
 async def list_users(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
     include_credentials: bool = Query(
         True,
-        description="Include credentials when permitted; false returns only credential availability",
+        description=(
+            "Include credentials: ROOT receives all plaintext keys; ADMIN receives its own "
+            "key and masked prefixes for others; USER receives only its own key; "
+            "false returns only availability"
+        ),
     ),
     name: str | None = None,
     role: str | None = None,
@@ -1027,12 +1033,19 @@ async def list_users(
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
+    expose_key = should_expose_user_key(request) or not include_credentials
+    if ctx.role == Role.USER:
+        expose_key = expose_key and is_personal_api_key_auth(request, ctx)
     users = await manager.list_users_page(
         account_id,
         limit=limit,
         name_filter=name,
         role_filter=role,
-        expose_key=should_expose_user_key(request) or not include_credentials,
+        expose_key=expose_key,
+        mask_keys=include_credentials and ctx.role != Role.ROOT,
+        hide_other_keys=ctx.role == Role.USER,
+        viewer_account_id=ctx.account_id,
+        viewer_user_id=ctx.user.user_id,
         page=page,
         query_filter=query,
     )
@@ -1043,10 +1056,16 @@ async def list_users(
                 "role": user["role"],
                 # A key prefix identifies a hash-only credential, which cannot
                 # be supplied to server-side Gateway or Bot Studio bindings.
-                "api_key_available": bool(user.get("api_key")),
+                **(
+                    {"api_key_available": bool(user.get("api_key"))}
+                    if ctx.role != Role.USER or user["user_id"] == ctx.user.user_id
+                    else {}
+                ),
             }
             for user in users["users"]
         ]
+    if ctx.role == Role.USER:
+        users.pop("key_count", None)
     return Response(status="ok", result=users if include_summary else users["users"])
 
 
@@ -1160,23 +1179,29 @@ async def set_user_role(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Promote an account user to ADMIN."""
+    """Change an account user's role for identity management operations only.
+
+    ROOT may manage any account; ADMIN may manage only its own account.
+    Supports USER <-> ADMIN changes, including promotion and demotion.
+    Role input is case-insensitive; stored and returned roles are lowercase.
+    """
     _check_account_access(ctx, account_id)
-    if body.role != Role.ADMIN:
-        raise InvalidArgumentError("set_user_role only supports promotion to admin.")
-    await _get_api_key_manager(request).set_role(account_id, user_id, Role.ADMIN)
+    role = body.role.lower()
+    if role not in (Role.USER, Role.ADMIN):
+        raise InvalidArgumentError("set_user_role only supports user and admin roles.")
+    await _get_api_key_manager(request).set_role(account_id, user_id, role)
     return Response(
         status="ok",
         result={
             "account_id": account_id,
             "user_id": user_id,
-            "role": Role.ADMIN,
+            "role": role,
         },
     )
 
 
 @router.post("/accounts/{account_id}/users/{user_id}/key")
-@require_auth_root_or_admin
+@require_auth_role(Role.ROOT, Role.ADMIN, Role.USER)
 async def regenerate_key(
     request: Request,
     body: RegenerateKeyRequest | None = Body(default=None),
@@ -1186,11 +1211,17 @@ async def regenerate_key(
 ):
     """Regenerate a user's API key. Old key is immediately invalidated."""
     _check_account_access(ctx, account_id)
+    if ctx.role == Role.USER:
+        if user_id != ctx.user.user_id:
+            raise PermissionDeniedError("USER can only regenerate their own API key")
+        if not is_personal_api_key_auth(request, ctx):
+            raise PermissionDeniedError("Self-service key rotation requires a personal API key")
     manager = _get_api_key_manager(request)
     new_key = await manager.regenerate_key(
         account_id,
         user_id,
         seed=body.seed if body is not None else None,
+        expected_api_key=ctx.api_key if ctx.role == Role.USER else None,
     )
     return Response(status="ok", result={"user_key": new_key})
 

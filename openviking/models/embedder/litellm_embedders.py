@@ -215,6 +215,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         try:
             return await self._run_once_async(
                 _call,
+                is_query=is_query,
                 logger=logger,
                 operation_name="LiteLLM async embedding",
             )

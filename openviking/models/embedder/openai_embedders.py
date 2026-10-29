@@ -207,10 +207,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             return 1536
 
     def _http_limits(self) -> httpx.Limits:
-        pool_limit = max(1, self.max_concurrent)
+        # Document concurrency is enforced before the request. Active connections
+        # must not reapply that limit to retrieval queries.
         return httpx.Limits(
-            max_connections=pool_limit,
-            max_keepalive_connections=pool_limit,
+            max_connections=None,
+            max_keepalive_connections=max(1, self.max_concurrent),
             keepalive_expiry=5.0,
         )
 
@@ -421,6 +422,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         try:
             return await self._run_once_async(
                 _call,
+                is_query=is_query,
                 logger=logger,
                 operation_name="OpenAI async embedding",
             )

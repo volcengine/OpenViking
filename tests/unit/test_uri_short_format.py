@@ -62,6 +62,13 @@ class TestVikingURIExplicitFormat:
         assert uri.scope == "~"
         assert uri.full_path == "~/notes"
 
+    def test_system_scope_is_parsable_public_and_listable(self):
+        uri = VikingURI("viking://system/memory")
+        assert uri.scope == "system"
+        assert VikingURI.build("system", "memory") == uri.uri
+        assert "system" in VikingURI.PUBLIC_SCOPES
+        assert "system" in VikingURI.LISTABLE_SCOPES
+
     def test_invalid_scope_error_copy_hides_home_alias(self):
         """The parser's own scope enumeration never advertises the alias."""
         with pytest.raises(ValueError, match="Invalid scope") as exc_info:
@@ -83,7 +90,6 @@ class TestVikingURIExplicitFormat:
         [
             ("viking://resources", "resources"),
             ("viking://user", "user"),
-            ("viking://session/abc123", "session"),
             ("viking://queue", "queue"),
             ("viking://temp", "temp"),
         ],

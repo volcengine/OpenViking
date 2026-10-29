@@ -678,18 +678,21 @@ class BotCompileService:
 
     @staticmethod
     def _skill_name_and_target(skill_uri: str) -> tuple[str, str]:
-        parts = uri_parts(skill_uri)
-        try:
-            index = parts.index("skills")
-        except ValueError as exc:
+        classification = classify_uri(skill_uri)
+        if not classification.is_skill:
             raise CompileFailure(
                 "SKILL_INVALID", "Skill URI is outside a skills namespace", stage="queued"
-            ) from exc
-        if len(parts) != index + 2:
+            )
+        if not classification.is_skill_root:
             raise CompileFailure(
                 "SKILL_INVALID", "Skill URI must identify one Skill root", stage="queued"
             )
-        return parts[-1], "viking://" + "/".join(parts[: index + 1])
+        assert classification.content_index is not None
+        parts = classification.parts
+        return (
+            parts[-1],
+            "viking://" + "/".join(parts[: classification.content_index + 1]),
+        )
 
     async def _retain_target_lock(self, target: tuple[str, str]) -> asyncio.Lock:
         """Retain a task lock keyed by effective account and canonical target URI."""

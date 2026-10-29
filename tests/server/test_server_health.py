@@ -104,7 +104,17 @@ async def test_health_endpoint_without_api_key():
 
 
 @pytest.mark.parametrize(
-    "credentials", ["anonymous", "partial", "trusted", "keyed", "malformed", "asserted-root"]
+    "credentials",
+    [
+        "anonymous",
+        "partial",
+        "trusted",
+        "keyed",
+        "malformed",
+        "asserted-root",
+        "root-only",
+        "invalid-root-only",
+    ],
 )
 async def test_health_trusted_identity_contract(credentials, caplog, service):
     app = create_app(
@@ -113,12 +123,14 @@ async def test_health_trusted_identity_contract(credentials, caplog, service):
     )
     await _initialize_auth_plugin(app, service, app.state.config)
     headers = {}
-    if credentials != "anonymous":
+    if credentials not in ("anonymous", "root-only", "invalid-root-only"):
         headers["X-OpenViking-Account"] = "account-a"
     if credentials in ("trusted", "keyed", "malformed", "asserted-root"):
         headers["X-OpenViking-User"] = "alice"
-    if credentials in ("keyed", "asserted-root"):
+    if credentials in ("keyed", "asserted-root", "root-only"):
         headers["X-API-Key"] = "test-root-key"
+    if credentials == "invalid-root-only":
+        headers["X-API-Key"] = "invalid-key"
     if credentials == "malformed":
         headers["X-OpenViking-User"] = "alice/../root"
     if credentials == "asserted-root":
@@ -128,13 +140,15 @@ async def test_health_trusted_identity_contract(credentials, caplog, service):
     ) as client:
         response = await client.get("/health", headers=headers)
     body = response.json()
-    expected_status = 401 if credentials in ("trusted", "malformed") else 200
+    expected_status = 401 if credentials in ("trusted", "malformed", "invalid-root-only") else 200
     assert response.status_code == expected_status
     if expected_status == 401:
         assert body["error"]["code"] == "UNAUTHENTICATED"
         return
     if credentials == "keyed":
         assert (body["account_id"], body["user_id"], body["role"]) == ("account-a", "alice", "user")
+    elif credentials == "root-only":
+        assert body["role"] == "root"
     else:
         assert "role" not in body
     assert body["root_api_key_required"] is True
@@ -284,10 +298,6 @@ async def test_ready_returns_200_after_initialized(monkeypatch):
         "openviking_cli.utils.ollama.detect_ollama_in_config",
         lambda config: (False, None, None),
     )
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.open_viking_config.OpenVikingConfigSingleton.get_instance",
-        lambda: SimpleNamespace(embedding=SimpleNamespace(get_embedder=lambda: None)),
-    )
 
     app = create_app(config=ServerConfig(), service=service)
     transport = httpx.ASGITransport(app=app)
@@ -324,7 +334,11 @@ async def test_slow_init_does_not_block_health(monkeypatch):
 
 
 async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
-    """The auth plugin must publish its manager before deletion setup."""
+    """System assets reconcile after auth loading and before deletion setup."""
+
+    events = []
+    ov_config = SimpleNamespace(reconcile_system_assets_on_startup=True)
+    monkeypatch.setattr("openviking.server.app.get_openviking_config", lambda: ov_config)
 
     class MockService:
         def __init__(self):
@@ -334,16 +348,27 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
 
         async def initialize(self):
             self._initialized = True
+            events.append("service")
 
         async def apply_agent_evolution_config(self):
-            pass
+            events.append("agent-evolution")
+
+        async def reconcile_system_assets(self, account_lister):
+            assert account_lister is manager
+            events.append("system-assets")
+            return 1
 
     manager = object()
-    setup = AsyncMock(return_value=None)
+
+    async def setup(**kwargs):
+        assert kwargs["manager"] is manager
+        events.append("deletion")
+
     monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
 
     async def initialize_plugin(app, service, config):
         app.state.api_key_manager = manager
+        events.append("auth")
 
     monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
 
@@ -355,4 +380,39 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
 
     assert service._initialized is True
     assert app.state.api_key_manager is manager
-    assert setup.await_args.kwargs["manager"] is manager
+    assert events == [
+        "service",
+        "agent-evolution",
+        "auth",
+        "system-assets",
+        "deletion",
+    ]
+
+    events.clear()
+    ov_config.reconcile_system_assets_on_startup = False
+    await _initialize_runtime_state(app, service, config)
+
+    assert service._initialized is True
+    assert app.state.api_key_manager is manager
+    assert events == ["service", "agent-evolution", "auth", "deletion"]
+
+
+async def test_initialize_runtime_state_skips_reconcile_without_account_manager(monkeypatch):
+    service = SimpleNamespace(
+        initialize=AsyncMock(),
+        apply_agent_evolution_config=AsyncMock(),
+        reconcile_system_assets=AsyncMock(),
+    )
+    setup = AsyncMock(return_value=None)
+    monkeypatch.setattr("openviking.service.deletion.setup_deletion", setup)
+
+    async def initialize_plugin(app, service, config):
+        app.state.api_key_manager = None
+
+    monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
+
+    app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
+    await _initialize_runtime_state(app, service, ServerConfig())
+
+    service.reconcile_system_assets.assert_not_awaited()
+    assert setup.await_args.kwargs["manager"] is None

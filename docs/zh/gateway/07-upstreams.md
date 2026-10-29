@@ -29,6 +29,15 @@ description: 添加和配置 OpenViking 网关转发请求的模型服务地址�
 | 火山方舟 | 三种都有 | Chat Completions 和 Responses 为 `https://ark.cn-beijing.volces.com/api/v3`；Anthropic Messages 为 `https://ark.cn-beijing.volces.com/api/compatible` |
 | BytePlus 方舟（海外站） | 三种都有 | Chat Completions 和 Responses 为 `https://ark.ap-southeast.bytepluses.com/api/v3`；Anthropic Messages 为 `https://ark.ap-southeast.bytepluses.com/api/compatible` |
 
+## 部署默认上游 {#deployment-default-upstreams}
+
+运维可以在网关配置中设置 `default_upstreams`，供[直接使用 OpenViking API 密钥](09-gateway-keys.md#openviking-keys)的客户端使用，见[配置示例](13-configuration.md#gateway-fields)。
+
+- 仅在账号没有存储上游时生效。账号一旦存储任何上游，就整组替换部署默认值，即使存储的上游全部已停用。
+- 部署默认值不会复制到账号存储中，也不会在 Studio 中显示。签发的网关密钥继续使用它们选定的已存储上游。
+- 保持对象的 key（例如 `ark-chat`）稳定：它就是冻结到对话中、供后续轮次路由使用的上游 ID。
+- 托管凭证写成 `"api_key": "$ARK_API_KEY"`，Helm 部署通过 `extraEnv` 从 Secret 注入 `ARK_API_KEY`。网关加载文件时展开环境变量引用，不要把明文 API 密钥写进 ConfigMap。
+
 ## 添加上游 {#add-an-upstream}
 
 1. 在**上游**标签页点**添加上游**，打开**新建上游**编辑页。页面分为**接口**、**凭证**、**模型**和**路由**四部分。
@@ -148,6 +157,15 @@ Claude 订阅令牌（`sk-ant-oat…`）无论怎么勾选都会被拒绝，见[
 停用一个上游后，原本使用它的对话会转到下一个候选上游，造成一次服务商缓存未命中，并丢掉之前的 Claude 思考块，这些请求被标为**上游已切换**（见[降级请求的异常](12-troubleshooting.md#issues-on-degraded-requests)）。想保留恢复的余地，就停用而不是删除。
 
 网关不做故障转移：选中的上游出错时，客户端收到这个错误；服务商无法访问时返回 502 "Model upstream is unavailable"。
+
+### 按请求指定上游 {#upstream-url-header}
+
+部署在网关前面的服务可以用 `X-OpenViking-Upstream-URL` 请求头为每个请求选择上游，客户端也可以发送这个请求头。它的值必须与密钥绑定的某个上游的 **Base URL** 相同（没有已存上游的 OpenViking 密钥，对应[部署默认上游](#deployment-default-upstreams)），只忽略末尾的 `/`。这个请求头把路由范围缩小到这些上游，再按常规的 API、模型和**优先级**规则从中选择，所以 Chat Completions 上游和 Responses 上游可以共用一个 Base URL。
+
+- 没有绑定的上游使用这个 Base URL：请求返回 403 "Upstream URL is not allowed"。网关从不向未配置的地址发请求。
+- 网关照常使用选中上游的凭证。**每个客户端自带 API Key** 时，API Key 来自 `X-OpenViking-Upstream-Key`；Coding Plan 上游未放行时仍会被拒绝。
+- 对话改用另一个 Base URL 时转到那个上游，与停用原上游一样标为**上游已切换**。
+- 不带这个请求头时，路由不变。与所有 `X-OpenViking-*` 请求头一样，它不会转发给服务商。
 
 ### 补全推理内容回传 {#restore-reasoning}
 

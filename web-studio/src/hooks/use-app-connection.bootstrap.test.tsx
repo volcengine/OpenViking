@@ -14,13 +14,15 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { useStudioService } from './use-studio-service'
 import { AppConnectionProvider, useAppConnection } from './use-app-connection'
 
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }))
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigate,
   useRouterState: () => '/home',
 }))
 
 afterEach(() => {
   cleanup()
+  navigate.mockReset()
   localStorage.removeItem('ov_console_connection_profiles')
 })
 
@@ -128,6 +130,63 @@ function ConnectionState() {
     </output>
   )
 }
+
+it.each([401, 503])(
+  'opens connection settings only for rejected credentials on startup (HTTP %s)',
+  async (status) => {
+    const server = createServer((req, res) => {
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.setHeader('Access-Control-Allow-Headers', '*')
+      if (req.method === 'OPTIONS') {
+        res.end()
+        return
+      }
+      res.statusCode = status
+      res.setHeader('Content-Type', 'application/json')
+      res.end(
+        JSON.stringify({
+          error: { code: status === 401 ? 'UNAUTHENTICATED' : 'UNAVAILABLE' },
+        }),
+      )
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address() as { port: number }
+    const client = new QueryClient()
+    localStorage.setItem(
+      'ov_console_connection',
+      JSON.stringify({
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        accountId: 'default',
+        userId: 'default',
+        apiKey: 'revoked-user-key',
+        adminApiKey: '',
+      }),
+    )
+    try {
+      render(
+        <QueryClientProvider client={client}>
+          <AppConnectionProvider>
+            <ConnectionState />
+          </AppConnectionProvider>
+        </QueryClientProvider>,
+      )
+      await waitFor(() =>
+        expect(
+          JSON.parse(screen.getByTestId('connection-state').textContent).mode,
+        ).toBe('offline'),
+      )
+      if (status === 401)
+        expect(navigate).toHaveBeenCalledWith({ to: '/settings' })
+      else expect(navigate).not.toHaveBeenCalled()
+    } finally {
+      cleanup()
+      client.clear()
+      localStorage.removeItem('ov_console_connection')
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  },
+)
 
 it('keeps a valid data connection and its resolved identity when a separate control key has expired', async () => {
   const keys: unknown[] = []

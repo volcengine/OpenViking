@@ -330,7 +330,7 @@ class TestWatchSchedulerResourceExistence:
             auth_state={"provider": "connector_encrypted", "ciphertext": "encrypted"},
         )
         resource_service._connector.restore_watch_request = AsyncMock(
-            return_value=("api-key", "tos", {})
+            return_value=("api-key", "tos", {}, None)
         )
 
         await scheduler._execute_task(task)

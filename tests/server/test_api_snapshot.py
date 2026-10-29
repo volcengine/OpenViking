@@ -286,9 +286,7 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
             reindex_contexts.append(ctx)
             return 0
 
-    def factory(*, vlm_resolver, vector_config_resolver):
-        assert vlm_resolver is service.viking_fs._vlm_resolver
-        assert vector_config_resolver is service.vector_config_resolver
+    def factory():
         return _SpyExecutor()
 
     monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
@@ -679,9 +677,7 @@ async def test_restore_apply_triggers_reindex_hook(
             calls.append(uri)
             return {"ok": True}
 
-    def factory(*, vlm_resolver, vector_config_resolver):
-        assert vlm_resolver is service.viking_fs._vlm_resolver
-        assert vector_config_resolver is service.vector_config_resolver
+    def factory():
         return _SpyExecutor()
 
     monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
@@ -739,9 +735,7 @@ async def test_restore_delete_removes_orphaned_vectors(
             deleted_calls.append((uri, int(level)))
             return 0
 
-    def factory(*, vlm_resolver, vector_config_resolver):
-        assert vlm_resolver is service.viking_fs._vlm_resolver
-        assert vector_config_resolver is service.vector_config_resolver
+    def factory():
         return _SpyExecutor()
 
     monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)

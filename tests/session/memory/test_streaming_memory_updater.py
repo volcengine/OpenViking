@@ -34,6 +34,7 @@ from openviking.session.memory.streaming_memory_updater import (
     acquire_memory_operation_lease,
     classify_memory_merge_mode,
     enforce_merge_group_peer_id,
+    filter_valid_links,
     get_streaming_memory_updater,
     merge_memory_operations,
     merge_one_memory_type_operations,
@@ -42,7 +43,7 @@ from openviking.session.memory.streaming_memory_updater import (
     split_request_by_merge_group,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -2023,3 +2024,56 @@ async def test_patch_merge_uses_original_messages_for_output_language(monkeypatc
     )
 
     assert captured_languages == ["zh-CN"]
+
+
+class TestFilterValidLinksTransientErrors:
+    """Endpoint existence probes must not drop links on transient faults."""
+
+    def _ops(self, from_uri):
+        return [
+            ResolvedOperation(
+                memory_fields={"case_name": "case"},
+                memory_type="cases",
+                uris=[from_uri],
+            )
+        ]
+
+    async def _filter(self, monkeypatch, read_file):
+        fs = SimpleNamespace(read_file=AsyncMock(side_effect=read_file))
+        monkeypatch.setattr(
+            "openviking.session.memory.streaming_memory_updater.safe_get_viking_fs",
+            lambda: fs,
+        )
+        return await filter_valid_links(
+            [StoredLink(from_uri="viking://user/u/memories/cases/a.md",
+                        to_uri="viking://user/u/memories/cases/b.md")],
+            upsert_operations=self._ops("viking://user/u/memories/cases/a.md"),
+            delete_file_contents=[],
+            ctx=_ctx(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_transient_read_error_keeps_link(self, monkeypatch):
+        async def read_file(uri, ctx=None):
+            raise PermissionDeniedError("storage hiccup")
+
+        # The to-endpoint probe failed transiently: the link must survive so
+        # the rewrite can surface the real failure, not be dropped forever.
+        valid = await self._filter(monkeypatch, read_file)
+        assert len(valid) == 1
+
+    @pytest.mark.asyncio
+    async def test_missing_endpoint_still_drops_link(self, monkeypatch):
+        async def read_file(uri, ctx=None):
+            raise NotFoundError(uri, "memory")
+
+        valid = await self._filter(monkeypatch, read_file)
+        assert valid == []
+
+    @pytest.mark.asyncio
+    async def test_empty_endpoint_still_drops_link(self, monkeypatch):
+        async def read_file(uri, ctx=None):
+            return ""
+
+        valid = await self._filter(monkeypatch, read_file)
+        assert valid == []

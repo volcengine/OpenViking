@@ -139,7 +139,8 @@ async function compact(sessionId, transcriptPath, trigger, cwd, heartbeat) {
 
 runHookStage({
   loadConfig,
-  gates: { enabled: (reloaded) => reloaded.autoCommitOnCompact },
+  // Catch-up uploads turns, so disabling capture also disables this commit.
+  gates: { enabled: (reloaded) => reloaded.autoCapture && reloaded.autoCommitOnCompact },
   envelope: noop,
   onSkip: (reason) => log("skip", { stage: "init", reason }),
 }, async (stage) => {
