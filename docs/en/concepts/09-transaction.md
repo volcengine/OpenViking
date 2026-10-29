@@ -547,9 +547,13 @@ concurrency during recovery.
 ### Blocked recovery retries and alerts
 
 QueueFS has no global retry limit or dead-letter queue. AddResource, Reindex,
-ContentWrite and Semantic consumers allow up to eight retries after the initial
-attempt for `HandoffRecoveryBlocked`, persisting `lock_handoff_retry` in the
-replacement message. Each retry waits `min(0.5 × 2^retry, 30)` seconds; backoff
+ContentWrite and Semantic consumers allow up to eight retries per delivery chain
+after the initial attempt for `HandoffRecoveryBlocked`, persisting
+`lock_handoff_retry` in the replacement message. If the process crashes after
+the replacement is enqueued but before the original is ACKed, recovery can
+create separate delivery chains from both messages, each retaining its own
+counter. This is therefore not a global retry limit for the same work.
+Each retry waits `min(0.5 × 2^retry, 30)` seconds; backoff
 holds the current consumer slot. Cancellation during backoff or a failed
 enqueue leaves the original delivery unacknowledged. Exhaustion ends the work
 with a failure; task tracking transitions the associated task to FAILED with a

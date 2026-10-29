@@ -539,8 +539,11 @@ filesystem 与 Redis 是相互独立的锁协调域，Redis 的 acquire **不会
 ### 恢复阻塞的重试与告警
 
 QueueFS 没有全局最大重试次数或死信队列。AddResource、Reindex、ContentWrite
-和 Semantic 消费者对 `HandoffRecoveryBlocked` 最多重试 8 次（首次尝试之外），
-通过消息中的 `lock_handoff_retry` 持久化计数。每次重试前等待
+和 Semantic 消费者对 `HandoffRecoveryBlocked` 的每条投递链最多重试 8 次
+（首次尝试之外），通过替代消息中的 `lock_handoff_retry` 持久化计数。
+如果替代消息已入队、原消息尚未 ACK 时进程崩溃，恢复后两条消息可能形成
+不同的投递链，各自沿用消息中的计数，因此这不是同一 work 的全局重试上限。
+每次重试前等待
 `min(0.5 × 2^retry, 30)` 秒；退避期间仍占用当前消费者槽位。
 等待取消或重新入队失败时，不 ACK 原消息；达到上限时结束该 work 并记录失败，
 关联任务通过任务跟踪机制进入 FAILED，可查询失败原因。失败不会自动进入死信队列。
