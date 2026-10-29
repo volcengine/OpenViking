@@ -1474,18 +1474,27 @@ class FSService:
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
-    async def _read_content(self, uri: str, ctx: RequestContext) -> tuple[str, str]:
+    async def _read_content(
+        self, uri: str, ctx: RequestContext, *, max_bytes: int | None = None
+    ) -> tuple[str, str]:
         """Resolve the URI and read stored content without Privacy restoration."""
         viking_fs = self._ensure_initialized()
         resolved_uri = await self._resolve_uri(uri, ctx)
+        reader = (
+            viking_fs.read_file
+            if max_bytes is None
+            else partial(viking_fs.read_file_bytes, max_bytes=max_bytes)
+        )
         try:
-            content = await viking_fs.read_file(resolved_uri, ctx=ctx)
+            content = await reader(resolved_uri, ctx=ctx)
         except NotFoundError:
             if "%20" not in resolved_uri:
                 raise
             legacy_uri = validate_safe_viking_uri_path(resolved_uri.replace("%20", " "))
-            content = await viking_fs.read_file(legacy_uri, ctx=ctx)
+            content = await reader(legacy_uri, ctx=ctx)
             resolved_uri = legacy_uri
+        if max_bytes is not None:
+            content = viking_fs._decode_bytes(content)
         return resolved_uri, content
 
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
@@ -1529,24 +1538,20 @@ class FSService:
         # Resolve id to URI before classify_uri / visible_content which expect
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
-        if self._privacy_sanitizer is not None:
-            stat = await self._ensure_initialized().stat(
-                resolved_uri,
-                ctx=ctx,
-                skip_count=True,
-            )
-            size = stat.get("size") if isinstance(stat, dict) else None
-            if isinstance(size, int) and size > self._privacy_sanitizer.max_content_bytes:
-                raise ResourceExhaustedError(
-                    "File exceeds the Privacy visible-read size limit",
-                    details={
-                        "uri": resolved_uri,
-                        "reason": "privacy_visible_read_limit_exceeded",
-                        "size_bytes": size,
-                        "max_bytes": self._privacy_sanitizer.max_content_bytes,
-                    },
-                )
-        resolved_uri, content = await self._read_content(resolved_uri, ctx)
+        max_bytes = (
+            self._privacy_sanitizer.max_content_bytes
+            if self._privacy_sanitizer is not None
+            else None
+        )
+        try:
+            resolved_uri, content = await self._read_content(resolved_uri, ctx, max_bytes=max_bytes)
+        except ResourceExhaustedError as exc:
+            if not exc.details or exc.details.get("reason") != "read_limit_exceeded":
+                raise
+            raise ResourceExhaustedError(
+                "File exceeds the Privacy visible-read size limit",
+                details={**exc.details, "reason": "privacy_visible_read_limit_exceeded"},
+            ) from exc
         if classify_uri(resolved_uri).is_memory:
             content = visible_content(content, uri=resolved_uri)
         if self._privacy_sanitizer is not None:

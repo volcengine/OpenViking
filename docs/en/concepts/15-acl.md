@@ -113,6 +113,8 @@ Delete and move authorize the specified file or directory without checking desce
 
 For a directory, `stat.count` uses the same path and ACL scalar filter and reports the number of context records visible to the caller.
 
+Listing summaries reuse read authorization already completed for that page, without querying ACL again for each entry.
+
 ## Retrieval Filtering
 
 ACL data exists only in the context collection. Each context record stores direct and inherited permissions in native scalar fields:

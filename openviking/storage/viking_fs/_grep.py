@@ -70,7 +70,7 @@ class _GrepMixin:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        await self._ensure_access(uri, ctx)
+        # stat() authorizes the requested path.
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
         await self.stat(uri, ctx=ctx, skip_count=True)
