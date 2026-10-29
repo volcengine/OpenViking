@@ -264,3 +264,43 @@ def test_load_server_config_rejects_bad_add_locations(tmp_path):
 
     with pytest.raises(ValueError, match="resource_uri"):
         load_server_config(str(config_path))
+
+
+def test_load_server_config_treats_null_encryption_as_absent(tmp_path):
+    """An explicit `"encryption": null` (common Helm/template output for unset
+    values) must load like a missing section instead of crashing on `.get` of
+    None — mirroring the `server: null` normalization in the same loader."""
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps({"server": {}, "encryption": None}),
+        encoding="utf-8",
+    )
+
+    server_config = load_server_config(str(config_path))
+
+    assert server_config.encryption_enabled is False
+    assert server_config.api_key_hashing_enabled is False
+
+
+def test_load_server_config_treats_null_api_key_hashing_as_absent(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps({"server": {}, "encryption": {"api_key_hashing": None}}),
+        encoding="utf-8",
+    )
+
+    server_config = load_server_config(str(config_path))
+
+    assert server_config.encryption_enabled is False
+    assert server_config.api_key_hashing_enabled is False
+
+
+def test_load_server_config_rejects_non_object_encryption_section(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps({"server": {}, "encryption": "enabled"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="'encryption' section must be an object"):
+        load_server_config(str(config_path))

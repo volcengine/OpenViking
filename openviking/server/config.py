@@ -542,13 +542,26 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
             # Custom auth mode — keep as string for plugin registration
             pass
 
-    # Get encryption enabled from config data directly (for test compatibility)
-    encryption_enabled = data.get("encryption", {}).get("enabled", False)
+    # Get encryption enabled from config data directly (for test compatibility).
+    # Normalize an explicit null section like the server section above: Helm
+    # charts and JSON templating emit null for unset values, and a scalar is a
+    # config mistake that deserves a clean error, not an AttributeError.
+    encryption_data = data.get("encryption", {})
+    if encryption_data is None:
+        encryption_data = {}
+    if not isinstance(encryption_data, dict):
+        raise ValueError(f"Invalid server config in {path}: 'encryption' section must be an object")
+    encryption_enabled = encryption_data.get("enabled", False)
     # Get API key hashing enabled from config data directly (under encryption namespace)
     # Default: false - rely on file-level encryption for API key protection
-    api_key_hashing_enabled = (
-        data.get("encryption", {}).get("api_key_hashing", {}).get("enabled", False)
-    )
+    api_key_hashing_data = encryption_data.get("api_key_hashing", {})
+    if api_key_hashing_data is None:
+        api_key_hashing_data = {}
+    if not isinstance(api_key_hashing_data, dict):
+        raise ValueError(
+            f"Invalid server config in {path}: 'encryption.api_key_hashing' section must be an object"
+        )
+    api_key_hashing_enabled = api_key_hashing_data.get("enabled", False)
 
     # BREAKING CHANGE: Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
     # Now, you must explicitly configure encryption.api_key_hashing.enabled=true to enable hashing.
