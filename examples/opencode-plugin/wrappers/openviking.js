@@ -1,1 +1,1 @@
-export { OpenVikingPlugin, default } from "./openviking/index.mjs"
+export { OpenVikingPlugin, default } from "../openviking-plugin/index.mjs"

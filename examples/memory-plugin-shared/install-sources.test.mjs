@@ -103,7 +103,7 @@ test("a default install of cursor, zcode and opencode downloads the bundle once 
   assert.equal(calls.filter((line) => line.includes("memory-plugin-marketplace.zip")).length, 1, calls.join("\n"));
   assert.ok(existsSync(join(home, ".openviking", "agent-integrations", "cursor", "scripts", "hook.mjs")));
   assert.ok(existsSync(join(home, ".openviking", "agent-integrations", "zcode", "scripts", "hook.mjs")));
-  assert.ok(existsSync(join(home, ".config", "opencode", "plugins", "openviking", "index.mjs")));
+  assert.ok(existsSync(join(home, ".config", "opencode", "openviking-plugin", "index.mjs")));
 });
 
 // It records its calls and keeps the one marketplace registration the
