@@ -569,6 +569,9 @@ class _FakeVikingFS:
     async def _ensure_access_many(self, uris, ctx, *, action):
         del uris, ctx, action
 
+    async def _ensure_descendant_access(self, uri, ctx, *, action, targets=None):
+        del uri, ctx, action, targets
+
     async def delete_temp(self, temp_uri: str, ctx=None):
         del ctx
         self.delete_temp_calls.append(temp_uri)

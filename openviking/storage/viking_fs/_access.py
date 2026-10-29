@@ -27,6 +27,7 @@ from openviking.storage.acl import (
     AclMode,
     AclSpec,
     AclUpdate,
+    EffectiveAcl,
     acl_allows,
     acl_ancestors,
     has_implicit_manage,
@@ -324,20 +325,22 @@ class _AccessMixin:
                 )
 
     async def _ensure_descendant_access(
-        self, uri: str, ctx: Optional[RequestContext], *, action: AclAction
+        self,
+        uri: str,
+        ctx: Optional[RequestContext],
+        *,
+        action: AclAction,
+        targets: Sequence[str] | None = None,
     ) -> None:
-        """Check shared descendants after the requested node has been authorized."""
-        real_ctx = self._ctx_or_default(ctx)
-        if (
-            not is_acl_uri(uri)
-            or real_ctx.bypass_acl
-            or has_implicit_manage(real_ctx, uri)
-            or not await self._acl_enabled(real_ctx)
-        ):
+        """Check descendants or exact selected targets after the root was authorized."""
+        if self.acl_manager is None:
             return
-        async for denied in self.acl_manager.iter_denied_uris(uri, real_ctx, action=action):
-            # A leftover index entry or virtual chunk is not copied filesystem content.
-            if await self.exists(denied, ctx=real_ctx):
+        real_ctx = self._ctx_or_default(ctx)
+        async for denied in self.acl_manager.iter_denied_uris(
+            [uri], real_ctx, action=action, targets=targets
+        ):
+            # Explicit targets remain authoritative even if they have just been removed.
+            if targets is not None or await self.exists(denied, ctx=real_ctx):
                 raise PermissionDeniedError(
                     f"Access denied for {denied}: {action.value} permission required",
                     resource=denied,
@@ -355,18 +358,21 @@ class _AccessMixin:
             real_ctx.account_id
         )
 
-    async def _ensure_acl_manage(self, uri: str, ctx: Optional[RequestContext]) -> RequestContext:
+    async def _ensure_acl_manage(
+        self, uri: str, ctx: Optional[RequestContext]
+    ) -> tuple[RequestContext, EffectiveAcl | None]:
+        """Authorize manage, returning its ACL snapshot unless authority is implicit."""
         if self.acl_manager is None:
             raise RuntimeError("ACL is not initialized")
         real_ctx = self._ctx_or_default(ctx)
         self._safe_uri_parts(uri)
         acl_ancestors(uri)
         if has_implicit_manage(real_ctx, uri):
-            return real_ctx
+            return real_ctx, None
         if await self.acl_manager.is_enabled(real_ctx.account_id):
             effective = await self.acl_manager.resolve(uri, real_ctx)
             if acl_allows(effective, real_ctx, AclAction.MANAGE):
-                return real_ctx
+                return real_ctx, effective
         raise PermissionDeniedError(
             f"ACL management denied for {uri}: manage permission required", resource=uri
         )
@@ -397,9 +403,10 @@ class _AccessMixin:
         return await acquire(path)
 
     async def get_acl(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
-        real_ctx = await self._ensure_acl_manage(uri, ctx)
+        real_ctx, effective = await self._ensure_acl_manage(uri, ctx)
         await self._ensure_acl_target_exists(uri, real_ctx)
-        effective = await self.acl_manager.resolve(uri, real_ctx)
+        if effective is None:
+            effective = await self.acl_manager.resolve(uri, real_ctx)
         return self.acl_manager.to_report(uri, effective)
 
     async def prepare_acl_update(
@@ -423,7 +430,7 @@ class _AccessMixin:
         *,
         acl_mode: AclMode | None = None,
     ) -> Dict[str, Any]:
-        real_ctx = await self._ensure_acl_manage(uri, ctx)
+        real_ctx, _ = await self._ensure_acl_manage(uri, ctx)
         lease = await self._acquire_acl_target_lock(uri, real_ctx)
         try:
             await self._ensure_acl_manage(uri, real_ctx)
@@ -459,12 +466,16 @@ class _AccessMixin:
     ) -> Dict[str, Any]:
         principal = normalize_acl_principal(principal)
         normalized_level = normalize_acl_level(level) if level is not None else None
-        real_ctx = await self._ensure_acl_manage(uri, ctx)
+        real_ctx, _ = await self._ensure_acl_manage(uri, ctx)
         lease = await self._acquire_acl_target_lock(uri, real_ctx)
         try:
-            await self._ensure_acl_manage(uri, real_ctx)
+            _, effective = await self._ensure_acl_manage(uri, real_ctx)
             await self._ensure_acl_target_exists(uri, real_ctx)
-            direct = await self.acl_manager.get_direct(uri, real_ctx)
+            direct = (
+                effective.direct
+                if effective is not None
+                else await self.acl_manager.get_direct(uri, real_ctx)
+            )
             entries = {entry.principal: entry for entry in direct.entries}
             if normalized_level is None:
                 entries.pop(principal, None)

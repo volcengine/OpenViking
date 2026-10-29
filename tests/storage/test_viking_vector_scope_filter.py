@@ -463,6 +463,15 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         if action == AclAction.MANAGE:
             expected_denied.add("denied-shared")
         assert {record["id"] for record in denied} == expected_denied
+        assert [
+            uri
+            async for uri in backend.acl_manager.iter_denied_uris(
+                ["viking://resources"],
+                finance_ctx,
+                action=action,
+                targets=["viking://resources/default.md"],
+            )
+        ] == []
 
         decay = {
             "events_time_decay_protection": "0",

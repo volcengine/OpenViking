@@ -50,6 +50,7 @@ ACL_GRANT_FIELDS = ("acl_direct_grants", "acl_inherited_grants")
 ACL_MODE_FIELD = "acl_mode"
 ACL_CONTEXT_FIELDS = frozenset((ACL_MODE_FIELD, *ACL_GRANT_FIELDS))
 _ACL_OUTPUT_FIELDS = ["uri", *sorted(ACL_CONTEXT_FIELDS)]
+_ACL_QUERY_BATCH_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -365,11 +366,12 @@ class AclManager:
     ) -> list[dict[str, Any]]:
         unique = sorted(set(uris))
         records: list[dict[str, Any]] = []
-        for offset in range(0, len(unique), 100):
-            conditions = [PathScope("uri", uri, depth=0) for uri in unique[offset : offset + 100]]
-            records.extend(
-                await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx)
-            )
+        for offset in range(0, len(unique), _ACL_QUERY_BATCH_SIZE):
+            conditions = [
+                PathScope("uri", uri, depth=0)
+                for uri in unique[offset : offset + _ACL_QUERY_BATCH_SIZE]
+            ]
+            records.extend(await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx))
         return records
 
     async def _scroll_all(
@@ -394,36 +396,69 @@ class AclManager:
                 return records
 
     async def iter_denied_uris(
-        self, uri: str, ctx: RequestContext, *, action: AclAction
+        self,
+        roots: Sequence[str],
+        ctx: RequestContext,
+        *,
+        action: AclAction,
+        targets: Sequence[str] | None = None,
     ) -> AsyncIterator[str]:
-        """Find denied records in a subtree, validating each URI's current ACL snapshot."""
+        """Find denied records within directory scopes or their explicitly selected targets."""
+        if isinstance(roots, str) or isinstance(targets, str):
+            raise TypeError("roots and targets must be sequences of URIs, not a single URI")
+        roots = list(dict.fromkeys(uri for uri in roots if is_acl_uri(uri)))
+        if (
+            not roots
+            or ctx.bypass_acl
+            or has_implicit_manage(ctx, roots[0])
+            or not await self.is_enabled(ctx.account_id)
+        ):
+            return
         scope = And(
             [
                 Eq("account_id", ctx.account_id),
-                PathScope("uri", uri, depth=-1),
+                Or([PathScope("uri", uri, depth=-1) for uri in roots]),
                 acl_filter(ctx, action, denied=True),
             ]
         )
-        cursor: str | None = None
+        filters = [scope]
+        if targets is not None:
+            selected = sorted(set(targets))
+            filters = [
+                And(
+                    [
+                        scope,
+                        Or(
+                            [
+                                PathScope("uri", target, depth=0)
+                                for target in selected[offset : offset + _ACL_QUERY_BATCH_SIZE]
+                            ]
+                        ),
+                    ]
+                )
+                for offset in range(0, len(selected), _ACL_QUERY_BATCH_SIZE)
+            ]
         checked: set[str] = set()
-        while True:
-            records, cursor = await self._context_store.scroll(
-                filter=scope,
-                limit=1,
-                cursor=cursor,
-                output_fields=["uri"],
-                ctx=replace(ctx, bypass_acl=True),
-            )
-            for record in records:
-                candidate = record["uri"]
-                if candidate in checked:
-                    continue
-                checked.add(candidate)
-                # Index levels can carry older snapshots for the same path.
-                if not acl_allows(await self.resolve(candidate, ctx), ctx, action):
-                    yield candidate
-            if cursor is None:
-                return
+        for scope_filter in filters:
+            cursor: str | None = None
+            while True:
+                records, cursor = await self._context_store.scroll(
+                    filter=scope_filter,
+                    limit=1,
+                    cursor=cursor,
+                    output_fields=["uri"],
+                    ctx=replace(ctx, bypass_acl=True),
+                )
+                for record in records:
+                    candidate = record["uri"]
+                    if candidate in checked:
+                        continue
+                    checked.add(candidate)
+                    # Index levels can carry older snapshots for the same path.
+                    if not acl_allows(await self.resolve(candidate, ctx), ctx, action):
+                        yield candidate
+                if cursor is None:
+                    break
 
     async def _subtree_records(self, uri: str, ctx: RequestContext) -> list[dict[str, Any]]:
         refs = await self._scroll_all(PathScope("uri", uri, depth=-1), ["id"], ctx)
