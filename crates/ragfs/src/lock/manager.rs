@@ -22,9 +22,8 @@ use super::provider::{AcquisitionChange, AtomicAcquisition, PathLockHandleMode, 
 use super::resolver::{LockPathResolver, ResolvedExactPaths};
 use super::types::{
     BorrowedPathLockLease, HandoffRecoveryReason, LockToken, OwnedPathLockLease, PathLockConflict,
-    PathLockError,
-    PathLockHandoffRef, PathLockKind, PathLockLease, PathLockObserveSnapshot, PathLockRequest,
-    PathLockResult,
+    PathLockError, PathLockHandoffRef, PathLockKind, PathLockLease, PathLockObserveSnapshot,
+    PathLockRequest, PathLockResult,
 };
 
 /// Configuration for the PathLockManager.
@@ -2028,14 +2027,11 @@ impl PathLockManager {
                     return Err(PathLockError::HandoffRecoveryRequired {
                         reason: HandoffRecoveryReason::CoverageMissing,
                     });
-                } else if handoff
-                    .lock_paths
-                    .iter()
-                    .zip(&handoff.covered_paths)
-                    .all(|(lp, request)| {
+                } else if handoff.lock_paths.iter().zip(&handoff.covered_paths).all(
+                    |(lp, request)| {
                         normalize_logical_path(&request.path).is_ok_and(|path| lp == path)
-                    })
-                {
+                    },
+                ) {
                     PathLockHandleMode::LogicalPath
                 } else {
                     return Err(PathLockError::InvalidRequest(
@@ -2085,10 +2081,8 @@ impl PathLockManager {
                     self.provider
                         .read_token(lp)
                         .await?
-                        .ok_or_else(|| {
-                            PathLockError::HandoffRecoveryRequired {
-                                reason: HandoffRecoveryReason::TokenUnavailable,
-                            }
+                        .ok_or_else(|| PathLockError::HandoffRecoveryRequired {
+                            reason: HandoffRecoveryReason::TokenUnavailable,
                         })?
                         .lock_type
                 }
@@ -3422,10 +3416,7 @@ mod tests {
             Err(PathLockError::InvalidRequest(_))
         ));
         // Rejection does not change the original Exact token or consume the handoff.
-        let adopted = consumer
-            .adopt(&producer.to_handoff(&lease))
-            .await
-            .unwrap();
+        let adopted = consumer.adopt(&producer.to_handoff(&lease)).await.unwrap();
         assert_eq!(adopted.lease.covered_paths[0].kind, PathLockKind::Exact);
         consumer.release(&adopted).await.unwrap();
     }

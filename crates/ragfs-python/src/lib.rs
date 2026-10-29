@@ -232,8 +232,8 @@ use ragfs::core::{
 use ragfs::leader::{LeaderLease, LeaderManager};
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
-    BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandoffRef, PathLockKind,
-    PathLockHandleMode, PathLockManager, PathLockRequest,
+    BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandleMode,
+    PathLockHandoffRef, PathLockKind, PathLockManager, PathLockRequest,
 };
 use ragfs::metrics::{RagfsMetric, RagfsMetricValue};
 
@@ -520,7 +520,10 @@ fn pathlock_config_from_value(
     }
 
     let provider = string_field(pathlock, "provider", "filesystem")?;
-    if !matches!(provider.as_str(), "filesystem" | "memory" | "sqlite" | "cache") {
+    if !matches!(
+        provider.as_str(),
+        "filesystem" | "memory" | "sqlite" | "cache"
+    ) {
         return Err(format!(
             "unsupported pathlock.provider: {provider}; expected filesystem, memory, sqlite, or cache"
         ));
@@ -1924,8 +1927,12 @@ impl RAGFSBindingClient {
         let kw = kwargs.unwrap_or(&empty);
         let req = git::parse_diff_paths_request(kw)?;
         let resp = py_detach_blocking(py, move || {
-            self.rt
-                .block_on(svc.diff_paths(&req.account, req.base.as_deref(), &req.head, &req.paths))
+            self.rt.block_on(svc.diff_paths(
+                &req.account,
+                req.base.as_deref(),
+                &req.head,
+                &req.paths,
+            ))
         })
         .map_err(|e| git::map_git_error(py, e))?;
         Ok(resp

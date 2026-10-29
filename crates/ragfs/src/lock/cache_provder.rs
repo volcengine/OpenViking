@@ -2267,9 +2267,10 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         fs.mkdir("/local", 0o755).await.unwrap();
         fs.mkdir("/local/account-a", 0o755).await.unwrap();
         fs.mkdir("/local/account-a/a", 0o755).await.unwrap();
-        let old_provider = Arc::new(
-            super::super::provider::FilesystemPathLockProvider::new(fs.clone(), 30.0),
-        );
+        let old_provider = Arc::new(super::super::provider::FilesystemPathLockProvider::new(
+            fs.clone(),
+            30.0,
+        ));
         let old = PathLockManager::new(fs, old_provider.clone(), PathLockConfig::default());
         let lease = old
             .acquire_tree("/local/account-a/a", Duration::ZERO, None)
@@ -2300,7 +2301,10 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             .unwrap();
         assert_ne!(fresh.lease.owner_id, handoff.owner_id);
         assert_eq!(
-            old_provider.read_token(&handoff.lock_paths[0]).await.unwrap(),
+            old_provider
+                .read_token(&handoff.lock_paths[0])
+                .await
+                .unwrap(),
             old_token
         );
         redis.release(&fresh).await.unwrap();
