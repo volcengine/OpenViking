@@ -98,7 +98,7 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
         except BaseException as exc:
             if ctx.committed:
                 record_enqueued_work(ctx.queue, metadata.work_id)
-            else:
+            elif registration is WorkRegistration.CREATED:
                 failure_message = str(exc) or type(exc).__name__
                 await run_to_completion(
                     lambda: self._tracker.mark_work_failed(
@@ -110,6 +110,9 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                     )
                 )
                 record_enqueued_work(ctx.queue, metadata.work_id)
+            # An existing work can still have an unacknowledged delivery. A
+            # failed replacement enqueue must preserve its state so recovery
+            # can execute the original rather than ACK it as terminal.
             raise
 
         if ctx.committed:
