@@ -201,9 +201,38 @@ class SessionReplayer:
             # Nothing live to archive (already committed elsewhere); clear the stale flag.
             self.store.mark_committed(harness, ref.native_session_id)
             return False
-        await self.client.commit(sid, keep_recent_count=keep_recent_count)
-        self.store.mark_committed(harness, ref.native_session_id)
+        await self._commit_and_mark(harness, ref, sid, keep_recent_count)
         return True
+
+    async def _commit_and_mark(
+        self, harness: str, ref: SessionRef, sid: str, keep_recent_count: int
+    ) -> None:
+        """Commit, then mark committed -- reconciling a commit whose response was lost.
+
+        A commit can be consumed server-side and still surface as an error (dropped
+        response, timeout). Re-raising unconditionally would leave ``needs_commit``
+        set and re-commit the same session on the next pass. On failure we therefore
+        re-read ``pending_tokens``: it is exactly 0 once a commit has landed, for
+        every ``keep_recent_count`` and in turn-budget retention mode too, because
+        it counts only messages outside the keep window. So ``pending_after == 0``
+        means the commit was consumed and the error was cosmetic.
+
+        Errors are never invented or swallowed: if the probe itself fails we raise
+        the original ``commit_error`` rather than the probe's, and a still-pending
+        session re-raises so the caller retries. ``CancelledError`` derives from
+        ``BaseException``, so cancellation cannot be reconciled into a false
+        "committed" verdict.
+        """
+        try:
+            await self.client.commit(sid, keep_recent_count=keep_recent_count)
+        except Exception as commit_error:  # noqa: BLE001 - commit may have succeeded remotely
+            try:
+                pending_after = await self.client.pending_tokens(sid)
+            except Exception:  # noqa: BLE001 - preserve the original commit failure
+                raise commit_error
+            if pending_after > 0:
+                raise
+        self.store.mark_committed(harness, ref.native_session_id)
 
     async def maybe_commit_on_threshold(
         self, harness: str, ref: SessionRef, threshold: int, keep_recent_count: int = 0
@@ -212,8 +241,7 @@ class SessionReplayer:
         pending = await self.client.pending_tokens(sid)
         if pending < threshold:
             return False
-        await self.client.commit(sid, keep_recent_count=keep_recent_count)
-        self.store.mark_committed(harness, ref.native_session_id)
+        await self._commit_and_mark(harness, ref, sid, keep_recent_count)
         return True
 
     async def reset_session(self, harness: str, ref: SessionRef) -> None:
