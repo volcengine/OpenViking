@@ -210,12 +210,10 @@ class ToolResultStore:
 
     async def read_metadata(self, tool_result_id: str) -> Dict[str, Any]:
         metadata_uri = f"{self._result_uri(tool_result_id)}/metadata.json"
-        try:
-            raw = await self._viking_fs.read_file(metadata_uri, ctx=self._ctx)
-        except NotFoundError:
-            raise
-        except Exception as exc:
-            raise NotFoundError(tool_result_id, "tool result") from exc
+        # VikingFS.read_file already raises NotFoundError for a missing file
+        # and lets every other fault keep its own type (timeout, ACL, decode)
+        # - the same classification read() applies to output.txt below.
+        raw = await self._viking_fs.read_file(metadata_uri, ctx=self._ctx)
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
