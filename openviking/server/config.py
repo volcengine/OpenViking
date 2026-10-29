@@ -5,13 +5,14 @@
 import sys
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 # Import auth plugin registry for config validation
 from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
+from openviking.utils.host_envelope import HostEnvelope, resolve_envelopes
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.config_loader import (
@@ -310,6 +311,61 @@ class ToolOutputExternalizationConfig(BaseModel):
     failure_mode: Literal["reject", "preserve_raw", "preview_only"] = "preserve_raw"
 
 
+class HostEnvelopeSpec(BaseModel):
+    """A user-defined host envelope; see ``openviking.utils.host_envelope.HostEnvelope``."""
+
+    name: str
+    detect_any: List[str]
+    strip: List[str] = Field(default_factory=list)
+    extract: Optional[str] = None
+
+
+class HostEnvelopeConfig(BaseModel):
+    """Strip agent-host scaffolding from user turns before they are understood or searched.
+
+    ``envelopes`` names the envelopes to try, in order; the first one that matches a turn
+    wins. Names refer to built-ins or to entries in ``custom``. Empty means off.
+    """
+
+    envelopes: List[str] = Field(default_factory=list)
+    custom: List[HostEnvelopeSpec] = Field(default_factory=list)
+    messages: bool = True
+    search: bool = True
+
+    @model_validator(mode="after")
+    def _check_names(self) -> "HostEnvelopeConfig":
+        self.resolve()  # fail at startup, not on the first message
+        return self
+
+    def resolve(self) -> List[HostEnvelope]:
+        custom = {
+            spec.name.strip().lower(): HostEnvelope(
+                name=spec.name.strip().lower(),
+                detect_any=tuple(spec.detect_any),
+                strip=tuple(spec.strip),
+                extract=spec.extract,
+            )
+            for spec in self.custom
+        }
+        resolved = []
+        for raw in self.envelopes:
+            name = str(raw or "").strip().lower()
+            if name in custom:
+                resolved.append(custom[name])
+                continue
+            found, unknown = resolve_envelopes([name])
+            if unknown:
+                raise ValueError(f"server.host_envelope: unknown envelope {raw!r}")
+            resolved.extend(found)
+        return resolved
+
+    def for_messages(self) -> List[HostEnvelope]:
+        return self.resolve() if self.messages else []
+
+    def for_search(self) -> List[HostEnvelope]:
+        return self.resolve() if self.search else []
+
+
 class AccountStoreConfig(BaseModel):
     """Startup-only selection of the complete account store provider."""
 
@@ -384,6 +440,7 @@ class ServerConfig(BaseModel):
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
+    host_envelope: HostEnvelopeConfig = Field(default_factory=HostEnvelopeConfig)
 
     @field_validator("user_config_defaults", mode="before")
     @classmethod

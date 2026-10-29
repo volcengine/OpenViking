@@ -309,6 +309,10 @@ def create_app(
         if callable(tool_output_setter):
             tool_output_setter(config.tool_output_externalization)
 
+        host_envelope_setter = getattr(sessions, "set_host_envelopes", None)
+        if callable(host_envelope_setter):
+            host_envelope_setter(config.host_envelope.for_messages())
+
         usage_reporter_setter = getattr(sessions, "set_usage_reporter", None)
         if callable(usage_reporter_setter):
             usage_reporter_setter(_get_usage_reporter())
@@ -467,6 +471,7 @@ def create_app(
     )
 
     app.state.config = config
+    app.state.search_host_envelopes = tuple(config.host_envelope.for_search())
     app.state.service_name = get_openviking_config().service_name
     app.state.server_config_overrides = server_overrides or {}
     from openviking.server.restart import RestartController
