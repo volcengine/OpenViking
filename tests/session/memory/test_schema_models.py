@@ -296,7 +296,7 @@ class TestSchemaModelGenerator:
         with pytest.raises(ValueError, match="new memory item requires fields: event_name"):
             model.model_validate({"page_id": 5, "event_name": None})
 
-    def test_non_event_add_only_page_id_schema_is_unchanged(self):
+    def test_add_only_page_id_schema_requires_new_page_range(self):
         memory_type = MemoryTypeSchema(
             memory_type="trajectories",
             operation_mode="add_only",
@@ -308,10 +308,8 @@ class TestSchemaModelGenerator:
         model = SchemaModelGenerator([memory_type]).create_flat_data_model(memory_type)
         page_id_schema = model.model_json_schema()["properties"]["page_id"]
 
-        assert "minimum" not in page_id_schema
-        assert page_id_schema["description"] == (
-            "Temporary page_id for identifying the target memory item."
-        )
+        assert page_id_schema["minimum"] == 100
+        assert "MUST be at least 100" in page_id_schema["description"]
 
     def test_existing_patch_can_omit_immutable_fields_but_new_item_cannot(self, real_registry):
         entities = real_registry.get("entities")
