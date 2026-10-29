@@ -497,14 +497,35 @@ by the cache provider. Business files stay in their existing file storage, and
 QueueFS keeps its existing persistent queue backend, such as SQLite. Business
 data and queue messages do not need to move to Redis.
 
-Pause incoming work, stop the old process and verify it has exited completely.
-Keep the existing file storage and persistent queues. Change
-`storage.agfs.pathlock.provider` from `filesystem` to `cache`, configure that cache
-provider to use Redis, and restart the service. The new process recovers pending
-jobs from the existing queue and acquires fresh path locks in Redis before
-resuming consumption. Neither draining the queue nor waiting for old filesystem
-lock leases to expire is required. This procedure requires a single instance;
-no writer using filesystem path locks may remain active during the switch.
+This procedure supports only a **single instance with downtime**:
+
+1. Pause incoming requests and task submissions. Pause any process manager or
+   scheduling policy that could automatically restart the old instance. Keep
+   the existing file storage and persistent queues.
+2. Stop the old service and all its queue consumer processes. Verify in the
+   process manager or deployment platform that every old instance PID / container
+   has exited, with no remaining child processes, standalone workers or other
+   writers using filesystem path locks against the same storage. Confirm that
+   the old instance's lock heartbeat renewal tasks have also stopped.
+   **Do not start the instance using Redis path locks until this check passes.**
+3. Change `storage.agfs.pathlock.provider` from `filesystem` to `cache` and
+   configure that cache provider to use Redis.
+4. Start one new instance. Verify that pending jobs recover from the existing
+   queue, acquire fresh path locks in Redis and resume consumption, then reopen
+   incoming requests and task submissions.
+
+`handoff` retains the lease in the old process and keeps its heartbeat running.
+Pausing requests or closing the listening port does not prove that the old
+writers have stopped; verify that all the processes above have exited. Process
+exit terminates their in-memory lease registries and heartbeat tasks, while
+`.ovlock` tokens may remain on disk. Draining the queue, deleting those lock
+files or waiting for old leases to expire is not required.
+
+Filesystem and Redis are independent lock coordination domains: Redis acquire
+**does not check or block old filesystem tokens**. If an old process remains
+alive, both backends can grant different owners the same path, allowing both
+processes to write business files. Waiting for old tokens to expire cannot
+replace the process exit check.
 
 New handoffs include `handle_mode`; historic payloads without it remain supported.
 On a provider change or an unavailable token, consumers acquire the complete
