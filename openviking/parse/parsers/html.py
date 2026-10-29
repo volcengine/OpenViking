@@ -121,9 +121,13 @@ class HTMLParser(BaseParser):
 
     def _html_to_markdown(self, html: str, base_url: str = "") -> str:
         """Convert HTML to Markdown using trafilatura."""
+        # The title must come from the ORIGINAL document: for WeChat pages
+        # _preprocess_html replaces html with the js_content fragment, which
+        # has no <head> and no title, so extracting after preprocessing loses
+        # the title for exactly the pages the preprocessing exists for.
+        title = self._extract_title(html, base_url or "")
         html = self._preprocess_html(html)
         content = self._extract_markdown(html, base_url or "")
-        title = self._extract_title(html, base_url or "")
         content = self._clean_markdown(content)
         if not content:
             content = self._extract_noscript_notice(html)
