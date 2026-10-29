@@ -58,9 +58,17 @@ export function ThreadList({ activeSessionId, className }: ThreadListProps) {
   } | null>(null)
 
   const handleNewSession = useCallback(async () => {
-    const result = await createSession.mutateAsync(undefined)
-    setTitle(result.session_id, t('threadList.newSession'))
-    void navigate({ to: '/sessions', search: { s: result.session_id } })
+    try {
+      const result = await createSession.mutateAsync(undefined)
+      setTitle(result.session_id, t('threadList.newSession'))
+      void navigate({ to: '/sessions', search: { s: result.session_id } })
+    } catch (error) {
+      toast.error(
+        t('threadList.createFailed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+    }
   }, [createSession, navigate, setTitle, t])
 
   const handleDeleteSession = useCallback(async () => {

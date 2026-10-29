@@ -22,6 +22,7 @@ const activity = {
       confirmDelete: '删除',
       deleting: '正在删除...',
       deleteSuccess: '会话已删除',
+      createFailed: '会话创建失败：{{error}}',
       deleteFailed: '会话删除失败：{{error}}',
       shortcut: '⌘ N 新建会话',
     },

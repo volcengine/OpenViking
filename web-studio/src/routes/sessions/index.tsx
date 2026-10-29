@@ -2,6 +2,7 @@ import { useCallback, useEffect } from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { ArrowLeftIcon, CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
@@ -33,9 +34,17 @@ function SessionsPage() {
   const { setTitle } = useSessionTitles(identityScopeKey)
 
   const handleNewSession = useCallback(async () => {
-    const result = await createSession.mutateAsync(undefined)
-    setTitle(result.session_id, t('threadList.newSession'))
-    void navigate({ to: '/sessions', search: { s: result.session_id } })
+    try {
+      const result = await createSession.mutateAsync(undefined)
+      setTitle(result.session_id, t('threadList.newSession'))
+      void navigate({ to: '/sessions', search: { s: result.session_id } })
+    } catch (error) {
+      toast.error(
+        t('threadList.createFailed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+    }
   }, [createSession, navigate, setTitle, t])
 
   // Cmd+N to create new session
