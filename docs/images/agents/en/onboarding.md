@@ -178,10 +178,10 @@ Then **read back**. Whenever any session is in OpenViking (imported this time, i
    ov read <memory URI>
    ```
 
-3. Read the imported conversation itself only in two cases: they want the original wording, or no memories were extracted (`extraction` isn't `completed`, or item 1 found nothing). Use the session `id` from the import JSON; an import commits once, so the archive is `archive_001`. Sessions the plugin saved (`live`) aren't read this way; go by what item 1 returned:
+3. Read the imported conversation itself only in two cases: they want the original wording, or no memories were extracted (`extraction` isn't `completed`, or item 1 found nothing). Read the raw messages in the archive directly: use the session `id` from the import JSON; an import commits once, so the archive is `archive_001`. Don't use `ov session get-session-archive`: it only returns archives whose memory processing has completed, so it finds nothing in exactly these cases. Sessions the plugin saved (`live`) aren't read this way; go by what item 1 returned:
 
    ```bash
-   ov session get-session-archive <session id> archive_001
+   ov read viking://user/<user_id>/sessions/<session id>/history/archive_001/messages.jsonl
    ```
 
 4. From what you read, put together four things: what this work is meant to achieve, where it left off, one judgment that was settled and its reason, and what is still open. Leave out anything you can't find; don't fill it in. Also note one **gap**: finished work that the discussion mentions but whose original isn't in OpenViking, such as a design doc, a script or a report. Step 4 uses it.
@@ -189,7 +189,7 @@ Then **read back**. Whenever any session is in OpenViking (imported this time, i
 | Import result | What the first sentence says | Read back |
 |---|---|---|
 | Written, `extraction` is `completed` | Which work was imported, and that the memories are ready | Read memories: `ov find`, then `ov read` one or two |
-| Written, extraction still in progress (`pending`, `running`) or no result | The discussions are saved; the memories are still being processed in the background and can be recalled automatically in a few minutes | Read the original conversation (`get-session-archive`), and say "this is read from the original conversation" |
+| Written, extraction still in progress (`pending`, `running`) or no result | The discussions are saved; the memories are still being processed in the background and can be recalled automatically in a few minutes | Read the original conversation (`messages.jsonl`), and say "this is read from the original conversation" |
 | `failed` | The discussions are saved, but processing them into memories failed; it can be retried later | Read the original conversations |
 | Nothing new: all imported before or saved by the plugin | These discussions were already in their OpenViking, so there was no need to upload them again | Read memories (without `--after`) |
 | Some failed | Which ones made it and which didn't; the failed ones can be retried later without re-sending everything | Read the ones that made it |
@@ -330,7 +330,7 @@ Then stop and wait for the user.
 
 1. **Check the plugin is running.** There is an `<openviking-context>` block in this conversation, or OpenViking tools are available. Call the `health` tool (its name may carry a prefix, such as `mcp__openviking__health` or `openviking_health`). If neither is there, see "No recall after the restart" in Troubleshooting. Only an injected block shows that automatic recall is running; no relevant memories may simply mean nothing relevant is stored yet.
 2. **Fill in missing choices.** From this conversation or the continuation message, check whether the import and the collaboration rule were done. Do whichever step is missing; don't re-ask what was settled.
-3. **Bring back the background.** Use the injected context first; if it isn't enough, use `search` (`mode="context"`), and `read` the original when needed. While memories are still being processed, you may read the imported original conversations, but say that you read the original record.
+3. **Bring back the background.** Use the injected context first; if it isn't enough, use `search` (`mode="context"`), and `read` the original when needed. While memories are still being processed, you may `read` the imported original conversations (`viking://user/<user_id>/sessions/<session id>/history/archive_001/messages.jsonl`), but say that you read the original record.
 
 **Tell the user**
 
@@ -365,7 +365,7 @@ After the summary and directions, wait for them to choose; don't start changing 
 | pi | `pi` | Restart pi | New session | `OV ✓` in the footer; `/viking` for status | Convert to JSONL; sessions are in `~/.pi/agent/sessions/*/*.jsonl` | `~/.pi/agent/AGENTS.md` |
 | DeepSeek Harness | `dsh` | Start a new session with the profile from the installer's `DeepSeek Harness profile:` line: `dsh --profile <profile>` | New session | "Context injection · openviking-memory" at the top of the session | Convert to JSONL; sessions are in `~/.dsh/sessions/` | Not confirmed |
 
-- **Codex approvals.** Codex asks before running commands that need the network, including the `ov find`, `ov read` and `ov session` used for the read-back here. For the install command, which carries the key, choose **Yes, proceed**, not "don't ask again for commands that start with …": that rule would store the key. The first time the OpenViking `search` tool runs, Codex asks for permission; choose **Always allow**. Trusting hooks and approving commands are separate things.
+- **Codex approvals.** Codex asks before running commands that need the network, including the `ov find` and `ov read` used for the read-back here. For the install command, which carries the key, choose **Yes, proceed**, not "don't ask again for commands that start with …": that rule would store the key. The first time the OpenViking `search` tool runs, Codex asks for permission; choose **Always allow**. Trusting hooks and approving commands are separate things.
 - **Choice tool.**
   - Claude Code: `AskUserQuestion`.
   - Codex: there are two; use whichever is in your tool list, preferring `request_user_input_async`.

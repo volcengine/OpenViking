@@ -53,6 +53,6 @@ OpenViking 通过目录和 URI 保留内容归属与来源。L0 摘要帮助识�
 ov acl set viking://resources/<user_id> --acl-mode restricted --entry user:<user_id>=manage --entry 'user:*=read'
 ```
 
-只在他明确要求时做，只改他自己的目录。没开启权限控制时这条命令不起作用，请他找团队管理员。
+只在他明确要求时做，只改他自己的目录。没开启权限控制时，普通成员运行这条命令会返回 `PERMISSION_DENIED … ACL management denied … manage permission required`。这说明团队没开权限控制，不是他的权限出了问题，也不影响他读写共享目录；想保护自己的目录，请他找团队管理员。
 
 共享技能用 `add_skill`（或 `ov add-skill <目录> -p viking://agent/skills`）安装，其他成员的 Agent 会在合适的任务里发现并使用它；不加 `target_uri` 时装进他自己的私有技能。

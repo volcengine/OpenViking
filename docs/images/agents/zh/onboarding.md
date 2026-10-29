@@ -178,10 +178,10 @@ node "${TMPDIR:-/tmp}/ov-import-history.mjs" --harness <claude|codex> --cwd "$PW
    ov read <记忆的 URI>
    ```
 
-3. 只有两种情况读导入的原对话：他想看当时的原话，或者没有提取出记忆（`extraction` 不是 `completed`，或者第 1 步什么都没查到）。会话 id 用导入 JSON 里的 `id`；导入只提交一次，归档就是 `archive_001`。插件保存的 `live` 会话不用读原对话，以第 1 步的结果为准：
+3. 只有两种情况读导入的原对话：他想看当时的原话，或者没有提取出记忆（`extraction` 不是 `completed`，或者第 1 步什么都没查到）。直接读归档里的原始消息：会话 id 用导入 JSON 里的 `id`，导入只提交一次，归档就是 `archive_001`。不要用 `ov session get-session-archive`，它只返回记忆整理完成的归档，正好在这两种情况下找不到。插件保存的 `live` 会话不用读原对话，以第 1 步的结果为准：
 
    ```bash
-   ov session get-session-archive <会话 id> archive_001
+   ov read viking://user/<user_id>/sessions/<会话 id>/history/archive_001/messages.jsonl
    ```
 
 4. 从读到的内容里整理四件事：这项工作要做成什么、上次做到哪、定过的一个判断和理由、还没解决的事。找不到的项就不写，不要补。另外记下一个**缺口**：讨论里提到、但原文不在 OpenViking 里的成品，例如方案文档、脚本、报告。步骤 4 会用到它。
@@ -189,7 +189,7 @@ node "${TMPDIR:-/tmp}/ov-import-history.mjs" --harness <claude|codex> --cwd "$PW
 | 导入结果 | 第一句怎么说 | 读回 |
 |---|---|---|
 | 有写入，`extraction` 为 `completed` | 导入了哪几项工作，记忆已经整理好 | 读记忆：`ov find`，再 `ov read` 一两条 |
-| 有写入，提取还在进行（`pending`、`running`）或没有结果 | 讨论已经存进去了，记忆还在后台整理，几分钟后就能被自动取回 | 读原对话（`get-session-archive`），并说明「这是从原对话里读到的」 |
+| 有写入，提取还在进行（`pending`、`running`）或没有结果 | 讨论已经存进去了，记忆还在后台整理，几分钟后就能被自动取回 | 读原对话（`messages.jsonl`），并说明「这是从原对话里读到的」 |
 | `failed` | 讨论已保存，但记忆整理失败了，之后可以重试 | 读原对话 |
 | 零新增：都已导入过或插件已保存 | 这些讨论之前就已经在他的 OpenViking 里，这次不用重复上传 | 读记忆（不加 `--after`） |
 | 部分失败 | 哪些成功、哪些失败，失败的之后可以重试，不要全部重传 | 读成功的部分 |
@@ -330,7 +330,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 1. **确认插件在运行。** 当前对话里有 `<openviking-context>` 块，或者 OpenViking 工具可用。调用 `health` 工具（名字可能带前缀，例如 `mcp__openviking__health`、`openviking_health`）。都没有时，见故障排查的「重启后没有召回」。有注入块才说明自动召回在运行；没有相关记忆，可能只是库里还没有相关内容。
 2. **补上缺的选择。** 从这段对话或续接消息里确认导入和协作约定是否已经做完。缺了就补做那一步，做过的不要重问。
-3. **取回背景。** 先用注入的上下文；不够再用 `search`（`mode="context"`）查，必要时 `read` 原文。记忆还在整理时，可以读导入的原对话，但要说明这是读的原记录。
+3. **取回背景。** 先用注入的上下文；不够再用 `search`（`mode="context"`）查，必要时 `read` 原文。记忆还在整理时，可以用 `read` 读导入的原对话（`viking://user/<user_id>/sessions/<会话 id>/history/archive_001/messages.jsonl`），但要说明这是读的原记录。
 
 **对用户说**
 
@@ -365,7 +365,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 | pi | `pi` | 重启 pi | 开新会话 | 底栏显示 `OV ✓`；`/viking` 查看状态 | 转成 JSONL；会话在 `~/.pi/agent/sessions/*/*.jsonl` | `~/.pi/agent/AGENTS.md` |
 | DeepSeek Harness | `dsh` | 用安装器输出中 `DeepSeek Harness profile：` 那一行的 profile 新开会话：`dsh --profile <profile>` | 开新会话 | 会话顶部显示「上下文注入 · openviking-memory」 | 转成 JSONL；会话在 `~/.dsh/sessions/` | 未确认 |
 
-- **Codex 的审批。** Codex 运行需要联网的命令前会请求批准，包括这里读回用的 `ov find`、`ov read` 和 `ov session`。运行带 key 的安装命令时选 **Yes, proceed**，不要选「以后以这个前缀开头的命令不再询问」，那条规则会把 key 存下来。OpenViking 的 `search` 工具第一次运行时，Codex 会请求允许，选 **Always allow** 即可。Hooks 信任和命令批准是两件事。
+- **Codex 的审批。** Codex 运行需要联网的命令前会请求批准，包括这里读回用的 `ov find` 和 `ov read`。运行带 key 的安装命令时选 **Yes, proceed**，不要选「以后以这个前缀开头的命令不再询问」，那条规则会把 key 存下来。OpenViking 的 `search` 工具第一次运行时，Codex 会请求允许，选 **Always allow** 即可。Hooks 信任和命令批准是两件事。
 - **选项工具。**
   - Claude Code：`AskUserQuestion`。
   - Codex：有两个，工具列表里有哪个用哪个，优先 `request_user_input_async`。

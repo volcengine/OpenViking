@@ -4,7 +4,7 @@ About OpenViking: the open-source context database for AI agents, open-sourced b
 
 You are an AI agent. The user is a member of an OpenViking team and asked you to install the OpenViking memory plugin and to help them start using it. This guide is written for you: for each step it says what the user should come away understanding, what you do yourself, and what your message to the user looks like. The wording is yours; use the user's language. If they want to read the guide itself, give them the link.
 
-This is the team edition. The "Onboarding guide" link on the installer's last line is the default, personal one; the user gave you this one, so follow this one and don't read that one.
+This is the team edition. The "Onboarding guide" link near the end of the installer output is the default, personal one; the user gave you this one, so follow this one and don't read that one.
 
 Three more pages, shared with the personal guide, are there when needed: [Troubleshooting](https://docs.openviking.ai/agents/en/onboarding-troubleshooting.md) (when a command fails), [Other hosts: convert sessions to JSONL](https://docs.openviking.ai/agents/en/onboarding-other-hosts.md) (when importing history on a host other than Claude Code or Codex), and the [extended reference](https://docs.openviking.ai/agents/en/reference/product-background.md) (when the user asks how something works, about permissions, or wants to organize several documents of their own). You don't need to read them before you start.
 
@@ -189,10 +189,10 @@ Then **read back**. Whenever any session is in OpenViking (imported this time, i
    ov read <memory URI>
    ```
 
-3. Read the imported conversation itself only in two cases: they want the original wording, or no memories were extracted (`extraction` isn't `completed`, or item 1 found nothing). Use the session `id` from the import JSON; an import commits once, so the archive is `archive_001`. Sessions the plugin saved (`live`) aren't read this way; go by what item 1 returned:
+3. Read the imported conversation itself only in two cases: they want the original wording, or no memories were extracted (`extraction` isn't `completed`, or item 1 found nothing). Read the raw messages in the archive directly: use the session `id` from the import JSON; an import commits once, so the archive is `archive_001`. Don't use `ov session get-session-archive`: it only returns archives whose memory processing has completed, so it finds nothing in exactly these cases. Sessions the plugin saved (`live`) aren't read this way; go by what item 1 returned:
 
    ```bash
-   ov session get-session-archive <session id> archive_001
+   ov read viking://user/<user_id>/sessions/<session id>/history/archive_001/messages.jsonl
    ```
 
 4. From what you read, put together four things: what this work is meant to achieve, where it left off, one judgment that was settled and its reason, and what is still open. Leave out anything you can't find; don't fill it in. Also note one **gap**: finished work that the discussion mentions but whose original isn't in OpenViking, such as a design doc, a script or a report. Steps 4 and 5 use it. Also note which project was imported and its directory on this machine (the `--cwd` value).
@@ -200,7 +200,7 @@ Then **read back**. Whenever any session is in OpenViking (imported this time, i
 | Import result | What the first sentence says | Read back |
 |---|---|---|
 | Written, `extraction` is `completed` | Which work was imported, and that the memories are ready | Read memories: `ov find`, then `ov read` one or two |
-| Written, extraction still in progress (`pending`, `running`) or no result | The discussions are saved; the memories are still being processed in the background and can be recalled automatically in a few minutes | Read the original conversation (`get-session-archive`), and say "this is read from the original conversation" |
+| Written, extraction still in progress (`pending`, `running`) or no result | The discussions are saved; the memories are still being processed in the background and can be recalled automatically in a few minutes | Read the original conversation (`messages.jsonl`), and say "this is read from the original conversation" |
 | `failed` | The discussions are saved, but processing them into memories failed; it can be retried later | Read the original conversations |
 | Nothing new: all imported before or saved by the plugin | These discussions were already in their OpenViking, so there was no need to upload them again | Read memories (without `--after`) |
 | Some failed | Which ones made it and which didn't; the failed ones can be retried later without re-sending everything | Read the ones that made it |
@@ -254,18 +254,19 @@ Add only what they named; don't scan directories or upload anything on your own.
    - The shared folder is empty: note "nobody has contributed yet".
    - It can't be read at all (an error or no permission): note why, skip the contribution below, and go straight to Step 5.
 
-2. **Prepare what could be contributed.** Only if Step 3 imported a project; the candidates are that project's key designs, output and progress:
+2. **Prepare what could be contributed.** The candidates are one project's key designs, output and progress. Use the project imported in Step 3, whose `<project directory>` is the `--cwd` value noted in 3c; if Step 3 imported nothing, use the project in the current directory (`$PWD`), which is then the `<project directory>`:
 
-   - Documents: in the project directory noted in Step 3, find designs, research, requirements, design specs, reports and similar documents changed within the import's time range; list them only, don't upload. For example, the last 14 days:
+   - Documents: in the project directory, find designs, research, requirements, design specs, reports and similar documents changed within the import's time range (the last 14 days if nothing was imported); list them only, don't upload. For example, the last 14 days:
 
      ```bash
      find "<project directory>" -type f \( -name '*.md' -o -name '*.pdf' -o -name '*.docx' -o -name '*.pptx' -o -name '*.xlsx' \) -mtime -14 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' | head -50
      ```
 
      Pick at most 5, preferring the Step 3 gap and documents mentioned in the sessions. Leave out READMEs, changelogs, code docs, templates, and anything containing secrets, credentials or private personal information.
-   - A progress summary: the four things read back in 3c (the goal, where it left off, settled judgments with their reasons, what is still open).
+   - Files already saved to their personal space in Step 3 (see "Files" above): list them too, and don't upload another copy from the local disk.
+   - A progress summary: only if 3c read something back; it is the four things read back (the goal, where it left off, settled judgments with their reasons, what is still open). If nothing was read back, offer no progress summary, only documents; don't piece one together from local documents or import summaries.
 
-   If Step 3 imported no project, there are no candidates.
+   If the current directory isn't a project (for example the home directory), or there are no suitable documents and nothing was read back, there are no candidates.
 
 3. **Contribute once they agree.** Everything goes into their own subfolder of the team folder, one folder per project: `viking://resources/<user_id>/<project>/`. `<user_id>` is the user name you noted in Step 1; `<project>` is the repository name or what they call the project. The commands below create the folders if they don't exist.
 
@@ -273,6 +274,13 @@ Add only what they named; don't scan directories or upload anything on your own.
 
      ```bash
      ov add-resource <document path> --parent-auto-create viking://resources/<user_id>/<project> --wait
+     ```
+
+   - Files saved to their personal space in Step 3: move them into the team folder so there is only one copy. `mv` doesn't create folders, so if the target folder doesn't exist yet, run `ov mkdir` first; use the item name shown by `ov ls viking://user/<user_id>/resources/<project>`:
+
+     ```bash
+     ov mkdir viking://resources/<user_id>/<project>
+     ov mv viking://user/<user_id>/resources/<project>/<item> viking://resources/<user_id>/<project>/<item>
      ```
 
    - The progress summary: write a Markdown file in the temp directory whose first line is "<project> progress, updated <date>", with the four things as its content; delete the temp file after writing:
@@ -301,7 +309,12 @@ Following the Step 3 read-back:
 
 In the question or a description, mention that to contribute something else or put it somewhere else, they can say so in the free-text input; if they change it, ask again with the new scope.
 
-If there are no candidates, don't send a choice card; say one sentence: "Whenever you have designs or progress the team should see, just say 'contribute <project>'s progress to the team'; the collaboration rule next covers this too." Then go to Step 5.
+If there are no candidates, still ask, so they know they can contribute and decide what. For example "Contribute a project's designs or progress to the team now? It goes into your folder in the team folder, where the team's members can see it." Options:
+
+- I'll choose what, with the description "tell me the files or the project to contribute"
+- Not now
+
+Once they name something, prepare the candidates as above, say what would be contributed, and ask again. If they choose not now, say one sentence: "Whenever you have designs or progress the team should see, just say 'contribute <project>'s progress to the team'; the collaboration rule next covers this too." Then go to Step 5.
 
 After contributing, say the result in one sentence: what was contributed and which of their folders in the team folder it is in; teammates' agents can find it now. If they chose not now, say "To contribute later, just say 'contribute <project>'s progress to the team'". Then go to Step 5.
 
@@ -338,7 +351,7 @@ The default rule text:
 
 ### Where things go
 
-- By default my work goes into my own subfolder of the team folder, one folder per project: `viking://resources/<user_id>/<project>/`, which the team's members can see. `<project>` is the repository name or what I call this work; if a matching folder already exists, use it.
+- By default my work goes into my own subfolder of the team folder, one folder per project: `viking://resources/<user_id>/<project>/`, which the team's members can see. `<project>` is the repository name or what I call this work; if a matching folder already exists in the team folder, use it.
 - What I said not to share, drafts still being explored, and anything only about me go into my personal space, `viking://user/<user_id>/resources/<project>/`, which other members can't see. Each piece of content is stored in one place only.
 - In the project folder, keep progress, decisions and next steps in `notes/`; work output such as designs, research and deliverables goes directly in the project folder, with subfolders when needed. Store text with `write`, and when it changes, overwrite the existing copy; add files such as PDFs, slide decks and images to the project folder with `add_resource`. After writing, read it back with `read` to check.
 - Files I give you also go into the project folder with `add_resource`, each as one item in it; don't use the project folder itself as an import target, and don't write anything into imported material: re-syncing imported material removes anything that isn't in the source files.
@@ -403,7 +416,7 @@ If they ask "where is it stored", explain then: by default in their own folder i
 - Prepare the continuation message. Use the URL you actually opened successfully; if this guide is a local file, use its absolute path. Fill in the angle brackets with the real results:
 
 ```text
-Restarted. Continue the OpenViking team onboarding from "After the restart" in https://docs.openviking.ai/agents/en/onboarding-team.md. History import: <for example "2 sessions imported", "already in OpenViking", "skipped">; team contribution: <for example "contributed the Gateway designs and progress", "not now", "team folder not readable">; collaboration rule: <added / not added>; what I want to do next: <the goal they mentioned, or if none, "see where <work> left off">.
+Restarted. Continue the OpenViking team onboarding from "After the restart" in https://docs.openviking.ai/agents/en/onboarding-team.md. History import: <for example "2 sessions imported", "already in OpenViking", "skipped">; team contribution: <for example "contributed the Gateway designs and progress", "not now", "team folder not readable">; collaboration rule: <added / not added>; what I want to do next: <the goal they mentioned, or "not said">.
 ```
 
 **Tell the user**
@@ -415,7 +428,7 @@ Restarted. Continue the OpenViking team onboarding from "After the restart" in h
 5. What to do when they come back:
    - Hosts whose "After restart" column says to resume the original session: tell them to come back to **this conversation** with the command in the table and send "restarted". Give them the continuation message as well, as a fallback: if they land in a different conversation, they send it in a new session.
    - Hosts that say to start a new session: tell them to start a new session, not to resume this conversation or reload the plugin in it, and give them the continuation message.
-6. One line on what comes next: "When you're back, I'll first tell you where <work> left off, and I can also show you what the team has shared." If no work was brought in: "When you're back, just tell me what you want to do, or have a look at what the team has shared first."
+6. One line on what comes next: "When you're back, we can carry on with <work> or first look at what the team has shared; your choice." If no work was brought in: "When you're back, just tell me what you want to do, or have a look at what the team has shared first."
 
 Then stop and wait for the user.
 
@@ -427,11 +440,11 @@ Then stop and wait for the user.
 
 1. **Check the plugin is running.** There is an `<openviking-context>` block in this conversation, or OpenViking tools are available. Call the `health` tool (its name may carry a prefix, such as `mcp__openviking__health` or `openviking_health`). If neither is there, see "No recall after the restart" in Troubleshooting. Only an injected block shows that automatic recall is running; no relevant memories may simply mean nothing relevant is stored yet.
 2. **Fill in missing choices.** From this conversation or the continuation message, check whether the import, the team contribution and the collaboration rule were done. Do whichever step is missing; don't re-ask what was settled.
-3. **Bring back the background.** Use the injected context first; if it isn't enough, use `search` (`mode="context"`), and `read` the original when needed. For team content only, set `target_uri` to `viking://resources`; list the team folder with `list`; find team skills with `find` and `context_type="skill"`. While memories are still being processed, you may read the imported original conversations, but say that you read the original record.
+3. **Bring back the background.** Use the injected context first; if it isn't enough, use `search` (`mode="context"`), and `read` the original when needed. For team content only, use `find` with `target_uri="viking://resources"` (`mode="context"` doesn't accept `target_uri`); list the team folder with `list`; find team skills with `find` and `context_type="skill"`. While memories are still being processed, you may `read` the imported original conversations (`viking://user/<user_id>/sessions/<session id>/history/archive_001/messages.jsonl`), but say that you read the original record.
 
 **Tell the user**
 
-Pick one by the outcome they want; if they haven't said, offer the first two as options:
+Pick one by the outcome they want; if they haven't said (the continuation message says "not said"), offer the first two as options:
 
 | They want | What the message contains |
 |---|---|
@@ -463,7 +476,7 @@ After the summary and directions, wait for them to choose; don't start changing 
 | pi | `pi` | Restart pi | New session | `OV ✓` in the footer; `/viking` for status | Convert to JSONL; sessions are in `~/.pi/agent/sessions/*/*.jsonl` | `~/.pi/agent/AGENTS.md` |
 | DeepSeek Harness | `dsh` | Start a new session with the profile from the installer's `DeepSeek Harness profile:` line: `dsh --profile <profile>` | New session | "Context injection · openviking-memory" at the top of the session | Convert to JSONL; sessions are in `~/.dsh/sessions/` | Not confirmed |
 
-- **Codex approvals.** Codex asks before running commands that need the network, including the `ov find`, `ov read`, `ov session`, `ov ls`, `ov overview`, `ov add-resource` and `ov write` used for the read-back and the contribution here. For the install command, which carries the key, choose **Yes, proceed**, not "don't ask again for commands that start with …": that rule would store the key. The first time the OpenViking `search` tool runs, Codex asks for permission; choose **Always allow**. Trusting hooks and approving commands are separate things.
+- **Codex approvals.** Codex asks before running commands that need the network, including the `ov find`, `ov read`, `ov ls`, `ov overview`, `ov add-resource`, `ov write`, `ov mkdir` and `ov mv` used for the read-back and the contribution here. For the install command, which carries the key, choose **Yes, proceed**, not "don't ask again for commands that start with …": that rule would store the key. The first time the OpenViking `search` tool runs, Codex asks for permission; choose **Always allow**. Trusting hooks and approving commands are separate things.
 - **Choice tool.**
   - Claude Code: `AskUserQuestion`.
   - Codex: there are two; use whichever is in your tool list, preferring `request_user_input_async`.

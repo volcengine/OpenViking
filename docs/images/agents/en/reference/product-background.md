@@ -53,6 +53,6 @@ If they want their own folder to be editable only by them and readable by everyo
 ov acl set viking://resources/<user_id> --acl-mode restricted --entry user:<user_id>=manage --entry 'user:*=read'
 ```
 
-Do it only when they ask, and only on their own folder. With access control off the command has no effect; ask them to contact their team admin.
+Do it only when they ask, and only on their own folder. With access control off, a regular member running this command gets `PERMISSION_DENIED … ACL management denied … manage permission required`. That means the team hasn't turned access control on, not that something is wrong with their permissions, and it doesn't affect their reading or writing in the shared folder; to protect their folder, they ask their team admin.
 
 Shared skills are installed with `add_skill` (or `ov add-skill <folder> -p viking://agent/skills`), and other members' agents find and use them for fitting tasks; without `target_uri` the skill goes into their own private skills.

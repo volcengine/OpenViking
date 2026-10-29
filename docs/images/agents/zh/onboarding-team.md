@@ -4,7 +4,7 @@
 
 你是一个 AI Agent。用户是一个 OpenViking 团队的成员，他请你安装 OpenViking 记忆插件，并带他开始使用。这份指南写给你看：它告诉你每一步要让用户明白什么、你自己要做什么、给用户的消息长什么样。措辞由你决定，用用户的语言。用户想看原文时，把链接给他。
 
-这是团队版。安装器最后一行打印的「接入引导」链接是默认的个人版；用户给你的是这份，按这份做，不用读那份。
+这是团队版。安装器输出末尾的「接入引导」链接是默认的个人版；用户给你的是这份，按这份做，不用读那份。
 
 另有三页按需查阅，和个人版共用：[故障排查](https://docs.openviking.net/agents/zh/onboarding-troubleshooting.md)（命令失败时）、[其他宿主：把会话转成 JSONL](https://docs.openviking.net/agents/zh/onboarding-other-hosts.md)（在 Claude Code、Codex 以外的宿主上导入历史时）、[扩展参考](https://docs.openviking.net/agents/zh/reference/product-background.md)（用户追问机制、权限，或想整理自己的多份资料时）。开始接入前不用读。
 
@@ -189,10 +189,10 @@ node "${TMPDIR:-/tmp}/ov-import-history.mjs" --harness <claude|codex> --cwd "$PW
    ov read <记忆的 URI>
    ```
 
-3. 只有两种情况读导入的原对话：他想看当时的原话，或者没有提取出记忆（`extraction` 不是 `completed`，或者第 1 步什么都没查到）。会话 id 用导入 JSON 里的 `id`；导入只提交一次，归档就是 `archive_001`。插件保存的 `live` 会话不用读原对话，以第 1 步的结果为准：
+3. 只有两种情况读导入的原对话：他想看当时的原话，或者没有提取出记忆（`extraction` 不是 `completed`，或者第 1 步什么都没查到）。直接读归档里的原始消息：会话 id 用导入 JSON 里的 `id`，导入只提交一次，归档就是 `archive_001`。不要用 `ov session get-session-archive`，它只返回记忆整理完成的归档，正好在这两种情况下找不到。插件保存的 `live` 会话不用读原对话，以第 1 步的结果为准：
 
    ```bash
-   ov session get-session-archive <会话 id> archive_001
+   ov read viking://user/<user_id>/sessions/<会话 id>/history/archive_001/messages.jsonl
    ```
 
 4. 从读到的内容里整理四件事：这项工作要做成什么、上次做到哪、定过的一个判断和理由、还没解决的事。找不到的项就不写，不要补。另外记下一个**缺口**：讨论里提到、但原文不在 OpenViking 里的成品，例如方案文档、脚本、报告。步骤 4 和步骤 5 会用到它。也记下导入的是哪个项目、它在本机的目录（`--cwd` 的值）。
@@ -200,7 +200,7 @@ node "${TMPDIR:-/tmp}/ov-import-history.mjs" --harness <claude|codex> --cwd "$PW
 | 导入结果 | 第一句怎么说 | 读回 |
 |---|---|---|
 | 有写入，`extraction` 为 `completed` | 导入了哪几项工作，记忆已经整理好 | 读记忆：`ov find`，再 `ov read` 一两条 |
-| 有写入，提取还在进行（`pending`、`running`）或没有结果 | 讨论已经存进去了，记忆还在后台整理，几分钟后就能被自动取回 | 读原对话（`get-session-archive`），并说明「这是从原对话里读到的」 |
+| 有写入，提取还在进行（`pending`、`running`）或没有结果 | 讨论已经存进去了，记忆还在后台整理，几分钟后就能被自动取回 | 读原对话（`messages.jsonl`），并说明「这是从原对话里读到的」 |
 | `failed` | 讨论已保存，但记忆整理失败了，之后可以重试 | 读原对话 |
 | 零新增：都已导入过或插件已保存 | 这些讨论之前就已经在他的 OpenViking 里，这次不用重复上传 | 读记忆（不加 `--after`） |
 | 部分失败 | 哪些成功、哪些失败，失败的之后可以重试，不要全部重传 | 读成功的部分 |
@@ -254,18 +254,19 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
    - 共享目录是空的：记下「还没有人贡献」。
    - 整个读不到（报错或权限不足）：记下原因，跳过下面的贡献，直接进入步骤 5。
 
-2. **准备贡献候选。** 只在步骤 3 导入了某个项目时准备，候选是这个项目的重点方案、产出和进展：
+2. **准备贡献候选。** 候选是一个项目的重点方案、产出和进展。项目用步骤 3 导入的那个，`<项目目录>` 是 3c 记下的 `--cwd` 值；步骤 3 没有导入时，用当前目录（`$PWD`）所在的项目，`<项目目录>` 就是它：
 
-   - 文档：在步骤 3 记下的项目目录里，找导入时间范围内改过的方案、调研、需求、设计、报告这类文档，只列出、不上传。例如最近 14 天：
+   - 文档：在项目目录里，找导入时间范围内（没有导入时用最近 14 天）改过的方案、调研、需求、设计、报告这类文档，只列出、不上传。例如最近 14 天：
 
      ```bash
      find "<项目目录>" -type f \( -name '*.md' -o -name '*.pdf' -o -name '*.docx' -o -name '*.pptx' -o -name '*.xlsx' \) -mtime -14 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' | head -50
      ```
 
      从结果里挑最多 5 份，步骤 3 的缺口和会话里提到过的优先。README、CHANGELOG、代码说明、模板，以及含密钥、账号、个人隐私的文件不选。
-   - 进展摘要：3c 读回的四件事（目标、上次做到哪、定过的判断和理由、还没解决的事）。
+   - 步骤 3 已经存进他个人空间的文件（见上面「文件」）：也列为候选，不要再从本地上传一份。
+   - 进展摘要：只在 3c 读回了内容时准备，内容就是读回的四件事（目标、上次做到哪、定过的判断和理由、还没解决的事）。没有读回时不准备进展摘要，只贡献文档；不要从本地文档或导入摘要另外拼一份。
 
-   步骤 3 没导入任何项目时，没有候选。
+   当前目录不是一个项目（例如主目录），或者既没有合适的文档、也没有读回时，没有候选。
 
 3. **他同意后贡献。** 放进团队目录下他自己的子目录，每个项目一个：`viking://resources/<user_id>/<项目名>/`，`<user_id>` 用步骤 1 记下的用户名，`<项目名>` 用仓库名或他对这个项目的叫法。目录不存在时下面的命令会自动建。
 
@@ -273,6 +274,13 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
      ```bash
      ov add-resource <文档路径> --parent-auto-create viking://resources/<user_id>/<项目名> --wait
+     ```
+
+   - 步骤 3 存进他个人空间的文件：移到团队目录，不留两份。`mv` 不会自动建目录，目标目录还不存在时先 `ov mkdir`；条目名用 `ov ls viking://user/<user_id>/resources/<项目名>` 里看到的名字：
+
+     ```bash
+     ov mkdir viking://resources/<user_id>/<项目名>
+     ov mv viking://user/<user_id>/resources/<项目名>/<条目名> viking://resources/<user_id>/<项目名>/<条目名>
      ```
 
    - 进展摘要：在临时目录写一个 Markdown 文件，开头一行写「<项目名> 进展，更新于 <日期>」，内容是那四件事，写入后删掉临时文件：
@@ -301,7 +309,12 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 在问题或描述里提一句：想换内容或换存放位置，在自由输入里直接说；他改了以后，按新的范围再问一次。
 
-没有贡献候选时不发选项，只说一句：「以后有想给团队看的方案或进展，说『把 <项目> 的进展贡献给团队』就行；接下来的协作约定也会带上这件事。」然后进入步骤 5。
+没有贡献候选时也要问，让他知道可以贡献、由他决定内容。问题例如「要不要现在把某个项目的方案或进展贡献给团队？会放在团队目录下你的文件夹里，团队成员都能看到。」选项：
+
+- 我来指定内容，描述写「告诉我要贡献的文件或项目」
+- 暂不贡献
+
+他指定后，按上面的方式准备候选、说清要贡献什么，再问一次。暂不贡献时说一句「以后有想给团队看的方案或进展，说『把 <项目> 的进展贡献给团队』就行；接下来的协作约定也会带上这件事。」然后进入步骤 5。
 
 贡献完成后一句话说结果：贡献了哪几项、在团队目录下他的哪个文件夹，同事的 Agent 现在就能检索到。暂不贡献时说「以后想贡献，说『把 <项目> 的进展贡献给团队』就行」。然后进入步骤 5。
 
@@ -338,7 +351,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 ### 存放方式
 
-- 我的工作内容默认存在团队目录下我自己的子目录，每个项目一个：`viking://resources/<user_id>/<项目名>/`，团队成员都能看到。`<项目名>` 用仓库名或我对这项工作的叫法，已有对应目录就沿用。
+- 我的工作内容默认存在团队目录下我自己的子目录，每个项目一个：`viking://resources/<user_id>/<项目名>/`，团队成员都能看到。`<项目名>` 用仓库名或我对这项工作的叫法，团队目录下已有对应目录就沿用。
 - 我说了不共享的内容、探索中的草稿、只和我个人有关的内容，存在我的个人空间 `viking://user/<user_id>/resources/<项目名>/`，其他成员看不到。同一份内容只存一处。
 - 项目目录下用 `notes/` 记录进展、决定和下一步；方案、调研、交付物等工作产出直接存在项目目录里，需要时再建子目录。文本内容用 `write` 存，内容改了就覆盖原来那份；PDF、PPT、图片这类文件用 `add_resource` 加到项目目录下。写完用 `read` 读回确认。
 - 我给的文件也用 `add_resource` 加到项目目录下，作为其中的一项；不要把项目目录本身作为导入目标，也不要往导入进来的资料里写东西：导入的资料重新同步时，会删掉源文件里没有的内容。
@@ -403,7 +416,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 - 准备续接消息。网址用你实际打开成功的那个；本指南是本地文件时，用它的绝对路径。尖括号换成实际结果：
 
 ```text
-已重启。从 https://docs.openviking.net/agents/zh/onboarding-team.md 的「重启之后」继续 OpenViking 团队版接入。历史导入：<例如「导入了 2 个会话」「已在 OpenViking 里」「已跳过」>；团队贡献：<例如「贡献了 Gateway 项目的方案和进展」「暂不贡献」「团队目录读不到」>；协作约定：<已写入 / 未写>；接下来想做：<他说过的目标，没说就写「先看看 <工作> 上次做到哪」>。
+已重启。从 https://docs.openviking.net/agents/zh/onboarding-team.md 的「重启之后」继续 OpenViking 团队版接入。历史导入：<例如「导入了 2 个会话」「已在 OpenViking 里」「已跳过」>；团队贡献：<例如「贡献了 Gateway 项目的方案和进展」「暂不贡献」「团队目录读不到」>；协作约定：<已写入 / 未写>；接下来想做：<他说过的目标，没说就写「未说」>。
 ```
 
 **对用户说**
@@ -415,7 +428,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 5. 回来之后做什么：
    - 「重启后」一列写着回到原会话的宿主：告诉他用表里的命令回到**这段对话**，然后发一句「已重启」。续接消息也给他，作为备用：回到的不是这段对话时，在新会话里发它。
    - 写着开新会话的宿主：告诉他开一个新会话，不要恢复这段对话，也不要在这里重新加载插件，并给他续接消息。
-6. 一句预告：「回来后我会先告诉你 <工作> 上次做到哪，也可以带你看看团队共享了什么。」没带入工作时说：「回来后直接告诉我你要做的事，或者先看看团队共享了什么。」
+6. 一句预告：「回来后可以接着 <工作> 做，也可以先看看团队共享了什么，你来选。」没带入工作时说：「回来后直接告诉我你要做的事，或者先看看团队共享了什么。」
 
 说完就停下，等用户操作。
 
@@ -427,11 +440,11 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 1. **确认插件在运行。** 当前对话里有 `<openviking-context>` 块，或者 OpenViking 工具可用。调用 `health` 工具（名字可能带前缀，例如 `mcp__openviking__health`、`openviking_health`）。都没有时，见故障排查的「重启后没有召回」。有注入块才说明自动召回在运行；没有相关记忆，可能只是库里还没有相关内容。
 2. **补上缺的选择。** 从这段对话或续接消息里确认导入、团队贡献和协作约定是否已经做完。缺了就补做那一步，做过的不要重问。
-3. **取回背景。** 先用注入的上下文；不够再用 `search`（`mode="context"`）查，必要时 `read` 原文。只查团队内容时把 `target_uri` 设为 `viking://resources`；列团队目录用 `list`；找团队技能用 `find` 并设 `context_type="skill"`。记忆还在整理时，可以读导入的原对话，但要说明这是读的原记录。
+3. **取回背景。** 先用注入的上下文；不够再用 `search`（`mode="context"`）查，必要时 `read` 原文。只查团队内容时用 `find` 并设 `target_uri="viking://resources"`（`mode="context"` 不接受 `target_uri`）；列团队目录用 `list`；找团队技能用 `find` 并设 `context_type="skill"`。记忆还在整理时，可以用 `read` 读导入的原对话（`viking://user/<user_id>/sessions/<会话 id>/history/archive_001/messages.jsonl`），但要说明这是读的原记录。
 
 **对用户说**
 
-按他想要的结果选一种；他没说时，把前两种作为选项给他：
+按他想要的结果选一种；他没说（续接消息里是「未说」）时，把前两种作为选项给他：
 
 | 他想要的 | 消息内容 |
 |---|---|
@@ -463,7 +476,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 | pi | `pi` | 重启 pi | 开新会话 | 底栏显示 `OV ✓`；`/viking` 查看状态 | 转成 JSONL；会话在 `~/.pi/agent/sessions/*/*.jsonl` | `~/.pi/agent/AGENTS.md` |
 | DeepSeek Harness | `dsh` | 用安装器输出中 `DeepSeek Harness profile：` 那一行的 profile 新开会话：`dsh --profile <profile>` | 开新会话 | 会话顶部显示「上下文注入 · openviking-memory」 | 转成 JSONL；会话在 `~/.dsh/sessions/` | 未确认 |
 
-- **Codex 的审批。** Codex 运行需要联网的命令前会请求批准，包括这里读回和贡献用的 `ov find`、`ov read`、`ov session`、`ov ls`、`ov overview`、`ov add-resource` 和 `ov write`。运行带 key 的安装命令时选 **Yes, proceed**，不要选「以后以这个前缀开头的命令不再询问」，那条规则会把 key 存下来。OpenViking 的 `search` 工具第一次运行时，Codex 会请求允许，选 **Always allow** 即可。Hooks 信任和命令批准是两件事。
+- **Codex 的审批。** Codex 运行需要联网的命令前会请求批准，包括这里读回和贡献用的 `ov find`、`ov read`、`ov ls`、`ov overview`、`ov add-resource`、`ov write`、`ov mkdir` 和 `ov mv`。运行带 key 的安装命令时选 **Yes, proceed**，不要选「以后以这个前缀开头的命令不再询问」，那条规则会把 key 存下来。OpenViking 的 `search` 工具第一次运行时，Codex 会请求允许，选 **Always allow** 即可。Hooks 信任和命令批准是两件事。
 - **选项工具。**
   - Claude Code：`AskUserQuestion`。
   - Codex：有两个，工具列表里有哪个用哪个，优先 `request_user_input_async`。
