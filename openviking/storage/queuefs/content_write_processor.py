@@ -18,8 +18,7 @@ from openviking.service.task_work_index import (
 )
 from openviking.storage.context_update_execution import commit_and_enqueue_plan
 from openviking.storage.context_update_plan import ContextUpdatePlan
-from openviking.storage.errors import HandoffRecoveryBlocked
-from openviking.storage.pathlock_recovery import adopt_or_reacquire
+from openviking.storage.pathlock_recovery import adopt_or_reacquire, prepare_handoff_retry
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -93,13 +92,12 @@ class ContentWriteProcessor(DequeueHandlerBase):
         )
 
     async def _requeue_lock_handoff(self, msg: ContentWriteMsg, exc: Exception) -> bool:
-        if msg.lock_handoff_retry >= 2 and not isinstance(exc, HandoffRecoveryBlocked):
+        payload = await prepare_handoff_retry(msg, exc, queue="ContentWrite")
+        if payload is None:
             return False
 
         from openviking.storage.queuefs import get_queue_manager
 
-        payload = msg.to_dict()
-        payload["lock_handoff_retry"] = msg.lock_handoff_retry + 1
         queue_manager = get_queue_manager()
         await queue_manager.enqueue(queue_manager.CONTENT_WRITE, payload)
         logger.warning(

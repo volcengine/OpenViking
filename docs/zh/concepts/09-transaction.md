@@ -503,7 +503,7 @@ SQLite 仅支持同机共享同一个本地磁盘数据库文件，不支持 EFS
 
 此流程仅支持 **单实例、停机切换**。按以下步骤操作：
 
-1. 暂停新请求和任务提交，暂停可能自动拉起旧实例的进程管理器或调度策略，
+1. 暂停新请求和任务提交，禁用可能自动拉起旧实例的自动重启或调度策略，
    保留原有文件存储和持久化队列。
 2. 停止旧服务及其所有队列消费进程。在进程管理器或部署平台中核对旧实例的
    PID / 容器已全部退出，且没有残留子进程、独立 worker 或其他访问同一存储的
@@ -530,6 +530,49 @@ filesystem 与 Redis 是相互独立的锁协调域，Redis 的 acquire **不会
 完整路径请求。不会只恢复混合批次中的部分路径。
 重新加锁遇到冲突或服务错误时保留任务重试；非法覆盖、失效引用和重复 adopt
 不会触发重新加锁。旧 `.ovlock` 文件无需扫描或复制到 Redis。
+
+恢复必须携带有效账号上下文；缺少上下文或覆盖路径不属于该账号时拒绝恢复。
+语义任务优先保留 `covered_paths` 中的 Exact/Tree 类型；历史消息缺少覆盖类型、
+无法确定原始粒度时，按任务路径保守获取 Tree 锁并记录 warning。
+这可能将原来的 Exact 锁扩大为 Tree 锁，降低恢复期间的并发度。
+
+### 恢复阻塞的重试与告警
+
+QueueFS 没有全局最大重试次数或死信队列。AddResource、Reindex、ContentWrite
+和 Semantic 消费者对 `HandoffRecoveryBlocked` 最多重试 8 次（首次尝试之外），
+通过消息中的 `lock_handoff_retry` 持久化计数。每次重试前等待
+`min(0.5 × 2^retry, 30)` 秒；退避期间仍占用当前消费者槽位。
+等待取消或重新入队失败时，不 ACK 原消息；达到上限时结束该 work 并记录失败，
+关联任务通过任务跟踪机制进入 FAILED，可查询失败原因。失败不会自动进入死信队列。
+
+每次阻塞记录 warning，达到上限记录 error，并导出
+`openviking_pathlock_recovery_blocked_total{queue, outcome}`，其中 `outcome`
+为 `retry` 或 `exhausted`。先启用 `server.observability.metrics.enabled`
+和 `server.observability.metrics.exporters.prometheus.enabled`，配置 Prometheus
+抓取 `/metrics`，再将以下示例加入 Prometheus 告警规则：
+
+```yaml
+groups:
+  - name: openviking-pathlock-recovery
+    rules:
+      - alert: OpenVikingPathlockRecoveryBlocked
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="retry"}[5m])) >= 8
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenViking 路径锁恢复反复阻塞"
+      - alert: OpenVikingPathlockRecoveryExhausted
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="exhausted"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenViking 路径锁恢复已达重试上限"
+```
+
+阈值应按业务流量调整。告警后结合日志中的 `task_id` 和失败原因检查竞争写入者或
+Redis 可用性，解决原因后重新提交失败任务。指标启用和规则配置见
+[指标体系](./12-metrics.md)及 [Grafana 与 Prometheus](../guides/11-grafana-prometheus.md)。
 
 ## 相关文档
 

@@ -16,8 +16,7 @@ from openviking.service.task_work_index import (
     bind_task_context_from_message,
     extract_task_metadata,
 )
-from openviking.storage.errors import HandoffRecoveryBlocked
-from openviking.storage.pathlock_recovery import adopt_or_reacquire
+from openviking.storage.pathlock_recovery import adopt_or_reacquire, prepare_handoff_retry
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -130,13 +129,12 @@ class AddResourceProcessor(DequeueHandlerBase):
         await self._record_watch_execution(msg, "cancelled")
 
     async def _requeue_lock_handoff(self, msg: AddResourceMsg, exc: Exception) -> bool:
-        if msg.lock_handoff_retry >= 2 and not isinstance(exc, HandoffRecoveryBlocked):
+        payload = await prepare_handoff_retry(msg, exc, queue="AddResource")
+        if payload is None:
             return False
 
         from openviking.storage.queuefs import get_queue_manager
 
-        payload = msg.to_dict()
-        payload["lock_handoff_retry"] = msg.lock_handoff_retry + 1
         await get_queue_manager().enqueue(self._queue_name, payload)
         logger.warning(
             "[AddResource] Requeued task %s after lock handoff failure: %s",

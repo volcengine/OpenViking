@@ -54,6 +54,7 @@ from openviking.storage.errors import (
     LockAcquisitionError,
 )
 from openviking.storage.index_action import FieldPatch
+from openviking.storage.pathlock_recovery import prepare_handoff_retry
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
@@ -362,6 +363,13 @@ class SemanticProcessor(DequeueHandlerBase):
         *,
         work: SemanticMessageWork,
     ) -> ProcessResult:
+        if isinstance(error, HandoffRecoveryBlocked):
+            payload = await prepare_handoff_retry(msg, error, queue="Semantic")
+            if payload is None:
+                self._merge_request_stats(msg.telemetry_id, error_count=1)
+                await self._cleanup_local_artifact(msg)
+                return ProcessResult.failed(f"Pathlock recovery retry limit reached: {error}")
+            msg.lock_handoff_retry = payload["lock_handoff_retry"]
         try:
             await work.reenqueue_after_error()
             self._merge_request_stats(msg.telemetry_id, requeue_count=1)

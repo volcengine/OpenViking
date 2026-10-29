@@ -107,7 +107,9 @@ async def test_storage_error_finishes_request_and_respects_lock_ownership(
     env.retry_queue.enqueue.assert_not_awaited()
     env.processor._account_breaker(msg.account_id).check()
     if owned:
-        env.pathlock.pathlock_adopt.assert_awaited_once_with(msg.lock_handoff)
+        env.pathlock.pathlock_adopt.assert_awaited_once_with(
+            msg.lock_handoff, fs_ctx={"account_id": msg.account_id}
+        )
         env.pathlock.pathlock_release.assert_awaited_once_with(env.lease)
     else:
         env.pathlock.pathlock_as_borrowed.assert_awaited_once_with(env.lease)

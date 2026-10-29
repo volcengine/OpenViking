@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+from asyncio import sleep
 from typing import Any, Awaitable, Callable
 
+from openviking.metrics.datasources.base import EventMetricDataSource
 from openviking.storage.errors import (
     HandoffRecoveryBlocked,
     HandoffRecoveryRequired,
@@ -16,6 +18,42 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 Requests = list[dict[str, str]]
+HANDOFF_RECOVERY_MAX_RETRIES = 8
+HANDOFF_RECOVERY_MAX_DELAY_SECS = 30.0
+
+
+async def prepare_handoff_retry(msg: Any, error: Exception, *, queue: str) -> dict | None:
+    """Bound recovery retries; keep the original delivery durable during backoff.
+
+    The incremented counter is persisted in the replacement message. If waiting
+    is cancelled or enqueue fails, callers must leave the original unacknowledged.
+    """
+    retry = msg.lock_handoff_retry
+    blocked = isinstance(error, HandoffRecoveryBlocked)
+    limit = HANDOFF_RECOVERY_MAX_RETRIES if blocked else 2
+    exhausted = retry >= limit
+    if blocked:
+        EventMetricDataSource._emit(
+            "pathlock.recovery_blocked",
+            {"queue": queue, "outcome": "exhausted" if exhausted else "retry"},
+        )
+        log = logger.error if exhausted else logger.warning
+        log(
+            "Pathlock recovery blocked queue=%s task_id=%s retry=%d limit=%d exhausted=%s: %s",
+            queue,
+            msg.task_id,
+            retry,
+            limit,
+            exhausted,
+            error,
+        )
+    if exhausted:
+        return None
+    if blocked:
+        await sleep(min(0.5 * 2**retry, HANDOFF_RECOVERY_MAX_DELAY_SECS))
+    payload = msg.to_dict()
+    payload["lock_handoff_retry"] = retry + 1
+    return payload
 
 
 def _validate_requests(requests: Any, account_id: str | None) -> Requests:
@@ -60,7 +98,7 @@ async def adopt_or_reacquire(
     agfs: Any,
     handoff: dict[str, Any],
     *,
-    ctx: Any = None,
+    ctx: Any,
     fallback_requests: Callable[[], Awaitable[Requests]] | None = None,
 ) -> Any:
     """Recover only typed adoption failures; acquire under a new owner.
@@ -68,12 +106,19 @@ async def adopt_or_reacquire(
     Callers must supply the complete operation scope for historic handles that
     cannot be inverted, and retain the result using a cancellation-safe guard.
     """
-    fs_ctx = {"account_id": ctx.account_id} if ctx is not None else None
-    kwargs = {"fs_ctx": fs_ctx} if fs_ctx is not None else {}
+    account_id = getattr(ctx, "account_id", None)
+    if (
+        not isinstance(account_id, str)
+        or not account_id.strip()
+        or "/" in account_id
+        or account_id in {".", ".."}
+        or "\x00" in account_id
+    ):
+        raise InvalidPathLockRequestError("handoff recovery requires an account context")
+    kwargs = {"fs_ctx": {"account_id": account_id}}
     try:
         return await agfs.pathlock_adopt(handoff, **kwargs)
     except HandoffRecoveryRequired as error:
-        account_id = ctx.account_id if ctx is not None else None
         operation = (
             _validate_requests(await fallback_requests(), account_id)
             if fallback_requests is not None

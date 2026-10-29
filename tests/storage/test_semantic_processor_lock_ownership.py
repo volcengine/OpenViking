@@ -8,7 +8,7 @@ import json
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -97,12 +97,50 @@ async def test_semantic_lock_reacquires_unicode_coverage_after_provider_change(m
         "covered_paths": [{"path": covered_path, "kind": "tree"}],
     }
 
-    scope = await SemanticLockScope.resolve(handoff)
+    scope = await SemanticLockScope.resolve(handoff, ctx=SimpleNamespace(account_id="default"))
 
     assert scope.lock == lease
-    pathlock.pathlock_acquire_batch.assert_awaited_once_with(handoff["covered_paths"])
+    pathlock.pathlock_acquire_batch.assert_awaited_once_with(
+        handoff["covered_paths"], fs_ctx={"account_id": "default"}
+    )
     await scope.close()
     pathlock.pathlock_release.assert_awaited_once_with(lease)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("historic", [False, True])
+async def test_semantic_file_recovery_preserves_exact_or_uses_conservative_tree(
+    monkeypatch, historic
+):
+    path = "/local/default/resources/file.md"
+    pathlock = SimpleNamespace(
+        pathlock_adopt=AsyncMock(side_effect=HandoffRecoveryRequired("provider_changed")),
+        pathlock_acquire_batch=AsyncMock(return_value={"lease_ref": "new"}),
+        pathlock_release=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_lock.get_viking_fs",
+        lambda: _FakeVikingFS(pathlock),
+    )
+    warning = Mock()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_lock.logger.warning", warning)
+    handoff = {"lock_paths": ["/local/default/resources/.exact.ovlock.file.md.123"]}
+    if not historic:
+        handoff["covered_paths"] = [{"path": path, "kind": "exact"}]
+    scope = await SemanticLockScope.resolve(
+        handoff, ctx=SimpleNamespace(account_id="default"), fallback_path_factory=lambda: path
+    )
+    pathlock.pathlock_acquire_batch.assert_awaited_once_with(
+        [{"path": path, "kind": "tree" if historic else "exact"}],
+        fs_ctx={"account_id": "default"},
+    )
+    if historic:
+        warning.assert_called_once_with(
+            "Recovering historic semantic handoff with conservative Tree coverage path=%s", path
+        )
+    else:
+        warning.assert_not_called()
+    await scope.close()
 
 
 def test_semantic_tree_stats_aggregate_multiple_plans_for_one_request():

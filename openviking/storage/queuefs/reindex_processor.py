@@ -11,8 +11,7 @@ from typing import Any, Dict, Optional
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_work_index import bind_task_context_from_message, extract_task_metadata
-from openviking.storage.errors import HandoffRecoveryBlocked
-from openviking.storage.pathlock_recovery import adopt_or_reacquire
+from openviking.storage.pathlock_recovery import adopt_or_reacquire, prepare_handoff_retry
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
@@ -66,13 +65,12 @@ class ReindexProcessor(DequeueHandlerBase):
         return await acquire(self._viking_fs._uri_to_path(msg.uri, ctx=ctx))
 
     async def _requeue_lock_handoff(self, msg: ReindexMsg, exc: Exception) -> bool:
-        if msg.lock_handoff_retry >= 2 and not isinstance(exc, HandoffRecoveryBlocked):
+        payload = await prepare_handoff_retry(msg, exc, queue="Reindex")
+        if payload is None:
             return False
 
         from openviking.storage.queuefs import get_queue_manager
 
-        payload = msg.to_dict()
-        payload["lock_handoff_retry"] = msg.lock_handoff_retry + 1
         queue_manager = get_queue_manager()
         await queue_manager.enqueue(queue_manager.REINDEX, payload)
         logger.warning(

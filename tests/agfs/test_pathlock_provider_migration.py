@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -21,7 +22,11 @@ from openviking.service.task_domain import TaskStatus, WorkState
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker
 from openviking.service.task_work_index import extract_task_metadata, get_task_context
-from openviking.storage.errors import HandoffRecoveryRequired, LockAcquisitionError
+from openviking.storage.errors import (
+    HandoffRecoveryBlocked,
+    HandoffRecoveryRequired,
+    LockAcquisitionError,
+)
 from openviking.storage.pathlock_recovery import adopt_or_reacquire
 from openviking.storage.queuefs import queue_manager as manager_module
 from openviking.storage.queuefs.queue_manager import QueueManager
@@ -146,29 +151,39 @@ async def main():
     await agfs.write("/local/migration/resources/tree/input.md", b"input", fs_ctx=ctx)
     await agfs.write("/local/migration/resources/信贷.md", b"before", fs_ctx=ctx)
     expected = []
-    for suffix, kind in [("tree", "tree"), ("信贷.md", "exact")]:
+    contended = len(sys.argv) > 5 and sys.argv[5] == "contended"
+    if contended:
+        await agfs.write("/local/migration/resources/tree/contended.md", b"", fs_ctx=ctx)
+    targets = [("tree", "tree"), ("tree", "tree")] if contended else [
+        ("tree", "tree"), ("信贷.md", "exact")]
+    for suffix, kind in targets:
         path = "/local/migration/resources/" + suffix
         uri = "viking://resources/" + suffix
         task = await tracker.create("reindex", resource_id=uri,
                                     account_id="migration", user_id="tester")
-        guard = PathLockGuard(agfs)
-        await guard.acquire(lambda: agfs.pathlock_acquire_batch(
-            [{"path": path, "kind": kind}], fs_ctx=ctx))
-        acquired_at = time.monotonic()
-        handoff = await guard.to_handoff()
-        old_owner = handoff["owner_id"]
-        old_lease_ref = handoff["lease_ref"]
-        if sys.argv[3] == "historic":
-            handoff.pop("handle_mode")
-            handoff.pop("covered_paths")
-            handoff["handle_id"] = handoff.pop("owner_id")
-            handoff.pop("lease_ref")
+        if not contended or not expected:
+            guard = PathLockGuard(agfs)
+            await guard.acquire(lambda: agfs.pathlock_acquire_batch(
+                [{"path": path, "kind": kind}], fs_ctx=ctx))
+            acquired_at = time.monotonic()
+            handoff = await guard.to_handoff()
+            old_owner = handoff["owner_id"]
+            old_lease_ref = handoff["lease_ref"]
+            if sys.argv[3] == "historic":
+                handoff.pop("handle_mode")
+                handoff.pop("covered_paths")
+                handoff["handle_id"] = handoff.pop("owner_id")
+                handoff.pop("lease_ref")
         msg = ReindexMsg(task_id=task.task_id, uri=uri, object_type="resources",
                          mode="semantic", account_id="migration",
-                         user_id="tester", role="root", lock_handoff=handoff)
+                         user_id="tester", role="root", lock_handoff=handoff,
+                         lock_handoff_retry=int(sys.argv[6]) if len(sys.argv) > 6 else 0)
         with bind_task_context(task.task_id, "migration", "tester"):
-            receipt = await guard.handoff_and_dispatch(
-                handoff, lambda: queue.enqueue(msg.to_dict()))
+            if contended and expected:
+                receipt = await queue.enqueue(msg.to_dict())
+            else:
+                receipt = await guard.handoff_and_dispatch(
+                    handoff, lambda: queue.enqueue(msg.to_dict()))
         assert guard.transferred and guard.lease is None
         expected.append({"task_id": task.task_id, "work_id": receipt.work_id,
                          "uri": uri, "path": path,
@@ -361,3 +376,273 @@ async def test_sqlite_backlog_migrates_to_redis_and_is_consumed(
             assert await reopened_agfs.read(task.result["output"]) == item["task_id"].encode()
     finally:
         await reopened_agfs.run("close")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("historic", [False, True], ids=["current", "historic"])
+async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkeypatch, historic):
+    """Two native clients compete for one old handoff using real SQLite/Redis.
+
+    Synchronization only forces the race and holds the winning write until the
+    losing consumer reports a real recovery conflict. No lock result is mocked.
+    """
+    redis_url = os.environ.get("REDIS_URL")
+    if not redis_url:
+        pytest.skip("REDIS_URL required for filesystem → Redis migration integration")
+    manifest = tmp_path / "contended.json"
+    producer = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _BACKLOG_PRODUCER,
+            str(tmp_path),
+            str(manifest),
+            "historic" if historic else "current",
+            "pending",
+            "contended",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert producer.returncode == 0, producer.stderr
+    expected = json.loads(manifest.read_text())
+    by_task = {item["task_id"]: item for item in expected}
+    assert len(by_task) == 2
+    assert len({item["old_owner"] for item in expected}) == 1
+    old_files = {p: p.read_bytes() for p in (tmp_path / "viking").rglob(".exact.ovlock.*")}
+    assert len(old_files) == 1
+    config = RagfsBindingConfig(
+        agfs=AGFSConfig(
+            path=str(tmp_path),
+            backend="local",
+            queuefs={"backend": "sqlite", "recover_stale_sec": 0},
+            pathlock={"provider": "cache"},
+        ),
+        cache=CacheConfig(
+            provider="redis",
+            params={"endpoints": [redis_url], "command_timeout_ms": 1000},
+        ),
+        service_name=f"contended-migration-{uuid.uuid4().hex}",
+    )
+    # Open both backends before processing: SQLite startup recovery must not
+    # reclaim a delivery that the other consumer has already started.
+    clients = [create_agfs_client(config) for _ in range(2)]
+    filesystems = [VikingFS(client) for client in clients]
+    managers = [QueueManager(client, max_concurrent_reindex=1) for client in clients]
+    tracker = TaskTracker(PersistentTaskStore(clients[0]))
+    monkeypatch.setattr(tracker_module, "_instance", tracker)
+    monkeypatch.setattr(manager_module, "_instance", managers[0])
+    queues = []
+    barrier = threading.Barrier(2)
+    conflict_seen, entered, finish = threading.Event(), threading.Event(), threading.Event()
+    state_lock = threading.Lock()
+    adoptions = 0
+    active = 0
+    executed = []
+    conflicts = []
+    original_requeue = ReindexProcessor._requeue_lock_handoff
+
+    async def record_conflict(self, msg, exc):
+        if isinstance(exc, HandoffRecoveryBlocked):
+            with state_lock:
+                conflicts.append(msg.task_id)
+            conflict_seen.set()
+        return await original_requeue(self, msg, exc)
+
+    monkeypatch.setattr(ReindexProcessor, "_requeue_lock_handoff", record_conflict)
+    for fs, manager in zip(filesystems, managers, strict=True):
+        original_adopt = fs._async_agfs.pathlock_adopt
+
+        async def simultaneous_adopt(*args, original=original_adopt, **kwargs):
+            nonlocal adoptions
+            with state_lock:
+                adoptions += 1
+                synchronize = adoptions <= 2
+            if synchronize:
+                await asyncio.to_thread(barrier.wait, 5)
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(fs._async_agfs, "pathlock_adopt", simultaneous_adopt)
+        queues.append(
+            manager.get_queue(
+                manager.REINDEX, dequeue_handler=ReindexProcessor(fs), allow_create=True
+            )
+        )
+
+    async def protected_executor(self, *, uri, ctx, lease_guard, **kwargs):
+        nonlocal active
+        task_id = get_task_context().task_id
+        item = by_task[task_id]
+        lease = lease_guard.lease
+        agfs = lease_guard._agfs
+        assert lease["owner_id"] != item["old_owner"]
+        assert lease["lease_ref"] != item["old_lease_ref"]
+        handoff = await agfs.pathlock_to_handoff(lease)
+        assert handoff["covered_paths"] == [{"path": item["path"], "kind": "tree"}]
+        output = item["path"] + "/contended.md"
+        with state_lock:
+            active += 1
+            assert active == 1, "two consumers entered the protected write"
+        try:
+            entered.set()
+            assert await asyncio.to_thread(finish.wait, 5), "winning write was never released"
+            with pytest.raises(LockAcquisitionError):
+                await filesystems[0]._async_agfs.pathlock_acquire_exact(output)
+            previous = await agfs.read(output)
+            await agfs.write(
+                output,
+                previous + task_id.encode() + b"\n",
+                fs_ctx={"account_id": ctx.account_id, "lease_ref": lease["lease_ref"]},
+            )
+            with state_lock:
+                executed.append((task_id, lease["owner_id"]))
+            return {"uri": uri, "output": output}
+        finally:
+            with state_lock:
+                active -= 1
+
+    monkeypatch.setattr(ReindexExecutor, "_run", protected_executor)
+    try:
+        await managers[0].prepare_task_tracking(tracker)
+        for manager in managers:
+            manager.start()
+        assert await asyncio.to_thread(entered.wait, 5), "neither consumer acquired recovery lock"
+        assert await asyncio.to_thread(conflict_seen.wait, 5), (
+            "no real recovery contention observed"
+        )
+        assert len(executed) == 0
+        finish.set()
+        async with asyncio.timeout(10):
+            while not (await queues[0].get_status()).is_complete:
+                await asyncio.sleep(0.05)
+        for manager in managers:
+            await asyncio.to_thread(manager.stop)
+        assert len(conflicts) == 1
+        assert {task_id for task_id, _ in executed} == set(by_task)
+        assert len({owner for _, owner in executed}) == 2
+        assert active == 0
+        statuses = [await queue.get_status() for queue in queues]
+        assert sum(status.requeue_count for status in statuses) == 1
+        assert sum(status.error_count for status in statuses) == 0
+        assert await queues[0].snapshot() == []
+        assert all(p.read_bytes() == data for p, data in old_files.items())
+        for item in expected:
+            task = await tracker.get(item["task_id"], account_id="migration", user_id="tester")
+            assert task.status is TaskStatus.COMPLETED
+            assert (
+                await tracker.get_work_state(
+                    item["task_id"], item["work_id"], account_id="migration", user_id="tester"
+                )
+                is WorkState.DONE
+            )
+        agfs = filesystems[0]._async_agfs
+        output = expected[0]["path"] + "/contended.md"
+        assert set((await agfs.read(output)).decode().splitlines()) == set(by_task)
+        lease = await agfs.pathlock_acquire_tree(expected[0]["path"])
+        await agfs.pathlock_release(lease)
+    finally:
+        finish.set()
+        for manager in managers:
+            await asyncio.to_thread(manager.stop)
+        for fs in filesystems:
+            await fs._async_agfs.run("close")
+    reopened = create_agfs_client(config)
+    agfs = AsyncAGFSClient(reopened)
+    try:
+        assert set((await agfs.read(output)).decode().splitlines()) == set(by_task)
+        assert (
+            await QueueManager(reopened)
+            .get_queue(QueueManager.REINDEX, allow_create=True)
+            .snapshot()
+            == []
+        )
+    finally:
+        await agfs.run("close")
+
+
+@pytest.mark.asyncio
+async def test_recovery_retry_exhaustion_fails_task_and_drains_queue(tmp_path, monkeypatch):
+    """A competing Redis owner survives; exhausted backlog is failed and ACKed."""
+    redis_url = os.environ.get("REDIS_URL")
+    if not redis_url:
+        pytest.skip("REDIS_URL required for filesystem → Redis migration integration")
+    manifest = tmp_path / "exhausted.json"
+    producer = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _BACKLOG_PRODUCER,
+            str(tmp_path),
+            str(manifest),
+            "current",
+            "pending",
+            "contended",
+            "8",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert producer.returncode == 0, producer.stderr
+    expected = json.loads(manifest.read_text())
+    client = create_agfs_client(
+        RagfsBindingConfig(
+            agfs=AGFSConfig(
+                path=str(tmp_path),
+                backend="local",
+                queuefs={"backend": "sqlite", "recover_stale_sec": 0},
+                pathlock={"provider": "cache"},
+            ),
+            cache=CacheConfig(
+                provider="redis",
+                params={"endpoints": [redis_url], "command_timeout_ms": 1000},
+            ),
+            service_name=f"exhausted-migration-{uuid.uuid4().hex}",
+        )
+    )
+    fs = VikingFS(client)
+    agfs = fs._async_agfs
+    tracker = TaskTracker(PersistentTaskStore(client))
+    manager = QueueManager(client)
+    monkeypatch.setattr(tracker_module, "_instance", tracker)
+    monkeypatch.setattr(manager_module, "_instance", manager)
+    queue = manager.get_queue(
+        manager.REINDEX, dequeue_handler=ReindexProcessor(fs), allow_create=True
+    )
+
+    async def forbidden_executor(*args, **kwargs):
+        raise AssertionError("exhausted recovery must not execute business writes")
+
+    monkeypatch.setattr(ReindexExecutor, "_run", forbidden_executor)
+    competing = await agfs.pathlock_acquire_tree(expected[0]["path"])
+    try:
+        await manager.prepare_task_tracking(tracker)
+        manager.start()
+        async with asyncio.timeout(10):
+            while not (await queue.get_status()).is_complete:
+                await asyncio.sleep(0.05)
+        await asyncio.to_thread(manager.stop)
+        status = await queue.get_status()
+        assert status.error_count == 2
+        assert status.requeue_count == 0
+        assert await queue.snapshot() == []
+        assert await agfs.read(expected[0]["path"] + "/contended.md") == b""
+        for item in expected:
+            task = await tracker.get(item["task_id"], account_id="migration", user_id="tester")
+            assert task.status is TaskStatus.FAILED
+            assert (
+                await tracker.get_work_state(
+                    item["task_id"], item["work_id"], account_id="migration", user_id="tester"
+                )
+                is WorkState.FAILED
+            )
+        # Exhaustion must never release the unrelated competing writer's lease.
+        with pytest.raises(LockAcquisitionError):
+            await agfs.pathlock_acquire_exact(expected[0]["path"] + "/child.md")
+    finally:
+        await asyncio.to_thread(manager.stop)
+        await agfs.pathlock_release(competing)
+        await agfs.run("close")

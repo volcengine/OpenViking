@@ -13,7 +13,11 @@ from openviking.storage.errors import (
     InvalidPathLockRequestError,
     LockAcquisitionError,
 )
-from openviking.storage.pathlock_recovery import adopt_or_reacquire
+from openviking.storage.pathlock_recovery import (
+    HANDOFF_RECOVERY_MAX_RETRIES,
+    adopt_or_reacquire,
+    prepare_handoff_retry,
+)
 from openviking.storage.pathlock_transfer import PathLockGuard
 
 CTX = SimpleNamespace(account_id="tenant")
@@ -151,8 +155,9 @@ async def test_cancelled_recovery_records_and_releases_fresh_lease():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("processor_name", ["AddResource", "Reindex", "ContentWrite"])
+@pytest.mark.parametrize("retry,delay", [(0, 0.5), (2, 2.0), (5, 16.0), (7, 30.0), (8, None)])
 async def test_migration_blockage_is_requeued_even_after_previous_retry_limit(
-    monkeypatch, processor_name
+    monkeypatch, processor_name, retry, delay
 ):
     from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
     from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
@@ -166,16 +171,25 @@ async def test_migration_blockage_is_requeued_even_after_previous_retry_limit(
     }
     manager = SimpleNamespace(REINDEX="Reindex", CONTENT_WRITE="ContentWrite", enqueue=AsyncMock())
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    sleep = AsyncMock()
+    monkeypatch.setattr("openviking.storage.pathlock_recovery.sleep", sleep)
     msg = SimpleNamespace(
         task_id="task",
-        lock_handoff_retry=5,
+        lock_handoff_retry=retry,
         to_dict=lambda: {"task_id": "task", "_task_work_id": "work"},
     )
-    assert await processors[processor_name]()._requeue_lock_handoff(
+    requeued = await processors[processor_name]()._requeue_lock_handoff(
         msg, HandoffRecoveryBlocked("busy")
     )
+    assert requeued is (delay is not None)
+    if delay is None:
+        sleep.assert_not_awaited()
+        manager.enqueue.assert_not_awaited()
+        return
+    sleep.assert_awaited_once_with(delay)
     manager.enqueue.assert_awaited_once_with(
-        processor_name, {"task_id": "task", "_task_work_id": "work", "lock_handoff_retry": 6}
+        processor_name,
+        {"task_id": "task", "_task_work_id": "work", "lock_handoff_retry": retry + 1},
     )
 
 
@@ -207,8 +221,10 @@ async def test_content_write_historic_batch_recovers_all_exact_write_targets():
 
 @pytest.mark.asyncio
 async def test_semantic_failed_migration_requeue_does_not_ack_original(monkeypatch):
+    from openviking.storage.queuefs.semantic_msg import SemanticMsg
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
+    monkeypatch.setattr("openviking.storage.pathlock_recovery.sleep", AsyncMock())
     processor = SemanticProcessor(
         vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
     )
@@ -216,6 +232,65 @@ async def test_semantic_failed_migration_requeue_does_not_ack_original(monkeypat
     processor._cleanup_local_artifact = AsyncMock()
     with pytest.raises(RuntimeError, match="disk full"):
         await processor._requeue_semantic_msg_after_error(
-            SimpleNamespace(telemetry_id=""), HandoffRecoveryBlocked("busy"), work=work
+            SemanticMsg(uri="viking://resources/tree", context_type="resource"),
+            HandoffRecoveryBlocked("busy"),
+            work=work,
         )
     processor._cleanup_local_artifact.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ctx", [None, SimpleNamespace(account_id=""), SimpleNamespace(account_id="../other")]
+)
+async def test_recovery_requires_valid_account_context(ctx):
+    agfs = client(HandoffRecoveryRequired("provider_changed"))
+    with pytest.raises(InvalidPathLockRequestError, match="account context"):
+        await adopt_or_reacquire(agfs, {"covered_paths": [TREE]}, ctx=ctx)
+    agfs.pathlock_adopt.assert_not_awaited()
+    agfs.pathlock_acquire_batch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_backoff_keeps_original_message_unchanged(monkeypatch):
+    started = asyncio.Event()
+
+    async def wait(delay):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("openviking.storage.pathlock_recovery.sleep", wait)
+    msg = SimpleNamespace(task_id="task", lock_handoff_retry=2, to_dict=lambda: {})
+    retry = asyncio.create_task(
+        prepare_handoff_retry(msg, HandoffRecoveryBlocked("busy"), queue="Reindex")
+    )
+    await started.wait()
+    retry.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await retry
+    assert msg.lock_handoff_retry == 2
+
+
+@pytest.mark.asyncio
+async def test_semantic_recovery_exhaustion_settles_failure_without_requeue():
+    from openviking.storage.queuefs.process_result import ProcessOutcome
+    from openviking.storage.queuefs.semantic_msg import SemanticMsg
+    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+
+    processor = SemanticProcessor(vlm_resolver=SimpleNamespace(get_vlm=AsyncMock()))
+    processor._cleanup_local_artifact = AsyncMock()
+    work = SimpleNamespace(reenqueue_after_error=AsyncMock())
+    msg = SemanticMsg(
+        uri="viking://resources/tree",
+        context_type="resource",
+        lock_handoff_retry=HANDOFF_RECOVERY_MAX_RETRIES,
+    )
+    restored = SemanticMsg.from_dict(msg.to_dict())
+    assert restored.lock_handoff_retry == HANDOFF_RECOVERY_MAX_RETRIES
+    result = await processor._requeue_semantic_msg_after_error(
+        restored, HandoffRecoveryBlocked("busy"), work=work
+    )
+    assert result.outcome is ProcessOutcome.FAILED
+    assert "retry limit" in result.error
+    work.reenqueue_after_error.assert_not_awaited()
+    processor._cleanup_local_artifact.assert_awaited_once_with(restored)

@@ -499,8 +499,8 @@ data and queue messages do not need to move to Redis.
 
 This procedure supports only a **single instance with downtime**:
 
-1. Pause incoming requests and task submissions. Pause any process manager or
-   scheduling policy that could automatically restart the old instance. Keep
+1. Pause incoming requests and task submissions. Disable any automatic restart
+   or scheduling policy that could restart the old instance. Keep
    the existing file storage and persistent queues.
 2. Stop the old service and all its queue consumer processes. Verify in the
    process manager or deployment platform that every old instance PID / container
@@ -536,6 +536,54 @@ never acquires only part of a mixed batch. Acquisition conflicts and service
 errors leave durable work pending for retry. Malformed coverage, invalidated
 references, and duplicate adoption do not trigger reacquisition. Old `.ovlock`
 files need no scanning or copying into Redis.
+
+Recovery requires a valid account context and rejects coverage outside that
+account. Semantic jobs preserve the Exact/Tree kind in `covered_paths`. When a
+historic message has no coverage kind and its original granularity cannot be
+determined, recovery conservatively acquires a Tree lock on the operation path
+and logs a warning. This can widen an original Exact lock to Tree and reduce
+concurrency during recovery.
+
+### Blocked recovery retries and alerts
+
+QueueFS has no global retry limit or dead-letter queue. AddResource, Reindex,
+ContentWrite and Semantic consumers allow up to eight retries after the initial
+attempt for `HandoffRecoveryBlocked`, persisting `lock_handoff_retry` in the
+replacement message. Each retry waits `min(0.5 × 2^retry, 30)` seconds; backoff
+holds the current consumer slot. Cancellation during backoff or a failed
+enqueue leaves the original delivery unacknowledged. Exhaustion ends the work
+with a failure; task tracking transitions the associated task to FAILED with a
+queryable reason. Failures do not automatically enter a dead-letter queue.
+
+Each blocked recovery logs a warning; exhaustion logs an error. The counter
+`openviking_pathlock_recovery_blocked_total{queue, outcome}` distinguishes
+`retry` from `exhausted`. Enable `server.observability.metrics.enabled` and
+`server.observability.metrics.exporters.prometheus.enabled`, configure Prometheus
+to scrape `/metrics`, then add these example alert rules:
+
+```yaml
+groups:
+  - name: openviking-pathlock-recovery
+    rules:
+      - alert: OpenVikingPathlockRecoveryBlocked
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="retry"}[5m])) >= 8
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenViking pathlock recovery is repeatedly blocked"
+      - alert: OpenVikingPathlockRecoveryExhausted
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="exhausted"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenViking pathlock recovery retry limit reached"
+```
+
+Adjust thresholds for workload volume. Use the logged `task_id` and failure
+reason to investigate competing writers or Redis availability, then resubmit
+failed tasks after resolving the cause. See [Metrics](./12-metrics.md) and
+[Grafana and Prometheus](../guides/11-grafana-prometheus.md) for monitoring setup.
 
 ## Related Documentation
 

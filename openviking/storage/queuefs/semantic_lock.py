@@ -52,6 +52,11 @@ class SemanticLockScope:
                     ),
                     "tree",
                 )
+                if not lock_handoff.get("covered_paths"):
+                    logger.warning(
+                        "Recovering historic semantic handoff with conservative Tree coverage path=%s",
+                        path,
+                    )
                 return [{"path": path, "kind": kind}]
 
             lease = await adopt_or_reacquire(
