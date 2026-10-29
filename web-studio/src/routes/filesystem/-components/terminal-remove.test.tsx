@@ -130,13 +130,22 @@ it.each([
     query: { uri, recursive: false },
   })
 })
-it('does not fall back to deleting the current directory for a missing target', async () => {
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-  submit('/rm --recursive')
-  await screen.findByText('terminal.rmUsage')
-  expect(confirm).not.toHaveBeenCalled()
-  expect(m.remove).not.toHaveBeenCalled()
-})
+it.each([
+  '/rm --recursive',
+  '/rm viking:// -r',
+  '/rm viking:/// -r',
+  '/rm viking://// --recursive',
+])(
+  'rejects missing or root deletion targets before confirmation: %s',
+  async (command) => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    submit(command)
+    await screen.findByText('terminal.rmUsage')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(m.remove).not.toHaveBeenCalled()
+    expect(m.refresh).not.toHaveBeenCalled()
+  },
+)
 it('shows a failed deletion without reporting success or refreshing', async () => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   m.remove.mockRejectedValue(new Error('permission denied'))

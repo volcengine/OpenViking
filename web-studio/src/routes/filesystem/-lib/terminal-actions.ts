@@ -244,11 +244,7 @@ export function parseRemove(input: string) {
     } else targets.push(token)
   }
   const uri = targets[0]
-  if (
-    targets.length !== 1 ||
-    !uri.startsWith('viking://') ||
-    !uri.slice(9).trim()
-  )
+  if (targets.length !== 1 || !isExplicitResourceUri(uri))
     throw new TerminalActionError('rmUsage')
   return { uri, recursive }
 }
