@@ -18,6 +18,8 @@ from openviking.service.task_work_index import (
 )
 from openviking.storage.context_update_execution import commit_and_enqueue_plan
 from openviking.storage.context_update_plan import ContextUpdatePlan
+from openviking.storage.errors import HandoffRecoveryBlocked
+from openviking.storage.pathlock_recovery import adopt_or_reacquire
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -54,7 +56,7 @@ class ContentWriteProcessor(DequeueHandlerBase):
 
         uris: set[str] = set()
         result = msg.result if isinstance(msg.result, dict) else {}
-        for field in ("created", "updated", "unchanged"):
+        for field in ("created", "updated", "unchanged", "deleted"):
             values = result.get(field)
             if isinstance(values, list):
                 uris.update(str(value) for value in values if value)
@@ -70,36 +72,28 @@ class ContentWriteProcessor(DequeueHandlerBase):
                 uris.add(str(plan["root_uri"]))
         return sorted(uris)
 
-    async def _reacquire_lock(self, msg: ContentWriteMsg, ctx: RequestContext) -> Dict[str, Any]:
-        covered_paths = (
-            msg.lock_handoff.get("covered_paths")
-            if isinstance(msg.lock_handoff, dict)
-            else None
-        )
-        if isinstance(covered_paths, list) and covered_paths:
-            return await self._viking_fs._async_agfs.pathlock_acquire_batch(covered_paths)
-
-        uris = self._uris_for_reacquire(msg)
-        if not uris:
-            raise ValueError("content-write lock reacquire has no resource URI")
-        paths = [self._viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
-        if len(paths) == 1:
-            return await self._viking_fs._async_agfs.pathlock_acquire_exact(paths[0])
-        return await self._viking_fs._async_agfs.pathlock_acquire_exact_batch(paths)
-
     async def _load_lock(self, msg: ContentWriteMsg, ctx: RequestContext) -> Dict[str, Any] | None:
         if msg.lock_handoff is None:
             return None
-        try:
-            return await self._viking_fs._async_agfs.pathlock_adopt(msg.lock_handoff)
-        except Exception as handoff_error:
-            try:
-                return await self._reacquire_lock(msg, ctx)
-            except Exception:
-                raise handoff_error
+
+        async def requests():
+            uris = self._uris_for_reacquire(msg)
+            # Content-write producers acquire Exact locks on their write targets,
+            # including RNFV file plans; generated parent sidecars are not targets.
+            return [
+                {
+                    "path": self._viking_fs._uri_to_path(uri, ctx=ctx),
+                    "kind": "exact",
+                }
+                for uri in uris
+            ]
+
+        return await adopt_or_reacquire(
+            self._viking_fs._async_agfs, msg.lock_handoff, ctx=ctx, fallback_requests=requests
+        )
 
     async def _requeue_lock_handoff(self, msg: ContentWriteMsg, exc: Exception) -> bool:
-        if msg.lock_handoff_retry >= 2:
+        if msg.lock_handoff_retry >= 2 and not isinstance(exc, HandoffRecoveryBlocked):
             return False
 
         from openviking.storage.queuefs import get_queue_manager
@@ -174,14 +168,11 @@ class ContentWriteProcessor(DequeueHandlerBase):
         )
 
         metadata = extract_task_metadata(data)
-        dispatch_complete = (
-            metadata is not None
-            and await tracker.is_enqueue_complete(
-                msg.task_id,
-                metadata.work_id,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
+        dispatch_complete = metadata is not None and await tracker.is_enqueue_complete(
+            msg.task_id,
+            metadata.work_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
         )
         lock_guard = PathLockGuard(self._viking_fs._async_agfs)
         if not dispatch_complete or (
@@ -209,7 +200,9 @@ class ContentWriteProcessor(DequeueHandlerBase):
         try:
             result_updates: Dict[str, Any] = {}
             checkpoint_result = (
-                deepcopy(task.result) if dispatch_complete and isinstance(task.result, dict) else None
+                deepcopy(task.result)
+                if dispatch_complete and isinstance(task.result, dict)
+                else None
             )
             if not dispatch_complete:
                 if lock_guard.lease is not None and msg.lock_scope == "semantic_handoff":
@@ -237,9 +230,7 @@ class ContentWriteProcessor(DequeueHandlerBase):
                         semantic_lock_handoff,
                         dispatch_refresh,
                         accepted=lambda value: (
-                            isinstance(value, tuple)
-                            and len(value) == 2
-                            and bool(value[1])
+                            isinstance(value, tuple) and len(value) == 2 and bool(value[1])
                         ),
                     )
                 if (

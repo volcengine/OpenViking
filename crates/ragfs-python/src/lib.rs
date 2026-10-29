@@ -21,6 +21,7 @@ use uuid::Uuid;
 /// Cached reference to the Python `openviking.storage.errors.LockAcquisitionError` class,
 /// imported at module init so that native and Python code share the same exception type.
 static LOCK_ACQUISITION_ERROR_TYPE: OnceLock<Py<PyType>> = OnceLock::new();
+static HANDOFF_RECOVERY_ERROR_TYPE: OnceLock<Py<PyType>> = OnceLock::new();
 static RUST_TRACING_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 static RUST_TRACING_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 static RUST_TRACING_FILE_STATE: OnceLock<TracingFileState> = OnceLock::new();
@@ -159,6 +160,12 @@ fn init_tracing(log_level: &str, log_output: &str) -> PyResult<()> {
 /// Map a PathLockError to the appropriate Python exception.
 fn pathlock_err_to_py(err: PathLockError) -> PyErr {
     match &err {
+        PathLockError::HandoffRecoveryRequired { reason } => Python::attach(|py| {
+            let ty = HANDOFF_RECOVERY_ERROR_TYPE
+                .get()
+                .expect("HandoffRecoveryRequired not initialized");
+            PyErr::from_type(ty.bind(py).clone(), reason.to_string())
+        }),
         PathLockError::Conflict { .. }
         | PathLockError::Timeout { .. }
         | PathLockError::HandoffFailed(_)
@@ -226,7 +233,7 @@ use ragfs::leader::{LeaderLease, LeaderManager};
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
     BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandoffRef, PathLockKind,
-    PathLockManager, PathLockRequest,
+    PathLockHandleMode, PathLockManager, PathLockRequest,
 };
 use ragfs::metrics::{RagfsMetric, RagfsMetricValue};
 
@@ -1469,6 +1476,15 @@ fn handoff_ref_to_py_dict(py: Python<'_>, handoff: &PathLockHandoffRef) -> PyRes
         dict.set_item("lease_ref", lease_ref)?;
     }
     dict.set_item("owner_id", &handoff.owner_id)?;
+    if let Some(mode) = handoff.handle_mode {
+        dict.set_item(
+            "handle_mode",
+            match mode {
+                PathLockHandleMode::LockPath => "lock_path",
+                PathLockHandleMode::LogicalPath => "logical_path",
+            },
+        )?;
+    }
     dict.set_item("lock_paths", &handoff.lock_paths)?;
     let covered = PyList::empty(py);
     for req in &handoff.covered_paths {
@@ -3141,8 +3157,20 @@ impl RAGFSBindingClient {
             .map(|v| v.extract(py))
             .transpose()?
             .filter(|s: &String| !s.is_empty());
+        let handle_mode = handoff_ref
+            .get("handle_mode")
+            .filter(|v| !v.bind(py).is_none())
+            .map(|v| -> PyResult<PathLockHandleMode> {
+                match v.extract::<String>(py)?.as_str() {
+                    "lock_path" => Ok(PathLockHandleMode::LockPath),
+                    "logical_path" => Ok(PathLockHandleMode::LogicalPath),
+                    _ => Err(PyValueError::new_err("invalid handoff handle_mode")),
+                }
+            })
+            .transpose()?;
         let handoff = PathLockHandoffRef {
             lease_ref,
+            handle_mode,
             owner_id,
             lock_paths,
             covered_paths,
@@ -3301,6 +3329,9 @@ fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     LOCK_ACQUISITION_ERROR_TYPE
         .set(exc_type)
         .map_err(|_| PyRuntimeError::new_err("LockAcquisitionError already initialized"))?;
+    HANDOFF_RECOVERY_ERROR_TYPE
+        .set(errors_mod.getattr("HandoffRecoveryRequired")?.extract()?)
+        .map_err(|_| PyRuntimeError::new_err("HandoffRecoveryRequired already initialized"))?;
 
     Ok(())
 }

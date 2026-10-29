@@ -489,6 +489,24 @@ Legacy compatibility form:
 
 Restart recovery requires persisted queue data. QueueFS uses SQLite by default. With the cache backend, durability depends on the configured Provider; the memory backend loses queued work when the process exits.
 
+### Single-instance filesystem → Redis migration
+
+Pause incoming work, stop the old process and verify it has exited completely.
+Keep the existing data and persistent queues, set `storage.agfs.pathlock.provider`
+to `cache`, configure Redis, and restart. Neither draining the queue nor waiting
+for old leases to expire is required. This procedure requires a single instance;
+no filesystem-lock writer may remain active during the switch.
+
+New handoffs include `handle_mode`; historic payloads without it remain supported.
+On a provider change or an unavailable token, consumers acquire the complete
+logical coverage with its Exact/Tree kinds under a new owner before resuming.
+They prefer `covered_paths`, invert historic `.path.ovlock` Tree handles, and use
+the operation's complete requests for non-invertible Exact handles. Recovery
+never acquires only part of a mixed batch. Acquisition conflicts and service
+errors leave durable work pending for retry. Malformed coverage, invalidated
+references, and duplicate adoption do not trigger reacquisition. Old `.ovlock`
+files need no scanning or copying into Redis.
+
 ## Related Documentation
 
 - [Architecture](./01-architecture.md) - System architecture overview

@@ -79,6 +79,9 @@ pub struct PathLockHandoffRef {
     /// Optional only for backward compatibility with historic queue payloads.
     #[serde(default)]
     pub lease_ref: Option<String>,
+    /// Provider handle representation; absent in historic queue payloads.
+    #[serde(default)]
+    pub handle_mode: Option<super::provider::PathLockHandleMode>,
     /// Owner identity (preserved across handoff).
     pub owner_id: String,
     /// Lock-file paths held.
@@ -155,6 +158,20 @@ pub struct PathLockConflict {
 }
 
 /// PathLock-specific error type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum HandoffRecoveryReason {
+    /// The destination uses a different handle representation.
+    #[error("provider_changed")]
+    ProviderChanged,
+    /// Historic logical handles do not describe their lock kinds.
+    #[error("coverage_missing")]
+    CoverageMissing,
+    /// The original token no longer grants ownership.
+    #[error("token_unavailable")]
+    TokenUnavailable,
+}
+
+/// PathLock-specific error type.
 #[derive(Debug, thiserror::Error)]
 pub enum PathLockError {
     /// Lock conflict with another owner.
@@ -206,6 +223,13 @@ pub enum PathLockError {
     /// Handoff/adopt failure.
     #[error("handoff/adopt failed: {0}")]
     HandoffFailed(String),
+
+    /// Durable work must acquire fresh coverage before continuing.
+    #[error("handoff recovery required: {reason}")]
+    HandoffRecoveryRequired {
+        /// Structured reason; unrelated failures must not trigger recovery.
+        reason: HandoffRecoveryReason,
+    },
 
     /// Internal error.
     #[error("lock internal error: {0}")]

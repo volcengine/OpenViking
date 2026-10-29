@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.storage.errors import InvalidPathLockRequestError
+from openviking.storage.errors import HandoffRecoveryRequired
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
@@ -76,19 +76,14 @@ async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_semantic_lock_reacquires_unicode_coverage_after_legacy_mapping_error(monkeypatch):
+async def test_semantic_lock_reacquires_unicode_coverage_after_provider_change(monkeypatch):
     covered_path = "/local/default/resources/agent-memory/credit-risk/信贷风险管理_1.md"
     lock_path = (
         "/local/default/resources/agent-memory/credit-risk/.exact.ovlock.1.md.14dd8bad93aaa5b0"
     )
     lease = {"id": "reacquired-lock"}
     pathlock = SimpleNamespace(
-        pathlock_adopt=AsyncMock(
-            side_effect=InvalidPathLockRequestError(
-                f"invalid lock request: handoff coverage '{covered_path}' "
-                f"does not map to lock path '{lock_path}'"
-            )
-        ),
+        pathlock_adopt=AsyncMock(side_effect=HandoffRecoveryRequired("provider_changed")),
         pathlock_acquire_batch=AsyncMock(return_value=lease),
         pathlock_release=AsyncMock(),
     )
@@ -234,7 +229,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         async def exists(self, uri, ctx=None):
             return True
 
-        async def pathlock_adopt(self, lease):
+        async def pathlock_adopt(self, lease, *, fs_ctx=None):
             return lease
 
         async def pathlock_release(self, lease):

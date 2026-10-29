@@ -48,7 +48,11 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     write_abstract_overview,
 )
-from openviking.storage.errors import InvalidPathLockRequestError, LockAcquisitionError
+from openviking.storage.errors import (
+    HandoffRecoveryBlocked,
+    InvalidPathLockRequestError,
+    LockAcquisitionError,
+)
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -362,6 +366,10 @@ class SemanticProcessor(DequeueHandlerBase):
             await work.reenqueue_after_error()
             self._merge_request_stats(msg.telemetry_id, requeue_count=1)
         except Exception as requeue_err:
+            if isinstance(error, HandoffRecoveryBlocked):
+                # No replacement is durable: propagate so the original delivery
+                # remains recoverable rather than being ACKed as failed.
+                raise
             logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
             self._merge_request_stats(msg.telemetry_id, error_count=1)
             await self._cleanup_local_artifact(msg)
@@ -912,6 +920,7 @@ class SemanticProcessor(DequeueHandlerBase):
             scope = await SemanticLockScope.resolve(
                 msg.lock_handoff,
                 caller_lock=caller_lock,
+                ctx=ctx,
                 fallback_path_factory=lambda: viking_fs._uri_to_path(msg.uri, ctx=ctx),
             )
             if scope.lock is None and await viking_fs.exists(msg.uri, ctx=ctx):

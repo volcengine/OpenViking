@@ -2257,6 +2257,57 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         runtime.close().await.unwrap();
     }
 
+    /// Classify filesystem migration without authorizing or changing old tokens.
+    #[tokio::test]
+    async fn manager_redis_classifies_filesystem_handoffs_without_reading_old_tokens() {
+        let Some((runtime, redis, _, key)) = test_managers("filesystem-migration").await else {
+            return;
+        };
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/local", 0o755).await.unwrap();
+        fs.mkdir("/local/account-a", 0o755).await.unwrap();
+        fs.mkdir("/local/account-a/a", 0o755).await.unwrap();
+        let old_provider = Arc::new(
+            super::super::provider::FilesystemPathLockProvider::new(fs.clone(), 30.0),
+        );
+        let old = PathLockManager::new(fs, old_provider.clone(), PathLockConfig::default());
+        let lease = old
+            .acquire_tree("/local/account-a/a", Duration::ZERO, None)
+            .await
+            .unwrap();
+        let mut handoff = old.to_handoff(&lease);
+        old.handoff(&lease).await.unwrap();
+        assert_eq!(handoff.handle_mode, Some(PathLockHandleMode::LockPath));
+        let old_token = old_provider
+            .read_token(&handoff.lock_paths[0])
+            .await
+            .unwrap();
+        for historic in [false, true] {
+            if historic {
+                handoff.handle_mode = None;
+                handoff.covered_paths.clear();
+            }
+            assert!(matches!(
+                redis.adopt(&handoff).await,
+                Err(PathLockError::HandoffRecoveryRequired {
+                    reason: super::super::types::HandoffRecoveryReason::ProviderChanged,
+                })
+            ));
+        }
+        let fresh = redis
+            .acquire_tree("/local/account-a/a", Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert_ne!(fresh.lease.owner_id, handoff.owner_id);
+        assert_eq!(
+            old_provider.read_token(&handoff.lock_paths[0]).await.unwrap(),
+            old_token
+        );
+        redis.release(&fresh).await.unwrap();
+        runtime.del(&[key]).await.unwrap();
+        runtime.close().await.unwrap();
+    }
+
     /// Verify Redis handoff can be adopted by another manager using logical handles.
     #[tokio::test]
     async fn manager_redis_adopts_handoff_across_managers() {
@@ -2286,13 +2337,14 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         .expect("producer must forget a released cross-manager handoff");
         let legacy = PathLockHandoffRef {
             lease_ref: None,
+            handle_mode: None,
             owner_id: "owner-a".to_string(),
             lock_paths: vec!["/local/account-a/a".to_string()],
             covered_paths: Vec::new(),
         };
         assert!(matches!(
             second.adopt(&legacy).await,
-            Err(PathLockError::HandoffFailed(_))
+            Err(PathLockError::HandoffRecoveryRequired { .. })
         ));
         runtime.del(&[key]).await.unwrap();
         runtime.close().await.unwrap();
