@@ -59,11 +59,14 @@ from openviking.resource.processing_mode import (
 )
 from openviking.server.identity import RequestContext
 from openviking.service.task_domain import TaskPatch
+from openviking.service.task_store import StoreOperationCode
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import InternalError, InvalidArgumentError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+_ENDED_TASK_CODES = frozenset({StoreOperationCode.ALREADY_TERMINAL, StoreOperationCode.NOT_FOUND})
 
 _TOS_BUCKET_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
 CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG = "resource_config"
@@ -531,6 +534,7 @@ class ConnectorDelegate:
         on_complete: Optional[
             Callable[[str, Optional[str], Optional[str]], Awaitable[None]]
         ] = None,
+        task_id: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Route add_resource to the external Connector service."""
@@ -703,6 +707,7 @@ class ConnectorDelegate:
             resource_id=task_resource_id,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
+            task_id=task_id,
         )
         try:
             submit_kwargs: Dict[str, Any] = {
@@ -912,12 +917,23 @@ class ConnectorDelegate:
                     )
                     last_status = status
 
-                await task_tracker.patch_task(
+                patched = await task_tracker.patch_task(
                     ov_task_id,
                     TaskPatch(stage=f"connector:{status}"),
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )
+                if patched.code in _ENDED_TASK_CODES:
+                    # Another party (identity cleanup, a Watch deletion) ended
+                    # or removed the OV Task; its result must not be applied.
+                    logger.info(
+                        "[ConnectorDelegate] Stopped monitoring connector task %s: "
+                        "ov_task_id=%s %s",
+                        connector_task_key,
+                        ov_task_id,
+                        patched.code.value,
+                    )
+                    return {"status": "failed", "error": "OV task ended before the import"}
 
                 if status in terminal_statuses:
                     if status == "succeeded":

@@ -30,7 +30,6 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
-from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
@@ -49,6 +48,7 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.acl import AclAction, AclMode, AclSpec
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -74,6 +74,9 @@ from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+WATCH_BUSY_WAIT_SECONDS = 10.0
+WATCH_BUSY_POLL_SECONDS = 0.5
 
 
 @dataclass
@@ -115,7 +118,6 @@ class FSService:
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
-        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ):
         self._viking_fs = viking_fs
@@ -126,7 +128,6 @@ class FSService:
         )
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_scheduler = watch_scheduler
-        self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
         # Installed by OpenVikingService; records Compile output versions after writes.
         self.compile_versions: Optional[Any] = None
 
@@ -137,7 +138,6 @@ class FSService:
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
-        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ) -> None:
         """Set service dependencies (for deferred initialization)."""
@@ -149,8 +149,6 @@ class FSService:
         )
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_scheduler = watch_scheduler
-        if uri_mutation_coordinator is not None:
-            self._uri_mutation_coordinator = uri_mutation_coordinator
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
@@ -173,6 +171,52 @@ class FSService:
         if not self._watch_scheduler:
             return None
         return self._watch_scheduler.watch_manager
+
+    @asynccontextmanager
+    async def _hold_watch_scope(
+        self,
+        requests: List[Dict[str, str]],
+        uris: List[str],
+        ctx: RequestContext,
+    ):
+        """Hold *requests* while no Watch run occupies *uris*, waiting a bounded time.
+
+        Watch runs start occupying their target only under its Tree lock, so a
+        clear occupancy check under this lease stays valid until it is released.
+        """
+        viking_fs = self._ensure_initialized()
+        agfs = viking_fs._async_agfs
+        manager = self._get_watch_manager()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + WATCH_BUSY_WAIT_SECONDS
+        while True:
+            try:
+                lease = await agfs.pathlock_acquire_batch(
+                    requests, timeout_secs=max(0.0, deadline - loop.time())
+                )
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError("Resource is being processed", uri=uris[0]) from exc
+            try:
+                busy = manager is not None and await manager.has_running_overlap(
+                    ctx.account_id, uris
+                )
+            except BaseException:
+                await run_to_completion(partial(agfs.pathlock_release, lease))
+                raise
+            if not busy:
+                break
+            await run_to_completion(partial(agfs.pathlock_release, lease))
+            if loop.time() >= deadline:
+                raise ResourceBusyError(
+                    "A Watch run is in progress for this resource",
+                    uri=uris[0],
+                    conflict_type="watch_running",
+                )
+            await asyncio.sleep(min(WATCH_BUSY_POLL_SECONDS, max(0.0, deadline - loop.time())))
+        try:
+            yield lease
+        finally:
+            await run_to_completion(lambda: agfs.pathlock_release(lease))
 
     async def _attach_and_filter_tags(
         self,
@@ -445,8 +489,10 @@ class FSService:
                 raise InvalidArgumentError(
                     f"directory descriptions are not supported for namespace: {directory_uri}"
                 )
-            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [directory_uri]):
-                await viking_fs.mkdir(uri, ctx=ctx)
+            async with self._hold_watch_scope(
+                [await self._existing_tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
+            ) as lease:
+                await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
                 return
 
         versions = self.compile_versions
@@ -455,35 +501,25 @@ class FSService:
         )
 
         async def create():
-            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [directory_uri]):
+            if managed:
+                await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
+            async with self._hold_watch_scope(
+                [await self._existing_tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
+            ) as lease:
                 acl_update = (
                     await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
                     if acl is not None
                     else None
                 )
-                lease = None
                 if managed:
-                    await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
-                    parent = VikingURI(directory_uri).parent.uri
-                    while not await viking_fs.exists(parent, ctx=ctx):
-                        parent = VikingURI(parent).parent.uri
-                    lease = await viking_fs._async_agfs.pathlock_acquire_tree(
-                        viking_fs._uri_to_path(parent, ctx=ctx)
+                    await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
+                    await versions.record_effects(
+                        [{"uri": directory_uri, "kind": "directory"}], ctx
                     )
-                try:
-                    await viking_fs.mkdir(uri, ctx=ctx, **({"lease_ref": lease} if lease else {}))
-                    if managed:
-                        await versions.record_effects(
-                            [{"uri": directory_uri, "kind": "directory"}], ctx
-                        )
-                    else:
-                        lease = await viking_fs._async_agfs.pathlock_acquire_exact(
-                            viking_fs._uri_to_path(abstract_uri, ctx=ctx)
-                        )
                     await initialize(acl_update, lease)
-                finally:
-                    if lease is not None:
-                        await viking_fs._async_agfs.pathlock_release(lease)
+                else:
+                    await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
+                    await initialize(acl_update, lease)
 
         async def initialize(acl_update, lease):
             abstract = self._normalize_directory_description(description)
@@ -528,6 +564,20 @@ class FSService:
             )
         else:
             await create()
+
+    async def _existing_tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
+        """Tree-lock the deepest existing ancestor-or-self of *uri*.
+
+        Locking a missing path materializes it on some PathLock backends.
+        """
+        viking_fs = self._ensure_initialized()
+        existing = uri
+        while not await viking_fs.exists(existing, ctx=ctx):
+            parent = VikingURI(existing).parent
+            if parent is None:
+                break
+            existing = parent.uri
+        return {"path": viking_fs._uri_to_path(existing, ctx=ctx), "kind": "tree"}
 
     @staticmethod
     def _normalize_directory_description(description: Optional[str]) -> Optional[str]:
@@ -590,35 +640,43 @@ class FSService:
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
-        if self.compile_versions is not None:
-            async with self.compile_versions.before_remove(uri, ctx) as lease:
+        async with self._hold_watch_scope(
+            [await self._existing_tree_lock_request(uri, ctx)], [uri], ctx
+        ) as watch_lease:
+            if self.compile_versions is not None:
+                async with self.compile_versions.before_remove(
+                    uri, ctx, lease_ref=watch_lease
+                ) as lease:
+                    async def remove():
+                        result = await viking_fs.rm(
+                            uri,
+                            recursive=recursive,
+                            ctx=delete_ctx,
+                            lease_ref=lease if lease is not None else watch_lease,
+                        )
+                        await self.compile_versions.record_effects(
+                            [{"uri": uri, "kind": "deleted"}], ctx
+                        )
+                        await self.compile_versions.after_remove(uri, ctx)
+                        return result
 
-                async def remove():
-                    result = await viking_fs.rm(
-                        uri,
-                        recursive=recursive,
-                        ctx=delete_ctx,
-                        **({"lease_ref": lease} if lease is not None else {}),
-                    )
-                    await self.compile_versions.record_effects(
-                        [{"uri": uri, "kind": "deleted"}], ctx
-                    )
-                    await self.compile_versions.after_remove(uri, ctx)
-                    return result
+                    async def record_remove():
+                        return await self.compile_versions.record_operation(
+                            [uri], ctx, "rm", {"recursive": recursive}, remove, recursive=True
+                        )
 
-                async def record_remove():
-                    return await self.compile_versions.record_operation(
-                        [uri], ctx, "rm", {"recursive": recursive}, remove, recursive=True
+                    result = (
+                        await run_to_completion(record_remove)
+                        if lease is not None
+                        else await record_remove()
                     )
-
-                result = (
-                    await run_to_completion(record_remove)
-                    if lease is not None
-                    else await record_remove()
+            else:
+                result = await viking_fs.rm(
+                    uri, recursive=recursive, ctx=delete_ctx, lease_ref=watch_lease
                 )
-        else:
-            result = await viking_fs.rm(uri, recursive=recursive, ctx=delete_ctx)
-        await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
+            await self._sync_watch_after_rm(
+                uri, account_id=ctx.account_id, context_type=context_type
+            )
         # A refresh on a parent that no longer exists would lock its sidecar
         # paths and thereby recreate the deleted directory. Nothing to
         # summarize there; skip it.
@@ -960,23 +1018,20 @@ class FSService:
         target_indexed = target_policy.processing_mode is NamespaceProcessingMode.INDEXED
 
         async def copy() -> Dict[str, Any]:
-            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [from_uri, to_uri]):
-                async with self._record_transfer(
-                    from_uri, to_uri, ctx, recursive=recursive
-                ) as lease:
-                    options = {"lease_ref": lease} if lease is not None else {}
-                    if not (source_indexed and target_indexed):
-                        options.update(
-                            maintain_vectors=False,
-                            copy_semantic_sidecars=False,
-                        )
-                    return await viking_fs.cp(
-                        from_uri,
-                        to_uri,
-                        recursive=recursive,
-                        ctx=ctx,
-                        **options,
+            async with self._transfer_scope(from_uri, to_uri, ctx, recursive=recursive) as lease:
+                options: Dict[str, Any] = {"lease_ref": lease}
+                if not (source_indexed and target_indexed):
+                    options.update(
+                        maintain_vectors=False,
+                        copy_semantic_sidecars=False,
                     )
+                return await viking_fs.cp(
+                    from_uri,
+                    to_uri,
+                    recursive=recursive,
+                    ctx=ctx,
+                    **options,
+                )
 
         if self.compile_versions is None:
             transfer_result = await copy()
@@ -999,9 +1054,7 @@ class FSService:
             target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
             target_is_dir = bool(target_stat.get("isDir"))
             rebuild_root_uri = (
-                to_uri
-                if target_is_dir
-                else self._semantic_refresh_parent_uri(to_uri, context_type)
+                to_uri if target_is_dir else self._semantic_refresh_parent_uri(to_uri, context_type)
             )
             if not rebuild_root_uri:
                 result["semantic_status"] = "skipped"
@@ -1100,42 +1153,58 @@ class FSService:
             vector_mode = "none"
 
         async def move() -> None:
-            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [from_uri, to_uri]):
+            async with self._transfer_scope(from_uri, to_uri, ctx, move=True) as lease:
+                watch_move_result = None
                 if use_watch_transaction:
-                    await watch_manager.validate_target_prefix_rewrite_internal(
-                        from_uri, to_uri, account_id=ctx.account_id
+                    watch_move_result = await watch_manager.move(
+                        account_id=ctx.account_id,
+                        from_uri=from_uri,
+                        to_uri=to_uri,
                     )
-                async with self._record_transfer(from_uri, to_uri, move_ctx, move=True) as lease:
-                    options = {"lease_ref": lease} if lease is not None else {}
-                    if vector_mode != "transfer":
-                        options.update(
-                            vector_mode=vector_mode,
-                            copy_semantic_sidecars=False,
-                        )
-                    result = await viking_fs.mv(
+                options: Dict[str, Any] = {"lease_ref": lease}
+                if vector_mode != "transfer":
+                    options.update(
+                        vector_mode=vector_mode,
+                        copy_semantic_sidecars=False,
+                    )
+                try:
+                    await viking_fs.mv(
                         from_uri,
                         to_uri,
                         ctx=move_ctx,
                         **options,
                     )
-                    if use_watch_transaction:
-                        try:
-                            await watch_manager.rewrite_target_prefix_internal(
-                                from_uri, to_uri, account_id=ctx.account_id
+                except BaseException as move_error:
+                    if watch_move_result is None or not watch_move_result.task_ids:
+                        raise
+                    try:
+                        rollback = await run_to_completion(
+                            partial(
+                                watch_manager.move,
+                                account_id=watch_move_result.account_id,
+                                from_uri=watch_move_result.to_uri,
+                                to_uri=watch_move_result.from_uri,
+                                task_ids=watch_move_result.task_ids,
                             )
-                        except Exception as commit_error:
-                            try:
-                                await viking_fs.mv(
-                                    to_uri,
-                                    from_uri,
-                                    ctx=move_ctx,
-                                    restore_acl=result.get("source_acl", {}),
-                                    **options,
-                                )
-                            except Exception as rollback_error:
-                                logger.exception("Move rollback failed: %s -> %s", to_uri, from_uri)
-                                raise rollback_error from commit_error
-                            raise
+                        )
+                        if set(rollback.task_ids) != set(watch_move_result.task_ids):
+                            raise RuntimeError(
+                                "Watch move rollback did not restore every moved task"
+                            )
+                    except BaseException as rollback_error:
+                        logger.exception(
+                            "Watch move rollback failed after filesystem move failed: "
+                            "account_id=%s from=%s to=%s task_count=%d task_ids=%s "
+                            "filesystem_error=%r",
+                            watch_move_result.account_id,
+                            watch_move_result.from_uri,
+                            watch_move_result.to_uri,
+                            len(watch_move_result.task_ids),
+                            watch_move_result.task_ids[:20],
+                            move_error,
+                        )
+                        raise rollback_error from move_error
+                    raise
 
         if self.compile_versions is None:
             await move()
@@ -1160,9 +1229,7 @@ class FSService:
             target_is_dir = bool(target_stat.get("isDir"))
             context_type = context_type_for_uri(to_uri)
             rebuild_root_uri = (
-                to_uri
-                if target_is_dir
-                else self._semantic_refresh_parent_uri(to_uri, context_type)
+                to_uri if target_is_dir else self._semantic_refresh_parent_uri(to_uri, context_type)
             )
             if rebuild_root_uri:
                 try:
@@ -1183,7 +1250,7 @@ class FSService:
             await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
 
     @asynccontextmanager
-    async def _record_transfer(
+    async def _transfer_scope(
         self,
         from_uri: str,
         to_uri: str,
@@ -1192,58 +1259,62 @@ class FSService:
         move: bool = False,
         recursive: bool = True,
     ):
-        """Hold managed transfer scopes through their final snapshot registration.
+        """Hold both transfer scopes, free of Watch runs, through final registration.
 
-        The yielded lease extends the native transfer's existing locking. Once
-        native transfer is attempted, its final directory state forms an ordinary
-        rollback baseline even on failure. Service-level guards run before locking.
+        The yielded lease extends the native transfer's own locking. When the
+        transfer touches a Compile target, its snapshot is registered under the
+        same lease; once attempted, the final directory state is the rollback
+        baseline even on failure. Service-level guards run before locking.
         """
-        versions = self.compile_versions
-        if versions is None:
-            yield None
-            return
         viking_fs = self._ensure_initialized()
-        manager = self._get_watch_manager()
-        watched_uris = (
-            [
-                task.to_uri
-                for task in await manager.get_all_tasks(ctx.account_id, ctx.user.user_id, "root")
-                if task.account_id == ctx.account_id and task.to_uri
-            ]
-            if manager is not None
-            else []
-        )
-        if not await versions.guard_transfer(from_uri, to_uri, ctx, watched_uris=watched_uris):
-            yield None
-            return
-        if move:
-            await versions.before_move(from_uri.rstrip("/"), to_uri.rstrip("/"), ctx)
-            await viking_fs._ensure_access(from_uri, ctx, action=AclAction.WRITE)
-        else:
-            await viking_fs._ensure_copy_source_access(from_uri, recursive=recursive, ctx=ctx)
-        await viking_fs._ensure_access(
-            to_uri, replace(ctx, bypass_acl=True), action=AclAction.WRITE
-        )
+        versions = self.compile_versions
+        managed = False
+        if versions is not None:
+            manager = self._get_watch_manager()
+            watched_uris = (
+                [
+                    task.to_uri
+                    for task in await manager.get_all_tasks(
+                        ctx.account_id, ctx.user.user_id, "root"
+                    )
+                    if task.account_id == ctx.account_id and task.to_uri
+                ]
+                if manager is not None
+                else []
+            )
+            managed = await versions.guard_transfer(
+                from_uri, to_uri, ctx, watched_uris=watched_uris
+            )
+        if managed:
+            if move:
+                await versions.before_move(from_uri.rstrip("/"), to_uri.rstrip("/"), ctx)
+                await viking_fs._ensure_access(from_uri, ctx, action=AclAction.WRITE)
+            else:
+                await viking_fs._ensure_copy_source_access(from_uri, recursive=recursive, ctx=ctx)
+            await viking_fs._ensure_access(
+                to_uri, replace(ctx, bypass_acl=True), action=AclAction.WRITE
+            )
         source_path = viking_fs._uri_to_path(from_uri, ctx=ctx)
         target_path = viking_fs._uri_to_path(to_uri, ctx=ctx)
         viking_fs._validate_transfer_paths(source_path, target_path)
         is_dir = (await viking_fs.stat(from_uri, ctx=ctx, skip_count=True)).get("isDir", False)
+        operation = "mv" if move else "cp"
         if is_dir and not recursive:
             raise InvalidArgumentError(f"Cannot copy directory without --recursive: {from_uri}")
-        if move and is_dir:
+        if managed and move and is_dir:
             await viking_fs._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
         if not is_dir and to_uri.rstrip("/") != to_uri:
             raise InvalidArgumentError(
-                f"Transfer destination for a file must include the target file name: {to_uri}"
+                f"{operation} destination for a file must include the target file name: {to_uri}"
             )
-        await viking_fs._ensure_transfer_parent_directory(
-            target_path, to_uri, operation="mv" if move else "cp"
-        )
+        # Locking a missing path materializes it on some PathLock backends, so the
+        # native pre-lock checks run first and only existing paths are locked.
+        await viking_fs._ensure_transfer_parent_directory(target_path, to_uri, operation=operation)
         await viking_fs._ensure_transfer_target_type(target_path, to_uri, is_dir=is_dir)
         if is_dir:
             if not await viking_fs.exists(to_uri, ctx=ctx):
                 target_path = viking_fs._transfer_parent_path(target_path)
-            roots = sorted({source_path, target_path}, key=len)
+            roots = sorted({source_path, target_path}, key=lambda path: (len(path), path))
             requests = [
                 {"path": path, "kind": "tree"}
                 for path in roots
@@ -1251,18 +1322,16 @@ class FSService:
             ]
         else:
             requests = [{"path": path, "kind": "exact"} for path in (source_path, target_path)]
-        lease = await viking_fs._async_agfs.pathlock_acquire_batch(requests)
-        try:
-            yield lease
-        finally:
+        async with self._hold_watch_scope(requests, [from_uri, to_uri], ctx) as lease:
             try:
-                await run_to_completion(
-                    lambda: versions.register_transfer(
-                        from_uri, to_uri, ctx, lease_ref=lease, move=move
-                    )
-                )
+                yield lease
             finally:
-                await viking_fs._async_agfs.pathlock_release(lease)
+                if managed:
+                    await run_to_completion(
+                        lambda: versions.register_transfer(
+                            from_uri, to_uri, ctx, lease_ref=lease, move=move
+                        )
+                    )
 
     async def _finish_transfer_after_caller_cancel(
         self,

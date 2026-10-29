@@ -19,6 +19,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
+from tests.utils.watch_fixtures import watch_manager, watch_store, watch_vfs  # noqa: F401
 
 
 # ── Workaround: local .so may lack AGFS_Grep symbol (new in latest source) ──

@@ -306,8 +306,8 @@ async def delete_watch_by_uri(
 async def _trigger_impl(target: WatchTask):
     """Dispatch a scheduling request without waiting for execution.
 
-    `WatchScheduler.schedule_task` awaits `_execute_task` inline, which runs
-    the full re-ingest (re-fetch + re-parse + re-embed) and can take many
+    `WatchScheduler.schedule_task` claims the Watch and submits its run
+    inline, which may refresh credentials or call a Connector and can take
     seconds. We don't want HTTP requests blocked for that long, so the call
     is fired off via `asyncio.create_task` and the response returns
     immediately with ``scheduled=true``. Actual success/failure is observable

@@ -326,6 +326,30 @@ async def test_delete_account_files_disables_automatic_pathlock(monkeypatch):
     agfs.rm.assert_awaited_once_with(path, recursive=True, auto_pathlock=False)
 
 
+async def test_creation_guard_reads_account_store_on_service_loop():
+    """Queue workers call the guard from their own loops; store reads stay on the service loop."""
+    service_loop = asyncio.get_running_loop()
+    lookup_loops = []
+
+    class Store:
+        async def get_deletion(self, account_id, user_id):
+            lookup_loops.append(asyncio.get_running_loop())
+            return None
+
+        async def get_user(self, account_id, user_id):
+            lookup_loops.append(asyncio.get_running_loop())
+            return None
+
+    deletion = DeletionService(service=Mock(), manager=Store(), service_loop=service_loop)
+
+    blocked = await asyncio.to_thread(
+        asyncio.run, deletion._creation_blocked("account", "missing-user")
+    )
+
+    assert blocked is True
+    assert lookup_loops == [service_loop, service_loop]
+
+
 @pytest_asyncio.fixture
 async def template_account(lightweight_admin_client):
     account_id = _uid()

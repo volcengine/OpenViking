@@ -1,445 +1,127 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+"""Watch task management over the Watch store.
+
+Permission and runtime conditions are evaluated by the store. Target stability comes
+from PathLock: a Watch row is created, and a run starts occupying it, only
+while its target's Tree lock is held; transfers rewrite rows inside their own
+lock and check occupancy there.
 """
-Resource monitoring task manager.
 
-Provides task creation, update, deletion, query, and persistence storage.
-"""
+import inspect
+from contextlib import asynccontextmanager
+from dataclasses import replace
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
 
-import json
-import uuid
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
-
-from pydantic import BaseModel, Field
-
-from openviking.concurrency import AsyncSemaphore
 from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
-from openviking.resource.uri_mutation_coordinator import (
-    UriMutationCoordinator,
+from openviking.resource.watch_store import WatchMoveResult, WatchStore
+from openviking.resource.watch_types import (
+    MUTABLE_FIELDS,
+    PermissionDeniedError,
+    WatchAuthority,
+    WatchPatch,
+    WatchRunResult,
+    WatchTask,
 )
-from openviking.resource.uri_mutation_coordinator import (
-    uri_matches_prefix as _uri_matches_prefix,
-)
-from openviking.resource.watch_storage import (
-    WATCH_TASK_STORAGE_BAK_URI,
-    WATCH_TASK_STORAGE_TMP_URI,
-    WATCH_TASK_STORAGE_URI,
-)
-from openviking_cli.exceptions import ConflictError, NotFoundError
+from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking_cli.exceptions import ConflictError, FailedPreconditionError
+from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_UNSET = object()
+__all__ = ["PermissionDeniedError", "WatchManager", "WatchPathLocks", "WatchTask"]
 
 
-def _rewrite_uri_prefix(uri: str, old_prefix: str, new_prefix: str) -> str:
-    old_normalized = old_prefix.rstrip("/")
-    new_normalized = new_prefix.rstrip("/")
-    if uri == old_normalized:
-        return new_normalized
-    return new_normalized + uri[len(old_normalized) :]
+class WatchPathLocks:
+    """Tree PathLocks on Watch targets, mapped into each account's AGFS namespace."""
 
+    def __init__(self, viking_fs: Any) -> None:
+        self._fs = viking_fs
 
-def _parent_uri(uri: str) -> Optional[str]:
-    normalized = uri.rstrip("/")
-    if "/" not in normalized:
-        return None
-    parent = normalized.rsplit("/", 1)[0]
-    if parent in {"viking:/", "viking://"}:
-        return None
-    return parent
+    @staticmethod
+    def _context(account_id: str) -> Any:
+        from openviking.server.identity import RequestContext, Role
+        from openviking_cli.session.user_id import UserIdentifier
 
+        return RequestContext(user=UserIdentifier(account_id, "default"), role=Role.ROOT)
 
-class WatchTask(BaseModel):
-    """Resource monitoring task data model."""
+    async def _existing_path(self, account_id: str, uri: str) -> str:
+        """Deepest existing ancestor-or-self of *uri*, whose Tree lock covers *uri*.
 
-    task_id: str = Field(
-        default_factory=lambda: str(uuid.uuid4()), description="Unique task identifier"
-    )
-    path: str = Field(..., description="Resource path to monitor")
-    source_type: Optional[str] = Field(None, description="Original resource source type")
-    to_uri: Optional[str] = Field(None, description="Target URI")
-    to_is_directory: Optional[bool] = Field(
-        None,
-        description="Whether the target URI is a directory destination",
-    )
-    parent_uri: Optional[str] = Field(None, description="Parent URI")
-    reason: str = Field(default="", description="Reason for monitoring")
-    instruction: str = Field(default="", description="Monitoring instruction")
-    watch_interval: float = Field(default=60.0, description="Monitoring interval in minutes")
-    build_index: bool = Field(default=True, description="Whether to build vector index")
-    summarize: bool = Field(default=False, description="Whether to generate summary")
-    processing_mode: ProcessingMode = Field(
-        default=DEFAULT_PROCESSING_MODE,
-        description="Post-ingest processing mode for scheduled add_resource runs",
-    )
-    processor_kwargs: Dict[str, Any] = Field(
-        default_factory=dict, description="Extra kwargs forwarded to processor"
-    )
-    auth_state: Optional[Dict[str, Any]] = Field(
-        default=None, description="Private authentication state for scheduled re-processing"
-    )
-    connector_states: Optional[Dict[str, Any]] = Field(
-        default=None, description="Private external Connector stream states"
-    )
-    created_at: datetime = Field(default_factory=datetime.now, description="Task creation time")
-    last_execution_time: Optional[datetime] = Field(None, description="Last execution time")
-    last_task_id: Optional[str] = Field(None, description="Latest ingestion task identifier")
-    last_status: Optional[str] = Field(None, description="Latest execution status")
-    last_error: Optional[str] = Field(None, description="Latest sanitized execution error")
-    next_execution_time: Optional[datetime] = Field(None, description="Next execution time")
-    is_active: bool = Field(default=True, description="Whether the task is active")
-    account_id: str = Field(default="default", description="Account ID (tenant)")
-    user_id: str = Field(default="default", description="User ID who created this task")
-    original_role: str = Field(default="user", description="Role used to execute this task")
+        Locking a missing path materializes it on some PathLock backends.
+        """
+        ctx = self._context(account_id)
+        while not await self._fs.exists(uri, ctx=ctx):
+            parent = VikingURI(uri).parent
+            if parent is None:
+                break
+            uri = parent.uri
+        return self._fs._uri_to_path(uri, ctx=ctx)
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat() if v else None}
-        extra = "ignore"
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert task to public dictionary."""
-        return {
-            "task_id": self.task_id,
-            "path": self.path,
-            "source_type": self.source_type,
-            "to_uri": self.to_uri,
-            "parent_uri": self.parent_uri,
-            "reason": self.reason,
-            "instruction": self.instruction,
-            "watch_interval": self.watch_interval,
-            "build_index": self.build_index,
-            "summarize": self.summarize,
-            "processing_mode": self.processing_mode,
-            "processor_kwargs": self.processor_kwargs,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "last_execution_time": self.last_execution_time.isoformat()
-            if self.last_execution_time
-            else None,
-            "last_task_id": self.last_task_id,
-            "last_status": self.last_status,
-            "last_error": self.last_error,
-            "next_execution_time": self.next_execution_time.isoformat()
-            if self.next_execution_time
-            else None,
-            "is_active": self.is_active,
-            "account_id": self.account_id,
-            "user_id": self.user_id,
-            "original_role": self.original_role,
-        }
-
-    def to_storage_dict(self) -> Dict[str, Any]:
-        """Convert task to dictionary for watch-task persistence."""
-        data = self.to_dict()
-        data["to_is_directory"] = self.to_is_directory
-        if self.auth_state is not None:
-            data["auth_state"] = self.auth_state
-        if self.connector_states is not None:
-            data["connector_states"] = self.connector_states
-        return data
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WatchTask":
-        """Create task from dictionary."""
-        data = dict(data)
-        if isinstance(data.get("created_at"), str):
-            data["created_at"] = datetime.fromisoformat(data["created_at"])
-        if isinstance(data.get("last_execution_time"), str):
-            data["last_execution_time"] = datetime.fromisoformat(data["last_execution_time"])
-        if isinstance(data.get("next_execution_time"), str):
-            data["next_execution_time"] = datetime.fromisoformat(data["next_execution_time"])
-        if data.get("processor_kwargs") is None:
-            data["processor_kwargs"] = {}
-        if data.get("auth_state") is not None and not isinstance(data.get("auth_state"), dict):
-            data["auth_state"] = None
-        if data.get("connector_states") is not None and not isinstance(
-            data.get("connector_states"), dict
-        ):
-            data["connector_states"] = None
-        return cls(**data)
-
-    def calculate_next_execution_time(self) -> datetime:
-        """Calculate next execution time based on interval."""
-        base_time = self.last_execution_time or self.created_at
-        return base_time + timedelta(minutes=self.watch_interval)
-
-
-class PermissionDeniedError(Exception):
-    """Permission denied error for watch operations."""
-
-    pass
+    @asynccontextmanager
+    async def tree(
+        self,
+        account_id: str,
+        uri: str,
+        *,
+        timeout: float = 0.0,
+        owner_lease_ref: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        agfs = self._fs._async_agfs
+        lease = await agfs.pathlock_acquire_tree(
+            await self._existing_path(account_id, uri),
+            timeout_secs=timeout,
+            owner_lease_ref=owner_lease_ref,
+        )
+        try:
+            yield lease
+        finally:
+            await run_to_completion(lambda: agfs.pathlock_release(lease))
 
 
 class WatchManager:
-    """Resource monitoring task manager.
+    def __init__(self, store: WatchStore, locks: WatchPathLocks) -> None:
+        self._store = store
+        self._locks = locks
+        self._deletion_guard: Optional[Callable[[str, str], Any]] = None
 
-    Provides task creation, update, deletion, query, and persistence storage.
-    Thread-safe with async lock for concurrent access protection.
-    Supports multi-tenant authorization.
-    """
+    def set_deletion_guard(self, guard: Optional[Callable[[str, str], Any]]) -> None:
+        """Refuse new Watches for identities the guard reports as being deleted."""
+        self._deletion_guard = guard
 
-    STORAGE_URI = WATCH_TASK_STORAGE_URI
-    STORAGE_BAK_URI = WATCH_TASK_STORAGE_BAK_URI
-    STORAGE_TMP_URI = WATCH_TASK_STORAGE_TMP_URI
+    async def _owner_deleting(self, account_id: str, user_id: str) -> bool:
+        guard = self._deletion_guard
+        if guard is None:
+            return False
+        result = guard(account_id, user_id)
+        return bool(await result if inspect.isawaitable(result) else result)
 
-    def __init__(
-        self,
-        viking_fs: Optional[Any] = None,
-        uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
-    ):
-        """Initialize WatchManager.
+    @property
+    def store(self) -> WatchStore:
+        return self._store
 
-        Args:
-            viking_fs: VikingFS instance for persistence storage
-        """
-        self._tasks: Dict[str, WatchTask] = {}
-        # (account_id, to_uri) -> task ids. A native watch owns its target alone
-        # (a refresh replaces the whole root); Connector watches write
-        # ``to/<relative_path>`` and may share one target.
-        self._uri_to_task: Dict[tuple[str, str], set[str]] = {}
-        self._lock = AsyncSemaphore()
-        self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
-        self._viking_fs = viking_fs
-        self._initialized = False
+    @property
+    def locks(self) -> WatchPathLocks:
+        return self._locks
 
     async def initialize(self) -> None:
-        """Initialize the manager by loading tasks from storage."""
-        if self._initialized:
-            return
+        await self._store.initialize()
 
-        async with self._lock:
-            if self._initialized:
-                return
+    async def close(self) -> None:
+        await self._store.close()
 
-            await self._load_tasks()
-            self._initialized = True
-            logger.info(f"[WatchManager] Initialized with {len(self._tasks)} tasks")
-
-    async def _load_tasks(self) -> None:
-        """Load tasks from VikingFS storage."""
-        if not self._viking_fs:
-            logger.debug("[WatchManager] No VikingFS provided, skipping load")
-            return
-
-        try:
-            from openviking.server.identity import RequestContext, Role
-            from openviking_cli.session.user_id import UserIdentifier
-
-            ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-
-            data = None
-            try:
-                content = await self._viking_fs.read_file(self.STORAGE_URI, ctx=ctx)
-                if content and content.strip():
-                    data = json.loads(content)
-            except NotFoundError:
-                data = None
-            except json.JSONDecodeError as e:
-                logger.warning(f"[WatchManager] Invalid task storage JSON: {e}")
-            except Exception as e:
-                logger.warning(f"[WatchManager] Failed to read task storage: {e}")
-
-            recovered_from_backup = False
-            if data is None:
-                try:
-                    bak_content = await self._viking_fs.read_file(self.STORAGE_BAK_URI, ctx=ctx)
-                    if bak_content and bak_content.strip():
-                        data = json.loads(bak_content)
-                        recovered_from_backup = True
-                except NotFoundError:
-                    data = None
-                except json.JSONDecodeError as e:
-                    logger.warning(f"[WatchManager] Invalid backup task storage JSON: {e}")
-                    data = None
-                except Exception as e:
-                    logger.warning(f"[WatchManager] Failed to read backup task storage: {e}")
-
-            if not isinstance(data, dict):
-                data = {"tasks": []}
-
-            normalized = False
-            for task_data in data.get("tasks", []):
-                try:
-                    task = WatchTask.from_dict(task_data)
-                    if not task.is_active:
-                        if task.next_execution_time is not None:
-                            task.next_execution_time = None
-                            normalized = True
-                    else:
-                        if task.watch_interval <= 0:
-                            task.is_active = False
-                            task.next_execution_time = None
-                            normalized = True
-                        elif task.next_execution_time is None:
-                            task.next_execution_time = task.calculate_next_execution_time()
-                            normalized = True
-                    self._tasks[task.task_id] = task
-                    self._index_add(task.account_id, task.to_uri, task.task_id)
-                except Exception as e:
-                    logger.warning(
-                        f"[WatchManager] Failed to load task {task_data.get('task_id')}: {e}"
-                    )
-
-            logger.info(f"[WatchManager] Loaded {len(self._tasks)} tasks from storage")
-            if recovered_from_backup:
-                normalized = True
-            if normalized:
-                await self._save_tasks()
-        except NotFoundError:
-            logger.debug("[WatchManager] No existing task storage found, starting fresh")
-        except Exception as e:
-            logger.error(f"[WatchManager] Failed to load tasks: {e}")
-
-    async def _save_tasks(self) -> None:
-        """Save tasks to VikingFS storage."""
-        if not self._viking_fs:
-            logger.debug("[WatchManager] No VikingFS provided, skipping save")
-            return
-
-        try:
-            from openviking.server.identity import RequestContext, Role
-            from openviking_cli.session.user_id import UserIdentifier
-
-            ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-
-            data = {
-                "tasks": [task.to_storage_dict() for task in self._tasks.values()],
-                "updated_at": datetime.now().isoformat(),
-            }
-
-            content = json.dumps(data, ensure_ascii=False, indent=2)
-            if not content.strip():
-                raise ValueError("Refusing to write empty watch task storage")
-            json.loads(content)
-
-            supports_atomic = all(
-                hasattr(self._viking_fs, name) for name in ("mv", "rm", "exists", "write_file")
-            )
-            if not supports_atomic:
-                await self._viking_fs.write_file(self.STORAGE_URI, content, ctx=ctx)
-                logger.debug(f"[WatchManager] Saved {len(self._tasks)} tasks to storage")
-                return
-
-            await self._viking_fs.write_file(self.STORAGE_TMP_URI, content, ctx=ctx)
-
-            try:
-                if await self._viking_fs.exists(self.STORAGE_BAK_URI, ctx=ctx):
-                    await self._viking_fs.rm(self.STORAGE_BAK_URI, ctx=ctx)
-            except Exception:
-                pass
-
-            try:
-                if await self._viking_fs.exists(self.STORAGE_URI, ctx=ctx):
-                    await self._viking_fs.mv(self.STORAGE_URI, self.STORAGE_BAK_URI, ctx=ctx)
-            except Exception as e:
-                logger.warning(f"[WatchManager] Failed to rotate task storage backup: {e}")
-
-            await self._viking_fs.mv(self.STORAGE_TMP_URI, self.STORAGE_URI, ctx=ctx)
-            logger.debug(f"[WatchManager] Saved {len(self._tasks)} tasks to storage")
-        except Exception as e:
-            logger.error(f"[WatchManager] Failed to save tasks: {e}")
-            raise
-
-    def _check_permission(
-        self,
-        task: WatchTask,
-        account_id: str,
-        user_id: str,
-        role: str,
-    ) -> bool:
-        """Check if user has permission to access/modify a task.
-
-        Args:
-            task: The task to check permission for
-            account_id: Requester's account ID
-            user_id: Requester's user ID
-            role: Requester's role (ROOT/ADMIN/USER)
-
-        Returns:
-            True if has permission, False otherwise
-
-        Notes:
-            - ROOT can access all tasks (system/scheduler bypass).
-            - Every other role (including ADMIN) is scoped to tasks they own
-              within the same account, so callers sharing an account but using
-              different user_ids never see each other's tasks.
-        """
-        role_value = (role or "").lower()
-        if role_value == "root":
-            return True
-
-        if task.account_id != account_id:
-            return False
-
-        return task.user_id == user_id
-
-    # ── Target index helpers ─────────────────────────────────────────────
-
-    def _index_get(self, account_id: str, to_uri: Optional[str]) -> set[str]:
-        if not to_uri:
-            return set()
-        return set(self._uri_to_task.get((account_id, to_uri), ()))
-
-    def _index_add(self, account_id: str, to_uri: Optional[str], task_id: str) -> None:
-        if to_uri:
-            self._uri_to_task.setdefault((account_id, to_uri), set()).add(task_id)
-
-    def _index_remove(self, account_id: str, to_uri: Optional[str], task_id: str) -> None:
-        if not to_uri:
-            return
-        ids = self._uri_to_task.get((account_id, to_uri))
-        if ids is None:
-            return
-        ids.discard(task_id)
-        if not ids:
-            del self._uri_to_task[(account_id, to_uri)]
-
-    @staticmethod
-    def _is_connector_auth_state(auth_state: Optional[Dict[str, Any]]) -> bool:
-        from openviking.connector.delegate import ConnectorDelegate
-
-        return ConnectorDelegate.is_watch_auth_state(auth_state)
-
-    def _all_connector_tasks(self, task_ids: set[str]) -> bool:
-        if not task_ids or not task_ids <= self._tasks.keys():
-            return False
-        return all(
-            self._is_connector_auth_state(self._tasks[task_id].auth_state) for task_id in task_ids
+    async def admits_run(self, task_id: str, run_id: str) -> bool:
+        """Allow Task creation only while the run still owns a live, unfenced Watch."""
+        state = await self._store.get_state(task_id)
+        return (
+            state is not None
+            and state.current_run_id == run_id
+            and not state.deleted
+            and not state.run_fenced
         )
-
-    def _blocking_task_ids(
-        self,
-        to_uri: Optional[str],
-        account_id: str,
-        auth_state: Optional[Dict[str, Any]],
-        exclude_task_ids: Optional[set[str]] = None,
-    ) -> set[str]:
-        """Task ids that keep a watch with *auth_state* off *to_uri*.
-
-        Connector watches (identified by their auth_state provider) may share a
-        target with other Connector watches; anything involving a native watch
-        is exclusive.
-        """
-        others = self._index_get(account_id, to_uri) - (exclude_task_ids or set())
-        if not others:
-            return set()
-        if self._is_connector_auth_state(auth_state) and self._all_connector_tasks(others):
-            return set()
-        return others
-
-    def _check_uri_conflict(
-        self,
-        to_uri: Optional[str],
-        account_id: str = "default",
-        exclude_task_id: Optional[str] = None,
-        auth_state: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        """Return True when a watch with *auth_state* may not target *to_uri*."""
-        exclude = {exclude_task_id} if exclude_task_id else None
-        return bool(self._blocking_task_ids(to_uri, account_id, auth_state, exclude))
 
     async def create_task(
         self,
@@ -461,60 +143,90 @@ class WatchManager:
         auth_state: Optional[Dict[str, Any]] = None,
         connector_states: Optional[Dict[str, Any]] = None,
         is_active: bool = True,
+        *,
+        initial_run_id: Optional[str] = None,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ) -> WatchTask:
-        """Create and persist a watch task while its target URI is stable."""
+        """Create a Watch under its target's Tree lock.
+
+        *initial_run_id* registers the caller's ingestion Task as the first
+        run. *lease_ref* is a lease the caller already holds on the target.
+
+        Identity deletion records its fence before removing the identity's
+        Watches; this checks the fence again after the insert, so a Watch
+        created concurrently is either removed by the deletion or withdrawn here.
+        """
         if not path:
             raise ValueError("Path is required")
+        if not to_uri:
+            raise ValueError("Watch requires a target URI")
         if watch_interval <= 0:
             raise ValueError("watch_interval must be > 0")
+        task = WatchTask(
+            path=path,
+            source_type=source_type,
+            to_uri=to_uri,
+            to_is_directory=to_is_directory,
+            parent_uri=parent_uri,
+            reason=reason,
+            instruction=instruction,
+            watch_interval=watch_interval,
+            build_index=build_index,
+            summarize=summarize,
+            processing_mode=processing_mode,
+            processor_kwargs=processor_kwargs or {},
+            auth_state=auth_state,
+            connector_states=connector_states,
+            is_active=is_active,
+            account_id=account_id,
+            user_id=user_id,
+            original_role=original_role,
+        )
+        task.next_execution_time = task.calculate_next_execution_time() if is_active else None
+        if await self._owner_deleting(account_id, user_id):
+            raise FailedPreconditionError("Identity deletion is in progress")
+        created = False
 
-        async with self._uri_mutation_coordinator.access(account_id, [to_uri]):
-            async with self._lock:
-                blocking = self._blocking_task_ids(to_uri, account_id, auth_state)
-                if blocking:
-                    # The target URI is the watch identity; only Connector watches
-                    # may share one, and never with a native watch.
-                    raise ConflictError(
-                        f"Target URI '{to_uri}' is already being monitored by an incompatible watch. "
-                        "Delete the conflicting watch or choose another target.",
-                        resource=to_uri,
-                    )
+        async def persist() -> None:
+            nonlocal created
+            await self._store.create_task(task, initial_run_id=initial_run_id)
+            created = True
 
-                task = WatchTask(
-                    path=path,
-                    source_type=source_type,
-                    to_uri=to_uri,
-                    to_is_directory=to_is_directory,
-                    parent_uri=parent_uri,
-                    reason=reason,
-                    instruction=instruction,
-                    watch_interval=watch_interval,
-                    build_index=build_index,
-                    summarize=summarize,
-                    processing_mode=processing_mode,
-                    processor_kwargs=processor_kwargs or {},
-                    auth_state=auth_state,
-                    connector_states=connector_states,
-                    is_active=is_active,
-                    account_id=account_id,
-                    user_id=user_id,
-                    original_role=original_role,
-                )
+        try:
+            try:
+                async with self._locks.tree(account_id, to_uri, owner_lease_ref=lease_ref):
+                    # Keep the target locked until the insert settles, including cancellation.
+                    await run_to_completion(persist)
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError("Watch target is being changed", uri=to_uri) from exc
+            if await self._owner_deleting(account_id, user_id):
+                raise FailedPreconditionError("Identity deletion is in progress")
+        except BaseException:
+            if created:
+                try:
+                    await run_to_completion(lambda: self._withdraw(task, initial_run_id))
+                except BaseException:
+                    logger.exception("[WatchManager] Failed to withdraw Watch %s", task.task_id)
+            raise
+        logger.info(
+            "[WatchManager] Created task %s for path %s by user %s/%s",
+            task.task_id,
+            path,
+            account_id,
+            user_id,
+        )
+        return task
 
-                task.next_execution_time = (
-                    task.calculate_next_execution_time() if task.is_active else None
-                )
-
-                self._tasks[task.task_id] = task
-                self._index_add(account_id, to_uri, task.task_id)
-
-                await self._save_tasks()
-
-                logger.info(
-                    f"[WatchManager] Created task {task.task_id} for path {path} "
-                    f"by user {account_id}/{user_id}"
-                )
-                return task
+    async def _withdraw(self, task: WatchTask, initial_run_id: Optional[str]) -> None:
+        await self._store.delete_task(
+            task.task_id, WatchAuthority(task.account_id, task.user_id, "root")
+        )
+        if initial_run_id:
+            await self._store.finish_run(
+                task.task_id,
+                initial_run_id,
+                WatchRunResult(status="cancelled", error="Identity deletion is in progress"),
+            )
 
     async def update_task(
         self,
@@ -522,391 +234,31 @@ class WatchManager:
         account_id: str,
         user_id: str,
         role: str,
-        path: Optional[str] = None,
-        source_type: Optional[str] = None,
-        to_uri: Optional[str] = None,
-        to_is_directory: Optional[bool] = None,
-        parent_uri: Optional[str] = None,
-        reason: Optional[str] = None,
-        instruction: Optional[str] = None,
-        watch_interval: Optional[float] = None,
-        build_index: Optional[bool] = None,
-        summarize: Optional[bool] = None,
-        processing_mode: Optional[ProcessingMode] = None,
-        processor_kwargs: Optional[Dict[str, Any]] = None,
-        auth_state: Any = _UNSET,
-        connector_states: Any = _UNSET,
-        is_active: Optional[bool] = None,
+        **values: Any,
     ) -> WatchTask:
-        """Update a watch task while its current and requested target URIs are stable."""
-        while True:
-            async with self._lock:
-                snapshot = self._tasks.get(task_id)
-                if not snapshot:
-                    raise ValueError(f"Task {task_id} not found")
-                stable_account_id = snapshot.account_id
-                stable_to_uri = snapshot.to_uri
-
-            async with self._uri_mutation_coordinator.access(
-                stable_account_id, [stable_to_uri, to_uri]
-            ):
-                async with self._lock:
-                    task = self._tasks.get(task_id)
-                    if not task:
-                        raise ValueError(f"Task {task_id} not found")
-                    if task.account_id != stable_account_id or task.to_uri != stable_to_uri:
-                        continue
-                    if not self._check_permission(task, account_id, user_id, role):
-                        raise PermissionDeniedError(
-                            f"User {account_id}/{user_id} does not have permission to "
-                            f"update task {task_id}"
-                        )
-                    return await self._update_task_unlocked(
-                        task,
-                        account_id=account_id,
-                        user_id=user_id,
-                        path=path,
-                        source_type=source_type,
-                        to_uri=to_uri,
-                        to_is_directory=to_is_directory,
-                        parent_uri=parent_uri,
-                        reason=reason,
-                        instruction=instruction,
-                        watch_interval=watch_interval,
-                        build_index=build_index,
-                        summarize=summarize,
-                        processing_mode=processing_mode,
-                        processor_kwargs=processor_kwargs,
-                        auth_state=auth_state,
-                        connector_states=connector_states,
-                        is_active=is_active,
-                    )
-
-    async def _update_task_unlocked(
-        self,
-        task: WatchTask,
-        *,
-        account_id: str,
-        user_id: str,
-        path: Optional[str],
-        source_type: Optional[str],
-        to_uri: Optional[str],
-        to_is_directory: Optional[bool],
-        parent_uri: Optional[str],
-        reason: Optional[str],
-        instruction: Optional[str],
-        watch_interval: Optional[float],
-        build_index: Optional[bool],
-        summarize: Optional[bool],
-        processing_mode: Optional[ProcessingMode],
-        processor_kwargs: Optional[Dict[str, Any]],
-        auth_state: Any,
-        connector_states: Any,
-        is_active: Optional[bool],
-    ) -> WatchTask:
-        task_id = task.task_id
-        if self._check_uri_conflict(
-            to_uri,
-            account_id=task.account_id,
-            exclude_task_id=task_id,
-            auth_state=task.auth_state if auth_state is _UNSET else auth_state,
-        ):
-            raise ConflictError(
-                f"Target URI '{to_uri}' is already being monitored by an incompatible watch. "
-                "Delete the conflicting watch or choose another target.",
-                resource=to_uri,
-            )
-
-        old_to_uri = task.to_uri
-        if path is not None:
-            task.path = path
-        if source_type is not None:
-            task.source_type = source_type
-        if to_uri is not None:
-            task.to_uri = to_uri
-        if to_is_directory is not None:
-            task.to_is_directory = to_is_directory
-        if parent_uri is not None:
-            task.parent_uri = parent_uri
-        if reason is not None:
-            task.reason = reason
-        if instruction is not None:
-            task.instruction = instruction
-        if watch_interval is not None:
-            if watch_interval <= 0:
-                if is_active is True:
-                    raise ValueError("watch_interval must be > 0 for active tasks")
-                task.watch_interval = watch_interval
-                task.is_active = False
-                task.next_execution_time = None
-            else:
-                task.watch_interval = watch_interval
-        if build_index is not None:
-            task.build_index = build_index
-        if summarize is not None:
-            task.summarize = summarize
-        if processing_mode is not None:
-            task.processing_mode = processing_mode
-        if processor_kwargs is not None:
-            task.processor_kwargs = processor_kwargs
-        if auth_state is not _UNSET:
-            task.auth_state = auth_state
-        if connector_states is not _UNSET:
-            if connector_states is not None and not isinstance(connector_states, dict):
-                raise ValueError("connector_states must be an object")
-            task.connector_states = connector_states
-        if is_active is not None:
-            task.is_active = is_active
-
-        if watch_interval is not None:
-            if task.is_active and task.watch_interval > 0:
-                task.next_execution_time = task.calculate_next_execution_time()
-            else:
-                task.next_execution_time = None
-        if is_active is not None and watch_interval is None:
-            if task.is_active:
-                if task.watch_interval <= 0:
-                    raise ValueError("watch_interval must be > 0 for active tasks")
-                if task.next_execution_time is None:
-                    task.next_execution_time = task.calculate_next_execution_time()
-            else:
-                task.next_execution_time = None
-
-        if to_uri is not None:
-            if old_to_uri and old_to_uri != to_uri:
-                self._index_remove(task.account_id, old_to_uri, task_id)
-            self._index_add(task.account_id, to_uri, task_id)
-
-        await self._save_tasks()
-        logger.info(f"[WatchManager] Updated task {task_id} by user {account_id}/{user_id}")
-        return task
-
-    async def update_auth_state(
-        self,
-        task_id: str,
-        auth_state: Optional[Dict[str, Any]],
-    ) -> None:
-        """Update private auth state for an existing watch task."""
-        async with self._lock:
-            task = self._tasks.get(task_id)
-            if not task:
-                return
-            task.auth_state = auth_state
-            await self._save_tasks()
-
-    async def update_connector_states(
-        self,
-        task_id: str,
-        connector_states: Dict[str, Any],
-    ) -> None:
-        """Update private stream states for an external Connector watch."""
-        if not isinstance(connector_states, dict):
-            raise ValueError("connector_states must be an object")
-        async with self._lock:
-            task = self._tasks.get(task_id)
-            if not task:
-                return
-            task.connector_states = connector_states
-            await self._save_tasks()
-
-    async def record_execution(
-        self,
-        task_id: str,
-        *,
-        status: str,
-        execution_task_id: Optional[str] = None,
-        error: Optional[str] = None,
-    ) -> None:
-        """Persist the latest execution result exposed by watch APIs."""
-        if not status:
-            raise ValueError("status is required")
-        sanitized_error = (
-            sanitize_public_http_error(code="WATCH_EXECUTION_FAILED", message=error).message
-            if error
-            else None
+        # Internal callers omit optional None values; auth/state None clears them.
+        values = {
+            key: value
+            for key, value in values.items()
+            if value is not None or key in {"auth_state", "connector_states"}
+        }
+        unknown = values.keys() - MUTABLE_FIELDS
+        if unknown:
+            raise ValueError(f"Unsupported Watch update fields: {sorted(unknown)}")
+        interval = values.get("watch_interval")
+        if interval is not None and interval <= 0:
+            if values.get("is_active") is True:
+                raise ValueError("watch_interval must be > 0 for active tasks")
+            values.pop("watch_interval")
+            values["is_active"] = False
+        task = await self._store.patch_task(
+            task_id,
+            WatchPatch(values),
+            WatchAuthority(account_id, user_id, role),
         )
-        async with self._lock:
-            task = self._tasks.get(task_id)
-            if not task:
-                return
-            task.last_task_id = execution_task_id
-            task.last_status = status
-            task.last_error = sanitized_error
-            task.last_execution_time = datetime.now()
-            task.next_execution_time = (
-                task.calculate_next_execution_time()
-                if task.is_active and task.watch_interval > 0
-                else None
-            )
-            await self._save_tasks()
-
-    def _plan_target_prefix_rewrite_unlocked(
-        self,
-        old_uri: str,
-        new_uri: str,
-        account_id: str = "default",
-    ) -> Dict[str, str]:
-        old_prefix = old_uri.rstrip("/")
-        new_prefix = new_uri.rstrip("/")
-        plan: Dict[str, str] = {}
-        for task_id, task in self._tasks.items():
-            if task.account_id == account_id and _uri_matches_prefix(task.to_uri, old_prefix):
-                plan[task_id] = _rewrite_uri_prefix(task.to_uri or "", old_prefix, new_prefix)
-
-        moving_task_ids = set(plan)
-        landing: Dict[str, set[str]] = {}
-        for task_id, target_uri in plan.items():
-            landing.setdefault(target_uri, set()).add(task_id)
-        for target_uri, movers in landing.items():
-            # Whoever ends up on the target (stayers plus movers) must be able to
-            # share it: more than one occupant is only fine when all are Connector.
-            occupants = (self._index_get(account_id, target_uri) - moving_task_ids) | movers
-            if len(occupants) > 1 and not self._all_connector_tasks(occupants):
-                raise ConflictError(
-                    f"Target URI '{target_uri}' is already being monitored by an incompatible watch. "
-                    "Delete the conflicting watch or choose another target.",
-                    resource=target_uri,
-                )
-        return plan
-
-    async def validate_target_prefix_rewrite_internal(
-        self,
-        old_uri: str,
-        new_uri: str,
-        account_id: str = "default",
-    ) -> None:
-        """Validate a watch target prefix rewrite without changing state."""
-        async with self._lock:
-            self._plan_target_prefix_rewrite_unlocked(old_uri, new_uri, account_id)
-
-    async def rewrite_target_prefix_internal(
-        self,
-        old_uri: str,
-        new_uri: str,
-        account_id: str = "default",
-    ) -> List[WatchTask]:
-        """Atomically rewrite matching watch target URIs and persist the result."""
-        async with self._lock:
-            plan = self._plan_target_prefix_rewrite_unlocked(old_uri, new_uri, account_id)
-            if not plan:
-                return []
-
-            original_targets = {
-                task_id: (task.to_uri, task.parent_uri)
-                for task_id, task in self._tasks.items()
-                if task_id in plan
-            }
-            original_uri_to_task = {key: set(ids) for key, ids in self._uri_to_task.items()}
-
-            try:
-                for task_id in plan:
-                    task = self._tasks[task_id]
-                    self._index_remove(account_id, task.to_uri, task_id)
-
-                updated: List[WatchTask] = []
-                for task_id, target_uri in plan.items():
-                    task = self._tasks[task_id]
-                    old_parent = _parent_uri(task.to_uri or "")
-                    task.to_uri = target_uri
-                    if task.parent_uri is not None and task.parent_uri == old_parent:
-                        task.parent_uri = _parent_uri(target_uri)
-                    self._index_add(account_id, target_uri, task_id)
-                    updated.append(task)
-
-                await self._save_tasks()
-                logger.info(
-                    f"[WatchManager] Rewrote {len(updated)} watch task target URI(s) "
-                    f"under {old_uri} to {new_uri}"
-                )
-                return updated
-            except Exception:
-                for task_id, (
-                    original_to_uri,
-                    original_parent_uri,
-                ) in original_targets.items():
-                    task = self._tasks[task_id]
-                    task.to_uri = original_to_uri
-                    task.parent_uri = original_parent_uri
-                self._uri_to_task = original_uri_to_task
-                raise
-
-    async def deactivate_tasks_under_uri_internal(
-        self, uri: str, account_id: str = "default"
-    ) -> List[WatchTask]:
-        """Deactivate watch tasks whose target URI is deleted."""
-        async with self._uri_mutation_coordinator.access(account_id, [uri]):
-            async with self._lock:
-                matched = [
-                    task
-                    for task in self._tasks.values()
-                    if task.account_id == account_id and _uri_matches_prefix(task.to_uri, uri)
-                ]
-                if not matched:
-                    return []
-
-                for task in matched:
-                    task.is_active = False
-                    task.next_execution_time = None
-
-                await self._save_tasks()
-                logger.info(f"[WatchManager] Deactivated {len(matched)} watch task(s) under {uri}")
-                return matched
-
-    async def delete_task(
-        self,
-        task_id: str,
-        account_id: str,
-        user_id: str,
-        role: str,
-    ) -> bool:
-        """Delete a monitoring task.
-
-        Args:
-            task_id: Task ID to delete
-            account_id: Requester's account ID
-            user_id: Requester's user ID
-            role: Requester's role (ROOT/ADMIN/USER)
-
-        Returns:
-            True if task was deleted, False if not found
-
-        Raises:
-            PermissionDeniedError: If user doesn't have permission
-        """
-        while True:
-            async with self._lock:
-                snapshot = self._tasks.get(task_id)
-                if not snapshot:
-                    return False
-                stable_account_id = snapshot.account_id
-                stable_to_uri = snapshot.to_uri
-
-            async with self._uri_mutation_coordinator.access(stable_account_id, [stable_to_uri]):
-                async with self._lock:
-                    task = self._tasks.get(task_id)
-                    if not task:
-                        return False
-                    if task.account_id != stable_account_id or task.to_uri != stable_to_uri:
-                        continue
-                    if not self._check_permission(task, account_id, user_id, role):
-                        raise PermissionDeniedError(
-                            f"User {account_id}/{user_id} does not have permission to "
-                            f"delete task {task_id}"
-                        )
-
-                    self._tasks.pop(task_id, None)
-                    self._index_remove(task.account_id, task.to_uri, task_id)
-
-                    try:
-                        await self._save_tasks()
-                    except Exception:
-                        self._tasks[task_id] = task
-                        self._index_add(task.account_id, task.to_uri, task_id)
-                        raise
-                    logger.info(
-                        f"[WatchManager] Deleted task {task_id} by user {account_id}/{user_id}"
-                    )
-                    return True
+        if task is None:
+            raise ValueError(f"Task {task_id} not found")
+        return task
 
     async def get_task(
         self,
@@ -915,35 +267,7 @@ class WatchManager:
         user_id: str = "default",
         role: str = "root",
     ) -> Optional[WatchTask]:
-        """Get a monitoring task by ID.
-
-        Args:
-            task_id: Task ID to query
-            account_id: Requester's account ID
-            user_id: Requester's user ID
-            role: Requester's role (ROOT/ADMIN/USER)
-
-        Returns:
-            WatchTask if found and accessible, None otherwise
-        """
-        while True:
-            async with self._lock:
-                snapshot = self._tasks.get(task_id)
-                if not snapshot:
-                    return None
-                stable_account_id = snapshot.account_id
-                stable_to_uri = snapshot.to_uri
-
-            async with self._uri_mutation_coordinator.access(stable_account_id, [stable_to_uri]):
-                async with self._lock:
-                    task = self._tasks.get(task_id)
-                    if not task:
-                        return None
-                    if task.account_id != stable_account_id or task.to_uri != stable_to_uri:
-                        continue
-                    if not self._check_permission(task, account_id, user_id, role):
-                        return None
-                    return task
+        return await self._store.get_task(task_id, WatchAuthority(account_id, user_id, role))
 
     async def get_all_tasks(
         self,
@@ -952,26 +276,10 @@ class WatchManager:
         role: str,
         active_only: bool = False,
     ) -> List[WatchTask]:
-        """Get all monitoring tasks accessible by the user.
-
-        Args:
-            account_id: Requester's account ID
-            user_id: Requester's user ID
-            role: Requester's role (ROOT/ADMIN/USER)
-            active_only: If True, only return active tasks
-
-        Returns:
-            List of accessible WatchTask objects
-        """
-        async with self._lock:
-            tasks = []
-            for task in self._tasks.values():
-                if not self._check_permission(task, account_id, user_id, role):
-                    continue
-                if active_only and not task.is_active:
-                    continue
-                tasks.append(task)
-            return sorted(tasks, key=lambda task: task.created_at, reverse=True)
+        return await self._store.list_tasks(
+            WatchAuthority(account_id, user_id, role),
+            active_only=active_only,
+        )
 
     async def get_task_by_uri(
         self,
@@ -980,96 +288,73 @@ class WatchManager:
         user_id: str,
         role: str,
     ) -> Optional[WatchTask]:
-        """Get a monitoring task by target URI.
+        tasks = await self._store.list_tasks(
+            WatchAuthority(account_id, user_id, role),
+            target_uri=to_uri,
+            scope_account_id=account_id,
+        )
+        if len(tasks) > 1:
+            raise ConflictError(
+                f"Target URI '{to_uri}' has {len(tasks)} watch tasks "
+                f"({', '.join(sorted(task.task_id for task in tasks))}); address one by task_id.",
+                resource=to_uri,
+            )
+        return tasks[0] if tasks else None
 
-        Args:
-            to_uri: Target URI to query
-            account_id: Requester's account ID
-            user_id: Requester's user ID
-            role: Requester's role (ROOT/ADMIN/USER)
+    async def delete_task(self, task_id: str, account_id: str, user_id: str, role: str) -> bool:
+        return await self._store.delete_task(task_id, WatchAuthority(account_id, user_id, role))
 
-        Returns:
-            WatchTask if found and accessible, None otherwise
+    async def update_auth_state(
+        self,
+        task_id: str,
+        auth_state: Optional[Dict[str, Any]],
+        *,
+        run_id: Optional[str] = None,
+    ) -> None:
+        await self._store.patch_task(task_id, WatchPatch({"auth_state": auth_state}), run_id=run_id)
 
-        Raises:
-            ConflictError: Several accessible Connector watches share *to_uri*;
-                address one by task_id instead.
-        """
-        async with self._uri_mutation_coordinator.access(account_id, [to_uri]):
-            async with self._lock:
-                task_ids = {
-                    task_id
-                    for task_id in self._index_get(account_id, to_uri)
-                    if (task := self._tasks.get(task_id)) is not None
-                    and self._check_permission(task, account_id, user_id, role)
-                }
-                if not task_ids:
-                    return None
-                if len(task_ids) > 1:
-                    raise ConflictError(
-                        f"Target URI '{to_uri}' has {len(task_ids)} watch tasks "
-                        f"({', '.join(sorted(task_ids))}); address one by task_id.",
-                        resource=to_uri,
-                    )
+    async def update_connector_states(self, task_id: str, connector_states: Dict[str, Any]) -> None:
+        await self._store.patch_task(task_id, WatchPatch({"connector_states": connector_states}))
 
-                return self._tasks[next(iter(task_ids))]
+    async def finish_run(self, task_id: str, run_id: str, result: WatchRunResult) -> bool:
+        if result.error:
+            result = replace(result, error=self._public_error(result.error))
+        return await self._store.finish_run(task_id, run_id, result)
 
-    async def update_execution_time(self, task_id: str) -> None:
-        """Update task execution time after execution.
+    async def deactivate_idle(self, task_id: str, *, target_uri: Optional[str], error: str) -> bool:
+        return await self._store.deactivate_idle(
+            task_id, target_uri=target_uri, error=self._public_error(error)
+        )
 
-        Args:
-            task_id: Task ID to update
-        """
-        async with self._lock:
-            task = self._tasks.get(task_id)
-            if not task:
-                return
+    @staticmethod
+    def _public_error(error: str) -> str:
+        return sanitize_public_http_error(code="WATCH_EXECUTION_FAILED", message=error).message
 
-            if not task.is_active or task.watch_interval <= 0:
-                task.is_active = False
-                task.next_execution_time = None
-                await self._save_tasks()
-                return
+    async def fail_initial_submission(self, task_id: str, run_id: str, error: str) -> None:
+        """Release a first run whose ingestion Task was never created."""
+        await self.finish_run(task_id, run_id, WatchRunResult(status="failed", error=error))
 
-            task.last_execution_time = datetime.now()
-            task.next_execution_time = task.calculate_next_execution_time()
+    async def has_running_overlap(self, account_id: str, uris: Sequence[str]) -> bool:
+        return await self._store.has_running_overlap(account_id, uris)
 
-            await self._save_tasks()
+    async def move(
+        self,
+        *,
+        account_id: str,
+        from_uri: str,
+        to_uri: str,
+        task_ids: Optional[Sequence[str]] = None,
+    ) -> WatchMoveResult:
+        return await self._store.move(
+            account_id=account_id,
+            from_uri=from_uri,
+            to_uri=to_uri,
+            task_ids=task_ids,
+        )
 
-    async def get_due_tasks(self, account_id: Optional[str] = None) -> List[WatchTask]:
-        """Get all tasks that are due for execution.
-
-        Args:
-            account_id: Optional account ID filter (for scheduler)
-
-        Returns:
-            List of tasks that need to be executed
-        """
-        async with self._lock:
-            now = datetime.now()
-            due_tasks = []
-
-            for task in self._tasks.values():
-                if not task.is_active:
-                    continue
-
-                if account_id and task.account_id != account_id:
-                    continue
-
-                if task.next_execution_time and task.next_execution_time <= now:
-                    due_tasks.append(task)
-
-            return due_tasks
-
-    async def get_next_execution_time(self, account_id: Optional[str] = None) -> Optional[datetime]:
-        async with self._lock:
-            next_times: List[datetime] = []
-            for task in self._tasks.values():
-                if not task.is_active:
-                    continue
-                if account_id and task.account_id != account_id:
-                    continue
-                if task.next_execution_time is None:
-                    continue
-                next_times.append(task.next_execution_time)
-            return min(next_times) if next_times else None
+    async def deactivate_tasks_under_uri_internal(
+        self,
+        uri: str,
+        account_id: str = "default",
+    ) -> List[WatchTask]:
+        return await self._store.deactivate_under_uri(account_id, uri)

@@ -3,23 +3,27 @@
 """Tests for file-system service coordination behavior."""
 
 import asyncio
-from contextlib import asynccontextmanager
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
+from openviking.resource.watch_manager import WatchManager, WatchPathLocks
+from openviking.resource.watch_store import WatchMoveResult
+from openviking.resource.watch_store_file import FileWatchStore
+from openviking.resource.watch_types import WatchAuthority
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.service.task_work_index import bind_task_context
 from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.acl import AclAction
-from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+from tests.utils.watch_fixtures import local_viking_fs
 
 
 @pytest.fixture(autouse=True)
@@ -34,33 +38,96 @@ def run_fs_operations_inline(monkeypatch):
     )
 
 
+class _FakePathLockAGFS:
+    """Grants every PathLock batch and records it."""
+
+    def __init__(self, events=None):
+        self.requests = []
+        self.held = 0
+        self.events = events
+
+    async def pathlock_acquire_batch(self, requests, timeout_secs=0.0, owner_lease_ref=None):
+        del timeout_secs, owner_lease_ref
+        self.requests.append(list(requests))
+        self.held += 1
+        if self.events is not None:
+            self.events.append(("lock", *(request["path"] for request in requests)))
+        return {"lease_ref": f"lease-{len(self.requests)}"}
+
+    async def pathlock_release(self, _lease):
+        self.held -= 1
+        if self.events is not None:
+            self.events.append(("unlock",))
+
+
+def _local_path(uri, ctx=None):
+    del ctx
+    return f"/local/default/{uri.removeprefix('viking://')}"
+
+
+def _with_pathlock(viking_fs, *, is_dir=False, events=None):
+    """Give a VikingFS double what FSService needs to hold Watch scopes."""
+    viking_fs._async_agfs = _FakePathLockAGFS(events)
+    viking_fs._uri_to_path = _local_path
+    viking_fs._transfer_parent_path = lambda path: path.rsplit("/", 1)[0]
+    viking_fs._validate_transfer_paths = lambda *_paths: None
+    viking_fs._ensure_transfer_parent_directory = AsyncMock()
+    viking_fs._ensure_transfer_target_type = AsyncMock()
+    if not hasattr(viking_fs, "exists"):
+        viking_fs.exists = AsyncMock(return_value=True)
+    if not hasattr(viking_fs, "stat"):
+        viking_fs.stat = AsyncMock(return_value={"isDir": is_dir})
+    return viking_fs
+
+
 class _FakeVikingFS:
-    def __init__(self, *, rm_error=None, events=None, parent_exists=True):
+    def __init__(
+        self,
+        *,
+        rm_error=None,
+        mv_errors=None,
+        events=None,
+        parent_exists=True,
+        is_dir=True,
+    ):
         self._ensure_access = AsyncMock()
         self._ensure_destination_access = AsyncMock()
         self.rm_calls = []
         self.mv_calls = []
         self.cp_calls = []
         self.rm_error = rm_error
+        self.mv_errors = list(mv_errors or [])
         self.events = events
         self.parent_exists = parent_exists
+        self.is_dir = is_dir
+        _with_pathlock(self, events=events)
 
     async def exists(self, uri, ctx=None):
         return self.parent_exists
 
-    async def rm(self, uri, recursive=False, ctx=None):
+    async def stat(self, uri, ctx=None, **_kwargs):
+        return {"isDir": self.is_dir}
+
+    async def rm(self, uri, recursive=False, ctx=None, lease_ref=None):
+        assert lease_ref is not None and self._async_agfs.held
         self.rm_calls.append({"uri": uri, "recursive": recursive, "ctx": ctx})
         if self.rm_error:
             raise self.rm_error
         return {"estimated_deleted_count": 3}
 
-    async def mv(self, from_uri, to_uri, ctx=None):
+    async def mv(self, from_uri, to_uri, ctx=None, lease_ref=None):
+        assert lease_ref is not None and self._async_agfs.held
         self.mv_calls.append({"from_uri": from_uri, "to_uri": to_uri, "ctx": ctx})
         if self.events is not None:
             self.events.append(("mv", from_uri, to_uri))
+        if self.mv_errors:
+            error = self.mv_errors.pop(0)
+            if error is not None:
+                raise error
         return {"source_acl": {}}
 
-    async def cp(self, from_uri, to_uri, recursive=False, ctx=None):
+    async def cp(self, from_uri, to_uri, recursive=False, ctx=None, lease_ref=None):
+        assert lease_ref is not None and self._async_agfs.held
         self.cp_calls.append(
             {
                 "from_uri": from_uri,
@@ -105,36 +172,23 @@ async def test_stat_forwards_optional_fields_without_changing_defaults(request_c
     }
 
 
-class _FakeMutationCoordinator:
-    def __init__(self, events=None):
-        self.calls = []
-        self.events = events
-
-    @asynccontextmanager
-    async def mutation(self, account_id, uris):
-        self.calls.append({"account_id": account_id, "uris": list(uris)})
-        if self.events is not None:
-            self.events.append(("mutation-enter", *uris))
-        try:
-            yield
-        finally:
-            if self.events is not None:
-                self.events.append(("mutation-exit", *uris))
-
-
 class _MkdirPathlockAGFS:
+    """One conflicting scope at a time, waiting up to the requested timeout."""
+
     def __init__(self):
         self._lock = asyncio.Lock()
         self.held = False
-        self.acquire_count = 0
+        self.requests = []
 
-    async def pathlock_acquire_exact(self, _path):
-        if self._lock.locked():
-            raise LockAcquisitionError("exact path is busy")
-        await self._lock.acquire()
+    async def pathlock_acquire_batch(self, requests, timeout_secs=0.0, owner_lease_ref=None):
+        del owner_lease_ref
+        try:
+            await asyncio.wait_for(self._lock.acquire(), timeout=timeout_secs or None)
+        except asyncio.TimeoutError as exc:
+            raise LockAcquisitionError("path is busy") from exc
         self.held = True
-        self.acquire_count += 1
-        return {"lease_ref": f"mkdir-{self.acquire_count}"}
+        self.requests.append(list(requests))
+        return {"lease_ref": f"mkdir-{len(self.requests)}"}
 
     async def pathlock_release(self, _lease):
         self.held = False
@@ -146,13 +200,15 @@ class _MkdirVikingFS:
         self.directory_exists = False
         self.abstract_content = None
         self._async_agfs = _MkdirPathlockAGFS()
+        self._uri_to_path = _local_path
 
-    def _uri_to_path(self, uri, ctx=None):
+    async def exists(self, uri, ctx=None):
         del ctx
-        return f"/local/default/{uri.removeprefix('viking://')}"
+        return self.directory_exists or uri != "viking://resources/shared"
 
-    async def mkdir(self, _uri, ctx=None):
+    async def mkdir(self, _uri, ctx=None, lease_ref=None):
         del ctx
+        assert self._async_agfs.held and lease_ref is not None
         if self.directory_exists:
             raise AGFSAlreadyExistsError("directory already exists")
         self.directory_exists = True
@@ -190,6 +246,10 @@ async def test_concurrent_default_mkdir_vectorizes_once(monkeypatch, request_con
 
     assert body_for_preview(viking_fs.abstract_content) == "# shared"
     assert vectorized == ["# shared"]
+    # The directory does not exist yet, so its existing parent is locked instead.
+    assert viking_fs._async_agfs.requests[0] == [
+        {"path": "/local/default/resources", "kind": "tree"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -223,28 +283,34 @@ async def test_write_forwards_tags_and_tag_mode_to_content_coordinator(
 
 class _FakeWatchManager:
     def __init__(self, *, events=None):
-        self.validate_calls = []
-        self.rewrite_calls = []
+        self.move_calls = []
+        self.move_errors = []
         self.deactivate_calls = []
-        self.validate_error = None
         self.events = events
+        self.running = []
+        self.overlap_calls = []
 
-    async def validate_target_prefix_rewrite_internal(self, from_uri, to_uri, account_id):
-        self.validate_calls.append(
-            {"from_uri": from_uri, "to_uri": to_uri, "account_id": account_id}
+    async def has_running_overlap(self, account_id, uris):
+        self.overlap_calls.append({"account_id": account_id, "uris": list(uris)})
+        return self.running.pop(0) if self.running else False
+
+    async def move(self, *, account_id, from_uri, to_uri, task_ids=None):
+        self.move_calls.append(
+            {
+                "account_id": account_id,
+                "from_uri": from_uri,
+                "to_uri": to_uri,
+                "task_ids": task_ids,
+            }
         )
         if self.events is not None:
-            self.events.append(("validate", from_uri, to_uri))
-        if self.validate_error:
-            raise self.validate_error
-
-    async def rewrite_target_prefix_internal(self, from_uri, to_uri, account_id):
-        self.rewrite_calls.append(
-            {"from_uri": from_uri, "to_uri": to_uri, "account_id": account_id}
-        )
-        if self.events is not None:
-            self.events.append(("rewrite", from_uri, to_uri))
-        return [SimpleNamespace(task_id="watch-1")]
+            self.events.append(("watch-move", from_uri, to_uri))
+        if self.move_errors:
+            error = self.move_errors.pop(0)
+            if error is not None:
+                raise error
+        moved_ids = ("watch-1",) if task_ids is None else tuple(task_ids)
+        return WatchMoveResult(account_id, from_uri, to_uri, moved_ids)
 
     async def deactivate_tasks_under_uri_internal(self, uri, account_id):
         self.deactivate_calls.append({"uri": uri, "account_id": account_id})
@@ -1032,76 +1098,140 @@ async def test_resource_rm_does_not_deactivate_watch_task_control_uri(request_co
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("separator", ["/", "//"])
-async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(
-    request_context, separator
-):
-    events = []
-    viking_fs = _FakeVikingFS(events=events)
-    watch_manager = _FakeWatchManager(events=events)
-    service = FSService(
-        viking_fs=viking_fs,
-        watch_scheduler=_FakeWatchScheduler(watch_manager),
-    )
-
-    async def enqueue_refresh(**kwargs):
-        events.append(("refresh", kwargs["root_uri"]))
-        assert kwargs == {
-            "root_uri": "viking://resources/codeask",
-            "source_uri": "viking://resources/codeask/wiki",
-            "copied_uri": "viking://resources/codeask/wiki-renamed",
-            "change_kind": "added",
-            "context_type": "resource",
-            "ctx": request_context,
-        }
-        return "queued"
-
-    service._enqueue_copy_refresh = enqueue_refresh
-
-    await service.mv(
-        f"viking://resources{separator}codeask/wiki",
-        f"viking://resources{separator}codeask/wiki-renamed",
-        ctx=request_context,
-    )
-
-    expected_watch_call = [
-        {
-            "from_uri": "viking://resources/codeask/wiki",
-            "to_uri": "viking://resources/codeask/wiki-renamed",
-            "account_id": "default",
-        }
-    ]
-    assert watch_manager.validate_calls == expected_watch_call
-    assert watch_manager.rewrite_calls == expected_watch_call
-    assert viking_fs.mv_calls == [
-        {
-            "from_uri": "viking://resources/codeask/wiki",
-            "to_uri": "viking://resources/codeask/wiki-renamed",
-            "ctx": replace(request_context, bypass_acl=True),
-        }
-    ]
-    assert [event[0] for event in events] == ["validate", "mv", "rewrite", "refresh"]
-
-
-@pytest.mark.asyncio
-async def test_resource_mv_conflict_fails_before_resource_move(request_context):
-    viking_fs = _FakeVikingFS()
+async def test_resource_mv_rolls_back_exact_watch_move_when_filesystem_fails(request_context):
+    file_error = OSError("filesystem move failed")
+    viking_fs = _FakeVikingFS(mv_errors=[file_error])
     watch_manager = _FakeWatchManager()
-    watch_manager.validate_error = RuntimeError("watch conflict")
     service = FSService(
         viking_fs=viking_fs,
         watch_scheduler=_FakeWatchScheduler(watch_manager),
     )
 
-    with pytest.raises(RuntimeError, match="watch conflict"):
+    with pytest.raises(OSError) as raised:
         await service.mv(
-            "viking://resources/codeask/wiki",
-            "viking://resources/codeask/wiki-renamed",
+            "viking://resources/source",
+            "viking://resources/target",
             ctx=request_context,
         )
 
-    assert viking_fs.mv_calls == []
-    assert watch_manager.rewrite_calls == []
+    assert raised.value is file_error
+    assert watch_manager.move_calls == [
+        {
+            "account_id": "default",
+            "from_uri": "viking://resources/source",
+            "to_uri": "viking://resources/target",
+            "task_ids": None,
+        },
+        {
+            "account_id": "default",
+            "from_uri": "viking://resources/target",
+            "to_uri": "viking://resources/source",
+            "task_ids": ("watch-1",),
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_preserves_both_filesystem_and_rollback_errors(request_context):
+    file_error = OSError("filesystem move failed")
+    rollback_error = RuntimeError("Watch rollback failed")
+    viking_fs = _FakeVikingFS(mv_errors=[file_error])
+    watch_manager = _FakeWatchManager()
+    watch_manager.move_errors = [None, rollback_error]
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+    )
+    with pytest.raises(RuntimeError) as raised:
+        await service.mv(
+            "viking://resources/source",
+            "viking://resources/target",
+            ctx=request_context,
+        )
+
+    assert raised.value is rollback_error
+    assert raised.value.__cause__ is file_error
+
+
+@pytest.fixture
+async def local_watch_fs_service(local_fs_service):
+    service, viking_fs = local_fs_service
+    store = FileWatchStore(viking_fs)
+    manager = WatchManager(store, WatchPathLocks(viking_fs))
+    await manager.initialize()
+    service._watch_scheduler = _FakeWatchScheduler(manager)
+    yield service, viking_fs, manager
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_checks_watch_created_while_waiting_for_lock(
+    request_context, local_watch_fs_service, monkeypatch
+):
+    service, viking_fs, manager = local_watch_fs_service
+    source, target = "viking://resources/source", "viking://resources/target"
+    await viking_fs.write_file(source + "/doc/new.txt", "new", ctx=request_context)
+    await viking_fs.write_file(target + "/keep.txt", "keep", ctx=request_context)
+    source_watch = await manager.create_task("source", to_uri=source + "/doc")
+    waiting, release = asyncio.Event(), asyncio.Event()
+    acquire = viking_fs._async_agfs.pathlock_acquire_batch
+    pause = True
+
+    async def acquire_after_watch(*args, **kwargs):
+        nonlocal pause
+        if pause:
+            pause = False
+            waiting.set()
+            await release.wait()
+        return await acquire(*args, **kwargs)
+
+    monkeypatch.setattr(viking_fs._async_agfs, "pathlock_acquire_batch", acquire_after_watch)
+    moving = asyncio.create_task(service.mv(source, target, ctx=request_context))
+    try:
+        await asyncio.wait_for(waiting.wait(), timeout=5)
+        target_watch = await manager.create_task("target", to_uri=target + "/doc")
+    finally:
+        release.set()
+    with pytest.raises(ConflictError):
+        await moving
+
+    assert await viking_fs.read_file(source + "/doc/new.txt", ctx=request_context) == "new"
+    assert await viking_fs.read_file(target + "/keep.txt", ctx=request_context) == "keep"
+    assert not await viking_fs.exists(target + "/doc/new.txt", ctx=request_context)
+    assert not await viking_fs.exists(source + "/keep.txt", ctx=request_context)
+    assert (await manager.store.get_task(source_watch.task_id)).to_uri == source + "/doc"
+    assert (await manager.store.get_task(target_watch.task_id)).to_uri == target + "/doc"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_preexisting", [False, True])
+async def test_resource_mv_watch_write_failure_preserves_existing_target_files(
+    request_context, local_watch_fs_service, monkeypatch, target_preexisting
+):
+    service, viking_fs, manager = local_watch_fs_service
+    source, target = "viking://resources/source", "viking://resources/target"
+    await viking_fs.write_file(source + "/doc/new.txt", "new", ctx=request_context)
+    if target_preexisting:
+        await viking_fs.write_file(target + "/keep.txt", "keep", ctx=request_context)
+    watch = await manager.create_task("source", to_uri=source + "/doc")
+    write = viking_fs.write_file
+    failure = OSError("Watch metadata write failed")
+
+    async def fail_watch_write(uri, *args, **kwargs):
+        if uri == FileWatchStore.STORAGE_TMP_URI:
+            raise failure
+        return await write(uri, *args, **kwargs)
+
+    monkeypatch.setattr(viking_fs, "write_file", fail_watch_write)
+    with pytest.raises(OSError) as raised:
+        await service.mv(source, target, ctx=request_context)
+    assert raised.value is failure
+    assert await viking_fs.read_file(source + "/doc/new.txt", ctx=request_context) == "new"
+    if target_preexisting:
+        assert await viking_fs.read_file(target + "/keep.txt", ctx=request_context) == "keep"
+    else:
+        assert not await viking_fs.exists(target, ctx=request_context)
+    assert (await manager.store.get_task(watch.task_id)).to_uri == source + "/doc"
 
 
 @pytest.mark.asyncio
@@ -1180,12 +1310,12 @@ async def test_resource_mv_without_watch_scheduler_moves_resource_directly(reque
             "ctx": request_context,
         },
     ]
-    assert [event[0] for event in events] == ["mv", "refresh", "refresh"]
+    assert [event[0] for event in events] == ["lock", "mv", "unlock", "refresh", "refresh"]
 
 
 @pytest.mark.asyncio
 async def test_resource_mv_watch_control_file_skips_parent_refresh(request_context):
-    viking_fs = _FakeVikingFS()
+    viking_fs = _FakeVikingFS(is_dir=False)
     service = FSService(
         viking_fs=viking_fs,
         watch_scheduler=_FakeWatchScheduler(_FakeWatchManager()),
@@ -1202,70 +1332,41 @@ async def test_resource_mv_watch_control_file_skips_parent_refresh(request_conte
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("separator", ["/", "//"])
-async def test_resource_cp_coordinates_mutation_without_copying_watch_tasks(
-    request_context, separator
+@pytest.mark.parametrize("operation", ["mv", "cp"])
+async def test_resource_transfer_moves_or_preserves_its_watch(
+    request_context, local_watch_fs_service, operation
 ):
-    source = "viking://resources/codeask/wiki"
-    target = "viking://resources/archive/wiki"
-    events = []
-    viking_fs = _FakeVikingFS(events=events)
-    coordinator = _FakeMutationCoordinator(events=events)
-    watch_manager = _FakeWatchManager(events=events)
-    service = FSService(
-        viking_fs=viking_fs,
-        watch_scheduler=_FakeWatchScheduler(watch_manager),
-        uri_mutation_coordinator=coordinator,
-    )
-
-    async def enqueue_refresh(**kwargs):
-        events.append(("refresh", kwargs["root_uri"]))
-        assert kwargs == {
-            "root_uri": "viking://resources/archive",
-            "source_uri": source,
-            "copied_uri": target,
-            "context_type": "resource",
-            "ctx": request_context,
-        }
-        return "queued"
-
-    service._enqueue_copy_refresh = enqueue_refresh
-
-    result = await service.cp(
-        source.replace("resources/", f"resources{separator}"),
-        target.replace("resources/", f"resources{separator}"),
-        recursive=True,
+    service, viking_fs, manager = local_watch_fs_service
+    source, target = "viking://resources/source/wiki", "viking://resources/archive/wiki"
+    await viking_fs.write_file(source + "/doc.txt", "content", ctx=request_context)
+    await viking_fs.mkdir("viking://resources/archive", ctx=request_context, exist_ok=True)
+    watch = await manager.create_task("source", to_uri=source)
+    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
+    result = await getattr(service, operation)(
+        source.replace("resources/", "resources//"),
+        target.replace("resources/", "resources//"),
         ctx=request_context,
+        **({"recursive": True} if operation == "cp" else {}),
     )
 
-    assert coordinator.calls == [{"account_id": "default", "uris": [source, target]}]
-    assert viking_fs.cp_calls == [
-        {
-            "from_uri": source,
-            "to_uri": target,
-            "recursive": True,
-            "ctx": request_context,
-        }
-    ]
-    assert [event[0] for event in events] == [
-        "mutation-enter",
-        "cp",
-        "mutation-exit",
-        "refresh",
-    ]
-    assert watch_manager.validate_calls == []
-    assert watch_manager.rewrite_calls == []
-    assert result["from"] == source
-    assert result["to"] == target
-    assert result["semantic_root_uri"] == "viking://resources/archive"
-    assert result["semantic_status"] == "queued"
+    assert await viking_fs.read_file(target + "/doc.txt", ctx=request_context) == "content"
+    assert await viking_fs.exists(source + "/doc.txt", ctx=request_context) is (operation == "cp")
+    assert (await manager.store.get_task(watch.task_id)).to_uri == (
+        target if operation == "mv" else source
+    )
+    assert len(await manager.store.list_tasks(WatchAuthority())) == 1
+    if operation == "cp":
+        assert result["from"] == source
+        assert result["to"] == target
+        assert result["semantic_root_uri"] == "viking://resources/archive"
+        assert result["semantic_status"] == "queued"
 
 
 @pytest.mark.asyncio
 async def test_resource_cp_refresh_failure_does_not_roll_back_copy(request_context):
     source = "viking://resources/source.md"
     target = "viking://resources/archive/copied.md"
-    viking_fs = _FakeVikingFS()
+    viking_fs = _FakeVikingFS(is_dir=False)
     service = FSService(viking_fs=viking_fs)
     service._enqueue_copy_refresh = AsyncMock(side_effect=RuntimeError("queue unavailable"))
 
@@ -1284,10 +1385,10 @@ async def test_resource_cp_finishes_transfer_and_refresh_after_caller_cancel(req
     started = asyncio.Event()
     release = asyncio.Event()
     completed = asyncio.Event()
-    viking_fs = _FakeVikingFS()
+    viking_fs = _FakeVikingFS(is_dir=False)
 
-    async def blocked_cp(from_uri, to_uri, recursive=False, ctx=None):
-        del from_uri, to_uri, recursive, ctx
+    async def blocked_cp(from_uri, to_uri, recursive=False, ctx=None, lease_ref=None):
+        del from_uri, to_uri, recursive, ctx, lease_ref
         started.set()
         await release.wait()
         completed.set()
@@ -1317,7 +1418,7 @@ async def test_resource_cp_finishes_inflight_refresh_after_caller_cancel(request
     refresh_started = asyncio.Event()
     release_refresh = asyncio.Event()
     refresh_completed = asyncio.Event()
-    service = FSService(viking_fs=_FakeVikingFS())
+    service = FSService(viking_fs=_FakeVikingFS(is_dir=False))
 
     async def blocked_refresh(**kwargs):
         del kwargs
@@ -1346,10 +1447,10 @@ async def test_resource_mv_finishes_transfer_and_refresh_after_caller_cancel(req
     started = asyncio.Event()
     release = asyncio.Event()
     completed = asyncio.Event()
-    viking_fs = _FakeVikingFS()
+    viking_fs = _FakeVikingFS(is_dir=False)
 
-    async def blocked_mv(from_uri, to_uri, ctx=None):
-        del from_uri, to_uri, ctx
+    async def blocked_mv(from_uri, to_uri, ctx=None, lease_ref=None):
+        del from_uri, to_uri, ctx, lease_ref
         started.set()
         await release.wait()
         completed.set()
@@ -1373,7 +1474,7 @@ async def test_resource_mv_finishes_transfer_and_refresh_after_caller_cancel(req
 
 @pytest.mark.asyncio
 async def test_non_resource_cp_skips_parent_semantic_refresh(request_context):
-    viking_fs = _FakeVikingFS()
+    viking_fs = _FakeVikingFS(is_dir=False)
     service = FSService(viking_fs=viking_fs)
     service._enqueue_copy_refresh = AsyncMock()
 
@@ -1472,9 +1573,7 @@ async def test_file_only_transfer_rebuild_uses_fresh_semantic_processing(
         mark_pending,
     )
     target = (
-        "viking://resources/archive/copied"
-        if recursive
-        else "viking://resources/archive/copied.md"
+        "viking://resources/archive/copied" if recursive else "viking://resources/archive/copied.md"
     )
     root = target if recursive else "viking://resources/archive"
 
@@ -1570,12 +1669,13 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
 async def test_system_mkdir_skips_semantic_sidecar_and_vectorization(request_context):
     uri = "viking://system/memory/memory_templates/custom/demo"
     viking_fs = SimpleNamespace(_ensure_access=AsyncMock(), mkdir=AsyncMock())
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
 
     await service.mkdir(uri, ctx=request_context)
 
     viking_fs._ensure_access.assert_awaited_once()
-    viking_fs.mkdir.assert_awaited_once_with(uri, ctx=request_context)
+    viking_fs.mkdir.assert_awaited_once_with(uri, ctx=request_context, lease_ref=ANY)
 
 
 @pytest.mark.asyncio
@@ -1663,6 +1763,7 @@ async def test_copy_to_system_uses_physical_file_strategy(request_context):
     viking_fs = SimpleNamespace(
         cp=AsyncMock(return_value={"from": source, "to": target, "recursive": False}),
     )
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
 
     result = await service.cp(source, target, recursive=False, ctx=request_context)
@@ -1674,6 +1775,7 @@ async def test_copy_to_system_uses_physical_file_strategy(request_context):
         ctx=request_context,
         maintain_vectors=False,
         copy_semantic_sidecars=False,
+        lease_ref=ANY,
     )
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "skipped"
@@ -1686,6 +1788,7 @@ async def test_indexed_copy_preserves_native_vectors_and_content_copy_refresh(re
     viking_fs = SimpleNamespace(
         cp=AsyncMock(return_value={"from": source, "to": target, "recursive": False}),
     )
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
     service._enqueue_copy_refresh = AsyncMock(return_value="queued")
 
@@ -1696,6 +1799,7 @@ async def test_indexed_copy_preserves_native_vectors_and_content_copy_refresh(re
         target,
         recursive=False,
         ctx=request_context,
+        lease_ref=ANY,
     )
     service._enqueue_copy_refresh.assert_awaited_once()
 
@@ -1707,6 +1811,7 @@ async def test_indexed_move_preserves_native_vector_transfer(request_context):
     viking_fs = SimpleNamespace(
         _ensure_access=AsyncMock(), _ensure_destination_access=AsyncMock(), mv=AsyncMock()
     )
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
     service._refresh_move_parents = AsyncMock()
 
@@ -1717,7 +1822,7 @@ async def test_indexed_move_preserves_native_vector_transfer(request_context):
     )
     viking_fs._ensure_destination_access.assert_awaited_once_with(target, request_context)
     viking_fs.mv.assert_awaited_once_with(
-        source, target, ctx=replace(request_context, bypass_acl=True)
+        source, target, ctx=replace(request_context, bypass_acl=True), lease_ref=ANY
     )
     service._refresh_move_parents.assert_awaited_once_with(
         from_uri=source,
@@ -1732,6 +1837,7 @@ async def test_transfer_to_registered_memory_template_is_rejected(request_contex
     source = "viking://resources/project/demo.yaml"
     target = "viking://system/memory/memory_templates/custom/profile.yaml"
     viking_fs = SimpleNamespace(cp=AsyncMock(), mv=AsyncMock())
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
 
     with pytest.raises(InvalidArgumentError, match="must be updated through write"):
@@ -1753,6 +1859,7 @@ async def test_move_to_system_deletes_source_vectors_without_target_index(
     viking_fs = SimpleNamespace(
         _ensure_access=AsyncMock(), _ensure_destination_access=AsyncMock(), mv=AsyncMock()
     )
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
     refresh = AsyncMock()
     monkeypatch.setattr(service, "_refresh_move_parents", refresh)
@@ -1765,6 +1872,7 @@ async def test_move_to_system_deletes_source_vectors_without_target_index(
         ctx=replace(request_context, bypass_acl=True),
         vector_mode="delete_source",
         copy_semantic_sidecars=False,
+        lease_ref=ANY,
     )
     refresh.assert_awaited_once()
 
@@ -1811,6 +1919,7 @@ async def test_copy_from_system_rebuilds_target_index(request_context):
         cp=AsyncMock(return_value={"from": source, "to": target, "recursive": False}),
         stat=AsyncMock(return_value={"isDir": False}),
     )
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
     service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
 
@@ -1823,6 +1932,7 @@ async def test_copy_from_system_rebuilds_target_index(request_context):
         ctx=request_context,
         maintain_vectors=False,
         copy_semantic_sidecars=False,
+        lease_ref=ANY,
     )
     service._enqueue_transfer_rebuild.assert_awaited_once_with(
         root_uri="viking://resources/project",
@@ -1842,6 +1952,7 @@ async def test_recursive_copy_from_system_rebuilds_target_subtree(request_contex
         cp=AsyncMock(return_value={"from": source, "to": target, "recursive": True}),
         stat=AsyncMock(return_value={"isDir": True}),
     )
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
     service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
 
@@ -1866,6 +1977,7 @@ async def test_move_from_system_rebuilds_target_index(request_context):
         mv=AsyncMock(),
         stat=AsyncMock(return_value={"isDir": False}),
     )
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
     service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
     service._refresh_move_parents = AsyncMock()
@@ -1878,6 +1990,7 @@ async def test_move_from_system_rebuilds_target_index(request_context):
         ctx=replace(request_context, bypass_acl=True),
         vector_mode="none",
         copy_semantic_sidecars=False,
+        lease_ref=ANY,
     )
     service._refresh_move_parents.assert_awaited_once_with(
         from_uri=source,
@@ -1904,6 +2017,7 @@ async def test_move_target_refresh_failure_does_not_roll_back_physical_move(requ
         mv=AsyncMock(),
         stat=AsyncMock(return_value={"isDir": False}),
     )
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
     service._enqueue_transfer_rebuild = AsyncMock(side_effect=RuntimeError("queue unavailable"))
 
@@ -1923,6 +2037,7 @@ async def test_recursive_move_from_system_rebuilds_target_subtree(request_contex
         mv=AsyncMock(),
         stat=AsyncMock(return_value={"isDir": True}),
     )
+    _with_pathlock(viking_fs)
     service = FSService(viking_fs=viking_fs)
     service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
     service._refresh_move_parents = AsyncMock()
@@ -1993,3 +2108,82 @@ async def test_system_rejects_semantic_sidecar_reads(request_context, operation)
         await getattr(service, operation)(uri, ctx=request_context)
 
     getattr(viking_fs, operation).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transfer_waits_for_running_watch_then_proceeds(request_context, monkeypatch):
+    monkeypatch.setattr("openviking.service.fs_service.WATCH_BUSY_POLL_SECONDS", 0)
+    viking_fs = _FakeVikingFS()
+    watch_manager = _FakeWatchManager()
+    watch_manager.running = [True, True]
+    service = FSService(viking_fs=viking_fs, watch_scheduler=_FakeWatchScheduler(watch_manager))
+    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
+
+    await service.mv(
+        "viking://resources/codeask/wiki", "viking://resources/archive/wiki", ctx=request_context
+    )
+
+    assert watch_manager.running == []
+    assert viking_fs._async_agfs.held == 0
+    assert len(viking_fs.mv_calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["mv", "cp", "rm", "mkdir"])
+async def test_fs_operation_reports_retryable_busy_while_watch_keeps_running(
+    request_context, monkeypatch, operation
+):
+    monkeypatch.setattr("openviking.service.fs_service.WATCH_BUSY_WAIT_SECONDS", 0)
+    viking_fs = _FakeVikingFS()
+    viking_fs.mkdir = AsyncMock()
+    watch_manager = _FakeWatchManager()
+    watch_manager.has_running_overlap = AsyncMock(return_value=True)
+    service = FSService(viking_fs=viking_fs, watch_scheduler=_FakeWatchScheduler(watch_manager))
+    source, target = "viking://resources/codeask/wiki", "viking://resources/archive/wiki"
+
+    with pytest.raises(ResourceBusyError) as raised:
+        if operation == "mv":
+            await service.mv(source, target, ctx=request_context)
+        elif operation == "cp":
+            await service.cp(source, target, recursive=True, ctx=request_context)
+        elif operation == "rm":
+            await service.rm(source, ctx=request_context, recursive=True)
+        else:
+            await service.mkdir(target, ctx=request_context)
+
+    assert raised.value.conflict_type == "watch_running"
+    assert raised.value.retryable is True
+    assert viking_fs._async_agfs.held == 0
+    assert viking_fs.mv_calls == viking_fs.cp_calls == viking_fs.rm_calls == []
+    viking_fs.mkdir.assert_not_awaited()
+
+
+@pytest.fixture
+def local_fs_service(tmp_path):
+    viking_fs = local_viking_fs(tmp_path / "agfs")
+    return FSService(viking_fs=viking_fs), viking_fs
+
+
+@pytest.mark.asyncio
+async def test_transfer_into_missing_parent_fails_without_creating_it(
+    request_context, local_fs_service
+):
+    service, viking_fs = local_fs_service
+    await viking_fs.write_file("viking://resources/a.md", "a", ctx=request_context)
+
+    with pytest.raises(NotFoundError):
+        await service.mv(
+            "viking://resources/a.md", "viking://resources/missing/a.md", ctx=request_context
+        )
+
+    assert not await viking_fs.exists("viking://resources/missing", ctx=request_context)
+    assert await viking_fs.read_file("viking://resources/a.md", ctx=request_context) == "a"
+
+
+@pytest.mark.asyncio
+async def test_rm_of_missing_path_does_not_create_it(request_context, local_fs_service):
+    service, viking_fs = local_fs_service
+    await viking_fs.mkdir("viking://resources", ctx=request_context)
+
+    await service.rm("viking://resources/gone", ctx=request_context, recursive=True)
+    assert not await viking_fs.exists("viking://resources/gone", ctx=request_context)

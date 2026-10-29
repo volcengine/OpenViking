@@ -90,6 +90,9 @@ class DeletionService:
             self._creation_blocked if self._require_registered_identity else self._is_deleting
         )
         get_task_tracker().set_deletion_guard(creation_guard)
+        scheduler = self._service.watch_scheduler
+        if scheduler is not None:
+            scheduler.watch_manager.set_deletion_guard(creation_guard)
         queue_manager = self._service._queue_manager
         queue = queue_manager.get_queue(queue_manager.DATA_CLEANUP)
         queued_task_ids = {
@@ -144,10 +147,16 @@ class DeletionService:
         """Reject missing registered identities, also after their deletion fence is gone."""
         if account_id == SYSTEM_TASK_ACCOUNT_ID:
             return False
-        if await self._is_deleting(account_id, user_id):
+        # Queue workers call this guard from their own loops; the account store
+        # and its cache clients belong to the service loop.
+        return await self._manager_dispatcher.run(
+            lambda: self._is_creation_blocked(account_id, user_id)
+        )
+
+    async def _is_creation_blocked(self, account_id: str, user_id: str) -> bool:
+        if await self._manager.get_deletion(account_id, user_id) is not None:
             return True
-        user = await self._manager.get_user(account_id, user_id)
-        return user is None
+        return await self._manager.get_user(account_id, user_id) is None
 
     async def delete(
         self,
@@ -434,9 +443,12 @@ class DeletionService:
             try:
                 await tracker.cancel(task.task_id, **owner)
             except ValueError:
-                # Some system work cannot be cancelled. Wait for its owner to
+                if task.task_type == "connector_import":
+                    # The import runs in the remote Connector service, which
+                    # cannot be stopped; failing the Task ends local monitoring.
+                    await tracker.fail(task.task_id, "Identity deleted", **owner)
+                # Other system work cannot be cancelled. Wait for its owner to
                 # finish instead of deleting the data underneath it.
-                pass
         for task in active:
             remaining = deadline - time.monotonic()
             if remaining <= 0:

@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 from openviking.core.directories import DirectoryInitializer
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
-from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
@@ -112,7 +111,6 @@ class OpenVikingService:
         self._session_compressor: Optional["SessionCompressorV3"] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._system_asset_synchronizer: Optional[SystemAssetSynchronizer] = None
-        self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._rule_cleanup_scheduler: Optional[RuleCleanupScheduler] = None
@@ -130,9 +128,7 @@ class OpenVikingService:
         self._data_dir_lock_path: Optional[str] = None
 
         # Sub-services
-        self._fs_service = FSService(
-            uri_mutation_coordinator=self._uri_mutation_coordinator,
-        )
+        self._fs_service = FSService()
         self._pack_service = PackService()
         self._search_service = SearchService()
         self._resource_memory_link_service = ResourceMemoryLinkService()
@@ -580,9 +576,12 @@ class OpenVikingService:
 
         self._watch_scheduler = WatchScheduler(
             resource_service=self._resource_service,
+            store=self._config.storage.build_watch_store(
+                service_name=self._config.service_name, viking_fs=self._viking_fs
+            ),
             viking_fs=self._viking_fs,
-            uri_mutation_coordinator=self._uri_mutation_coordinator,
             runtime_config_manager=self._runtime_config_manager,
+            leader_enabled=self._config.enable_watch_scheduler,
         )
 
         # Wire up sub-services
@@ -593,7 +592,6 @@ class OpenVikingService:
             privacy_sanitizer=self._privacy_sanitizer,
             resource_memory_link_service=self._resource_memory_link_service,
             watch_scheduler=self._watch_scheduler,
-            uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
         self._pack_service.set_dependencies(
             viking_fs=self._viking_fs,
@@ -748,11 +746,7 @@ class OpenVikingService:
             )
             await self._external_task_service.restore_tasks(restored_tasks)
 
-        if self._config.enable_watch_scheduler:
-            await self._watch_scheduler.start()
-            logger.info("WatchScheduler started")
-        else:
-            logger.info("WatchScheduler disabled by config (enable_watch_scheduler=false)")
+        await self._watch_scheduler.start()
 
         if self._queue_manager:
             self._queue_manager.start()

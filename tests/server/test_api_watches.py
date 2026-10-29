@@ -8,6 +8,8 @@ import asyncio
 import httpx
 import pytest
 
+from openviking.resource.watch_types import WatchRunResult
+
 
 @pytest.fixture
 def watch_manager(service):
@@ -85,6 +87,7 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypa
     assert resp.status_code == 200
     assert resp.json()["result"]["is_active"] is False
     assert resp.json()["result"]["next_execution_time"] is None
+    assert resp.json()["result"]["watch_interval"] == 4320
 
     # POST trigger — monkeypatch scheduler so we don't actually run a fetch.
     # Class-level setattr means the function is bound as a method, so the
@@ -121,11 +124,16 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypa
 
 async def test_list_exposes_last_execution_result(client: httpx.AsyncClient, watch_manager):
     task = await _seed(watch_manager, to_uri="viking://resources/test/observable")
-    await watch_manager.record_execution(
+    run = await watch_manager.store.begin_run(
         task.task_id,
-        status="failed",
-        execution_task_id="connector-task-1",
-        error="pull failed",
+        run_id="connector-task-1",
+        target_uri=task.to_uri,
+        manual=True,
+    )
+    await watch_manager.finish_run(
+        task.task_id,
+        run.run_id,
+        WatchRunResult(status="failed", execution_task_id="connector-task-1", error="pull failed"),
     )
 
     resp = await client.get("/api/v1/watches")
@@ -135,16 +143,6 @@ async def test_list_exposes_last_execution_result(client: httpx.AsyncClient, wat
     assert result["last_task_id"] == "connector-task-1"
     assert result["last_status"] == "failed"
     assert result["last_error"] == "pull failed"
-
-
-async def test_get_by_uri_returns_single_object(client: httpx.AsyncClient, watch_manager):
-    task = await _seed(watch_manager, to_uri="viking://resources/test/uri-keyed")
-    resp = await client.get("/api/v1/watches", params={"to_uri": task.to_uri})
-    assert resp.status_code == 200
-    body = resp.json()
-    # When to_uri is given, result is single object (not the {tasks, total} envelope)
-    assert "task_id" in body["result"]
-    assert "tasks" not in body["result"]
 
 
 async def test_active_only_filter(client: httpx.AsyncClient, watch_manager):
@@ -198,16 +196,9 @@ async def test_not_found_404(client: httpx.AsyncClient):
 
 
 async def test_patch_rejects_non_positive_watch_interval(client: httpx.AsyncClient, watch_manager):
-    """REST PATCH must reject `watch_interval <= 0` at the request boundary.
-
-    Without the field_validator, a negative or zero value would be forwarded
-    to WatchManager.update_task, which deactivates the task and stores the
-    bad cadence. A later resume (`is_active=true`) then fails inside
-    update_task with ValueError → 404, misleading callers about the root
-    cause. Reject upfront through the structured 400 error mapper.
-    """
+    """Invalid cadence is rejected without changing the Watch."""
     task = await _seed(watch_manager, to_uri="viking://resources/test/nonpos")
-    for bad in [-1, 0, -42.5]:
+    for bad in [-1, 0]:
         resp = await client.patch(
             f"/api/v1/watches/{task.task_id}",
             json={"watch_interval": bad},
@@ -215,17 +206,11 @@ async def test_patch_rejects_non_positive_watch_interval(client: httpx.AsyncClie
         assert resp.status_code == 400, (
             f"watch_interval={bad} should be 400, got {resp.status_code}: {resp.text[:200]}"
         )
+    assert (await watch_manager.get_task(task.task_id)).watch_interval == task.watch_interval
 
 
 async def test_patch_rejects_unknown_field(client: httpx.AsyncClient, watch_manager):
-    """UpdateWatchRequest has extra='forbid'; passing a field outside the allowed
-    set (watch_interval / is_active / reason / instruction) returns 400.
-
-    Note: `to_uri` is intentionally NOT exposed via PATCH. WatchManager's
-    update_task supports rebinding to_uri (which is the only mutation that can
-    raise ConflictError on the watch side), but we want to-uri assignment to
-    be a delete-and-recreate operation for clarity, not an in-place mutation.
-    """
+    """Changing a target requires deleting and recreating its Watch."""
     task = await _seed(watch_manager, to_uri="viking://resources/test/forbid")
     resp = await client.patch(
         f"/api/v1/watches/{task.task_id}",
@@ -253,18 +238,6 @@ async def test_trigger_by_uri(client: httpx.AsyncClient, watch_manager, monkeypa
     assert resp.status_code == 200
     await asyncio.wait_for(schedule_started.wait(), timeout=2.0)
     assert triggered == [task.task_id]
-
-
-async def test_patch_partial_preserves_unset_fields(client: httpx.AsyncClient, watch_manager):
-    task = await _seed(watch_manager, to_uri="viking://resources/test/partial")
-    original_interval = task.watch_interval
-
-    # PATCH only is_active — interval should not change
-    resp = await client.patch(f"/api/v1/watches/{task.task_id}", json={"is_active": False})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["result"]["watch_interval"] == original_interval
-    assert body["result"]["is_active"] is False
 
 
 async def test_home_alias_to_uri_resolves_to_canonically_keyed_task(

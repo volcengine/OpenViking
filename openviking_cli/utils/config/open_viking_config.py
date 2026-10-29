@@ -379,9 +379,9 @@ class OpenVikingConfig(BaseModel):
     enable_watch_scheduler: bool = Field(
         default=True,
         description=(
-            "Whether to start the background WatchScheduler that periodically re-processes "
-            "watched resources. Disable on read-only replicas that share a writer's data "
-            "so only the writer runs the watch/refresh background loop."
+            "Whether this node may become the Watch scheduler leader that polls due "
+            "watches and settles their runs. Every node serves the Watch API either way; "
+            "disable on nodes that should never run the background watch/refresh loop."
         ),
     )
 
@@ -536,6 +536,28 @@ class OpenVikingConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_expiry_backend(self) -> "OpenVikingConfig":
         self._check_expiry_backend()
+        return self
+
+    @model_validator(mode="after")
+    def _validate_watch_store(self) -> "OpenVikingConfig":
+        # A MySQL Watch store is shared by several nodes; run occupancy is only
+        # exclusive when every node coordinates through the same PathLock backend.
+        if self.storage.watch_store.provider == "mysql":
+            if self.storage.agfs.pathlock.provider != "cache":
+                raise ValueError(
+                    "storage.watch_store.provider='mysql' requires "
+                    "storage.agfs.pathlock.provider='cache'"
+                )
+            if self.storage.task_store.provider != "mysql":
+                raise ValueError(
+                    "storage.watch_store.provider='mysql' requires "
+                    "storage.task_store.provider='mysql'"
+                )
+            if not self.storage.watch_store.params.get("credential_encryption_key"):
+                raise ValueError(
+                    "storage.watch_store.provider='mysql' requires "
+                    "storage.watch_store.params.credential_encryption_key"
+                )
         return self
 
     def _check_expiry_backend(self) -> None:

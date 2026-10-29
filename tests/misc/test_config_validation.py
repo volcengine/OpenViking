@@ -1301,3 +1301,30 @@ if __name__ == "__main__":
 
         traceback.print_exc()
         sys.exit(1)
+
+
+def _mysql_watch_store_config(watch_params):
+    mysql = {"user": "u", "password": "p", "database": "d"}
+    return {
+        "cache": {"provider": "redis", "params": {"endpoints": ["redis://redis:6379"]}},
+        "storage": {
+            "agfs": {"pathlock": {"provider": "cache"}},
+            "task_store": {"provider": "mysql", "params": mysql},
+            "watch_store": {"provider": "mysql", "params": {**mysql, **watch_params}},
+        },
+    }
+
+
+def test_watch_store_defaults_to_file_and_rejects_unknown_providers():
+    assert OpenVikingConfig.from_dict({}).storage.watch_store.provider == "file"
+    with pytest.raises(ValueError, match="'file' or 'mysql'"):
+        OpenVikingConfig.from_dict({"storage": {"watch_store": {"provider": "sqlite"}}})
+
+
+def test_mysql_watch_store_requires_credential_encryption_key():
+    with pytest.raises(ValueError, match="credential_encryption_key"):
+        OpenVikingConfig.from_dict(_mysql_watch_store_config({}))
+    config = OpenVikingConfig.from_dict(
+        _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
+    )
+    assert config.storage.watch_store.provider == "mysql"

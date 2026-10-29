@@ -57,7 +57,7 @@ from openviking.pyagfs.exceptions import (
     AGFSNotSupportedError,
     GitConcurrentCommitError,
 )
-from openviking.resource.uri_mutation_coordinator import uri_matches_prefix
+from openviking.resource.watch_types import uri_matches_prefix
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskSnapshot
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
@@ -2537,8 +2537,13 @@ class CompileVersions:
                 )
 
     @asynccontextmanager
-    async def before_remove(self, uri: str, ctx: RequestContext) -> AsyncIterator[Any]:
-        """Hold a managed descendant's content lease through deletion and metadata updates."""
+    async def before_remove(
+        self, uri: str, ctx: RequestContext, *, lease_ref: Optional[Dict[str, Any]] = None
+    ) -> AsyncIterator[Any]:
+        """Hold a managed descendant's content lease through deletion and metadata updates.
+
+        *lease_ref* is the caller's outer lease, which this lease extends.
+        """
         uri = uri.rstrip("/")
         await self._reject_running(ctx.account_id, uri)
         record = await self.owning_target(ctx.account_id, uri)
@@ -2551,7 +2556,7 @@ class CompileVersions:
             lock_uri = "viking://" + "/".join(parts[:-1])
         try:
             lease = await self._fs._async_agfs.pathlock_acquire_tree(
-                self._fs._uri_to_path(lock_uri, ctx=ctx)
+                self._fs._uri_to_path(lock_uri, ctx=ctx), owner_lease_ref=lease_ref
             )
         except LockAcquisitionError as exc:
             raise ResourceBusyError("Resource is being processed", uri=uri) from exc
