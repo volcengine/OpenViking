@@ -20,6 +20,7 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     storage_calls = []
     embedder = SimpleNamespace(is_sparse=False)
     config = SimpleNamespace(
+        service_name="openviking",
         default_account="default",
         default_user="default",
         agent_evolution=AgentEvolutionConfig(),
