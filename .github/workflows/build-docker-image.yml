@@ -26,7 +26,7 @@ jobs:
           - arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.repository == 'volcengine/OpenViking' && matrix.runner == 'ubuntu-24.04' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -34,11 +34,21 @@ jobs:
       id-token: write
 
     steps:
+      - name: Prepare self-hosted Docker build host
+        if: github.repository == 'volcengine/OpenViking' && matrix.runner == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ca-certificates git curl unzip xz-utils
+          docker info
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
 
       - name: Normalize image name
         id: image-name

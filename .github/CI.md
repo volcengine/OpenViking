@@ -18,25 +18,40 @@ file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
-The API workflow in `volcengine/OpenViking` automatically uses `ov-ci-runner`
-for its shared native build on PR, scheduled and release runs. This includes
-PRs whose head branch is in a fork. Add the custom label `ov-ci-runner` to the runner
-with that display name; the default `self-hosted`, `Linux` and `X64` labels alone
-cannot distinguish it from other machines. Manual runs also default to
-`native_runner=ov-ci-runner`; select `native_runner=github-hosted` to use a hosted
-build, or `linux_only=true` for a focused manual trial.
-Only the shared Linux native build uses labels
-`[self-hosted, Linux, X64, ov-ci-runner]`; preparation, API and cuVS jobs retain
-their GitHub-hosted runners.
+Linux x64 CI tests and builds in `volcengine/OpenViking` default to
+`[self-hosted, Linux, X64, ov-ci-runner]`: PR checks and their SDK/plugin tests,
+distribution builds, Rust CLI tests and musl cross-builds, API/cuVS/effect tests,
+Hermes/framework/host-compatibility tests, Gateway tests, CodeQL and docs builds,
+and the amd64 Docker image build. This includes PRs whose head branch is in a
+fork. Publishing, deployment and repository maintenance jobs retain their
+existing runners. macOS, Windows and native ARM matrix entries keep their
+original runners; matrix names and required check contexts stay unchanged.
+
+The exception is `P0 Memory Tests` in `oc2ov_test.yml`: it requires
+`[self-hosted, Linux, X64, openviking-ecs]` to use its original host and the
+services installed there. Add the custom label `openviking-ecs` to that runner
+and `ov-ci-runner` to the new build runner. Display names do not select runners,
+and generic Linux labels would allow the memory suite onto either machine.
+
+Manual API runs default to `native_runner=ov-ci-runner`; select
+`native_runner=github-hosted` to override only the shared native build, or
+`linux_only=true` for a focused manual trial.
 The host needs a running Docker daemon accessible to the runner service and
 outbound access to Ubuntu packages, GitHub, Rust and Python dependencies.
-The build runs in an Ubuntu 24.04 container to match the artifact consumers'
-glibc/platform; bundle validation remains mandatory.
+Ordinary self-hosted jobs run in Ubuntu 24.04 containers with explicit bootstrap
+dependencies; release wheels retain their Ubuntu 20.04 build container. API and
+cuVS consumers use the same Ubuntu 24.04 glibc/platform as the native bundle;
+bundle validation remains mandatory. Gateway Redis/kind tests and Docker image
+builds use the host Docker daemon directly and require an Ubuntu host with
+passwordless sudo. Gateway jobs use isolated Python environments, run-specific
+container/cluster names and unconditional cleanup of their own Docker resources.
 Workflows running in fork repositories use GitHub-hosted runners. Manual defaults
 retain the full API platform matrix. Automatic PR builds execute contributed code
 on the dedicated host; use a disposable runner without unrelated credentials or
 network access to production services.
-A missing label or offline runner leaves the native job queued; there is no automatic fallback.
+A missing label or offline runner leaves affected jobs queued; there is no
+automatic fallback. One runner service executes one job at a time, so multiple
+jobs and matrix entries queue on that service.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.
 Its check name stays `cuvs-tests / Lite Test (ubuntu-24.04, 3.11)`, matching the
@@ -72,6 +87,8 @@ actionlint .github/workflows/pr.yml .github/workflows/api_test.yml \
   .github/workflows/_build.yml .github/workflows/_test_lite.yml \
   .github/workflows/_test_full.yml .github/workflows/rust-cli.yml
 ```
+
+`.github/actionlint.yaml` registers both custom runner labels for validation.
 
 Compare wall time, runner queue time, compiler cache hits and native build counts
 on GitHub before quoting a speedup. A local workflow validation cannot measure

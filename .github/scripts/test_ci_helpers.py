@@ -145,6 +145,157 @@ class PlanTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    @staticmethod
+    def workflow_jobs(workflow):
+        text = (ROOT / ".github/workflows" / workflow).read_text().split("\njobs:\n", 1)[1]
+        return dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)", text, re.M | re.S))
+
+    @staticmethod
+    def evaluate_runner(expression, repository, platform="ubuntu-24.04", arch="x86_64"):
+        for variable, value in (
+            ("github.repository", repository),
+            ("matrix.os", platform),
+            ("matrix.arch", arch),
+        ):
+            expression = expression.replace(variable, repr(value))
+        expression = expression.replace("&&", "and").replace("||", "or")
+        expression = expression.replace("null", "None")
+        return eval(expression, {"__builtins__": {}, "fromJSON": json.loads})
+
+    def test_memory_suite_stays_on_original_ecs_host(self):
+        job = self.workflow_jobs("oc2ov_test.yml")["p0-tests"]
+        self.assertIn("runs-on: [self-hosted, Linux, X64, openviking-ecs]", job)
+        self.assertNotIn("ov-ci-runner", job)
+        self.assertNotIn("container:", job)
+
+    def test_linux_ci_uses_dedicated_runner_with_matching_container(self):
+        dedicated = ["self-hosted", "Linux", "X64", "ov-ci-runner"]
+        workflows = {
+            "pr.yml": (
+                "plugin-tests",
+                "openclaw-tests",
+                "plugin-versions",
+                "check-deps",
+                "sdk-python-tests",
+                "langchain-tests",
+            ),
+            "_build.yml": ("build-studio", "build-sdist", "build-linux"),
+            "rust-cli.yml": ("test", "build"),
+            "api_test.yml": ("prepare", "api-tests"),
+            "_test_lite.yml": ("test-lite",),
+            "_test_full.yml": ("test",),
+            "api_test_effect.yml": ("effect-tests",),
+            "hermes-plugin-tests.yml": ("hermes-plugin-tests", "quick-local-platforms"),
+            "python-agent-framework.yml": ("contracts",),
+            "framework-layout.yml": ("layout",),
+            "host-compat.yml": ("check",),
+            "_docs.yml": ("build",),
+            "_codeql.yml": ("analyze",),
+            "gateway-chart.yml": ("chart",),
+            "gateway.yml": ("test",),
+            "gateway-e2e.yml": ("kind",),
+        }
+        for workflow, job_ids in workflows.items():
+            jobs = self.workflow_jobs(workflow)
+            for job_id in job_ids:
+                job = jobs[job_id]
+                runner = re.search(r"    runs-on: \$\{\{ (.+) \}\}", job).group(1)
+                container = re.search(r"    container: (.+)", job)
+                with self.subTest(workflow=workflow, job=job_id):
+                    self.assertEqual(
+                        self.evaluate_runner(runner, "volcengine/OpenViking"), dedicated
+                    )
+                    hosted = self.evaluate_runner(runner, "example/OpenViking")
+                    self.assertIn(hosted, ("ubuntu-24.04", ["ubuntu-24.04"], ["ubuntu-latest"]))
+                    if workflow in ("gateway.yml", "gateway-e2e.yml"):
+                        self.assertIsNone(container)
+                        self.assertIn("docker info", job)
+                    elif job_id == "build-linux":
+                        self.assertEqual(container.group(1), "ubuntu:20.04")
+                        self.assertEqual(
+                            self.evaluate_runner(runner, "volcengine/OpenViking", arch="aarch64"),
+                            ["ubuntu-24.04-arm"],
+                        )
+                    else:
+                        expression = container.group(1)[3:-3].strip()
+                        self.assertEqual(
+                            self.evaluate_runner(expression, "volcengine/OpenViking"),
+                            "ubuntu:24.04",
+                        )
+                        self.assertIsNone(self.evaluate_runner(expression, "example/OpenViking"))
+                    if "matrix.os" in runner:
+                        for platform in (
+                            "ubuntu-24.04-arm",
+                            "macos-14",
+                            "macos-15-intel",
+                            "windows-latest",
+                            "windows-2025",
+                        ):
+                            self.assertEqual(
+                                self.evaluate_runner(runner, "volcengine/OpenViking", platform),
+                                platform,
+                            )
+                            if container:
+                                self.assertIsNone(
+                                    self.evaluate_runner(
+                                        expression, "volcengine/OpenViking", platform
+                                    )
+                                )
+
+    def test_gateway_cleanup_removes_only_current_run_resources(self):
+        for workflow, job_id, step_name, expected in (
+            (
+                "gateway.yml",
+                "test",
+                "Remove this run's Redis cluster containers",
+                ["rm -f ovgw-test-1-7000", "rm -f ovgw-test-1-7001", "rm -f ovgw-test-1-7002"],
+            ),
+            (
+                "gateway-e2e.yml",
+                "kind",
+                "Remove this run's kind cluster",
+                ["delete cluster --name ovgw-test-1"],
+            ),
+        ):
+            job = self.workflow_jobs(workflow)[job_id]
+            cleanup = job.split(f"- name: {step_name}\n", 1)[1]
+            self.assertIn("if: always()", cleanup)
+            script = cleanup.split("run:", 1)[1].strip()
+            if script.startswith("|"):
+                script = script[1:]
+            output = subprocess.check_output(
+                [
+                    "bash",
+                    "-c",
+                    "docker() { printf '%s\\n' \"$*\"; }; "
+                    "kind() { printf '%s\\n' \"$*\"; }; "
+                    "GATEWAY_REDIS_PREFIX=ovgw-test-1; KIND_CLUSTER_NAME=ovgw-test-1;\n" + script,
+                ],
+                text=True,
+            )
+            self.assertEqual(output.splitlines(), expected)
+
+    def test_docker_image_build_keeps_native_arm_runner(self):
+        job = self.workflow_jobs("build-docker-image.yml")["build-and-push-image"]
+        expression = re.search(r"    runs-on: \$\{\{ (.+) \}\}", job).group(1)
+        for repository, platform, expected in (
+            (
+                "volcengine/OpenViking",
+                "ubuntu-24.04",
+                ["self-hosted", "Linux", "X64", "ov-ci-runner"],
+            ),
+            ("volcengine/OpenViking", "ubuntu-24.04-arm", "ubuntu-24.04-arm"),
+            ("example/OpenViking", "ubuntu-24.04", "ubuntu-24.04"),
+        ):
+            self.assertEqual(
+                self.evaluate_runner(
+                    expression.replace("matrix.runner", "matrix.os"), repository, platform
+                ),
+                expected,
+            )
+        self.assertNotIn("container:", job)
+        self.assertIn("docker info", job)
+
     def test_dedicated_native_runner_is_automatic_with_manual_hosted_override(self):
         text = (ROOT / ".github/workflows/api_test.yml").read_text()
         block = text.split("\n  native-runtime:\n", 1)[1].split("\n  cuvs-tests:", 1)[0]

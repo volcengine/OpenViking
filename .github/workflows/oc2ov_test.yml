@@ -28,7 +28,8 @@ concurrency:
 jobs:
   p0-tests:
     name: P0 Memory Tests
-    runs-on: [self-hosted, linux, x64]
+    # Keep this service-dependent suite on its original ECS host.
+    runs-on: [self-hosted, Linux, X64, openviking-ecs]
     timeout-minutes: 100
     if: >-
       inputs.skip_tests != true &&
