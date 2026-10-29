@@ -88,6 +88,22 @@ Merge the following fields into your `ov.conf`; set `PRIMARY_API_KEY` and `BACKU
 
 Each credential can specify its own provider, model and connection fields; an omitted model uses the parent section's `model`. Embedding credentials must remain compatible with the parent model's vector dimension and input semantics. `query_planner.credentials` follows the VLM format. Rerank remains a single configuration and does not support a `credentials` array.
 
+To route an oversized VLM request from a small model to a model with a larger context, declare each model's total context window on its credential:
+
+```json
+{
+  "vlm": {
+    "model": "local-small",
+    "credentials": [
+      {"id": "local", "provider": "openai", "model": "local-small", "api_key": "${PRIMARY_API_KEY}", "context_window": 32768},
+      {"id": "hosted", "provider": "openai", "model": "hosted-large", "api_key": "${BACKUP_API_KEY}", "context_window": 200000}
+    ]
+  }
+}
+```
+
+When a provider reports an input-too-large error, OpenViking tries only later credentials with a declared window larger than the failed credential's. If the active credential failed only because of context size, a successful fallback applies to that request only; a later small request starts with the original active credential. Authentication, quota, and service failures retain their normal sticky failover behavior, including requests that also encounter context overflow on another credential. Without declarations, input-too-large remains fail-fast. The values are routing hints, not a guarantee that a provider accepts the request; tokenization and output reservations vary.
+
 ## Configuration Scope and Update Lifecycle
 
 OpenViking configuration has two layers:
@@ -781,7 +797,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
-| `credentials` | array | Ordered VLM credential/model list, with index 0 having the highest priority. Each item can override `provider`, `model`, `api_key`, `api_base`, `api_version`, `extra_headers`, `extra_request_body`, `reasoning_effort`, and `keepalive_expiry` |
+| `credentials` | array | Ordered VLM credential/model list, with index 0 having the highest priority. Each item can override `provider`, `model`, `api_key`, `api_base`, `api_version`, `extra_headers`, `extra_request_body`, `reasoning_effort`, `keepalive_expiry`, and `context_window` |
+| `credentials[].context_window` | int | Optional positive total context size in tokens for this credential. Enables request-scoped input-too-large fallback only to later credentials declaring a larger window |
 | `failback_timeout_seconds` | float | Time threshold for attempting a step back toward a higher-priority credential after failover (default: `600`) |
 | `failback_request_count` | int | Successful requests on a lower-priority credential before attempting a step back (default: `50`) |
 | `backup` | object | Optional backup VLM configuration (same shape as `vlm`) for automatic failover when the primary fails with retryable errors such as rate limits, `5xx` responses, or connection/timeout failures. Only one level of failover is supported &mdash; the backup itself cannot define a nested `backup` |

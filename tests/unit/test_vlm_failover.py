@@ -6,13 +6,216 @@ import time
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pydantic import ValidationError
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm.base import (
     FailoverVLM,
+    MultiCredentialVLM,
     PrimaryBackupSwitcher,
 )
 from openviking.models.vlm.token_usage import TokenUsageTracker
-from openviking_cli.utils.config.vlm_config import VLMConfig
+from openviking.utils.exceptions import AllCredentialsFailedError
+from openviking_cli.utils.config.vlm_config import VLMConfig, VLMCredential
+
+
+def _credential(name: str) -> Mock:
+    credential = Mock()
+    credential.model = name
+    credential.provider = "openai"
+    credential.temperature = 0.0
+    credential.max_retries = 0
+    credential.timeout = 30.0
+    credential.max_tokens = None
+    credential.thinking = False
+    return credential
+
+
+def _overflow() -> ModelError:
+    return ModelError(ModelErrorKind.INPUT_TOO_LARGE, "context size exceeded")
+
+
+class TestContextWindowFailover:
+    def test_larger_credential_serves_only_the_oversized_request(self):
+        small, large = _credential("small"), _credential("large")
+        small.get_completion.side_effect = [_overflow(), "small response"]
+        large.get_completion.return_value = "large response"
+        vlm = MultiCredentialVLM(
+            [small, large], ["small", "large"], context_windows=[32768, 200000]
+        )
+
+        assert vlm.get_completion("oversized") == "large response"
+        assert vlm.active_credential_id == "small"
+        assert vlm.get_completion("short") == "small response"
+        assert large.get_completion.call_count == 1
+
+    def test_undeclared_windows_keep_input_too_large_fail_fast(self):
+        small, large = _credential("small"), _credential("large")
+        error = _overflow()
+        small.get_completion.side_effect = error
+        vlm = MultiCredentialVLM([small, large], ["small", "large"])
+
+        with pytest.raises(ModelError) as raised:
+            vlm.get_completion("oversized")
+        assert raised.value is error
+        large.get_completion.assert_not_called()
+
+    @pytest.mark.parametrize("second_window", [None, 32768, 16000])
+    def test_missing_or_nonlarger_window_is_skipped(self, second_window):
+        small, other = _credential("small"), _credential("other")
+        error = _overflow()
+        small.get_completion.side_effect = error
+        vlm = MultiCredentialVLM(
+            [small, other],
+            ["small", "other"],
+            context_windows=[32768, second_window],
+        )
+
+        with pytest.raises(ModelError) as raised:
+            vlm.get_completion("oversized")
+        assert raised.value is error
+        other.get_completion.assert_not_called()
+
+    def test_skips_ineligible_credentials_to_reach_later_larger_one(self):
+        small, unknown, same, large = [
+            _credential(name) for name in ("small", "unknown", "same", "large")
+        ]
+        small.get_completion.side_effect = _overflow()
+        large.get_completion.return_value = "large response"
+        vlm = MultiCredentialVLM(
+            [small, unknown, same, large],
+            ["small", "unknown", "same", "large"],
+            context_windows=[32768, None, 32768, 200000],
+        )
+
+        assert vlm.get_completion("oversized") == "large response"
+        unknown.get_completion.assert_not_called()
+        same.get_completion.assert_not_called()
+
+    def test_second_overflow_raises_minimum_window_for_remaining_candidates(self):
+        small, medium, lower, large = [
+            _credential(name) for name in ("small", "medium", "lower", "large")
+        ]
+        small.get_completion.side_effect = _overflow()
+        medium.get_completion.side_effect = _overflow()
+        large.get_completion.return_value = "large response"
+        vlm = MultiCredentialVLM(
+            [small, medium, lower, large],
+            ["small", "medium", "lower", "large"],
+            context_windows=[32768, 64000, 48000, 200000],
+        )
+
+        assert vlm.get_completion("oversized") == "large response"
+        lower.get_completion.assert_not_called()
+        assert vlm.active_credential_id == "small"
+
+    def test_exhausted_larger_credential_reports_both_overflows(self):
+        small, medium, lower = [_credential(name) for name in ("small", "medium", "lower")]
+        small.get_completion.side_effect = _overflow()
+        medium.get_completion.side_effect = _overflow()
+        vlm = MultiCredentialVLM(
+            [small, medium, lower],
+            ["small", "medium", "lower"],
+            context_windows=[32768, 64000, 48000],
+        )
+
+        with pytest.raises(AllCredentialsFailedError) as raised:
+            vlm.get_completion("oversized")
+        assert [item[0] for item in raised.value.errors] == ["small", "medium"]
+        lower.get_completion.assert_not_called()
+
+    def test_unrelated_bad_request_does_not_try_larger_credential(self):
+        small, large = _credential("small"), _credential("large")
+        error = ModelError(ModelErrorKind.INVALID_REQUEST, "invalid argument")
+        small.get_completion.side_effect = error
+        vlm = MultiCredentialVLM(
+            [small, large], ["small", "large"], context_windows=[32768, 200000]
+        )
+
+        with pytest.raises(ModelError) as raised:
+            vlm.get_completion("invalid")
+        assert raised.value is error
+        large.get_completion.assert_not_called()
+
+    def test_authentication_failover_stays_sticky(self):
+        small, large = _credential("small"), _credential("large")
+        small.get_completion.side_effect = ModelError(
+            ModelErrorKind.AUTHENTICATION_ERROR, "bad key"
+        )
+        large.get_completion.return_value = "large response"
+        vlm = MultiCredentialVLM(
+            [small, large], ["small", "large"], context_windows=[32768, 200000]
+        )
+
+        assert vlm.get_completion("request") == "large response"
+        assert vlm.active_credential_id == "large"
+
+    @pytest.mark.asyncio
+    async def test_async_vision_tries_larger_credential_without_sticking(self):
+        small, large = _credential("small"), _credential("large")
+        small.get_vision_completion_async = AsyncMock(side_effect=_overflow())
+        large.get_vision_completion_async = AsyncMock(return_value="large response")
+        vlm = MultiCredentialVLM(
+            [small, large], ["small", "large"], context_windows=[32768, 200000]
+        )
+
+        assert await vlm.get_vision_completion_async("picture") == "large response"
+        assert vlm.active_credential_id == "small"
+
+    @pytest.mark.asyncio
+    async def test_stream_switches_before_first_item_but_does_not_stick(self):
+        small, large = _credential("small"), _credential("large")
+        vlm = MultiCredentialVLM(
+            [small, large], ["small", "large"], context_windows=[32768, 200000]
+        )
+
+        async def stream_factory(credential):
+            if credential is small:
+                raise _overflow()
+            yield "large item"
+
+        assert [item async for item in vlm.stream_with_failover(stream_factory)] == ["large item"]
+        assert vlm.active_credential_id == "small"
+
+    @pytest.mark.asyncio
+    async def test_stream_never_replays_after_an_item(self):
+        small, large = _credential("small"), _credential("large")
+        vlm = MultiCredentialVLM(
+            [small, large], ["small", "large"], context_windows=[32768, 200000]
+        )
+        seen = []
+
+        async def stream_factory(credential):
+            seen.append(credential)
+            yield "partial"
+            raise _overflow()
+
+        with pytest.raises(ModelError):
+            [item async for item in vlm.stream_with_failover(stream_factory)]
+        assert seen == [small]
+
+    @pytest.mark.asyncio
+    async def test_media_uses_larger_credential_without_changing_text_selection(self, tmp_path):
+        small, large = _credential("small"), _credential("large")
+        small.supports_media.return_value = large.supports_media.return_value = True
+        small.get_media_completion_async = AsyncMock(side_effect=_overflow())
+        large.get_media_completion_async = AsyncMock(return_value="large response")
+        media = tmp_path / "recording.wav"
+        media.write_bytes(b"audio")
+        vlm = MultiCredentialVLM(
+            [small, large], ["small", "large"], context_windows=[32768, 200000]
+        )
+
+        assert (
+            await vlm.get_media_completion_async(
+                prompt="describe",
+                media_path=media,
+                filename="recording.wav",
+                media_type="audio/wav",
+            )
+            == "large response"
+        )
+        assert vlm.active_credential_id == "small"
 
 
 class TestVLMBackupConfig:
@@ -151,6 +354,41 @@ class TestVLMBackupConfig:
 
         assert dict_a["max_tokens"] == 2048
         assert dict_b["max_tokens"] == 8192
+
+    def test_context_window_round_trips_and_rejects_invalid_values(self):
+        credential = VLMCredential(
+            id="local", provider="openai", model="small", context_window=32768
+        )
+        assert credential.model_dump()["context_window"] == 32768
+        assert VLMCredential.model_validate(credential.model_dump()).context_window == 32768
+        for invalid in (0, -1, True, 1.0, "32768"):
+            with pytest.raises(ValidationError):
+                VLMCredential(context_window=invalid)
+
+    def test_context_windows_reach_multi_credential_runtime(self, monkeypatch):
+        from openviking.models.vlm import VLMFactory
+
+        monkeypatch.setattr(VLMFactory, "create", lambda _config: Mock())
+        config = VLMConfig(
+            model="parent",
+            credentials=[
+                VLMCredential(
+                    id="local",
+                    provider="openai",
+                    model="small",
+                    api_key="local-key",
+                    context_window=32768,
+                ),
+                VLMCredential(
+                    id="remote",
+                    provider="openai",
+                    model="large",
+                    api_key="remote-key",
+                    context_window=200000,
+                ),
+            ],
+        )
+        assert config.get_vlm_instance()._context_windows == [32768, 200000]
 
 
 class TestLegacyProvidersDictMigration:

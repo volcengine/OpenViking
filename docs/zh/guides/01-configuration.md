@@ -88,6 +88,22 @@ Redis 命名空间。OTel 的 `service_name` 显式配置时保持原值，省�
 
 每项凭据可以独立指定 provider、模型及连接字段；未指定模型时使用父级的 `model`。Embedding 凭据必须与父级模型的向量维度和输入语义兼容。`query_planner.credentials` 使用与 VLM 相同的格式。Rerank 仍使用单配置，不支持 `credentials` 数组。
 
+如需在小模型上下文超限时切换到更大上下文的模型，可在各 VLM 凭据上声明模型的总上下文窗口：
+
+```json
+{
+  "vlm": {
+    "model": "local-small",
+    "credentials": [
+      {"id": "local", "provider": "openai", "model": "local-small", "api_key": "${PRIMARY_API_KEY}", "context_window": 32768},
+      {"id": "hosted", "provider": "openai", "model": "hosted-large", "api_key": "${BACKUP_API_KEY}", "context_window": 200000}
+    ]
+  }
+}
+```
+
+当 provider 返回输入超限错误时，OpenViking 仅尝试后续声明了更大窗口的凭据。如果活动凭据仅因上下文超限而失败，成功切换只对当前请求生效，后续短请求仍从原先的活动凭据开始。认证、配额和服务故障仍按原有规则保持切换，包括同一次请求中其他凭据也发生上下文超限的情形。未声明窗口时，输入超限仍直接失败。声明值仅用于路由判断，不能保证请求一定被接受；不同模型的分词方式和输出预留可能不同。
+
 ## 配置范围与生效方式
 
 OpenViking 的配置分为两个层级：
@@ -774,7 +790,8 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
-| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body`、`reasoning_effort` 和 `keepalive_expiry` |
+| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body`、`reasoning_effort`、`keepalive_expiry` 和 `context_window` |
+| `credentials[].context_window` | int | 可选的正整数，表示该凭据的总上下文 token 数。仅当后续凭据声明的窗口更大时，才对当前输入超限请求尝试切换 |
 | `failback_timeout_seconds` | float | 切换到低优先级 credential 后，尝试逐级切回的时间阈值（默认：`600`） |
 | `failback_request_count` | int | 低优先级 credential 成功处理多少次请求后尝试逐级切回（默认：`50`） |
 | `backup` | object | 可选的备用 VLM 配置（结构与 `vlm` 相同），当主 VLM 遇到限流、`5xx`、超时或连接失败等可重试错误时自动切换。仅支持 1 层备用 &mdash; 备用 VLM 本身不能再嵌套 `backup` |

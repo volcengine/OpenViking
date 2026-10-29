@@ -340,6 +340,39 @@ def test_bot_credentials_override_or_inherit_agent_max_tokens(tmp_path, monkeypa
     assert [vlm.max_tokens for vlm in provider._vlm._vlm_instances] == [2048, 8192]
 
 
+def test_bot_credentials_preserve_declared_context_windows(tmp_path, monkeypatch):
+    config = _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "bot": {
+                "agents": {
+                    "credentials": [
+                        {
+                            "id": "local",
+                            "provider": "openai",
+                            "model": "local-small",
+                            "api_key": "local-key",
+                            "context_window": 32768,
+                        },
+                        {
+                            "id": "hosted",
+                            "provider": "openai",
+                            "model": "hosted-large",
+                            "api_key": "hosted-key",
+                            "context_window": 200000,
+                        },
+                    ]
+                }
+            }
+        },
+    )
+
+    provider = _make_provider(config)
+    assert isinstance(provider._vlm, MultiCredentialVLM)
+    assert provider._vlm._context_windows == [32768, 200000]
+
+
 def test_explicit_litellm_provider_uses_vlm_adapter(tmp_path, monkeypatch):
     config = _write_config(
         tmp_path,

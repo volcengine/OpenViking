@@ -101,6 +101,15 @@ class VLMCredential(BaseModel):
             "Overrides the parent max_tokens when set."
         ),
     )
+    context_window: Optional[int] = RuntimeField(
+        default=None,
+        gt=0,
+        strict=True,
+        description=(
+            "Declared total context window for this credential. "
+            "A request that exceeds it may try a later credential with a larger declared window."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -683,6 +692,7 @@ class VLMConfig(BaseModel):
                     self._vlm_instance = MultiCredentialVLM(
                         vlm_instances,
                         credential_ids=[c.id for c in self.credentials],
+                        context_windows=[c.context_window for c in self.credentials],
                         failback_timeout_seconds=self.failback_timeout_seconds,
                         failback_request_count=self.failback_request_count,
                     )
