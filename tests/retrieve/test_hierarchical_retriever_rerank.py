@@ -177,13 +177,14 @@ async def test_rerank_scores_preserves_fallbacks_for_empty_documents(monkeypatch
         rerank_config=_config(),
     )
 
-    scores = await retriever._rerank_scores(
+    rerank = await retriever._rerank_scores(
         "hello",
         ["root A", "", "   ", "root D"],
         [0.2, 0.8, 0.7, 0.4],
     )
 
-    assert scores == [0.95, 0.8, 0.7, 0.05]
+    assert rerank.scores == [0.95, 0.8, 0.7, 0.05]
+    assert rerank.reranked == [True, False, False, True]
     assert fake_client.calls == [("hello", ["root A", "root D"])]
 
 
@@ -231,9 +232,9 @@ async def test_rerank_scores_bounds_oversized_documents_and_preserves_tail(
         rerank_config=RerankConfig(ak="ak", sk="sk", max_input_tokens=128),
     )
 
-    scores = await retriever._rerank_scores("query", [oversized_document], [0.2])
+    rerank = await retriever._rerank_scores("query", [oversized_document], [0.2])
 
-    assert scores == [0.95]
+    assert rerank.scores == [0.95]
     rerank_query, rerank_documents = fake_client.calls[0]
     bounded_document = rerank_documents[0]
     assert estimate_text_tokens(rerank_query) + estimate_text_tokens(bounded_document) <= 128
@@ -289,6 +290,96 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_fails(monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, [0.9], RuntimeError("provider unavailable")])
+async def test_rerank_failure_fallback_does_not_apply_rerank_threshold(monkeypatch, failure):
+    class FailedRerankClient(FakeRerankClient):
+        def rerank_batch(self, query, documents):
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: FailedRerankClient([]),
+    )
+    storage = DummyStorage(
+        [
+            _result("viking://resources/high", 0.8, abstract="high"),
+            _result("viking://resources/low", 0.05, abstract="low"),
+        ]
+    )
+    retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=_config())
+
+    result = await retriever.retrieve(_query(), ctx=_ctx(), limit=5)
+    explicit = await retriever.retrieve(_query(), ctx=_ctx(), limit=5, score_threshold=0.5)
+
+    # Vector scores are not on the reranker's scale, so rerank.threshold must not filter them.
+    assert [ctx.score for ctx in result.matched_contexts] == [0.8, 0.05]
+    assert [ctx.score for ctx in explicit.matched_contexts] == [0.8]
+
+
+@pytest.mark.asyncio
+async def test_rerank_threshold_filters_only_model_scores(monkeypatch):
+    fake_client = FakeRerankClient([0.05, 0.9, 0.95])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+    storage = DummyStorage(
+        [
+            _result("viking://resources/demoted", 0.9, abstract="demoted"),
+            _result("viking://resources/relevant", 0.8, abstract="relevant"),
+            _result("viking://resources/no-abstract", 0.05, abstract=""),
+            _result("viking://resources/promoted", 0.01, abstract="promoted"),
+        ]
+    )
+    retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=_config())
+
+    result = await retriever.retrieve(_query(), ctx=_ctx(), limit=5)
+
+    assert fake_client.calls == [("hello", ["demoted", "relevant", "promoted"])]
+    # The empty abstract was never reranked, so its vector score skips rerank.threshold.
+    assert [(ctx.uri, ctx.score) for ctx in result.matched_contexts] == [
+        ("viking://resources/promoted", 0.95),
+        ("viking://resources/relevant", 0.9),
+        ("viking://resources/no-abstract", 0.05),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rerank_config, mode",
+    [
+        (RerankConfig(), None),
+        (_config(), RetrieverMode.QUICK),
+        (RerankConfig(ak="ak", sk="sk", threshold=0.8), RetrieverMode.QUICK),
+    ],
+)
+async def test_quick_path_does_not_apply_rerank_threshold(monkeypatch, rerank_config, mode):
+    fake_client = FakeRerankClient([])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+    storage = DummyStorage(
+        [
+            _result("viking://resources/high", 0.9, abstract="high"),
+            _result("viking://resources/low", 0.05, abstract="low"),
+        ]
+    )
+    retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=rerank_config)
+
+    result = await retriever.retrieve(_query(), ctx=_ctx(), limit=5, mode=mode)
+    explicit = await retriever.retrieve(
+        _query(), ctx=_ctx(), limit=5, mode=mode, score_threshold=0.5
+    )
+
+    assert fake_client.calls == []
+    assert [ctx.score for ctx in result.matched_contexts] == [0.9, 0.05]
+    assert [ctx.score for ctx in explicit.matched_contexts] == [0.9]
+
+
+@pytest.mark.asyncio
 async def test_rerank_scores_runs_blocking_client_off_event_loop():
     class SlowRerankClient:
         def __init__(self):
@@ -315,7 +406,7 @@ async def test_rerank_scores_runs_blocking_client_off_event_loop():
         await asyncio.sleep(0.01)
         ticks += 1
 
-    assert await rerank_task == [0.9]
+    assert (await rerank_task).scores == [0.9]
     assert fake_client.thread_id != threading.get_ident()
     assert ticks >= 3
 

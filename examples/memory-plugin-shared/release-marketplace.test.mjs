@@ -521,7 +521,7 @@ test("the docs download tree holds what the installer fetches, under the address
     const channels = JSON.parse(readFileSync(join(out, "releases", "latest", "channels.json"), "utf8"));
     assert.equal(channels.schema, 1);
     assert.deepEqual(Object.keys(channels.harnesses).sort(), [
-      "claude", "codex", "cursor", "dsh", "kimicode", "opencode", "pi", "trae", "trae-cli", "trae-cn", "zcode",
+      "claude", "codebuddy", "codex", "cursor", "dsh", "kimicode", "opencode", "pi", "trae", "trae-cli", "trae-cn", "zcode",
     ]);
     assert.deepEqual(channels.harnesses.codex, {
       version,

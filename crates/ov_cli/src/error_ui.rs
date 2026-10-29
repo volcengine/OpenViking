@@ -269,14 +269,17 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
         ]),
         Error::Network(message) => ErrorReport::new(
             copy(language, "Connection Error", "连接错误"),
-            copy(
-                language,
-                "Could not reach OpenViking. The server may be offline, or this config points to the wrong URL.",
-                "无法连接 OpenViking。服务器可能未启动，或当前配置指向了错误的 URL。",
+            format!(
+                "{} {}",
+                copy(
+                    language,
+                    "Could not reach OpenViking. Check the detail first, then whether the server is running and the URL is correct.",
+                    "无法连接 OpenViking。请先查看详情，再确认服务器是否运行、URL 是否正确。"
+                ),
+                detail_line(language, message),
             ),
         )
         .with_command(command)
-        .with_detail(message)
         .with_actions(vec![
             ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
             ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
@@ -528,12 +531,6 @@ fn system_help_command(program: &str, tokens: &[&str]) -> String {
         Some("crypto") => match tokens.get(3).copied() {
             Some("init-key") => format!("{program} system crypto init-key --help"),
             _ => format!("{program} system crypto --help"),
-        },
-        Some("backend") => match tokens.get(3).copied() {
-            Some("sync-status" | "sync-retry") => {
-                format!("{program} system backend {} --help", tokens[3])
-            }
-            _ => format!("{program} system backend --help"),
         },
         Some("wait" | "status" | "health" | "consistency") => {
             format!("{program} system {} --help", tokens[2])
@@ -1186,9 +1183,29 @@ Usage: ov config [OPTIONS] [COMMAND]
 
         assert!(rendered.contains("Connection Error"));
         assert!(rendered.contains("Could not reach OpenViking"));
+        assert!(rendered.contains("connection refused"));
         assert!(rendered.contains("ov config validate"));
         assert!(rendered.contains("ov health"));
         assert!(rendered.contains("ov config switch"));
+    }
+
+    #[test]
+    fn network_error_card_shows_tls_cause_without_guessing_offline() {
+        let error = Error::Network("invalid peer certificate: UnknownIssuer".to_string());
+        let report = report_for_runtime_error("ov health", &error);
+        let rendered = strip_ansi(&render_report(&report, false));
+        let text = rendered
+            .replace('│', " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(
+            text.contains("invalid peer certificate: UnknownIssuer"),
+            "{rendered}"
+        );
+        assert!(!text.contains("offline"));
+        assert!(!text.contains("wrong URL"));
     }
 
     #[test]

@@ -35,7 +35,7 @@ describe('gateway translations', () => {
   })
 
   it('label the sidebar entry in both languages', () => {
-    expect(en.appShell.footer.gateway).toBe('OpenViking Gateway')
+    expect(en.appShell.footer.gateway).toBe('Gateway')
     expect(zhCN.appShell.footer.gateway).toBe('OpenViking 网关')
   })
 

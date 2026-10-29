@@ -13,11 +13,15 @@ from .tool_protocols.common import PREFIX
 from .windows import native_definitions
 
 # Only what the gateway adds to MCP: the arguments a notice names, in order of
-# preference, and the attachment upload hook with its usage note.
+# preference, the attachment upload hook, and usage notes.
 TOOL_OVERRIDES = {
     "find": {"notice": ("query",)},
     "search": {"notice": ("query",)},
     "read": {"notice": ("uris",)},
+    "download": {
+        "notice": ("uri",),
+        "description": " Run the returned curl command with the client's shell tool.",
+    },
     "list": {"notice": ("uri",)},
     "write": {"notice": ("uri",)},
     "add_resource": {

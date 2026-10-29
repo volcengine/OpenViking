@@ -13,8 +13,8 @@ from openviking_cli.exceptions import InvalidURIError
     "uri",
     [
         "viking://resources/docs",
-        "viking://session/s1",
         "viking://agent/skills/demo/SKILL.md",
+        "viking://system/memory",
         "viking://",
         "viking://~",
         "viking://~/memories/x",

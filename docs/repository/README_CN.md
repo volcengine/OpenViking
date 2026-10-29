@@ -11,7 +11,7 @@
 
 [English](../../README.md) / 中文 / [日本語](README_JA.md)
 
-<a href="https://www.openviking.ai">官网</a> · <a href="https://openviking.ai/studio">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://docs.openviking.ai/">文档</a> · <a href="https://blog.openviking.ai/">博客</a>
+<a href="https://www.openviking.ai">官网</a> · <a href="https://studio.openviking.ai">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://docs.openviking.ai/">文档</a> · <a href="https://blog.openviking.ai/">博客</a>
 
 <p>
   <a href="https://github.com/volcengine/OpenViking/releases"><img src="https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square" alt="release"></a>
@@ -45,14 +45,14 @@ OpenViking 是面向 AI 智能体的开源上下文数据库——用一个文�
 
 大多数 Agent 记忆是个黑盒：文本进去，向量出来，没人看得到里面到底存了什么。OpenViking 换一种做法，把上下文组织成 `viking://` 虚拟文件系统。Agent 像操作文件一样用 `ls`、`tree`、`read`、`write`、`grep` 浏览和修改；你也可以随时打开目录，查看和编辑 Agent 记住的内容。每个目录都带有自动生成的摘要，Agent 先扫摘要，再决定读哪些内容。
 
-<a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
+<a href="https://studio.openviking.ai" target="_blank" rel="noopener noreferrer">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-playground-dark.png">
-    <img src="../images/studio-playground.png" alt="OpenViking Studio：浏览上下文，体验语义检索">
+    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-filesystem-dark.png">
+    <img src="../images/studio-filesystem.png" alt="OpenViking Studio 文件系统：浏览个人记忆与资源">
   </picture>
 </a>
 
-[在线体验 OpenViking Studio](https://openviking.ai/studio)，无需安装。 [自行部署 Web Studio](../../web-studio/README_CN.md)。
+[在线体验 OpenViking Studio](https://studio.openviking.ai)，无需安装。 [自行部署 Web Studio](../../web-studio/README_CN.md)。
 
 ## 为什么用 OpenViking
 
@@ -109,6 +109,8 @@ viking://resources/my_project/
 ## 评测结果
 
 OpenViking 0.3.22 的评测覆盖长对话用户记忆（LoCoMo）和多轮智能体任务（tau2-bench）。完整结果和实验设置（含知识库问答）见[评测报告](https://blog.openviking.ai/post/openviking-benchmark-results/)，复现脚本在 [./benchmark](../../benchmark)。
+
+自己运行评测，请从 [RAG 与 Memory 评测指南](../../benchmark/README_zh.md)开始：以 VikingBot 为日常记忆评测主入口，另列官网 LoCoMo 复现、mem0 prompt 对照和 RAG 评测，避免用 RAG 流程评测记忆。
 
 记忆评测使用 [Doubao 2.0 Pro](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-seed-2-0-pro) 作为 VLM，使用 [Doubao-embedding-vision-251215](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-embedding-vision) 作为 Embedding 模型。
 
@@ -311,6 +313,8 @@ Codex 首次启动会停在 `Hooks need review`，选 `Trust all and continue`�
 
 详细接入方式请参考 [Integrations](https://openviking.ai/integrations)。
 
+框架应用请参考 [LangChain/LangGraph 和 Microsoft Agent Framework 集成包](../../integrations/frameworks/README.md)，其中也介绍了如何添加其他框架适配器。
+
 ## 桌面客户端（Beta）
 
 桌面客户端是面向 macOS 和 Windows x64 的控制台（Beta），用于配置支持的本地 Agent 接入、查看会话中的召回与捕获事件，并将本地记忆和技能同步到 OpenViking。
@@ -391,6 +395,7 @@ ov chat   # 在另一个终端运行
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI 原生的分布式文件系统
 - [loopx](https://github.com/huangruiteng/loopx) - 轻量级循环工程状态内核
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - 与用户共同成长的智能体
+- [NVIDIA cuVS](https://github.com/NVIDIA/cuvs) - GPU 加速的向量搜索与聚类库
 
 合作提议请[提交 issue](https://github.com/volcengine/OpenViking/issues)。
 
@@ -417,4 +422,5 @@ OpenViking 各组件采用不同的许可证：
 - **主项目**：AGPLv3——详见 [LICENSE](../../LICENSE)
 - **crates/ov\_cli**：Apache 2.0——详见 [LICENSE](../../crates/LICENSE)
 - **examples**：Apache 2.0——详见 [LICENSE](../../examples/LICENSE)。`examples/hermes-plugin` 中的 Hermes 插件保留其 [MIT 许可证](../../examples/hermes-plugin/LICENSE)。
+- **integrations/frameworks**：LangChain/LangGraph 适配器采用 AGPLv3，Microsoft Agent Framework 适配器采用 MIT，详见各包的 `LICENSE`；可运行示例保留 Apache 2.0，详见各包的 `examples/LICENSE`。
 - **third\_party**：各三方项目保留其原有协议

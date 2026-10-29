@@ -50,12 +50,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install build dependencies
-        working-directory: examples/langchain
+        working-directory: integrations/frameworks/langchain
         run: python -m pip install build setuptools setuptools-scm twine wheel
 
       - name: Resolve package version
         id: version
-        working-directory: examples/langchain
+        working-directory: integrations/frameworks/langchain
         run: |
           PACKAGE_VERSION=$(python -m setuptools_scm)
           echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
@@ -74,18 +74,18 @@ jobs:
           fi
 
       - name: Build distributions
-        working-directory: examples/langchain
+        working-directory: integrations/frameworks/langchain
         run: python -m build
 
       - name: Validate distributions
-        working-directory: examples/langchain
+        working-directory: integrations/frameworks/langchain
         run: python -m twine check dist/*
 
       - name: Upload distributions
         uses: actions/upload-artifact@v7
         with:
           name: langchain-openviking-distributions
-          path: examples/langchain/dist/*
+          path: integrations/frameworks/langchain/dist/*
 
   publish-testpypi:
     name: Publish to TestPyPI

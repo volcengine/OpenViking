@@ -29,7 +29,11 @@ from openviking.session.memory.dataclass import (
     SkippedMemoryOperation,
     StoredLink,
 )
-from openviking.session.memory.memory_updater import MemoryUpdateResult
+from openviking.session.memory.memory_updater import (
+    MemoryReadError,
+    MemoryUpdateError,
+    MemoryUpdateResult,
+)
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
@@ -717,87 +721,12 @@ async def test_train_from_extracted_cases_skips_experience_updates_when_not_allo
 
 
 @pytest.mark.asyncio
-async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollouts(monkeypatch):
-    seen_rollouts = []
-    rollout_messages = _messages()
-
-    class FakeTrainer:
-        policy_set = ExperienceSet(
-            root_uri="viking://user/u/memories/experiences",
-            policies=[],
-        )
-
-    class FakeAnalyzer:
-        async def analyze(self, rollout, context):
-            del context
-            seen_rollouts.append(rollout)
-            return RolloutAnalysis(
-                evaluation=RubricEvaluation(
-                    passed=True,
-                    score=1.0,
-                    criterion_results=[],
-                    feedback=[],
-                ),
-                trajectories=[],
-                gradients=[],
-            )
-
-    async def fake_estimate_exp_gradients(self, *args, **kwargs):
-        return []
-
-    monkeypatch.setattr(
-        "openviking.session.compressor_v3.get_viking_fs",
-        lambda: SimpleNamespace(ls=AsyncMock(return_value=[])),
-    )
-    monkeypatch.setattr(
-        "openviking.session.compressor_v3.get_streaming_policy_trainer",
-        AsyncMock(return_value=FakeTrainer()),
-    )
-    monkeypatch.setattr(
-        "openviking.session.train.components.gradient_estimator.ExperienceGradientEstimator.estimate",
-        fake_estimate_exp_gradients,
-    )
-
-    case_a = _training_case()
-    case_b = Case(
-        name="case_b",
-        task_signature="Handle a second extracted case.",
-        input={"summary": "second case"},
-        rubric=case_a.rubric,
-    )
-
-    compressor = SessionCompressorV3(
-        vikingdb=None,
-        rollout_analyzer=FakeAnalyzer(),
-        streaming_trainer_config=StreamingPolicyTrainerConfig(
-            max_wait_seconds=60,
-            max_gradients_per_update=8,
-        ),
-    )
-
-    result = await compressor.train_from_extracted_cases(
-        cases=[case_a, case_b],
-        messages=rollout_messages,
-        ctx=_ctx(),
-        session_id="s1",
-    )
-
-    assert result["case_count"] == 2
-    assert result["submitted"] == 2
-    assert [rollout.case.name for rollout in seen_rollouts] == [
-        "duplicate_booking",
-        "case_b",
-    ]
-    assert [rollout.messages for rollout in seen_rollouts] == [
-        rollout_messages,
-        rollout_messages,
-    ]
-
-
-@pytest.mark.asyncio
-async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
+@pytest.mark.parametrize("apply_error", [False, True, "links"])
+async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, apply_error):
     applied_operations = []
     trained_cases = []
+    uri = _case_operation().uris[0]
+    link = StoredLink(from_uri=uri, to_uri=uri + ".other.md", link_type="related_to")
 
     class DummyRegistry:
         async def initialize_memory_files(self, ctx, allowed_memory_types=None):
@@ -811,6 +740,7 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
                     upsert_operations=[_case_operation()],
                     delete_file_contents=[],
                     errors=[],
+                    resolved_links=[link] if apply_error == "links" else [],
                 ),
                 [],
             )
@@ -819,10 +749,17 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
         async def submit(self, request):
             applied_operations.append(request.operations)
             result = MemoryUpdateResult()
-            result.add_written(_case_operation().uris[0])
+            if apply_error:
+                result.add_error(uri, MemoryReadError(uri, TimeoutError("read timeout")))
+            else:
+                result.add_written(uri)
             return SimpleNamespace(operations=request.operations, apply_result=result)
 
-    compressor = SessionCompressorV3(vikingdb=None)
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=SimpleNamespace(),
+        vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace())),
+    )
     compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
 
     async def fake_train_from_extracted_cases(**kwargs):
@@ -840,15 +777,26 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
         lambda: DummyRegistry(),
     )
     monkeypatch.setattr(
+        "openviking.session.memory.account_templates.resolve_account_memory_registry",
+        AsyncMock(return_value=DummyRegistry()),
+    )
+    monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_memory_updater",
         AsyncMock(return_value=FakeStreamingUpdater()),
     )
 
-    contexts = await compressor.extract_long_term_memories(
+    extraction = compressor.extract_long_term_memories(
         messages=_messages(),
         ctx=_ctx(),
         allowed_memory_types={"cases", "profile", "trajectories", "experiences"},
+        strict_extract_errors=True,
     )
+    if apply_error:
+        with pytest.raises(MemoryUpdateError):
+            await extraction
+        assert trained_cases == []
+        return
+    contexts = await extraction
 
     assert len(applied_operations) == 1
     assert applied_operations[0].upsert_operations[0].memory_type == "cases"

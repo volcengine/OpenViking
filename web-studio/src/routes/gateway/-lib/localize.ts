@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next'
 
 import { toGatewayError } from './api'
+import type { GatewayKey } from './api'
 
 /** `t` from `useTranslation('gateway')`. */
 export type Translate = TFunction<'gateway'>
@@ -17,6 +18,7 @@ export const DEGRADATIONS = [
   'hidden_tool_history_unavailable',
   'hidden_reply_without_anchor',
   'capture_parse_failure',
+  'revocation_check_unavailable',
 ] as const
 
 function label(t: Translate, group: string, value: string): string {
@@ -31,6 +33,10 @@ export const vendorLabel = (t: Translate, vendor: string) =>
 
 export const authModeLabel = (t: Translate, mode: string) =>
   label(t, 'authMode', mode)
+
+/** OpenViking API keys used directly have no name of their own. */
+export const keyName = (t: Translate, key: GatewayKey) =>
+  key.source === 'openviking' ? t('keys.openviking.name') : key.name
 
 /** Request type: new message, tool step, housekeeping, memory sync… */
 export const kindLabel = (t: Translate, kind: string) => label(t, 'kind', kind)
@@ -54,6 +60,7 @@ export const windowReminderLabel = (t: Translate, reminder: string) =>
 
 const OPENVIKING_REASONS: Record<string, string> = {
   openviking_unavailable: 'unavailable',
+  openviking_unreachable: 'unavailable',
   openviking_http_401: 'unauthorized',
   openviking_version_mismatch: 'versionMismatch',
   openviking_identity_missing: 'identityMissing',
@@ -117,34 +124,16 @@ export function degradationInfo(t: Translate, reason: string): DegradationInfo {
   }
 }
 
-/** Gateway messages the UI recognizes, mapped to friendlier copy. */
-const ERROR_MESSAGES: Array<[RegExp, string]> = [
-  [/^Revoke or update dependent keys/i, 'errors.inUse'],
-  [/^Invalid gateway configuration/i, 'errors.invalidSettings'],
-  [/^Invalid key configuration/i, 'errors.invalidKeyRequest'],
-  [/^Unknown context policy/i, 'errors.unknownProfile'],
-  [/^Unknown upstream/i, 'errors.unknownUpstream'],
-  [/^Gateway key not found/i, 'errors.keyNotFound'],
-  [/^Gateway session not found/i, 'errors.sessionNotFound'],
-  [/^Upstream API key is missing/i, 'errors.upstreamKeyMissing'],
-  [/subscription OAuth credentials/i, 'errors.subscriptionKey'],
-  [
-    /^OpenViking key belongs to another account/i,
-    'enums.openviking.otherAccount',
-  ],
-]
-
-/**
- * A user-facing message for anything a gateway call threw: known server
- * messages and OpenViking reasons first, then a summary by error category,
- * and the raw message when nothing more specific is known.
- */
+/** Stable API reason codes drive copy; raw detail is a fallback for unknown errors. */
 export function gatewayErrorMessage(t: Translate, error: unknown): string {
-  const { detail, reason } = toGatewayError(error)
-  const known = ERROR_MESSAGES.find(([pattern]) => pattern.test(detail))
-  if (known) return t(known[1])
-  const openViking = openVikingReason(t, detail)
+  const failure = toGatewayError(error)
+  const { detail, reason } = failure
+  if (reason === 'other_account') return t('enums.openviking.otherAccount')
+  const openViking = openVikingReason(t, reason)
   if (openViking) return openViking
   if (reason === 'other') return detail || t('errors.reasons.other')
-  return t(`errors.reasons.${reason}`)
+  return t(`errors.reasons.${reason}`, {
+    count: failure.keyCount,
+    defaultValue: detail || t('errors.reasons.other'),
+  })
 }

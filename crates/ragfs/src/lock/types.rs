@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::path::normalize_logical_path;
+
 /// Lock kind: exact (single path) or tree (path + descendants).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PathLockKind {
@@ -106,31 +108,25 @@ impl PathLockLease {
 
 /// Return true when a held request covers another requested operation.
 fn request_is_covered_by(held: &PathLockRequest, request: &PathLockRequest) -> bool {
+    let (Ok(held_path), Ok(request_path)) = (
+        normalize_logical_path(&held.path),
+        normalize_logical_path(&request.path),
+    ) else {
+        return false;
+    };
     match (held.kind, request.kind) {
-        (PathLockKind::Exact, PathLockKind::Exact) => normalize_path(&held.path) == normalize_path(&request.path),
-        (PathLockKind::Tree, _) => path_is_self_or_descendant(&request.path, &held.path),
+        (PathLockKind::Exact, PathLockKind::Exact) => held_path == request_path,
+        (PathLockKind::Tree, _) => path_is_self_or_descendant(request_path, held_path),
         (PathLockKind::Exact, PathLockKind::Tree) => false,
     }
 }
 
-/// Normalize a path for simple lock coverage checks.
-fn normalize_path(path: &str) -> String {
-    let trimmed = path.trim_end_matches('/');
-    if trimmed.is_empty() {
-        "/".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Return true when `path` is equal to or under `ancestor`.
+/// Return true when a normalized `path` is equal to or under `ancestor`.
 fn path_is_self_or_descendant(path: &str, ancestor: &str) -> bool {
-    let path = normalize_path(path);
-    let ancestor = normalize_path(ancestor);
     path == ancestor
         || ancestor == "/"
         || path
-            .strip_prefix(&ancestor)
+            .strip_prefix(ancestor)
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 

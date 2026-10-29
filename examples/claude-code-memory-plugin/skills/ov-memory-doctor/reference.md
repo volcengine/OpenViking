@@ -83,10 +83,9 @@ That file and the registry file whose path the doctor prints are the whole surfa
 | `api_key` | key required | from the key; account/user headers are silently stripped |
 | `trusted` | root key optional | from the headers; missing → 400 `Trusted mode requests must include X-OpenViking-Account …` |
 
-Key formats: `base64url(account).base64url(user).base64url(secret)` (three
-segments, identity readable) or a bare 64-hex legacy key (identity only via
-server lookup). Both fail identically as `401 Invalid API Key` when unknown —
-there is no "wrong account" error.
+Key format: `base64url(account).base64url(user).base64url(secret)` (three
+segments, identity readable). Other shapes are rejected as
+`401 Invalid API Key` — there is no "wrong account" error.
 
 `role: root` keys are allowed only on `/api/v1/system/status`, `/api/v1/admin/*`,
 `/api/v1/observer/*`, `/api/v1/tasks/*` and a few system paths; everything the
@@ -159,7 +158,7 @@ port is bound only after initialization finishes, so "connection refused"
 during startup is normal; `/health` 200 says nothing about embedding or VLM.
 
 `GET /ready` (no auth, 200 or 503):
-`{"status":"ready"|"not_ready","checks":{"agfs":{"status":…,"checks":{"filesystem":…,"multiwrite_sync":…}},"vectordb":…,"api_key_manager":…,"embedding":…,"ollama":…}}`.
+`{"status":"ready"|"not_ready","checks":{"agfs":{"status":…,"checks":{"filesystem":…}},"vectordb":…,"api_key_manager":…,"embedding":…,"ollama":…}}`.
 `ok`, `not_configured` and `not_supported` count as healthy; `embedding` is a
 real embed call with a 10s cap. `503 {"status":"not_ready","reason":"initializing"}`
 while booting; 404 on servers that predate the endpoint. The official docker

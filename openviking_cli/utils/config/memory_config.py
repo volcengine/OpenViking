@@ -21,6 +21,13 @@ class SessionAutoCommitConfig(BaseModel):
             "started. When disabled, neither happens."
         ),
     )
+    idle_backend: Literal["local", "redis"] = Field(
+        default="local",
+        description=(
+            "Idle timeout discovery backend. 'local' scans session metadata; "
+            "'redis' uses distributed expiry scheduling."
+        ),
+    )
     check_interval_seconds: float = Field(default=600.0, gt=0)
     scan_rate_limit_files_per_second: float = Field(
         default=2.0,

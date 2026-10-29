@@ -16,6 +16,22 @@ class EnqueueContext:
     queue: str
     payload: Payload
     committed: bool = False
+    work_id: Optional[str] = None
+
+
+class EnqueueReceipt(str):
+    """String-compatible QueueFS message ID with optional logical Work identity."""
+
+    work_id: Optional[str]
+
+    def __new__(cls, message_id: str, work_id: Optional[str] = None) -> "EnqueueReceipt":
+        value = super().__new__(cls, message_id)
+        value.work_id = work_id
+        return value
+
+    @property
+    def message_id(self) -> str:
+        return str(self)
 
 
 @dataclass

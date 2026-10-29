@@ -1,4 +1,5 @@
 import { postResources } from '#/lib/ov-client'
+import type { OvClientAdapter } from '#/lib/ov-client'
 import type { ResourceImportRequest } from './resource-import-types'
 
 type GeneratedResourceBody = Parameters<typeof postResources>[0]['body']
@@ -9,10 +10,10 @@ type GeneratedResourceBody = Parameters<typeof postResources>[0]['body']
  */
 export function postResourceImport(
   body: ResourceImportRequest,
-  signal?: AbortSignal,
+  options: { client: OvClientAdapter['client']; signal: AbortSignal },
 ) {
   return postResources({
     body: body as GeneratedResourceBody,
-    ...(signal ? { signal } : {}),
+    ...options,
   })
 }

@@ -14,12 +14,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type * as Api from '../-lib/api'
 import type { GatewayKey, IssuedKey, Profile, Upstream } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import { PROFILE_DEFAULTS } from '../-lib/profile-schema'
 import { UPSTREAM_DEFAULTS } from '../-lib/upstream-schema'
 import { KeysPage } from './keys-page'
 
 const api = vi.hoisted(() => ({
   getConnectionInfo: vi.fn(),
+  getAccess: vi.fn(),
   listKeys: vi.fn(),
   listProfiles: vi.fn(),
   listUpstreams: vi.fn(),
@@ -37,10 +39,16 @@ vi.mock('../-lib/api', async (importOriginal) => ({
 vi.mock('sonner', () => ({ toast: toastMocks }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    // Plural counts are appended so assertions can check them.
+    t: (key: string, values?: { count?: number }) =>
+      values?.count === undefined ? key : `${key} ${values.count}`,
     i18n: { resolvedLanguage: 'en' },
   }),
 }))
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
+
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
@@ -119,6 +127,17 @@ const laptop: GatewayKey = {
   prefix: 'ovgw_Ab3dE9x',
   created_at: 1_700_000_000,
 }
+const direct: GatewayKey = {
+  ...laptop,
+  id: 'k3',
+  name: '',
+  source: 'openviking',
+  policy_id: '',
+  upstream_ids: [],
+  user_id: 'carol',
+  prefix: '7f3a9c1e',
+  created_at: 1_800_000_000,
+}
 const ci: GatewayKey = {
   ...laptop,
   id: 'k2',
@@ -146,6 +165,15 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  api.getAccess.mockResolvedValue({
+    managed: false,
+    can_write_objects: true,
+    can_issue_for_others: true,
+    role: 'admin',
+    account_id: 'acme',
+    user_id: 'admin',
+    warnings: [],
+  })
   api.getConnectionInfo.mockResolvedValue({
     base_url: BASE_URL,
     public_url_configured: true,
@@ -180,7 +208,60 @@ describe('KeysPage', () => {
     expect(within(rows[2]).getByText('CI bot')).toBeTruthy()
     expect(within(rows[2]).getByText('keys.missing')).toBeTruthy()
     expect(within(rows[2]).getByText('deepseek-chat')).toBeTruthy()
+    expect(
+      screen.getByText('docs.link').closest('a')?.getAttribute('href'),
+    ).toBe(gatewayDocsUrl('keys', 'en'))
   })
+
+  it('marks an OpenViking API key and shows the defaults it uses', async () => {
+    api.listKeys.mockResolvedValue([direct, laptop])
+    renderPage()
+
+    const rows = await screen.findAllByRole('row')
+    expect(within(rows[1]).getByText('keys.openviking.name')).toBeTruthy()
+    expect(within(rows[1]).getByText('7f3a9c1e…')).toBeTruthy()
+    // Profile and upstreams: the account's defaults, not a missing profile.
+    expect(
+      within(rows[1]).getAllByText('keys.openviking.defaults'),
+    ).toHaveLength(2)
+    expect(within(rows[1]).queryByText('keys.missing')).toBeNull()
+    expect(within(rows[1]).getByText('states.any')).toBeTruthy()
+    // Only OpenViking can revoke it.
+    expect(
+      within(rows[1]).queryByRole('button', { name: 'keys.actions.revokeKey' }),
+    ).toBeNull()
+    expect(
+      within(rows[2]).getByRole('button', { name: 'keys.actions.revokeKey' }),
+    ).toBeTruthy()
+  })
+
+  it.each([
+    [[direct], 0],
+    [[direct, { ...laptop, user_id: 'carol' }], 1],
+  ])(
+    'warns that deleting user data does not stop an OpenViking API key',
+    async (keys, revoked) => {
+      api.listKeys.mockResolvedValue(keys)
+      renderPage()
+
+      fireEvent.click(
+        (
+          await screen.findAllByRole('button', { name: 'keys.actions.more' })
+        )[0],
+      )
+      fireEvent.click(
+        await screen.findByRole('menuitem', {
+          name: 'keys.actions.deleteUserData',
+        }),
+      )
+      // Only gateway keys are counted as revoked.
+      expect(
+        screen.getByText(
+          `keys.deleteUser.description ${revoked} keys.deleteUser.directKey`,
+        ),
+      ).toBeTruthy()
+    },
+  )
 
   it('revokes a key after confirmation', async () => {
     api.revokeKey.mockResolvedValue({ deleted: true })
@@ -235,6 +316,79 @@ describe('KeysPage', () => {
     const issue = screen.getByRole('button', { name: 'keys.issue' })
     expect((issue as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('offers management unlock when shared prerequisites are missing', async () => {
+    api.getAccess.mockResolvedValue({
+      managed: true,
+      can_write_objects: false,
+      can_issue_for_others: false,
+      role: 'user',
+      user_id: 'alice',
+    })
+    api.listKeys.mockResolvedValue([])
+    api.listUpstreams.mockResolvedValue([])
+    const unlock = vi.fn()
+    window.addEventListener('gateway-management-unlock', unlock)
+    renderPage()
+    const button = await screen.findByRole('button', {
+      name: 'keys.prerequisites.unlock',
+    })
+    expect(screen.getByText('keys.prerequisites.managed')).toBeTruthy()
+    expect(
+      screen.queryByRole('link', { name: /keys.prerequisites.addUpstream/ }),
+    ).toBeNull()
+    fireEvent.click(button)
+    expect(unlock).toHaveBeenCalledTimes(1)
+    window.removeEventListener('gateway-management-unlock', unlock)
+  })
+
+  it('hides the user column and user-data deletion for ordinary users', async () => {
+    api.getAccess.mockResolvedValue({
+      managed: true,
+      can_write_objects: false,
+      can_issue_for_others: false,
+      role: 'user',
+      user_id: 'alice',
+    })
+    renderPage()
+    await screen.findByText('Alice laptop')
+    expect(
+      screen.queryByRole('columnheader', { name: 'keys.table.user' }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: 'keys.actions.more' }),
+    ).toBeNull()
+    expect(
+      screen.getAllByRole('button', { name: 'keys.actions.revokeKey' }),
+    ).toHaveLength(2)
+  })
+
+  it.each(['admin', 'root'])(
+    'offers user-data deletion for %s',
+    async (role) => {
+      api.getAccess.mockResolvedValue({
+        managed: true,
+        can_write_objects: false,
+        can_issue_for_others: true,
+        role,
+        user_id: 'admin',
+      })
+      renderPage()
+      const buttons = await screen.findAllByRole('button', {
+        name: 'keys.actions.more',
+      })
+      expect(
+        screen.getByRole('columnheader', { name: 'keys.table.user' }),
+      ).toBeTruthy()
+      fireEvent.click(buttons[0])
+      fireEvent.click(
+        await screen.findByRole('menuitem', {
+          name: 'keys.actions.deleteUserData',
+        }),
+      )
+      expect(screen.getByText('keys.deleteUser.title')).toBeTruthy()
+    },
+  )
 
   it('issues a key and shows the secret once with ready-to-use snippets', async () => {
     api.listUpstreams.mockResolvedValue([claude])

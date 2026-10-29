@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { mermaid } from '@streamdown/mermaid'
 import { Loader2, TriangleAlert } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
@@ -13,7 +14,7 @@ function prepareSvg(svg: string): { svg: string; width: number } {
   const document = new DOMParser().parseFromString(svg, 'image/svg+xml')
   const root = document.documentElement
   if (root.localName !== 'svg') {
-    throw new Error('Mermaid returned invalid SVG markup.')
+    throw new Error(i18n.t('studio:errors.invalidSvg'))
   }
 
   const viewBox = root

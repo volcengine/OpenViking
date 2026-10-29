@@ -90,6 +90,16 @@ Manual editing is still supported. A minimal custom-server config looks like:
 
 `account` and `user` are usually optional when using a regular user API key because the server can derive identity from the key. They are recommended for `trusted` auth mode and tenant-scoped operations. They are required for root-key-only configs because a root key has no built-in tenant identity.
 
+### Private CA certificates
+
+`ov` trusts both the bundled public CA roots and certificates in the operating system's native trust store. Install your organization's private CA in the system trust store, or point `SSL_CERT_FILE` at a PEM bundle for a single command:
+
+```bash
+SSL_CERT_FILE=/path/to/company-ca.pem ov health
+```
+
+On Unix, `SSL_CERT_DIR` can instead name a colon-separated list of certificate directories. TLS certificate verification remains enabled.
+
 For more setup details, see [docs/en/getting-started/05-cli-setup.md](../../docs/en/getting-started/05-cli-setup.md).
 
 ## Quick Start
@@ -157,6 +167,8 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 - `search` - Context-aware retrieval. Experimental.
 - `grep` - Content pattern search.
 - `glob` - File glob pattern search.
+
+`search --mode list` (the default) returns ranked hits. `search --mode context` assembles context using server defaults and prints its text; use `-o json` to retain the complete `entries`, `rendered`, `digest`, and `stats` result. Context mode supports `--events-time-decay-protection`, but rejects `--uri` and `--read-content`; `--level` is ignored by the server. Context-specific options such as `max_tokens` and `detail` are not exposed as CLI flags yet.
 
 ### Sessions And Memory
 
@@ -256,11 +268,11 @@ Some command help may also show the long `--output json` form. `-o json` is the 
 
 ```bash
 # Add URL and wait for processing
-ov add-resource https://example.com/docs --wait --timeout 60
+ov add-resource https://example.com/docs --wait
 
 # Add a local directory with filters
 ov add-resource ./dir \
-  --wait --timeout 600 \
+  --wait \
   --ignore-dirs "node_modules,dist" \
   --include "*.md,*.py" \
   --exclude "*.tmp,*.log"
@@ -271,6 +283,10 @@ ov add-resource ./docs -p "viking://resources/docs/{calendar:today}" --wait
 # Search with filters
 ov find "API authentication" --threshold 0.7 --limit 5
 ov find "authentication" --uri viking://resources/project --level 0,1
+
+# Assemble context with event time decay, or inspect the complete JSON result
+ov search "recent decisions" --mode context --events-time-decay-protection 7d
+ov -o json search "authentication" --mode context
 
 # Recursive list
 ov ls viking://resources --recursive

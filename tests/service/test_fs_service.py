@@ -12,15 +12,30 @@ import pytest
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService, ListingPage
+from openviking.service.task_work_index import bind_task_context
 from openviking.storage.abstract_overview import body_for_preview
+from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
+@pytest.fixture(autouse=True)
+def run_fs_operations_inline(monkeypatch):
+    async def run_tracked_operation(_task_type, *, operation, **_kwargs):
+        with bind_task_context("test-task", "default", "test-user", enqueued_work=[]):
+            return await operation(), "test-task"
+
+    monkeypatch.setattr(
+        "openviking.service.fs_service.run_tracked_operation",
+        run_tracked_operation,
+    )
+
+
 class _FakeVikingFS:
     def __init__(self, *, rm_error=None, events=None, parent_exists=True):
+        self._ensure_access = AsyncMock()
         self.rm_calls = []
         self.mv_calls = []
         self.cp_calls = []
@@ -246,41 +261,6 @@ class _FakeResourceMemoryLinkService:
 class _FakeWatchScheduler:
     def __init__(self, watch_manager):
         self.watch_manager = watch_manager
-
-
-class _FakeWaitTracker:
-    def __init__(self):
-        self.registered_requests = []
-        self.registered_roots = []
-        self.wait_calls = []
-        self.cleaned = []
-
-    def register_request(self, telemetry_id):
-        self.registered_requests.append(telemetry_id)
-
-    def register_semantic_root(self, telemetry_id, root_id):
-        self.registered_roots.append(
-            {
-                "telemetry_id": telemetry_id,
-                "root_id": root_id,
-                "request_was_registered": telemetry_id in self.registered_requests,
-            }
-        )
-
-    async def wait_for_request(self, telemetry_id, timeout=None):
-        self.wait_calls.append((telemetry_id, timeout))
-
-    def build_queue_status(self, telemetry_id):
-        return {
-            "Semantic": {"processed": 1, "error_count": 0, "errors": []},
-            "Embedding": {"processed": 0, "error_count": 0, "errors": []},
-        }
-
-    def mark_semantic_failed(self, telemetry_id, root_id, message):
-        pass
-
-    def cleanup(self, telemetry_id):
-        self.cleaned.append(telemetry_id)
 
 
 class _FakeQueueManager:
@@ -914,10 +894,11 @@ async def test_tree_tag_filter_keeps_zero_node_limit_unbounded(request_context):
 
 
 @pytest.mark.asyncio
-async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_context):
+async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_context, monkeypatch):
     viking_fs = _FakeVikingFS()
     service = FSService(viking_fs=viking_fs)
-    service._enqueue_delete_refresh = AsyncMock()
+    queue_manager = _FakeQueueManager()
+    monkeypatch.setattr("openviking.service.fs_service.get_queue_manager", lambda: queue_manager)
     service._wait_for_refresh = AsyncMock(return_value={"Semantic": {"pending_count": 0}})
 
     uri = "viking://resources/images/2026/06/10/不二周助_jpeg"
@@ -926,18 +907,16 @@ async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_cont
         ctx=request_context,
         recursive=True,
         wait=True,
-        timeout=12.0,
     )
 
+    viking_fs._ensure_access.assert_awaited_once_with(uri, request_context, action=AclAction.MANAGE)
     assert viking_fs.rm_calls == [{"uri": uri, "recursive": True, "ctx": request_context}]
-    service._enqueue_delete_refresh.assert_awaited_once_with(
-        root_uri="viking://resources/images/2026/06/10",
-        deleted_uri=uri,
-        context_type="resource",
-        ctx=request_context,
-        force_refresh=True,
-    )
-    service._wait_for_refresh.assert_awaited_once_with(timeout=12.0)
+    assert len(queue_manager.messages) == 1
+    msg = queue_manager.messages[0]
+    assert msg.uri == "viking://resources/images/2026/06/10"
+    assert msg.context_type == "resource"
+    assert msg.recursive is False
+    assert msg.changes == {"deleted": [uri]}
     assert result["semantic_root_uri"] == "viking://resources/images/2026/06/10"
     assert result["semantic_status"] == "complete"
     assert result["queue_status"] == {"Semantic": {"pending_count": 0}}
@@ -945,7 +924,7 @@ async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_cont
 
 @pytest.mark.asyncio
 async def test_resource_rm_reports_failed_semantic_status_when_wait_queue_has_errors(
-    request_context,
+    request_context, monkeypatch
 ):
     viking_fs = _FakeVikingFS()
     service = FSService(viking_fs=viking_fs)
@@ -990,13 +969,11 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
     viking_fs = _FakeVikingFS()
     service = FSService(viking_fs=viking_fs)
     service._enqueue_delete_refresh = AsyncMock()
-    service._wait_for_refresh = AsyncMock()
 
     uri = "viking://resources/images/2026/06/10/不二周助_jpeg"
     result = await service.rm(uri, ctx=request_context, recursive=True)
 
     service._enqueue_delete_refresh.assert_awaited_once()
-    service._wait_for_refresh.assert_not_awaited()
     assert result["semantic_status"] == "queued"
 
 
@@ -1004,7 +981,6 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
 async def test_resource_scope_rm_does_not_refresh_global_root(request_context):
     service = FSService(viking_fs=_FakeVikingFS())
     service._enqueue_delete_refresh = AsyncMock()
-    service._wait_for_refresh = AsyncMock()
 
     result = await service.rm(
         "viking://resources",
@@ -1014,7 +990,6 @@ async def test_resource_scope_rm_does_not_refresh_global_root(request_context):
     )
 
     service._enqueue_delete_refresh.assert_not_awaited()
-    service._wait_for_refresh.assert_not_awaited()
     assert "semantic_root_uri" not in result
 
 
@@ -1472,43 +1447,48 @@ async def test_transfer_refresh_message_records_deleted_source_entry(
 
 
 @pytest.mark.asyncio
-async def test_resource_rm_wait_registers_request_before_semantic_root(
+@pytest.mark.parametrize("recursive", [False, True])
+async def test_file_only_transfer_rebuild_uses_fresh_semantic_processing(
     request_context,
     monkeypatch,
+    recursive,
 ):
-    viking_fs = _FakeVikingFS()
-    service = FSService(viking_fs=viking_fs)
-    tracker = _FakeWaitTracker()
+    service = FSService(viking_fs=_FakeVikingFS())
     queue_manager = _FakeQueueManager()
-
-    monkeypatch.setattr(
-        "openviking.service.fs_service.get_current_telemetry",
-        lambda: SimpleNamespace(telemetry_id="tm-fs-rm"),
-    )
-    monkeypatch.setattr(
-        "openviking.service.fs_service.get_request_wait_tracker",
-        lambda: tracker,
-    )
+    mark_pending = AsyncMock()
     monkeypatch.setattr(
         "openviking.service.fs_service.get_queue_manager",
         lambda: queue_manager,
     )
+    monkeypatch.setattr(
+        "openviking.service.fs_service.mark_abstract_overview_pending",
+        mark_pending,
+    )
+    target = (
+        "viking://resources/archive/copied"
+        if recursive
+        else "viking://resources/archive/copied.md"
+    )
+    root = target if recursive else "viking://resources/archive"
 
-    result = await service.rm(
-        "viking://resources/images/2026/06/10/不二周助_jpeg",
+    status = await service._enqueue_transfer_rebuild(
+        root_uri=root,
+        target_uri=target,
+        recursive=recursive,
+        context_type="resource",
         ctx=request_context,
-        recursive=True,
-        wait=True,
-        timeout=3,
     )
 
-    assert tracker.registered_requests == ["tm-fs-rm"]
-    assert tracker.registered_roots
-    assert tracker.registered_roots[0]["request_was_registered"] is True
-    assert queue_manager.messages[0].recursive is False
-    assert tracker.wait_calls == [("tm-fs-rm", 3)]
-    assert tracker.cleaned == ["tm-fs-rm"]
-    assert result["semantic_status"] == "complete"
+    assert status == "queued"
+    msg = queue_manager.messages[0]
+    assert msg.uri == root
+    assert msg.recursive is recursive
+    assert msg.changes is None if recursive else msg.changes == {"added": [target]}
+    assert msg.generation_trigger == "content_transfer_rebuild"
+    if recursive:
+        mark_pending.assert_not_awaited()
+    else:
+        mark_pending.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1577,3 +1557,422 @@ async def test_resource_rm_refreshes_memory_overview_for_cleaned_memories(
         }
     ]
     assert result["memory_cleanup"] == cleanup
+
+
+@pytest.mark.asyncio
+async def test_system_mkdir_skips_semantic_sidecar_and_vectorization(request_context):
+    uri = "viking://system/memory/memory_templates/custom/demo"
+    viking_fs = SimpleNamespace(_ensure_access=AsyncMock(), mkdir=AsyncMock())
+    service = FSService(viking_fs=viking_fs)
+
+    await service.mkdir(uri, ctx=request_context)
+
+    viking_fs._ensure_access.assert_awaited_once()
+    viking_fs.mkdir.assert_awaited_once_with(uri, ctx=request_context)
+
+
+@pytest.mark.asyncio
+async def test_system_rm_skips_vector_and_semantic_work(request_context):
+    uri = "viking://system/memory/memory_templates/custom/demo.md"
+    viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        rm=AsyncMock(return_value={"estimated_deleted_count": 0}),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service._rm(uri, ctx=request_context)
+
+    viking_fs.rm.assert_awaited_once_with(
+        uri,
+        recursive=False,
+        ctx=request_context,
+        no_vector=True,
+    )
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_system_stat_suppresses_vector_fields(request_context):
+    uri = "viking://system/memory/memory_templates/custom/demo.md"
+    viking_fs = SimpleNamespace(stat=AsyncMock(return_value={"uri": uri}))
+    service = FSService(viking_fs=viking_fs)
+
+    await service.stat(uri, ctx=request_context)
+
+    viking_fs.stat.assert_awaited_once_with(
+        uri,
+        ctx=request_context,
+        skip_count=True,
+        include_lock_status=False,
+        include_vector_fields=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_ls_allows_agent_output_without_semantic_enrichment(request_context):
+    uri = "viking://system/memory/memory_templates/custom"
+    entries = [{"uri": f"{uri}/demo.md", "isDir": False}]
+    formatted = [{**entries[0], "size": 4}]
+    viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        ls=AsyncMock(return_value=entries),
+        _finalize_listing_entries=AsyncMock(return_value=formatted),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.ls(uri, ctx=request_context, output="agent")
+
+    assert result == ListingPage(entries=formatted, has_more=False)
+    finalize_call = viking_fs._finalize_listing_entries.await_args
+    assert finalize_call.args[1] == "agent"
+    assert finalize_call.kwargs["include_abstract"] is False
+    assert finalize_call.kwargs["include_overview"] is False
+
+
+@pytest.mark.asyncio
+async def test_system_tree_allows_agent_output_without_semantic_enrichment(request_context):
+    uri = "viking://system/memory/memory_templates/custom"
+    entries = [{"uri": f"{uri}/demo.md", "isDir": False, "rel_path": "demo.md"}]
+    viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        tree=AsyncMock(return_value=entries),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.tree(uri, ctx=request_context, output="agent")
+
+    assert result == ListingPage(entries=entries, has_more=False)
+    tree_options = viking_fs.tree.await_args.kwargs
+    assert tree_options["output"] == "agent"
+    assert tree_options["include_abstract"] is False
+    assert tree_options["include_overview"] is False
+
+
+@pytest.mark.asyncio
+async def test_copy_to_system_uses_physical_file_strategy(request_context):
+    source = "viking://resources/project/demo.md"
+    target = "viking://system/memory/memory_templates/custom/demo.md"
+    viking_fs = SimpleNamespace(
+        cp=AsyncMock(return_value={"from": source, "to": target, "recursive": False}),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    result = await service.cp(source, target, recursive=False, ctx=request_context)
+
+    viking_fs.cp.assert_awaited_once_with(
+        source,
+        target,
+        recursive=False,
+        ctx=request_context,
+        maintain_vectors=False,
+        copy_semantic_sidecars=False,
+    )
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_indexed_copy_preserves_native_vectors_and_content_copy_refresh(request_context):
+    source = "viking://resources/source/demo.md"
+    target = "viking://resources/target/demo.md"
+    viking_fs = SimpleNamespace(
+        cp=AsyncMock(return_value={"from": source, "to": target, "recursive": False}),
+    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
+
+    await service.cp(source, target, recursive=False, ctx=request_context)
+
+    viking_fs.cp.assert_awaited_once_with(
+        source,
+        target,
+        recursive=False,
+        ctx=request_context,
+    )
+    service._enqueue_copy_refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_indexed_move_preserves_native_vector_transfer(request_context):
+    source = "viking://resources/source/demo.md"
+    target = "viking://resources/target/demo.md"
+    viking_fs = SimpleNamespace(_ensure_access=AsyncMock(), mv=AsyncMock())
+    service = FSService(viking_fs=viking_fs)
+    service._refresh_move_parents = AsyncMock()
+
+    await service.mv(source, target, ctx=request_context)
+
+    viking_fs._ensure_access.assert_awaited_once_with(
+        source, request_context, action=AclAction.MANAGE
+    )
+    viking_fs.mv.assert_awaited_once_with(source, target, ctx=request_context)
+    service._refresh_move_parents.assert_awaited_once_with(
+        from_uri=source,
+        to_uri=target,
+        ctx=request_context,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+async def test_transfer_to_registered_memory_template_is_rejected(request_context, operation):
+    source = "viking://resources/project/demo.yaml"
+    target = "viking://system/memory/memory_templates/custom/profile.yaml"
+    viking_fs = SimpleNamespace(cp=AsyncMock(), mv=AsyncMock())
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match="must be updated through write"):
+        if operation == "cp":
+            await service.cp(source, target, recursive=False, ctx=request_context)
+        else:
+            await service.mv(source, target, ctx=request_context)
+
+    getattr(viking_fs, operation).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_move_to_system_deletes_source_vectors_without_target_index(
+    monkeypatch,
+    request_context,
+):
+    source = "viking://resources/project/demo.md"
+    target = "viking://system/memory/memory_templates/custom/demo.md"
+    viking_fs = SimpleNamespace(_ensure_access=AsyncMock(), mv=AsyncMock())
+    service = FSService(viking_fs=viking_fs)
+    refresh = AsyncMock()
+    monkeypatch.setattr(service, "_refresh_move_parents", refresh)
+
+    await service.mv(source, target, ctx=request_context)
+
+    viking_fs.mv.assert_awaited_once_with(
+        source,
+        target,
+        ctx=request_context,
+        vector_mode="delete_source",
+        copy_semantic_sidecars=False,
+    )
+    refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sidecar_name", [".abstract.md", ".overview.md"])
+async def test_copy_to_system_rejects_semantic_sidecar_target(
+    request_context,
+    sidecar_name,
+):
+    source = "viking://resources/project/demo.md"
+    target = f"viking://system/memory/memory_templates/custom/{sidecar_name}"
+    viking_fs = SimpleNamespace(cp=AsyncMock())
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match="semantic sidecars are not supported"):
+        await service.cp(source, target, recursive=False, ctx=request_context)
+
+    viking_fs.cp.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sidecar_name", [".abstract.md", ".overview.md"])
+async def test_move_to_system_rejects_semantic_sidecar_target(
+    request_context,
+    sidecar_name,
+):
+    source = "viking://resources/project/demo.md"
+    target = f"viking://system/memory/memory_templates/custom/{sidecar_name}"
+    viking_fs = SimpleNamespace(mv=AsyncMock())
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match="semantic sidecars are not supported"):
+        await service.mv(source, target, ctx=request_context)
+
+    viking_fs.mv.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_copy_from_system_rebuilds_target_index(request_context):
+    source = "viking://system/memory/memory_templates/custom/demo.md"
+    target = "viking://resources/project/demo.md"
+    viking_fs = SimpleNamespace(
+        cp=AsyncMock(return_value={"from": source, "to": target, "recursive": False}),
+        stat=AsyncMock(return_value={"isDir": False}),
+    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
+
+    result = await service.cp(source, target, recursive=False, ctx=request_context)
+
+    viking_fs.cp.assert_awaited_once_with(
+        source,
+        target,
+        recursive=False,
+        ctx=request_context,
+        maintain_vectors=False,
+        copy_semantic_sidecars=False,
+    )
+    service._enqueue_transfer_rebuild.assert_awaited_once_with(
+        root_uri="viking://resources/project",
+        target_uri=target,
+        recursive=False,
+        context_type="resource",
+        ctx=request_context,
+    )
+    assert result["semantic_status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_recursive_copy_from_system_rebuilds_target_subtree(request_context):
+    source = "viking://system/compile/example-skills/demo"
+    target = "viking://resources/project/demo"
+    viking_fs = SimpleNamespace(
+        cp=AsyncMock(return_value={"from": source, "to": target, "recursive": True}),
+        stat=AsyncMock(return_value={"isDir": True}),
+    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
+
+    await service.cp(source, target, recursive=True, ctx=request_context)
+
+    service._enqueue_transfer_rebuild.assert_awaited_once_with(
+        root_uri=target,
+        target_uri=target,
+        recursive=True,
+        context_type="resource",
+        ctx=request_context,
+    )
+
+
+@pytest.mark.asyncio
+async def test_move_from_system_rebuilds_target_index(request_context):
+    source = "viking://system/memory/memory_templates/custom/demo.md"
+    target = "viking://resources/project/demo.md"
+    viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        mv=AsyncMock(),
+        stat=AsyncMock(return_value={"isDir": False}),
+    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
+    service._refresh_move_parents = AsyncMock()
+
+    await service.mv(source, target, ctx=request_context)
+
+    viking_fs.mv.assert_awaited_once_with(
+        source,
+        target,
+        ctx=request_context,
+        vector_mode="none",
+        copy_semantic_sidecars=False,
+    )
+    service._refresh_move_parents.assert_awaited_once_with(
+        from_uri=source,
+        to_uri=target,
+        ctx=request_context,
+        refresh_target=False,
+    )
+    service._enqueue_transfer_rebuild.assert_awaited_once_with(
+        root_uri="viking://resources/project",
+        target_uri=target,
+        recursive=False,
+        context_type="resource",
+        ctx=request_context,
+    )
+
+
+@pytest.mark.asyncio
+async def test_move_target_refresh_failure_does_not_roll_back_physical_move(request_context):
+    source = "viking://system/memory/memory_templates/custom/demo.md"
+    target = "viking://resources/project/demo.md"
+    viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        mv=AsyncMock(),
+        stat=AsyncMock(return_value={"isDir": False}),
+    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_transfer_rebuild = AsyncMock(side_effect=RuntimeError("queue unavailable"))
+
+    await service.mv(source, target, ctx=request_context)
+
+    viking_fs.mv.assert_awaited_once()
+    service._enqueue_transfer_rebuild.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recursive_move_from_system_rebuilds_target_subtree(request_context):
+    source = "viking://system/compile/example-skills/demo"
+    target = "viking://resources/project/demo"
+    viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        mv=AsyncMock(),
+        stat=AsyncMock(return_value={"isDir": True}),
+    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
+    service._refresh_move_parents = AsyncMock()
+
+    await service.mv(source, target, ctx=request_context)
+
+    service._enqueue_transfer_rebuild.assert_awaited_once_with(
+        root_uri=target,
+        target_uri=target,
+        recursive=True,
+        context_type="resource",
+        ctx=request_context,
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_grep_and_glob_force_filesystem_implementation(request_context):
+    uri = "viking://system/memory/memory_templates/custom"
+    viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        grep=AsyncMock(return_value={"matches": []}),
+        glob=AsyncMock(return_value={"matches": []}),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    await service.grep(uri, "demo", ctx=request_context)
+    await service.glob("*.md", uri=uri, ctx=request_context)
+
+    assert viking_fs.grep.await_args.kwargs["force_fs"] is True
+    assert viking_fs.glob.await_args.kwargs["force_fs"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["grep_tags", "glob_tags", "glob_vector_fields"])
+async def test_system_file_search_rejects_index_features(request_context, operation):
+    uri = "viking://system/memory/memory_templates/custom"
+    viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        grep=AsyncMock(return_value={"matches": []}),
+        glob=AsyncMock(return_value={"matches": []}),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match="not supported"):
+        if operation == "grep_tags":
+            await service.grep(uri, "demo", ctx=request_context, include_tags=True)
+        elif operation == "glob_tags":
+            await service.glob("*.md", uri=uri, ctx=request_context, tags=["team=search"])
+        else:
+            await service.glob("*.md", uri=uri, ctx=request_context, extra_fields=["id"])
+
+    viking_fs.grep.assert_not_awaited()
+    viking_fs.glob.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["abstract", "overview"])
+async def test_system_rejects_semantic_sidecar_reads(request_context, operation):
+    uri = "viking://system/memory/memory_templates/custom/demo.md"
+    viking_fs = SimpleNamespace(
+        _ensure_access=AsyncMock(),
+        abstract=AsyncMock(),
+        overview=AsyncMock(),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    with pytest.raises(InvalidArgumentError, match=f"{operation} is not supported"):
+        await getattr(service, operation)(uri, ctx=request_context)
+
+    getattr(viking_fs, operation).assert_not_awaited()

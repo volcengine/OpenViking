@@ -52,6 +52,7 @@ const enums = {
     recalled: 'Memory added',
     empty: 'Nothing relevant found',
     disabled: 'Recall is off or the budget is used up',
+    budget: 'Too little budget left to add memory',
     recall_timeout: 'Recall timed out',
   },
   toolSkipReason: {
@@ -65,11 +66,11 @@ const enums = {
     tools_forced_choice: 'The client required a specific tool',
     deepseek_reasoning_history_required:
       'DeepSeek thinking is on and earlier reasoning cannot be sent back',
-    tool_name_collision: 'The client defines a tool with the same name',
+    tool_name_collision: 'The client already has OpenViking tools',
     tools_unavailable:
-      "OpenViking's tool list couldn't be loaded when this conversation started",
+      "OpenViking's tool list couldn't be loaded when this conversation first needed it",
     tools_not_selected_at_session_start:
-      'Tools were not available when this conversation started',
+      'This conversation has no OpenViking tools',
   },
   toolStopReason: {
     token_budget: 'Tool token budget reached',
@@ -85,8 +86,9 @@ const enums = {
     errorCode: 'OpenViking reported error {{code}}',
     versionMismatch: 'OpenViking is older than the gateway requires',
     identityMissing: "OpenViking couldn't tell which user this key belongs to",
-    rootKey: "Root keys aren't accepted. Use a user key from this account.",
-    otherAccount: 'This OpenViking key belongs to another account.',
+    rootKey:
+      "Root API keys aren't accepted. Use a user API key from this account.",
+    otherAccount: 'This OpenViking API key belongs to another account.',
   },
   degradation: {
     memory_store_failure: {
@@ -154,6 +156,12 @@ const enums = {
       explanation:
         "The streamed reply couldn't be read, so it wasn't saved to OpenViking. The client wasn't affected.",
       action: 'No action needed unless it happens often.',
+    },
+    revocation_check_unavailable: {
+      label: 'Key not verified',
+      explanation:
+        "OpenViking couldn't confirm the gateway key, so the request was served without checking whether the key was revoked.",
+      action: 'Check that OpenViking is reachable and healthy.',
     },
   },
 }

@@ -7,6 +7,7 @@ from __future__ import annotations
 import threading
 import time
 
+from openviking.models.model_error import ModelErrorKind, model_error_kind
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
     ERROR_CLASS_INPUT_TOO_LARGE,
@@ -95,9 +96,19 @@ class CircuitBreaker:
 
     def record_failure(self, error: Exception) -> None:
         """Record a failed API call. May trip the breaker."""
-        error_class = classify_api_error(error)
-        if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
-            logger.info(f"Circuit breaker ignoring row-specific input error: {error}")
+        kind = model_error_kind(error)
+        legacy_class = classify_api_error(error) if kind is None else None
+        if kind in {
+            ModelErrorKind.AUTHENTICATION_ERROR,
+            ModelErrorKind.PERMISSION_DENIED,
+            ModelErrorKind.MODEL_NOT_FOUND,
+            ModelErrorKind.UNSUPPORTED,
+            ModelErrorKind.INVALID_REQUEST,
+            ModelErrorKind.INPUT_TOO_LARGE,
+            ModelErrorKind.CONTENT_SAFETY,
+        } or legacy_class == ERROR_CLASS_INPUT_TOO_LARGE:
+            label = kind.value if kind is not None else legacy_class
+            logger.info("Circuit breaker ignoring %s error: %s", label, error)
             return
 
         with self._lock:
@@ -115,14 +126,15 @@ class CircuitBreaker:
                 )
                 return
 
-            if error_class in (
+            if kind is ModelErrorKind.QUOTA_EXHAUSTED or legacy_class in {
                 ERROR_CLASS_PERMANENT,
                 ERROR_CLASS_AUTH,
                 ERROR_CLASS_QUOTA_EXCEEDED,
-            ):
+            }:
                 self._state = _STATE_OPEN
                 self._current_reset_timeout = self._base_reset_timeout
-                logger.info(f"Circuit breaker tripped immediately on {error_class} error: {error}")
+                label = kind.value if kind is not None else legacy_class
+                logger.info("Circuit breaker tripped immediately on %s: %s", label, error)
                 return
 
             if self._failure_count >= self._failure_threshold:

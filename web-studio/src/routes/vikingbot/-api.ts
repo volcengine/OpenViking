@@ -1,4 +1,6 @@
+import i18n from '#/i18n/core'
 import { getOvResult, ovClient } from '#/lib/ov-client'
+import type { ServerMode } from '#/lib/connection/health'
 
 export type Connection = {
   id: string
@@ -36,7 +38,7 @@ export type PlatformMessage = {
 }
 export function botAccountBase() {
   const { accountId } = ovClient.getConnection()
-  if (!accountId) throw new Error('Select an account before managing bots')
+  if (!accountId) throw new Error(i18n.t('studio:errors.botAccountRequired'))
   return `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/bot`
 }
 export function getCapabilities() {
@@ -128,9 +130,9 @@ export function rotateCredentials(
   )
 }
 
-export async function getBotUsers() {
+export async function getBotUsers(serverMode: ServerMode) {
   const { accountId } = ovClient.getConnection()
-  if (!accountId) throw new Error('Select an account before managing bots')
+  if (!accountId) throw new Error(i18n.t('studio:errors.botAccountRequired'))
   const users = await getOvResult<
     Array<{ user_id: string; api_key_available: boolean }>
   >(
@@ -141,7 +143,7 @@ export async function getBotUsers() {
   )
   return users.map((user) => ({
     user_id: user.user_id,
-    available: user.api_key_available,
+    available: serverMode === 'trusted' || user.api_key_available,
   }))
 }
 

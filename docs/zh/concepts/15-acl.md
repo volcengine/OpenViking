@@ -32,8 +32,8 @@ ACL 条目使用带类型的 principal：
 | Level | 允许的操作 |
 |-------|------------|
 | `read` | 读取、列目录、`find/search/grep` |
-| `write` | `read` 的能力，以及写入、创建、删除或移动文件、修改 tags |
-| `manage` | `write` 的能力，以及删除或移动目录、管理 ACL |
+| `write` | `read` 的能力，以及写入、创建、修改 tags |
+| `manage` | `write` 的能力，以及删除或移动文件和目录、管理 ACL |
 
 高等级包含低等级能力。授予 `manage`，等价于同时授予 `read` 和 `write`。
 
@@ -90,7 +90,7 @@ read user:carol on viking://resources/A/B/C/report.md
 |------|----------|
 | read、stat、list、tree、find、search、grep、glob | read |
 | write、create、mkdir、set tags | write |
-| 删除或移动文件 | write |
+| 删除或移动文件 | manage |
 | 删除或移动目录 | 目录及完整子树的 manage |
 | 管理 ACL | manage |
 | move 目标父目录 | write |

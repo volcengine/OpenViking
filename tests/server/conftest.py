@@ -96,7 +96,9 @@ def _install_session_commit_queue_fallback(service: OpenVikingService, monkeypat
     monkeypatch.setattr(
         tracker,
         "has_work",
-        lambda task_id: task_id in queued_commit_tasks or original_has_work(task_id),
+        lambda task_id, **kwargs: (
+            task_id in queued_commit_tasks or original_has_work(task_id, **kwargs)
+        ),
     )
 
     async def enqueue_with_session_commit_fallback(queue_name, data):

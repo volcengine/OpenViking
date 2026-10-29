@@ -799,6 +799,7 @@ class DirectBackendConfig(BaseModel):
     """Direct backend configuration."""
 
     restrict_to_workspace: bool = False  # If true, restrict file access to workspace directory
+    allow_exec: bool = Field(default=True, description="Allow agents to execute host commands")
     allow_compile_exec: bool = False
 
 

@@ -71,7 +71,7 @@ class FeishuProvider:
             key: record.get(key) for key in ("app_id", "step", "setup_mode", "onboarding_id")
         } | {"settings": self.validate_settings(record.get("settings", {}))}
 
-    def install(self, service, record):
+    def install(self, service, record, *, openviking_connection):
         from vikingbot.studio.providers.feishu.channel import StudioFeishuChannel
 
         channel_config = FeishuChannelConfig(
@@ -88,6 +88,7 @@ class FeishuProvider:
             channel_config,
             service.manager.bus,
             record=record,
+            openviking_connection=openviking_connection,
             store=service.store,
             workspace_path=service.config.workspace_path,
             bot_config=service.config,

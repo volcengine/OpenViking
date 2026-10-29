@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.core.path_variables import CalendarVariableProvider
 from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils.image_search import prepare_image_bytes_for_model
@@ -463,6 +464,7 @@ async def _generate_media_summary(
         with tempfile.NamedTemporaryFile(
             suffix=Path(original_filename).suffix,
             delete=False,
+            dir=get_parser_download_temp_dir(),
         ) as temporary:
             temporary_path = Path(temporary.name)
 

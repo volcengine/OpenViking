@@ -18,6 +18,7 @@ from openviking.server.routers.openviking_assets import router as openviking_ass
 from openviking.server.routers.pack import router as pack_router
 from openviking.server.routers.privacy_configs import router as privacy_configs_router
 from openviking.server.routers.resources import router as resources_router
+from openviking.server.routers.rules import router as rules_router
 from openviking.server.routers.search import router as search_router
 from openviking.server.routers.sessions import router as sessions_router
 from openviking.server.routers.skills import router as skills_router
@@ -38,6 +39,7 @@ __all__ = [
     "compile_router",
     "system_router",
     "resources_router",
+    "rules_router",
     "filesystem_router",
     "content_router",
     "console_router",

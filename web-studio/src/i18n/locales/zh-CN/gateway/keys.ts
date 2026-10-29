@@ -1,9 +1,11 @@
 const keys = {
   description:
-    '每个密钥属于一个 OpenViking 用户，使用一份上下文配置和一组上游。密钥不能修改，需要调整时请签发新密钥并吊销旧密钥。',
+    '每个网关密钥（以 ovgw_ 开头）属于一个 OpenViking 用户，使用一份上下文配置和一组上游。密钥不能修改，需要调整时请签发新密钥并吊销旧密钥。',
   issue: '签发密钥',
   loadFailed: '无法加载网关密钥',
   prerequisites: {
+    managed: '网关管理员还没有添加上游或上下文配置。',
+    unlock: '输入网关管理密钥',
     upstream: '签发密钥前，请先添加上游。',
     profile: '签发密钥前，请先创建上下文配置。',
     both: '签发密钥前，请先添加上游并创建上下文配置。',
@@ -28,6 +30,10 @@ const keys = {
   missing: '已删除',
   missingProfile: '这个上下文配置已不存在',
   missingUpstream: '这个上游已不存在',
+  openviking: {
+    name: 'OpenViking API 密钥',
+    defaults: '账号默认',
+  },
   extra: '+{{count}}',
   actions: {
     revokeKey: '吊销“{{name}}”',
@@ -44,9 +50,13 @@ const keys = {
   deleteUser: {
     title: '删除 {{user}} 的网关数据？',
     description_one:
-      '这会吊销 {{user}} 的网关密钥，并删除网关为该用户保存的对话状态，其中包括尚未保存到 OpenViking 的对话内容。该用户的客户端会立即失去访问权限。已经存入 OpenViking 的记忆不受影响。',
+      '这会吊销 {{user}} 的网关密钥，并删除网关为该用户保存的对话状态（包括尚未保存到 OpenViking 的内容）和请求日志。该用户的客户端会立即失去访问权限。已经存入 OpenViking 的记忆不受影响。',
+    description_zero:
+      '这会删除网关为 {{user}} 保存的对话状态（包括尚未保存到 OpenViking 的内容）和请求日志。已经存入 OpenViking 的记忆不受影响。',
     description_other:
-      '这会吊销 {{user}} 的全部 {{count}} 个网关密钥，并删除网关为该用户保存的对话状态，其中包括尚未保存到 OpenViking 的对话内容。该用户的客户端会立即失去访问权限。已经存入 OpenViking 的记忆不受影响。',
+      '这会吊销 {{user}} 的全部 {{count}} 个网关密钥，并删除网关为该用户保存的对话状态（包括尚未保存到 OpenViking 的内容）和请求日志。该用户的客户端会立即失去访问权限。已经存入 OpenViking 的记忆不受影响。',
+    directKey:
+      '直接使用其 OpenViking API 密钥的客户端仍可使用，直到在 OpenViking 中重新生成这把密钥。',
     confirm: '删除网关数据',
     done: '已删除 {{user}} 的网关数据',
   },
@@ -59,27 +69,30 @@ const keys = {
       description: '用来区分不同的密钥，写上使用者和客户端最清楚。',
     },
     user: {
-      label: 'OpenViking 用户',
+      self: '以你的身份（{{user}}）读写记忆。',
+      developmentIdentity: '以 {{user}} 的身份读写记忆。',
+      label: '给谁用',
       placeholder: '选择 OpenViking 用户',
       loading: '正在加载用户…',
       description:
-        '网关会以这个用户的身份召回和保存记忆。该用户的 OpenViking 密钥在服务端读取，由网关加密保存，不会显示。',
+        '网关会以这个用户的身份召回和保存记忆。该用户的用户 API 密钥在服务端读取，由网关加密保存，不会显示。',
       roles: {
         admin: '管理员',
         user: '用户',
       },
-      unavailable: '服务端读不到这个用户的密钥，请改为粘贴',
-      loadFailed: '无法加载本账号的用户，请直接粘贴密钥。',
-      none: '服务端读不到本账号用户的密钥，请直接粘贴。',
-      root: '使用 Root 密钥时无法在这里选择用户，请直接粘贴密钥。',
+      unavailable: '服务端读不到这个用户的用户 API 密钥，请改为粘贴',
+      loadFailed: '无法加载本账号的用户，请直接粘贴用户 API 密钥。',
+      none: '服务端读不到本账号用户的用户 API 密钥，请直接粘贴。',
       choose: '选择用户',
     },
     openvikingKey: {
-      label: 'OpenViking 密钥',
+      forUser: '粘贴 {{user}} 的用户 API 密钥',
+      managementKey: '这是网关管理密钥，请粘贴该用户的用户 API 密钥。',
+      label: 'OpenViking API 密钥',
       description:
-        '本账号中某个 OpenViking 用户的密钥。网关会以这个用户的身份召回和保存记忆。不接受 Root 密钥。密钥加密保存，之后不再显示。',
-      gatewayKey: '这是网关密钥，请填写 OpenViking 用户自己的密钥。',
-      paste: '粘贴 OpenViking 密钥',
+        '本账号中某个用户的用户 API 密钥。网关会以这个用户的身份召回和保存记忆。不接受 Root API 密钥。密钥加密保存，之后不再显示。',
+      gatewayKey: '这是网关密钥（给客户端用的），请粘贴该用户的用户 API 密钥。',
+      paste: '粘贴用户 API 密钥',
     },
     profile: {
       label: '上下文配置',
@@ -95,6 +108,7 @@ const keys = {
       required: '至少选择一个上游',
       empty: '还没有上游。',
       create: '去添加',
+      blocked: '已拦截',
       off: '已停用',
     },
     models: {
@@ -106,22 +120,28 @@ const keys = {
     submit: '签发密钥',
   },
   errors: {
+    requiredVersion: '要求版本：{{version}}。',
     title: '无法签发密钥',
-    rootKey: '这是 Root 密钥。请改用本账号中某个 OpenViking 用户的密钥。',
-    otherAccount: '这个 OpenViking 密钥属于其他账号，请使用本账号的用户密钥。',
+    rootKey: '这是 Root API 密钥，请改用本账号中某个用户的用户 API 密钥。',
+    otherAccount:
+      '这个 OpenViking API 密钥属于其他账号，请使用本账号的用户 API 密钥。',
     invalidKey:
       'OpenViking 拒绝了这个密钥。请检查密钥是否完整，以及是否已被重新生成。',
     unavailable: '网关连不上 OpenViking，无法校验这个密钥。请稍后重试。',
     versionMismatch:
       'OpenViking 版本低于网关的要求。请升级 OpenViking 后重试。',
     unknownUser: '这个用户已不在本账号中，请重新选择。',
-    userKeyUnreadable: '服务端读不到这个用户的 OpenViking 密钥，请改为粘贴。',
+    userRequired: 'root API 密钥不属于任何用户，请选择这把密钥对应的用户。',
+    userKeyUnreadable:
+      '服务端只保存了这个用户 API 密钥的哈希，无法自动读取。请粘贴该用户的用户 API 密钥。',
   },
   secret: {
+    identity: '这把密钥以 {{user}} 的身份读写记忆。',
+    dependency:
+      '它绑定 {{user}} 当前的用户 API 密钥。那个密钥重新生成后，这把网关密钥会自动失效，需要重新签发。',
     title: '复制网关密钥',
     once: '完整密钥只显示这一次。',
     copyKey: '复制网关密钥',
-    user: 'OpenViking 用户',
     profile: '上下文配置',
     connectTitle: '接入客户端',
     clients: {

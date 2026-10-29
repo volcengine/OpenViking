@@ -27,8 +27,9 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_decay import parse_duration_ms
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
+from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
 
 class _SemanticMixin:
@@ -72,20 +73,7 @@ class _SemanticMixin:
         must guarantee that the URI points to a directory.
         """
         await self._ensure_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
-                continue
-            try:
-                if not await self._agfs_path_exists(path):
-                    continue
-                return await self._read_abstract_file(path, uri, ctx=ctx)
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    continue
-                raise
-        return f"# {uri} [Directory abstract is not ready]"
+        return await self._read_abstract_file(self._uri_to_path(uri, ctx=ctx), uri, ctx=ctx)
 
     async def abstract(
         self,
@@ -98,31 +86,14 @@ class _SemanticMixin:
         the endpoint remains usable for both file and directory URIs.
         """
         await self._ensure_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        path = primary_path
-        last_exc: Optional[Exception] = None
-        for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
-                continue
-            try:
-                info = await self._async_agfs.stat(candidate_path)
-                path = candidate_path
-                break
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_exc = exc
-                    continue
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-        else:
-            if last_exc is not None:
-                mapped = map_exception(last_exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from last_exc
-            raise NotFoundError(uri, "directory") from last_exc
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            info = await self._async_agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
             parent_path = path.rsplit("/", 1)[0] or "/"
             parent_uri = self._path_to_uri(parent_path, ctx=ctx)
@@ -145,31 +116,14 @@ class _SemanticMixin:
         the endpoint remains usable for both file and directory URIs.
         """
         await self._ensure_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        path = primary_path
-        last_exc: Optional[Exception] = None
-        for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
-                continue
-            try:
-                info = await self._async_agfs.stat(candidate_path)
-                path = candidate_path
-                break
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_exc = exc
-                    continue
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-        else:
-            if last_exc is not None:
-                mapped = map_exception(last_exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from last_exc
-            raise NotFoundError(uri, "directory") from last_exc
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            info = await self._async_agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
             parent_path = path.rsplit("/", 1)[0] or "/"
             parent_uri = self._path_to_uri(parent_path, ctx=ctx)
@@ -202,7 +156,7 @@ class _SemanticMixin:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        image_url: Optional[str] = None,
+        image_url: str | list[str] | None = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
     ):
@@ -305,6 +259,7 @@ class _SemanticMixin:
             limit=limit,
             mode=RetrieverMode.QUICK,
             score_threshold=score_threshold,
+            has_explicit_target=bool(retrieval_targets.first_explicit_directory),
             scope_dsl=filter,
             level=level,
             events_time_decay_protection=events_time_decay_protection,
@@ -400,7 +355,7 @@ class _SemanticMixin:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        image_url: Optional[str] = None,
+        image_url: str | list[str] | None = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
@@ -456,9 +411,17 @@ class _SemanticMixin:
             except Exception:
                 target_abstract = ""
 
-        intent_enabled = (
-            bool(self.retrieval_config.enable_intent) if self.retrieval_config is not None else True
-        )
+        retrieval_config = self.retrieval_config or RetrievalConfig()
+        # The raw query remains usable if optional intent analysis times out or fails.
+        typed_queries = [
+            TypedQuery(
+                query=query,
+                context_type=None,
+                intent="",
+                priority=1,
+                target_directories=retrieval_targets.target_directories,
+            )
+        ]
 
         # With session context: optional intent analysis
         if image_url:
@@ -473,45 +436,45 @@ class _SemanticMixin:
                     image_query=True,
                 )
             ]
-        elif intent_enabled and (session_summary or current_messages):
-            if self._vlm_resolver is None:
-                raise RuntimeError(
-                    "VikingFS requires a VLM resolver for account-owned intent analysis"
+        elif retrieval_config.enable_intent and (session_summary or current_messages):
+            try:
+                if self._vlm_resolver is None:
+                    raise RuntimeError(
+                        "VikingFS requires a VLM resolver for account-owned intent analysis"
+                    )
+                analyzer = IntentAnalyzer(
+                    max_recent_messages=5,
+                    query_planner=await self._vlm_resolver.get_query_planner(real_ctx.account_id),
                 )
-            analyzer = IntentAnalyzer(
-                max_recent_messages=5,
-                query_planner=await self._vlm_resolver.get_query_planner(real_ctx.account_id),
-            )
-            with telemetry.measure("search.intent_analysis"):
-                query_plan = await analyzer.analyze(
-                    compression_summary=session_summary or "",
-                    messages=current_messages or [],
-                    current_message=query,
-                    context_type=context_types[0]
-                    if context_types and len(context_types) == 1
-                    else None,
-                    target_abstract=target_abstract,
+                with telemetry.measure("search.intent_analysis"):
+                    query_plan = await asyncio.wait_for(
+                        analyzer.analyze(
+                            compression_summary=session_summary or "",
+                            messages=current_messages or [],
+                            current_message=query,
+                            context_type=context_types[0]
+                            if context_types and len(context_types) == 1
+                            else None,
+                            target_abstract=target_abstract,
+                        ),
+                        timeout=retrieval_config.recall_intent_timeout_s,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Intent analysis failed (%s); using original query: %s",
+                    type(exc).__name__,
+                    exc,
                 )
-            typed_queries = query_plan.queries
-            for tq in typed_queries:
-                tq.target_directories = retrieval_targets.target_directories
-                # Caller scope is authoritative even when the planner ignores its prompt.
-                if context_types and len(context_types) == 1:
-                    tq.context_type = context_types[0]
-                elif context_types and tq.context_type not in context_types:
-                    # The existing scope filter searches only the caller's allowed types.
-                    tq.context_type = None
-        else:
-            # No session context, or intent disabled: search with the raw query.
-            typed_queries = [
-                TypedQuery(
-                    query=query,
-                    context_type=None,
-                    intent="",
-                    priority=1,
-                    target_directories=retrieval_targets.target_directories,
-                )
-            ]
+            else:
+                typed_queries = query_plan.queries
+                for tq in typed_queries:
+                    tq.target_directories = retrieval_targets.target_directories
+                    # Caller scope is authoritative even when the planner ignores its prompt.
+                    if context_types and len(context_types) == 1:
+                        tq.context_type = context_types[0]
+                    elif context_types and tq.context_type not in context_types:
+                        # The existing scope filter searches only the caller's allowed types.
+                        tq.context_type = None
         telemetry.set("search.typed_queries_count", len(typed_queries))
 
         # Concurrent execution
@@ -533,6 +496,7 @@ class _SemanticMixin:
                 ctx=real_ctx,
                 limit=limit,
                 score_threshold=score_threshold,
+                has_explicit_target=bool(retrieval_targets.first_explicit_directory),
                 scope_dsl=filter,
                 level=level,
                 events_time_decay_protection=events_time_decay_protection,

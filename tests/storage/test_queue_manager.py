@@ -14,7 +14,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.pyagfs import AsyncAGFSClient
-from openviking.service.task_work_index import bind_task_context
+from openviking.service.task_domain import WorkRecoveryMode
+from openviking.service.task_work_index import bind_task_context, record_enqueued_work
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase, NamedQueue
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.queue_manager import QueueManager
@@ -82,21 +83,30 @@ def test_queue_worker_closes_loop_scoped_clients_before_closing_its_loop() -> No
 async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
     transport, monkeypatch, concurrency
 ):
+    from openviking.service.task_store import PersistentTaskStore
+    from openviking.service.task_tracker import TaskTracker
     from openviking.service.task_tracker_concurrency import run_to_completion
     from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
     from openviking.storage.queuefs.semantic_msg import SemanticMsg
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-    from openviking.telemetry import OperationTelemetry
-    from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+    from tests.test_task_tracker import _FakeAgfs
 
-    tracker = get_request_wait_tracker()
-    telemetry_id = OperationTelemetry("skill-shutdown").telemetry_id
-    tracker.register_request(telemetry_id)
     msg = SemanticMsg(
-        uri="viking://agent/skills/demo", context_type="skill", telemetry_id=telemetry_id
+        uri="viking://agent/skills/demo",
+        context_type="skill",
+        task_id="skill-task",
+        _task_work_id="semantic",
     )
     started, queued, release = threading.Event(), threading.Event(), threading.Event()
     events = []
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    task = await tracker.create(
+        "add_skill", task_id="skill-task", account_id="acc", user_id="alice"
+    )
+    await tracker.start(task.task_id, account_id="acc", user_id="alice")
+    active_work = "active"
+    queued_work = "queued"
 
     class Lease:
         lock = {"lease_ref": "demo"}
@@ -111,8 +121,22 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
             pass
 
         async def run(self, uri):
-            tracker.register_embedding_root(telemetry_id, "active")
-            tracker.register_embedding_root(telemetry_id, "queued")
+            await tracker.register_work(
+                task.task_id,
+                active_work,
+                "Embedding",
+                account_id="acc",
+                user_id="alice",
+            )
+            await tracker.register_work(
+                task.task_id,
+                queued_work,
+                "Embedding",
+                account_id="acc",
+                user_id="alice",
+            )
+            record_enqueued_work("Embedding", active_work)
+            record_enqueued_work("Embedding", queued_work)
             queued.set()
 
         def get_stats(self):
@@ -124,7 +148,12 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
             while not release.is_set():
                 await asyncio.sleep(0.01)
             events.append("write-finished")
-            tracker.mark_embedding_done(telemetry_id, "active")
+            await tracker.mark_work_done(
+                task.task_id,
+                active_work,
+                account_id="acc",
+                user_id="alice",
+            )
 
         await run_to_completion(finish)
         return ProcessResult.success()
@@ -146,6 +175,9 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
             return {"id": self.name, "data": msg.to_json()}
 
         async def process_dequeued(self, data):
+            if self.name == QueueManager.SEMANTIC:
+                with bind_task_context("skill-task", "acc", "alice", enqueued_work=[]):
+                    return await self.handler(data)
             return await self.handler(data)
 
         async def ack(self, *args):
@@ -197,14 +229,13 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
         assert all(not thread.is_alive() for thread in threads)
         assert events.index("write-finished") < events.index("lock-released")
         assert f"ack-{manager.SEMANTIC}" not in events
-        assert not tracker.is_complete(telemetry_id)  # Queued vectors await restart.
+        assert await tracker.has_work(task.task_id, account_id="acc", user_id="alice")
     finally:
         release.set()
         if stopping is not None:
             await stopping
         else:
             await asyncio.to_thread(manager.stop)
-        tracker.cleanup(telemetry_id)
 
 
 async def test_status_waits_for_processing_messages_from_other_workers(monkeypatch) -> None:
@@ -251,13 +282,11 @@ async def test_constructor_middlewares_apply_to_all_queues(transport):
     manager = QueueManager(object(), middlewares=middlewares)
     middlewares.clear()
     existing = manager.get_queue("existing", allow_create=True)
-    with bind_task_context("task", "account", "user"):
-        await existing.enqueue({})
-        middlewares.append(Recorder())
-        future = manager.get_queue("future", allow_create=True)
-        await future.enqueue({})
+    await existing.enqueue({})
+    middlewares.append(Recorder())
+    future = manager.get_queue("future", allow_create=True)
+    await future.enqueue({})
     assert calls == ["existing", "future"]
-    assert manager._task_work_index.has_work("task")
     assert transport.write.await_count == 2
 
 
@@ -318,27 +347,58 @@ async def test_concurrent_worker_uses_process_and_ack_middleware(transport, fail
         transport.write.assert_awaited_once_with("/queue/Test/ack", b"message-1")
 
 
-async def test_bootstrap_restores_legacy_messages_into_middleware_index(transport):
+async def test_bootstrap_restores_legacy_messages_into_store(transport):
     manager = QueueManager(object())
-    queue = manager.get_queue("Test", allow_create=True)
+    manager.get_queue("Test", allow_create=True)
     message = {
         "id": "legacy-message",
         "data": json.dumps({"task_id": "task", "account_id": "account", "user_id": "user"}),
     }
     transport.read.return_value = json.dumps([message]).encode()
-    attached = []
+    restored_work = []
 
     class Tracker:
-        def attach_work_index(self, index):
-            attached.append(index)
-            assert index.has_work("task")
+        work_recovery_mode = WorkRecoveryMode.QUEUE_SNAPSHOT
+
+        async def reconcile_delivery(self, task_id, work_id, queue_name, *, account_id, user_id):
+            restored_work.append((task_id, work_id, queue_name, account_id, user_id))
 
         async def restore_work_tasks(self, owners):
             assert owners == {"task": ("account", "user")}
             return ["restored"]
 
     assert await manager.prepare_task_tracking(Tracker()) == ["restored"]
-    assert attached == [manager._task_work_index]
-    await queue.ack("legacy-message", message)
-    assert not attached[0].has_work("task")
-    transport.write.assert_awaited_once_with("/queue/Test/ack", b"legacy-message")
+    assert restored_work == [("task", "queuefs:legacy-message", "Test", "account", "user")]
+
+
+async def test_bootstrap_restores_task_owner_from_cross_user_child_work(transport):
+    manager = QueueManager(object())
+    manager.get_queue("Test", allow_create=True)
+    message = {
+        "id": "cross-user-child",
+        "data": json.dumps(
+            {
+                "task_id": "task",
+                "_task_work_id": "work",
+                "account_id": "account",
+                "user_id": "content-owner",
+                "_task_account_id": "account",
+                "_task_user_id": "task-owner",
+            }
+        ),
+    }
+    transport.read.return_value = json.dumps([message]).encode()
+    restored_work = []
+
+    class Tracker:
+        work_recovery_mode = WorkRecoveryMode.QUEUE_SNAPSHOT
+
+        async def reconcile_delivery(self, task_id, work_id, queue_name, *, account_id, user_id):
+            restored_work.append((task_id, work_id, queue_name, account_id, user_id))
+
+        async def restore_work_tasks(self, owners):
+            assert owners == {"task": ("account", "task-owner")}
+            return ["restored"]
+
+    assert await manager.prepare_task_tracking(Tracker()) == ["restored"]
+    assert restored_work == [("task", "work", "Test", "account", "task-owner")]

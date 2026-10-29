@@ -11,7 +11,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from openviking.core.namespace import relative_uri_path
-from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, classify_api_error
+from openviking.models.model_error import ModelErrorKind, model_error_kind
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.ops import common
@@ -116,7 +116,7 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
         """Resolve one collision, reserving every selected path before yielding to storage."""
         path = items[0][1]["path"]
         inputs = {i for _, artifact in items for i in artifact["inputs"]}
-        records = [runtime.records[i] for i in sorted(inputs)]
+        records = [runtime.records[i] for i in sorted(inputs) if i in runtime.records]
         group = Group("merge-" + digest([ref for ref, _ in items]), records)
         snapshots = dict(items)
 
@@ -126,10 +126,6 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
             blocked = {d.path for d in response.files if reserved.get(d.path, path) != path}
             if blocked:
                 raise ValueError(f"Output paths are reserved by other jobs: {sorted(blocked)}")
-            if {i for draft in response.files for i in draft.inputs} != inputs:
-                raise ValueError(
-                    "Resolved files must account for every candidate's supporting input"
-                )
 
         try:
             transform = Transform(
@@ -317,7 +313,7 @@ async def reduce_group(
             break
         except ModelCallError as exc:
             if (
-                classify_api_error(exc) != ERROR_CLASS_INPUT_TOO_LARGE
+                model_error_kind(exc) is not ModelErrorKind.INPUT_TOO_LARGE
                 or depth == 3
                 or stage == "map"
             ):

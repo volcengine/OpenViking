@@ -34,6 +34,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { replayPending } from "./lib/pending-queue.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
@@ -317,6 +318,13 @@ async function main({ cfg, input, cwd }) {
   const health = await fetchJSON("/health");
   let result;
   if (health.ok) {
+    // SessionStart replays at most one capped batch, so drain more of the
+    // queue here; older entries go out before this turn's messages.
+    try {
+      await replayPending(fetchJSON, log, { consumeRetries: false });
+    } catch (err) {
+      logError("pending-replay", err);
+    }
     result = await pushTurnsToOv(ovSessionId, captureTurns, effectivePeer.peerId, cfg);
   } else if (isRetryableFailure(health)) {
     logError("health_check", "server unreachable or unhealthy; enqueuing capture");

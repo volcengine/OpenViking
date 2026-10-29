@@ -88,15 +88,21 @@ function formatRelativeTime(iso: string, t: TFunction<'sessions'>): string {
 }
 
 // ---------------------------------------------------------------------------
-// TypingIndicator
+// StreamingIndicator
 // ---------------------------------------------------------------------------
 
-function TypingIndicator() {
+function StreamingIndicator() {
+  const { t } = useTranslation('sessions')
   return (
-    <div className="flex items-center gap-1 py-1">
-      <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:0ms]" />
-      <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:150ms]" />
-      <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:300ms]" />
+    <div
+      role="status"
+      aria-label={t('chat.generating')}
+      className="flex h-5 items-center"
+    >
+      <span
+        aria-hidden="true"
+        className="size-1.5 animate-pulse rounded-full bg-muted-foreground motion-reduce:animate-none"
+      />
     </div>
   )
 }
@@ -125,6 +131,7 @@ interface MessageListProps {
   messages: Message[]
   streaming?: {
     parts?: MessagePart[]
+    insertIndex?: number
     iteration: number
   }
   onResourceClick?: (uri: string) => void
@@ -137,55 +144,55 @@ export function MessageList({
   streaming,
 }: MessageListProps) {
   const isExpanded = layout === 'expanded'
-  const safeMessages = groupMessages([
-    ...(Array.isArray(messages) ? messages : []),
-    ...(streaming
-      ? [
-          {
-            id: '__streaming__',
-            role: 'assistant' as const,
-            parts: streaming.parts ?? [],
-            created_at: new Date().toISOString(),
-          },
-        ]
-      : []),
-  ])
-  const streamingGroup =
-    streaming && safeMessages.at(-1)?.role === 'assistant'
-      ? safeMessages.pop()
-      : undefined
+  const baseMessages = Array.isArray(messages) ? messages : []
+  const insertIndex = streaming
+    ? Math.min(
+        streaming.insertIndex ?? baseMessages.length,
+        baseMessages.length,
+      )
+    : baseMessages.length
+  const beforeMessages = groupMessages(baseMessages.slice(0, insertIndex))
+  const afterMessages = streaming
+    ? groupMessages(baseMessages.slice(insertIndex))
+    : []
+  const safeMessages = streaming ? beforeMessages : groupMessages(baseMessages)
+
+  const renderMessages = (items: Message[]) =>
+    items.map((msg, idx) => {
+      const prev = idx > 0 ? items[idx - 1] : null
+      const sameRole =
+        prev?.role === msg.role &&
+        (!prev.turn_id || !msg.turn_id || prev.turn_id === msg.turn_id)
+      return msg.role === 'user' ? (
+        <UserMessage
+          key={msg.id}
+          message={msg}
+          compact={sameRole}
+          expanded={isExpanded}
+        />
+      ) : (
+        <AssistantMessage
+          key={msg.id}
+          message={msg}
+          compact={sameRole}
+          expanded={isExpanded}
+          onResourceClick={onResourceClick}
+        />
+      )
+    })
+
   return (
     <>
-      {safeMessages.map((msg, idx) => {
-        const prev = idx > 0 ? safeMessages[idx - 1] : null
-        const sameRole =
-          prev?.role === msg.role &&
-          (!prev.turn_id || !msg.turn_id || prev.turn_id === msg.turn_id)
-        return msg.role === 'user' ? (
-          <UserMessage
-            key={msg.id}
-            message={msg}
-            compact={sameRole}
-            expanded={isExpanded}
-          />
-        ) : (
-          <AssistantMessage
-            key={msg.id}
-            message={msg}
-            compact={sameRole}
-            expanded={isExpanded}
-            onResourceClick={onResourceClick}
-          />
-        )
-      })}
+      {renderMessages(safeMessages)}
       {streaming && (
         <StreamingAssistantMessage
           {...streaming}
-          parts={streamingGroup?.parts ?? streaming.parts}
+          parts={streaming.parts}
           expanded={isExpanded}
           onResourceClick={onResourceClick}
         />
       )}
+      {streaming && renderMessages(afterMessages)}
     </>
   )
 }
@@ -327,7 +334,6 @@ function StreamingAssistantMessage({
   onResourceClick?: (uri: string) => void
 }) {
   const safeParts = Array.isArray(parts) ? parts : []
-  const hasContent = safeParts.length > 0
   const toolResultsById = getToolResultsById(safeParts)
 
   return (
@@ -340,7 +346,7 @@ function StreamingAssistantMessage({
           renderStreamingPart(part, i, toolResultsById, onResourceClick),
         )}
 
-        {!hasContent ? <TypingIndicator /> : null}
+        <StreamingIndicator />
       </div>
     </div>
   )

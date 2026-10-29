@@ -3,6 +3,7 @@
 
 """Tests for search endpoints: find, search, grep, glob."""
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -597,50 +598,38 @@ async def test_find_no_results(client: httpx.AsyncClient):
     assert resp.json()["status"] == "ok"
 
 
-@pytest.mark.parametrize("query", ["", "   \t\n"])
-async def test_find_rejects_empty_query(client: httpx.AsyncClient, service, query: str):
+@pytest.mark.parametrize("endpoint", ["find", "search"])
+@pytest.mark.parametrize(
+    ("query", "message"),
+    [
+        ("", "must not be empty"),
+        ("   \t\n", "must not be empty"),
+        ("broken\ud8b7", "valid Unicode"),
+    ],
+)
+async def test_search_rejects_invalid_query(
+    client: httpx.AsyncClient, service, endpoint, query, message
+):
     class RaisingEmbedder:
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-            raise AssertionError("empty query should not be embedded")
+            raise AssertionError("invalid query should not be embedded")
 
         async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-            raise AssertionError("empty query should not be embedded")
+            raise AssertionError("invalid query should not be embedded")
 
     service.viking_fs.query_embedder = RaisingEmbedder()
 
     resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": query},
+        f"/api/v1/search/{endpoint}",
+        content=json.dumps({"query": query}),
+        headers={"Content-Type": "application/json"},
     )
 
     assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "must not be empty" in body["error"]["message"]
-
-
-@pytest.mark.parametrize("query", ["", "   \t\n"])
-async def test_search_rejects_empty_query(client: httpx.AsyncClient, service, query: str):
-    class RaisingEmbedder:
-        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-            raise AssertionError("empty query should not be embedded")
-
-        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-            raise AssertionError("empty query should not be embedded")
-
-    service.viking_fs.query_embedder = RaisingEmbedder()
-
-    resp = await client.post(
-        "/api/v1/search/search",
-        json={"query": query},
-    )
-
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert "must not be empty" in body["error"]["message"]
+    assert message in body["error"]["message"]
 
 
 @pytest.mark.parametrize("method_name", ["find", "search"])
@@ -859,10 +848,22 @@ async def test_find_with_invalid_time_returns_invalid_argument(client: httpx.Asy
     assert body["error"]["message"]
 
 
-async def test_find_with_invalid_time_field_returns_invalid_argument(client: httpx.AsyncClient):
+@pytest.mark.parametrize("endpoint", ["/api/v1/search/find", "/api/v1/search/search"])
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"time_field": "published_at", "since": "2h"},
+        {"limit": 0},
+        {"limit": -1},
+        {"node_limit": 0},
+        {"node_limit": -1},
+        {"limit": 0, "node_limit": 5},
+    ],
+)
+async def test_search_rejects_invalid_request_fields(client: httpx.AsyncClient, endpoint, fields):
     resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": "sample", "time_field": "published_at", "since": "2h"},
+        endpoint,
+        json={"query": "sample", **fields},
     )
 
     assert resp.status_code == 400
@@ -870,6 +871,7 @@ async def test_find_with_invalid_time_field_returns_invalid_argument(client: htt
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert body["error"]["message"]
+    assert body["error"]["details"]["validation_errors"]
 
 
 async def test_find_with_inverted_mixed_time_range_returns_invalid_argument(

@@ -110,7 +110,7 @@ export function TokenTrendChart({
               axisLine={false}
               className="text-muted-foreground"
               tick={{ fill: 'currentColor', fontSize: 12 }}
-              tickFormatter={(value) => Number(value).toLocaleString()}
+              tickFormatter={(value) => formatNumber(Number(value))}
               tickLine={false}
               width="auto"
             />

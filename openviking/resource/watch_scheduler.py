@@ -403,6 +403,7 @@ class WatchScheduler:
                             api_key,
                             add_type,
                             connector_args,
+                            connector_auth_config,
                         ) = await self._resource_service._connector.restore_watch_request(
                             auth_state,
                             account_id=task.account_id,
@@ -416,6 +417,10 @@ class WatchScheduler:
                     refresh_kwargs = {}
                     if connector_watch:
                         refresh_kwargs["connector_states"] = getattr(task, "connector_states", None)
+                        # Re-resolve managed credentials every round so refreshed
+                        # tokens stay current; watches persist only the reference.
+                        if connector_auth_config:
+                            refresh_kwargs["connector_auth_config"] = connector_auth_config
                     result = await self._resource_service.refresh_resource(
                         path=task.path,
                         ctx=ctx,

@@ -144,14 +144,14 @@ Read the complete text of an L0, L1, or L2 file.
 | uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` (returned by `stat()`) |
 | offset | int | No | 0 | Starting line number (0-indexed) |
 | limit | int | No | -1 | Number of lines to read, `-1` means read to end |
-| raw | bool | No | false | Return raw stored content without memory-field cleanup. In Python, use `client.read_raw(uri)` to read this form. |
+| raw | bool | No | false | Skip default sanitization and MEMORY_FIELDS cleanup, and attempt placeholder restoration. In Python, use `client.read_raw(uri)`. |
 
 **Notes**
 
 - `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
 - Instead of a Viking URI, you may pass the 32-character hex `id` returned by `stat()` for a file. The server looks up the URI via the vector index and applies the same permission checks. Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup also fails if the corresponding vector record has been deleted. In both cases, the server returns `NOT_FOUND` and indicates that the data may not have been indexed yet or may have been deleted.
-- Public URI parameters accept `resources`, `user`, and `agent` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}/messages.jsonl` or the backward-compatible `viking://session/{session_id}/messages.jsonl` alias. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
-
+- Public URI parameters accept `resources`, `user`, and `agent` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}/messages.jsonl` or the current user's `viking://~/sessions/{session_id}/messages.jsonl` home alias. The old `viking://session/...` scope and internal scopes such as `temp` and `queue` return `INVALID_URI`.
+- Sensitive information handling: default reads (`raw=false`) preserve existing placeholders and sanitize remaining registered plaintext values; `raw=true` skips default sanitization and returns the restored content. Restoration affects only the response, not stored files; see [Privacy Configs](../concepts/13-privacy.md).
 
 **Python SDK**
 
@@ -216,18 +216,19 @@ Write a file and automatically refresh related semantics and vectors.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | File URI to write |
 | content | str | Yes | - | New content to write |
-| mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` creates only a missing file and returns `409 Conflict` if it already exists |
+| mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` is a compatibility alias for `replace` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
-| timeout | float | No | `null` | Timeout in seconds when `wait=true` |
+| timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
 | tag_mode | string | No | `replace` | Tag update mode: `replace` overwrites tags, `append` merges by key, and `clear` removes existing tags without requiring `tags` |
 
 **Notes**
 
-- `replace` and `append` create a missing target file. `append` uses the supplied content as the initial file content in that case. `create` targets only a missing file and returns `409 Conflict` when the path already exists. Directories are always rejected.
-- Explicit `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
+- `replace`, `append`, and the `create` compatibility alias create a missing target file. `append` uses the supplied content as the initial file content in that case; `create` otherwise behaves exactly like `replace`. Directories are always rejected.
+- Creating a missing file with any mode only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
+- Once file content is committed, a later semantic/vector enqueue failure does not roll it back. The request returns an error; retry the same write to resubmit derived maintenance. Explicit writes always recommit their final bytes, so retries remain safe while the vector index lags the file.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write automatically schedules related semantic and vector processing.
 - Parent L0/L1 refreshes for resource writes are best-effort: a parent lock conflict skips that directory refresh while preserving the file write and its own summary/vector work. Skipping L0/L1 persistence also skips directory vector updates; a later refresh is not guaranteed. Locks on the written file itself still raise conflicts. Contention detected before enqueueing returns `semantic_status: "skipped"`; skips during background execution are logged, and `wait=true` does not guarantee updated parent summaries.
 - When non-empty `tags` are supplied, tags are included in the file's first vector upsert rather than updated after processing. Omitting `tags`, or using `tags: []` with `tag_mode: "replace"`, preserves existing tags. Use `tag_mode: "clear"` to remove all existing tags; `clear` ignores any supplied tag values.
@@ -345,8 +346,10 @@ Write multiple files below one Resource or Memory directory, then refresh the af
 | `root_uri` | string | Yes | - | Existing Resource or Memory directory containing every target |
 | `operations` | array | Yes | - | File writes to validate and apply |
 | `wait` | boolean | No | `true` | Wait for semantic/vector refresh |
-| `timeout` | number | No | `null` | Refresh timeout in seconds when `wait=true` |
+| timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | `telemetry` | boolean/object | No | `false` | Include operation telemetry |
+| `processing_mode` | string | No | `semantic_and_vectors` | One processing mode for the whole batch: `semantic_and_vectors` or `vectors_only` |
+| `defer_processing` | boolean | No | `false` | Save files without scheduling semantic or vector work; the caller schedules later processing |
 
 Each operation contains:
 
@@ -356,18 +359,24 @@ Each operation contains:
 | `content` | string | Conditional | UTF-8 text; exactly one of `content` and `content_base64` is required |
 | `content_base64` | string | Conditional | Base64-encoded bytes; not supported for Memory targets |
 | `mode` | string | No | `replace` (default), `append`, `create`, or `upsert` |
+| `tags` | string[] | No | - | Explicit retrieval tags for this file |
+| `tag_mode` | string | No | `replace` | Tag write mode for this file: `replace`, `append`, or `clear` |
+| `acl` | object | No | - | Direct ACL for this file; requires manage permission on the file |
 
 **Notes**
 
 - Operation count, individual file size, and total content size have no application-level quotas.
 - All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
 - Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
-- `replace`, `append`, and `create` match `write()` semantics. `upsert` replaces an existing file or creates a missing file.
-- The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Semantic processing starts after all writes finish and the locks are released, refreshing the affected `.overview.md` and `.abstract.md` files together.
+- `create`, `replace`, and `upsert` are compatible spellings for setting the requested final body: they overwrite an existing file and create a missing one. `append` appends when the file exists and creates it with the supplied body when it does not.
+- `processing_mode` applies to the whole batch; operations cannot mix semantic modes. `vectors_only` maintains changed-file vectors without refreshing parent semantics.
+- `tags`, `tag_mode`, and `acl` apply per operation. Tags travel with the file's first vector upsert; `clear` does not require `tags` and ignores supplied tag values.
+- The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Without deferral, asynchronous processing retains the file locks until the associated work settles, refreshing the affected `.overview.md` and `.abstract.md` files together.
 - Resource parent refreshes use the same best-effort behavior as `write()`: L0/L1 lock conflicts skip the directory refresh and its vector updates while preserving file writes and file processing. A later refresh is not guaranteed.
 - An underlying I/O failure can still leave writes completed earlier in the batch visible.
 - Existing `.abstract.md` and `.overview.md` bodies may be replaced or appended. OpenViking preserves and validates protected OKF metadata and rebuilds only the directory's existing L0/L1 vectors for these operations.
-- In the response body, `semantic_status` (`queued`, `complete`, `deferred`, or `skipped`) reports the directory aggregation status; it is `skipped` if any directory encounters contention before enqueueing. Meanwhile, `vector_status` reports vector maintenance for changed files.
+- In the response body, `semantic_status` (`queued`, `complete`, `deferred`, or `skipped`) reports grouped parent-directory aggregation. It is `skipped` only when no parent group was enqueued; one busy parent does not hide work enqueued for another. `vector_status` reports vector maintenance for changed files.
+- If formal content commits but asynchronous refresh enqueue fails, the body is kept. Re-run with the final body using `replace`, `create`, or `upsert`; do not blindly replay an already-successful `append`, because it would append twice.
 
 **Python SDK**
 
@@ -638,7 +647,7 @@ ov set-tags viking://resources/project/ \
 
 ### reindex()
 
-Validate and repair semantic and/or vector artifacts for existing content already stored in OpenViking. Resource and skill targets use incremental RFV (Request / Formal / Vector) convergence by default: unchanged file fingerprints, directory L0/L1 visible-body fingerprints, and request scalars are skipped. Use `force=true` for an unconditional rebuild.
+Validate and repair semantic and/or vector artifacts for existing content already stored in OpenViking. For resources and skills, reindex compares persisted content with existing vector records: missing or stale records are rebuilt, vector records whose content no longer exists are deleted, and matching records are skipped. Deletion is allowed only after both sides are read completely. Use `force=true` to rebuild existing content unconditionally; completeness checks still apply.
 
 This API operates on existing `viking://...` content. It does not import new files. For normal ingestion, use [Resources](02-resources.md).
 
@@ -676,20 +685,28 @@ Session namespaces are not supported by `reindex()`. Requests for
 `viking://session/...` or `viking://user/<user_id>/sessions/...` are rejected;
 when reindexing a broader user namespace, session subtrees are skipped.
 
+For a concrete user root, namespace reindex processes `resources`, skill packages, memory shards, peer resources/memories, and other indexed files or custom top-level directories. Broad operations use shallow paginated discovery and skip session, privacy, internal settings, and storage-control subtrees. An actor-peer view must use an explicit visible content target because a broader namespace cannot provide a complete persisted-content view.
+
+Namespace reindex discovers targets from both persisted content and existing vector records. It reads and reuses one complete lightweight vector-record list per supported URI prefix, so it can clean missing content roots. Retryable failures or record-count changes retry the whole read at most three times; an incomplete read is never used for deletion. Directly requesting an already-missing target still returns `NOT_FOUND`; use an existing parent scope or namespace to remove its leftover vectors. A concrete content request never expands to sibling scopes.
+
+Memory uses the original file's L2 and no longer generates virtual `#chunk_NNNN` records. Reindex removes records whose content is gone and all legacy chunks, including a requested file's own old chunks. If the original memory file cannot be processed, its existing L2 is preserved, and real files whose names resemble chunk URIs are not deleted.
+
+Memory directory L0/L1 records require a nonempty, valid `.abstract.md`/`.overview.md` source for the respective level. A confirmed missing or empty source removes old records at that level; IO or format errors preserve them, increase `failed_records`, and add a warning. The other level and healthy files continue processing.
+
+For `semantic_and_vectors`, a memory directory removes records whose content is gone first, then reuses the same processing flow as `add_resources` and waits for the related semantic and vector work. An exact memory file only rebuilds its own L2 and removes legacy chunks; it does not regenerate directory semantics.
+
 **Modes**
 
-- `vectors_only`: compares current source MD5 values with vector-record MD5 values through RFV and rebuilds only missing or stale L0/L1/L2 records; it does not rewrite `.abstract.md` or `.overview.md`
-- `semantic_and_vectors`: uses the same RFV state and `ContextUpdatePlan` to drive semantic repair and L0/L1/L2 updates, without a second manual vector scan
+- `vectors_only`: compares current content fingerprints with vector-record fingerprints and rebuilds only missing or stale L0/L1/L2 records; it does not rewrite `.abstract.md` or `.overview.md`
+- `semantic_and_vectors`: repairs semantic artifacts first, then updates the corresponding L0/L1/L2 vectors
 
-For `resource` and `skill`, `semantic_and_vectors` refreshes directory/file semantic artifacts, including `.abstract.md` and `.overview.md`. For `memory`, it rebuilds the current persisted memory subtree semantics and vectors, but it does not replay historical extraction order.
+For `resource` and `skill`, `semantic_and_vectors` refreshes directory/file semantic artifacts, including `.abstract.md` and `.overview.md`. For `memory`, it rebuilds the current persisted memory subtree semantics and vectors.
 
-Resource/skill `vectors_only` and `semantic_and_vectors` share one F traversal and one narrow-field V inventory. Each source is read once during state resolution and that result is reused while executing the plan. `force=true` bypasses MD5 equality but still performs completeness and scope checks.
+Both resource/skill modes share one persisted-content scan and one lightweight vector-record read. Each source is read once and reused during later processing. `force=true` bypasses fingerprint equality but still performs completeness and scope checks.
 
-For a resource/skill directory, `recursive=false` limits both modes to the target directory's own L0/L1 records. Direct children are read only as existing REUSE inputs for the target aggregation; descendants are neither scanned nor rebuilt. Namespace containers have no index records of their own, so namespace targets reject `recursive=false` instead of silently becoming a no-op. Memory remains on the existing reindex path.
+For a resource/skill directory, `recursive=false` limits both modes to the target directory's own L0/L1 records. Direct children are used only to aggregate the target directory; they are not scanned or rebuilt. Namespace containers have no index records of their own, so namespace targets reject `recursive=false` instead of silently becoming a no-op. Memory remains on the existing reindex path.
 
-When the F snapshot is complete, the RFV diff identifies records present in V but absent from F as orphans and removes them during the same reindex. Deletion fails closed when the F snapshot is incomplete.
-
-When non-empty `tags` are provided, tags are included in the same upsert as each vector record produced by reindex; reindex does not call `set_tags` afterwards. Directory and namespace reindex operations apply tags to successfully rebuilt directory L0/L1 and leaf L2 records. `replace` overwrites existing tags, while `append` merges by key. `replace` with an empty tag list is a no-op. `clear` removes existing tags and does not require `tags`; if values are supplied with `clear`, they are ignored.
+When non-empty `tags` are provided, tags are saved in the same write as each vector record produced by reindex; reindex does not call `set_tags` afterwards. Directory and namespace reindex operations apply tags to successfully rebuilt directory L0/L1 and leaf L2 records. `replace` overwrites existing tags, while `append` merges by key. `replace` with an empty tag list is a no-op. `clear` removes existing tags and does not require `tags`; if values are supplied with `clear`, they are ignored.
 
 Subtree reindex is not transactional. Records skipped because no semantic source is available, or records whose embedding fails, do not receive the new tags.
 
@@ -825,7 +842,7 @@ Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{t
 | mode | Effective reindex mode |
 | scanned_records | Number of records or semantic sources considered |
 | rebuilt_records | Number of vector records successfully rebuilt |
-| deleted_records | Number of orphan vector records confirmed and deleted by the RFV diff |
+| deleted_records | Number of vector records confirmed to have no corresponding content and deleted |
 | unsupported_records | Number of records skipped because no usable vector source was available |
 | failed_records | Number of records that failed while rebuilding |
 | duration_ms | Synchronous run duration in milliseconds |
@@ -834,11 +851,7 @@ Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{t
 
 **Behavior notes**
 
-- `vectors_only` and `semantic_and_vectors` are non-destructive. They use rebuild/upsert behavior and do not require dropping the vector collection first.
-- `viking://` reindex fans out to supported top-level namespaces and excludes `session`.
-- Namespace reindex operations such as `viking://user` propagate to supported child content types.
-- `vectors_only` is the right mode when only the embedding model or vector index needs to be refreshed.
-- `semantic_and_vectors` is the right mode when semantic artifacts themselves must be regenerated before re-vectorization.
+- Reindex does not delete the whole vector collection. It overwrites records for live content and deletes only records confirmed to have no corresponding content.
 - Only one reindex task can run for the same URI and owner at a time. A concurrent request for the same target returns a conflict.
 - For resource files, text files can use file content when no summary is available. Non-text files require a generated summary or existing vector record fallback; otherwise they are counted as unsupported.
 

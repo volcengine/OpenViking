@@ -36,7 +36,8 @@ import { cn } from '#/lib/utils'
 import { deleteUserData, revokeKey } from '../-lib/api'
 import type { GatewayKey, IssuedKey, Profile, Upstream } from '../-lib/api'
 import { formatDateTime, formatRelativeTime, shortenId } from '../-lib/format'
-import { gatewayErrorMessage, protocolLabel } from '../-lib/localize'
+import { gatewayErrorMessage, keyName, protocolLabel } from '../-lib/localize'
+import { requestManagementUnlock } from '../-lib/management-key'
 import { NEW_ID } from '../-lib/search'
 import {
   useConnectionInfo,
@@ -46,6 +47,7 @@ import {
   useUpstreams,
 } from '../-lib/use-gateway'
 import { ConfirmDialog } from './confirm-dialog'
+import { DocsLink } from './docs-link'
 import { EmptyState, ErrorState, LoadingState } from './empty-state'
 import { ExplainedButton } from './explained-button'
 import { KeysIssueDialog } from './keys-issue-dialog'
@@ -68,7 +70,7 @@ type Missing = 'upstream' | 'profile' | 'both'
 /** Issue and revoke gateway keys. */
 export function KeysPage() {
   const { t } = useTranslation('gateway')
-  const { connection, invalidate } = useGateway()
+  const { connection, invalidate, readOnly, canIssueForOthers } = useGateway()
   const keysQuery = useKeys()
   const profilesQuery = useProfiles()
   const upstreamsQuery = useUpstreams()
@@ -118,11 +120,23 @@ export function KeysPage() {
           ? 'profile'
           : null
   const canIssue = listsReady && !missing
+  // Only someone who can't add upstreams or profiles waits for the gateway admin.
+  const missingReason = missing
+    ? t(
+        readOnly
+          ? 'keys.prerequisites.managed'
+          : `keys.prerequisites.${missing}`,
+      )
+    : undefined
   const refreshing =
     keysQuery.isFetching ||
     profilesQuery.isFetching ||
     upstreamsQuery.isFetching
-  const userKeyCount = keys.filter((key) => key.user_id === userTarget).length
+  const userKeys = keys.filter((key) => key.user_id === userTarget)
+  // OpenViking API keys are listed too, but deleting the user revokes only gateway keys.
+  const userGatewayKeyCount = userKeys.filter(
+    (key) => key.source !== 'openviking',
+  ).length
 
   function openIssue() {
     setIssueSession((session) => session + 1)
@@ -138,9 +152,51 @@ export function KeysPage() {
   const issueButton = (
     <IssueButton
       disabled={!canIssue}
-      reason={missing ? t(`keys.prerequisites.${missing}`) : undefined}
+      reason={missingReason}
       onClick={openIssue}
     />
+  )
+
+  const prerequisiteActions = (
+    <>
+      {!readOnly && (missing === 'upstream' || missing === 'both') ? (
+        <Button
+          variant="outline"
+          size="sm"
+          nativeButton={false}
+          render={
+            <Link
+              to="/gateway/upstreams/$upstreamId"
+              params={{ upstreamId: NEW_ID }}
+            />
+          }
+        >
+          <ServerIcon />
+          {t('keys.prerequisites.addUpstream')}
+        </Button>
+      ) : null}
+      {!readOnly && (missing === 'profile' || missing === 'both') ? (
+        <Button
+          variant="outline"
+          size="sm"
+          nativeButton={false}
+          render={
+            <Link
+              to="/gateway/profiles/$profileId"
+              params={{ profileId: NEW_ID }}
+            />
+          }
+        >
+          <SlidersHorizontalIcon />
+          {t('keys.prerequisites.createProfile')}
+        </Button>
+      ) : null}
+      {missing && readOnly ? (
+        <Button variant="outline" size="sm" onClick={requestManagementUnlock}>
+          {t('keys.prerequisites.unlock')}
+        </Button>
+      ) : null}
+    </>
   )
 
   return (
@@ -149,6 +205,7 @@ export function KeysPage() {
         description={t('keys.description')}
         actions={
           <>
+            <DocsLink section="keys" />
             <Button
               type="button"
               variant="outline"
@@ -185,47 +242,16 @@ export function KeysPage() {
               description={
                 <>
                   <span className="block">{t('keys.empty.description')}</span>
-                  {missing ? (
+                  {missingReason ? (
                     <span className="mt-2 block font-medium text-foreground">
-                      {t(`keys.prerequisites.${missing}`)}
+                      {missingReason}
                     </span>
                   ) : null}
                 </>
               }
               action={
                 <>
-                  {missing === 'upstream' || missing === 'both' ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      nativeButton={false}
-                      render={
-                        <Link
-                          to="/gateway/upstreams/$upstreamId"
-                          params={{ upstreamId: NEW_ID }}
-                        />
-                      }
-                    >
-                      <ServerIcon />
-                      {t('keys.prerequisites.addUpstream')}
-                    </Button>
-                  ) : null}
-                  {missing === 'profile' || missing === 'both' ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      nativeButton={false}
-                      render={
-                        <Link
-                          to="/gateway/profiles/$profileId"
-                          params={{ profileId: NEW_ID }}
-                        />
-                      }
-                    >
-                      <SlidersHorizontalIcon />
-                      {t('keys.prerequisites.createProfile')}
-                    </Button>
-                  ) : null}
+                  {prerequisiteActions}
                   {issueButton}
                 </>
               }
@@ -238,9 +264,11 @@ export function KeysPage() {
                   <TableHead className={DESKTOP_ONLY}>
                     {t('keys.table.key')}
                   </TableHead>
-                  <TableHead className={DESKTOP_ONLY}>
-                    {t('keys.table.user')}
-                  </TableHead>
+                  {canIssueForOthers ? (
+                    <TableHead className={DESKTOP_ONLY}>
+                      {t('keys.table.user')}
+                    </TableHead>
+                  ) : null}
                   <TableHead className={DESKTOP_ONLY}>
                     {t('keys.table.profile')}
                   </TableHead>
@@ -265,8 +293,17 @@ export function KeysPage() {
                     gatewayKey={key}
                     profiles={profilesQuery.isSuccess ? profiles : undefined}
                     upstreams={upstreamsQuery.isSuccess ? upstreams : undefined}
-                    onRevoke={() => setRevokeTarget(key)}
-                    onDeleteUser={() => setUserTarget(key.user_id)}
+                    showUser={canIssueForOthers}
+                    onRevoke={
+                      key.source === 'openviking'
+                        ? undefined
+                        : () => setRevokeTarget(key)
+                    }
+                    onDeleteUser={
+                      canIssueForOthers
+                        ? () => setUserTarget(key.user_id)
+                        : undefined
+                    }
                   />
                 ))}
               </TableBody>
@@ -320,10 +357,16 @@ export function KeysPage() {
           if (!open) setUserTarget(null)
         }}
         title={t('keys.deleteUser.title', { user: userTarget ?? '' })}
-        description={t('keys.deleteUser.description', {
-          user: userTarget ?? '',
-          count: userKeyCount,
-        })}
+        description={[
+          t('keys.deleteUser.description', {
+            user: userTarget ?? '',
+            count: userGatewayKeyCount,
+          }),
+          // A client sending the OpenViking API key itself keeps working.
+          ...(userKeys.some((key) => key.source === 'openviking')
+            ? [t('keys.deleteUser.directKey')]
+            : []),
+        ].join(' ')}
         confirmLabel={t('keys.deleteUser.confirm')}
         icon={<UserXIcon />}
         onConfirm={() =>
@@ -392,6 +435,7 @@ function KeyRow({
   gatewayKey: key,
   profiles,
   upstreams,
+  showUser,
   onRevoke,
   onDeleteUser,
 }: {
@@ -399,24 +443,34 @@ function KeyRow({
   /** Undefined while the list isn't loaded, so nothing shows as missing. */
   profiles?: Profile[]
   upstreams?: Upstream[]
-  onRevoke: () => void
-  onDeleteUser: () => void
+  /** Admins see whose identity each key acts as. */
+  showUser: boolean
+  /** Absent for an OpenViking API key: only OpenViking can revoke it. */
+  onRevoke?: () => void
+  onDeleteUser?: () => void
 }) {
   const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
+  const direct = key.source === 'openviking'
+  const name = keyName(t, key)
   const profile = profiles?.find((item) => item.id === key.policy_id)
+  const defaults = (
+    <span className="text-muted-foreground">
+      {t('keys.openviking.defaults')}
+    </span>
+  )
 
   return (
     <TableRow>
       <TableCell className="pl-4">
-        <span className="block max-w-48 truncate font-medium" title={key.name}>
-          {key.name}
+        <span className="block max-w-48 truncate font-medium" title={name}>
+          {name}
         </span>
         <span
           className="block max-w-56 truncate font-mono text-xs text-muted-foreground md:hidden"
           title={key.user_id}
         >
-          {`${key.prefix}… · ${key.user_id}`}
+          {showUser ? `${key.prefix}… · ${key.user_id}` : `${key.prefix}…`}
         </span>
       </TableCell>
       <TableCell
@@ -424,16 +478,20 @@ function KeyRow({
       >
         {`${key.prefix}…`}
       </TableCell>
+      {showUser ? (
+        <TableCell className={DESKTOP_ONLY}>
+          <span
+            className="block max-w-40 truncate font-mono text-xs"
+            title={key.user_id}
+          >
+            {key.user_id}
+          </span>
+        </TableCell>
+      ) : null}
       <TableCell className={DESKTOP_ONLY}>
-        <span
-          className="block max-w-40 truncate font-mono text-xs"
-          title={key.user_id}
-        >
-          {key.user_id}
-        </span>
-      </TableCell>
-      <TableCell className={DESKTOP_ONLY}>
-        {profile ? (
+        {direct ? (
+          defaults
+        ) : profile ? (
           <Link
             to="/gateway/profiles/$profileId"
             params={{ profileId: profile.id }}
@@ -453,47 +511,51 @@ function KeyRow({
         )}
       </TableCell>
       <TableCell className={DESKTOP_ONLY}>
-        <ChipList
-          items={key.upstream_ids}
-          label={(id) =>
-            upstreams?.find((upstream) => upstream.id === id)?.name ?? id
-          }
-          render={(id) => {
-            const upstream = upstreams?.find((item) => item.id === id)
-            if (upstream) {
-              return (
+        {direct ? (
+          defaults
+        ) : (
+          <ChipList
+            items={key.upstream_ids}
+            label={(id) =>
+              upstreams?.find((upstream) => upstream.id === id)?.name ?? id
+            }
+            render={(id) => {
+              const upstream = upstreams?.find((item) => item.id === id)
+              if (upstream) {
+                return (
+                  <Badge
+                    key={id}
+                    variant="outline"
+                    className={cn(
+                      'max-w-40 font-normal',
+                      protocolTint(upstream.protocol),
+                    )}
+                    title={protocolLabel(t, upstream.protocol)}
+                  >
+                    <span className="truncate">{upstream.name}</span>
+                  </Badge>
+                )
+              }
+              return upstreams ? (
+                <ToneBadge
+                  key={id}
+                  tone="warning"
+                  title={t('keys.missingUpstream')}
+                >
+                  {t('keys.missing')}
+                </ToneBadge>
+              ) : (
                 <Badge
                   key={id}
                   variant="outline"
-                  className={cn(
-                    'max-w-40 font-normal',
-                    protocolTint(upstream.protocol),
-                  )}
-                  title={protocolLabel(t, upstream.protocol)}
+                  className="font-mono font-normal text-muted-foreground"
                 >
-                  <span className="truncate">{upstream.name}</span>
+                  {shortenId(id)}
                 </Badge>
               )
-            }
-            return upstreams ? (
-              <ToneBadge
-                key={id}
-                tone="warning"
-                title={t('keys.missingUpstream')}
-              >
-                {t('keys.missing')}
-              </ToneBadge>
-            ) : (
-              <Badge
-                key={id}
-                variant="outline"
-                className="font-mono font-normal text-muted-foreground"
-              >
-                {shortenId(id)}
-              </Badge>
-            )
-          }}
-        />
+            }}
+          />
+        )}
       </TableCell>
       <TableCell className={DESKTOP_ONLY}>
         {key.models.length ? (
@@ -522,38 +584,42 @@ function KeyRow({
       </TableCell>
       <TableCell className="pr-4">
         <div className="flex items-center justify-end gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-            aria-label={t('keys.actions.revokeKey', { name: key.name })}
-            onClick={onRevoke}
-          >
-            <Trash2Icon />
-            {t('actions.revoke')}
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="text-muted-foreground"
-                  aria-label={t('keys.actions.more', { name: key.name })}
-                />
-              }
+          {onRevoke ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              aria-label={t('keys.actions.revokeKey', { name })}
+              onClick={onRevoke}
             >
-              <EllipsisIcon />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-auto min-w-48">
-              <DropdownMenuItem variant="destructive" onClick={onDeleteUser}>
-                <UserXIcon />
-                {t('keys.actions.deleteUserData')}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+              <Trash2Icon />
+              {t('actions.revoke')}
+            </Button>
+          ) : null}
+          {onDeleteUser ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-muted-foreground"
+                    aria-label={t('keys.actions.more', { name })}
+                  />
+                }
+              >
+                <EllipsisIcon />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-auto min-w-48">
+                <DropdownMenuItem variant="destructive" onClick={onDeleteUser}>
+                  <UserXIcon />
+                  {t('keys.actions.deleteUserData')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
         </div>
       </TableCell>
     </TableRow>

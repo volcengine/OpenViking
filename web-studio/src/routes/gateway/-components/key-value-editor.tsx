@@ -1,3 +1,4 @@
+import { useReadOnly } from './read-only'
 import * as React from 'react'
 import { PlusIcon, Trash2Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -9,6 +10,7 @@ import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 type Row = { id: number; key: string; value: string }
 
 type CommonProps = {
+  disabled?: boolean
   keyPlaceholder: string
   valuePlaceholder: string
   /** Label of the add button; defaults to "Add". */
@@ -55,6 +57,8 @@ function sameRecord(a: object, b: object): boolean {
  * out of the value; when a name repeats, the last row wins and is flagged.
  */
 export function KeyValueEditor(props: KeyValueEditorProps) {
+  const readOnly = useReadOnly()
+  const disabled = props.disabled || readOnly
   const { t } = useTranslation('gateway')
   const { storedKeys = [], maskValues } = props
   const [rows, setRows] = React.useState(() => toRows(props.value))
@@ -105,6 +109,7 @@ export function KeyValueEditor(props: KeyValueEditorProps) {
           <div key={row.id} className="grid gap-1">
             <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2">
               <Input
+                disabled={disabled}
                 {...PLAIN_INPUT_PROPS}
                 value={row.key}
                 placeholder={props.keyPlaceholder}
@@ -116,6 +121,7 @@ export function KeyValueEditor(props: KeyValueEditorProps) {
                 }
               />
               <Input
+                disabled={disabled}
                 {...PLAIN_INPUT_PROPS}
                 type={
                   maskValues ? 'password' : props.numeric ? 'number' : 'text'
@@ -133,18 +139,21 @@ export function KeyValueEditor(props: KeyValueEditorProps) {
                   change(row.id, { value: event.target.value })
                 }
               />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={t('keyValue.remove')}
-                className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                onClick={() =>
-                  update(rows.filter((other) => other.id !== row.id))
-                }
-              >
-                <Trash2Icon />
-              </Button>
+              {readOnly ? null : (
+                <Button
+                  disabled={disabled}
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t('keyValue.remove')}
+                  className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() =>
+                    update(rows.filter((other) => other.id !== row.id))
+                  }
+                >
+                  <Trash2Icon />
+                </Button>
+              )}
             </div>
             {duplicate ? (
               <p className="text-xs text-amber-600 dark:text-amber-300">
@@ -154,19 +163,27 @@ export function KeyValueEditor(props: KeyValueEditorProps) {
           </div>
         )
       })}
-      <div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() =>
-            setRows([...rows, { id: nextRowId++, key: '', value: '' }])
-          }
-        >
-          <PlusIcon />
-          {props.addLabel ?? t('keyValue.add')}
-        </Button>
-      </div>
+      {/* A read-only view shows what is set, not how to add more. */}
+      {readOnly ? (
+        rows.length ? null : (
+          <p className="text-sm text-muted-foreground">{t('keyValue.none')}</p>
+        )
+      ) : (
+        <div>
+          <Button
+            disabled={disabled}
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setRows([...rows, { id: nextRowId++, key: '', value: '' }])
+            }
+          >
+            <PlusIcon />
+            {props.addLabel ?? t('keyValue.add')}
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

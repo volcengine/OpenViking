@@ -12,6 +12,7 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.model_error import model_error_boundary, model_error_from_status
 from openviking.storage.vectordb.collection.volcengine_clients import (
     DEFAULT_TIMEOUT,
     ClientForDataApi,
@@ -65,10 +66,12 @@ class VikingDBClientMixin:
         try:
             response = self.client.do_req("POST", path, req_body=req_body)
             if response.status_code != 200:
-                logger.warning(
-                    f"VikingDB API returned bad code: {response.status_code}, message: {response.text}"
+                raise model_error_from_status(
+                    response.status_code,
+                    f"VikingDB API returned bad code: {response.status_code}, "
+                    f"message: {response.text}",
+                    provider="vikingdb",
                 )
-                return []
 
             result = response.json()
             return result.get("result", {}).get("data", [])
@@ -102,12 +105,11 @@ class VikingDBClientMixin:
             content=req.body,
         )
         if response.status_code != 200:
-            logger.warning(
-                "VikingDB API returned bad code: %s, message: %s",
+            raise model_error_from_status(
                 response.status_code,
-                response.text,
+                f"VikingDB API returned bad code: {response.status_code}, message: {response.text}",
+                provider="vikingdb",
             )
-            return []
 
         result = response.json()
         return result.get("result", {}).get("data", [])
@@ -182,6 +184,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
             return self.document_param
         return None
 
+    @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         input_type = self._resolve_input_type(is_query)
 
@@ -197,7 +200,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
 
             return EmbedResult(dense_vector=dense_vector)
 
-        result = self._run_with_retry(
+        result = self._run_once(
             _call,
             logger=logger,
             operation_name="VikingDB embedding",
@@ -212,6 +215,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         )
         return result
 
+    @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
             results = await self._call_api_async([text], dense_model=self.dense_model)
@@ -224,8 +228,9 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
                 dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
             return EmbedResult(dense_vector=dense_vector)
 
-        result = await self._run_with_async_retry(
+        result = await self._run_once_async(
             _call,
+            is_query=is_query,
             logger=logger,
             operation_name="VikingDB async embedding",
         )
@@ -264,6 +269,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
             "version": model_version,
         }
 
+    @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         def _call() -> EmbedResult:
             results = self._call_api([text], sparse_model=self.sparse_model)
@@ -277,7 +283,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
 
             return EmbedResult(sparse_vector=sparse_vector)
 
-        result = self._run_with_retry(
+        result = self._run_once(
             _call,
             logger=logger,
             operation_name="VikingDB sparse embedding",
@@ -292,6 +298,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
         )
         return result
 
+    @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
             results = await self._call_api_async([text], sparse_model=self.sparse_model)
@@ -306,8 +313,9 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
                 sparse_vector = self._process_sparse_embedding(item["sparse_embedding"])
             return EmbedResult(sparse_vector=sparse_vector)
 
-        result = await self._run_with_async_retry(
+        result = await self._run_once_async(
             _call,
+            is_query=is_query,
             logger=logger,
             operation_name="VikingDB async sparse embedding",
         )
@@ -360,6 +368,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
             return self.document_param
         return None
 
+    @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         input_type = self._resolve_input_type(is_query)
 
@@ -383,7 +392,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
 
             return EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector)
 
-        result = self._run_with_retry(
+        result = self._run_once(
             _call,
             logger=logger,
             operation_name="VikingDB hybrid embedding",
@@ -398,6 +407,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         )
         return result
 
+    @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
             results = await self._call_api_async(
@@ -419,8 +429,9 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
                 sparse_vector = self._process_sparse_embedding(item["sparse_embedding"])
             return EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector)
 
-        result = await self._run_with_async_retry(
+        result = await self._run_once_async(
             _call,
+            is_query=is_query,
             logger=logger,
             operation_name="VikingDB async hybrid embedding",
         )

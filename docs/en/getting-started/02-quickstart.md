@@ -76,7 +76,7 @@ Release owners rotate in this order: qin-ctx, zhoujh01, ZaynJarvis, t0saki.
 Import it into a new resource directory:
 
 ```bash
-ov add-resource ./ov-release-rotation.md --to viking://resources/ov-release-rotation --wait --timeout 120
+ov add-resource ./ov-release-rotation.md --to viking://resources/ov-release-rotation --wait
 ```
 
 The CLI uploads the local file automatically. `--wait` waits for processing; continue after the command succeeds. Without it, save the returned `task_id` and use `ov task status <task_id>` until the task is `completed`. See [Background Tasks](../api/17-tasks.md).

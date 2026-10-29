@@ -6,24 +6,30 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useBlocker } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { EyeIcon } from 'lucide-react'
 import { isOvClientError } from '#/lib/ov-client'
-import { FolderOpen, Plus, X } from 'lucide-react'
+import { createRandomUuid } from '#/lib/browser-crypto'
 import { Button } from '#/components/ui/button'
-import { Input } from '#/components/ui/input'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '#/components/ui/dialog'
 import { Textarea } from '#/components/ui/textarea'
 import { useAppConnection } from '#/hooks/use-app-connection'
-import { DirectoryPickerDialog } from '#/routes/resources/-components/directory-picker-dialog'
-import { fetchFileContent } from '#/routes/resources/-lib/api'
-import {
-  createCompile,
-  fetchCompileSkills,
-  fetchCompileTask,
-  lookupSubmission,
-} from '../-lib/api'
+import { fetchFileContent, fetchFsStat } from '#/routes/resources/-lib/api'
+import { createCompile, fetchCompileTask, lookupSubmission } from '../-lib/api'
 import type { CompileRequest, CompileTask } from '../-lib/api'
 import { compileCommand, parseArgs } from '../-lib/commands'
 import { CompileError, CompileShell } from './shared'
 import { SkillPicker } from './skill-picker'
+import { CapabilityNotice, useCompileCapability } from './capability-notice'
+import { CompileLocations } from './compile-locations'
+import { useCompileSkills, skillGuide } from '../-lib/skills'
+import { locationLabel, sourceUris, targetError } from '../-lib/locations'
 
 type Draft = { skill: string; sources: string; to: string; instruction: string }
 const empty: Draft = { skill: '', sources: '', to: '', instruction: '' }
@@ -40,7 +46,13 @@ function readDraft(key: string): Draft {
     return empty
   }
 }
-export function CompileForm({ fromTask }: { fromTask?: string }) {
+export function CompileForm({
+  fromTask,
+  sourceUri,
+}: {
+  fromTask?: string
+  sourceUri?: string
+}) {
   const { t } = useTranslation('compile'),
     navigate = useNavigate()
   const { identityScopeKey, connection } = useAppConnection()
@@ -48,24 +60,43 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
   const draftKey = `compile-draft:${identityScopeKey}`,
     submissionKey = `compile-submission:${identityScopeKey}`
   const [handoff] = useState(() => readCompileHandoff(identityScopeKey))
+  const [recoverKey, setRecoverKey] = useState(() => {
+    try {
+      return sessionStorage.getItem(submissionKey)
+    } catch {
+      return null
+    }
+  })
+  const [savedDraft] = useState(() => readDraft(draftKey))
+  const [draftStarted, setDraftStarted] = useState(
+    () => !!(recoverKey || handoff || fromTask || sourceUri),
+  )
   useEffect(() => {
     clearCompileHandoff()
   }, [])
   const [draft, setDraft] = useState(() =>
-    handoff
-      ? {
-          skill: handoff.skill || '',
-          sources: handoff.from?.join('\n') || '',
-          to: handoff.to || '',
-          instruction: handoff.instruction || '',
-        }
-      : readDraft(draftKey),
+    recoverKey
+      ? savedDraft
+      : handoff
+        ? {
+            skill: handoff.skill || '',
+            sources: handoff.from?.join('\n') || '',
+            to: handoff.to || '',
+            instruction: handoff.instruction || '',
+          }
+        : fromTask
+          ? savedDraft
+          : {
+              ...empty,
+              sources: sourceUri || userResourceRoot.replace(/\/$/, ''),
+            },
   )
   const [args, setArgs] = useState(
-      handoff?.args ? JSON.stringify(handoff.args, null, 2) : '',
+      !recoverKey && handoff?.args ? JSON.stringify(handoff.args, null, 2) : '',
     ),
     [preview, setPreview] = useState(false)
-  const [picker, setPicker] = useState<'sources' | 'to' | null>(null)
+  const [locationRevision, setLocationRevision] = useState(0)
+  const capability = useCompileCapability()
   const [error, setError] = useState<unknown>(null),
     [savingError, setSavingError] = useState(false)
   const [busy, setBusy] = useState(false),
@@ -76,13 +107,6 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
   const mounted = useRef(true),
     completed = useRef(false),
     filled = useRef(false)
-  const [recoverKey, setRecoverKey] = useState(() => {
-    try {
-      return sessionStorage.getItem(submissionKey)
-    } catch {
-      return null
-    }
-  })
   useEffect(() => {
     mounted.current = true
     return () => {
@@ -97,18 +121,15 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
     enableBeforeUnload: () => !completed.current && !!args.trim(),
   })
   useEffect(() => {
-    if (completed.current) return
+    if (completed.current || !draftStarted) return
     try {
       localStorage.setItem(draftKey, JSON.stringify(draft))
       setSavingError(false)
     } catch {
       setSavingError(true)
     }
-  }, [draft, draftKey])
-  const skills = useQuery({
-    queryKey: ['compile-skills', identityScopeKey],
-    queryFn: ({ signal }) => fetchCompileSkills(signal),
-  })
+  }, [draft, draftKey, draftStarted])
+  const skills = useCompileSkills()
   const original = useQuery({
     queryKey: ['compile-task', identityScopeKey, fromTask],
     queryFn: ({ signal }) => fetchCompileTask(fromTask!, signal),
@@ -116,13 +137,14 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
   })
   useEffect(() => {
     const originalRequest = original.data?.meta?.request
-    if (!originalRequest || filled.current) return
+    if (!originalRequest || filled.current || recoverKey) return
     filled.current = true
     if (
       Object.values(readDraft(draftKey)).some(Boolean) &&
       !window.confirm(t('selectDraft'))
     )
       return
+    setLocationRevision((value) => value + 1)
     setDraft({
       skill: originalRequest.skill,
       sources: originalRequest.from.join('\n'),
@@ -132,7 +154,7 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
     setArgs(
       originalRequest.args ? JSON.stringify(originalRequest.args, null, 2) : '',
     )
-  }, [original.data, draftKey, t])
+  }, [original.data, draftKey, recoverKey, t])
   const skillContent = useQuery({
     queryKey: ['compile-skill-content', identityScopeKey, draft.skill],
     queryFn: () =>
@@ -140,6 +162,7 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
     enabled: preview && !!draft.skill,
   })
   function update(key: keyof Draft, value: string) {
+    setDraftStarted(true)
     setDraft((v) => ({ ...v, [key]: value }))
   }
   const [attempted, setAttempted] = useState(false)
@@ -151,11 +174,7 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
       : sourceRows.some((v) => v.trim() && !v.trim().startsWith('viking://'))
         ? t('invalidUri')
         : '',
-    to: !draft.to.trim()
-      ? t('targetRequired')
-      : !draft.to.trim().startsWith('viking://')
-        ? t('invalidUri')
-        : '',
+    to: targetError(draft.to.trim()) ? t(targetError(draft.to.trim())!) : '',
     args: (() => {
       try {
         parseArgs(args)
@@ -218,8 +237,11 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
       ...(parsed ? { args: parsed } : {}),
     }
   }
+  function isCurrent() {
+    return mounted.current
+  }
   async function finish(task: CompileTask) {
-    if (!mounted.current) return
+    if (!isCurrent()) return
     completed.current = true
     try {
       localStorage.removeItem(draftKey)
@@ -246,7 +268,7 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
         } catch (cause) {
           if (!isOvClientError(cause) || cause.code !== 'NOT_FOUND') throw cause
         }
-        if (!mounted.current) return
+        if (!isCurrent()) return
         const submittedAt = Number(restoredKey.split(':')[0])
         if (
           !Number.isFinite(submittedAt) ||
@@ -255,10 +277,32 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
           throw new Error(t('expiredSubmission'))
       }
       if (!submission.current && !validate()) return
+      const checked = await capability.refetch()
+      if (!isCurrent() || checked.isError || !checked.data?.can_create) return
+      if (!submission.current && !restoredKey) {
+        const entries = await Promise.all(
+          sourceUris(draft.sources).map((uri) =>
+            fetchFsStat(uri, { throwOnError: true }),
+          ),
+        )
+        if (!isCurrent()) return
+        if (entries.some((entry) => !entry.isDir))
+          throw new Error(t('sourceNotDirectory'))
+        try {
+          const destination = await fetchFsStat(draft.to.trim(), {
+            throwOnError: true,
+          })
+          if (!destination.isDir) throw new Error(t('targetNotDirectory'))
+        } catch (cause) {
+          // Only a confirmed missing directory is safe to create during execution.
+          if ((cause as { code?: string }).code !== 'NOT_FOUND') throw cause
+        }
+        if (!isCurrent()) return
+      }
       const body = submission.current?.request || request()
       if (!submission.current)
         submission.current = {
-          key: recoverKey || `${Date.now()}:${crypto.randomUUID()}`,
+          key: recoverKey || `${Date.now()}:${createRandomUuid()}`,
           request: body,
         }
       const key = submission.current.key
@@ -305,9 +349,17 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
   useEffect(() => {
     if (error) document.getElementById('compile-error')?.focus()
   }, [error])
-  const selected = skills.data?.find((s) => s.uri === draft.skill)
+  const selected = skills.data.find((s) => s.uri === draft.skill)
+  const guide = selected ? skillGuide(selected, t) : null
+  const targetLabel = locationLabel(draft.to, userResourceRoot)
+  const skillGroups = [
+    ['builtinSkills', skills.builtin],
+    ['mySkills', skills.mine],
+    ['sharedSkills', skills.shared],
+  ] as const
   return (
     <CompileShell title={t('new')}>
+      <CapabilityNotice capability={capability} />
       {recoverKey && (
         <Button
           variant="outline"
@@ -345,24 +397,95 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
         }}
         className="w-full min-w-0 space-y-5"
       >
-        <p className="text-sm text-muted-foreground">{t('formIntro')}</p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-muted-foreground">{t('formIntro')}</p>
+          {!draftStarted && Object.values(savedDraft).some(Boolean) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={busy || uncertain}
+              onClick={() => {
+                setDraft(savedDraft)
+                setDraftStarted(true)
+                setAttempted(false)
+                setError(null)
+                setLocationRevision((value) => value + 1)
+              }}
+            >
+              {t('restoreDraft')}
+            </Button>
+          )}
+        </div>
         <fieldset
           disabled={busy || uncertain}
           className="space-y-6 rounded-xl border bg-card p-5 disabled:opacity-60 sm:p-6"
         >
           <section className="space-y-2">
-            <label
-              htmlFor="compile-skill"
-              className="block text-sm font-medium"
-            >
-              {t('skill')} <span className="text-destructive">*</span>
-            </label>
+            <div className="flex items-center justify-between gap-3">
+              <label
+                htmlFor="compile-skill"
+                className="block text-sm font-medium"
+              >
+                {t('skill')} <span className="text-destructive">*</span>
+              </label>
+              {draft.skill && (
+                <Dialog open={preview} onOpenChange={setPreview}>
+                  <DialogTrigger
+                    render={<Button type="button" variant="ghost" size="sm" />}
+                  >
+                    <EyeIcon className="size-4" />
+                    {t('preview')}
+                  </DialogTrigger>
+                  <DialogContent className="flex max-h-[80dvh] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+                    <DialogHeader className="shrink-0 border-b py-5 pl-6 pr-14">
+                      <DialogTitle className="break-words text-lg leading-snug">
+                        {guide?.name || selected?.name || t('preview')}
+                      </DialogTitle>
+                      <DialogDescription className="break-all text-xs">
+                        {draft.skill}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="min-h-0 overflow-auto overscroll-contain px-6 py-5">
+                      {skillContent.isPending ? (
+                        <p role="status" className="text-muted-foreground">
+                          {t('loading')}
+                        </p>
+                      ) : skillContent.isError ? (
+                        <CompileError
+                          error={skillContent.error}
+                          retry={() => void skillContent.refetch()}
+                        />
+                      ) : skillContent.data.content ? (
+                        <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed">
+                          {skillContent.data.content}
+                        </pre>
+                      ) : (
+                        <p className="text-muted-foreground">
+                          {t('skillContentEmpty')}
+                        </p>
+                      )}
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              )}
+            </div>
             <SkillPicker
               invalid={attempted && !!fieldErrors.skill}
-              disabled={busy || uncertain || skills.isPending}
-              loading={skills.isPending}
+              disabled={
+                busy ||
+                uncertain ||
+                (skills.builtin.isPending &&
+                  skills.mine.isPending &&
+                  skills.shared.isPending)
+              }
+              loading={
+                skills.builtin.isPending ||
+                skills.mine.isPending ||
+                skills.shared.isPending
+              }
               value={draft.skill}
-              skills={skills.data ?? []}
+              skills={skills.data}
               onChange={(uri) => {
                 update('skill', uri)
                 setPreview(false)
@@ -372,149 +495,58 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
             <p className="text-xs text-muted-foreground">
               {t('skillLocationHint')}
             </p>
-            {skills.isError && (
-              <CompileError
-                error={skills.error}
-                retry={() => void skills.refetch()}
-              />
+            {skillGroups.map(
+              ([label, query]) =>
+                query.isError && (
+                  <div key={label} className="space-y-2">
+                    <p className="text-sm">
+                      {t('skillGroupFailed', { group: t(label) })}
+                    </p>
+                    <CompileError
+                      error={query.error}
+                      retry={() => void query.refetch()}
+                    />
+                  </div>
+                ),
             )}
-            {skills.data?.length === 0 && (
-              <Link to="/skills" className="text-sm text-primary underline">
-                {t('noSkills')}
-              </Link>
-            )}
-            {selected && (
-              <p className="text-sm text-muted-foreground">
-                {selected.description}
+            {!skills.builtin.isPending &&
+              !skills.mine.isPending &&
+              !skills.shared.isPending &&
+              !skills.builtin.isError &&
+              !skills.mine.isError &&
+              !skills.shared.isError &&
+              !skills.data.length && (
+                <p className="text-sm text-muted-foreground">
+                  {t('noSkills')}{' '}
+                  <Link to="/skills" className="text-primary underline">
+                    {t('manageSkills')}
+                  </Link>
+                </p>
+              )}
+            {selected?.metadataError && (
+              <p className="text-xs text-muted-foreground">
+                {t('skillMetadataFailed')}{' '}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void skills.builtin.refetch()}
+                >
+                  {t('retry')}
+                </Button>
               </p>
             )}
-            {draft.skill && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setPreview((v) => !v)}
-              >
-                {t('preview')}
-              </Button>
-            )}
-            {preview && (
-              <div className="max-h-80 overflow-auto rounded-lg border p-4">
-                <pre className="whitespace-pre-wrap break-words text-xs">
-                  {skillContent.data?.content || t('loading')}
-                </pre>
-                {skillContent.isError && (
-                  <CompileError error={skillContent.error} />
-                )}
-              </div>
-            )}
           </section>
-          <section className="space-y-2 border-t pt-5">
-            <label
-              htmlFor="compile-sources"
-              className="block text-sm font-medium"
-            >
-              {t('sources')} <span className="text-destructive">*</span>
-            </label>
-            <p id="source-hint" className="text-xs text-muted-foreground">
-              {t('sourceHint')}
-            </p>
-            <div className="space-y-2">
-              {sourceRows.map((uri, index) => (
-                <div key={index} className="flex items-center gap-2">
-                  <Input
-                    id={
-                      index === 0
-                        ? 'compile-sources'
-                        : `compile-source-${index}`
-                    }
-                    aria-label={t('sourceNumber', { number: index + 1 })}
-                    aria-invalid={attempted && !!fieldErrors.sources}
-                    aria-describedby="source-hint error-sources"
-                    placeholder={t('sourcePlaceholder')}
-                    value={uri}
-                    className="min-w-0 flex-1 font-mono text-xs"
-                    onChange={(e) =>
-                      update(
-                        'sources',
-                        sourceRows
-                          .map((v, i) => (i === index ? e.target.value : v))
-                          .join('\n'),
-                      )
-                    }
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label={t('removeSource', { uri: uri || index + 1 })}
-                    onClick={() =>
-                      update(
-                        'sources',
-                        sourceRows.filter((_, i) => i !== index).join('\n'),
-                      )
-                    }
-                  >
-                    <X className="size-4" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-            {fieldError('sources')}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setPicker('sources')}
-              >
-                <FolderOpen className="size-4" />
-                {t('browse')}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  update('sources', [...sourceRows, ''].join('\n'))
-                }
-              >
-                <Plus className="size-4" />
-                {t('addSource')}
-              </Button>
-            </div>
-          </section>
-          <section className="space-y-2">
-            <label
-              htmlFor="compile-target"
-              className="block text-sm font-medium"
-            >
-              {t('target')} <span className="text-destructive">*</span>
-            </label>
-            <div className="flex gap-2">
-              <Input
-                id="compile-target"
-                aria-invalid={attempted && !!fieldErrors.to}
-                aria-describedby="target-hint error-to"
-                className="min-w-0 flex-1 font-mono text-xs"
-                required
-                value={draft.to}
-                onChange={(e) => update('to', e.target.value)}
-                placeholder={t('targetPlaceholder')}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setPicker('to')}
-              >
-                {t('browse')}
-              </Button>
-            </div>
-            {fieldError('to')}
-            <p id="target-hint" className="text-xs text-muted-foreground">
-              {t('targetHint')}
-            </p>
-          </section>
+          <CompileLocations
+            key={locationRevision}
+            sources={draft.sources}
+            to={draft.to}
+            onSources={(value) => update('sources', value)}
+            onTarget={(value) => update('to', value)}
+            attempted={attempted}
+            sourceError={fieldErrors.sources}
+            destinationError={fieldErrors.to}
+          />
           <section className="space-y-2">
             <label
               htmlFor="compile-instruction"
@@ -537,17 +569,36 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
             <summary className="cursor-pointer rounded text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
               {t('advanced')}
             </summary>
-            <ArgsEditor value={args} onChange={setArgs} />
+            <ArgsEditor
+              value={args}
+              onChange={(value) => {
+                setDraftStarted(true)
+                setArgs(value)
+              }}
+            />
             <p className="mt-2 text-xs text-muted-foreground">
               {t('argsHint')}
             </p>
             {fieldError('args')}
           </details>
         </fieldset>
-        <div className="sticky bottom-0 space-y-3 border-t bg-background/95 py-4 backdrop-blur">
-          <p className="text-xs text-muted-foreground">
-            {t(savingError ? 'storageFailed' : 'draft')}
-          </p>
+        <div className="sticky bottom-0 space-y-3 border-t bg-background py-4">
+          {draft.skill && sourceUris(draft.sources).length > 0 && draft.to && (
+            <p className="break-words text-sm">
+              {t('submissionSummary', {
+                skill:
+                  guide?.name || selected?.name || draft.skill.split('/').pop(),
+                count: sourceUris(draft.sources).length,
+                space: t(targetLabel.scope),
+                folder: targetLabel.path || t('spaceRoot'),
+              })}
+            </p>
+          )}
+          {draftStarted && (
+            <p className="text-xs text-muted-foreground">
+              {t(savingError ? 'storageFailed' : 'draft')}
+            </p>
+          )}
           <div className="flex flex-wrap justify-between gap-3">
             <Button
               type="button"
@@ -573,12 +624,15 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
                 variant="ghost"
                 disabled={busy || uncertain}
                 onClick={() => {
+                  setDraftStarted(true)
                   setDraft(empty)
+                  setLocationRevision((value) => value + 1)
                   setArgs('')
                   setAttempted(false)
                   setError(null)
                   setPreview(false)
                   submission.current = null
+                  filled.current = true
                   setRecoverKey(null)
                   try {
                     sessionStorage.removeItem(submissionKey)
@@ -589,33 +643,21 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
               >
                 {t('clear')}
               </Button>
-              <Button type="submit" disabled={busy}>
+              <Button
+                type="submit"
+                disabled={
+                  busy ||
+                  (!recoverKey &&
+                    !uncertain &&
+                    (capability.isError || !capability.data?.can_create))
+                }
+              >
                 {t(busy ? 'submitting' : uncertain ? 'retry' : 'start')}
               </Button>
             </div>
           </div>
         </div>
       </form>
-      <DirectoryPickerDialog
-        identityScopeKey={identityScopeKey}
-        userResourceRoot={userResourceRoot}
-        open={!!picker}
-        onOpenChange={(open) => {
-          if (!open) setPicker(null)
-        }}
-        value={picker === 'to' && draft.to ? draft.to : userResourceRoot}
-        onSelect={(uri) => {
-          if (picker === 'to') update('to', uri)
-          else
-            update(
-              'sources',
-              [
-                ...new Set([...draft.sources.split('\n').filter(Boolean), uri]),
-              ].join('\n'),
-            )
-          setPicker(null)
-        }}
-      />
     </CompileShell>
   )
 }

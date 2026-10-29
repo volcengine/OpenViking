@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -289,7 +290,14 @@ async def ov_session_status(
     client: OVClient = Depends(get_client),
 ) -> Dict[str, Any]:
     """GET /api/v1/sessions/{session_id}."""
+    session_id = body.session_id
+    # Reject percent escapes as well: upstream routers may decode the path.
+    if session_id in {".", ".."} or not re.fullmatch(r"[^/\\?#%\x00-\x1f\x7f]+", session_id):
+        raise HTTPException(
+            status_code=422,
+            detail="session_id must be a single path segment without URL syntax or control characters",
+        )
     try:
-        return await client.get(f"/api/v1/sessions/{body.session_id}")
+        return await client.get(f"/api/v1/sessions/{session_id}")
     except OVError as exc:
         raise _forward(exc) from exc

@@ -675,8 +675,7 @@ def test_external_provider_does_not_cache_unbound_client_identity(external_provi
 def test_save_config_targets_explicit_home_and_restores_outer_scope(
     external_provider, tmp_path, monkeypatch
 ):
-    import yaml
-
+    from hermes_cli.config import yaml
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     _, provider, _, _ = external_provider("config-provider")
@@ -1033,7 +1032,8 @@ def reload_provider(external_provider, monkeypatch):
         backend.post.return_value = {"result": {}}
 
     class Client:
-        def __init__(self, endpoint, api_key="", *, account="", user="", agent=""):
+        def __init__(self, endpoint, api_key="", *, account="", user="", agent="", extra_headers=None):
+            self._extra_headers = extra_headers or {}
             self._conn_snapshot = (endpoint, api_key, account, user, agent)
             self.get = backends[user].get
             self.post = backends[user].post
@@ -1125,6 +1125,38 @@ def test_reload_keeps_new_connection_pending_after_old_commit(reload_provider, m
         commits = [c for c in backend.post.call_args_list if c.args[0].endswith("/commit")]
         assert len(commits) == 1
         assert commits[0].args == (f"/api/v1/sessions/{sid}/commit", {"keep_recent_count": 0})
+
+
+@pytest.mark.parametrize("agent_context", ["primary", "cron", "subagent", "flush"])
+@pytest.mark.parametrize("owner_run_id", ["", "dead-owner"])
+def test_startup_recovery_respects_write_context(external_provider, monkeypatch, agent_context, owner_run_id):
+    from unittest.mock import Mock
+
+    home, provider, module, _ = external_provider(f"recovery-{agent_context}")
+    if owner_run_id and module.fcntl is None:
+        pytest.skip("Scoped recovery requires POSIX advisory locks")
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19531")
+    monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+    client = Mock()
+    client.post.return_value = {}
+    monkeypatch.setattr(provider, "_build_client", lambda: client)
+    monkeypatch.setattr(provider, "_new_client", lambda **_: client)
+    provider.initialize("live-sid", hermes_home=str(home))
+    marker = provider._state_path("pending", "previous-sid")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"session_id": "previous-sid", "owner_run_id": owner_run_id}))
+    provider.initialize("live-sid", hermes_home=str(home), agent_context=agent_context)
+    assert provider._drain_finalizers(timeout=5)
+    if agent_context == "primary":
+        client.post.assert_called_once_with("/api/v1/sessions/previous-sid/commit", {"keep_recent_count": 0})
+        assert not marker.exists()
+    else:
+        client.post.assert_not_called()
+        assert marker.exists()
+        provider.initialize("live-sid", hermes_home=str(home), agent_context="primary")
+        assert provider._drain_finalizers(timeout=5)
+        client.post.assert_called_once_with("/api/v1/sessions/previous-sid/commit", {"keep_recent_count": 0})
+        assert not marker.exists()
 
 
 def test_reload_recovery_preserves_markers_for_other_connections(reload_provider, monkeypatch):

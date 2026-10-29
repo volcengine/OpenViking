@@ -25,14 +25,15 @@ type Config struct {
 
 // AddResourceOptions controls AddResource.
 type AddResourceOptions struct {
-	ACL                 *ACLSpec
-	To                  string
-	Parent              string
-	CreateParent        *bool
-	AddType             string
-	Reason              string
-	Instruction         string
-	Wait                bool
+	ACL          *ACLSpec
+	To           string
+	Parent       string
+	CreateParent *bool
+	AddType      string
+	Reason       string
+	Instruction  string
+	Wait         bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout             *float64
 	Strict              bool
 	IgnoreDirs          string
@@ -51,7 +52,8 @@ type AddResourceOptions struct {
 
 // AddSkillOptions controls AddSkill.
 type AddSkillOptions struct {
-	Wait      bool
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout   *float64
 	Telemetry any
 	Extra     map[string]any
@@ -140,7 +142,8 @@ type GetSkillOptions struct {
 
 // UpdateSkillOptions controls UpdateSkill.
 type UpdateSkillOptions struct {
-	Wait           bool
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout        *float64
 	SourceMetadata map[string]any
 	Telemetry      any
@@ -154,7 +157,10 @@ type DeleteSkillOptions struct {
 }
 
 // WaitProcessedOptions controls WaitProcessed.
+//
+// Deprecated: Waiting-specific timeout options are ignored.
 type WaitProcessedOptions struct {
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout *float64 `json:"timeout,omitempty"`
 }
 
@@ -239,14 +245,16 @@ type TreePage struct {
 type RemoveOptions struct {
 	Recursive bool
 	Wait      bool
-	Timeout   *float64
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout *float64
 }
 
 // WriteOptions controls Write.
 type WriteOptions struct {
-	ACL            *ACLSpec
-	Mode           string
-	Wait           bool
+	ACL  *ACLSpec
+	Mode string
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
@@ -257,18 +265,24 @@ type WriteOptions struct {
 
 // BatchWriteOperation is one file write in a batch.
 type BatchWriteOperation struct {
-	URI           string  `json:"uri"`
-	Content       *string `json:"content,omitempty"`
-	ContentBase64 *string `json:"content_base64,omitempty"`
-	Mode          string  `json:"mode,omitempty"`
+	URI           string   `json:"uri"`
+	Content       *string  `json:"content,omitempty"`
+	ContentBase64 *string  `json:"content_base64,omitempty"`
+	Mode          string   `json:"mode,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	TagMode       string   `json:"tag_mode,omitempty"`
+	ACL           *ACLSpec `json:"acl,omitempty"`
 }
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
-	Wait      *bool
-	Timeout   *float64
-	Telemetry any
-	Extra     map[string]any
+	DeferProcessing bool
+	Wait            *bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout        *float64
+	Telemetry      any
+	ProcessingMode string
+	Extra          map[string]any
 }
 
 // SetTagsOptions controls SetTags.

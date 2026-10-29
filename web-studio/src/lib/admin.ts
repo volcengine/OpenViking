@@ -1,5 +1,7 @@
+import { resolveApiKeyAuth, createApiKeyHeaders } from '#/lib/connection/auth'
+import type { ApiKeyAuth } from '#/lib/connection/auth'
 import axios from 'axios'
-import { fetchServerHealth } from '#/hooks/use-server-mode'
+import type { ServerMode } from '#/lib/connection/health'
 
 import { createClient } from '#/gen/ov-client/client'
 import {
@@ -72,6 +74,7 @@ export type CapabilityDetailCode =
   | 'rootAvailable'
   | 'tenantDataAvailable'
   | 'trustedIdentityRequired'
+  | 'trustedKeyRequired'
 
 export type CapabilityProbeResult = {
   detail?: string
@@ -84,15 +87,17 @@ export type CapabilityProbeResult = {
 export type StudioConnectionProbe = {
   admin: CapabilityProbeResult
   data: CapabilityProbeResult
-  rootApiKeyRequired?: boolean
 }
 
 export type ProbeConnectionInput = {
+  apiKeyAuth?: ApiKeyAuth
+  skipAdmin?: boolean
+  dataRootUri?: string
   accountId: string
   adminApiKey: string
   apiKey: string
   baseUrl: string
-  serverMode: 'api_key' | 'trusted' | 'dev' | 'checking' | 'offline'
+  serverMode: ServerMode
   userId: string
 }
 
@@ -167,8 +172,9 @@ function createProbeClient(baseUrl: string) {
 function setApiKeyHeader(
   headers: Record<string, string>,
   apiKey: string,
+  auth: ApiKeyAuth = 'header',
 ): void {
-  setOptionalHeader(headers, 'X-API-Key', apiKey)
+  Object.assign(headers, createApiKeyHeaders(apiKey, auth))
 }
 
 function probeError(error: unknown): CapabilityProbeResult {
@@ -198,13 +204,15 @@ async function probeAdminAccess(
     }
   }
 
-  // The Root API key is the only control-plane credential. The User API key is
-  // never promoted to admin access, so management stays gated behind the root
-  // or account-admin key alone.
+  // Check the control-plane credential's authenticated role. Listing users is
+  // also available to ordinary users and cannot prove management permission.
   const controlKey = input.adminApiKey.trim()
   if (!controlKey) {
     return {
-      detailCode: 'controlKeyRequired',
+      detailCode:
+        input.serverMode === 'trusted'
+          ? 'trustedKeyRequired'
+          : 'controlKeyRequired',
       state: 'skipped',
     }
   }
@@ -214,35 +222,25 @@ async function probeAdminAccess(
   setApiKeyHeader(headers, controlKey)
 
   try {
-    await client.get('/api/v1/admin/accounts', { headers })
-    return {
-      detailCode: 'rootAvailable',
-      state: 'ok',
+    const { data } = await client.get<unknown>('/health', { headers })
+    if (isRecord(data) && data.role === 'root') {
+      return { detailCode: 'rootAvailable', state: 'ok' }
     }
-  } catch (accountsError) {
     if (
-      !axios.isAxiosError(accountsError) ||
-      accountsError.response?.status !== 403 ||
-      !input.accountId
+      isRecord(data) &&
+      data.role === 'admin' &&
+      input.accountId.trim() &&
+      data.account_id === input.accountId.trim()
     ) {
-      return probeError(accountsError)
+      return { detailCode: 'accountAdminAvailable', state: 'ok' }
     }
-
-    try {
-      const accountId = encodeURIComponent(input.accountId)
-      await client.get(`/api/v1/admin/accounts/${accountId}/users`, {
-        headers,
-        params: {
-          limit: 1,
-        },
-      })
-      return {
-        detailCode: 'accountAdminAvailable',
-        state: 'ok',
-      }
-    } catch (usersError) {
-      return probeError(usersError)
+    return {
+      errorCode: 'PERMISSION_DENIED',
+      statusCode: 403,
+      state: 'error',
     }
+  } catch (error) {
+    return probeError(error)
   }
 }
 
@@ -252,9 +250,14 @@ async function probeDataAccess(
   if (input.serverMode === 'checking' || input.serverMode === 'offline') {
     return { state: 'skipped' }
   }
-  if (input.serverMode === 'api_key' && !input.apiKey) {
+  const apiKey =
+    input.apiKey || (input.serverMode === 'trusted' ? input.adminApiKey : '')
+  if (input.serverMode !== 'dev' && !apiKey) {
     return {
-      detailCode: 'dataKeyRequired',
+      detailCode:
+        input.serverMode === 'trusted'
+          ? 'trustedKeyRequired'
+          : 'dataKeyRequired',
       state: 'skipped',
     }
   }
@@ -273,6 +276,7 @@ async function probeDataAccess(
   setApiKeyHeader(
     headers,
     input.apiKey || (input.serverMode === 'trusted' ? input.adminApiKey : ''),
+    input.apiKeyAuth ?? resolveApiKeyAuth(input.baseUrl),
   )
 
   if (input.serverMode === 'trusted') {
@@ -286,7 +290,7 @@ async function probeDataAccess(
       params: {
         node_limit: 1,
         output: 'agent',
-        uri: 'viking://',
+        uri: input.dataRootUri ?? 'viking://',
       },
     })
     return {
@@ -301,29 +305,13 @@ async function probeDataAccess(
 export async function probeStudioConnection(
   input: ProbeConnectionInput,
 ): Promise<StudioConnectionProbe> {
-  const headers: Record<string, string> = {}
-  setApiKeyHeader(headers, input.adminApiKey || input.apiKey)
-  setOptionalHeader(headers, 'X-OpenViking-Account', input.accountId)
-  setOptionalHeader(headers, 'X-OpenViking-User', input.userId)
-  const [admin, data, health] = await Promise.all([
-    probeAdminAccess(input),
+  const [admin, data] = await Promise.all([
+    input.skipAdmin
+      ? Promise.resolve({ state: 'skipped' as const })
+      : probeAdminAccess(input),
     probeDataAccess(input),
-    Promise.allSettled(
-      input.serverMode === 'trusted'
-        ? [fetchServerHealth(input.baseUrl, headers)]
-        : [],
-    ),
   ])
-  const metadata =
-    health[0]?.status === 'fulfilled' ? health[0].value : undefined
-  return {
-    admin,
-    data,
-    rootApiKeyRequired:
-      typeof metadata?.root_api_key_required === 'boolean'
-        ? metadata.root_api_key_required
-        : undefined,
-  }
+  return { admin, data }
 }
 
 function normalizeAccount(value: unknown): AdminAccount | null {
@@ -397,6 +385,23 @@ export async function fetchAdminUsers(
       path: {
         account_id: accountId,
       },
+    }),
+  )
+  return result
+    .map((item) => normalizeUser(accountId, item))
+    .filter((item): item is AdminUser => Boolean(item))
+}
+
+/** List selectable identities without returning their API keys to the wizard. */
+export async function fetchAdminUserDirectory(
+  connection: AdminConnection,
+  accountId: string,
+): Promise<AdminUser[]> {
+  const result = await getOvResult<unknown[]>(
+    createAdminClient(connection).get({
+      url: '/api/v1/admin/accounts/{account_id}/users',
+      path: { account_id: accountId },
+      query: { include_credentials: false },
     }),
   )
   return result

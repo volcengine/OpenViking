@@ -27,18 +27,12 @@ from typing import Optional
 from openviking.observability.events import (
     make_payload_subscriber,
     register_event_subscriber,
-    try_publish_event,
     unregister_event_subscriber,
 )
 from openviking.server.config import ServerConfig
 from openviking_cli.utils import get_logger
 
-from .account_dimension import (
-    configure_metric_account_dimension as _configure_metric_account_dimension_runtime,
-)
-from .account_dimension import (
-    reset_metric_account_dimension,
-)
+from .account_dimension import configure_metric_account_dimension, reset_metric_account_dimension
 from .bootstrap import create_default_collector_manager
 from .collectors.cache import CacheCollector
 from .collectors.embedding import EmbeddingCollector
@@ -99,40 +93,6 @@ def _shutdown_exporters_best_effort(exporters: list) -> None:
                 )
 
 
-def configure_metric_account_dimension(
-    *,
-    enabled: bool | None = None,
-    metric_allowlist: set[str] | list[str] | tuple[str, ...] | None = None,
-    max_active_accounts: int | None = None,
-    policy=None,
-    resolver=None,
-) -> None:
-    """
-    Configure the process-global account-dimension runtime used by collector write helpers.
-
-    This function is a thin façade over `account_dimension.configure_metric_account_dimension`
-    so callers do not need to import policy internals directly from the metrics package.
-    """
-    _configure_metric_account_dimension_runtime(
-        enabled=enabled,
-        metric_allowlist=metric_allowlist,
-        max_active_accounts=max_active_accounts,
-        policy=policy,
-        resolver=resolver,
-    )
-
-
-def _create_metric_registry() -> MetricRegistry:
-    """
-    Create a new `MetricRegistry` instance.
-
-    This helper centralizes the registry instantiation to avoid security issues
-    introduced by bridging classes (e.g., an external registry implementation
-    bypassing internal safety checks).
-    """
-    return MetricRegistry()
-
-
 def init_metrics_from_server_config(
     config: ServerConfig, *, app=None, service=None, registry: MetricRegistry | None = None
 ) -> None:
@@ -172,7 +132,7 @@ def init_metrics_from_server_config(
             metric_allowlist=list(account_dimension.metric_allowlist or []),
             max_active_accounts=int(account_dimension.max_active_accounts),
         )
-        _registry = registry or _create_metric_registry()
+        _registry = registry or MetricRegistry()
         collector_manager = create_default_collector_manager(
             app=app, service=service, config=config
         )
@@ -203,7 +163,6 @@ def init_metrics_from_server_config(
                 service_name=exporters_config.otel.service_name,
                 export_interval_ms=exporters_config.otel.export_interval_ms,
                 headers=exporters_config.otel.headers,
-                enabled=True,
             )
             otel_exporter.start()
             _exporters.append(otel_exporter)
@@ -268,27 +227,6 @@ def get_metrics_registry() -> MetricRegistry:
     return reg
 
 
-def try_get_metrics_registry() -> MetricRegistry | None:
-    """
-    Return the global MetricRegistry if metrics are initialized, otherwise `None`.
-
-    This helper is intended for best-effort call sites that want to avoid raising an exception
-    when metrics are disabled.
-    """
-    return _registry
-
-
-def try_dispatch_event(event_name: str, payload: dict) -> None:
-    """
-    Publish an in-process observability event.
-
-    Kept for older call sites that imported the metrics API directly. The event is now
-    published to the shared bus, so non-metrics subscribers can consume it even when
-    Prometheus metrics are disabled.
-    """
-    try_publish_event(event_name, payload)
-
-
 def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
     """
     Build the default in-process event router for event-driven metrics.
@@ -336,6 +274,7 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
         ("vlm.call", vlm_collector),
         ("session.lifecycle", session_collector),
         ("session.archive", session_collector),
+        ("resource.import", resource_collector),
         ("resource.stage", resource_collector),
         ("resource.wait", resource_collector),
         ("retrieval.completed", retrieval_collector),

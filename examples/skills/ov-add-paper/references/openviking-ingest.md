@@ -14,12 +14,6 @@ ov tree viking://resources/papers/<slug>
 
 If the user did not provide a target URI, derive a stable slug from the paper title, arXiv ID, DOI, or file stem.
 
-Use `--timeout 300` or a larger value for medium-sized papers:
-
-```bash
-ov add-resource <artifact-dir> --to viking://resources/papers/<slug> --wait --timeout 300
-```
-
 The `stat` preflight should return NOT_FOUND for a new target. If it succeeds, ask before overwriting or choose a different target.
 
 ## Required Preconditions
@@ -46,7 +40,7 @@ If `ov add-resource --wait` exits with a connection error after the target appea
 
 ```bash
 ov -o json stat viking://resources/papers/<slug>
-ov wait --timeout 300
+ov wait
 ov observer queue
 ov tree viking://resources/papers/<slug>
 ```

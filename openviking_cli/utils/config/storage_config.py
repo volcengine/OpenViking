@@ -15,6 +15,22 @@ from .vectordb_config import VectorDBBackendConfig
 logger = get_logger(__name__)
 
 
+class TaskStoreConfig(BaseModel):
+    """Durable Task/Work backend selection."""
+
+    provider: str = "file"
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def normalize_provider(self):
+        self.provider = self.provider.strip().lower()
+        if self.provider not in {"file", "mysql"}:
+            raise ValueError(
+                f"storage.task_store.provider must be 'file' or 'mysql', got {self.provider!r}"
+            )
+        return self
+
+
 class StorageConfig(BaseModel):
     """Configuration for storage backend.
 
@@ -48,6 +64,11 @@ class StorageConfig(BaseModel):
     parse_output: ParseOutputConfig = Field(
         default_factory=ParseOutputConfig,
         description="Where parsers write intermediate artifacts (agfs temp or local dir)",
+    )
+
+    task_store: TaskStoreConfig = Field(
+        default_factory=TaskStoreConfig,
+        description="Persistent Task/Work storage backend",
     )
 
     params: Dict[str, Any] = Field(
@@ -97,18 +118,6 @@ class StorageConfig(BaseModel):
                 "'session_commit' queue."
             )
 
-        if self.agfs.path is not None:
-            logger.warning(
-                f"StorageConfig: 'agfs.path' is deprecated and will be ignored. "
-                f"Using '{self.workspace}' from workspace instead of '{self.agfs.path}'"
-            )
-
-        if self.vectordb.path is not None:
-            logger.warning(
-                f"StorageConfig: 'vectordb.path' is deprecated and will be ignored. "
-                f"Using '{self.workspace}' from workspace instead of '{self.vectordb.path}'"
-            )
-
         # Update paths to use workspace (expand ~ first)
         workspace_path = Path(self.workspace).expanduser().resolve()
         workspace_path.mkdir(parents=True, exist_ok=True)
@@ -129,9 +138,18 @@ class StorageConfig(BaseModel):
         upload_temp_dir.mkdir(parents=True, exist_ok=True)
         return upload_temp_dir
 
-    def build_task_tracker(self, agfs: Any):
+    def build_task_tracker(self, agfs: Any, *, service_name: str | None = None):
         """Build the persistent TaskTracker from storage config."""
-        from openviking.service.task_store import PersistentTaskStore
+        from openviking.service.task_store import TaskWorkStore
         from openviking.service.task_tracker import TaskTracker
 
-        return TaskTracker(store=PersistentTaskStore(agfs))
+        store: TaskWorkStore
+        if self.task_store.provider == "mysql":
+            from openviking.service.task_store_mysql import MySQLTaskWorkStore
+
+            store = MySQLTaskWorkStore(params=self.task_store.params, service_name=service_name)
+        else:
+            from openviking.service.task_store import PersistentTaskStore
+
+            store = PersistentTaskStore(agfs)
+        return TaskTracker(store=store)

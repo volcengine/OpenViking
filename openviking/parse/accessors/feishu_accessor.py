@@ -26,6 +26,7 @@ from lark_oapi.core.cache import ICache
 
 from openviking.parse.base import format_table_to_markdown
 from openviking.parse.feishu_import import FeishuImportPlan, recursive_wiki
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils.exceptions import error_code_from_http_status
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils.logger import get_logger
@@ -505,7 +506,11 @@ class FeishuAccessor(DataAccessor):
                 )
 
             if doc_type == "folder":
-                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_folder_"))
+                temp_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix="ov_feishu_folder_", dir=get_parser_download_temp_dir()
+                    )
+                )
                 plan = self._new_import_plan(temp_dir, kwargs)
                 plan.source_url = source_str
                 skipped_items: list[dict[str, Any]] = []
@@ -541,7 +546,11 @@ class FeishuAccessor(DataAccessor):
                 )
 
             if doc_type == "wiki" and recursive_wiki(kwargs):
-                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_wiki_"))
+                temp_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix="ov_feishu_wiki_", dir=get_parser_download_temp_dir()
+                    )
+                )
                 plan = self._new_import_plan(temp_dir, kwargs)
                 plan.source_url = source_str
                 skipped_items: list[dict[str, Any]] = []
@@ -621,7 +630,9 @@ class FeishuAccessor(DataAccessor):
             }
 
             if downloaded_images:
-                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_"))
+                temp_dir = Path(
+                    tempfile.mkdtemp(prefix="ov_feishu_", dir=get_parser_download_temp_dir())
+                )
                 markdown_path = temp_dir / "document.md"
                 markdown_path.write_text(markdown_content, encoding="utf-8")
                 for rel_path, image_bytes in downloaded_images.items():
@@ -637,6 +648,7 @@ class FeishuAccessor(DataAccessor):
                     suffix=".md",
                     prefix="ov_feishu_",
                     delete=False,
+                    dir=get_parser_download_temp_dir(),
                     encoding="utf-8",
                 )
                 temp_file.write(markdown_content)
@@ -1530,7 +1542,9 @@ class FeishuAccessor(DataAccessor):
             content_type,
             filename_hint=filename_hint,
         )
-        temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_file_"))
+        temp_dir = Path(
+            tempfile.mkdtemp(prefix="ov_feishu_file_", dir=get_parser_download_temp_dir())
+        )
         path = temp_dir / filename
         path.write_bytes(content)
         return path

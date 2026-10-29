@@ -807,8 +807,47 @@ class TestResolutionRepair:
 
         assert self._loop(ctx=None)._retryable_resolution_issues(operations) == []
 
+    def test_missing_or_failing_isolation_handler_preserves_legacy_retry(self):
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"ranges": "0"},
+                    memory_type="events",
+                    uris=[],
+                    page_id=100,
+                    resolution_skip=MemoryOperationSkip(
+                        reason_code=MemoryOperationSkipCode.NO_WRITABLE_TARGET,
+                        reason="No writable memory target could be resolved",
+                    ),
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+        )
+        ctx = SimpleNamespace(user=SimpleNamespace(user_id="alice"))
+
+        missing_handler = self._loop(ctx=ctx)
+        missing_handler._isolation_handler = None
+        assert len(missing_handler._retryable_resolution_issues(operations)) == 1
+
+        failing_handler = self._loop(ctx=ctx)
+        failing_handler._isolation_handler.has_writable_message_target.side_effect = RuntimeError(
+            "target lookup failed"
+        )
+        assert len(failing_handler._retryable_resolution_issues(operations)) == 1
+
+    @pytest.mark.parametrize(
+        ("resolution_skip_code", "has_writable_target", "expected_llm_calls"),
+        [
+            (MemoryOperationSkipCode.INVALID_RANGES, False, 2),
+            (MemoryOperationSkipCode.NO_WRITABLE_TARGET, False, 1),
+            (MemoryOperationSkipCode.NO_WRITABLE_TARGET, True, 2),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_run_repairs_only_failed_event_and_preserves_successful_profile(self):
+    async def test_run_repairs_only_actionable_event_and_preserves_successful_profile(
+        self, resolution_skip_code, has_writable_target, expected_llm_calls
+    ):
         schema = TestResolveOperations._event_schema()
         profile_schema = MemoryTypeSchema(
             memory_type="profile",
@@ -830,6 +869,7 @@ class TestResolutionRepair:
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
         isolation_handler.fill_identity_fields.side_effect = lambda item, **kwargs: item
+        isolation_handler.has_writable_message_target.return_value = has_writable_target
         event_resolution_attempts = 0
 
         def calculate_memory_uris(*, memory_type_schema, operation, **kwargs):
@@ -839,8 +879,12 @@ class TestResolutionRepair:
             event_resolution_attempts += 1
             if event_resolution_attempts == 1:
                 operation.resolution_skip = MemoryOperationSkip(
-                    reason_code=MemoryOperationSkipCode.INVALID_RANGES,
-                    reason="Message ranges are malformed or out of bounds",
+                    reason_code=resolution_skip_code,
+                    reason=(
+                        "Message ranges are malformed or out of bounds"
+                        if resolution_skip_code == MemoryOperationSkipCode.INVALID_RANGES
+                        else "No writable memory target could be resolved"
+                    ),
                 )
                 return []
             operation.resolution_skip = None
@@ -853,6 +897,7 @@ class TestResolutionRepair:
             viking_fs=Mock(),
             context_provider=context_provider,
             isolation_handler=isolation_handler,
+            ctx=SimpleNamespace(user=SimpleNamespace(user_id="alice")),
         )
         loop._call_llm = AsyncMock(
             side_effect=[
@@ -890,10 +935,12 @@ class TestResolutionRepair:
 
             final_operations, _ = await loop.run()
 
-        assert loop._call_llm.await_count == 2
-        assert event_resolution_attempts == 2
+        assert loop._call_llm.await_count == expected_llm_calls
+        assert event_resolution_attempts == expected_llm_calls
         assert len(final_operations.upsert_operations) == 2
-        assert final_operations.upsert_operations[0].uris == [event_uri]
+        assert final_operations.upsert_operations[0].uris == (
+            [event_uri] if expected_llm_calls == 2 else []
+        )
         assert final_operations.upsert_operations[0].page_id == 100
         assert final_operations.upsert_operations[1].memory_type == "profile"
         assert final_operations.upsert_operations[1].uris == [profile_uri]
@@ -903,9 +950,12 @@ class TestResolutionRepair:
             for message in loop._call_llm.await_args_list[-1].args[0]
             if message["role"] == "user" and "Resolution issues:" in message["content"]
         ]
-        assert len(repair_messages) == 1
-        assert '"reason_code": "invalid_ranges"' in repair_messages[0]
-        assert '"event_name": "demo"' in repair_messages[0]
+        if expected_llm_calls == 2:
+            assert len(repair_messages) == 1
+            assert f'"reason_code": "{resolution_skip_code.value}"' in repair_messages[0]
+            assert '"event_name": "demo"' in repair_messages[0]
+        else:
+            assert repair_messages == []
 
     def test_merge_event_repair_ignores_unrequested_memory_types(self):
         original_profile = ResolvedOperation(
@@ -1208,18 +1258,21 @@ class TestPageIdInstruction:
 
         system_content = loop._call_llm.await_args.args[0][0]["content"]
         assert "## Page ID Rules" in system_content
-        assert "## Read Format Rules" in system_content
+        assert "## Read Format Rules" not in system_content
         assert 'Every memory item you create or edit MUST include "page_id".' in system_content
         assert (
             "The read tool accepts `uri`, optional `offset` (0-indexed), and optional `limit`."
-            in system_content
+            not in system_content
         )
-        assert "each visible line is prefixed with `line_number<TAB>`" in system_content
+        assert "each visible line is prefixed with `line_number<TAB>`" not in system_content
         assert (
             "Never include the line-number prefix itself in `search`, `replace`, or `delete`."
+            not in system_content
+        )
+        assert (
+            "For existing items, use the page_id shown in the supplied memory context."
             in system_content
         )
-        assert "For existing items, use the page_id shown in read/search results." in system_content
         assert "For new items, assign a unique page_id >= 100." in system_content
         assert "When editing an existing item, reuse its existing page_id." in system_content
         assert "Link fields" not in system_content
@@ -1283,10 +1336,10 @@ class TestPageIdInstruction:
 
         system_content = loop._call_llm.await_args.args[0][0]["content"]
         assert "## Page ID Rules" in system_content
-        assert "## Read Format Rules" in system_content
+        assert "## Read Format Rules" not in system_content
         assert "## Link Rules" in system_content
         assert "Link fields `f` and `t` must reference these page_id values." in system_content
-        assert "each visible line is prefixed with `line_number<TAB>`" in system_content
+        assert "each visible line is prefixed with `line_number<TAB>`" not in system_content
         assert "Only create links when the relationship is meaningful" in system_content
 
 

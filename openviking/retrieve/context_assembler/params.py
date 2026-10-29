@@ -37,6 +37,8 @@ MAX_EXCLUDE_URIS = 200
 MAX_PLANNED_QUERIES = 3
 READ_CONCURRENCY = 8
 OTHER_PEER_OVERFETCH = 4
+# Candidates reranked per served slot, as HierarchicalRetriever.RERANK_CANDIDATE_MULTIPLIER.
+RERANK_CANDIDATE_MULTIPLIER = 2
 
 ORIGIN_ORDER: Tuple[str, ...] = ("actor_peer", "self", "other_peer")
 
@@ -124,7 +126,7 @@ class AssembleParams:
 
     query: str = ""
     search_type: SearchType = "semantic"
-    image_url: Optional[str] = None
+    image_url: str | list[str] | None = None
     limit: int = DEFAULT_LIMIT
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None

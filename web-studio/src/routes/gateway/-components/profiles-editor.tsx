@@ -1,3 +1,4 @@
+import { ReadOnlyProvider } from './read-only'
 import * as React from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router'
@@ -25,7 +26,7 @@ import { cn } from '#/lib/utils'
 
 import { keysUsing, newObjectId, saveProfile } from '../-lib/api'
 import type { Profile, ProfileSettings } from '../-lib/api'
-import { gatewayErrorMessage } from '../-lib/localize'
+import { toastGatewayError } from '../-lib/error-toast'
 import {
   PROFILE_DEFAULTS,
   duplicateProfile,
@@ -48,6 +49,7 @@ import {
 } from './profiles-settings'
 import { BackLink, SectionHeader } from './section-header'
 import { SettingField } from './setting-field'
+import { ToggleRow } from './toggle-row'
 
 /** Key-order-independent copy, so reordered objects still compare equal. */
 function canonical(value: unknown): unknown {
@@ -136,7 +138,7 @@ function ProfileEditorForm({
 }: ProfileEditorFormProps) {
   const { t } = useTranslation('gateway')
   const navigate = useNavigate()
-  const { connection, invalidate } = useGateway()
+  const { connection, invalidate, readOnly } = useGateway()
   const isNew = profileId === NEW_ID
   const [targetId] = React.useState(() => (isNew ? newObjectId() : profileId))
   const baseline = React.useMemo(
@@ -173,9 +175,9 @@ function ProfileEditorForm({
       await invalidate('profiles')
       void navigate({ to: '/gateway/profiles' })
     },
-    onError: (error) => toast.error(gatewayErrorMessage(t, error)),
+    onError: (error) => toastGatewayError(t, error),
   })
-  const canSave = valid && dirty && !save.isPending
+  const canSave = !readOnly && valid && dirty && !save.isPending
 
   function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -189,6 +191,7 @@ function ProfileEditorForm({
       ...current,
       ...PROFILE_DEFAULTS,
       name: current.name,
+      client_overrides: current.client_overrides,
     }))
     toast.success(t('profiles.toast.reset'))
   }
@@ -218,94 +221,117 @@ function ProfileEditorForm({
         title={isNew || !source ? t('profiles.editor.newTitle') : source.name}
         description={description}
         actions={
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label={t('actions.more')}
-                  title={t('actions.more')}
-                />
-              }
-            >
-              <EllipsisIcon />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-auto min-w-52">
-              <DropdownMenuItem onClick={resetToRecommended}>
-                <RotateCcwIcon />
-                {t('profiles.actions.reset')}
-              </DropdownMenuItem>
-              {isNew ? null : (
-                <DropdownMenuItem
-                  onClick={() =>
-                    void navigate({
-                      to: '/gateway/profiles/$profileId',
-                      params: { profileId: NEW_ID },
-                      search: { from: profileId },
-                    })
-                  }
-                >
-                  <CopyPlusIcon />
-                  {t('actions.duplicate')}
+          readOnly ? undefined : (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label={t('actions.more')}
+                    title={t('actions.more')}
+                  />
+                }
+              >
+                <EllipsisIcon />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-auto min-w-52">
+                <DropdownMenuItem onClick={resetToRecommended}>
+                  <RotateCcwIcon />
+                  {t('profiles.actions.reset')}
                 </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                {isNew ? null : (
+                  <DropdownMenuItem
+                    onClick={() =>
+                      void navigate({
+                        to: '/gateway/profiles/$profileId',
+                        params: { profileId: NEW_ID },
+                        search: { from: profileId },
+                      })
+                    }
+                  >
+                    <CopyPlusIcon />
+                    {t('actions.duplicate')}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )
         }
       />
 
       <form noValidate className="flex flex-col gap-5" onSubmit={submit}>
-        <Notice tone="info">{t('profiles.editor.banner')}</Notice>
+        {!readOnly ? (
+          <Notice tone="info">{t('profiles.editor.banner')}</Notice>
+        ) : null}
         {sourceMissing ? (
           <Notice tone="warning">{t('profiles.editor.sourceMissing')}</Notice>
         ) : null}
 
-        <div className="grid gap-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
-          <SectionNav settings={draft} errors={errors} />
-          <div className="grid min-w-0 gap-4">
-            <Card className="gap-0 py-0">
-              <CardContent className="py-5">
-                <SettingField
-                  label={t('profiles.name.label')}
-                  htmlFor="profile-name"
-                  description={t('profiles.name.description')}
-                  error={
-                    showNameError && errors.name
-                      ? t(errors.name.key, errors.name.values)
-                      : undefined
-                  }
-                  className="max-w-md"
-                >
-                  <Input
-                    id="profile-name"
-                    value={draft.name}
-                    autoComplete="off"
-                    placeholder={t('profiles.name.placeholder')}
-                    aria-invalid={showNameError}
-                    onBlur={() => setNameTouched(true)}
-                    onChange={(event) => update({ name: event.target.value })}
-                  />
-                </SettingField>
-              </CardContent>
-            </Card>
-            <ProfileSettingsForm
-              value={draft}
-              onChange={update}
-              errors={errors}
-            />
-          </div>
-        </div>
-
-        <EditorFooter
-          status={status}
-          invalid={!valid && !needsNameOnly}
-          cancelTo="/gateway/profiles"
-          saveLabel={t(isNew ? 'profiles.editor.create' : 'actions.save')}
-          saving={save.isPending}
-          disabled={!canSave}
-        />
+        <ReadOnlyProvider value={readOnly}>
+          <fieldset disabled={readOnly} className="contents">
+            <div className="grid gap-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
+              <SectionNav settings={draft} errors={errors} />
+              <div className="grid min-w-0 gap-4">
+                <Card className="gap-0 py-0">
+                  <CardContent className="grid gap-4 py-5">
+                    <SettingField
+                      label={t('profiles.name.label')}
+                      htmlFor="profile-name"
+                      description={t('profiles.name.description')}
+                      error={
+                        showNameError && errors.name
+                          ? t(errors.name.key, errors.name.values)
+                          : undefined
+                      }
+                      className="max-w-md"
+                    >
+                      <Input
+                        id="profile-name"
+                        value={draft.name}
+                        autoComplete="off"
+                        placeholder={t('profiles.name.placeholder')}
+                        aria-invalid={showNameError}
+                        onBlur={() => setNameTouched(true)}
+                        onChange={(event) =>
+                          update({ name: event.target.value })
+                        }
+                      />
+                    </SettingField>
+                    <ToggleRow
+                      id="profile-client_overrides"
+                      label={t('profiles.clientOverrides.label')}
+                      description={t('profiles.clientOverrides.description')}
+                      docs="clientOverrides"
+                      checked={draft.client_overrides}
+                      onCheckedChange={(client_overrides) =>
+                        update({ client_overrides })
+                      }
+                    />
+                  </CardContent>
+                </Card>
+                <ProfileSettingsForm
+                  value={draft}
+                  onChange={update}
+                  errors={errors}
+                />
+              </div>
+            </div>
+          </fieldset>
+        </ReadOnlyProvider>
+        {readOnly ? (
+          <BackLink to="/gateway/profiles" label={t('actions.back')} />
+        ) : (
+          <EditorFooter
+            status={status}
+            invalid={!valid && !needsNameOnly}
+            cancelTo="/gateway/profiles"
+            saveLabel={t(isNew ? 'profiles.editor.create' : 'actions.save')}
+            saving={save.isPending}
+            disabled={!canSave}
+          />
+        )}
       </form>
     </div>
   )
@@ -324,6 +350,7 @@ type ProfileEditorProps = {
  */
 export function ProfileEditor({ profileId, from }: ProfileEditorProps) {
   const { t } = useTranslation('gateway')
+  const { readOnly } = useGateway()
   const isNew = profileId === NEW_ID
   const sourceId = isNew ? from : profileId
   const profiles = useProfiles({ enabled: Boolean(sourceId) })
@@ -332,6 +359,9 @@ export function ProfileEditor({ profileId, from }: ProfileEditorProps) {
   const backLink = (
     <BackLink to="/gateway/profiles" label={t('profiles.editor.back')} />
   )
+
+  // The read-only notice above the tabs explains why and offers to unlock.
+  if (isNew && readOnly) return backLink
 
   if (sourceId && !profiles.data) {
     return (

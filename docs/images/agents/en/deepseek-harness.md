@@ -10,6 +10,7 @@ curl -fsSL https://openviking.ai/install | bash
 The installer asks for the harness and OpenViking credentials:
 
 1. Select **DeepSeek Harness**. The plugin goes into the `web` profile; for another profile, run the command with `bash -s -- --dsh-profile <name>` in place of `bash`.
+   On macOS with the DeepSeek Harness Desktop app, also select **DeepSeek Harness Desktop** (selected by default when Desktop is found). Open Desktop once and quit it with ⌘Q before running the installer, and reopen it afterwards. On Windows, set it up by hand: put the server URL and API key in `%USERPROFILE%\.openviking\ovcli.conf`, then in Desktop's **Plugins** page click **Add plugin**, enter `@openviking/dsh-memory-plugin` and **Install** (see the full guide's [manual setup](https://docs.openviking.net/en/agent-integrations/17-dsh#desktop-plugins-page)).
 2. Select **Volcengine OpenViking Cloud** and enter the API key:
 
 {{OPENVIKING_API_KEY_BLOCK}}
@@ -18,12 +19,15 @@ The installer asks for the harness and OpenViking credentials:
 
 1. Run `dsh --profile web` and open a new conversation. Confirm that “context injection · openviking-memory” appears at the top.
 2. Confirm that the model has `mcp__openviking__*` tools and can call them.
+3. For Desktop, open a new conversation in the app and check the same two points. `--dump-config` does not work for Desktop's `desktop` profile; check that `~/.dsh/profiles/desktop/package.json` lists the plugin under `dsh.profile.bundles` instead.
 
 ## Troubleshooting
 
 | Issue | What to check |
 |---|---|
 | No context injection or OpenViking tools | Run `dsh --profile web --dump-config` and confirm it contains `openviking-memory`; otherwise rerun the installer or run `dsh plugin --profile web add @openviking/dsh-memory-plugin` |
+| Desktop shows nothing after installing | Quit Desktop with ⌘Q (closing the window only hides it) and reopen it; in **Plugins**, check that the plugin is enabled |
+| `profile "desktop" is managed exclusively by the Electron application` | Only Desktop's own `dsh` command can change the `desktop` profile, and nothing can start it; see the full guide's [Desktop section](https://docs.openviking.net/en/agent-integrations/17-dsh#deepseek-harness-desktop) |
 | Installed into the wrong profile | The installer uses `web`; rerun it with `bash -s -- --dsh-profile <name>` in place of `bash` |
 | DSH reports the plugin is incompatible with this dsh version | The plugin accepts every DSH 0.x release from `0.1.0-rc.6` on; on DSH 1.0 or later, update the plugin or run `dsh plugin allow-version` |
 | Plugin fails to start after a DSH upgrade | Newer 0.x releases are admitted without prior verification; pin DSH to a verified release such as `0.2.0-rc.2` and open an issue |

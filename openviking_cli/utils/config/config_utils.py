@@ -9,6 +9,8 @@ from typing import Any, Optional, get_args, get_origin
 
 from pydantic import BaseModel, ValidationError
 
+DEFAULT_SERVICE_NAME = "openviking-server"
+
 
 def suggest_closest_field(field_name: str, valid_fields: set[str]) -> Optional[str]:
     """Return the closest matching field name when it is similar enough."""
@@ -126,6 +128,18 @@ def warn_unknown_config_fields(
                 logger=logger,
                 path_prefix=f"{child_prefix}[{index}]" if is_sequence else child_prefix,
             )
+
+
+def normalize_service_name(value: Any, field_name: str = "service_name") -> str:
+    """Return a validated service name for cache namespaces and OTel defaults."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be empty")
+    if any(not (char.isascii() and (char.isalnum() or char in "._-")) for char in normalized):
+        raise ValueError(f"{field_name} must contain only ASCII letters, digits, '.', '_' or '-'")
+    return normalized
 
 
 def format_validation_error(

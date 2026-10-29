@@ -14,7 +14,7 @@ from .notices import tool_tail
 from .protocols import SSEDecoder, replays_reasoning, usage_of
 from .records import RecordKind as K
 from .tool_catalog import notice_head
-from .tool_protocols import hidden_chain, tool_protocol
+from .tool_protocols import reply_chain, tool_protocol
 from .tool_protocols.common import PREFIX, ToolLoopError, ToolRound, add_usage
 from .windows import ALONE, NEW_CONTEXT, window_number
 
@@ -42,7 +42,7 @@ class HiddenToolLoop:
         seconds = self.policy.get("tool_total_seconds")
         self.deadline = time.monotonic() + seconds if prepared.tools_active and seconds else None
         self.adapter.lead_with(prepared.reply_lead)
-        self.transcript, self.usage = [], {}
+        self.transcript, self.usage, self.counted = [], {}, {}
         self.final, self.hidden, self.window = None, False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
         self.round = ToolRound([], [], {}, False)
@@ -69,23 +69,33 @@ class HiddenToolLoop:
                 received += len(chunk)
                 if received > 64 * 1024 * 1024:
                     raise ToolLoopError("Model stream exceeds tool response budget")
-                for frame in decoder.feed(chunk):
-                    value = decoder.data(frame)
-                    if value is None:
-                        continue
-                    if "error" in value or value.get("type") == "error":
-                        raise ToolLoopError("Model stream failed")
-                    for event in adapter.event(value):
-                        yield adapter.encode(event)
+                # Events that arrive together leave in one write, any before a failure included.
+                events = []
+                try:
+                    events.extend(self.decode(decoder, chunk))
+                finally:
+                    if events:
+                        yield b"".join(events)
             if decoder.buffer.strip():
                 raise ToolLoopError("Incomplete model event stream")
         self.round = adapter.end()
         response.close()
 
+    def decode(self, decoder, chunk):
+        """Client bytes for the upstream events ``chunk`` completes."""
+        for frame in decoder.feed(chunk):
+            value = decoder.data(frame)
+            if value is None:
+                continue
+            if "error" in value or value.get("type") == "error":
+                raise ToolLoopError("Model stream failed")
+            for event in self.adapter.event(value):
+                yield self.adapter.encode(event)
+
     def observe(self):
         self.transcript.extend(self.round.output)
         add_usage(self.usage, self.round.usage)
-        normalized = usage_of({"usage": self.round.usage})
+        normalized = usage_of({"usage": self.round.usage}, self.adapter.usage_excludes_cache)
         if normalized["input_tokens"]:
             # The latest round measures the window best; native tools read it here.
             self.capture.context_usage = normalized
@@ -96,6 +106,9 @@ class HiddenToolLoop:
         prefix = "hidden_upstream_" if self.rounds else "first_upstream_"
         for key, value in normalized.items():
             self.prepared.metrics[prefix + key] = self.prepared.metrics.get(prefix + key, 0) + value
+            if self.round.usage:
+                # Rounds may report usage in different forms, so the log sums them read one by one.
+                self.counted[key] = self.counted.get(key, 0) + value
 
     def stream(self, events):
         # Adapters update visible history either way; only streams send events.
@@ -182,9 +195,7 @@ class HiddenToolLoop:
         # The next request strips the recall notice before matching, so the anchor,
         # the visible count and the replaced span all go without it.
         visible = self.adapter.strip_lead(self.adapter.visible)
-        anchor = (
-            hidden_chain([*self.prepared.messages, *visible], self.protocol)[-1] if visible else ""
-        )
+        anchor = reply_chain(self.prepared, visible)[-1] if visible else ""
         if self.window:
             # new_context refuses an anchor whose cut this request applies, so only a
             # concurrent request can have stored another header here first.
@@ -204,7 +215,7 @@ class HiddenToolLoop:
             # which relaying recorded as the same reply; the transcript replaces it there too.
             dropped, _ = self.adapter.split_reasoning(visible)
             if dropped is not visible and replays_reasoning(self.prepared.upstream):
-                other = hidden_chain([*self.prepared.messages, *dropped], self.protocol)[-1]
+                other = reply_chain(self.prepared, dropped)[-1]
                 if dropped and other:
                     await self.store.replay.put(
                         self.prepared.scope,
@@ -221,6 +232,7 @@ class HiddenToolLoop:
         # The combined reply reads like any relayed one: calls left for the client
         # hand the turn off, and the continuation that ends it is captured.
         self.capture.nonstream(self.final)
+        self.capture.usage = self.counted or self.capture.usage
         self.prepared.metrics["hidden_rounds"] = self.rounds
 
     def error(self, message: str) -> bytes:

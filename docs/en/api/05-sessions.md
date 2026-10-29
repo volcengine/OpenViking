@@ -12,8 +12,8 @@ viking://user/{user_id}/sessions/{session_id}
 ```
 
 Session APIs are scoped to the authenticated user and return canonical user
-session URIs. URI-based APIs may also accept the backward-compatible
-`viking://session/{session_id}` alias, resolved in the same user context.
+session URIs. URI-based APIs also accept the `viking://~/sessions/{session_id}`
+home alias for the authenticated user.
 
 ## API Reference
 
@@ -48,15 +48,15 @@ Create a new session. Sessions are containers for conversations, storing message
 
 `auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 
-| Field | Type | Default | Max | Description |
-|-------|------|---------|-----|-------------|
-| `pending_token_threshold` | int | 150000 | 1000000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
-| `message_count_threshold` | int | 100 | 1000 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
-| `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
-| `keep_recent_count` | int | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
-| `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
+| Field | Type | Default | Min | Max | Description |
+|-------|------|---------|-----|-----|-------------|
+| `pending_token_threshold` | int | 150000 | 0 | 1000000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 100 | 0 | 1000 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `idle_timeout_seconds` | int | 86400 | 0 (off) or 300 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
+| `keep_recent_count` | int | 0 | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `min_commit_interval_seconds` | int | 0 | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
-All fields have a minimum of `0` and are clamped into `[0, max]`. Unknown keys are rejected with `InvalidArgumentError`. Idle commits also require `memory.session_auto_commit.enabled` on the server; setting `idle_timeout_seconds` alone does not start the scanner.
+New `idle_timeout_seconds` inputs must be `0` (off) or at least `300`; values above `604800` are clamped to that maximum. For stored-data compatibility, existing positive values below 300 continue to be read unchanged. Other fields have a minimum of `0` and are clamped to their ranges. Unknown keys are rejected with `InvalidArgumentError`. Idle commits also require `memory.session_auto_commit.enabled` on the server; setting `idle_timeout_seconds` alone does not start the scanner.
 
 #### 3. Usage Examples
 
@@ -589,7 +589,7 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results \
 
 ### read_tool_result()
 
-Read one externalized tool result by Unicode character range.
+Read one externalized tool result by Unicode character range. The returned content may contain placeholders for sensitive values. To restore them, read the corresponding file through the [Content API](12-content.md).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -927,7 +927,7 @@ If the archive does not exist, is incomplete, or does not belong to the session,
 
 #### 1. API Implementation Introduction
 
-Delete the session directory, including messages, archives, and session audit records. Long-term memories already extracted into user or Peer memory directories remain; locate and delete those URIs separately when needed. This endpoint has no automatic undo.
+Delete the session directory, including messages, archives, and session audit records. Long-term memories already extracted into user or Peer memory directories remain; locate and delete those URIs separately when needed. This endpoint has no automatic undo. The corresponding Privacy config (`category=session`, `target_key=session_id`) is retained.
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:delete_session()` - HTTP route
@@ -1333,6 +1333,8 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 Commit a session. Message archiving (Phase 1) completes before the response returns. Summary generation and memory extraction (Phase 2) run asynchronously in the background when messages are archived. Archived commits return `status: "accepted"` with a `task_id`; no-op commits return `status: "skipped"` with `task_id: null`.
 
+The former standalone session `extract` endpoint has been removed. Use `commit` for memory extraction. This archives messages according to the retention policy; use the returned `task_id` to check the background extraction result. An `accepted` response does not mean extraction is complete.
+
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Split messages according to the retention policy, persist the archive and recovery records, enqueue Phase 2, and write retained messages back to the live session
 - **Phase 2 (Asynchronous)**: Extract long-term memories; generate WM/checkpoint summaries only when the effective WM policy is enabled (default: disabled)
@@ -1472,43 +1474,6 @@ ov session commit a1b2c3d4
   }
 }
 ```
-
----
-
-### extract()
-
-#### 1. API Implementation Introduction
-
-Extract memories from the existing session’s current live messages and wait for the extraction result. This does not create a commit task or replace archiving; previously archived history is not included again as live input.
-
-**Code Entries:**
-- `openviking/server/routers/sessions.py:extract_session()` - HTTP route
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| session_id | str | Yes | - | Session ID to extract memories from |
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```http
-POST /api/v1/sessions/{session_id}/extract
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key"
-```
-
-**Response Example**
-
-The response’s `result` field contains the list of extracted memory writes. The exact item shape depends on which memories were produced for that session.
 
 <a id="get_task"></a><a id="list_tasks"></a>
 

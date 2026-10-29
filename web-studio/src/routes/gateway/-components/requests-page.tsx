@@ -39,10 +39,12 @@ import { cn } from '#/lib/utils'
 import { LOG_KINDS, resyncCapture } from '../-lib/api'
 import type { GatewayKey, LogKind, LogRecord, Upstream } from '../-lib/api'
 import { formatClockTime, formatNumber } from '../-lib/format'
-import { gatewayErrorMessage, kindLabel } from '../-lib/localize'
+import { gatewayErrorMessage, keyName, kindLabel } from '../-lib/localize'
+import type { Translate } from '../-lib/localize'
 import type { RequestsFilter } from '../-lib/search'
 import { useGateway, useKeys, useLogs, useUpstreams } from '../-lib/use-gateway'
 import { ConfirmDialog } from './confirm-dialog'
+import { DocsLink } from './docs-link'
 import { EmptyState, ErrorState, LoadingState } from './empty-state'
 import type { ResyncRequest } from './request-details'
 import { RequestRow, RequestsTableHeader } from './requests-row'
@@ -85,6 +87,7 @@ function inSegment(record: LogRecord, segment: Segment): boolean {
 
 /** Text a search term is matched against: model, conversation, key, upstream. */
 function searchableText(
+  t: Translate,
   record: LogRecord,
   upstreams?: Map<string, Upstream>,
   keys?: Map<string, GatewayKey>,
@@ -97,7 +100,7 @@ function searchableText(
     record.model,
     record.session,
     record.request_id,
-    key?.name,
+    key && keyName(t, key),
     key?.prefix,
     upstream?.name,
   ]
@@ -209,7 +212,9 @@ export function RequestsPage() {
           (kind === 'all' || record.kind === kind) &&
           (!needle ||
             (session !== undefined && record.session === session) ||
-            searchableText(record, upstreamsById, keysById).includes(needle)),
+            searchableText(t, record, upstreamsById, keysById).includes(
+              needle,
+            )),
       )
   }, [
     records,
@@ -220,6 +225,7 @@ export function RequestsPage() {
     hashed,
     upstreamsById,
     keysById,
+    t,
   ])
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -342,7 +348,10 @@ export function RequestsPage() {
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
-      <SectionHeader description={t('requests.description')} />
+      <SectionHeader
+        description={t('requests.description')}
+        actions={<DocsLink section="requests" />}
+      />
       <Card className="gap-0 overflow-hidden py-0">
         <CardHeader className="border-b bg-muted/20 px-4 py-3 [.border-b]:pb-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">

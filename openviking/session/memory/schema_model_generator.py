@@ -189,9 +189,15 @@ class SchemaModelGenerator:
                     Field(None, description=desc),
                 )
 
-        # Create the model
+        replace_string_fields = [
+            field.name
+            for field in memory_type.fields
+            if field.merge_op == MergeOp.REPLACE and field.field_type == FieldType.STRING
+        ]
+
+        # New objects have no stored value on which to apply a string patch.
         @model_validator(mode="before")
-        def require_new_object_identity(cls, data):
+        def validate_new_object_fields(cls, data):
             del cls
             if not isinstance(data, dict):
                 return data
@@ -202,6 +208,17 @@ class SchemaModelGenerator:
             missing = [name for name in required_on_create if data.get(name) is None]
             if is_new and missing:
                 raise ValueError("new memory item requires fields: " + ", ".join(missing))
+            if is_new:
+                invalid = [
+                    name
+                    for name in replace_string_fields
+                    if data.get(name) is not None and not isinstance(data[name], str)
+                ]
+                if invalid:
+                    raise ValueError(
+                        "new memory item requires a complete string for replace fields: "
+                        + ", ".join(invalid)
+                    )
             return data
 
         json_schema_extra = None
@@ -221,7 +238,7 @@ class SchemaModelGenerator:
         model = create_model(
             model_name,
             __config__=ConfigDict(extra="ignore", json_schema_extra=json_schema_extra),
-            __validators__={"require_new_object_identity": require_new_object_identity},
+            __validators__={"validate_new_object_fields": validate_new_object_fields},
             **field_definitions,
         )
 
@@ -389,112 +406,3 @@ class SchemaModelGenerator:
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
-
-
-class SchemaPromptGenerator:
-    """
-    Prompt generator that incorporates schema information into LLM prompts.
-
-    Generates descriptive text about memory types and their fields
-    based on the YAML schema definitions.
-    """
-
-    def __init__(
-        self,
-        schemas: List[MemoryTypeSchema],
-        template_context: Optional[Dict[str, Any]] = None,
-    ):
-        if hasattr(schemas, "list_all"):
-            schemas = schemas.list_all()
-        self.schemas = schemas
-        self._template_context = dict(template_context or {})
-
-    def _render_description(self, description: str) -> str:
-        return render_description_template(description, self._template_context)
-
-    def generate_type_descriptions(self) -> str:
-        """
-        Generate descriptions of all memory types.
-
-        Returns:
-            Formatted string with all memory type descriptions
-        """
-        lines = ["## Available Memory Types"]
-
-        for mt in self.schemas:
-            lines.append(f"\n### {mt.memory_type}")
-            lines.append(self._render_description(mt.description))
-
-            # Add URI format information
-            if mt.directory or mt.filename_template:
-                lines.append("\n**URI Format:**")
-                if mt.directory and mt.filename_template:
-                    lines.append(f"- URI: `{mt.directory}/{mt.filename_template}`")
-                elif mt.directory:
-                    lines.append(f"- Directory: `{mt.directory}`")
-                elif mt.filename_template:
-                    lines.append(f"- Filename: `{mt.filename_template}`")
-
-                # Add variable substitution info
-                lines.append("\n**Variable Substitution:**")
-                lines.append("- `{{ user_space }}` → 'default'")
-                if mt.fields:
-                    for field in mt.fields:
-                        lines.append(f"- `{{ {field.name} }}` → use value from fields")
-
-            if mt.fields:
-                lines.append("\n**Fields:**")
-                for field in mt.fields:
-                    lines.append(
-                        f"- `{field.name}` ({field.field_type.value}): "
-                        f"{self._render_description(field.description)}"
-                    )
-
-        return "\n".join(lines)
-
-    def generate_field_descriptions(self, memory_type: str) -> Optional[str]:
-        """
-        Generate descriptions for a specific memory type's fields.
-
-        Args:
-            memory_type: The memory type to describe
-
-        Returns:
-            Formatted string with field descriptions, or None if not found
-        """
-        mt = next((s for s in self.schemas if s.memory_type == memory_type), None)
-        if not mt:
-            return None
-
-        lines = [f"### {mt.memory_type} Fields"]
-        for field in mt.fields:
-            lines.append(f"- `{field.name}`: {self._render_description(field.description)}")
-
-        return "\n".join(lines)
-
-    def get_full_prompt_context(self) -> Dict[str, Any]:
-        """
-        Get the full prompt context including all schema information.
-
-        Returns:
-            Dictionary with all prompt context components
-        """
-        return {
-            "type_descriptions": self.generate_type_descriptions(),
-            "memory_types": [
-                {
-                    "memory_type": mt.memory_type,
-                    "description": mt.description,
-                    "fields": [
-                        {
-                            "name": f.name,
-                            "type": f.field_type.value,
-                            "description": f.description,
-                            "merge_op": f.merge_op.value,
-                        }
-                        for f in mt.fields
-                    ],
-                }
-                for mt in self.schemas
-            ],
-        }

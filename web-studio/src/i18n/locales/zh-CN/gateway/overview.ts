@@ -8,6 +8,21 @@ const overview = {
   sampleNote_other:
     '以上数据统计自请求日志中最新的 {{limit}} 条记录。日志保留 {{count}} 天。',
   setup: {
+    providedUpstreams_one: '网关管理员已提供 {{count}} 个上游',
+    providedUpstreams_other: '网关管理员已提供 {{count}} 个上游',
+    importedUpstreams_one: '已有 {{count}} 个上游，来自 OpenViking 的模型配置',
+    importedUpstreams_other:
+      '已有 {{count}} 个上游，来自 OpenViking 的模型配置',
+    someImportedUpstreams:
+      '已有 {{count}} 个上游，其中 {{imported}} 个来自 OpenViking 的模型配置',
+    waitUpstreams: '等待网关管理员添加上游',
+    providedProfiles_one: '网关管理员已提供 {{count}} 个上下文配置',
+    providedProfiles_other: '网关管理员已提供 {{count}} 个上下文配置',
+    waitProfiles: '等待网关管理员添加上下文配置',
+    codingPlan:
+      '{{name}} 是 Coding Plan 上游，确认套餐允许之前，发往它的请求都会被拦截。',
+    confirm: '去确认',
+
     title: '快速开始',
     description:
       '完成下面四步，就能让第一段对话用上记忆。客户端发出第一个请求后，这张卡片会自动隐藏。',
@@ -34,6 +49,7 @@ const overview = {
       description:
         '客户端用这个密钥调用网关。每个密钥属于一个 OpenViking 用户，网关读写的就是这个用户的记忆。',
       blocked: '请先添加上游并创建上下文配置。',
+      waiting: '网关管理员添加上游和上下文配置后，才能签发密钥。',
       done_one: '已签发 {{count}} 个密钥',
       done_other: '已签发 {{count}} 个密钥',
       action: '签发密钥',
@@ -44,6 +60,25 @@ const overview = {
         '把 Claude Code、Codex CLI 或聊天应用指向网关地址并填入密钥，然后发一条消息。',
       action: '查看接入指南',
     },
+  },
+  quick: {
+    title: '快速模式',
+    description: '跳过下面的步骤，一键拿到可以直接使用的网关密钥。',
+    upstreamImport:
+      '上游：导入 OpenViking 服务端的模型配置，沿用它的 API Key 和额度',
+    upstreamUse: '上游：使用 {{names}}（{{models}}，{{protocol}}）',
+    profileCreate: '上下文配置：用推荐设置新建“{{name}}”',
+    profileUse: '上下文配置：使用“{{name}}”',
+    keySelf: '密钥：为 {{user}} 签发',
+    keyPick: '密钥：下一步选择密钥归属的 OpenViking 用户',
+    action: '一键生成密钥',
+    running: '生成中…',
+    retry: '重试',
+    locked: '创建上下文配置或导入模型需要网关管理密钥。',
+    noUsable:
+      'OpenViking 的模型配置里没有网关能直接转发的模型。处理下面列出的问题，或者在第 1 步手动添加上游。',
+    keyName: '快速模式',
+    divider: '或者按步骤手动配置',
   },
   kpi: {
     requests: {
@@ -73,18 +108,33 @@ const overview = {
       none: '还没有召回',
     },
   },
+  cacheMiss: {
+    title_one: '有 {{count}} 段长对话连续没有命中提示词缓存',
+    title_other: '有 {{count}} 段长对话连续没有命中提示词缓存',
+    description_one:
+      '最近连续 {{streak}} 次模型调用的输入都不少于 {{tokens}} Token，缓存命中率都是 0%。常见原因是请求开头的内容（系统提示词、工具定义）每次都在变，或者上游把请求分给了不同的账号或渠道。',
+    description_other:
+      '最近连续 {{streak}} 次模型调用的输入都不少于 {{tokens}} Token，缓存命中率都是 0%。常见原因是请求开头的内容（系统提示词、工具定义）每次都在变，或者上游把请求分给了不同的账号或渠道。',
+    action:
+      '对照服务商后台的缓存记录：那边有命中，说明上游没有把缓存用量传回网关；那边也没有，检查系统提示词里有没有时间这类每次都变的内容，以及中转服务是否在多个渠道之间轮换。',
+    noWrites:
+      '上游也没有写入缓存，客户端很可能没有在请求里设置 cache_control。对照服务商后台的缓存记录：那边有命中，说明上游没有把缓存用量传回网关。',
+    streak_one: '连续 {{count}} 次未命中',
+    streak_other: '连续 {{count}} 次未命中',
+  },
+  cacheUnreported: {
+    title_one: '上游 {{upstreams}} 最近没有返回过缓存命中',
+    title_other: '上游 {{upstreams}} 最近没有返回过缓存命中',
+    description_one:
+      '相关长对话的缓存命中率一直是 0%，统计时都按未命中计算。可能是服务商不支持提示词缓存、客户端没有开启缓存，或者中转服务没有把缓存用量传回网关。',
+    description_other:
+      '相关长对话的缓存命中率一直是 0%，统计时都按未命中计算。可能是服务商不支持提示词缓存、客户端没有开启缓存，或者中转服务没有把缓存用量传回网关。',
+    separator: '、',
+  },
   openviking: {
     title: 'OpenViking',
     description: '为新消息检索记忆，并保存对话。',
     version: '版本',
-    authMode: '认证方式',
-    authModes: {
-      api_key: 'API 密钥模式',
-      trusted: 'Trusted 模式',
-      dev: '开发模式',
-      oidc: 'OIDC 模式',
-      ldap: 'LDAP 模式',
-    },
     unreachable:
       '连不上 OpenViking 期间，请求照常发给模型，只是不带记忆；保存对话会一直重试，直到 OpenViking 恢复。',
     starting: '网关还没完成对 OpenViking 的首次检查，请稍后刷新。',

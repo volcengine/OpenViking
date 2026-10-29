@@ -83,19 +83,37 @@ const internalRouterFiles = new Set([
   'stats.py',
   'user_settings.py',
 ])
-for (const file of fs.readdirSync(routerDir).filter((name) => name.endsWith('.py'))) {
-  if (internalRouterFiles.has(file)) continue
-  const source = fs.readFileSync(path.join(routerDir, file), 'utf8')
+const routerFiles = fs.readdirSync(routerDir)
+  .filter((name) => name.endsWith('.py') && !internalRouterFiles.has(name))
+  .map((name) => path.join(routerDir, name))
+// Gateway management is a public API owned by its ASGI application, including
+// when that application is embedded in the server.
+const gatewayManagement = path.join(repoRoot, 'openviking_gateway/management.py')
+routerFiles.push(gatewayManagement)
+// Both hosts mount the gateway application at MOUNT_PATH.
+const gatewayMount = fs
+  .readFileSync(path.join(repoRoot, 'openviking_gateway/config.py'), 'utf8')
+  .match(/^MOUNT_PATH\s*=\s*["']([^"']+)["']/m)[1]
+for (const routerFile of routerFiles) {
+  const file = path.basename(routerFile)
+  const isGateway = routerFile === gatewayManagement
+  const source = fs.readFileSync(routerFile, 'utf8')
+  const prefixConstant = source.match(/^PREFIX\s*=\s*["']([^"']+)["']/m)?.[1]
   const routerPrefix =
-    source.match(/router\s*=\s*APIRouter\([^)]*prefix=["']([^"']+)/s)?.[1] ?? ''
-  const mountPrefix = file === 'bot.py' ? '/bot/v1' : ''
+    source.match(/router\s*=\s*APIRouter\([^)]*prefix=["']([^"']+)/s)?.[1] ??
+    (source.match(/router\s*=\s*APIRouter\([^)]*prefix=PREFIX\b/s) ? prefixConstant : '') ?? ''
+  const mountPrefix = file === 'bot.py' ? '/bot/v1' : isGateway ? gatewayMount : ''
+  // Gateway upstreams and policies share the handlers that object_routes(kind) registers.
+  const objectKinds = Array.from(source.matchAll(/object_routes\(\s*["']([^"']+)["']/g),
+    (match) => match[1])
   const decorators = [
     ...Array.from(
-      source.matchAll(/@router\.(get|post|put|patch|delete)\(\s*["']([^"']*)/g),
+      source.matchAll(/@router\.(get|post|put|patch|delete)\(\s*f?["']([^"']*)/g),
       (match) => ({
         index: match.index,
         methods: [match[1].toUpperCase()],
-        path: match[2],
+        // Unescape f-string braces.
+        path: match[2].replaceAll('{{', '{').replaceAll('}}', '}'),
         sourceLength: match[0].length,
       })
     ),
@@ -137,8 +155,20 @@ for (const file of fs.readdirSync(routerDir).filter((name) => name.endsWith('.py
       ) continue
       query.set(defaultMatch[1], false)
     }
-    for (const method of decorator.methods) {
-      routes.set(`${method} ${normalizePath(routePath)}`, { query, pathParameters })
+    // The caller dependency consumes account_id directly from query_params.
+    if (isGateway) query.set('account_id', false)
+    const concretePaths = routePath.includes('{kind}')
+      ? objectKinds.map((kind) => routePath.replace('{kind}', kind))
+      : [routePath]
+    for (const concretePath of concretePaths) {
+      const concreteParameters = new Set(
+        Array.from(concretePath.matchAll(/\{([^}:]+)(?::[^}]+)?\}/g), (item) => item[1])
+      )
+      for (const method of decorator.methods) {
+        routes.set(`${method} ${normalizePath(concretePath)}`, {
+          query, pathParameters: concreteParameters,
+        })
+      }
     }
   }
 }
@@ -178,11 +208,9 @@ function findRoute(method, documentedPath) {
     const candidateMethod = candidate.slice(0, separator)
     const candidatePath = candidate.slice(separator + 1)
     if (candidateMethod !== method) continue
-    const placeholderPattern =
-      candidatePath.startsWith('/webdav/resources/{}') ||
-      candidatePath.startsWith('/api/v1/system/sync/{}')
-        ? '.+'
-        : '[^/]+'
+    const placeholderPattern = candidatePath.startsWith('/webdav/resources/{}')
+      ? '.+'
+      : '[^/]+'
     const pattern = candidatePath
       .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       .replace(/\\\{\\\}/g, placeholderPattern)
@@ -351,10 +379,7 @@ function routeIsCovered(route, coverage) {
     .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     .replace(
       /\\\{\\\}/g,
-      routePath.startsWith('/webdav/resources/{}') ||
-        routePath.startsWith('/api/v1/system/sync/{}')
-        ? '.+'
-        : '[^/]+'
+      routePath.startsWith('/webdav/resources/{}') ? '.+' : '[^/]+'
     )
   for (const reference of coverage) {
     const referenceSeparator = reference.indexOf(' ')

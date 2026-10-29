@@ -127,7 +127,10 @@ class TestFsMv:
             f.write("move me")
             temp_path = f.name
         try:
-            ov_add_resource(temp_path, src_uri)
+            add_result = ov_add_resource(temp_path, src_uri)
+            assert add_result["exit_code"] == 0, (
+                f"add-resource for mv failed: {add_result['stderr'][:300]}"
+            )
         finally:
             os.unlink(temp_path)
         r = ov_mv(src_uri, dst_uri)

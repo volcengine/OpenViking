@@ -28,8 +28,10 @@ import {
   useLogs,
   useOverview,
 } from '../-lib/use-gateway'
+import { DocsLink } from './docs-link'
 import { ErrorState, LoadingState } from './empty-state'
 import { MetricCard } from './metric-card'
+import { CacheNotices } from './overview-cache'
 import { RecentRequests } from './overview-recent'
 import { OverviewSetup } from './overview-setup'
 import { DegradedRequestsCard, OpenVikingCard } from './overview-status'
@@ -149,6 +151,7 @@ export function OverviewPage() {
         description={t('overview.description')}
         actions={
           <>
+            <DocsLink section="overview" />
             {overview.dataUpdatedAt ? (
               <span className="text-xs text-muted-foreground tabular-nums">
                 {t('states.updatedAt', {
@@ -175,6 +178,9 @@ export function OverviewPage() {
         <>
           {data.last_request_at == null ? <OverviewSetup /> : null}
           <MetricRow data={data} />
+          {data.cache_alerts ? (
+            <CacheNotices alerts={data.cache_alerts} />
+          ) : null}
           <div className="grid gap-3 lg:grid-cols-2">
             <OpenVikingCard
               health={data.openviking}

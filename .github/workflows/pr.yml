@@ -181,7 +181,7 @@ jobs:
             echo "cuvs_changed=false" >> $GITHUB_OUTPUT
           fi
 
-          LANGCHAIN_PATTERN="examples/langchain/|openviking/integrations/langchain/|tests/(unit/test_langchain|integration/langchain_langgraph/)|examples/langchain-langgraph/|^pyproject\.toml$|^uv\.lock$|\.github/workflows/(pr|python-langchain-release)\.yml"
+          LANGCHAIN_PATTERN="integrations/frameworks/langchain/|^openviking/integrations/|^tests/unit/test_langchain_[^/]*\.py$|^tests/integration/langchain_langgraph/|^examples/(langchain|langchain-langgraph|agent-framework)/|^pyproject\.toml$|^uv\.lock$|\.github/workflows/(pr|python-langchain-release)\.yml"
           LANGCHAIN_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$LANGCHAIN_PATTERN" || true)
 
           if [ -n "$LANGCHAIN_CHANGED_FILES" ]; then
@@ -292,44 +292,40 @@ jobs:
       - name: Install standalone integration
         run: |
           uv pip install --system -e sdk/python
-          uv pip install --system -e "examples/langchain[langgraph,test,dev]"
+          uv pip install --system -e "integrations/frameworks/langchain[langgraph,test,dev]"
 
       - name: Check package formatting and lint
         run: |
           ruff format --check \
-            examples/langchain/src \
-            examples/langchain/tests \
-            openviking/integrations/langchain \
-            tests/integration/langchain_langgraph \
-            tests/unit/test_langchain*.py
+            integrations/frameworks/langchain/src \
+            integrations/frameworks/langchain/tests \
+            tests/unit/test_langchain_package_boundary.py
           ruff check \
-            examples/langchain/src \
-            examples/langchain/tests \
-            openviking/integrations/langchain \
-            tests/integration/langchain_langgraph \
-            tests/unit/test_langchain*.py
+            integrations/frameworks/langchain/src \
+            integrations/frameworks/langchain/tests \
+            tests/unit/test_langchain_package_boundary.py
 
       - name: Type-check package
         run: >-
           mypy
-          --config-file examples/langchain/pyproject.toml
-          examples/langchain/src/langchain_openviking
+          --config-file integrations/frameworks/langchain/pyproject.toml
+          integrations/frameworks/langchain/src/langchain_openviking
 
       - name: Run LangChain and LangGraph tests
         run: |
           python -m pytest -q --noconftest -o addopts='' \
-            tests/unit/test_langchain*.py \
-            tests/integration/langchain_langgraph
+            integrations/frameworks/langchain/tests \
+            tests/unit/test_langchain_package_boundary.py
 
       - name: Build and inspect distributions
         run: |
-          python -m build examples/langchain
-          python -m twine check examples/langchain/dist/*
+          python -m build integrations/frameworks/langchain
+          python -m twine check integrations/frameworks/langchain/dist/*
 
       - name: Verify the installed wheel
         if: matrix.python-version == '3.12'
         run: |
-          WHEEL_PATH="${GITHUB_WORKSPACE}/$(find examples/langchain/dist -name '*.whl' -print -quit)"
+          WHEEL_PATH="${GITHUB_WORKSPACE}/$(find integrations/frameworks/langchain/dist -name '*.whl' -print -quit)"
           uv venv .langchain-wheel-venv --python "${{ matrix.python-version }}"
           uv pip install \
             --python .langchain-wheel-venv/bin/python \
@@ -337,10 +333,10 @@ jobs:
             "${WHEEL_PATH}"
           cd /tmp
           "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
-            "${GITHUB_WORKSPACE}/examples/langchain/tests/installed_base_smoke.py"
+            "${GITHUB_WORKSPACE}/integrations/frameworks/langchain/tests/installed_base_smoke.py"
           uv pip install \
             --python "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
             "${WHEEL_PATH}[langgraph]"
           "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
-            "${GITHUB_WORKSPACE}/examples/langchain/tests/installed_smoke.py"
+            "${GITHUB_WORKSPACE}/integrations/frameworks/langchain/tests/installed_smoke.py"
           uv pip check --python "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python"

@@ -32,8 +32,8 @@ Asynchronous parse and semantic tasks created by a request carry the same group 
 | Level | Allowed operations |
 |-------|--------------------|
 | `read` | Read, list, and `find/search/grep` |
-| `write` | `read` capabilities plus write, create, file delete/move, and tag updates |
-| `manage` | `write` capabilities plus directory delete/move and ACL management |
+| `write` | `read` capabilities plus write, create, and tag updates |
+| `manage` | `write` capabilities plus file/directory delete/move and ACL management |
 
 Each higher level includes the lower levels. A `manage` grant therefore includes `read` and `write`.
 
@@ -94,7 +94,7 @@ All filesystem APIs use the same permission mapping:
 |-----------|---------------------|
 | read, stat, list, tree, find, search, grep, glob | read |
 | write, create, mkdir, set tags | write |
-| delete or move a file | write |
+| delete or move a file | manage |
 | delete or move a directory | manage on the directory and complete subtree |
 | manage ACL | manage |
 | move destination parent | write |

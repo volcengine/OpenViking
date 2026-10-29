@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import re
 
-import openviking.metrics.global_api as global_api
 from openviking.metrics.collectors.base import EventMetricCollector
 from openviking.metrics.collectors.cache import CacheCollector
 from openviking.metrics.collectors.embedding import EmbeddingCollector
 from openviking.metrics.collectors.queue import QueueDurationCollector
 from openviking.metrics.collectors.rerank import RerankCollector
+from openviking.metrics.collectors.resource import ResourceIngestionCollector
 from openviking.metrics.collectors.retrieval import RetrievalCollector
 from openviking.metrics.collectors.session import SessionCollector
 from openviking.metrics.collectors.telemetry_bridge import TelemetryBridgeCollector
@@ -68,21 +68,22 @@ def test_queue_duration_collector_records_processing_and_end_to_end_histograms(
         {
             "queue": "Semantic",
             "outcome": "success",
-            "process_duration_seconds": 2.5,
-            "end_to_end_duration_seconds": 8.0,
+            "process_duration_seconds": 60.0,
+            "end_to_end_duration_seconds": 404261.58497,
         },
         registry,
     )
 
     text = render_prometheus(registry)
-    labels = 'outcome="success",queue="Semantic"'
+    schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
+    labels = f'bucket_schema="{schema}",outcome="success",queue="Semantic"'
     assert f"openviking_queue_process_duration_seconds_count{{{labels}}} 1" in text
-    assert f"openviking_queue_process_duration_seconds_sum{{{labels}}} 2.5" in text
+    assert f"openviking_queue_process_duration_seconds_sum{{{labels}}} 60.0" in text
     assert f"openviking_queue_end_to_end_duration_seconds_count{{{labels}}} 1" in text
-    assert f"openviking_queue_end_to_end_duration_seconds_sum{{{labels}}} 8.0" in text
+    assert f"openviking_queue_end_to_end_duration_seconds_sum{{{labels}}} 404261.58497" in text
     assert (
-        "openviking_queue_end_to_end_duration_seconds_bucket{"
-        'le="86400.0",outcome="success",queue="Semantic"} 1' in text
+        f'openviking_queue_end_to_end_duration_seconds_bucket{{bucket_schema="{schema}",'
+        'le="500000.0",outcome="success",queue="Semantic"} 1' in text
     )
 
 
@@ -120,12 +121,31 @@ def test_queue_duration_collector_allows_processing_only_and_ignores_bad_payload
     )
 
     text = render_prometheus(registry)
-    assert (
-        "openviking_queue_process_duration_seconds_count{"
-        'outcome="requeued",queue="Embedding"} 1' in text
+    assert re.search(
+        r'openviking_queue_process_duration_seconds_count\{bucket_schema="[0-9a-f]{16}",'
+        r'outcome="requeued",queue="Embedding"\} 1',
+        text,
     )
     assert "openviking_queue_end_to_end_duration_seconds" not in text
     assert 'outcome="unknown"' not in text
+
+
+def test_resource_collector_records_connector_imports(registry, render_prometheus):
+    ResourceIngestionCollector().receive(
+        "resource.import",
+        {
+            "pipeline": "connector",
+            "source_type": "repository",
+            "account_id": "acct-code",
+        },
+        registry,
+    )
+
+    text = render_prometheus(registry)
+    assert (
+        'openviking_resource_imports_total{account_id="__unknown__",'
+        'pipeline="connector",source_type="repository"} 1'
+    ) in text
 
 
 def test_session_collector_records_lifecycle_and_archive(registry, render_prometheus):
@@ -251,17 +271,6 @@ def test_telemetry_bridge_collector_ignores_malformed_payloads_instead_of_raisin
     assert "openviking_operation_requests_total" not in text
 
 
-def test_http_collector_importable() -> None:
-    from openviking.metrics.collectors.http import HTTPCollector
-
-    assert HTTPCollector is not None
-
-
-def test_global_api_no_longer_exports_metrics_enabled_helper() -> None:
-    """Avoid redundant exports: metrics enablement is read via direct config access."""
-    assert not hasattr(global_api, "is_metrics_enabled_from_server_config")
-
-
 def test_embedding_collector_maps_call_metrics_and_tokens(registry, render_prometheus):
     """`embedding.call` must produce calls/duration/tokens metrics keyed by provider+model."""
     EmbeddingCollector().receive(
@@ -296,6 +305,43 @@ def test_embedding_collector_maps_call_metrics_and_tokens(registry, render_prome
     )
     assert re.search(
         r'openviking_embedding_tokens_total\{(?=[^}]*account_id="__unknown__")(?=[^}]*model_name="text-embedding-3-large")(?=[^}]*provider="openai")[^}]*\} 5(?:\.0)?',
+        text,
+    )
+
+
+def test_model_collectors_attribute_ingestion_tokens(registry, render_prometheus):
+    EmbeddingCollector().receive(
+        "embedding.call",
+        {
+            "provider": "openai",
+            "model_name": "text-embedding-3-large",
+            "duration_seconds": 0.12,
+            "prompt_tokens": 3,
+            "completion_tokens": 0,
+            "source_type": "repository",
+        },
+        registry,
+    )
+    VLMCollector().receive(
+        "vlm.call",
+        {
+            "provider": "volcengine",
+            "model_name": "doubao-vlm",
+            "duration_seconds": 0.2,
+            "prompt_tokens": 5,
+            "completion_tokens": 2,
+            "source_type": "document",
+        },
+        registry,
+    )
+
+    text = render_prometheus(registry)
+    assert re.search(
+        r'openviking_embedding_ingestion_tokens_total\{[^}]*source_type="repository"[^}]*\} 3(?:\.0)?',
+        text,
+    )
+    assert re.search(
+        r'openviking_vlm_ingestion_tokens_total\{[^}]*source_type="document"[^}]*\} 7(?:\.0)?',
         text,
     )
 
@@ -366,8 +412,10 @@ def test_embedding_collector_records_success_volume_and_latency(registry, render
         'openviking_embedding_requests_total{account_id="__unknown__",status="ok"} 1' in text
         or 'openviking_embedding_requests_total{account_id="__unknown__",status="ok"} 1.0' in text
     )
-    assert (
-        'openviking_embedding_latency_seconds_count{account_id="__unknown__",status="ok"} 1' in text
+    assert re.search(
+        r'openviking_embedding_latency_seconds_count\{account_id="__unknown__",'
+        r'bucket_schema="[0-9a-f]{16}",status="ok"\} 1',
+        text,
     )
 
 

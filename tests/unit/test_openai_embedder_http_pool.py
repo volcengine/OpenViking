@@ -15,6 +15,7 @@ import openai
 import pytest
 from pydantic import ValidationError
 
+from openviking.concurrency import AsyncSemaphore
 from openviking.models.embedder import OpenAIDenseEmbedder
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
@@ -26,6 +27,8 @@ class _EmbeddingServer(ThreadingHTTPServer):
     def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), _EmbeddingHandler)
         self.connection_count = 0
+        self.document_started = threading.Event()
+        self.release_document = threading.Event()
 
     def get_request(self):
         request, address = super().get_request()
@@ -38,7 +41,10 @@ class _EmbeddingHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         content_length = int(self.headers.get("Content-Length", "0"))
-        self.rfile.read(content_length)
+        request = json.loads(self.rfile.read(content_length))
+        if request["input"] == "blocked-document":
+            self.server.document_started.set()
+            self.server.release_document.wait(timeout=10)
         payload = json.dumps(
             {
                 "object": "list",
@@ -71,6 +77,7 @@ def _embedding_server() -> Iterator[_EmbeddingServer]:
     try:
         yield server
     finally:
+        server.release_document.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
@@ -82,7 +89,7 @@ def _pool(client):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["openai", "azure"])
-async def test_openai_embedder_bounds_sync_and_async_connection_pools(provider: str) -> None:
+async def test_openai_embedder_bounds_idle_connections(provider: str) -> None:
     provider_kwargs = {}
     if provider == "azure":
         provider_kwargs = {
@@ -103,7 +110,6 @@ async def test_openai_embedder_bounds_sync_and_async_connection_pools(provider: 
     try:
         for client in (embedder.client, async_client):
             pool = _pool(client)
-            assert pool._max_connections == 3
             assert pool._max_keepalive_connections == 3
             assert pool._keepalive_expiry == 5.0
             assert client._client.timeout == openai.DEFAULT_TIMEOUT
@@ -113,7 +119,8 @@ async def test_openai_embedder_bounds_sync_and_async_connection_pools(provider: 
 
 
 @pytest.mark.asyncio
-async def test_openai_embedder_reuses_and_closes_local_connection() -> None:
+@pytest.mark.parametrize("account_bound", [False, True])
+async def test_openai_embedder_reuses_connections_without_blocking_queries(account_bound) -> None:
     with _embedding_server() as server:
         embedder = OpenAIDenseEmbedder(
             model_name="test-embedding",
@@ -121,8 +128,12 @@ async def test_openai_embedder_reuses_and_closes_local_connection() -> None:
             api_base=f"http://127.0.0.1:{server.server_port}/v1",
             dimension=3,
             encoding_format="float",
+            config={"max_concurrent": 1},
         )
+        if account_bound:
+            embedder._account_semaphore = AsyncSemaphore(1)
         async_client = embedder._get_async_client()
+        tasks = []
 
         try:
             first = await embedder.embed_async("first")
@@ -132,12 +143,38 @@ async def test_openai_embedder_reuses_and_closes_local_connection() -> None:
             assert second.dense_vector == pytest.approx([0.1, 0.2, 0.3])
             assert server.connection_count == 1
 
+            document = asyncio.create_task(embedder.embed_async("blocked-document"))
+            tasks.append(document)
+            assert await asyncio.to_thread(server.document_started.wait, 5)
+            waiting_document = asyncio.create_task(embedder.embed_async("next-document"))
+            tasks.append(waiting_document)
+
+            # Queries must reach the provider while the only document slot and
+            # its HTTP connection remain occupied, without freeing that slot.
+            query_results = await asyncio.wait_for(
+                asyncio.gather(
+                    embedder.embed_async("first-query", is_query=True),
+                    embedder.embed_async("second-query", is_query=True),
+                ),
+                timeout=5,
+            )
+            assert all(result.dense_vector == [0.1, 0.2, 0.3] for result in query_results)
+            assert not document.done()
+            assert not waiting_document.done()
+
+            server.release_document.set()
+            await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+
             embedder.close()
             await asyncio.sleep(0)
 
             assert embedder.client.is_closed()
             assert async_client.is_closed()
         finally:
+            server.release_document.set()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             if not embedder.client.is_closed():
                 embedder.client.close()
             if not async_client.is_closed():
@@ -161,7 +198,6 @@ def test_direct_embedder_normalizes_non_positive_pool_limit(max_concurrent: int)
 
     try:
         pool = _pool(embedder.client)
-        assert pool._max_connections == 1
         assert pool._max_keepalive_connections == 1
     finally:
         embedder.close()

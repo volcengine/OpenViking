@@ -4,28 +4,9 @@ Give [OpenCode](https://opencode.ai/) cross-project and cross-session long-term 
 
 Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
-Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result).
-
-## Prerequisites
-
-- [OpenCode](https://opencode.ai/) 1.15.7+ or 2.0.15+
-- Node.js 18+
-- An OpenViking HTTP server
-- An OpenViking API key when your server requires authentication
-
-Start your OpenViking server first:
-
-```bash
-openviking-server --config ~/.openviking/ov.conf
-```
-
-In another terminal, check the service:
-
-```bash
-curl http://localhost:1933/health
-```
-
 ## Install
+
+Requirements: [OpenCode](https://opencode.ai/) 1.15.7+ or 2.0.15+, Node.js 18+, and an OpenViking HTTP server — verify with `curl http://localhost:1933/health`. You also need an OpenViking API key when the server requires authentication.
 
 ### One-line installer (recommended)
 
@@ -144,14 +125,16 @@ API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy
 
 ## Verify
 
-Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (16 tools). OpenCode namespaces MCP tools as `openviking_*`:
+Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (17 tools). OpenCode namespaces MCP tools as `openviking_*`:
 
 - `openviking_find`, `openviking_search` (`openviking_search` with `mode="context"` replaces the former recall tool)
-- `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
+- `openviking_read`, `openviking_download`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
 - `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 
 OpenCode 2 captures the current turn's user message, assistant response, and tool results when each execution ends, and captures the transcript before compaction discards it. It commits at the token threshold, and forces a commit on compaction, session deletion, and plugin cleanup. OpenCode 2 runs cleanup after 60 minutes of inactivity, when the service stops, and when a local plugin is hot-reloaded.
+
+Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result).
 
 OpenCode 1.15.7 does not call plugin disposal hooks. A short-lived v1 CLI run can also exit before asynchronous capture finishes; this behavior predates v2 support. Keep the v1 service running to let idle capture finish. OpenCode 1.18.32 calls the disposal hook when its instance is disposed.
 

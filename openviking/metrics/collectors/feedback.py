@@ -169,7 +169,7 @@ class FeedbackCollector(DomainStatsMetricCollector):
         channels: dict[str, dict[str, Any]],
     ) -> None:
         for metric_name, _ in self._SUMMARY_METRICS:
-            registry.gauge_delete_matching(metric_name, match_labels={})
+            registry.delete_matching(metric_name, match_labels={})
         for metric_name, key in self._SUMMARY_METRICS:
             registry.set_gauge(
                 metric_name,
@@ -179,7 +179,7 @@ class FeedbackCollector(DomainStatsMetricCollector):
             )
 
         for metric_name, _ in self._CHANNEL_METRICS:
-            registry.gauge_delete_matching(metric_name, match_labels={})
+            registry.delete_matching(metric_name, match_labels={})
         for channel, channel_stats in channels.items():
             labels = {"channel": str(channel), "valid": str(valid)}
             for metric_name, key in self._CHANNEL_METRICS:

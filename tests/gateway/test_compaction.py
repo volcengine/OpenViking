@@ -581,7 +581,7 @@ async def test_proxy_sends_the_summary_with_vendor_alias_and_headers(running_gat
         json={
             "name": "chat",
             "protocol": "chat",
-            "base_url": str(app.state.config.openviking_url),
+            "base_url": app.state.openviking_url + "/v1",
             "models": ["model"],
             "aliases": {"alias": "model"},
             "context_windows": {"model": 1024},

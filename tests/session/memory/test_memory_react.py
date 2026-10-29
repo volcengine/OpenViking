@@ -824,8 +824,9 @@ class TestExtractLoopFinalJsonRetry:
         initial_system_prompt = system_prompts[0]
         assert "`delete_ids` deletes the whole item" in initial_system_prompt
         assert "only if every substantive fact is in scope" in initial_system_prompt
-        assert "otherwise MUST use DELETE blocks" in initial_system_prompt
-        assert "not inferring scope from the file name/topic" in initial_system_prompt
+        assert "rewrite the complete affected field" in initial_system_prompt
+        assert "DELETE blocks" not in initial_system_prompt
+        assert "never infer scope from the file name/topic" in initial_system_prompt
 
     @pytest.mark.asyncio
     async def test_python_protocol_retries_then_raises_on_empty_response(self):

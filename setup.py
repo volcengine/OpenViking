@@ -11,6 +11,7 @@ from pathlib import Path
 from setuptools import Distribution, Extension, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
+from setuptools.command.sdist import sdist
 
 try:
     from wheel.bdist_wheel import bdist_wheel
@@ -30,6 +31,9 @@ resolve_openviking_version = importlib.import_module(
 pypi_long_description = importlib.import_module(
     "scripts.build_support.readme"
 ).pypi_long_description
+write_system_assets_manifest = importlib.import_module(
+    "scripts.build_support.system_assets_manifest"
+).write_system_assets_manifest
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
 C_COMPILER_PATH = os.environ.get("CC") or shutil.which("gcc") or "gcc"
@@ -516,24 +520,27 @@ def _build_web_studio():
 class OpenVikingBuildPy(build_py):
     def run(self):
         _build_web_studio()
+        write_system_assets_manifest(SETUP_DIR / "openviking" / "system_assets")
         super().run()
         package_root = Path(self.build_lib) / "vikingbot"
         for asset_name in ("workspace", "bridge"):
             source = SETUP_DIR / "bot" / asset_name
             if not source.is_dir():
-                raise FileNotFoundError(
-                    f"required VikingBot asset directory not found: {source}"
-                )
+                raise FileNotFoundError(f"required VikingBot asset directory not found: {source}")
             destination = package_root / asset_name
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(
                 source,
                 destination,
-                ignore=shutil.ignore_patterns(
-                    "node_modules", "dist", "__pycache__", "*.pyc"
-                ),
+                ignore=shutil.ignore_patterns("node_modules", "dist", "__pycache__", "*.pyc"),
             )
+
+
+class OpenVikingSdist(sdist):
+    def make_release_tree(self, base_dir, files):
+        super().make_release_tree(base_dir, files)
+        write_system_assets_manifest(Path(base_dir) / "openviking" / "system_assets")
 
 
 if bdist_wheel is not None:
@@ -556,6 +563,7 @@ class OpenVikingDistribution(Distribution):
 cmdclass = {
     "build_ext": OpenVikingBuildExt,
     "build_py": OpenVikingBuildPy,
+    "sdist": OpenVikingSdist,
 }
 if OpenVikingBdistWheel is not None:
     cmdclass["bdist_wheel"] = OpenVikingBdistWheel
@@ -579,11 +587,16 @@ setup(
     cmdclass=cmdclass,
     package_data={
         "openviking_gateway": ["client-rules.json"],
+        "openviking.scheduling.expiry": ["lua/*.lua"],
         "openviking": [
             "lib/ragfs_python*.so",
             "lib/ragfs_python*.pyd",
             "bin/ov",
             "bin/ov.exe",
+            "server/account_stores/sql/*.sql",
+            "server/account_stores/sql/changes/*.sql",
+            "service/sql/*.sql",
+            "service/sql/changes/*.sql",
             "server/static/**/*",
             "web_studio/dist/**/*",
             "storage/vectordb/engine/*.abi3.so",

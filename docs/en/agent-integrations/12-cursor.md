@@ -20,7 +20,7 @@ Quit Cursor completely and restart it after installation.
 - Lifecycle Hooks for profile loading, prompt recall, conversation capture, session commit, and `viking://` URI protection.
 - The OpenViking MCP server with tools such as `search`, `read`, `remember`, and `add_skill`; `search` with `mode="context"` returns assembled context.
 - An always-on Rule and the `openviking-memory` Skill, which tell the Agent how to use injected context and memory tools, plus the `openviking-skills` Skill for finding, using, creating (`add_skill`), sharing, and migrating skills stored in OpenViking.
-- The `ov-experience-memory` Skill, which has the Agent search and apply prior task Experience before executable work. Cursor captures text only, so here the Skill only retrieves and applies Experience; its reads are not linked back to the Experience they used.
+- The `ov-experience-memory` Skill, which has the Agent search and apply prior task Experience before executable work. Successful OpenViking MCP `read` calls are captured with the conversation. When the `session commit` containing the read produces trajectories, those trajectories can be queried for the Experience.
 
 ## Verify
 
@@ -35,8 +35,13 @@ Quit Cursor completely and restart it after installation.
 - `sessionStart` loads your profile, the current project's memory index, and an `<available-skills>` catalog of your OpenViking skills.
 - `beforeSubmitPrompt` recalls context for the current request, including your own skills and those shared with your account under `viking://agent/skills`, and injects it through `additional_context`.
 - `beforeReadFile` denies reading a `viking://` path as a local file and points the Agent to OpenViking MCP tools. Shell commands are not checked.
-- `stop` incrementally captures new user and assistant messages.
+- `afterMCPExecution` appends completed calls to the `openviking` MCP server to a local tool log, preserving the native call ID, input, output, and success or failure status. It does not upload messages or rewrite earlier results.
+- `stop` uploads new conversation turns and locally recorded tool results through `add message`. Capture progress advances only after upload succeeds, and `session commit` follows the existing message threshold. Tool records do not add to that threshold's message count.
 - `preCompact` and `sessionEnd` commit pending messages for memory extraction.
+
+Tool capture requires `afterMCPExecution` to provide `tool_use_id`, `mcp_server_name`, `tool_name`, `tool_input`, and `result_json`. Events without an identity or result are skipped, never inferred to be successful. Failed uploads remain local for the same conversation's next capture attempt; incomplete capture prevents a commit.
+
+The tool log stays beside the session checkpoint. Stop reads only the unacknowledged tail; the checkpoint keeps the byte position and accepted call IDs so repeated events do not require rereading old result bodies. Progress advances only after acknowledgement, and tool calls do not consume the text deduplication window.
 
 The skill catalog lists your own skills first, then those shared with your account, leaving out a shared skill whose name you also own; each description is cut to about 40 tokens. It has its own token budget, `skillCatalogTokenBudget` (default `1200`), separate from the profile budget. When not every description fits, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, it shrinks to a one-line skill count. Set `skillCatalog` to `false` or the budget to `0` to turn it off, either in the `plugin` or `plugin.cursor` section of `~/.openviking/ovcli.conf` ([Plugin Settings](../configuration/02-client.md#plugin-settings)) or through `OPENVIKING_SKILL_CATALOG` and `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`. Without any skills, or on a server without `GET /api/v1/skills`, the catalog is left out.
 
@@ -60,6 +65,7 @@ Uninstall removes only OpenViking-managed Cursor Hooks, MCP, Rule, Skills, and r
 | Recall appears in Hook output but not in the answer | Upgrade to the latest stable Cursor; older releases may not support `beforeSubmitPrompt.additional_context`. |
 | The same event runs multiple OpenViking Hooks | Cursor may be importing an older Claude Code plugin. Upgrade or remove the legacy OpenViking plugin ids reported by the installer, then restart Cursor. |
 | MCP does not connect | Check the URL/API key in `~/.openviking/ovcli.conf`, then restart Cursor. |
+| An Experience was read but has no application trajectories | Check that `afterMCPExecution` is installed and provides the fields above, and that `session commit` finished extracting trajectories. Upgrade older Cursor builds that omit the call ID. Automatic injection alone does not count as a read. |
 | Detailed diagnostics are needed | Start Cursor with `OPENVIKING_DEBUG=1` and inspect `~/.openviking/logs/cursor-hooks.log`. |
 
 ## See also

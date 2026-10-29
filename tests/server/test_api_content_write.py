@@ -155,13 +155,49 @@ async def test_write_without_wait_is_immediately_readable(client_with_resource):
     )
     assert write_resp.status_code == 200
     body = write_resp.json()
-    assert body["result"]["content_updated"] is True
     assert body["result"]["semantic_status"] == "queued"
     assert body["result"]["vector_status"] == "queued"
+    task_id = body["result"]["task_id"]
 
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
     assert read_resp.status_code == 200
     assert read_resp.json()["result"] == original + "\nImmediate append."
+
+    wait_resp = await client.post("/api/v1/system/wait", json={})
+    assert wait_resp.status_code == 200
+    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+    assert task_resp.status_code == 200
+    assert task_resp.json()["result"]["status"] == "completed"
+
+
+async def test_write_agent_skill_completes_without_lock_self_blocking(client):
+    uri = "viking://agent/skills/content-write-lock/SKILL.md"
+    content = """---
+name: content-write-lock
+description: Verify direct Agent Skill writes complete.
+---
+
+# Content Write Lock
+
+Use this skill to verify lock handoff behavior.
+"""
+
+    write_resp = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": uri,
+            "content": content,
+            "mode": "create",
+            "wait": True,
+        },
+    )
+
+    assert write_resp.status_code == 200
+    body = write_resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["uri"] == uri
+    assert body["result"]["semantic_status"] == "complete"
+    assert body["result"]["vector_status"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -225,8 +261,8 @@ async def test_api_create_mode_write_then_read(client):
     assert read_resp.json()["result"] == "# Hello\n\nWrite-then-read verification."
 
 
-async def test_api_create_mode_existing_file_409(client_with_resource):
-    """Test create mode on an existing file should return 409."""
+async def test_api_create_mode_existing_file_overwrites(client_with_resource):
+    """create is an upsert: writing an existing file overwrites it, no 409."""
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
 
@@ -234,15 +270,19 @@ async def test_api_create_mode_existing_file_409(client_with_resource):
         "/api/v1/content/write",
         json={
             "uri": file_uri,
-            "content": "new content",
+            "content": "# Overwritten\n\nvia create.",
             "mode": "create",
             "wait": True,
         },
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "ALREADY_EXISTS"
+    assert body["status"] == "ok"
+    assert body["result"]["mode"] == "create"
+
+    read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
+    assert read_resp.status_code == 200
+    assert read_resp.json()["result"] == "# Overwritten\n\nvia create."
 
 
 async def test_api_create_mode_invalid_extension_400(client):

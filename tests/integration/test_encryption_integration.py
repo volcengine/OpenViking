@@ -17,7 +17,8 @@ import pytest_asyncio
 from openviking.crypto.config import bootstrap_encryption
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import LocalFileProvider
-from openviking.server.api_keys import APIKeyManager, is_new_format_key
+from openviking.server.api_keys import is_new_format_key
+from openviking.server.store_assembly import build_api_key_manager
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -191,7 +192,7 @@ class TestVikingFSEncryptionWithAccounts:
         await svc.initialize()
 
         # Create APIKeyManager using VikingFS to ensure system file encryption
-        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
+        api_key_manager = build_api_key_manager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
@@ -325,7 +326,7 @@ class TestVikingFSEncryptionWithAccounts:
         )
 
         # Verify identity can be resolved correctly via API Key
-        identity = api_key_manager.resolve(user_key)
+        identity = await api_key_manager.resolve_identity(user_key)
         assert identity.account_id == account_id
         assert identity.user_id == admin_user_id
 
@@ -357,7 +358,7 @@ class TestVikingFSEncryptionWithAccounts:
         assert self._is_file_encrypted(account_users_path), "users.json not encrypted after update"
 
         # Verify identity can be resolved via new user's API Key
-        identity = api_key_manager.resolve(new_user_key)
+        identity = await api_key_manager.resolve_identity(new_user_key)
         assert identity.account_id == account_id
         assert identity.user_id == new_user_id
 
@@ -422,8 +423,8 @@ class TestVikingFSEncryptionWithAccounts:
         assert self._is_file_encrypted(account2_users_path)
 
         # Verify respective API Keys can resolve correctly
-        identity1 = api_key_manager.resolve(key1)
-        identity2 = api_key_manager.resolve(key2)
+        identity1 = await api_key_manager.resolve_identity(key1)
+        identity2 = await api_key_manager.resolve_identity(key2)
 
         assert identity1.account_id == account1_id
         assert identity2.account_id == account2_id
@@ -549,9 +550,12 @@ This is a test skill for verifying encryption functionality.
         assert admin_user_key is not None
         assert is_new_format_key(admin_user_key)
 
-        # 2. Verify list-accounts operation (via accessing APIKeyManager internal data)
+        # 2. Verify list-accounts operation
         print("[2] Verify list-accounts operation")
-        assert test_account_id in api_key_manager._accounts, (
+        account_ids = {
+            account["account_id"] for account in await api_key_manager.list_accounts()
+        }
+        assert test_account_id in account_ids, (
             f"Account {test_account_id} not in account list"
         )
         print(f"  ✓ Account {test_account_id} exists in account list")
@@ -565,9 +569,10 @@ This is a test skill for verifying encryption functionality.
 
         # 4. Verify list-users operation
         print("[4] Verify list-users operation")
-        account_info = api_key_manager._accounts.get(test_account_id)
-        assert account_info is not None
-        assert test_user_id in account_info.users, f"User {test_user_id} not in user list"
+        users = await api_key_manager.list_users_page(test_account_id)
+        assert test_user_id in {
+            user["user_id"] for user in users["users"]
+        }, f"User {test_user_id} not in user list"
         print(f"  ✓ User {test_user_id} exists in user list")
 
         # 5. Check all files in account directory are encrypted (recursive check)
@@ -979,9 +984,7 @@ This is a test skill for verifying encryption functionality.
 
         # Delete test account
         await api_key_manager.delete_account(test_account_id)
-        assert test_account_id not in api_key_manager._accounts, (
-            f"Account {test_account_id} not deleted"
-        )
+        assert await api_key_manager.get_account(test_account_id) is None
         print(f"  ✓ Test account deleted: {test_account_id}")
 
         print("\n" + "=" * 80)
@@ -1139,7 +1142,7 @@ class TestAddResourceWithSemanticProcessing:
         await svc.initialize()
 
         # Create APIKeyManager using VikingFS to ensure system file encryption
-        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
+        api_key_manager = build_api_key_manager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {
@@ -1230,7 +1233,6 @@ This is a file in subdir2.
                 entries = await svc.viking_fs.ls(uri, output="original", ctx=ctx)
                 for entry in entries:
                     entry_uri = entry["uri"]
-                    entry_name = entry.get("name", "")
 
                     if entry["isDir"]:
                         await check_encrypted_files(entry_uri)
@@ -1312,9 +1314,7 @@ This is a file in subdir2.
         print("=" * 80)
 
         await api_key_manager.delete_account(test_account_id)
-        assert test_account_id not in api_key_manager._accounts, (
-            f"Account {test_account_id} not deleted"
-        )
+        assert await api_key_manager.get_account(test_account_id) is None
         print(f"  ✓ Test account deleted: {test_account_id}")
 
         print("\n" + "=" * 80)

@@ -12,9 +12,10 @@
 // pins is moved to the release under test, and its tests run there. The tests
 // exercise the plugin's code on the new host packages but never start the host,
 // so a host may also list smoke steps: commands that install the real host
-// release, add the packed plugin to it, and check the host picked it up. Run
-// `node examples/memory-plugin-shared/sync.mjs` first: the copy takes the
-// generated shared/ modules with it.
+// release, add the packed plugin to it, and check the host picked it up; a step
+// may run a script from this repository, such as one that emulates a host
+// launcher npm does not ship. Run `node examples/memory-plugin-shared/sync.mjs`
+// first: the copy takes the generated shared/ modules with it.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -113,7 +114,8 @@ function checkRelease(host, release) {
 /**
  * Install the real host release in an isolated home and run the host's smoke
  * steps against the plugin packed the way npm would publish it. Steps substitute
- * {version} and {tarball}; a step with `expect` must print a line matching it.
+ * {version}, {tarball} and {root} (this repository); a step with `expect` must
+ * print a line matching it.
  */
 function smoke(host, release, work) {
   const dir = mkdtempSync(join(tmpdir(), `host-compat-${host.id}-smoke-`));
@@ -128,7 +130,8 @@ function smoke(host, release, work) {
 
     // The host's own state (profiles, stores, credentials) lands in the scratch home.
     const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config") };
-    const fill = (arg) => arg.replaceAll("{version}", release.version).replaceAll("{tarball}", tarball);
+    const fill = (arg) => arg
+      .replaceAll("{version}", release.version).replaceAll("{tarball}", tarball).replaceAll("{root}", ROOT);
     for (const step of host.smoke) {
       const [command, ...args] = step.run.map(fill);
       const label = `smoke: ${step.run.join(" ")}`;

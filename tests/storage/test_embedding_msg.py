@@ -1,8 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from uuid import uuid4
-
 import pytest
 
 from openviking.storage.index_action import FieldPatch, IndexAction
@@ -13,39 +11,51 @@ from openviking.storage.queuefs.embedding_msg import (
     NoopPayload,
     UpdateFieldsPayload,
 )
-from openviking.telemetry.request_wait_tracker import RequestWaitTracker
 
 
-def test_embedding_msg_roundtrip_preserves_id_for_request_wait_tracker():
-    telemetry_id = f"tm_{uuid4().hex}"
-    tracker = RequestWaitTracker.get_instance()
-    tracker.register_request(telemetry_id)
-
-    try:
-        msg = EmbeddingMsg(
-            "hello",
-            {"uri": "viking://user/default/skills/demo", "account_id": "default"},
-            telemetry_id=telemetry_id,
-        )
-        tracker.register_embedding_root(telemetry_id, msg.id)
-
-        restored = EmbeddingMsg.from_dict(msg.to_dict())
-
-        assert restored.id == msg.id
-        tracker.mark_embedding_done(telemetry_id, restored.id)
-        assert tracker.is_complete(telemetry_id)
-    finally:
-        tracker.cleanup(telemetry_id)
-
-
-def test_embedding_msg_roundtrip_preserves_queue_enqueue_time():
+def test_embedding_msg_roundtrip_preserves_task_identity_and_queue_time():
     msg = EmbeddingMsg(
         "hello",
-        {"uri": "viking://resources/demo", "account_id": "default"},
+        {"uri": "viking://user/default/skills/demo", "account_id": "default"},
+        telemetry_id="telemetry-1",
+        task_id="task-1",
+        _task_work_id="work-1",
         queue_enqueued_at=123.456,
     )
 
-    assert EmbeddingMsg.from_dict(msg.to_dict()).queue_enqueued_at == 123.456
+    restored = EmbeddingMsg.from_dict(msg.to_dict())
+
+    assert restored.id == msg.id
+    assert restored.task_id == "task-1"
+    assert restored._task_work_id == "work-1"
+    assert restored.queue_enqueued_at == 123.456
+
+
+def test_embedding_msg_roundtrip_preserves_failure_requeue_count():
+    msg = EmbeddingMsg(
+        "hello",
+        {"uri": "viking://resources/demo", "account_id": "default"},
+        failure_requeue_count=1,
+    )
+
+    restored = EmbeddingMsg.from_dict(msg.to_dict())
+    legacy = msg.to_dict()
+    legacy.pop("failure_requeue_count")
+
+    assert restored.failure_requeue_count == 1
+    assert EmbeddingMsg.from_dict(legacy).failure_requeue_count == 0
+
+
+def test_embedding_msg_roundtrip_preserves_ingestion_source_type():
+    msg = EmbeddingMsg.for_embed(
+        message="hello",
+        context_data={"uri": "viking://resources/demo", "account_id": "default"},
+        source_type="repository",
+    )
+
+    restored = EmbeddingMsg.from_json(msg.to_json())
+
+    assert restored.source_type == "repository"
 
 
 def test_legacy_embedding_msg_without_account_id_is_rejected():
@@ -301,10 +311,17 @@ def test_legacy_upsert_discards_historically_ignored_fields():
     assert restored.action is IndexAction.UPSERT
     assert restored.record_ids == []
     assert restored.field_patch is None
+    serialized = restored.to_dict()
+    assert "record_ids" not in serialized
+    assert "update_fields" not in serialized
+    assert "initial_fields" not in serialized
     assert set(restored.to_dict()) == {
         "id",
         "telemetry_id",
+        "task_id",
+        "_task_work_id",
         "queue_enqueued_at",
+        "failure_requeue_count",
         "action",
         "payload",
     }

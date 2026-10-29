@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-import yaml
+from hermes_cli.config import yaml
 
 
 @contextmanager
@@ -38,6 +38,7 @@ class GatewayBackend:
         self.reject_session_search = False
         self.unconfirmed_context = False
         self.reject_identity = False
+        self.profile = None
         self.upload_started = None
         self.release_upload = None
 
@@ -89,6 +90,8 @@ class GatewayBackend:
                     ]
                 )
             docs = [("common", "viking://user/tenant/memories/preferences/common.md")]
+            if self.profile:
+                docs += [("profile", "viking://user/tenant/memories/profile.md")]
             docs += [
                 (name, f"viking://user/tenant/peers/telegram.{name}/memories/preferences/fact.md")
                 for name in ("alice", "bob", "assistant")
@@ -119,7 +122,9 @@ class GatewayBackend:
         elif path == "/api/v1/fs/ls":
             result = []
         elif path.startswith("/api/v1/content/"):
-            return httpx.Response(404)
+            if not (self.profile and request.url.params.get("uri", "").endswith("/memories/profile.md")):
+                return httpx.Response(404)
+            result = self.profile
         return httpx.Response(200, json={"status": "ok", "result": result})
 
 
@@ -226,6 +231,23 @@ def test_gateway_capture_commit_and_sender_scoped_recall(
         with profile_scope(home):
             provider.handle_tool_call("viking_search", {"query": "preference"})
         assert backend.searches[-1][0].headers["X-OpenViking-Actor-Peer"] == "telegram.assistant"
+    finally:
+        manager.shutdown_all()
+
+
+def test_first_turn_list_recall_does_not_repeat_profile(external_provider, monkeypatch):
+    home, provider, _, manager, backend = initialize(external_provider, monkeypatch, scope=None)
+    monkeypatch.setenv("OPENVIKING_RECALL_PREFER_ABSTRACT", "false")  # default: full L2 reads
+    backend.profile = "PROFILE_BODY Alice drinks oolong."
+    profile_uri = "viking://user/tenant/memories/profile.md"
+    try:
+        with profile_scope(home):
+            first = provider.prefetch("Remember my drink preference", session_id="shared-group")
+            later = provider.prefetch("Remember my drink preference", session_id="shared-group")
+        assert f'<user-profile uri="{profile_uri}">' in first
+        assert first.count("PROFILE_BODY") == first.count(profile_uri) == 1
+        assert "common" in first and "common" in later
+        assert profile_uri not in later
     finally:
         manager.shutdown_all()
 

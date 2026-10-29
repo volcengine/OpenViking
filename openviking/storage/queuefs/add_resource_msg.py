@@ -22,6 +22,7 @@ class AddResourceMsg:
     user_id: str
     group_ids: list[str] = field(default_factory=list)
     role: str
+    _task_work_id: str = ""
     path: str = ""
     source_path: str = ""
     telemetry_id: Optional[str] = None
@@ -34,7 +35,6 @@ class AddResourceMsg:
     bypass_acl: bool = False
     reason: str = ""
     instruction: str = ""
-    timeout: Optional[float] = None
     build_index: bool = True
     summarize: bool = False
     strict: bool = False
@@ -160,6 +160,7 @@ class AddResourceMsg:
 
         return cls(
             task_id=str(task_id),
+            _task_work_id=str(data.get("_task_work_id") or ""),
             path=str(path or ""),
             source_path=str(data.get("source_path") or path or ""),
             root_uri=str(root_uri),
@@ -181,7 +182,6 @@ class AddResourceMsg:
             else None,
             reason=str(data.get("reason", "")),
             instruction=str(data.get("instruction", "")),
-            timeout=float(data["timeout"]) if data.get("timeout") is not None else None,
             build_index=bool(data.get("build_index", True)),
             summarize=bool(data.get("summarize", False)),
             strict=bool(data.get("strict", False)),

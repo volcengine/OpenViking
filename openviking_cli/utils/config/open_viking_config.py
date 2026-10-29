@@ -6,7 +6,7 @@ import logging
 import os
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -17,7 +17,9 @@ from .agent_evolution_config import AgentEvolutionConfig
 from .cache_config import CacheConfig
 from .config_loader import resolve_config_path
 from .config_utils import (
+    DEFAULT_SERVICE_NAME,
     format_validation_error,
+    normalize_service_name,
     warn_unknown_config_fields,
     warn_unknown_fields,
 )
@@ -29,6 +31,7 @@ from .consts import (
 )
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
+from .expiry_config import ExpiryConfig
 from .git_config import GitConfig
 from .glob_config import GlobConfig
 from .grep_config import GrepConfig
@@ -36,7 +39,7 @@ from .ingest_config import IngestConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
 from .oauth_config import OAuthConfig
-from .openviking_gateway_config import OpenVikingGatewayConfig
+from .openviking_gateway_config import EmbeddedGatewayConfig
 from .parser_config import (
     AnydocConfig,
     AudioConfig,
@@ -57,6 +60,7 @@ from .queue_worker_config import QueueWorkersConfig
 from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
+from .rules_config import RulesConfig
 from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
@@ -109,6 +113,27 @@ class ConnectorConfig(BaseModel):
             raise ValueError("connector.poll_interval_ms must be > 0")
         return self
 
+    def credential_resolve_url(self) -> str:
+        """Derive the unified credential-resolve endpoint from ``auth``.
+
+        The Feishu compatibility endpoint (``.../oauth/access_token``) and the
+        unified resolver (``.../credential/resolve``) are two fixed paths on the
+        same KernelAPI inner entry, so the resolver URL is derived from the
+        configured ``auth`` rather than adding a second endpoint setting; this
+        keeps existing Feishu deployments unchanged. Returns an empty string
+        when ``auth`` is unset or uses an unrecognized path.
+        """
+        auth = self.auth.strip()
+        if not auth:
+            return ""
+        compat_suffix = "/oauth/access_token"
+        resolve_suffix = "/credential/resolve"
+        if auth.endswith(compat_suffix):
+            return auth[: -len(compat_suffix)] + resolve_suffix
+        if auth.endswith(resolve_suffix):
+            return auth
+        return ""
+
 
 class ParserApiConfig(BaseModel):
     """Configuration for the Understanding files/responses API."""
@@ -157,6 +182,18 @@ class ParserApiConfig(BaseModel):
         return self
 
 
+class ParserRuntimeConfig(BaseModel):
+    """Runtime directories used by built-in parser download/extraction paths."""
+
+    download_temp_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Directory for parser-owned downloads, Git checkouts, and archive extraction. "
+            "Defaults to the system temporary directory."
+        ),
+    )
+
+
 class CompileApiConfig(BaseModel):
     """Configuration for the external Compile task API."""
 
@@ -164,6 +201,9 @@ class CompileApiConfig(BaseModel):
     gateway_token: str = ""
     http_timeout_seconds: float = 10.0
     poll_interval_ms: int = 30000
+    # Run Redis-backed Compile scheduling on this instance.
+    scheduler_enabled: bool = False
+    scheduler_backend: Literal["redis"] = "redis"
 
     @model_validator(mode="after")
     def _validate(self) -> "CompileApiConfig":
@@ -196,6 +236,10 @@ class OpenVikingConfig(BaseModel):
         default=None,
         description="Deprecated and ignored. User is the only data-plane identity.",
     )
+    service_name: str = Field(
+        default=DEFAULT_SERVICE_NAME,
+        description="OpenViking deployment name shared by cache namespaces and OTel defaults",
+    )
 
     cache: Optional[CacheConfig] = Field(
         default=None,
@@ -204,6 +248,11 @@ class OpenVikingConfig(BaseModel):
 
     storage: StorageConfig = Field(
         default_factory=StorageConfig, description="Storage configuration"
+    )
+
+    parser: ParserRuntimeConfig = Field(
+        default_factory=ParserRuntimeConfig,
+        description="Runtime directories used by built-in parsers",
     )
 
     embedding: EmbeddingConfig = Field(
@@ -221,6 +270,11 @@ class OpenVikingConfig(BaseModel):
     )
 
     rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
+
+    rules: RulesConfig = Field(
+        default_factory=RulesConfig,
+        description="Rule compilation and applicability model configuration",
+    )
 
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,
@@ -319,7 +373,7 @@ class OpenVikingConfig(BaseModel):
         description="External Connector service configuration for data import",
     )
 
-    gateway: OpenVikingGatewayConfig = Field(default_factory=OpenVikingGatewayConfig)
+    gateway: EmbeddedGatewayConfig = Field(default_factory=EmbeddedGatewayConfig)
 
     enable_watch_scheduler: bool = Field(
         default=True,
@@ -327,6 +381,14 @@ class OpenVikingConfig(BaseModel):
             "Whether to start the background WatchScheduler that periodically re-processes "
             "watched resources. Disable on read-only replicas that share a writer's data "
             "so only the writer runs the watch/refresh background loop."
+        ),
+    )
+
+    reconcile_system_assets_on_startup: bool = Field(
+        default=True,
+        description=(
+            "Whether to reconcile packaged system assets for active accounts during startup. "
+            "Disable on read-only replicas that share a writer's data."
         ),
     )
 
@@ -374,9 +436,22 @@ class OpenVikingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_service_name(self) -> "OpenVikingConfig":
+        """Validate and normalize the top-level service name."""
+        self.service_name = normalize_service_name(self.service_name)
+        return self
+
+    @model_validator(mode="after")
     def _validate_cache_runtime_config(self) -> "OpenVikingConfig":
+        """Require the shared cache Provider whenever AGFS selects a cache-backed runtime."""
         agfs = self.storage.agfs
-        uses_canonical_cache = agfs.cachefs.backend == "cache" or agfs.queuefs.backend == "cache"
+        backups = agfs.backups or {}
+        uses_canonical_cache = (
+            agfs.cachefs.backend == "cache"
+            or agfs.queuefs.backend == "cache"
+            or agfs.pathlock.provider == "cache"
+            or backups.get("provider", "filesystem") == "cache"
+        )
         if uses_canonical_cache and self.cache is None:
             raise ValueError("top-level cache config is required when an AGFS backend uses cache")
         return self
@@ -445,6 +520,31 @@ class OpenVikingConfig(BaseModel):
 
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory configuration")
 
+    expiry: ExpiryConfig = Field(
+        default_factory=ExpiryConfig,
+        description="Distributed expiry scheduling configuration",
+    )
+
+    @model_validator(mode="after")
+    def _validate_expiry_backend(self) -> "OpenVikingConfig":
+        self._check_expiry_backend()
+        return self
+
+    def _check_expiry_backend(self) -> None:
+        if self.uses_redis_expiry():
+            self.expiry.validate_for_runtime()
+
+    def uses_redis_session_expiry(self) -> bool:
+        idle = self.memory.session_auto_commit
+        return idle.enabled and idle.idle_backend == "redis"
+
+    def uses_redis_compile_schedule(self) -> bool:
+        return self.compile_api.scheduler_enabled
+
+    def uses_redis_expiry(self) -> bool:
+        """Whether any feature needs the distributed ExpiryScheduler."""
+        return self.uses_redis_session_expiry() or self.uses_redis_compile_schedule()
+
     agent_evolution: AgentEvolutionConfig = RuntimeField(
         default_factory=AgentEvolutionConfig,
         description="Dynamic cluster default for Agent Evolution.",
@@ -476,7 +576,7 @@ class OpenVikingConfig(BaseModel):
         ),
     )
 
-    model_config = {"arbitrary_types_allowed": True}
+    model_config = {"arbitrary_types_allowed": True, "hide_input_in_errors": True}
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "OpenVikingConfig":
@@ -513,6 +613,8 @@ class OpenVikingConfig(BaseModel):
 
             # Handle parser configurations from nested "parsers" section
             parser_configs = {}
+            missing_parser_download_temp_dir = object()
+            parser_download_temp_dir = missing_parser_download_temp_dir
             if "parsers" in config_copy:
                 parser_configs = config_copy.pop("parsers")
                 if parser_configs is None:
@@ -526,9 +628,12 @@ class OpenVikingConfig(BaseModel):
                         "Config field 'parsers.excel' was removed and is ignored; "
                         "spreadsheet parsing now uses 'parsers.anydoc'."
                     )
+                parser_download_temp_dir = parser_configs.pop(
+                    "download_temp_dir", missing_parser_download_temp_dir
+                )
                 warn_unknown_fields(
                     data=parser_configs,
-                    valid_fields=set(parser_types),
+                    valid_fields=set(parser_types) | {"download_temp_dir"},
                     path_prefix="parsers",
                     logger=_get_config_logger(),
                 )
@@ -563,9 +668,13 @@ class OpenVikingConfig(BaseModel):
                             error=e,
                             path_prefix="memory",
                         )
-                    ) from e
+                    ) from None
+            instance._check_expiry_backend()
 
             # Apply parser configurations
+            if parser_download_temp_dir is not missing_parser_download_temp_dir:
+                instance.parser = ParserRuntimeConfig(download_temp_dir=parser_download_temp_dir)
+
             for parser_type in parser_types:
                 if parser_type in parser_configs:
                     parser_data = parser_configs[parser_type]
@@ -596,7 +705,9 @@ class OpenVikingConfig(BaseModel):
                     )
             return instance
         except ValidationError as e:
-            raise ValueError(format_validation_error(root_model=cls, error=e)) from e
+            # The formatted error omits input values; do not reattach a raw
+            # validation traceback which could expose nested credentials.
+            raise ValueError(format_validation_error(root_model=cls, error=e)) from None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""

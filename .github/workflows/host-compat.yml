@@ -37,6 +37,9 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Install pnpm
+        run: npm install --global pnpm@12
+
       - name: Generate the shared runtime copies
         run: node examples/memory-plugin-shared/sync.mjs
 

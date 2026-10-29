@@ -160,7 +160,7 @@ class TestToolPart:
         part = ToolPart(
             tool_id="call-123",
             tool_name="search",
-            tool_uri="viking://session/test/tools/call-123",
+            tool_uri="viking://user/default/sessions/test/tools/call-123",
             skill_uri="viking://user/test/skills/search",
             tool_input={"query": "test"},
             tool_output="Result",
@@ -168,7 +168,7 @@ class TestToolPart:
             duration_ms=150.5,
             prompt_tokens=100,
             completion_tokens=50,
-            tool_output_ref="viking://session/s1/tool-results/tr_call",
+            tool_output_ref="viking://user/default/sessions/s1/tool-results/tr_call",
             tool_output_truncated=True,
             tool_output_original_chars=1000,
             tool_output_preview_chars=100,
@@ -179,7 +179,7 @@ class TestToolPart:
 
         assert part.tool_id == "call-123"
         assert part.tool_name == "search"
-        assert part.tool_uri == "viking://session/test/tools/call-123"
+        assert part.tool_uri == "viking://user/default/sessions/test/tools/call-123"
         assert part.skill_uri == "viking://user/test/skills/search"
         assert part.tool_input == {"query": "test"}
         assert part.tool_output == "Result"
@@ -187,7 +187,7 @@ class TestToolPart:
         assert part.duration_ms == 150.5
         assert part.prompt_tokens == 100
         assert part.completion_tokens == 50
-        assert part.tool_output_ref == "viking://session/s1/tool-results/tr_call"
+        assert part.tool_output_ref == "viking://user/default/sessions/s1/tool-results/tr_call"
         assert part.tool_output_truncated is True
         assert part.tool_output_original_chars == 1000
         assert part.tool_output_preview_chars == 100
@@ -256,7 +256,7 @@ class TestPartFromDict:
             "type": "tool",
             "tool_id": "call-123",
             "tool_name": "search",
-            "tool_uri": "viking://session/test/tools/call-123",
+            "tool_uri": "viking://user/default/sessions/test/tools/call-123",
             "skill_uri": "viking://user/test/skills/search",
             "tool_input": {"query": "test"},
             "tool_output": "Result",
@@ -264,7 +264,7 @@ class TestPartFromDict:
             "duration_ms": 150.0,
             "prompt_tokens": 100,
             "completion_tokens": 50,
-            "tool_output_ref": "viking://session/s1/tool-results/tr_call",
+            "tool_output_ref": "viking://user/default/sessions/s1/tool-results/tr_call",
             "tool_output_truncated": True,
             "tool_output_original_chars": 1000,
             "tool_output_preview_chars": 100,
@@ -277,7 +277,7 @@ class TestPartFromDict:
         assert part.tool_id == "call-123"
         assert part.tool_name == "search"
         assert part.tool_status == "completed"
-        assert part.tool_output_ref == "viking://session/s1/tool-results/tr_call"
+        assert part.tool_output_ref == "viking://user/default/sessions/s1/tool-results/tr_call"
         assert part.tool_output_truncated is True
         assert part.tool_output_original_chars == 1000
         assert part.tool_output_preview_chars == 100
@@ -509,7 +509,8 @@ class TestMessageToDict:
         assert d["parts"][0]["type"] == "text"
         assert d["parts"][1]["type"] == "context"
 
-    def test_to_dict_with_tool_part(self):
+    @pytest.mark.parametrize("tool_input", [None, {}, {"query": "OpenViking"}])
+    def test_to_dict_with_tool_part(self, tool_input):
         """Test to_dict with ToolPart."""
         msg = Message(
             id="msg-1",
@@ -519,11 +520,12 @@ class TestMessageToDict:
                     tool_id="call-1",
                     tool_name="search",
                     tool_uri="viking://tools/1",
+                    tool_input=tool_input,
                     tool_status="completed",
                     duration_ms=100,
                     prompt_tokens=50,
                     completion_tokens=25,
-                    tool_output_ref="viking://session/s1/tool-results/tr_call",
+                    tool_output_ref="viking://user/default/sessions/s1/tool-results/tr_call",
                     tool_output_truncated=True,
                     tool_output_original_chars=1000,
                     tool_output_preview_chars=100,
@@ -537,11 +539,14 @@ class TestMessageToDict:
         assert d["parts"][0]["type"] == "tool"
         assert d["parts"][0]["tool_id"] == "call-1"
         assert d["parts"][0]["duration_ms"] == 100
-        assert d["parts"][0]["tool_output_ref"] == "viking://session/s1/tool-results/tr_call"
+        assert d["parts"][0]["tool_output_ref"] == "viking://user/default/sessions/s1/tool-results/tr_call"
         assert d["parts"][0]["tool_output_truncated"] is True
         assert d["parts"][0]["tool_output_original_chars"] == 1000
         assert d["parts"][0]["tool_output_preview_chars"] == 100
         assert d["parts"][0]["tool_output_externalized_reason"] == "single_threshold"
+        assert ("tool_input" in d["parts"][0]) == (tool_input is not None)
+        assert Message.from_dict(d).parts[0].tool_input == tool_input
+        assert Message.from_dict(json.loads(msg.to_jsonl())).to_dict()["parts"] == d["parts"]
 
     def test_to_dict_with_image_part(self):
         """Test to_dict with ImagePart."""
@@ -672,7 +677,7 @@ class TestMessageFromDict:
                     "tool_name": "search",
                     "tool_uri": "viking://tools/1",
                     "tool_status": "completed",
-                    "tool_output_ref": "viking://session/s1/tool-results/tr_call",
+                    "tool_output_ref": "viking://user/default/sessions/s1/tool-results/tr_call",
                     "tool_output_truncated": True,
                     "tool_output_original_chars": 1000,
                     "tool_output_preview_chars": 100,
@@ -686,7 +691,7 @@ class TestMessageFromDict:
 
         assert isinstance(msg.parts[0], ToolPart)
         assert msg.parts[0].tool_id == "call-1"
-        assert msg.parts[0].tool_output_ref == "viking://session/s1/tool-results/tr_call"
+        assert msg.parts[0].tool_output_ref == "viking://user/default/sessions/s1/tool-results/tr_call"
         assert msg.parts[0].tool_output_truncated is True
         assert msg.parts[0].tool_output_original_chars == 1000
         assert msg.parts[0].tool_output_preview_chars == 100

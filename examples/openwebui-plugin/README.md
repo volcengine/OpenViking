@@ -74,7 +74,7 @@ All configuration is via environment variables:
 | `OV_ACCOUNT` | `default` | Tenant — sent as `X-OpenViking-Account` |
 | `OV_USER` | `default` | User — sent as `X-OpenViking-User` |
 | `OV_AGENT` | `default` | Actor peer ID — sent as `X-OpenViking-Actor-Peer` |
-| `OV_BIND` | `0.0.0.0:8765` | Host:port the tool server binds to |
+| `OV_BIND` | `0.0.0.0:8765` | Host:port the tool server binds to; bracket IPv6 addresses, e.g. `[::1]:8765` |
 | `OV_TIMEOUT` | `30` | HTTP timeout in seconds when calling OpenViking |
 
 There is no config file. This is intentional — make the deployment unit one
@@ -112,6 +112,11 @@ the OV server validates the source.
 ### `ov_session_status`
 Returns session metadata for a given session ID — message counts, archive
 state, pending tokens. Takes `{session_id}`.
+
+The ID must be a non-empty single path segment. Standalone `.` / `..`,
+`/`, `\`, `?`, `#`, `%`, and ASCII control characters are rejected with
+HTTP 422 before contacting OpenViking. Dots within an ID and Unicode IDs
+remain supported.
 
 ## Tests
 

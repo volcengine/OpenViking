@@ -377,7 +377,6 @@ describe("plugin module seams", () => {
       reason: "project docs",
       instruction: "extract API notes",
       wait: true,
-      timeout: 30,
     }, "agent-main")).resolves.toEqual({
       content: [{ type: "text", text: "Imported OpenViking resource. viking://resources/project-docs Warnings: kept existing metadata" }],
       details: {
@@ -394,14 +393,12 @@ describe("plugin module seams", () => {
       reason: "project docs",
       instruction: "extract API notes",
       wait: true,
-      timeout: 30,
     }, "agent-main");
 
     await expect(runtime.addSkillOpenViking({
       source: "./skills/debugger/SKILL.md",
       data: "skill body",
       wait: false,
-      timeout: 5,
     }, "agent-main")).resolves.toEqual({
       content: [{ type: "text", text: "Imported OpenViking skill (debugger). viking://user/skills/debugger" }],
       details: {
@@ -415,7 +412,6 @@ describe("plugin module seams", () => {
       path: "./skills/debugger/SKILL.md",
       data: "skill body",
       wait: false,
-      timeout: 5,
     }, "agent-main");
   });
 
@@ -585,7 +581,7 @@ describe("plugin module seams", () => {
     const readFactory = registerTool.mock.calls[0]?.[0];
     const readTool = readFactory({ sessionId: "session-1" });
     const result = await readTool.execute("call-1", {
-      tool_output_ref: "viking://session/ov-session-1/tool-results/tr_1",
+      tool_output_ref: "viking://user/default/sessions/ov-session-1/tool-results/tr_1",
     });
 
     expect(readToolResult).toHaveBeenCalledWith(
@@ -603,7 +599,7 @@ describe("plugin module seams", () => {
     const grepSessionArchives = vi.fn().mockResolvedValue({
       count: 1,
       matches: [{
-        uri: "viking://session/ov-session-1/history/archive_001#L12",
+        uri: "viking://user/default/sessions/ov-session-1/history/archive_001#L12",
         line: 12,
         content: "important command output",
       }],
@@ -695,7 +691,6 @@ describe("plugin module seams", () => {
       source: "https://example.com/docs",
       to: "viking://resources/docs",
       wait: true,
-      timeout: 30,
     });
     expect(addResource).toHaveBeenCalledWith({
       pathOrUrl: "https://example.com/docs",
@@ -704,7 +699,6 @@ describe("plugin module seams", () => {
       reason: undefined,
       instruction: undefined,
       wait: true,
-      timeout: 30,
     }, "agent-main");
     expect(resourceResult.content[0].text).toBe("Imported OpenViking resource. viking://resources/docs Warnings: warn");
     expect(resourceResult.details).toMatchObject({ action: "resource_imported", root_uri: "viking://resources/docs" });
@@ -716,7 +710,6 @@ describe("plugin module seams", () => {
       path: undefined,
       data: "name: demo\n",
       wait: undefined,
-      timeout: undefined,
     }, "agent-main");
     expect(skillResult.content[0].text).toBe("Imported OpenViking skill (demo). viking://user/skills/demo");
     expect(skillResult.details).toMatchObject({ action: "skill_imported", uri: "viking://user/skills/demo" });

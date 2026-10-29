@@ -10,7 +10,7 @@ class RetrievalConfig(BaseModel):
     recall_intent_timeout_s: float = Field(
         default=5.0,
         gt=0.0,
-        description="Timeout in seconds for optional context query expansion.",
+        description="Timeout in seconds for session intent analysis and context query expansion.",
     )
     recall_rewrite_timeout_s: float = Field(
         default=30.0,
@@ -24,5 +24,13 @@ class RetrievalConfig(BaseModel):
             "planning when session_id is present. false skips session load, "
             "get_context_for_search, and IntentAnalyzer — searches with the raw query only "
             "(same path as no-session search)."
+        ),
+    )
+    apply_rerank_to_context: bool = Field(
+        default=False,
+        description=(
+            "Whether search(mode='context') reranks its merged candidates with the configured "
+            "rerank model before quota allocation and budgeting. Needs a usable rerank "
+            "config; false keeps context mode on vector scores."
         ),
     )

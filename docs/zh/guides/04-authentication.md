@@ -51,6 +51,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 
 创建账号后，保存响应中的 `user_key`，将它用于 CLI、SDK 和数据 API。root key 不用于租户数据读写。
 
+User key 采用三段式格式 `base64url(account).base64url(user).base64url(secret)`。服务端只接受该格式；裸密钥或其他格式一律以 `401 Invalid API key` 拒绝。
+
 ### 方案二：OIDC（企业 SSO）
 
 OIDC 和 LDAP 需要可选认证依赖。在运行服务端的 Python 环境中安装：
@@ -157,6 +159,8 @@ OIDC Claims: {
 ## 完整配置参考
 
 ### OIDC 完整配置
+
+`issuer` 必须与身份提供方签发的令牌中的 `iss` 完全一致，包括末尾的 `/`。
 
 ```json
 {
@@ -400,7 +404,6 @@ OIDC Claims: {
 | `validate_config(config)` | 在启动时校验 `ServerConfig`；遇到致命错误应调用 `sys.exit(1)` |
 | `initialize(app, service, config)` | 在 `app.state` 上初始化运行时状态（如 `APIKeyManager`） |
 | `get_request_context_checks(path, identity)` | 可选的认证后路径/身份检查 |
-| `requires_api_key_manager()` | Admin API 路由是否需要 `APIKeyManager` |
 | `can_skip_api_key_for_bot_proxy()` | Bot 代理是否可以跳过 API Key 校验（如 `dev` 模式） |
 
 ### 注册自定义插件示例
@@ -445,6 +448,8 @@ rank 用于降权检查，不会继承 ADMIN 的接口权限。`require_role()` 
 
 ### Trusted 模式
 
+Trusted 模式只管理用户身份和角色。创建账号（包括首个管理员）和创建用户都不生成个人密钥、哈希或密钥索引；重置个人密钥返回 HTTP 412（`FAILED_PRECONDITION`）。Studio 可选择没有个人密钥的用户；Bot 使用部署配置的 root key 认证，并单独传递用户身份。已有个人密钥不会被自动删除，也不用于 trusted 认证。
+
 trusted 模式的普通数据面请求无需预先注册 user 或创建 user API Key。服务端会异步批量注册
 该 account/user，使其最终出现在既有 account/user 管理接口中（默认五分钟刷盘）。注册不会
 创建 user API Key，也不会修改 group 或已有 user 的角色。设置
@@ -474,7 +479,7 @@ ACL 用户组是例外：组和成员通过 [Admin API](../api/08-admin.md#用�
 - 携带受信部署自身的 `root_api_key`。对于 `/api/v1/admin/*`，服务端校验该 key 后会将请求视为 ROOT。
 - 如果 Admin 路由指向具体 account/user，也可以同时携带 `X-OpenViking-Account` + `X-OpenViking-User`。这些 header 必须与目标 URL 匹配，并会保留为请求身份；授权仍来自受信 `root_api_key`。
 
-角色更新 API 只支持将用户提升为 ADMIN。Trusted Admin API 的管理权限来自已校验的部署 root key，无需也不支持创建 ROOT 用户。
+角色更新 API 仅用于身份管理变更操作，支持在 USER 与 ADMIN 之间切换，包括提升和降级。ROOT 可操作任意账户，ADMIN 仅限本账户。Trusted Admin API 的管理权限来自已校验的部署 root key，无需也不支持创建 ROOT 用户。
 
 配置了 root key 的 Trusted 部署可直接调用上面的 Admin API，无需先切换到 API Key 模式或注册网关管理员。
 
@@ -582,18 +587,19 @@ root key 请求上携带身份 header。
 
 ## Trusted 模式
 
-Trusted 模式不会查询 user key，而是直接信任每个请求显式携带的身份请求头：
+Trusted 模式使用 root API key 验证上游，再从每个请求显式携带的身份请求头解析用户，不查询 user key：
 
 ```json
 {
   "server": {
     "auth_mode": "trusted",
+    "root_api_key": "your-secret-root-key",
     "host": "127.0.0.1"
   }
 }
 ```
 
-数据请求必须提供 `X-OpenViking-Account` 和 `X-OpenViking-User`。若配置了 `root_api_key`，请求还必须携带匹配的 API Key，以验证上游网关。
+`server.root_api_key` 缺失、为空或仅含空白时拒绝启动，localhost 也不例外。数据请求必须提供 `X-OpenViking-Account`、`X-OpenViking-User` 和匹配的 API Key，以验证上游网关。匿名 `/health` 存活探测仍可使用。
 
 角色默认从已注册用户查询，未注册时为 USER。配置并验证 root key 后，上游可用 `X-OpenViking-Role: user` 或 `admin` 断言角色，不接受 `root`。Admin API 的 ROOT 授权来自部署 root key。
 
@@ -726,7 +732,7 @@ ov config validate
 | GET | `/api/v1/admin/accounts` | ROOT | 列出所有工作区 |
 | DELETE | `/api/v1/admin/accounts/{id}` | ROOT | 删除工作区 |
 | POST | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 注册用户 |
-| GET | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 列出用户 |
+| GET | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN, USER | 列出用户；ADMIN/USER 仅限本账户 |
 | DELETE | `/api/v1/admin/accounts/{id}/users/{uid}` | ROOT, ADMIN | 移除用户 |
-| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT, ADMIN | 将用户提升为 ADMIN；ADMIN 仅限本账户 |
-| POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN | 重新生成 user key |
+| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT, ADMIN | 身份管理变更：切换 USER/ADMIN；ADMIN 仅限本账户 |
+| POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN, USER | 重新生成 user key；USER 仅能使用个人 API Key 认证轮换自身密钥 |

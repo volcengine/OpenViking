@@ -6,6 +6,7 @@ import pytest
 
 from openviking.pyagfs.async_client import AsyncAGFSClient
 from openviking.pyagfs.helpers import cp
+from openviking.storage.errors import InvalidPathLockRequestError
 
 
 class _RecordingClient:
@@ -94,9 +95,7 @@ async def test_async_client_passes_directories_only_to_tree_directory() -> None:
 
     await agfs.tree_directory("/local/acct-1/data", directories_only=True)
 
-    assert client.calls == [
-        ("tree_directory", "/local/acct-1/data", {"account_id": "acct-1"})
-    ]
+    assert client.calls == [("tree_directory", "/local/acct-1/data", {"account_id": "acct-1"})]
     assert client.tree_options["directories_only"] is True
 
 
@@ -121,6 +120,26 @@ async def test_async_client_rejects_cross_account_mv() -> None:
 
     with pytest.raises(ValueError, match="cross-account"):
         await agfs.mv("/local/a/data/file.txt", "/local/b/data/file.txt")
+
+
+@pytest.mark.asyncio
+async def test_async_client_types_native_invalid_pathlock_handoff() -> None:
+    class _InvalidHandoffClient:
+        def pathlock_adopt(self, ctx, handoff_ref):
+            del ctx, handoff_ref
+            raise ValueError(
+                "invalid lock request: handoff coverage '/local/default/resources/"
+                "信贷风险管理_1.md' does not map to lock path "
+                "'/local/default/resources/.exact.ovlock.1.md.deadbeef'"
+            )
+
+    agfs = AsyncAGFSClient(_InvalidHandoffClient())
+
+    with pytest.raises(InvalidPathLockRequestError) as exc_info:
+        await agfs.pathlock_adopt({"owner_id": "producer"})
+
+    assert "handoff coverage" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 def test_cp_rejects_cross_account_raw_copy() -> None:

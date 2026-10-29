@@ -19,7 +19,8 @@ import pytest_asyncio
 
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import VolcengineKMSProvider
-from openviking.server.api_keys import APIKeyManager, is_new_format_key
+from openviking.server.api_keys import is_new_format_key
+from openviking.server.store_assembly import build_api_key_manager
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -285,7 +286,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         )
         await svc.initialize()
 
-        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
+        api_key_manager = build_api_key_manager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
