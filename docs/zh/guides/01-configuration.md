@@ -2155,6 +2155,8 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
 
 句中、行内代码或代码块里引用的标签不会被删除；未命中或标签未闭合时原样保留。名字写错时服务启动失败。
 
+客户端知道哪些块是自己注入的，可以用请求头声明，服务端照声明处理，不再自己判断：`X-OpenViking-Host-Envelope: botmux,claude-code` 表示按顺序只尝试这几个外壳（内置名或 `custom` 中的名字，不要求出现在 `envelopes` 里），`none` 表示本次请求不做归一化。请求头作用于消息写入（`/sessions/{id}/messages`、`/messages/batch`）和 `find`、`search`、`recall`；声明了未知的名字时返回 400。没有该请求头时按上面的配置处理。
+
 ### Usage Reporter
 
 可选的 Usage Reporter 从已 commit session 的 tool parts 中抽取记忆使用事件。内置文件日志 Sink 将每个事件写成一行扁平 JSON，并按小时滚动专用日志文件：

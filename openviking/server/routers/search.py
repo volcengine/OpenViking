@@ -34,6 +34,7 @@ from openviking.retrieve.context_assembler.recall_preset import (
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
+from openviking.server.host_envelope import declared_host_envelopes
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
@@ -384,7 +385,9 @@ def _strip_query_envelope(
     Only a query that matched an envelope and came out empty is skipped; a short query
     without one is searched as usual.
     """
-    envelopes = getattr(http_request.app.state, "search_host_envelopes", ())
+    envelopes = declared_host_envelopes(http_request)
+    if envelopes is None:
+        envelopes = getattr(http_request.app.state, "search_host_envelopes", ())
     if not envelopes or not query:
         return query
     result = normalize(query, envelopes)

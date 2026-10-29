@@ -338,6 +338,10 @@ class HostEnvelopeConfig(BaseModel):
         return self
 
     def resolve(self) -> List[HostEnvelope]:
+        return self.lookup(self.envelopes)
+
+    def lookup(self, names: List[str]) -> List[HostEnvelope]:
+        """Envelopes by name, in order, whether or not ``envelopes`` lists them."""
         custom = {
             spec.name.strip().lower(): HostEnvelope(
                 name=spec.name.strip().lower(),
@@ -348,7 +352,7 @@ class HostEnvelopeConfig(BaseModel):
             for spec in self.custom
         }
         resolved = []
-        for raw in self.envelopes:
+        for raw in names:
             name = str(raw or "").strip().lower()
             if name in custom:
                 resolved.append(custom[name])

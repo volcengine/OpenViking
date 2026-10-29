@@ -2188,6 +2188,8 @@ Many agent hosts wrap the user's turn in their own scaffolding: a bridge's routi
 
 Tags quoted mid-sentence, in inline code or in a fenced block are never removed, and a turn that does not match or has an unclosed tag is kept as it is. An unknown name fails server startup.
 
+A client knows which blocks it injected and can say so instead of leaving the server to guess. `X-OpenViking-Host-Envelope: botmux,claude-code` tries exactly those envelopes, in that order (built-in or `custom` names; they need not appear in `envelopes`), and `none` turns normalization off for the request. The header applies to message writes (`/sessions/{id}/messages`, `/messages/batch`) and to `find`, `search` and `recall`; an unknown name returns 400. Without the header, the configuration above applies.
+
 ### Usage Reporter
 
 The optional Usage Reporter extracts memory usage events from committed session tool parts. The built-in file log sink writes each event as one flat JSON object to a dedicated hourly rotating file:

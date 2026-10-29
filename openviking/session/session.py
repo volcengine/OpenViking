@@ -990,8 +990,13 @@ class Session:
     async def add_messages_async(
         self,
         messages_spec: List[dict],
+        host_envelopes: Optional[Sequence[HostEnvelope]] = None,
     ) -> List[Message]:
-        """Asynchronously add multiple messages without blocking the caller loop."""
+        """Asynchronously add multiple messages without blocking the caller loop.
+
+        ``host_envelopes`` replaces the session's configured envelopes for this call,
+        e.g. with the ones a client declared.
+        """
         if self._privacy_config_service is not None:
             messages_spec = await extract_and_store_session_privacy(
                 self.session_id,
@@ -1000,7 +1005,7 @@ class Session:
                 self._privacy_config_service,
                 self._privacy_sanitizer,
             )
-        self._normalize_host_envelopes(messages_spec)
+        self._normalize_host_envelopes(messages_spec, host_envelopes)
         message_groups = self._build_message_groups(messages_spec)
         messages = []
         for group in message_groups:
@@ -1011,14 +1016,19 @@ class Session:
         await self._append_messages_authoritatively(messages)
         return messages
 
-    def _normalize_host_envelopes(self, messages_spec: List[dict]) -> None:
+    def _normalize_host_envelopes(
+        self,
+        messages_spec: List[dict],
+        host_envelopes: Optional[Sequence[HostEnvelope]] = None,
+    ) -> None:
         """Strip host scaffolding from user text parts, keeping what the host sent.
 
         Runs after privacy extraction, so ``original_text`` holds the same sanitized
         text that would otherwise have been stored. The normalized ``text`` is what
         extraction, embedding and query expansion read.
         """
-        if not self._host_envelopes:
+        envelopes = self._host_envelopes if host_envelopes is None else tuple(host_envelopes)
+        if not envelopes:
             return
         for spec in messages_spec:
             if spec.get("role") != "user":
@@ -1026,7 +1036,7 @@ class Session:
             for part in spec.get("parts") or []:
                 if not isinstance(part, TextPart) or part.original_text is not None:
                     continue
-                result = normalize(part.text, self._host_envelopes)
+                result = normalize(part.text, envelopes)
                 if result.matched:
                     part.original_text, part.text = part.text, result.text
 
