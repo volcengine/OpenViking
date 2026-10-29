@@ -4,7 +4,9 @@
  * Client-side diagnostics for the OpenCode plugin.
  *
  * OpenCode loads this plugin one of two ways: as a file plugin, the wrapper the
- * installer drops in ~/.config/opencode/plugins/ next to the plugin directory,
+ * installer drops in ~/.config/opencode/plugins/, which imports the plugin
+ * directory ~/.config/opencode/openviking-plugin (kept outside plugins/ because
+ * OpenCode v2 also loads every directory in there),
  * or as the npm package named in opencode.json's `plugin` list. The plugin then
  * registers its MCP server and bundled skills from inside OpenCode's config
  * hook, so the host's config only matters when it switches that server off.
@@ -46,7 +48,9 @@ const INSTALL_FIX = "curl -fsSL https://openviking.ai/install | bash -s -- --har
 
 // The installer writes these paths under $HOME regardless of XDG_CONFIG_HOME.
 const opencodeDir = () => join(homedir(), ".config", "opencode")
-const filePluginDir = () => join(opencodeDir(), "plugins", "openviking")
+const filePluginDir = () => join(opencodeDir(), "openviking-plugin")
+// Where installers before 0.5.35 put the plugin directory.
+const legacyPluginDir = () => join(opencodeDir(), "plugins", "openviking")
 
 // The same choice install.sh's opencode_config_file makes.
 function opencodeConfigPath() {
@@ -104,6 +108,8 @@ function checkInstall(report) {
     report.fail(`${homeShort(wrapper)} loads a plugin that is not on disk`, `${homeShort(filePluginDir())}/index.mjs is missing`, INSTALL_FIX)
   } else if (viaFile && viaNpm) {
     report.warn("OpenCode loads this plugin twice", `${homeShort(wrapper)} and ${NPM_PACKAGE} in ${homeShort(configPath)}; every hook runs twice`, `remove ${NPM_PACKAGE} from the plugin list, or re-run the installer`)
+  } else if (viaFile && existsPath(legacyPluginDir())) {
+    report.warn("OpenCode v2 loads this plugin twice", `${homeShort(wrapper)} and the old directory ${homeShort(legacyPluginDir())}; one MCP server always fails`, `re-run the installer, or rm -rf ${homeShort(legacyPluginDir())}`)
   } else if (viaFile) report.ok(`file plugin ${homeShort(wrapper)} → ${homeShort(filePluginDir())}`)
   else if (viaNpm) report.ok(`npm plugin ${NPM_PACKAGE} listed in ${homeShort(configPath)}`)
   else report.fail("OpenCode does not load this plugin", `no ${homeShort(wrapper)} and no ${NPM_PACKAGE} in ${homeShort(configPath)}`, INSTALL_FIX)

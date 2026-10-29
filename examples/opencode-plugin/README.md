@@ -103,11 +103,11 @@ For development or PR testing, copy the package into OpenCode's plugin directory
 
 ```bash
 node examples/memory-plugin-shared/sync.mjs
-mkdir -p ~/.config/opencode/plugins/openviking
+mkdir -p ~/.config/opencode/plugins ~/.config/opencode/openviking-plugin
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
-cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
-cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
-cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
+cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/openviking-plugin/
+cp -r examples/opencode-plugin/lib ~/.config/opencode/openviking-plugin/
+cp -r examples/opencode-plugin/servers ~/.config/opencode/openviking-plugin/
 ```
 
 `sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
@@ -115,9 +115,10 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 This creates a stable OpenCode plugin layout:
 
 ```text
-~/.config/opencode/plugins/
-├── openviking.js
-└── openviking/
+~/.config/opencode/
+├── plugins/
+│   └── openviking.js
+└── openviking-plugin/
     ├── index.mjs
     ├── package.json
     ├── lib/
@@ -127,11 +128,11 @@ This creates a stable OpenCode plugin layout:
 The top-level `openviking.js` is only a wrapper:
 
 ```js
-export { OpenVikingPlugin, default } from "./openviking/index.mjs"
+export { OpenVikingPlugin, default } from "../openviking-plugin/index.mjs"
 ```
 
 This wrapper is only for source installs with the directory layout shown above. npm package installs load `index.mjs` directly through `package.json`.
-Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files.
+Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files. Keep the plugin directory outside `plugins/`: OpenCode v2 also loads directories there, so a directory in `plugins/` would load the plugin a second time.
 
 ## Configuration
 
@@ -261,7 +262,7 @@ Set `dataDir` in `plugin.opencode` to override this directory.
 `scripts/ov-memory-doctor.mjs` checks the plugin install, the client configuration, and the server connection, and lists a fix for every problem it finds. For the installer's file plugin:
 
 ```bash
-node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs
+node ~/.config/opencode/openviking-plugin/scripts/ov-memory-doctor.mjs
 ```
 
 Options: `--json`, `--offline`, `--timeout <ms>`, `--no-color`. The `ov-memory-doctor` skill runs the same script from inside a session.
