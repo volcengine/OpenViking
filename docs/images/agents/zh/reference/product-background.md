@@ -1,6 +1,6 @@
 # OpenViking 扩展参考
 
-[接入引导](https://docs.openviking.net/agents/zh/onboarding.md)已包含普通接入需要的解释。本文件用于回答用户追问或处理扩展目标，无需在开始接入时通读；只查与当前问题有关的部分。知识不代表当前工具一定支持，也不授予执行额外任务的许可。
+[接入引导](https://docs.openviking.net/agents/zh/onboarding.md)（团队版是 [onboarding-team.md](https://docs.openviking.net/agents/zh/onboarding-team.md)）已包含普通接入需要的解释。本文件用于回答用户追问或处理扩展目标，无需在开始接入时通读；只查与当前问题有关的部分。知识不代表当前工具一定支持，也不授予执行额外任务的许可。
 
 ## 内容类型与处理状态
 
@@ -40,3 +40,19 @@ OpenViking 通过目录和 URI 保留内容归属与来源。L0 摘要帮助识�
 经验保留有效做法、纠正和适用条件。说明它为什么适合当前任务，避免机械照搬；是否启用提取、是否可检索需核对，不能承诺每轮自动产生经验。
 
 知识整理／Compile 适合基于多份材料形成有来源的主题知识或 Wiki，通过 `ov` 命令行的 `ov compile` 执行（安装器的 `cli` 一项装的就是 `ov`），由服务端的 Compile Runtime 运行，结果写回 OpenViking。先检查服务是否支持、来源范围和输出位置，再按用户授权执行；用法见 https://docs.openviking.net/zh/context-compilation/01-overview 。安装插件、导入历史或生成普通摘要都不等于已执行 Compile。
+
+## 团队共享目录与权限
+
+团队成员属于同一个 account，各自是其中的一个 user。每个成员的记忆、会话、个人资料和私有技能都在 `viking://user/<自己的 user_id>/` 下，按 user 隔离，其他成员读不到。account 内共享的有两处：`viking://resources/`（共享资料）和 `viking://agent/skills/`（共享技能）。插件每次提问前的自动召回，范围包括他自己的空间和这两处。
+
+共享资料的权限由团队决定。账号没有开启权限控制（ACL，默认不开）时，所有成员都能读、写、删 `viking://resources/` 下的任何内容；开启后，默认仍是所有成员都能管理，管理员可以把某个目录设为受限（restricted），只授权给指定的成员或用户组。管理员对共享资料始终有管理权。写入被拒时返回 `PERMISSION_DENIED`。复制、移动不带走原来的权限：新位置继承目标目录的权限，移进个人空间就不再共享。
+
+他想让自己的目录只有自己能改、别人只能看时，账号开启了权限控制才有效，这时可以对他自己的目录运行：
+
+```bash
+ov acl set viking://resources/<user_id> --acl-mode restricted --entry user:<user_id>=manage --entry 'user:*=read'
+```
+
+只在他明确要求时做，只改他自己的目录。没开启权限控制时这条命令不起作用，请他找团队管理员。
+
+共享技能用 `add_skill`（或 `ov add-skill <目录> -p viking://agent/skills`）安装，其他成员的 Agent 会在合适的任务里发现并使用它；不加 `target_uri` 时装进他自己的私有技能。

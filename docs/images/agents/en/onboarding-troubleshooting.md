@@ -1,6 +1,6 @@
 # OpenViking onboarding guide: troubleshooting (for agents)
 
-Look here when a command from the [onboarding guide](https://docs.openviking.ai/agents/en/onboarding.md) fails. Find the symptom, fix it and retry once; if it still fails, tell the user which step didn't work, what it affects and what they can do.
+Look here when a command from the [onboarding guide](https://docs.openviking.ai/agents/en/onboarding.md) (or the team edition, [onboarding-team.md](https://docs.openviking.ai/agents/en/onboarding-team.md)) fails. Find the symptom, fix it and retry once; if it still fails, tell the user which step didn't work, what it affects and what they can do.
 
 | Symptom | What to do |
 |---|---|
@@ -21,3 +21,5 @@ Look here when a command from the [onboarding guide](https://docs.openviking.ai/
 | Import script prints `not supported yet` | The script can't read this host's history directly: convert it as in [Other hosts: convert sessions to JSONL](https://docs.openviking.ai/agents/en/onboarding-other-hosts.md) and import it with `--input`. |
 | Import script prints `--session: no session matches …` | The id was wrong and nothing was uploaded. Run `--list` again and use the ids it prints. |
 | No recall after the restart | First tell apart "nothing relevant stored yet" from "the hooks didn't run". Codex and TraeCode CLI: trust the OpenViking hooks in `/hooks` and confirm `openviking-memory` is enabled in `/plugins`. Cursor and TRAE: the app was not fully quit. Otherwise run the doctor: Claude Code `/openviking-memory:ov` or the `ov-memory-doctor` skill; Codex the `$ov-memory-doctor` skill; Cursor, TRAE, TRAE CN, ZCode `node ~/.openviking/agent-integrations/<cursor\|trae\|trae-cn\|zcode>/scripts/ov-memory-doctor.mjs`; pi `/viking`; DeepSeek Harness `dsh --profile <profile> --dump-config` should list `openviking-memory`, where `<profile>` is the one the installer printed. On command-line hosts, setting `OPENVIKING_DEBUG=1` before starting writes hook logs to `~/.openviking/logs/`; desktop apps opened from the dock or a launcher don't see variables set in a shell. |
+| Team edition: writing to `viking://resources/…` returns `PERMISSION_DENIED … write permission required` | The team has access control on, and they can't write to this folder. Don't write somewhere else; tell them to ask their team admin for write access to their own folder `viking://resources/<user_id>/`, keep the content on their machine or in their personal space for now, and contribute once they have access. |
+| Team edition: some folders in `ov ls viking://resources` show `permission denied` | These are folders they can't read, which is normal. Skip them and don't list them to the user. If `viking://resources` can't be read at all, ask them to contact their team admin. |

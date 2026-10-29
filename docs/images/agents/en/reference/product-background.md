@@ -1,6 +1,6 @@
 # OpenViking extended reference
 
-The [onboarding guide](https://docs.openviking.ai/agents/en/onboarding.md) already explains what a normal setup needs. This page is for answering the user's follow-up questions or handling goals beyond the setup; you don't need to read it through before you start, only the part relevant to the question at hand. Knowing something here doesn't mean the current tools support it, and it doesn't authorize extra tasks.
+The [onboarding guide](https://docs.openviking.ai/agents/en/onboarding.md) (or the team edition, [onboarding-team.md](https://docs.openviking.ai/agents/en/onboarding-team.md)) already explains what a normal setup needs. This page is for answering the user's follow-up questions or handling goals beyond the setup; you don't need to read it through before you start, only the part relevant to the question at hand. Knowing something here doesn't mean the current tools support it, and it doesn't authorize extra tasks.
 
 ## Kinds of content and processing states
 
@@ -40,3 +40,19 @@ Preferences help the collaboration fit stable ways of expressing and judging thi
 Experience keeps what worked, corrections and when they apply. Explain why it fits the current task rather than copying it mechanically; whether extraction is on and whether it is searchable needs checking, so don't promise experience will be produced every turn.
 
 Organizing knowledge, Compile, suits building sourced topic knowledge or a wiki from several documents. It runs as `ov compile` in the `ov` command line (the installer's `cli` entry installs `ov`), is executed by the server's Compile Runtime, and writes its results back into OpenViking. First check that the server supports it, the source scope and where the output goes, then run it as the user authorizes; usage is at https://docs.openviking.ai/en/context-compilation/01-overview . Installing the plugin, importing history or producing an ordinary summary is not the same as running Compile.
+
+## Team shared folders and permissions
+
+Team members belong to the same account, each as a user in it. Each member's memories, sessions, personal material and private skills are under `viking://user/<their own user_id>/`, isolated per user, so other members can't read them. The account shares two places: `viking://resources/` (shared material) and `viking://agent/skills/` (shared skills). The plugin's automatic recall before each prompt covers their own space and these two.
+
+The team decides the permissions on shared material. When the account has access control (ACL) off, which is the default, every member can read, write and delete anything under `viking://resources/`; when it is on, every member can still manage everything by default, and an admin can make a folder restricted, granting it only to chosen members or groups. Admins always keep management rights on shared material. A refused write returns `PERMISSION_DENIED`. Copying or moving doesn't carry the old permissions along: the new location inherits the target folder's permissions, and moving into the personal space stops sharing.
+
+If they want their own folder to be editable only by them and readable by everyone else, it works only when the account has access control on; then run this on their own folder:
+
+```bash
+ov acl set viking://resources/<user_id> --acl-mode restricted --entry user:<user_id>=manage --entry 'user:*=read'
+```
+
+Do it only when they ask, and only on their own folder. With access control off the command has no effect; ask them to contact their team admin.
+
+Shared skills are installed with `add_skill` (or `ov add-skill <folder> -p viking://agent/skills`), and other members' agents find and use them for fitting tasks; without `target_uri` the skill goes into their own private skills.

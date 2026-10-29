@@ -592,7 +592,7 @@ test("a non-interactive run with no server says so and how to re-run", (t) => {
   assert.match(result.stdout, /DeepSeek Harness\n {4}Next: start a new dsh session: dsh --profile web\n {4}Updates: re-run this installer\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
   assert.equal(JSON.parse(readFileSync(join(home, ".openviking", "ovcli.conf"), "utf8")).url, "http://127.0.0.1:1933");
   // The unreachable server is repeated at the end, then where the agent goes next.
-  assert.match(result.stdout, /!! {2}Not done:\n {6}- Cannot reach http:\/\/127\.0\.0\.1:1933\. If the server is not running yet, start it before using the plugin\.\n==> Onboarding guide \(for your agent\): https:\/\/docs\.openviking\.ai\/agents\/en\/onboarding\.md\n$/);
+  assert.match(result.stdout, /!! {2}Not done:\n {6}- Cannot reach http:\/\/127\.0\.0\.1:1933\. If the server is not running yet, start it before using the plugin\.\n==> Onboarding guide \(for your agent\): https:\/\/docs\.openviking\.ai\/agents\/en\/onboarding\.md\n==> If the user's message links another onboarding guide \(for example the team edition\), follow that one instead\.\n$/);
 
   // Once a server is configured, a re-run has nothing to warn about.
   const again = run(["--harness", "dsh", "--lang", "en", "--yes"]);
@@ -608,11 +608,11 @@ test("what was asked for but not installed is listed again just before the onboa
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const tail = result.stdout.slice(result.stdout.lastIndexOf("Not done:"));
-  assert.match(tail, /^Not done:\n {6}- Cannot reach [^\n]+\n {6}- pi CLI not found; skipping pi extension install\.\n==> Onboarding guide \(for your agent\): \S+\n$/);
+  assert.match(tail, /^Not done:\n {6}- Cannot reach [^\n]+\n {6}- pi CLI not found; skipping pi extension install\.\n==> Onboarding guide \(for your agent\): \S+\n==> If the user's message links another onboarding guide[^\n]*\n$/);
 
   const zh = run(["--harness", "dsh,pi", "--lang", "zh", "--yes"]);
   assert.equal(zh.status, 0, `${zh.stdout}\n${zh.stderr}`);
-  assert.match(zh.stdout, /未完成：\n {6}- 无法连接[^\n]+\n {6}- 未找到 pi 命令，跳过 pi 扩展安装。\n==> 接入引导（给 Agent 看）： https:\/\/docs\.openviking\.net\/agents\/zh\/onboarding\.md\n$/);
+  assert.match(zh.stdout, /未完成：\n {6}- 无法连接[^\n]+\n {6}- 未找到 pi 命令，跳过 pi 扩展安装。\n==> 接入引导（给 Agent 看）： https:\/\/docs\.openviking\.net\/agents\/zh\/onboarding\.md\n==> 用户消息里给的是另一份接入引导（例如团队版）时，以那份为准。\n$/);
 });
 
 test("run from inside a dsh session, the plugin goes into that session's profile", (t) => {
