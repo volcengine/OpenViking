@@ -451,6 +451,25 @@ class TestWatchSchedulerGitShaGate:
         assert updated.next_execution_time > datetime.now()
 
     @pytest.mark.asyncio
+    async def test_unchanged_skip_preserves_last_task_id(self, monkeypatch):
+        state = {"kind": "git", "head_sha": "a" * 40, "instruction": ""}
+        probe = AsyncMock(return_value=("refs/heads/main", "a" * 40))
+        scheduler, resource_service = self._build_scheduler(monkeypatch, probe)
+        manager, task = await self._setup_task(scheduler, source_checkpoint=state)
+        await manager.record_execution(
+            task.task_id,
+            status="completed",
+            execution_task_id="ingest-task-1",
+        )
+
+        await scheduler._execute_task(task)
+
+        assert resource_service.calls == []
+        updated = await manager.get_task(task.task_id)
+        assert updated.last_status == "completed"
+        assert updated.last_task_id == "ingest-task-1"
+
+    @pytest.mark.asyncio
     async def test_commit_pin_uses_commit_checkpoint_without_refresh(self, monkeypatch):
         commit = "a" * 40
         probe = AsyncMock(return_value=("", commit))
@@ -614,6 +633,45 @@ class TestWatchSchedulerGitShaGate:
         assert updated.last_status == "completed"
         # No fresh checkpoint available: previous state is left untouched.
         assert updated.source_checkpoint["head_sha"] == "a" * 40
+
+    @pytest.mark.asyncio
+    async def test_sync_completed_refresh_persists_checkpoint(self, monkeypatch):
+        sha = "c" * 40
+        probe = AsyncMock(return_value=("refs/heads/main", sha))
+        monkeypatch.setattr(
+            "openviking.parse.accessors.git_accessor.GitAccessor.probe_git_remote_head",
+            probe,
+        )
+
+        class SyncResourceService(ResourceService):
+            def __init__(self):
+                super().__init__()
+                self.calls = []
+
+            async def refresh_resource(self, **kwargs):
+                self.calls.append(kwargs)
+                # No queue manager: the terminal result is returned directly,
+                # carrying the imported revision meta without a task_id.
+                return {
+                    "root_uri": kwargs.get("to"),
+                    "status": "completed",
+                    "meta": {"resolved_head_sha": sha},
+                }
+
+        resource_service = SyncResourceService()
+        scheduler = WatchScheduler(resource_service=resource_service, check_interval=1)
+        manager, task = await self._setup_task(scheduler)
+
+        await scheduler._execute_task(task)
+
+        assert len(resource_service.calls) == 1
+        updated = await manager.get_task(task.task_id)
+        assert updated.last_status == "completed"
+        assert updated.source_checkpoint == {
+            "kind": "git",
+            "head_sha": sha,
+            "instruction": "",
+        }
 
     @pytest.mark.asyncio
     async def test_non_git_source_does_not_probe(self, monkeypatch):

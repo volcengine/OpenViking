@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import os
 import shutil
+import signal
 import stat
 import tempfile
 import urllib.request
@@ -62,6 +63,10 @@ class GitAccessor(DataAccessor):
 
     PRIORITY = 80  # Higher than generic HTTP, lower than specific services
     DEFAULT_REMOTE_HEAD_TIMEOUT = 30.0
+    # Upper bound for reaping the git process tree after cancellation. The
+    # tree is SIGKILLed as a group, so this only guards pathological reap
+    # delays and must stay short to avoid pinning the caller's slot.
+    CANCEL_REAP_TIMEOUT = 1.0
 
     @property
     def priority(self) -> int:
@@ -424,14 +429,17 @@ class GitAccessor(DataAccessor):
         }
         if env is not None:
             process_kwargs["env"] = env
+        if os.name == "posix":
+            # Detach git into a fresh session/process group so that remote
+            # helpers (http/ssh) and other descendants can be signalled
+            # together on timeout/cancellation instead of being orphaned
+            # while they still hold our stdout/stderr pipes.
+            process_kwargs["start_new_session"] = True
         proc = await asyncio.create_subprocess_exec(*args, **process_kwargs)
         try:
             stdout, stderr = await proc.communicate()
         except BaseException:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            with contextlib.suppress(Exception):
-                await asyncio.shield(proc.wait())
+            await self._terminate_git_process(proc)
             raise
         if proc.returncode != 0:
             raise_git_auth_error(stderr)
@@ -450,6 +458,36 @@ class GitAccessor(DataAccessor):
                 logger.warning(f"[GitAccessor] {user_msg}")
             raise RuntimeError(user_msg)
         return stdout.decode().strip()
+
+    async def _terminate_git_process(self, proc: asyncio.subprocess.Process) -> None:
+        """Best-effort termination of the whole git process tree.
+
+        Git spawns remote helpers (http/ssh) which inherit the stdout/stderr
+        pipes. Killing only the direct git child leaves those descendants
+        alive and holding the pipes open, so ``communicate()``/``wait()`` may
+        block long after cancellation. On POSIX git runs in its own process
+        group (see ``start_new_session``), so signal the entire group.
+        """
+        if os.name == "posix":
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            # Non-POSIX platforms have no process-group signal primitive;
+            # fall back to the direct child.
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+
+        # Reaping itself must be bounded: shield protects the reap from a
+        # second cancellation, while wait_for guarantees cleanup cannot pin
+        # the caller's execution slot indefinitely. CancelledError derives
+        # from BaseException and is deliberately not suppressed.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(
+                asyncio.shield(proc.wait()),
+                timeout=self.CANCEL_REAP_TIMEOUT,
+            )
 
     async def _has_commit(
         self,

@@ -435,6 +435,9 @@ class WatchScheduler:
                     ):
                         skipped_unchanged = True
                         execution_status = "completed"
+                        # No new ingestion runs: keep the last real task id so
+                        # record_execution does not null out the public field.
+                        execution_task_id = task.last_task_id
                         logger.info(
                             f"[WatchScheduler] Task {task.task_id} source unchanged at "
                             f"{probed_checkpoint.get('head_sha')}, skipping refresh"
@@ -467,6 +470,16 @@ class WatchScheduler:
                     execution_code = result.get("code")
                     execution_task_id = result.get("task_id")
                     result_status = str(result.get("status") or "").lower()
+                    # Synchronous deployments (no queue manager) return the
+                    # terminal result directly: extract its revision checkpoint
+                    # here. Async submissions carry no meta yet and get
+                    # overridden by the task_tracker.wait result below.
+                    refreshed_checkpoint = (
+                        self._resource_service._initial_source_checkpoint(
+                            result.get("meta"),
+                            instruction=task.instruction,
+                        )
+                    )
                     if execution_task_id and result_status not in {
                         "completed",
                         "failed",

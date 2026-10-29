@@ -5,6 +5,7 @@
 import asyncio
 import base64
 import os
+import signal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -957,11 +958,12 @@ class TestGitAccessor:
         assert "remote reflected" not in caplog.text
         assert os.environ.get("GIT_CONFIG_COUNT") != env["GIT_CONFIG_COUNT"]
 
-    async def test_cancelled_git_process_is_killed_and_reaped(
+    async def test_cancelled_git_process_group_is_killed_and_reaped(
         self,
         accessor: GitAccessor,
     ) -> None:
         process = SimpleNamespace(
+            pid=43210,
             communicate=AsyncMock(side_effect=asyncio.CancelledError),
             kill=Mock(),
             wait=AsyncMock(),
@@ -970,13 +972,74 @@ class TestGitAccessor:
             "openviking.parse.accessors.git_accessor.asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=process),
         ):
-            with pytest.raises(asyncio.CancelledError):
-                await accessor._run_git(
-                    ["git", "clone", "https://git.example.com/org/private.git"]
-                )
+            with patch(
+                "openviking.parse.accessors.git_accessor.os.killpg"
+            ) as killpg:
+                with pytest.raises(asyncio.CancelledError):
+                    await accessor._run_git(
+                        ["git", "clone", "https://git.example.com/org/private.git"]
+                    )
+
+        killpg.assert_called_once_with(43210, signal.SIGKILL)
+        process.kill.assert_not_called()
+        process.wait.assert_awaited_once_with()
+
+    async def test_cancelled_git_process_falls_back_to_direct_kill_without_pgid(
+        self,
+        accessor: GitAccessor,
+    ) -> None:
+        process = SimpleNamespace(
+            pid=43210,
+            communicate=AsyncMock(side_effect=asyncio.CancelledError),
+            kill=Mock(),
+            wait=AsyncMock(),
+        )
+        with patch(
+            "openviking.parse.accessors.git_accessor.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            with patch(
+                "openviking.parse.accessors.git_accessor.os.name", "nt"
+            ):
+                with pytest.raises(asyncio.CancelledError):
+                    await accessor._run_git(
+                        ["git", "clone", "https://git.example.com/org/private.git"]
+                    )
 
         process.kill.assert_called_once_with()
         process.wait.assert_awaited_once_with()
+
+    async def test_cancelled_git_reap_is_bounded_when_wait_hangs(
+        self,
+        accessor: GitAccessor,
+    ) -> None:
+        async def hang_forever() -> None:
+            await asyncio.Event().wait()
+
+        process = SimpleNamespace(
+            pid=43210,
+            communicate=AsyncMock(side_effect=asyncio.CancelledError),
+            kill=Mock(),
+            wait=AsyncMock(side_effect=hang_forever),
+        )
+        accessor.CANCEL_REAP_TIMEOUT = 0.01
+        with patch(
+            "openviking.parse.accessors.git_accessor.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            with patch(
+                "openviking.parse.accessors.git_accessor.os.killpg"
+            ) as killpg:
+                loop = asyncio.get_running_loop()
+                start = loop.time()
+                with pytest.raises(asyncio.CancelledError):
+                    await accessor._run_git(
+                        ["git", "clone", "https://git.example.com/org/private.git"]
+                    )
+                elapsed = loop.time() - start
+
+        killpg.assert_called_once_with(43210, signal.SIGKILL)
+        assert elapsed < 1.0
 
     @pytest.mark.parametrize(
         ("source", "repo_name"),
