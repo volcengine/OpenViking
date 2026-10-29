@@ -91,9 +91,9 @@ read user:carol on viking://resources/A/B/C/report.md
 | read、stat、list、tree、find、search、grep、glob | read |
 | write、create、mkdir、set tags | write |
 | 删除或移动文件 | manage |
-| 删除或移动目录 | 目录及完整子树的 manage |
+| 删除或移动目录 | 该目录的 manage（授权整个子树，包括 restricted 后代） |
 | 管理 ACL | manage |
-| move 目标父目录 | write |
+| cp、move 目标 | 新路径要求父目录 write；已有文件要求文件 write；已有目录要求目录 manage |
 
 服务端会先 canonicalize URI，再在同一个鉴权入口中依次执行 account/owner/actor peer 等硬边界、开启时的有效 ACL 或关闭时的原有 namespace 规则，以及写入和删除的 namespace 防护。
 
@@ -102,9 +102,9 @@ read user:carol on viking://resources/A/B/C/report.md
 
 目录上的 ACL 授权会被所有后代继承。`list`、`tree` 和批量结果仍逐个检查有效 ACL，因为默认开放的目录下可能存在独立的 restricted 边界。
 
-共享区内部移动时，节点自己的 direct ACL 和 restricted 状态随节点移动，inherited 按新父节点重新计算。个人资源移入共享区时不携带 ACL，只继承目标目录权限；共享资源移回个人区时清空 ACL。
+复制和移动不携带源 ACL：已有目标保留自己的 ACL，新建目标继承目标父目录的 ACL；移入个人区时清空 ACL。
 
-递归修改 tags、删除或移动目录会先校验完整目标子树。任一节点缺少所需能力，或子树扫描不完整，操作都会整体中止。
+删除和移动检查指定文件或目录的权限，授权后不逐个检查子节点。复制按目录范围查询不可读内容，核实命中路径存在且当前权限确实不可读后，拒绝整次复制；不逐个检查目标子节点的写入权限。递归修改 tags 仍检查完整子树，权限不足或扫描不完整时整体中止。
 
 目录 `stat` 的 `count` 使用相同的路径和 ACL 标量过滤，表示当前用户可见的 context 数量。
 

@@ -14,7 +14,7 @@ import os
 import signal
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -678,6 +678,7 @@ class ResourceService:
         resource_lock: Dict[str, Any],
     ) -> bool:
         """Remove a newly reserved target only while it is still empty."""
+        ctx = replace(ctx, bypass_acl=True)
         try:
             if not await self._viking_fs.exists(root_uri, ctx=ctx):
                 return True

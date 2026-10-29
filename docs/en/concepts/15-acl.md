@@ -95,9 +95,9 @@ All filesystem APIs use the same permission mapping:
 | read, stat, list, tree, find, search, grep, glob | read |
 | write, create, mkdir, set tags | write |
 | delete or move a file | manage |
-| delete or move a directory | manage on the directory and complete subtree |
+| delete or move a directory | manage on that directory, authorizing its entire subtree including restricted descendants |
 | manage ACL | manage |
-| move destination parent | write |
+| copy or move destination | write on the parent for a new path; write on an existing file; manage on an existing directory |
 
 The server canonicalizes the URI, then uses one authorization entry point for account/owner/actor-peer boundaries, effective ACLs when enabled or existing namespace rules when disabled, and write/delete namespace guards.
 
@@ -107,9 +107,9 @@ inside a restricted directory only inherits the parent’s permissions.
 
 An ACL grant on a directory is inherited by every descendant. `list`, `tree`, and other batch results still check every returned node because an open directory can contain independently restricted descendants.
 
-Within the shared scope, a moved node keeps its direct ACL and restricted state, then recalculates inherited permissions from its new parent. A private resource moved into the shared scope carries no ACL and inherits the destination directory; a shared resource moved back to a private area has its ACL cleared.
+Copies and moves do not carry source ACLs: existing destinations retain their ACLs, new destinations inherit their destination parent’s ACL, and private destinations have no ACL.
 
-Recursive tag updates, directory deletion, and directory moves validate the complete affected subtree first. The operation stops if any node lacks the required capability or the subtree cannot be scanned completely.
+Delete and move authorize the specified file or directory without checking descendants individually. Copy queries for unreadable records within the directory and rejects the whole copy after confirming the path exists and its current ACL denies read access; destination descendants are not checked individually. Recursive tag updates still validate the complete subtree and stop on insufficient permission or an incomplete scan.
 
 For a directory, `stat.count` uses the same path and ACL scalar filter and reports the number of context records visible to the caller.
 

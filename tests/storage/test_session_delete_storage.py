@@ -10,6 +10,7 @@ import pytest
 
 from openviking.core.namespace import resolve_request_uri
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.expr import And, Eq, Or, PathScope
@@ -310,13 +311,12 @@ async def test_default_rm_still_cleans_vector_records(storage, missing, uri):
         storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
 
 
-@pytest.mark.parametrize("no_vector", [False, True])
-@pytest.mark.parametrize("child_allowed", [False, True])
-async def test_resource_rm_still_checks_descendant_manage_acl(storage, no_vector, child_allowed):
+@pytest.mark.parametrize("allowed", [False, True])
+async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, allowed):
     child_uri = f"{RESOURCE_URI}/restricted.md"
     storage.fs._collect_uris.return_value = [child_uri]
     storage.acl.is_enabled.return_value = True
-    allowed = EffectiveAcl(
+    managed = EffectiveAcl(
         AclMode.RESTRICTED,
         DirectAcl((AclEntry("user:alice", AclLevel.MANAGE),)),
         DirectAcl(),
@@ -324,30 +324,19 @@ async def test_resource_rm_still_checks_descendant_manage_acl(storage, no_vector
     denied = EffectiveAcl(AclMode.RESTRICTED, DirectAcl(), DirectAcl())
 
     async def resolve_many(uris, ctx):
-        return {uri: denied if uri == child_uri and not child_allowed else allowed for uri in uris}
+        return {uri: managed if uri == RESOURCE_URI and allowed else denied for uri in uris}
 
     storage.acl.resolve_many.side_effect = resolve_many
-
-    if child_allowed:
-        result = await storage.fs.rm(
-            RESOURCE_URI, recursive=True, ctx=storage.ctx, no_vector=no_vector
-        )
-        assert result == {"estimated_deleted_count": 0 if no_vector else 7}
+    service = FSService(viking_fs=storage.fs)
+    service._enqueue_delete_refresh = AsyncMock(return_value="queued")
+    if allowed:
+        await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
         storage.agfs.rm.assert_awaited_once()
+        storage.vector.delete_uris.assert_awaited_once()
+        assert not storage.ctx.bypass_acl
     else:
-        with pytest.raises(PermissionDeniedError, match="restricted.md"):
-            await storage.fs.rm(RESOURCE_URI, recursive=True, ctx=storage.ctx, no_vector=no_vector)
+        with pytest.raises(PermissionDeniedError):
+            await service._rm(RESOURCE_URI, ctx=storage.ctx, recursive=True)
         storage.agfs.rm.assert_not_awaited()
-
-    storage.fs._collect_uris.assert_awaited_once_with(
-        RESOURCE_PATH, True, ctx=storage.ctx, strict=True
-    )
-    if no_vector or not child_allowed:
-        storage.vector.count.assert_not_awaited()
         storage.vector.delete_uris.assert_not_awaited()
-    else:
-        storage.vector.count.assert_awaited_once()
-        storage.vector.delete_uris.assert_awaited_once_with(
-            storage.ctx, [RESOURCE_URI], recursive=True
-        )
-    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
+    storage.acl.resolve_many.assert_awaited_once_with([RESOURCE_URI], storage.ctx)

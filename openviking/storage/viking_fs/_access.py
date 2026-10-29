@@ -245,6 +245,34 @@ class _AccessMixin:
     ) -> None:
         await self._ensure_access_many([uri], ctx, action=action)
 
+    async def _ensure_destination_access(self, uri: str, ctx: Optional[RequestContext]) -> bool:
+        """Authorize copy/move/import destinations and return whether the target exists."""
+        try:
+            stat = await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
+            parent = VikingURI(uri).parent
+            if parent is None:
+                raise InvalidArgumentError(f"Destination has no parent: {uri}") from exc
+            checked_uri, action, exists = parent.uri, AclAction.WRITE, False
+        else:
+            checked_uri = uri
+            action = AclAction.MANAGE if stat["isDir"] else AclAction.WRITE
+            exists = True
+
+        # Non-ACL namespaces authorize the target path using their fixed policy.
+        if not is_acl_uri(uri):
+            checked_uri = uri
+        # Capability checks must not apply the namespace-root deletion guard.
+        access = await self._can_access_many([checked_uri], ctx, action=action)
+        if not access[checked_uri]:
+            raise PermissionDeniedError(
+                f"Access denied for {checked_uri}: {action.value} permission required",
+                resource=checked_uri,
+            )
+        return exists
+
     async def _ensure_access_many(
         self,
         uris: Sequence[str],
@@ -293,6 +321,26 @@ class _AccessMixin:
                 raise PermissionDeniedError(
                     "Temp root is read-only for non-root users",
                     resource=uri,
+                )
+
+    async def _ensure_descendant_access(
+        self, uri: str, ctx: Optional[RequestContext], *, action: AclAction
+    ) -> None:
+        """Check shared descendants after the requested node has been authorized."""
+        real_ctx = self._ctx_or_default(ctx)
+        if (
+            not is_acl_uri(uri)
+            or real_ctx.bypass_acl
+            or has_implicit_manage(real_ctx, uri)
+            or not await self._acl_enabled(real_ctx)
+        ):
+            return
+        async for denied in self.acl_manager.iter_denied_uris(uri, real_ctx, action=action):
+            # A leftover index entry or virtual chunk is not copied filesystem content.
+            if await self.exists(denied, ctx=real_ctx):
+                raise PermissionDeniedError(
+                    f"Access denied for {denied}: {action.value} permission required",
+                    resource=denied,
                 )
 
     async def _ensure_retrieval_scope(self, uri: str, ctx: Optional[RequestContext]) -> None:
