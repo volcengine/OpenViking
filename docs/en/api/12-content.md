@@ -647,7 +647,7 @@ ov set-tags viking://resources/project/ \
 
 ### reindex()
 
-Validate and repair semantic and/or vector artifacts for existing content already stored in OpenViking. Resource and skill targets use incremental RFV (Request / Formal / Vector) convergence by default: unchanged file fingerprints, directory L0/L1 visible-body fingerprints, and request scalars are skipped. Use `force=true` for an unconditional rebuild.
+Validate and repair semantic and/or vector artifacts for existing content already stored in OpenViking. For resources and skills, reindex compares persisted content with existing vector records: missing or stale records are rebuilt, vector records whose content no longer exists are deleted, and matching records are skipped. Deletion is allowed only after both sides are read completely. Use `force=true` to rebuild existing content unconditionally; completeness checks still apply.
 
 This API operates on existing `viking://...` content. It does not import new files. For normal ingestion, use [Resources](02-resources.md).
 
@@ -685,20 +685,28 @@ Session namespaces are not supported by `reindex()`. Requests for
 `viking://session/...` or `viking://user/<user_id>/sessions/...` are rejected;
 when reindexing a broader user namespace, session subtrees are skipped.
 
+For a concrete user root, namespace reindex processes `resources`, skill packages, memory shards, peer resources/memories, and other indexed files or custom top-level directories. Broad operations use shallow paginated discovery and skip session, privacy, internal settings, and storage-control subtrees. An actor-peer view must use an explicit visible content target because a broader namespace cannot provide a complete persisted-content view.
+
+Namespace reindex discovers targets from both persisted content and existing vector records. It reads and reuses one complete lightweight vector-record list per supported URI prefix, so it can clean missing content roots. Retryable failures or record-count changes retry the whole read at most three times; an incomplete read is never used for deletion. Directly requesting an already-missing target still returns `NOT_FOUND`; use an existing parent scope or namespace to remove its leftover vectors. A concrete content request never expands to sibling scopes.
+
+Memory uses the original file's L2 and no longer generates virtual `#chunk_NNNN` records. Reindex removes records whose content is gone and all legacy chunks, including a requested file's own old chunks. If the original memory file cannot be processed, its existing L2 is preserved, and real files whose names resemble chunk URIs are not deleted.
+
+Memory directory L0/L1 records require a nonempty, valid `.abstract.md`/`.overview.md` source for the respective level. A confirmed missing or empty source removes old records at that level; IO or format errors preserve them, increase `failed_records`, and add a warning. The other level and healthy files continue processing.
+
+For `semantic_and_vectors`, a memory directory removes records whose content is gone first, then reuses the same processing flow as `add_resources` and waits for the related semantic and vector work. An exact memory file only rebuilds its own L2 and removes legacy chunks; it does not regenerate directory semantics.
+
 **Modes**
 
-- `vectors_only`: compares current source MD5 values with vector-record MD5 values through RFV and rebuilds only missing or stale L0/L1/L2 records; it does not rewrite `.abstract.md` or `.overview.md`
-- `semantic_and_vectors`: uses the same RFV state and `ContextUpdatePlan` to drive semantic repair and L0/L1/L2 updates, without a second manual vector scan
+- `vectors_only`: compares current content fingerprints with vector-record fingerprints and rebuilds only missing or stale L0/L1/L2 records; it does not rewrite `.abstract.md` or `.overview.md`
+- `semantic_and_vectors`: repairs semantic artifacts first, then updates the corresponding L0/L1/L2 vectors
 
-For `resource` and `skill`, `semantic_and_vectors` refreshes directory/file semantic artifacts, including `.abstract.md` and `.overview.md`. For `memory`, it rebuilds the current persisted memory subtree semantics and vectors, but it does not replay historical extraction order.
+For `resource` and `skill`, `semantic_and_vectors` refreshes directory/file semantic artifacts, including `.abstract.md` and `.overview.md`. For `memory`, it rebuilds the current persisted memory subtree semantics and vectors.
 
-Resource/skill `vectors_only` and `semantic_and_vectors` share one F traversal and one narrow-field V inventory. Each source is read once during state resolution and that result is reused while executing the plan. `force=true` bypasses MD5 equality but still performs completeness and scope checks.
+Both resource/skill modes share one persisted-content scan and one lightweight vector-record read. Each source is read once and reused during later processing. `force=true` bypasses fingerprint equality but still performs completeness and scope checks.
 
-For a resource/skill directory, `recursive=false` limits both modes to the target directory's own L0/L1 records. Direct children are read only as existing REUSE inputs for the target aggregation; descendants are neither scanned nor rebuilt. Namespace containers have no index records of their own, so namespace targets reject `recursive=false` instead of silently becoming a no-op. Memory remains on the existing reindex path.
+For a resource/skill directory, `recursive=false` limits both modes to the target directory's own L0/L1 records. Direct children are used only to aggregate the target directory; they are not scanned or rebuilt. Namespace containers have no index records of their own, so namespace targets reject `recursive=false` instead of silently becoming a no-op. Memory remains on the existing reindex path.
 
-When the F snapshot is complete, the RFV diff identifies records present in V but absent from F as orphans and removes them during the same reindex. Deletion fails closed when the F snapshot is incomplete.
-
-When non-empty `tags` are provided, tags are included in the same upsert as each vector record produced by reindex; reindex does not call `set_tags` afterwards. Directory and namespace reindex operations apply tags to successfully rebuilt directory L0/L1 and leaf L2 records. `replace` overwrites existing tags, while `append` merges by key. `replace` with an empty tag list is a no-op. `clear` removes existing tags and does not require `tags`; if values are supplied with `clear`, they are ignored.
+When non-empty `tags` are provided, tags are saved in the same write as each vector record produced by reindex; reindex does not call `set_tags` afterwards. Directory and namespace reindex operations apply tags to successfully rebuilt directory L0/L1 and leaf L2 records. `replace` overwrites existing tags, while `append` merges by key. `replace` with an empty tag list is a no-op. `clear` removes existing tags and does not require `tags`; if values are supplied with `clear`, they are ignored.
 
 Subtree reindex is not transactional. Records skipped because no semantic source is available, or records whose embedding fails, do not receive the new tags.
 
@@ -834,7 +842,7 @@ Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{t
 | mode | Effective reindex mode |
 | scanned_records | Number of records or semantic sources considered |
 | rebuilt_records | Number of vector records successfully rebuilt |
-| deleted_records | Number of orphan vector records confirmed and deleted by the RFV diff |
+| deleted_records | Number of vector records confirmed to have no corresponding content and deleted |
 | unsupported_records | Number of records skipped because no usable vector source was available |
 | failed_records | Number of records that failed while rebuilding |
 | duration_ms | Synchronous run duration in milliseconds |
@@ -843,11 +851,7 @@ Task records are persisted under `/local/{account_id}/_system/tasks/{user_id}/{t
 
 **Behavior notes**
 
-- `vectors_only` and `semantic_and_vectors` are non-destructive. They use rebuild/upsert behavior and do not require dropping the vector collection first.
-- `viking://` reindex fans out to supported top-level namespaces and excludes `session`.
-- Namespace reindex operations such as `viking://user` propagate to supported child content types.
-- `vectors_only` is the right mode when only the embedding model or vector index needs to be refreshed.
-- `semantic_and_vectors` is the right mode when semantic artifacts themselves must be regenerated before re-vectorization.
+- Reindex does not delete the whole vector collection. It overwrites records for live content and deletes only records confirmed to have no corresponding content.
 - Only one reindex task can run for the same URI and owner at a time. A concurrent request for the same target returns a conflict.
 - For resource files, text files can use file content when no summary is available. Non-text files require a generated summary or existing vector record fallback; otherwise they are counted as unsupported.
 

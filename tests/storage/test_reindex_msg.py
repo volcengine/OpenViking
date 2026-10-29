@@ -365,8 +365,8 @@ async def test_reindex_processor_does_not_release_lease_owned_by_failed_executor
     )
     agfs = SimpleNamespace(pathlock_release=AsyncMock())
 
-    async def fail_after_releasing(_self, *, existing_lease, **_kwargs):
-        await agfs.pathlock_release(existing_lease)
+    async def fail_after_releasing(_self, *, lease_guard, **_kwargs):
+        await lease_guard.close()
         raise RuntimeError("semantic plan enqueue failed")
 
     monkeypatch.setattr(
