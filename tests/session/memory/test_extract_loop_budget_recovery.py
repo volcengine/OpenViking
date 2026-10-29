@@ -368,3 +368,22 @@ class TestExtractionContentBoundary:
             execute.assert_awaited_once()
             assert len(vlm.calls) == 2
         assert response.content == "<think>planning</think>I will read the file."
+
+
+class TestBudgetExhaustedDuringResolutionRepair:
+    @pytest.mark.asyncio
+    async def test_truncated_repair_response_keeps_valid_first_pass(self):
+        """The event-resolution repair response is cut off by the output
+        budget, but a fully valid first pass was already parsed and stashed.
+        The budget branch must keep it — exactly like the unparseable-repair
+        branch below it — instead of aborting the whole extraction."""
+        first_pass = Mock()
+        vlm = ScriptedVLM(["sdk.commit()", _length_response()])
+        loop = _make_loop(vlm)
+        loop.resolve_operations = _async_return((first_pass, []))
+        loop._retryable_resolution_issues = Mock(return_value=["unresolved target"])
+
+        operations, _tools = await _run_loop(loop)
+
+        assert operations is first_pass
+        assert len(vlm.calls) == 2

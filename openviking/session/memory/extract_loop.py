@@ -408,7 +408,18 @@ class ExtractLoop:
                 # Truncation is not an ordinary format mistake: a same-cap format
                 # retry would only hit the budget again, and replaying the
                 # truncated output just grows the prompt. Fail fast with the
-                # dedicated error recorded by _call_llm().
+                # dedicated error recorded by _call_llm() — unless a valid first
+                # pass is already in hand, which the preserve branch below keeps
+                # when the repair response is merely unparseable.
+                if pending_resolution_repair is not None:
+                    final_operations, raw_links = pending_resolution_repair
+                    pending_resolution_repair = None
+                    tracer.info(
+                        "Event resolution repair response was cut off by the "
+                        "output budget; keeping the first-pass operations",
+                        console=True,
+                    )
+                    break
                 raise RuntimeError(
                     f"Memory extraction aborted: {parse_error or failure_kind}"
                 )
