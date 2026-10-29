@@ -1404,18 +1404,23 @@ class ReindexExecutor:
         try:
             abstract = await self._read_directory_abstract(dir_uri, ctx=ctx)
             if level == ContextLevel.ABSTRACT:
-                vector_text = abstract
+                body = abstract
             else:
                 overview = await self._read_directory_overview(dir_uri, ctx=ctx)
-                vector_text = overview or abstract
+                body = overview or abstract
 
-            if not vector_text:
+            if not body:
                 await self.delete_uri_level(uri=dir_uri, level=level, ctx=ctx)
                 return
 
+            # Same canonical embedding text as every other L0/L1 writer (the
+            # rebuild loop below uses embedding_text_for_body for both levels):
+            # visible body plus the whitelisted ``directory`` metadata block.
+            vector_text = embedding_text_for_body(level, dir_uri, body)
+
             # L1 abstract scalar carries the overview for Rerank.
             if level == ContextLevel.OVERVIEW:
-                abstract = _truncate_abstract_bytes(vector_text)
+                abstract = _truncate_abstract_bytes(body)
 
             await self._upsert_context(
                 uri=dir_uri,
