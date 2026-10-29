@@ -7,6 +7,7 @@ Generates type-safe Pydantic models at runtime from MemoryTypeSchema
 definitions, with discriminator support for polymorphic fields.
 """
 
+import json
 import re
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 
@@ -189,6 +190,10 @@ class SchemaModelGenerator:
                     Field(None, description=desc),
                 )
 
+        string_fields = [
+            field.name for field in memory_type.fields if field.field_type == FieldType.STRING
+        ]
+
         replace_string_fields = [
             field.name
             for field in memory_type.fields
@@ -201,6 +206,15 @@ class SchemaModelGenerator:
             del cls
             if not isinstance(data, dict):
                 return data
+            for name in string_fields:
+                val = data.get(name)
+                if isinstance(val, dict) and "blocks" in val:
+                    continue
+                if isinstance(val, (dict, list)):
+                    try:
+                        data[name] = json.dumps(val, ensure_ascii=False)
+                    except (TypeError, ValueError):
+                        pass
             try:
                 is_new = int(data.get("page_id")) >= 100
             except (TypeError, ValueError):

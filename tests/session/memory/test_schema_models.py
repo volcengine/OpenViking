@@ -488,6 +488,62 @@ class TestSchemaModelGenerator:
             assert "custom_field" in model.model_fields
             assert "memory_type" not in model.model_fields
 
+    def test_string_fields_coerce_dict_and_list_to_json_string(self, real_registry):
+        """String-typed fields should coerce dict or list values to compact JSON strings (#6639)."""
+        cases_schema = real_registry.get("cases")
+        assert cases_schema is not None
+
+        generator = SchemaModelGenerator([cases_schema])
+        model = generator.create_flat_data_model(cases_schema)
+
+        input_payload = {"summary": "fix graylog", "preconditions": ["running"]}
+        rubric_payload = [
+            {"name": "criteria_1", "description": "passes", "required": True, "weight": 1.0}
+        ]
+
+        item = model.model_validate(
+            {
+                "page_id": 100,
+                "case_name": "graylog_diagnose",
+                "task_signature": "Diagnose graylog issue",
+                "input": input_payload,
+                "rubric": rubric_payload,
+                "evidence": "Observed error logs",
+            }
+        )
+
+        assert isinstance(item.input, str)
+        assert json.loads(item.input) == input_payload
+        assert isinstance(item.rubric, str)
+        assert json.loads(item.rubric) == rubric_payload
+
+    def test_structured_operations_model_accepts_cases_with_dict_and_list(self, real_registry):
+        """End-to-end structured operations model validation for cases with dict/list inputs (#6639)."""
+        generator = SchemaModelGenerator([real_registry.get("cases")])
+        operations_model = generator.create_structured_operations_model()
+
+        input_payload = {"summary": "reproduce bug", "preconditions": ["installed"]}
+        rubric_payload = [{"name": "eval", "weight": 1.0}]
+
+        validated = operations_model.model_validate(
+            {
+                "cases": [
+                    {
+                        "page_id": 100,
+                        "case_name": "reproduce_bug",
+                        "task_signature": "Reproduce reported bug",
+                        "input": input_payload,
+                        "rubric": rubric_payload,
+                        "evidence": "Logs confirmed",
+                    }
+                ]
+            }
+        )
+
+        assert len(validated.cases) == 1
+        assert isinstance(validated.cases[0].input, str)
+        assert json.loads(validated.cases[0].input) == input_payload
+
 
 class TestWikiLink:
     def test_invalid_link_type_keeps_freeform_short_label(self):
