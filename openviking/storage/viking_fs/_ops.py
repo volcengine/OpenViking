@@ -1439,7 +1439,17 @@ class _OpsMixin:
         if vector_store is None:
             return False
 
-        backend_type = (await vector_store.get_account_backend(ctx.account_id))._mode
+        try:
+            backend_type = (await vector_store.get_account_backend(ctx.account_id))._mode
+        except Exception:
+            # Same fallback as the count and collection-meta checks below: a
+            # backend probe failure must degrade the glob to the fs engine,
+            # not fail the whole request.
+            logger.debug(
+                "glob engine=auto: account backend probe failed, falling back to fs",
+                exc_info=True,
+            )
+            return False
         if backend_type not in ("volcengine", "vikingdb"):
             return False
 
