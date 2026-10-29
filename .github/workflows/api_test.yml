@@ -2,6 +2,16 @@ name: 06. API & CLI Integration Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      native_runner:
+        description: 'Runner for the shared Linux native build'
+        type: choice
+        options: [github-hosted, ov-ci-runner]
+        default: github-hosted
+      linux_only:
+        description: 'Run only Linux API tests for a focused manual trial'
+        type: boolean
+        default: false
   schedule:
     - cron: '0 1,4,7,10,13 * * *'
   pull_request:
@@ -54,9 +64,31 @@ jobs:
       (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ||
        (github.repository == 'volcengine/OpenViking' &&
         (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))))
-    runs-on: ubuntu-24.04
+    # Add the custom label ov-ci-runner to the intended runner. Its display name
+    # alone does not select it. Fork PRs keep using GitHub-hosted runners.
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'volcengine/OpenViking' && inputs.native_runner == 'ov-ci-runner' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
+    # Match the consumers' glibc/platform instead of depending on the host OS.
+    container: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'volcengine/OpenViking' && inputs.native_runner == 'ov-ci-runner' && 'ubuntu:24.04' || null }}
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 30
     steps:
+      - name: Prepare self-hosted build container
+        if: github.event_name == 'workflow_dispatch' && github.repository == 'volcengine/OpenViking' && inputs.native_runner == 'ov-ci-runner'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git curl sudo unzip xz-utils procps \
+            build-essential cmake ccache pkg-config \
+            libssl-dev libffi-dev zlib1g-dev libbz2-dev liblzma-dev \
+            libreadline-dev libsqlite3-dev libuuid1
+          echo "Runner: $RUNNER_NAME"
+          uname -m
+          getconf GNU_LIBC_VERSION
+          nproc
+          free -h
+          df -h .
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -103,7 +135,7 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'release') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
+        os: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_only && fromJSON('["ubuntu-24.04"]') || ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'release') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
       - uses: actions/checkout@v6

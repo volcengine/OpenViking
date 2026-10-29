@@ -2,6 +2,7 @@
 
 import fnmatch
 import io
+import json
 import re
 import subprocess
 import tarfile
@@ -144,6 +145,75 @@ class PlanTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_dedicated_native_runner_requires_official_manual_opt_in(self):
+        text = (ROOT / ".github/workflows/api_test.yml").read_text()
+        block = text.split("\n  native-runtime:\n", 1)[1].split("\n  cuvs-tests:", 1)[0]
+        runner = re.search(r"    runs-on: \$\{\{ (.+) \}\}", block).group(1)
+        container = re.search(r"    container: \$\{\{ (.+) \}\}", block).group(1)
+        prepare = re.search(r"        if: (.+)", block).group(1)
+        contexts = (
+            ("volcengine/OpenViking", "workflow_dispatch", "ov-ci-runner", True),
+            ("volcengine/OpenViking", "workflow_dispatch", "github-hosted", False),
+            ("volcengine/OpenViking", "pull_request", "ov-ci-runner", False),
+            ("volcengine/OpenViking", "schedule", "ov-ci-runner", False),
+            ("volcengine/OpenViking", "release", "ov-ci-runner", False),
+            ("zhanglistar/OpenViking", "workflow_dispatch", "ov-ci-runner", False),
+        )
+        for repository, event, selection, use_self_hosted in contexts:
+            values = {
+                "github.repository": repository,
+                "github.event_name": event,
+                "inputs.native_runner": selection,
+            }
+
+            def evaluate(expression, values=values):
+                for variable, value in values.items():
+                    expression = expression.replace(variable, repr(value))
+                expression = expression.replace("&&", "and").replace("||", "or")
+                expression = expression.replace("null", "None")
+                return eval(expression, {"__builtins__": {}, "fromJSON": json.loads})
+
+            with self.subTest(repository=repository, event=event, selection=selection):
+                self.assertEqual(
+                    evaluate(runner),
+                    ["self-hosted", "Linux", "X64", "ov-ci-runner"]
+                    if use_self_hosted
+                    else ["ubuntu-24.04"],
+                )
+                self.assertEqual(evaluate(container), "ubuntu:24.04" if use_self_hosted else None)
+                self.assertEqual(evaluate(prepare), use_self_hosted)
+        self.assertIn("shell: bash", block)
+        self.assertLess(
+            block.index("Prepare self-hosted build container"), block.index("actions/checkout")
+        )
+        self.assertIn("libssl-dev", block)
+        self.assertIn("procps", block)
+
+    def test_linux_only_trial_does_not_reduce_automatic_api_coverage(self):
+        text = (ROOT / ".github/workflows/api_test.yml").read_text()
+        api = text.split("\n  api-tests:\n", 1)[1]
+        expression = re.search(r"        os: \$\{\{ (.+) \}\}", api).group(1)
+        full = ["ubuntu-24.04", "macos-14", "windows-latest"]
+        for event, ref, linux_only, platforms in (
+            ("workflow_dispatch", "refs/heads/main", True, ["ubuntu-24.04"]),
+            ("workflow_dispatch", "refs/heads/main", False, full),
+            ("schedule", "refs/heads/main", True, full),
+            ("release", "refs/tags/v0.5.3", True, full),
+            ("pull_request", "refs/pull/6751/merge", True, ["ubuntu-24.04"]),
+        ):
+            rendered = expression
+            for variable, value in (
+                ("github.event_name", event),
+                ("github.ref", ref),
+                ("inputs.linux_only", linux_only),
+            ):
+                rendered = rendered.replace(variable, repr(value))
+            rendered = rendered.replace("&&", "and").replace("||", "or")
+            with self.subTest(event=event, linux_only=linux_only):
+                self.assertEqual(
+                    eval(rendered, {"__builtins__": {}, "fromJSON": json.loads}), platforms
+                )
+
     def test_runtime_markdown_reaches_workflow_planner(self):
         for workflow in ("pr.yml", "api_test.yml"):
             text = (ROOT / ".github/workflows" / workflow).read_text()

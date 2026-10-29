@@ -18,6 +18,21 @@ file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
+For a manual self-hosted trial, add the custom label `ov-ci-runner` to the runner
+with that display name; the default `self-hosted`, `Linux` and `X64` labels alone
+cannot distinguish it from other machines. Run the API workflow in
+`volcengine/OpenViking` with `native_runner=ov-ci-runner` and `linux_only=true`.
+Only the shared Linux native build uses labels
+`[self-hosted, Linux, X64, ov-ci-runner]`; preparation, API and cuVS jobs retain
+their GitHub-hosted runners.
+The host needs a running Docker daemon accessible to the runner service and
+outbound access to Ubuntu packages, GitHub, Rust and Python dependencies.
+The build runs in an Ubuntu 24.04 container to match the artifact consumers'
+glibc/platform; bundle validation remains mandatory.
+PRs and automatic runs retain GitHub-hosted runners, and manual defaults retain
+the full API platform matrix. Select only reviewed, trusted refs for a self-hosted run.
+A missing label or offline runner leaves the opted-in job queued; there is no automatic fallback.
+
 The cuVS check now lives in the API workflow so it can consume the same artifact.
 Its check name stays `cuvs-tests / Lite Test (ubuntu-24.04, 3.11)`, matching the
 previous PR workflow. The caller job ID, reusable job name, Python version and
