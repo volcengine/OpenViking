@@ -7,7 +7,7 @@ on:
         description: 'Runner for the shared Linux native build'
         type: choice
         options: [github-hosted, ov-ci-runner]
-        default: github-hosted
+        default: ov-ci-runner
       linux_only:
         description: 'Run only Linux API tests for a focused manual trial'
         type: boolean
@@ -64,18 +64,18 @@ jobs:
       (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ||
        (github.repository == 'volcengine/OpenViking' &&
         (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))))
-    # Add the custom label ov-ci-runner to the intended runner. Its display name
-    # alone does not select it. Fork PRs keep using GitHub-hosted runners.
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'volcengine/OpenViking' && inputs.native_runner == 'ov-ci-runner' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
+    # Official-repository automatic runs (including fork PRs) use ov-ci-runner.
+    # Manual runs can select github-hosted; workflows in forks use hosted runners.
+    runs-on: ${{ github.repository == 'volcengine/OpenViking' && (github.event_name != 'workflow_dispatch' || inputs.native_runner == 'ov-ci-runner') && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
     # Match the consumers' glibc/platform instead of depending on the host OS.
-    container: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'volcengine/OpenViking' && inputs.native_runner == 'ov-ci-runner' && 'ubuntu:24.04' || null }}
+    container: ${{ github.repository == 'volcengine/OpenViking' && (github.event_name != 'workflow_dispatch' || inputs.native_runner == 'ov-ci-runner') && 'ubuntu:24.04' || null }}
     defaults:
       run:
         shell: bash
     timeout-minutes: 30
     steps:
       - name: Prepare self-hosted build container
-        if: github.event_name == 'workflow_dispatch' && github.repository == 'volcengine/OpenViking' && inputs.native_runner == 'ov-ci-runner'
+        if: github.repository == 'volcengine/OpenViking' && (github.event_name != 'workflow_dispatch' || inputs.native_runner == 'ov-ci-runner')
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \

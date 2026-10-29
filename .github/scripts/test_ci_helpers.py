@@ -145,7 +145,7 @@ class PlanTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
-    def test_dedicated_native_runner_requires_official_manual_opt_in(self):
+    def test_dedicated_native_runner_is_automatic_with_manual_hosted_override(self):
         text = (ROOT / ".github/workflows/api_test.yml").read_text()
         block = text.split("\n  native-runtime:\n", 1)[1].split("\n  cuvs-tests:", 1)[0]
         runner = re.search(r"    runs-on: \$\{\{ (.+) \}\}", block).group(1)
@@ -154,10 +154,16 @@ class WorkflowContractTests(unittest.TestCase):
         contexts = (
             ("volcengine/OpenViking", "workflow_dispatch", "ov-ci-runner", True),
             ("volcengine/OpenViking", "workflow_dispatch", "github-hosted", False),
-            ("volcengine/OpenViking", "pull_request", "ov-ci-runner", False),
-            ("volcengine/OpenViking", "schedule", "ov-ci-runner", False),
-            ("volcengine/OpenViking", "release", "ov-ci-runner", False),
+            ("volcengine/OpenViking", "pull_request", "", True),
+            ("volcengine/OpenViking", "schedule", "", True),
+            ("volcengine/OpenViking", "release", "", True),
+            ("volcengine/OpenViking", "pull_request", "github-hosted", True),
+            ("volcengine/OpenViking", "schedule", "github-hosted", True),
+            ("volcengine/OpenViking", "release", "github-hosted", True),
             ("zhanglistar/OpenViking", "workflow_dispatch", "ov-ci-runner", False),
+            ("zhanglistar/OpenViking", "pull_request", "", False),
+            ("zhanglistar/OpenViking", "schedule", "", False),
+            ("zhanglistar/OpenViking", "release", "", False),
         )
         for repository, event, selection, use_self_hosted in contexts:
             values = {
@@ -188,6 +194,8 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("libssl-dev", block)
         self.assertIn("procps", block)
+        manual = text.split("\n      native_runner:\n", 1)[1].split("\n      linux_only:", 1)[0]
+        self.assertIn("default: ov-ci-runner", manual)
 
     def test_linux_only_trial_does_not_reduce_automatic_api_coverage(self):
         text = (ROOT / ".github/workflows/api_test.yml").read_text()
