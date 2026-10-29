@@ -427,6 +427,13 @@ class WatchScheduler:
                         ctx=ctx,
                         instruction=task.instruction,
                     )
+                    if probed_checkpoint is not None:
+                        # Reuse the probed revision as an immutable download
+                        # target so GitAccessor.access() skips its own
+                        # ls-remote probe on the actual refresh.
+                        processor_kwargs["git_head_sha_hint"] = probed_checkpoint[
+                            "head_sha"
+                        ]
                     stored_checkpoint = getattr(task, "source_checkpoint", None) or {}
                     if (
                         probed_checkpoint is not None
@@ -551,6 +558,19 @@ class WatchScheduler:
                             # Persist the revision actually imported. ZIP downloads
                             # report their immutable target SHA; clone fallbacks
                             # report the checked-out local HEAD.
+                            #
+                            # Design intent: the checkpoint tracks the *source
+                            # revision* only. A non-None checkpoint means the
+                            # code was fetched and parsed successfully (the
+                            # accessor only emits resolved_head_sha after a
+                            # successful access()). Downstream semantic/embedding
+                            # queue failures are post-processing concerns with
+                            # their own retry paths; they must NOT block the
+                            # source checkpoint, otherwise an unchanged HEAD
+                            # would re-trigger a full clone+parse on every tick
+                            # just to retry indexing. Queue health is surfaced
+                            # via queue_status and does not gate source-version
+                            # skip logic.
                             await self._watch_manager.update_source_checkpoint(
                                 task.task_id,
                                 refreshed_checkpoint,

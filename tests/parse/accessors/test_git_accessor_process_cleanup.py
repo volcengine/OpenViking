@@ -34,7 +34,7 @@ CANCEL_BOUND_SECONDS = 5.0
 #   2. records helper/child PIDs into a marker file;
 #   3. blocks forever reading git's command stream (like a wedged helper).
 _BLOCKING_HELPER = """#!/bin/sh
-target="${{1#block::}}"
+target="${1#block::}"
 sleep 30 &
 child=$!
 printf 'helper=%s\\nchild=%s\\n' "$$" "$child" >> "$target"

@@ -170,19 +170,25 @@ class GitAccessor(DataAccessor):
                 if commit:
                     resolved_sha = commit
                 else:
-                    try:
-                        tracked = await asyncio.wait_for(
-                            self._resolve_tracked_head(repo_url, branch, git_env),
-                            timeout=self.DEFAULT_REMOTE_HEAD_TIMEOUT,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            f"[GitAccessor] git head probe timed out for {repo_url}; "
-                            "fetching ref by name without an exact-revision checkpoint"
-                        )
-                        tracked = None
-                    if tracked is not None:
-                        _, resolved_sha = tracked
+                    # Watch refresh path: reuse the revision the scheduler
+                    # already probed to avoid a second serial ls-remote.
+                    hint_sha = kwargs.get("git_head_sha_hint")
+                    if hint_sha:
+                        resolved_sha = hint_sha
+                    else:
+                        try:
+                            tracked = await asyncio.wait_for(
+                                self._resolve_tracked_head(repo_url, branch, git_env),
+                                timeout=self.DEFAULT_REMOTE_HEAD_TIMEOUT,
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                f"[GitAccessor] git head probe timed out for {repo_url}; "
+                                "fetching ref by name without an exact-revision checkpoint"
+                            )
+                            tracked = None
+                        if tracked is not None:
+                            _, resolved_sha = tracked
                 # Fetch an immutable per-SHA archive when resolved; fall back to
                 # the moving branch/commit name only when the probe was skipped.
                 download_ref = resolved_sha or commit or branch
