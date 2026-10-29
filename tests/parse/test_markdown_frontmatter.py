@@ -73,6 +73,27 @@ async def test_frontmatter_is_removed_only_when_explicitly_requested(
 
 
 @pytest.mark.asyncio
+async def test_crlf_frontmatter_metadata_is_extracted() -> None:
+    lf = "---\ntitle: Release Notes\nowner: team\n---\n# Guide\n\nbody text\n"
+    document = lf.replace("\n", "\r\n")
+
+    kept = await MarkdownParser()._compute_layout(
+        document, "viking://temp/test", source_path="/tmp/release-notes.md"
+    )
+
+    assert kept.meta["frontmatter"] == {"title": "Release Notes", "owner": "team"}
+    assert kept.doc_title == "Release Notes"
+    assert _written(kept) == [document]
+
+    removed = await MarkdownParser(extract_frontmatter=True)._compute_layout(
+        document, "viking://temp/test", source_path="/tmp/release-notes.md"
+    )
+
+    assert removed.meta["frontmatter"] == {"title": "Release Notes", "owner": "team"}
+    assert _written(removed) == ["# Guide\r\n\r\nbody text\r\n"]
+
+
+@pytest.mark.asyncio
 async def test_frontmatter_title_still_names_the_document_when_kept() -> None:
     document = "---\ntitle: Release Notes\n---\n\n# Guide\n\nbody text\n"
 
