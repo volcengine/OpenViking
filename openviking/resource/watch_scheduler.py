@@ -8,7 +8,7 @@ Provides scheduled task execution for watch tasks.
 
 import asyncio
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set
 
 from openviking.connector.auth import (
@@ -221,7 +221,7 @@ class WatchScheduler:
                 if self._watch_manager:
                     next_time = await self._watch_manager.get_next_execution_time()
                     if next_time is not None:
-                        now = datetime.now()
+                        now = datetime.now(timezone.utc)
                         # Floor at 1s: a due task that is still executing (or held by
                         # an in-flight first round) would otherwise spin this loop.
                         sleep_seconds = min(
