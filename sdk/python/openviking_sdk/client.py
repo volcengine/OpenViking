@@ -1426,7 +1426,9 @@ class AsyncHTTPClient:
         return self._handle_response_data(response).get("result", {})
 
     async def acl_get(self, uri: str) -> Dict[str, Any]:
-        response = await self._http.get("/api/v1/acl", params={"uri": VikingURI.normalize(uri)})
+        response = await self._request(
+            "GET", "/api/v1/acl", params={"uri": VikingURI.normalize(uri)}
+        )
         return self._handle_response_data(response).get("result", {})
 
     async def acl_set(
@@ -1443,14 +1445,16 @@ class AsyncHTTPClient:
             payload["entries"] = entries
         if acl_mode is not None:
             payload["acl_mode"] = acl_mode
-        response = await self._http.put(
+        response = await self._request(
+            "PUT",
             "/api/v1/acl",
             json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
     async def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/acl/grant",
             json={
                 "uri": VikingURI.normalize(uri),
@@ -1461,14 +1465,15 @@ class AsyncHTTPClient:
         return self._handle_response_data(response).get("result", {})
 
     async def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             "/api/v1/acl/revoke",
             json={"uri": VikingURI.normalize(uri), "principal": principal},
         )
         return self._handle_response_data(response).get("result", {})
 
     async def acl_delete(self, uri: str) -> Dict[str, Any]:
-        response = await self._http.request(
+        response = await self._request(
             "DELETE", "/api/v1/acl", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response_data(response).get("result", {})
