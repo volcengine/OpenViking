@@ -57,7 +57,7 @@ def test_compile_builtin_skill_uri(skill, valid):
         "viking://system/resources/wiki",
     ],
 )
-def test_compile_builtin_skill_namespace_is_source_only(target):
+def test_compile_rejects_system_target(target):
     from openviking.service.compile_service import CompileService
 
     CompileService._validate_target("viking://user/alice/skills")
@@ -65,6 +65,31 @@ def test_compile_builtin_skill_namespace_is_source_only(target):
 
     with pytest.raises(InvalidArgumentError, match="system namespace"):
         CompileService._validate_target(target)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "viking://system/compile/example-skills/llm-wiki",
+        "viking://system/memory/memory_templates/custom/qa/input",
+    ],
+)
+def test_compile_rejects_system_source(source):
+    from openviking.service.compile_service import CompileRequest, CompileService
+    from openviking_cli.utils.config.open_viking_config import CompileApiConfig
+
+    service = CompileService(CompileApiConfig(), ExternalTaskService(), SimpleNamespace())
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
+    request = CompileRequest.model_validate(
+        {
+            "from": [source],
+            "to": "viking://resources/wiki",
+            "skill": "viking://system/compile/example-skills/llm-wiki",
+        }
+    )
+
+    with pytest.raises(InvalidArgumentError, match="Compile source.*system namespace"):
+        service._normalize_request_uris(request, ctx)
 
 
 @pytest.mark.asyncio
@@ -92,6 +117,47 @@ async def test_compile_api_rejects_system_target_without_creating_task(service, 
 
     assert response.status_code == 400, response.text
     assert "system namespace" in response.text
+    after = {
+        task.task_id
+        for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+    }
+    assert after == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source",
+    [
+        "viking://system/compile/example-skills/llm-wiki",
+        "viking://system/memory/memory_templates/custom/qa/input",
+    ],
+)
+async def test_compile_api_rejects_system_source_without_creating_task(
+    source, service, app, client
+):
+    from openviking.server.auth import get_request_context
+    from openviking.service.task_tracker import get_task_tracker
+
+    ctx = RequestContext(user=service.user, role=Role.ADMIN, api_key="test-compile-key")
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    tracker = get_task_tracker()
+    before = {
+        task.task_id
+        for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)
+    }
+
+    response = await client.post(
+        "/api/v1/compile",
+        json={
+            "from": [source],
+            "to": "viking://resources/wiki",
+            "skill": "viking://system/compile/example-skills/llm-wiki",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "Compile source must not be in the system namespace" in response.text
     after = {
         task.task_id
         for task in await tracker.list_tasks(task_type="compile", limit=None, **owner)

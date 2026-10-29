@@ -817,6 +817,11 @@ class CompileService:
                 for index, source in enumerate(request.from_)
             )
         )
+        for source in sources:
+            if classify_uri(source).is_system:
+                raise InvalidArgumentError(
+                    "Compile source must not be in the system namespace"
+                )
         skill = request.skill.removesuffix("/SKILL.md")
         skill = validate_request_viking_uri(
             resolve_path_variables(skill), ctx, field_name="skill"
