@@ -16,7 +16,7 @@ relations.jsonl       # 每行一条有向边
 
 `relation` 是稳定、语言无关的机器谓词（`member_of`、`leads`、`located_in`……），`label` 是对应的本地化显示名（`属于`、`率领`、`位于`……），`entity_type` 用于可视化时的节点颜色、形状和过滤。图谱可以增量刷新：已有节点和边会被保留、合并证据，新知识追加进来。
 
-Skill 源码：[openviking/system_assets/compile/example-skills/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/knowledge-graph) · 可视化脚本：[examples/compile/graph-show/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/knowledge-graph)
+Skill 源码：[examples/compile/ov-compile-skills/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/knowledge-graph) · 可视化脚本：[examples/compile/graph-show/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/knowledge-graph)
 
 先确认[前置条件](01-overview.md#前置条件)，并在 OpenViking 仓库根目录运行以下命令。来源目录需替换为自己的资料目录。
 
@@ -30,7 +30,7 @@ ov ls -r viking://resources/journal
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill openviking/system_assets/compile/example-skills/knowledge-graph -p viking://agent/skills --wait
+ov add-skill examples/compile/ov-compile-skills/knowledge-graph -p viking://agent/skills --wait
 ov skills list
 # → viking://agent/skills/knowledge-graph
 ```
