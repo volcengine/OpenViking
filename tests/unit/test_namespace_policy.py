@@ -10,6 +10,7 @@ from openviking.core.namespace_policy import (
     SYSTEM_FIXED_DIRECTORIES,
     SYSTEM_MEMORY_CUSTOM_ROOT,
     SYSTEM_OFFICIAL_ASSET_ROOTS,
+    SYSTEM_VIKINGBOT_SKILLS_ROOT,
     NamespaceProcessingMode,
     is_system_custom_asset_uri,
     is_system_fixed_directory_uri,
@@ -22,7 +23,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 def test_system_namespace_uses_file_only_policy():
-    policy = namespace_policy_for_uri("viking://system/compile/example-skills/demo")
+    policy = namespace_policy_for_uri("viking://system/vikingbot/skills/compile-manager/SKILL.md")
 
     assert policy.processing_mode is NamespaceProcessingMode.FILE_ONLY
     assert policy.supports_acl is False
@@ -61,8 +62,10 @@ def test_fixed_and_official_system_roots_are_explicit():
     assert SYSTEM_MEMORY_CUSTOM_ROOT in SYSTEM_FIXED_DIRECTORIES
     assert SYSTEM_OFFICIAL_ASSET_ROOTS == {
         "viking://system/compile/example-skills",
+        "viking://system/vikingbot/skills",
         "viking://system/memory/memory_templates/builtin",
     }
+    assert SYSTEM_VIKINGBOT_SKILLS_ROOT in SYSTEM_FIXED_DIRECTORIES
     assert is_system_fixed_directory_uri("viking://system/memory/memory_templates/custom/")
     assert not is_system_fixed_directory_uri(
         "viking://system/memory/memory_templates/custom/team.yaml"

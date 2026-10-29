@@ -10,13 +10,16 @@ from functools import cached_property
 from pathlib import Path
 
 from openviking.core.namespace import uri_parts
-from openviking.core.namespace_constants import SYSTEM_ASSET_ROOT_MAPPINGS
+from openviking.core.namespace_constants import (
+    SYSTEM_ASSET_ROOT_MAPPINGS,
+    SYSTEM_VIKINGBOT_SKILLS_ROOT,
+)
 from openviking.core.namespace_policy import (
     SYSTEM_FIXED_DIRECTORIES,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
-from openviking.storage.viking_fs import VikingFS
+from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
 from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking_cli.exceptions import NotFoundError
 
@@ -68,13 +71,45 @@ class SystemAssetSynchronizer:
                 relative_path = source_path.relative_to(source_root).as_posix()
                 yield source_path, target_root, f"{target_root}/{relative_path}"
 
+    async def _remove_stale_assets(
+        self,
+        target_root: str,
+        expected_uris: set[str],
+        ctx: RequestContext,
+    ) -> int:
+        removed = 0
+        pending = [target_root]
+        while pending:
+            directory_uri = pending.pop()
+            entries = await self._viking_fs.ls(
+                directory_uri,
+                show_all_hidden=True,
+                node_limit=LS_ALL_NODES,
+                ctx=ctx,
+            )
+            for entry in entries:
+                uri = entry["uri"]
+                if entry.get("isDir"):
+                    if any(expected.startswith(f"{uri}/") for expected in expected_uris):
+                        pending.append(uri)
+                    else:
+                        await self._viking_fs.rm(uri, recursive=True, ctx=ctx, no_vector=True)
+                        removed += 1
+                elif uri not in expected_uris:
+                    await self._viking_fs.rm(uri, ctx=ctx, no_vector=True)
+                    removed += 1
+        return removed
+
     async def sync(self, ctx: RequestContext) -> int:
         root_ctx = replace(ctx, role=Role.ROOT, actor_peer_id=None)
         for uri in sorted(SYSTEM_FIXED_DIRECTORIES, key=lambda value: len(uri_parts(value))):
             await self._viking_fs.mkdir(uri, exist_ok=True, ctx=root_ctx)
 
+        managed_assets = list(self._iter_managed_assets())
+        expected_by_root = {target_root: set() for _, target_root in SYSTEM_ASSET_ROOT_MAPPINGS}
         pending_by_root: dict[str, list[dict[str, str]]] = {}
-        for source_path, target_root, target_uri in self._iter_managed_assets():
+        for source_path, target_root, target_uri in managed_assets:
+            expected_by_root[target_root].add(target_uri)
             expected = source_path.read_bytes()
             try:
                 current = await self._viking_fs.read_file_bytes(target_uri, ctx=root_ctx)
@@ -96,4 +131,10 @@ class SystemAssetSynchronizer:
                 operations=operations,
                 ctx=root_ctx,
             )
-        return sum(len(operations) for operations in pending_by_root.values())
+        changed = sum(len(operations) for operations in pending_by_root.values())
+        changed += await self._remove_stale_assets(
+            SYSTEM_VIKINGBOT_SKILLS_ROOT,
+            expected_by_root[SYSTEM_VIKINGBOT_SKILLS_ROOT],
+            root_ctx,
+        )
+        return changed

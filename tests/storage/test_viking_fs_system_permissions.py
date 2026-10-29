@@ -11,6 +11,7 @@ from openviking.core.namespace_policy import (
     SYSTEM_MEMORY_BUILTIN_ROOT,
     SYSTEM_MEMORY_CUSTOM_ROOT,
     SYSTEM_ROOT_URI,
+    SYSTEM_VIKINGBOT_SKILLS_ROOT,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction
@@ -40,6 +41,7 @@ def _fs(*, acl_manager=None) -> VikingFS:
         SYSTEM_ROOT_URI,
         f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/example.md",
         f"{SYSTEM_MEMORY_BUILTIN_ROOT}/default.yaml",
+        f"{SYSTEM_VIKINGBOT_SKILLS_ROOT}/compile-manager/SKILL.md",
         SYSTEM_MEMORY_CUSTOM_ROOT,
         CUSTOM_ASSET_URI,
     ],
@@ -66,13 +68,21 @@ def test_admin_can_manage_only_concrete_custom_assets(action):
     assert not fs._system_permission_allows(SYSTEM_MEMORY_CUSTOM_ROOT, admin, action)
     assert not fs._system_permission_allows(SYSTEM_MEMORY_BUILTIN_ROOT, admin, action)
     assert not fs._system_permission_allows(SYSTEM_EXAMPLE_SKILLS_ROOT, admin, action)
+    assert not fs._system_permission_allows(SYSTEM_VIKINGBOT_SKILLS_ROOT, admin, action)
 
 
 @pytest.mark.parametrize("action", [AclAction.WRITE, AclAction.MANAGE])
-def test_user_cannot_modify_system_assets(action):
+@pytest.mark.parametrize(
+    "uri",
+    [
+        CUSTOM_ASSET_URI,
+        f"{SYSTEM_VIKINGBOT_SKILLS_ROOT}/compile-manager/SKILL.md",
+    ],
+)
+def test_user_cannot_modify_system_assets(action, uri):
     fs = _fs()
 
-    assert not fs._system_permission_allows(CUSTOM_ASSET_URI, _ctx(Role.USER), action)
+    assert not fs._system_permission_allows(uri, _ctx(Role.USER), action)
 
 
 @pytest.mark.asyncio

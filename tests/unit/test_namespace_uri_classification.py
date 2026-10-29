@@ -107,7 +107,11 @@ def test_exact_memory_and_skill_root_detection():
     assert classify_uri(
         "viking://system/compile/example-skills/llm-wiki/SKILL.md"
     ).is_skill
+    assert classify_uri("viking://system/vikingbot/skills").is_skill_namespace
+    assert classify_uri("viking://system/vikingbot/skills/compile-manager").is_skill_root
+    assert classify_uri("viking://system/vikingbot/skills/compile-manager/SKILL.md").is_skill
     assert not classify_uri("viking://system/compile").is_skill
+    assert not classify_uri("viking://system/vikingbot").is_skill
     assert not classify_uri(
         "viking://system/compile/example-skills/llm-wiki/references"
     ).is_skill_root
