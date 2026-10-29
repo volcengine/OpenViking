@@ -680,7 +680,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             execute_started_at = time.perf_counter()
             if embedding_msg.queue_enqueued_at > 0:
                 queue_wait_ms = max((time.time() - embedding_msg.queue_enqueued_at) * 1000.0, 0.0)
-            inserted_data = embedding_msg.context_data
+            inserted_data = dict(embedding_msg.context_data)
+            inserted_data.pop("_write_source", None)  # Ignore sources in already queued messages.
+            inserted_data.pop("_write_lease", None)  # Ignore leases in already queued messages.
             logger.debug(
                 "Processing embedding message: %s action=%s",
                 self._embedding_delivery_log_context(embedding_msg),
@@ -923,9 +925,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         )
                     else:
                         result = await self._vikingdb.upsert(
-                            inserted_data,
-                            ctx=ctx,
-                            options=upsert_options,
+                            inserted_data, ctx=ctx, options=upsert_options
                         )
                     record_id = result
                     if record_id:

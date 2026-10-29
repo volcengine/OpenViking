@@ -161,15 +161,55 @@ async def _initialize_auth_plugin(
     logger.info("Auth plugin initialized: %s", effective_auth_mode)
 
 
+async def _initialize_ttl_adapter(
+    app: FastAPI,
+    service: OpenVikingService,
+    config: ServerConfig,
+) -> None:
+    """Wire built-in Redis TTL when explicitly enabled.
+
+    The default configuration installs no hook, starts no TTL worker and leaves
+    the internal TTL routes unregistered.
+    """
+    from openviking.ttl.wiring import build_ttl_adapter, install_ttl_hook, set_ttl_adapter
+
+    adapter = build_ttl_adapter(config.ttl_adapter)
+    set_ttl_adapter(adapter)
+    app.state.ttl_adapter = adapter
+    if adapter is None:
+        return
+    adapter.bind_runtime(service, app.state.api_key_manager)
+    service.configure_ttl(adapter)
+    viking_fs = service.viking_fs
+    if viking_fs is not None:
+        install_ttl_hook(viking_fs, adapter)
+    if not getattr(app.state, "ttl_routes_registered", False):
+        from openviking.ttl.internal import router as ttl_internal_router
+
+        app.include_router(ttl_internal_router)
+        app.state.ttl_routes_registered = True
+    logger.info("TTL adapter initialized")
+
+
 async def _initialize_runtime_state(
     app: FastAPI,
     service: OpenVikingService,
     config: ServerConfig,
 ) -> None:
     """Initialize service and auth dependencies before traffic is accepted."""
-    await service.initialize()
-    await service.apply_agent_evolution_config()
-    await _initialize_auth_plugin(app, service, config)
+    if config.ttl_adapter is not None and config.ttl_adapter.enabled:
+
+        async def install_ttl_hooks():
+            await _initialize_auth_plugin(app, service, config)
+            await _initialize_ttl_adapter(app, service, config)
+
+        await service.initialize(before_background_start=install_ttl_hooks)
+        await service.apply_agent_evolution_config()
+    else:
+        await service.initialize()
+        await service.apply_agent_evolution_config()
+        await _initialize_auth_plugin(app, service, config)
+        await _initialize_ttl_adapter(app, service, config)
     manager = getattr(app.state, "api_key_manager", None)
     if manager is not None and get_openviking_config().reconcile_system_assets_on_startup:
         account_count = await service.reconcile_system_assets(manager)

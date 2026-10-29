@@ -105,7 +105,9 @@ def warn_unknown_config_fields(
     """
     warn_unknown_fields(
         data=data,
-        valid_fields=set(model.model_fields) | (extra_valid_fields or set()),
+        valid_fields=set(model.model_fields)
+        | {field.alias for field in model.model_fields.values() if isinstance(field.alias, str)}
+        | (extra_valid_fields or set()),
         logger=logger,
         path_prefix=path_prefix,
     )

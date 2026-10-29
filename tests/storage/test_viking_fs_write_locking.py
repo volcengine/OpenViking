@@ -182,7 +182,11 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     )
     monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
 
+    # Notification failure cannot undo a committed append or keep its lease held.
+    hook = AsyncMock(side_effect=RuntimeError("registration unavailable"))
+    fs.set_post_write_hook(hook)
     await fs.append_file("viking://a.md", "+new")
+    hook.assert_awaited_once()
 
     assert fake.events[0] == ("ensure_parent", "/local/default/resources/a.md", None)
     assert fake.events[1][0] == "acquire"

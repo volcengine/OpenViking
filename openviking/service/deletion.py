@@ -323,6 +323,12 @@ class DeletionService:
             if scheduler is not None:
                 await run_to_completion(lambda: scheduler.delete_tasks(account_id, user_id))
             await run_to_completion(lambda: self._cancel_tasks(account_id, user_id))
+            if user_id is None:
+                from openviking.ttl.wiring import get_ttl_adapter
+
+                ttl = get_ttl_adapter()
+                if ttl is not None:
+                    await run_to_completion(lambda: ttl.delete_account(account_id))
             await run_to_completion(
                 lambda: tracker.delete_tasks(
                     account_id,

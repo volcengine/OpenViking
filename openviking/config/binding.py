@@ -79,6 +79,13 @@ def _validate_request(patch: dict, is_account: bool, creating: bool) -> None:
         patch = {**patch, "vectordb": dict(patch["vectordb"])}
         if "project" in patch["vectordb"]:
             patch["vectordb"]["project_name"] = patch["vectordb"].pop("project")
+    if isinstance(patch, dict) and isinstance(patch.get("ttl"), dict):
+        # ``global`` is a reserved word, so the model declares it as ``global_``
+        # with a ``global`` alias; translate the external name for validation
+        # only, mirroring the vectordb ``project`` alias above.
+        patch = {**patch, "ttl": dict(patch["ttl"])}
+        if "global" in patch["ttl"]:
+            patch["ttl"]["global_"] = patch["ttl"].pop("global")
     validate_patch(model, patch, creating=creating)
 
 

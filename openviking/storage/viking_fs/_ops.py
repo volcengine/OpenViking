@@ -3,7 +3,9 @@
 """Core filesystem operations mixin for VikingFS."""
 
 import asyncio
+import inspect
 import math
+import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -189,7 +191,33 @@ class _OpsMixin:
             data = data.encode("utf-8")
 
         # Encryption (when configured) happens inside the ragfs layer keyed by account_id.
-        return await self._async_agfs.write(path, data)
+        result = await self._async_agfs.write(path, data)
+        await self._notify_post_write(uri, ctx)
+        return result
+
+    async def _notify_post_write(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext],
+        written_at_ms: Optional[int] = None,
+    ) -> None:
+        """Best-effort notification for optional product adapters.
+
+        The storage write is already committed when this runs, so observer
+        failures are logged and must not turn a successful write into an API
+        failure. A disabled hook returns before reading the clock or doing I/O.
+        """
+        hook = getattr(self, "_post_write_hook", None)
+        if hook is None:
+            return
+        if written_at_ms is None:
+            written_at_ms = time.time_ns() // 1_000_000
+        try:
+            result = hook(uri, ctx, written_at_ms)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.exception("[VikingFS] Post-write hook failed for %s", uri)
 
     async def mkdir(
         self,
@@ -268,6 +296,22 @@ class _OpsMixin:
                 logger.warning(f"[VikingFS] Failed to count nodes before delete: {e}")
                 return 0
 
+        async def _finish_missing_delete() -> Dict[str, Any]:
+            """Clean orphan index records for an idempotent delete."""
+            if no_vector:
+                return {"estimated_deleted_count": 0}
+            uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
+            uris_to_delete.append(target_uri)
+            real_ctx = self._ctx_or_default(ctx)
+            estimated_count = await _estimate_deleted_count(path, real_ctx)
+            vector_store = self._get_vector_store()
+            if recursive and vector_store is not None:
+                await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
+            else:
+                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
+            return {"estimated_deleted_count": estimated_count}
+
         # Check existence and determine lock strategy
         try:
             stat = await self._async_agfs.stat(path)
@@ -280,16 +324,7 @@ class _OpsMixin:
                 raise
             if recursive:
                 await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
-            if no_vector:
-                return {"estimated_deleted_count": 0}
-            # Path does not exist: clean up any orphan index records and return
-            uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
-            uris_to_delete.append(target_uri)
-            real_ctx = self._ctx_or_default(ctx)
-            estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-            logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
-            return {"estimated_deleted_count": estimated_count}
+            return await _finish_missing_delete()
 
         if is_dir:
             await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
@@ -315,6 +350,17 @@ class _OpsMixin:
                 raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
         try:
+            if lease_ref is None and lease is not None:
+                try:
+                    await self._async_agfs.stat(path)
+                except Exception as exc:
+                    if is_not_found_error(exc):
+                        return await _finish_missing_delete()
+                    mapped = map_exception(exc, resource=uri)
+                    if mapped is not None:
+                        raise mapped from exc
+                    raise
+
             check_descendant_acl = (
                 is_dir
                 and (not no_vector or is_acl_uri(target_uri))
@@ -337,7 +383,11 @@ class _OpsMixin:
             if not no_vector:
                 real_ctx = self._ctx_or_default(ctx)
                 estimated_count = await _estimate_deleted_count(path, real_ctx)
-                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+                vector_store = self._get_vector_store()
+                if recursive and vector_store is not None:
+                    await vector_store.delete_uris(real_ctx, [target_uri], recursive=True)
+                else:
+                    await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             try:
                 result = await self._async_agfs.rm(
                     path,
@@ -2045,6 +2095,7 @@ class _OpsMixin:
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        await self._notify_post_write(uri, ctx)
 
     async def read_file(
         self,
@@ -2197,6 +2248,7 @@ class _OpsMixin:
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        await self._notify_post_write(uri, ctx)
 
     async def append_file(
         self,
@@ -2210,6 +2262,7 @@ class _OpsMixin:
         path = self._uri_to_path(uri, ctx=ctx)
 
         owned_lease = None
+        written_at_ms: Optional[int] = None
         try:
             await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
             lease = lease_ref
@@ -2239,6 +2292,8 @@ class _OpsMixin:
                 final_content,
                 fs_ctx=fs_ctx,
             )
+            if getattr(self, "_post_write_hook", None) is not None:
+                written_at_ms = time.time_ns() // 1_000_000
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
@@ -2249,6 +2304,8 @@ class _OpsMixin:
         finally:
             if owned_lease is not None:
                 await self._async_agfs.pathlock_release(owned_lease)
+        if written_at_ms is not None:
+            await self._notify_post_write(uri, ctx, written_at_ms)
 
     async def ls(
         self,

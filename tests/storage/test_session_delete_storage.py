@@ -12,7 +12,9 @@ from openviking.core.namespace import resolve_request_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.viking_fs import VikingFS
+from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -151,6 +153,99 @@ async def test_session_rm_reuses_outer_lease_without_releasing_it(storage):
     assert storage.agfs.rm.await_args.kwargs["fs_ctx"]["lease_ref"] == "outer-lease"
 
 
+async def test_session_rm_rechecks_existence_after_waiting_for_tree_lock(storage):
+    storage.agfs.stat.side_effect = [
+        {"isDir": True},
+        FileNotFoundError(SESSION_PATH),
+    ]
+
+    result = await storage.fs.rm(SESSION_URI, recursive=True, ctx=storage.ctx, no_vector=True)
+
+    assert result == {"estimated_deleted_count": 0}
+    storage.agfs.pathlock_acquire_tree.assert_awaited_once_with(SESSION_PATH)
+    storage.agfs.rm.assert_not_awaited()
+    storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)
+
+
+async def test_ttl_recycles_under_native_tree_lease_and_retries_failed_deletion(
+    tmp_path, monkeypatch
+):
+    import fakeredis.aioredis
+
+    from openviking.scheduling.expiry.api import CallbackRequest, ItemIdentity
+    from openviking.ttl.adapter import TTLBackfillRequest, TTLRecycleRequest
+    from openviking.ttl.runtime import DirectoryTTL
+    from openviking.ttl.wiring import install_ttl_hook
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+    from openviking_cli.exceptions import NotFoundError
+    from openviking_cli.utils.config.agfs_config import AGFSConfig
+    from openviking_cli.utils.config.ttl_config import TTLConfig
+
+    agfs = create_agfs_client(
+        RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="local"))
+    )
+    vectors = SimpleNamespace(count=AsyncMock(return_value=1), delete_uris=AsyncMock())
+    fs = VikingFS(agfs=agfs, vector_store=vectors)
+    engine = DirectoryTTL(resource_id="recycle-contract", batch_interval=0, delete_interval=0)
+    engine.fs = fs
+    engine.policies = AsyncMock(return_value=(TTLConfig(sessions=7, user_events=7), None))
+    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    ctx = engine.context("account")
+    session = "viking://user/alice/sessions/fresh"
+    event = "viking://user/alice/memories/events/2020/01/01"
+    request = TTLRecycleRequest(engine.resource_id, ctx.account_id)
+    callback = CallbackRequest(ItemIdentity("ttl", ctx.account_id, "_system", "maintenance"))
+    try:
+        # A historical Session missed incremental registration; backfill must recover it.
+        await fs.write_file(session + "/messages.jsonl", "recent message", ctx=ctx)
+        install_ttl_hook(fs, engine)
+        await engine.start()
+        # Soft TTL permits writing old Events until the background deletion happens.
+        await fs.write_file(event + "/event.md", "historical event", ctx=ctx)
+        await engine._registration_task
+        prefix = engine.prefix(ctx.account_id)
+        event_score = await engine.redis.zscore(prefix + "user_events", event)
+        assert event_score is not None
+        await engine.register_initial_backfill(
+            TTLBackfillRequest(
+                engine.resource_id,
+                ctx.account_id,
+                ("viking://user/alice/sessions", "viking://user/alice/memories/events"),
+            )
+        )
+        assert (await engine.recycle_due(request)).deleted == 0
+        assert await fs.read_file(event + "/event.md", ctx=ctx) == "historical event"
+        monkeypatch.setattr(
+            "openviking.ttl.runtime.time.time_ns", lambda: engine._recycle_after_ms * 1_000_000
+        )
+        await engine.handle(callback)
+        await engine._task
+        assert (await engine.read_initial(ctx.account_id))["done"]
+        assert await engine.redis.zscore(prefix + "sessions", session) is not None
+
+        # The file's fresh ModTime wins over a stale Session index entry.
+        await engine.redis.zadd(prefix + "sessions", {session: 1})
+        vectors.delete_uris.side_effect = OSError("vector deletion unavailable")
+        failed = await engine.recycle_due(request)
+        assert failed.failed == 1 and failed.skipped >= 1
+        assert await engine.redis.zscore(prefix + "sessions", session) > 1
+        assert await engine.redis.zscore(prefix + "user_events", event) == event_score
+        assert await fs.read_file(event + "/event.md", ctx=ctx) == "historical event"
+        assert (await fs._async_agfs.pathlock_observe())["active_locks"] == 0
+
+        vectors.delete_uris.side_effect = None
+        recycled = await engine.recycle_due(request)
+        assert recycled.deleted == 1 and recycled.failed == 0
+        with pytest.raises(NotFoundError):
+            await fs.stat(event, ctx=ctx)
+        assert await engine.redis.zscore(prefix + "user_events", event) is None
+        assert await fs.read_file(session + "/messages.jsonl", ctx=ctx) == "recent message"
+        assert (await fs._async_agfs.pathlock_observe())["active_locks"] == 0
+    finally:
+        await engine.aclose()
+        agfs.close()
+
+
 async def test_session_rm_preserves_retryable_busy_error(storage):
     storage.agfs.pathlock_acquire_tree.side_effect = LockAcquisitionError("path is locked")
 
@@ -186,6 +281,12 @@ async def test_session_rm_preserves_namespace_and_path_validation(storage, acl_e
 async def test_default_rm_still_cleans_vector_records(storage, missing, uri):
     child_uri = f"{uri}/document.md"
     storage.fs._collect_uris.return_value = [child_uri]
+    delete = AsyncMock()
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend._get_backend_for_context = AsyncMock(
+        return_value=SimpleNamespace(delete_by_filter=delete)
+    )
+    storage.vector.delete_uris = backend.delete_uris
     if missing:
         storage.agfs.stat.side_effect = FileNotFoundError(RESOURCE_PATH)
 
@@ -195,7 +296,14 @@ async def test_default_rm_still_cleans_vector_records(storage, missing, uri):
     storage.fs._collect_uris.assert_awaited_once()
     storage.vector.count.assert_awaited_once()
     assert storage.vector.count.await_args.kwargs["ctx"] == storage.ctx
-    storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [child_uri, uri])
+    delete.assert_awaited_once_with(
+        And(
+            [
+                Eq("account_id", storage.ctx.account_id),
+                Or([Eq("uri", uri), PathScope("uri", uri, depth=-1)]),
+            ]
+        )
+    )
     if missing:
         storage.agfs.rm.assert_not_awaited()
     else:
@@ -240,5 +348,7 @@ async def test_resource_rm_still_checks_descendant_manage_acl(storage, no_vector
         storage.vector.delete_uris.assert_not_awaited()
     else:
         storage.vector.count.assert_awaited_once()
-        storage.vector.delete_uris.assert_awaited_once_with(storage.ctx, [child_uri, RESOURCE_URI])
+        storage.vector.delete_uris.assert_awaited_once_with(
+            storage.ctx, [RESOURCE_URI], recursive=True
+        )
     storage.agfs.pathlock_release.assert_awaited_once_with(storage.lease)

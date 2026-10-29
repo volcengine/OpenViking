@@ -161,13 +161,14 @@ async def update_user_config(
     uri = user_config_uri(ctx)
     async with _user_config_lock(viking_fs, uri, ctx) as handle:
         current = await read_user_config(viking_fs, ctx)
-        before = current.model_dump()
+        before = current.model_dump(by_alias=True)
         result = updater(current)
         runtime = await validate_add_targets(current.add_targets, ctx=ctx, viking_fs=viking_fs)
         current.add_targets.resource_uri = runtime.resource_uri
         current.add_targets.skill_uri = runtime.skill_uri
         validate_user_memory_policy(current.memory_policy)
-        if current.model_dump() != before:
+        if current.model_dump(by_alias=True) != before:
+            await _prepare_ttl_change(ctx, UserConfig.model_validate(before), current)
             before_content = json.dumps(before, ensure_ascii=False, sort_keys=True)
             await viking_fs.write_file(
                 user_config_backup_uri(ctx),
@@ -178,7 +179,7 @@ async def update_user_config(
                 await viking_fs.write_file(
                     uri,
                     json.dumps(
-                        current.model_dump(exclude_none=True),
+                        current.model_dump(by_alias=True, exclude_none=True),
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
@@ -193,7 +194,47 @@ async def update_user_config(
                     lease_ref=handle,
                 )
                 raise
+            if before.get("ttl") != current.model_dump(by_alias=True).get("ttl"):
+                await _publish_ttl_change(ctx, current)
         return result
+
+
+async def _prepare_ttl_change(ctx: RequestContext, before: UserConfig, after: UserConfig) -> None:
+    if before.ttl == after.ttl:
+        return
+    from openviking.ttl.wiring import get_ttl_adapter, ttl_config_supported
+    from openviking_cli.exceptions import UnimplementedError
+
+    if not ttl_config_supported():
+        raise UnimplementedError("Redis-backed TTL is not enabled in this deployment.")
+    await get_ttl_adapter().prepare_user_configuration(ctx, before.ttl, after.ttl)
+
+
+async def _publish_ttl_change(ctx: RequestContext, config: UserConfig) -> None:
+    from openviking.ttl.wiring import get_ttl_adapter
+
+    adapter = get_ttl_adapter()
+    if adapter is not None:
+        await adapter.publish_user_configuration(ctx, config.ttl)
+
+
+async def patch_user_config(viking_fs: VikingFS, ctx: RequestContext, patch: dict) -> UserConfig:
+    """Apply a sparse settings patch through the existing locked write lifecycle."""
+    from openviking.config.merge import apply_three_state_patch
+
+    def update(current: UserConfig) -> UserConfig:
+        payload = current.model_dump(by_alias=True, exclude_none=True)
+        if "ttl" in patch:
+            payload = apply_three_state_patch(payload, {"ttl": patch["ttl"]})
+        if "memory_policy" in patch:
+            # Keep the existing whole-policy replacement semantics.
+            payload["memory_policy"] = patch["memory_policy"]
+        candidate = _user_config_from_payload(payload)
+        current.memory_policy = candidate.memory_policy
+        current.ttl = candidate.ttl
+        return current
+
+    return await update_user_config(viking_fs, ctx, update)
 
 
 async def write_user_config(
@@ -207,16 +248,18 @@ async def write_user_config(
     validate_user_memory_policy(user_config.memory_policy)
     uri = user_config_uri(ctx)
     async with _user_config_lock(viking_fs, uri, ctx) as handle:
+        await _prepare_ttl_change(ctx, UserConfig(), user_config)
         await viking_fs.write_file(
             uri,
             json.dumps(
-                user_config.model_dump(exclude_none=True),
+                user_config.model_dump(by_alias=True, exclude_none=True),
                 ensure_ascii=False,
                 sort_keys=True,
             ),
             ctx=ctx,
             lease_ref=handle,
         )
+        await _publish_ttl_change(ctx, user_config)
     return runtime
 
 
@@ -224,7 +267,8 @@ async def delete_user_config(viking_fs: VikingFS, ctx: RequestContext) -> None:
     try:
         await viking_fs.rm(user_config_uri(ctx), ctx=ctx)
     except (NotFoundError, FileNotFoundError):
-        return
+        pass
+    await _publish_ttl_change(ctx, UserConfig())
 
 
 async def read_user_add_targets(

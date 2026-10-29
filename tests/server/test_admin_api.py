@@ -2155,19 +2155,24 @@ async def test_create_user_paths_accept_initial_user_config(
     assert bob_settings.resource_uri == "viking://user/bob/resources/bob"
 
 
-async def test_user_memory_policy_can_be_initialized_and_hot_updated(
-    lightweight_admin_client: httpx.AsyncClient,
-    lightweight_admin_app: FastAPI,
+async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updates(
+    lightweight_admin_client, lightweight_admin_app, monkeypatch
 ):
+    import fakeredis.aioredis
+
+    from openviking.ttl import wiring
+    from openviking.ttl.runtime import DirectoryTTL
+    from openviking_cli.utils.config.open_viking_config import set_openviking_config
+
+    client = lightweight_admin_client
     acct = _uid()
-    create_account = await lightweight_admin_client.post(
+    created = await client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    assert create_account.status_code == 200, create_account.text
-
-    create_user = await lightweight_admin_client.post(
+    assert created.status_code == 200, created.text
+    created = await client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={
             "user_id": "bob",
@@ -2176,80 +2181,107 @@ async def test_user_memory_policy_can_be_initialized_and_hot_updated(
         },
         headers=root_headers(),
     )
-    assert create_user.status_code == 200, create_user.text
-
-    get_settings = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
-        headers=root_headers(),
-    )
-    assert get_settings.status_code == 200, get_settings.text
-    assert get_settings.json()["result"]["memory_policy"] == {
-        "self": {"enabled": True},
-        "peer": {"enabled": True},
-        "working_memory": {"enabled": False},
-        "memory_types": ["profile"],
-    }
-
-    patch_settings = await lightweight_admin_client.patch(
-        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
-        json={"memory_policy": {"memory_types": ["experiences"]}},
-        headers=root_headers(),
-    )
-    assert patch_settings.status_code == 200, patch_settings.text
-    memory_policy = patch_settings.json()["result"]["memory_policy"]
-    assert memory_policy["memory_types"] == [
-        "cases",
-        "experiences",
-        "trajectories",
-    ]
-
-    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
-    persisted = await read_user_config(
-        viking_fs,
-        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
-    )
-    assert persisted.memory_policy["memory_types"] == [
-        "cases",
-        "experiences",
-        "trajectories",
-    ]
+    assert created.status_code == 200, created.text
+    url = f"/api/v1/admin/accounts/{acct}/users/bob/settings"
+    service = lightweight_admin_app.state.fake_service
+    fs = service.viking_fs
     user_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
-    backup = json.loads(viking_fs.files[user_config_backup_uri(user_ctx)])
-    assert backup["memory_policy"]["memory_types"] == ["profile"]
+    monkeypatch.setattr(wiring, "_adapter", None)
+    before = dict(fs.files)
+    rejected = await client.patch(url, json={"ttl": {"sessions": 7}}, headers=root_headers())
+    assert rejected.status_code == 501 and fs.files == before
 
-    writes_before_noop = len(viking_fs.writes)
-    noop_patch = await lightweight_admin_client.patch(
-        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
-        json={"memory_policy": persisted.memory_policy},
-        headers=root_headers(),
-    )
-    assert noop_patch.status_code == 200, noop_patch.text
-    assert len(viking_fs.writes) == writes_before_noop
+    engine = DirectoryTTL(resource_id="settings-contract", timezone_name="UTC")
+    engine.bind_runtime(service, lightweight_admin_app.state.api_key_manager)
+    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr(wiring, "_adapter", engine)
+    previous_config = get_openviking_config()
+    try:
+        await service.runtime_config_manager.patch_cluster({"ttl": {"global": 60, "sessions": 30}})
+        configured = await client.patch(
+            f"/api/v1/admin/accounts/{acct}/configuration",
+            json={"settings": {"ttl": {"global": 45, "peer_events": 14}}},
+            headers=root_headers(),
+        )
+        assert configured.status_code == 200, configured.text
+        patched = await client.patch(
+            url,
+            json={
+                "memory_policy": {"memory_types": ["experiences"]},
+                "ttl": {"sessions": 7, "peer_events": 3, "user_events": "disabled"},
+            },
+            headers=root_headers(),
+        )
+        assert patched.status_code == 200, patched.text
+        settings = (await client.get(url, headers=root_headers())).json()["result"]
+        assert settings["ttl"] == {"sessions": 7, "peer_events": 3, "user_events": "disabled"}
+        assert settings["memory_policy"]["memory_types"] == ["cases", "experiences", "trajectories"]
+        persisted = await read_user_config(fs, user_ctx)
+        assert persisted.ttl.sessions == 7
+        assert persisted.memory_policy["memory_types"] == settings["memory_policy"]["memory_types"]
+        backup = json.loads(fs.files[user_config_backup_uri(user_ctx)])
+        assert backup["memory_policy"]["memory_types"] == ["profile"]
 
-    lightweight_admin_app.state.config.user_config_defaults = UserConfig(
-        memory_policy={"memory_types": ["events"]}
-    )
-    reset_settings = await lightweight_admin_client.patch(
-        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
-        json={"memory_policy": None},
-        headers=root_headers(),
-    )
-    assert reset_settings.status_code == 200, reset_settings.text
-    assert reset_settings.json()["result"]["memory_policy"] == {
-        "self": {"enabled": True},
-        "peer": {"enabled": True},
-        "working_memory": {"enabled": False},
-        "memory_types": ["events"],
-    }
+        first_peer = "viking://user/bob/peers/first/memories/events/2026/01/01"
+        second_peer = "viking://user/bob/peers/second/memories/events/2026/01/01"
+        user_event = "viking://user/bob/memories/events/2026/01/01"
+        assert await engine.resolve_expires_at([first_peer, second_peer, user_event], user_ctx) == {
+            first_peer: "2026-01-04T00:00:00Z",
+            second_peer: "2026-01-04T00:00:00Z",
+            user_event: None,
+        }
+        queried = await client.get(
+            f"/api/v1/admin/accounts/{acct}/configuration",
+            params={"path": "viking://user/bob/peers"},
+            headers=root_headers(),
+        )
+        assert queried.status_code == 200 and queried.json()["result"]["effective_policy"] == 3
 
-    persisted = await read_user_config(viking_fs, user_ctx)
-    assert persisted.memory_policy is None
-    backup = json.loads(viking_fs.files[user_config_backup_uri(user_ctx)])
-    assert backup["memory_policy"]["memory_types"] == [
-        "cases",
-        "experiences",
-        "trajectories",
-    ]
+        writes_before_noop = len(fs.writes)
+        noop = await client.patch(
+            url, json={"memory_policy": persisted.memory_policy}, headers=root_headers()
+        )
+        assert noop.status_code == 200 and len(fs.writes) == writes_before_noop
+        patched = await client.patch(
+            url, json={"ttl": {"sessions": None, "peer_events": "disabled"}}, headers=root_headers()
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["result"]["ttl"] == {
+            "peer_events": "disabled",
+            "user_events": "disabled",
+        }
+        assert (await engine.policy(acct, "viking://user/bob/sessions")).days == 30
+        assert not (await engine.policy(acct, first_peer)).enabled
+        assert patched.json()["result"]["memory_policy"] == settings["memory_policy"]
+        assert json.loads(fs.files[user_config_backup_uri(user_ctx)])["ttl"]["sessions"] == 7
+
+        # Enabling retention must persist recovery intent before changing UserConfig.
+        before = dict(fs.files)
+        with monkeypatch.context() as failure:
+            failure.setattr(engine, "client", AsyncMock(side_effect=OSError("Redis unavailable")))
+            rejected = await client.patch(
+                url, json={"ttl": {"user_events": 7}}, headers=root_headers()
+            )
+        assert rejected.status_code == 503 and fs.files == before
+        cleared = await client.patch(url, json={"ttl": None}, headers=root_headers())
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["result"]["ttl"] is None
+        assert cleared.json()["result"]["memory_policy"] == settings["memory_policy"]
+        assert (await engine.policy(acct, first_peer)).days == 14
+
+        lightweight_admin_app.state.config.user_config_defaults = UserConfig(
+            memory_policy={"memory_types": ["events"]}
+        )
+        reset = await client.patch(url, json={"memory_policy": None}, headers=root_headers())
+        assert reset.status_code == 200, reset.text
+        assert reset.json()["result"]["memory_policy"]["memory_types"] == ["events"]
+        assert (await read_user_config(fs, user_ctx)).memory_policy is None
+        assert json.loads(fs.files[user_config_backup_uri(user_ctx)])["memory_policy"][
+            "memory_types"
+        ] == ["cases", "experiences", "trajectories"]
+    finally:
+        set_openviking_config(previous_config)
+        await engine.aclose()
 
 
 async def test_user_memory_policy_uses_server_default_without_user_override(
@@ -2601,13 +2633,15 @@ async def test_delete_account(
             assert (await manager.resolve_identity(replacement_key)).user_id == "bob"
 
 
-async def test_delete_account_retries_when_runtime_config_cleanup_fails(
-    admin_client: httpx.AsyncClient,
-    admin_service: OpenVikingService,
-    admin_app: FastAPI,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
+    admin_client, admin_service, admin_app, monkeypatch
 ):
-    """Config cleanup failure keeps the deletion fence and can be retried."""
+    import fakeredis.aioredis
+
+    from openviking.scheduling.expiry.api import CallbackRequest, ItemIdentity
+    from openviking.ttl import wiring
+    from openviking.ttl.runtime import DirectoryTTL
+
     acct = _uid()
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
@@ -2615,41 +2649,61 @@ async def test_delete_account_retries_when_runtime_config_cleanup_fails(
         headers=root_headers(),
     )
     user_key = resp.json()["result"]["user_key"]
-    runtime_config = admin_service.runtime_config_manager
+    engine = DirectoryTTL(resource_id="account-cleanup")
+    engine.bind_runtime(admin_service, admin_app.state.api_key_manager)
+    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    scheduler = Mock(report=AsyncMock(), unregister=AsyncMock())
+    engine.install_expiry(scheduler)
+    monkeypatch.setattr(wiring, "_adapter", engine)
+    prefix = engine.prefix(acct)
+    other = engine.prefix("other") + "sessions"
+    await engine.redis.zadd(prefix + "sessions", {"viking://user/alice/sessions/s": 1})
+    await engine.redis.hset(prefix + "backfill:initial", "roots", "[]")
+    await engine.redis.set(prefix + "backfill:initial:done", "1")
+    await engine.redis.zadd(other, {"viking://user/alice/sessions/kept": 1})
+    unlink = engine.redis.unlink
+    monkeypatch.setattr(engine.redis, "unlink", AsyncMock(side_effect=OSError("Redis unavailable")))
     delete_config = AsyncMock(side_effect=OSError("provider unavailable"))
-    monkeypatch.setattr(runtime_config, "delete_account", delete_config)
+    monkeypatch.setattr(admin_service.runtime_config_manager, "delete_account", delete_config)
+    try:
+        resp = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
+        assert resp.status_code == 202
+        failed = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
+        assert failed["status"] == "failed" and "Redis unavailable" in failed["error"]
+        assert await engine.redis.zcard(prefix + "sessions") == 1
+        denied = await admin_client.get(
+            "/api/v1/fs/ls?uri=viking://", headers={"X-API-Key": user_key}
+        )
+        assert denied.status_code == 401
+        assert await admin_app.state.api_key_manager.get_deletion(acct) is not None
+        conflict = await admin_client.post(
+            "/api/v1/admin/accounts",
+            json={"account_id": acct, "admin_user_id": "replacement"},
+            headers=root_headers(),
+        )
+        assert conflict.status_code == 409
 
-    resp = await admin_client.delete(
-        f"/api/v1/admin/accounts/{acct}",
-        headers=root_headers(),
-    )
-    assert resp.status_code == 202
-    failed = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
-    assert failed["status"] == "failed"
-    assert "provider unavailable" in failed["error"]
-    denied = await admin_client.get(
-        "/api/v1/fs/ls?uri=viking://",
-        headers={"X-API-Key": user_key},
-    )
-    assert denied.status_code == 401
-    assert await admin_app.state.api_key_manager.get_deletion(acct) is not None
+        monkeypatch.setattr(engine.redis, "unlink", unlink)
+        retry = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
+        failed = await _wait_for_task(admin_client, retry.json()["result"]["task_id"])
+        assert failed["status"] == "failed" and "provider unavailable" in failed["error"]
+        assert await admin_app.state.api_key_manager.get_deletion(acct) is not None
+        delete_config.side_effect = None
+        retry = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
+        completed = await _wait_for_task(admin_client, retry.json()["result"]["task_id"])
+        assert completed["status"] == "completed"
+        assert await admin_app.state.api_key_manager.get_deletion(acct) is None
+        assert delete_config.await_count == 2
+        assert not [key async for key in engine.redis.scan_iter(match=prefix + "*")]
+        assert await engine.redis.zcard(other) == 1
 
-    conflict = await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "replacement"},
-        headers=root_headers(),
-    )
-    assert conflict.status_code == 409
-
-    delete_config.side_effect = None
-    retry = await admin_client.delete(
-        f"/api/v1/admin/accounts/{acct}",
-        headers=root_headers(),
-    )
-    completed = await _wait_for_task(admin_client, retry.json()["result"]["task_id"])
-    assert completed["status"] == "completed"
-    assert await admin_app.state.api_key_manager.get_deletion(acct) is None
-    assert delete_config.await_count == 2
+        # A delivery already in flight cannot revive maintenance for the deleted account.
+        callback = CallbackRequest(ItemIdentity("ttl", acct, "_system", "maintenance"))
+        assert (await engine.handle(callback)).reason == "account_deleted"
+        scheduler.report.assert_not_awaited()
+        assert not [key async for key in engine.redis.scan_iter(match=prefix + "*")]
+    finally:
+        await engine.aclose()
 
 
 async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
