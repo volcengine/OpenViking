@@ -6,7 +6,7 @@ on:
     branches: [ main, develop ]
     paths-ignore:
       - 'docs/**'
-      - '**.md'
+      - 'bot/docs/**'
       - 'LICENSE'
       - 'CONTRIBUTING.md'
       - '**.png'

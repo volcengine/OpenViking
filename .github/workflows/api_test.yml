@@ -10,7 +10,7 @@ on:
       - 'develop'
     paths-ignore:
       - 'docs/**'
-      - '**.md'
+      - 'bot/docs/**'
       - 'LICENSE'
       - 'CONTRIBUTING.md'
       - '**.png'
@@ -78,6 +78,8 @@ jobs:
           retention-days: 1
 
   cuvs-tests:
+    # Preserve the caller ID and _test_lite job name: the required check context
+    # stays "cuvs-tests / Lite Test (ubuntu-24.04, 3.11)".
     needs: [prepare, native-runtime]
     if: needs.prepare.outputs.cuvs_changed == 'true'
     uses: ./.github/workflows/_test_lite.yml

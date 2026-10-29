@@ -33,9 +33,10 @@ def plan(paths, full=False):
     # Keep unfamiliar paths on the safe side: only known independent trees
     # bypass API tests. Added/removed/renamed paths are all included in the diff.
     independent = re.compile(
-        r"^(docs/|sdk/|integrations/frameworks/|agent-plugins/|npm/|"
+        r"^(docs/|bot/docs/|sdk/|integrations/frameworks/|agent-plugins/|npm/|"
         r"examples/[^/]*(plugin|extension)[^/]*/|examples/memory-plugin-shared/)"
-        r"|(\.md|\.png|\.jpg|\.jpeg|\.gif|\.svg)$"
+        r"|^(README(?:\.[^/]+)?|CONTRIBUTING|SECURITY|LICENSE)\.md$"
+        r"|(\.png|\.jpg|\.jpeg|\.gif|\.svg)$"
     )
     api = full or any(not independent.search(path) for path in paths)
     return {

@@ -1,6 +1,8 @@
 """Dependency-free tests for routing and artifact compatibility boundaries."""
 
+import fnmatch
 import io
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -10,6 +12,8 @@ from unittest.mock import patch
 
 import ci_plan
 import native_bundle
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class PlanTests(unittest.TestCase):
@@ -80,6 +84,30 @@ class PlanTests(unittest.TestCase):
         self.assertTrue(result["sdk_python_changed"])
         self.assertTrue(result["api_changed"])
 
+    def test_runtime_markdown_keeps_api_tests(self):
+        for path in (
+            "openviking/system_assets/compile/example-skills/daily-report/SKILL.md",
+            "bot/workspace/SOUL.md",
+            "bot/workspace/skills/weather/SKILL.md",
+            "openviking/prompts/new-template.md",
+            "new-runtime/prompts/template.md",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(ci_plan.plan([path])["api_changed"])
+
+    def test_known_documentation_skips_api_tests(self):
+        for path in (
+            "README.md",
+            "README.zh-CN.md",
+            "CONTRIBUTING.md",
+            "SECURITY.md",
+            "docs/zh/concepts/09-transaction.md",
+            "bot/docs/en/concepts/01-architecture.md",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(ci_plan.plan([path])["api_changed"])
+        self.assertTrue(ci_plan.plan(["README.md", "bot/workspace/SOUL.md"])["api_changed"])
+
     def test_non_pr_events_keep_full_coverage(self):
         result = ci_plan.plan([], full=True)
         self.assertTrue(all(value for key, value in result.items() if key != "wheel_os"))
@@ -113,6 +141,73 @@ class PlanTests(unittest.TestCase):
             paths = git("diff", "--name-only", "--no-renames", f"{base}...HEAD").splitlines()
             self.assertIn("setup.py", paths)
             self.assertTrue(ci_plan.plan(paths)["deps_changed"])
+
+
+class WorkflowContractTests(unittest.TestCase):
+    def test_runtime_markdown_reaches_workflow_planner(self):
+        for workflow in ("pr.yml", "api_test.yml"):
+            text = (ROOT / ".github/workflows" / workflow).read_text()
+            ignored = re.search(r"paths-ignore:\n((?:[ \t]+-.*\n)+)", text).group(1)
+            patterns = [line.strip()[2:].strip("'\"") for line in ignored.splitlines()]
+            for path in (
+                "openviking/system_assets/compile/example-skills/daily-report/SKILL.md",
+                "openviking/prompts/new-template.md",
+                "bot/workspace/SOUL.md",
+            ):
+                with self.subTest(workflow=workflow, path=path):
+                    self.assertFalse(any(fnmatch.fnmatchcase(path, p) for p in patterns))
+
+    def test_only_official_main_saves_stable_compiler_cache_keys(self):
+        text = (ROOT / ".github/actions/compiler-cache/action.yml").read_text()
+        steps = re.findall(
+            r"    - uses: (actions/cache(?:/restore)?@v5)\n(.*?)(?=\n    - |\Z)",
+            text,
+            re.S,
+        )
+        self.assertEqual(len(steps), 4)
+        contexts = (
+            ("volcengine/OpenViking", "refs/heads/main", "push", True),
+            ("volcengine/OpenViking", "refs/heads/main", "schedule", True),
+            ("volcengine/OpenViking", "refs/heads/main", "workflow_dispatch", True),
+            ("volcengine/OpenViking", "refs/pull/6751/merge", "pull_request", False),
+            ("volcengine/OpenViking", "refs/heads/main", "pull_request", False),
+            ("volcengine/OpenViking", "refs/tags/v0.5.3", "release", False),
+            ("volcengine/OpenViking", "refs/heads/develop", "push", False),
+            ("zhanglistar/OpenViking", "refs/heads/main", "push", False),
+        )
+        for repository, ref, event, should_save in contexts:
+            enabled = []
+            for action, body in steps:
+                condition = re.search(r"      if: (.+)", body).group(1)
+                for variable, value in (
+                    ("github.repository", repository),
+                    ("github.ref", ref),
+                    ("github.event_name", event),
+                ):
+                    condition = condition.replace(variable, repr(value))
+                condition = condition.replace("||", "or").replace("&&", "and")
+                if eval(condition, {"__builtins__": {}}):
+                    enabled.append(action)
+                self.assertNotIn("github.sha", body)
+            with self.subTest(repository=repository, ref=ref, event=event):
+                self.assertEqual(
+                    enabled,
+                    ["actions/cache@v5"] * 2 if should_save else ["actions/cache/restore@v5"] * 2,
+                )
+        self.assertIn("CCACHE_MAXSIZE=256M", text)
+        self.assertIn("CARGO_INCREMENTAL=0", text)
+
+    def test_cuvs_required_check_context_is_preserved(self):
+        caller = (ROOT / ".github/workflows/api_test.yml").read_text()
+        reusable = (ROOT / ".github/workflows/_test_lite.yml").read_text()
+        block = caller.split("\n  cuvs-tests:\n", 1)[1].split("\n  api-tests:", 1)[0]
+        self.assertIn("uses: ./.github/workflows/_test_lite.yml", block)
+        self.assertIn("os_json: '[\"ubuntu-24.04\"]'", block)
+        self.assertIn("python_json: '[\"3.11\"]'", block)
+        self.assertIn(
+            "name: Lite Test (${{ matrix.os }}, ${{ matrix.python-version }})",
+            reusable,
+        )
 
 
 class BundleTests(unittest.TestCase):

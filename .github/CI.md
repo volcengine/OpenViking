@@ -19,18 +19,27 @@ wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.
-Its test list and Python version are unchanged. Repository branch protection
-that explicitly names the old parent workflow's cuVS check may need to select
-the new check context.
+Its check name stays `cuvs-tests / Lite Test (ubuntu-24.04, 3.11)`, matching the
+previous PR workflow. The caller job ID, reusable job name, Python version and
+test list are preserved, so ordinary required status checks need no migration.
 
 Cargo intermediates and ccache outputs are keyed by runner OS/architecture,
-target and compiler fingerprint. Cargo also includes the lockfile and commit;
-restoring an earlier key still leaves Cargo/ccache responsible for validating
-source and compiler inputs. Wheel building compiles each native component once.
+target and compiler fingerprint. Cargo also includes the lockfile. Neither key
+contains the commit SHA. Only non-PR runs on the official repository's `main`
+branch save these caches; PR, fork and tag runs restore only. Ccache is capped at
+256 MiB per entry and Cargo incremental output is disabled. Cache entries are
+immutable: a compiler or dependency-key change creates a new entry; source
+changes still rebuild correctly through Cargo/ccache input validation.
+Wheel building compiles each native component once.
 Studio is built once per distribution workflow and downloaded by each wheel job.
 Bootstrap/version/repair/test commands use `uv run --no-sync`; test environments
 install dependencies first, then native binaries, then editable Python entry
 points with native compilation disabled.
+
+Markdown is not globally ignored at the workflow entry point or by the planner.
+Known documentation trees and root README/security/contribution documents
+skip API tests; runtime skills, prompt templates and bot workspace Markdown
+select API tests, including newly introduced runtime paths.
 
 Local checks:
 
