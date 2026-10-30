@@ -100,7 +100,7 @@ class VikingDBStateDataSource(StateMetricDataSource):
             runner=run_async,
         )
         count_env = self.safe_read_async(
-            lambda: vikingdb.count(filter=None, ctx=None),
+            lambda: vikingdb.count_shared_collection(filter=None),
             default=0,
             runner=run_async,
         )

@@ -1851,6 +1851,18 @@ class VikingVectorIndexBackend:
             backend = self._get_default_backend()
         return await backend.count(filter=filter)
 
+    async def count_shared_collection(
+        self,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+    ) -> int:
+        """Count records in the cluster's shared physical collection.
+
+        This infrastructure-level view is intended for collection metrics. It
+        includes every account stored in the shared adapter, but not accounts
+        configured with their own dedicated vector database.
+        """
+        return await self._get_root_backend().count(filter=filter)
+
     async def search_by_keywords(
         self,
         keywords: Optional[List[str]] = None,

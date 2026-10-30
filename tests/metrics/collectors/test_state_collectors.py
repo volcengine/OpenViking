@@ -348,7 +348,7 @@ def test_vikingdb_collector_exports_health_and_count(monkeypatch):
         async def health_check(self):
             return True
 
-        async def count(self, filter=None, ctx=None):
+        async def count_shared_collection(self, filter=None):
             return 123
 
     class Service:
