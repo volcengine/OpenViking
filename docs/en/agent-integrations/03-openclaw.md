@@ -95,8 +95,10 @@ The main branch calls `getSessionContext(tokenBudget)` and builds:
 ```text
 summaryMessage = { role: "user", content: "[Session History Summary]\n" + latest_archive_overview }
 messages = [summaryMessage] + OV active messages
-systemPromptAddition = Session Context Guide (when archives exist) + user profile (when profile.md exists) + recalled context (when available)
+systemPromptAddition = Session Context Guide (when archives exist) + user profile (when profile.md exists)
 ```
+
+Recalled context is not part of `assemble()` when the plugin has the `plugins.entries.openviking.hooks.allowConversationAccess` grant, which setup writes. A `before_prompt_build` hook then recalls once per turn from the current request and returns the block as `prependContext`; OpenClaw freezes it into that user turn and replays it unchanged, so the cached history prefix survives later turns. Without the grant, the main branch appends recalled context to `systemPromptAddition` as before. That addition changes every turn and can invalidate the provider prompt cache for the history after it.
 
 `latest_archive_overview` is the summary text returned by the server; `[Session History Summary]` is the literal heading prepended by the plugin. This synthetic user message is inserted only when the overview is nonempty. Active messages provide recent uncompressed conversation. The host adds the pending `prompt` to the turn. The plugin uses it for recall without appending a second copy to the returned history. Recalled context belongs to this request and is not directly captured as new conversation in OV.
 

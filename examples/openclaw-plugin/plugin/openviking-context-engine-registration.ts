@@ -36,6 +36,7 @@ export type OpenVikingContextEngineCreateParams<
   }) => void;
   queryConfigStore: TQueryConfigStore;
   traceRecorder: TTraceRecorder;
+  recallViaPromptHook?: boolean;
 };
 
 export type OpenVikingContextEngineRegistrationDeps<
@@ -56,6 +57,7 @@ export type OpenVikingContextEngineRegistrationDeps<
   rememberSessionAgentId: OpenVikingContextEngineCreateParams["rememberSessionAgentId"];
   queryConfigStore: TQueryConfigStore;
   traceRecorder: TTraceRecorder;
+  recallViaPromptHook?: boolean;
   createContextEngine: (params: OpenVikingContextEngineCreateParams<TCfg, TClient, TQueryConfigStore, TTraceRecorder, TLogger>) => TEngine;
   setContextEngineRef: (engine: TEngine) => void;
 };
@@ -90,11 +92,12 @@ export function registerOpenVikingContextEngine<
       rememberSessionAgentId: deps.rememberSessionAgentId,
       queryConfigStore: deps.queryConfigStore,
       traceRecorder: deps.traceRecorder,
+      recallViaPromptHook: deps.recallViaPromptHook,
     });
     deps.setContextEngineRef(contextEngine);
     return contextEngine;
   });
   deps.logger.info(
-    "openviking: registered context-engine (assemble=archive+active+auto-recall, afterTurn=auto-capture, session→OV id=uuid-or-sha256 + diag/Phase2 options)",
+    `openviking: registered context-engine (assemble=archive+active${deps.recallViaPromptHook ? "" : "+auto-recall"}, afterTurn=auto-capture, session→OV id=uuid-or-sha256 + diag/Phase2 options)`,
   );
 }

@@ -70,6 +70,15 @@ export function ensureInstallRecord(plugins: Record<string, unknown>): void {
   }
 }
 
+// Auto-recall uses before_prompt_build, which OpenClaw only dispatches to a
+// non-bundled plugin with conversation access. An explicit false is kept.
+export function grantPromptRecallHook(hooks: unknown): Record<string, unknown> {
+  const existing = hooks && typeof hooks === "object" && !Array.isArray(hooks)
+    ? (hooks as Record<string, unknown>)
+    : {};
+  return existing.allowConversationAccess === false ? existing : { ...existing, allowConversationAccess: true };
+}
+
 export function writeOpenVikingConfig(
   configPath: string,
   pluginCfg: Record<string, unknown>,
@@ -85,7 +94,7 @@ export function writeOpenVikingConfig(
   const entries = plugins.entries as Record<string, unknown>;
 
   const existingEntry = (entries.openviking as Record<string, unknown>) ?? {};
-  entries.openviking = { ...existingEntry, config: pluginCfg };
+  entries.openviking = { ...existingEntry, hooks: grantPromptRecallHook(existingEntry.hooks), config: pluginCfg };
 
   ensureInstallRecord(plugins);
 

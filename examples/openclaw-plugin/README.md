@@ -163,23 +163,28 @@ In this setup:
 
 The plugin writes and searches user-scoped memory through `viking://user/...`; OpenViking resolves that alias from the request tenant and actor-peer context. Deprecated agent URI paths are not used by the plugin.
 
-## assemble Recall Flow
+## Auto-Recall Flow
 
 ![Automatic recall flow before prompt build](./images/openclaw-plugin-recall-flow.png)
 
-Auto-recall now runs through `assemble()`. OpenClaw calls the same context engine method in two shapes, and the plugin assigns different responsibilities to each shape:
+Auto-recall runs in a `before_prompt_build` hook once per user turn and returns the memory block as `prependContext`. OpenClaw freezes that text into the admitted user turn and replays it unchanged on later model calls and turns, so the history prefix stays cacheable. `assemble()` keeps rebuilding history and adds the session guide and user profile to `systemPromptAddition`; it no longer injects per-turn recall.
 
-1. Preflight assemble: params include `prompt`; `messages` is still old history. The plugin reads archive/session context back from OpenViking and rebuilds history.
-2. transformContext assemble: params do not include `prompt`; the latest `messages` entry is already the current user turn. The plugin only runs long-term recall and prepends the memory block to that user message content.
+OpenClaw dispatches `before_prompt_build` to a non-bundled plugin only with an explicit grant. `openclaw openviking setup` and the installer write it for you:
+
+```json
+{ "plugins": { "entries": { "openviking": { "hooks": { "allowConversationAccess": true } } } } }
+```
+
+Without the grant (or with `allowPromptInjection: false`), the plugin keeps the previous behavior and recalls inside `assemble()`: recall goes into `systemPromptAddition`, which changes every turn and can invalidate the provider prompt cache for the history that follows it.
 
 During recall, the plugin:
 
-1. Extracts query text from the latest user message.
+1. Uses the current request text (`currentUserMessage`, falling back to `prompt` on older hosts) as the query.
 2. Resolves the agent routing for the current `sessionId/sessionKey`.
 3. Runs a quick availability precheck so model requests do not stall when OpenViking is unavailable.
 4. Sends one session-aware context search for the configured `recallTargetTypes` (`user,agent` by default; optionally `resource`; use `ov_archive_search` and `ov_archive_expand` to inspect raw session history).
 5. Lets OpenViking expand the query from session history, filter and rank candidates, apply cross-turn deduplication, select detail tiers, and assemble the result under the injection budget.
-6. Prepends the server-rendered context inside `<relevant-memories>` to the current user message; it does not append a standalone synthetic user message.
+6. Returns the server-rendered context inside `<relevant-memories>`; retries of the same turn reuse the first result.
 
 ## Session Lifecycle
 

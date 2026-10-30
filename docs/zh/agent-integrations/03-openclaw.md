@@ -95,8 +95,10 @@ openclaw openviking setup --base-url https://openviking.example.com --api-key sk
 ```text
 summaryMessage = { role: "user", content: "[Session History Summary]\n" + latest_archive_overview }
 messages = [summaryMessage] + OV active messages
-systemPromptAddition = Session Context Guide（有归档时）+ 用户 profile（profile.md 存在时）+ 本轮召回结果（有命中时）
+systemPromptAddition = Session Context Guide（有归档时）+ 用户 profile（profile.md 存在时）
 ```
+
+插件拥有 `plugins.entries.openviking.hooks.allowConversationAccess` 授权（setup 会自动写入）时，召回不在 `assemble()` 中进行：`before_prompt_build` hook 每轮以当前请求查询一次，并把结果以 `prependContext` 返回；OpenClaw 将其冻结在本轮 user turn 上并原样重放，后续轮次的历史前缀缓存因此不受影响。未授权时，主分支仍把召回结果追加到 `systemPromptAddition`；这部分每轮变化，可能使其后历史的 provider prompt cache 失效。
 
 `latest_archive_overview` 是服务端返回的摘要正文，`[Session History Summary]` 是插件加在正文前的固定文本标题。仅在 overview 非空时插入这条合成 user 消息；active messages 保留近期未压缩对话。当前 `prompt` 由宿主加入本轮；插件只用它查询记忆，不把它重复追加到返回的历史中。召回结果属于本次请求的上下文，不直接作为新对话写回 OV。
 

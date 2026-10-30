@@ -189,23 +189,28 @@ OpenViking 会把受管的 `peers/` 容器作为用户 namespace 的一部分初
 
 插件通过 `viking://user/...` 写入和检索 user-scoped memory；OpenViking 会根据请求里的租户身份和 actor peer context 解析这个别名。legacy agent URI namespace 已由 OpenViking 废弃，插件不再使用。
 
-## assemble 召回链路
+## 自动召回链路
 
 ![Prompt 前的自动召回流程](./images/openclaw-plugin-recall-flow.png)
 
-自动召回现在由 `assemble()` 承接。OpenClaw 会在同一个 context engine 上调用两次 `assemble()`，插件按调用形态区分职责：
+自动召回在 `before_prompt_build` hook 中每个 user turn 执行一次，记忆块以 `prependContext` 返回。OpenClaw 会把这段文本冻结到本轮 user turn 上，后续模型调用和后续轮次都原样重放，历史前缀因此可以命中 prompt cache。`assemble()` 继续负责重建历史，并把 session guide 和 user profile 放进 `systemPromptAddition`，不再注入每轮变化的召回内容。
 
-1. preflight assemble：调用参数里带 `prompt`，`messages` 还是旧历史；插件从 OpenViking 回读 archive/session context 并重建历史。
-2. transformContext assemble：调用参数里不带 `prompt`，最后一条 `messages` 已经是本轮 user；插件只做长期记忆召回，并把记忆块 prepend 到这条 user message 的 content 开头。
+OpenClaw 只有在显式授权时才会向非内置插件派发 `before_prompt_build`。`openclaw openviking setup` 和安装脚本会自动写入：
+
+```json
+{ "plugins": { "entries": { "openviking": { "hooks": { "allowConversationAccess": true } } } } }
+```
+
+未授权（或设置了 `allowPromptInjection: false`）时，插件保持原有行为，在 `assemble()` 中召回：召回内容进入 `systemPromptAddition`，每轮都会变化，可能使其后历史的 provider prompt cache 失效。
 
 召回阶段会：
 
-1. 从最后一条 user message 提取查询文本。
+1. 以本轮请求文本（`currentUserMessage`，旧版本宿主回退到 `prompt`）作为查询。
 2. 基于当前 `sessionId/sessionKey` 解析本轮的 agent 路由。
 3. 先做一次快速可用性检查，避免在 OpenViking 不可用时拖慢模型请求。
 4. 按配置的 `recallTargetTypes` 发起一次带 session 上下文的 context search（默认 `user,agent`；可选 `resource`；原始 session 历史仍可用 `ov_archive_search` 和 `ov_archive_expand` 查看）。
 5. 由 OpenViking 服务端结合 session 历史扩展查询，完成候选过滤与排序、跨轮去重、内容层级选择和预算内组装。
-6. 把服务端渲染的上下文以 `<relevant-memories>` 形式 prepend 到当前 user message；不会追加独立 synthetic user message。
+6. 以 `<relevant-memories>` 形式返回服务端渲染的上下文；同一轮重试复用第一次的结果。
 
 ## Session 生命周期
 

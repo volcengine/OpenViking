@@ -22,6 +22,8 @@ import { registerOpenVikingArchiveTools } from "./plugin/openviking-archive-tool
 import { createOpenVikingImportRuntime } from "./plugin/openviking-import-runtime.js";
 import { registerOpenVikingImportTools } from "./plugin/openviking-import-tools.js";
 import { registerOpenVikingLifecycleHooks } from "./plugin/openviking-lifecycle-hooks.js";
+import { promptRecallHookGranted, registerOpenVikingPromptRecallHook } from "./plugin/openviking-prompt-recall-hook.js";
+import { recallForPromptHook } from "./services/context-lifecycle-service.js";
 import { registerOpenVikingMemoryRecallTools } from "./plugin/openviking-memory-recall-tools.js";
 import { registerOpenVikingMemoryTools } from "./plugin/openviking-memory-tools.js";
 import { registerOpenVikingQueryTools } from "./plugin/openviking-query-tools.js";
@@ -77,6 +79,7 @@ type HookAgentContext = {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  senderId?: string;
 };
 
 type ToolDefinition = {
@@ -95,7 +98,9 @@ type ToolContext = {
 };
 
 type OpenClawPluginApi = {
+  id?: string;
   runtime?: { version?: string };
+  config?: unknown;
   pluginConfig?: unknown;
   openVikingTransport?: HttpTransport;
   logger: PluginLogger;
@@ -378,6 +383,27 @@ const contextEnginePlugin = {
       logger: api.logger,
     });
 
+    const recallViaPromptHook = cfg.autoRecall
+      && promptRecallHookGranted(api.config, api.id ?? contextEnginePlugin.id);
+    if (recallViaPromptHook) {
+      registerOpenVikingPromptRecallHook({
+        api,
+        cfg,
+        logger: api.logger,
+        getClient,
+        resolveAgentId,
+        queryConfigStore,
+        traceRecorder,
+        isBypassedSession,
+        recall: recallForPromptHook,
+      });
+    } else if (cfg.autoRecall) {
+      api.logger.info(
+        `openviking: auto-recall runs in assemble; set plugins.entries.${api.id ?? contextEnginePlugin.id}.hooks.allowConversationAccess=true ` +
+          "to recall through before_prompt_build and keep the prompt cache stable",
+      );
+    }
+
     registerOpenVikingContextEngine({
       api,
       plugin: contextEnginePlugin,
@@ -389,6 +415,7 @@ const contextEnginePlugin = {
       rememberSessionAgentId,
       queryConfigStore,
       traceRecorder,
+      recallViaPromptHook,
       createContextEngine: createMemoryOpenVikingContextEngine,
       setContextEngineRef,
     });
