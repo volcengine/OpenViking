@@ -75,7 +75,7 @@ def load_json_config(path: Path) -> Dict[str, Any]:
 
     Raises:
         FileNotFoundError: If the file does not exist.
-        ValueError: If the file contains invalid JSON.
+        ValueError: If the file contains invalid JSON or its root is not an object.
     """
     if not path.exists():
         raise FileNotFoundError(f"Config file does not exist: {path}")
@@ -89,9 +89,14 @@ def load_json_config(path: Path) -> Dict[str, Any]:
 
     try:
         # print(f"Loading config file: {path}")
-        return json.loads(raw)
+        data = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON in config file {path}: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Config file {path} must contain a JSON object, got {type(data).__name__}"
+        )
+    return data
 
 
 def require_config(

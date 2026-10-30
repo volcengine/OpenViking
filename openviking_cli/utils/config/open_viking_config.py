@@ -846,6 +846,11 @@ class OpenVikingConfigSingleton:
             # Unset variables are left unchanged by expandvars().
             raw = os.path.expandvars(raw)
             config_data = json.loads(raw)
+            if not isinstance(config_data, dict):
+                raise ValueError(
+                    f"Config file {config_path} must contain a JSON object, "
+                    f"got {type(config_data).__name__}"
+                )
 
             config = OpenVikingConfig.from_dict(config_data)
             cls._config_file = config_path.resolve()

@@ -21,6 +21,7 @@ from openviking_cli.utils.config.config_loader import (
 from openviking_cli.utils.config.open_viking_config import (
     CompileApiConfig,
     OpenVikingConfig,
+    OpenVikingConfigSingleton,
     ParserApiConfig,
 )
 from openviking_cli.utils.config.parser_config import CodeHostingConfig, DirectoryConfig
@@ -100,6 +101,23 @@ class TestLoadJsonConfig:
         with pytest.raises(ValueError, match="Invalid JSON"):
             load_json_config(conf)
 
+    @pytest.mark.parametrize(
+        ("content", "root_type"),
+        [
+            ("[]", "list"),
+            ('"unfinished edit"', "str"),
+            ("42", "int"),
+            ("true", "bool"),
+            ("null", "NoneType"),
+        ],
+    )
+    def test_rejects_non_object_root(self, tmp_path, content, root_type):
+        conf = tmp_path / "bad-root.conf"
+        conf.write_text(content)
+
+        with pytest.raises(ValueError, match=rf"must contain a JSON object, got {root_type}"):
+            load_json_config(conf)
+
     def test_expands_environment_variables(self, tmp_path, monkeypatch):
         conf = tmp_path / "env.conf"
         conf.write_text('{"api_key": "${TEST_API_KEY}"}')
@@ -123,6 +141,24 @@ class TestRequireConfig:
         monkeypatch.delenv("TEST_MISSING_ENV", raising=False)
         with pytest.raises(FileNotFoundError, match="configuration file not found"):
             require_config(None, "TEST_MISSING_ENV", "nonexistent_file.conf", "test")
+
+
+@pytest.mark.parametrize(
+    ("content", "root_type"),
+    [
+        ("[]", "list"),
+        ('"unfinished edit"', "str"),
+        ("42", "int"),
+        ("true", "bool"),
+        ("null", "NoneType"),
+    ],
+)
+def test_runtime_loader_rejects_non_object_root(tmp_path, content, root_type):
+    conf = tmp_path / "bad-root.conf"
+    conf.write_text(content)
+
+    with pytest.raises(ValueError, match=rf"must contain a JSON object, got {root_type}"):
+        OpenVikingConfigSingleton._load_from_file(str(conf))
 
 
 def test_runtime_concurrency_uses_scope_specific_defaults():
