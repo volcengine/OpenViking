@@ -57,6 +57,13 @@ const activity = {
       },
       send: '发送',
       cancel: '停止',
+      attachImage: '添加图片',
+      removeImage: '移除图片',
+      imageLimit: '最多只能添加 {{count}} 张图片',
+      imageTooLarge: '单张图片不能超过 {{size}} MB',
+      imageTypeUnsupported: '仅支持 PNG、JPEG、WebP、GIF 格式的图片',
+      imageReadFailed: '图片读取失败，请重试',
+      imageOnlyTitle: '图片消息',
     },
     impact: {
       title: '记忆影响',

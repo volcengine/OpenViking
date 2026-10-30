@@ -57,6 +57,13 @@ const activity = {
       },
       send: 'Send',
       cancel: 'Stop',
+      attachImage: 'Add image',
+      removeImage: 'Remove image',
+      imageLimit: 'You can attach up to {{count}} images',
+      imageTooLarge: 'Each image must be {{size}} MB or smaller',
+      imageTypeUnsupported: 'Only PNG, JPEG, WebP and GIF images are supported',
+      imageReadFailed: 'Could not read that image, please try again',
+      imageOnlyTitle: 'Image message',
     },
     impact: {
       title: 'Memory impact',

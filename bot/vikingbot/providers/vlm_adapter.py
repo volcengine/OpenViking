@@ -230,6 +230,29 @@ def _exception_log_details(error: BaseException) -> dict[str, str]:
     }
 
 
+_NON_MULTIMODAL_MARKERS = (
+    "not a multimodal model",
+    "does not support image",
+    "doesn't support image",
+    "image input is not supported",
+    "unsupported image input",
+)
+
+
+def _is_image_unsupported_error(error: BaseException) -> bool:
+    """True when the upstream model rejected the request because it is text-only."""
+    text = str(error).lower()
+    return any(marker in text for marker in _NON_MULTIMODAL_MARKERS)
+
+
+def _image_unsupported_message(model: str) -> str:
+    return (
+        f"The configured model ({model}) does not accept image input. "
+        "Point vlm.model (or bot.agents.model) at a vision-capable model, "
+        "or resend the message without images."
+    )
+
+
 class VLMProviderAdapter(LLMProvider):
     """Adapter that wraps an openviking VLMBase instance as an LLMProvider.
 
@@ -317,8 +340,13 @@ class VLMProviderAdapter(LLMProvider):
             if langfuse_observation:
                 self._end_langfuse_observation_error(langfuse_observation, e)
             self._log_request_exception("chat", e, model=effective_model)
+            content = (
+                _image_unsupported_message(effective_model)
+                if _is_image_unsupported_error(e)
+                else f"Error calling LLM in VLM Adapter: {str(e)}"
+            )
             return LLMResponse(
-                content=f"Error calling LLM in VLM Adapter: {str(e)}",
+                content=content,
                 finish_reason="error",
                 error_kind=model_error_kind(e),
             )
@@ -370,11 +398,17 @@ class VLMProviderAdapter(LLMProvider):
             ):
                 yield event
         except Exception as exc:
-            self._log_request_exception("chat_stream", exc, model=model or self._default_model)
+            effective_model = model or self._default_model
+            self._log_request_exception("chat_stream", exc, model=effective_model)
+            content = (
+                _image_unsupported_message(effective_model)
+                if _is_image_unsupported_error(exc)
+                else f"Error calling LLM in VLM Adapter stream: {str(exc)}"
+            )
             yield LLMStreamEvent(
                 type="response",
                 response=LLMResponse(
-                    content=f"Error calling LLM in VLM Adapter stream: {str(exc)}",
+                    content=content,
                     finish_reason="error",
                     error_kind=model_error_kind(exc),
                 ),

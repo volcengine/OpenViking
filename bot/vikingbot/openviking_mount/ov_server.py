@@ -1,7 +1,9 @@
 import base64
 import json
+import mimetypes
 import re
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional
 
 from loguru import logger
@@ -1046,6 +1048,48 @@ class VikingClient:
     def _assistant_peer_id(self) -> Optional[str]:
         return None
 
+    @staticmethod
+    def _user_media_parts(media: Any) -> list[dict[str, Any]]:
+        if not isinstance(media, list):
+            return []
+
+        parts: list[dict[str, Any]] = []
+        for item in media:
+            url = ""
+            detail = None
+            if isinstance(item, dict):
+                if item.get("type") != "image_url":
+                    continue
+                image_url = item.get("image_url")
+                if isinstance(image_url, dict):
+                    url = str(image_url.get("url") or "").strip()
+                    detail = image_url.get("detail")
+                elif isinstance(image_url, str):
+                    url = image_url.strip()
+            elif isinstance(item, str):
+                url = item.strip()
+            if not url:
+                continue
+
+            if not url.startswith(("http://", "https://", "data:image/")):
+                path = Path(url)
+                try:
+                    if not path.is_file():
+                        continue
+                    mime, _ = mimetypes.guess_type(str(path))
+                    if not mime or not mime.startswith("image/"):
+                        continue
+                    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                except OSError:
+                    continue
+                url = f"data:{mime};base64,{encoded}"
+
+            image_part: dict[str, Any] = {"type": "image_url", "image_url": {"url": url}}
+            if detail:
+                image_part["image_url"]["detail"] = detail
+            parts.append(image_part)
+        return parts
+
     def _normalize_session_messages(
         self,
         messages: list[dict[str, Any]],
@@ -1145,8 +1189,11 @@ class VikingClient:
             tools_used = message.get("tools_used") or []
             tool_parts = build_tool_parts(tools_used)
             agent_turns = message.get("agent_turns")
+            user_media_parts = (
+                self._user_media_parts(message.get("media")) if role == "user" else []
+            )
 
-            if not content and not tool_parts and not agent_turns:
+            if not content and not tool_parts and not agent_turns and not user_media_parts:
                 continue
 
             ov_role = "user" if role == "user" else "assistant"
@@ -1180,11 +1227,14 @@ class VikingClient:
                         )
                     )
 
-            if ov_role == "user" and content:
+            if ov_role == "user" and (content or user_media_parts):
+                user_parts = list(user_media_parts)
+                if content:
+                    user_parts.append({"type": "text", "text": content})
                 normalized.append(
                     build_payload(
                         "user",
-                        [{"type": "text", "text": content}],
+                        user_parts,
                         created_at,
                         safe_message_peer_id,
                     )
