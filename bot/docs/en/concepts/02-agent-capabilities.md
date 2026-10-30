@@ -146,7 +146,7 @@ VikingBot supports three kinds of multimodal interaction:
 
 - channel image input becomes model vision content blocks;
 - `generate_image` uses `agents.gen_image_model` for text-to-image and supported image-to-image operations;
-- Telegram audio can be transcribed through GroqTranscriptionProvider.
+- Telegram voice notes can be transcribed through GroqTranscriptionProvider.
 
 Generated images can be delivered directly to the originating channel through a message callback. Whether the model can understand images depends on the selected Provider and model.
 
