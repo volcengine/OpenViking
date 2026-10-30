@@ -656,8 +656,12 @@ async def test_restore_without_project_dir_restores_full_account_tree(
     )
     assert missing_resp.status_code == 404
 
+    from openviking.service.task_tracker import get_task_tracker
     from openviking.system_assets.sync import system_asset_sync_lock
 
+    await get_task_tracker().wait(
+        result["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id, timeout=20
+    )
     profile = "viking://system/memory/memory_templates/builtin/profile.yaml"
     updated = await service.viking_fs.read_file_bytes(profile, ctx=ctx) + b"\n# package update\n"
     agfs = service.viking_fs._async_agfs
@@ -665,6 +669,8 @@ async def test_restore_without_project_dir_restores_full_account_tree(
         await agfs.write(
             service.viking_fs._uri_to_path(profile, ctx=ctx), updated, auto_pathlock=False
         )
+    recorded = await client.post("/api/v1/snapshot/commit", json={"message": "package revision"})
+    assert recorded.status_code == 200, recorded.text
     denied = await client.post("/api/v1/snapshot/restore", json={"source_commit": c1_oid})
     assert denied.status_code == 403, denied.text
     assert await service.viking_fs.read_file_bytes(profile, ctx=ctx) == updated

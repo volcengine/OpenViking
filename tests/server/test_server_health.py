@@ -394,7 +394,7 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
 
     assert service._initialized is True
     assert app.state.api_key_manager is manager
-    assert events == ["service", "agent-evolution", "auth", "deletion"]
+    assert events == startup + ["deletion"]
 
 
 async def test_initialize_runtime_state_skips_reconcile_without_account_manager(monkeypatch):
