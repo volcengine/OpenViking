@@ -165,8 +165,12 @@ jobs:
           else
             python3 .github/scripts/ci_plan.py --full --output "$GITHUB_OUTPUT"
           fi
-      - name: Test CI selection and artifact validation
-        run: python3 -m unittest discover -s .github/scripts -p 'test_ci_helpers.py' -v
+      - name: Test packaging and CI selection contracts
+        run: |
+          python3 -m pip install pytest
+          python3 -m pytest --noconftest -q -o addopts='' \
+            tests/misc/test_abi3_packaging_config.py \
+            tests/misc/test_release_tag_selection.py
 
   build:
     needs: check-deps

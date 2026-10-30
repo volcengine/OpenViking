@@ -54,7 +54,9 @@ select API tests, including newly introduced runtime paths.
 Local checks:
 
 ```sh
-python3 -m unittest discover -s .github/scripts -p test_ci_helpers.py -v
+python3 -m pytest --noconftest -q -o addopts='' \
+  tests/misc/test_abi3_packaging_config.py \
+  tests/misc/test_release_tag_selection.py
 actionlint .github/workflows/pr.yml .github/workflows/api_test.yml \
   .github/workflows/_build.yml .github/workflows/_test_lite.yml \
   .github/workflows/_test_full.yml .github/workflows/rust-cli.yml
