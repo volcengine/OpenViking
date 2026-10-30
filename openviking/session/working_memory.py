@@ -1012,9 +1012,9 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
     - ``Open Issues`` UPDATE that silently drops old items restores them
       with an explicit marker.
 
-    Missing sections, unknown ops, or non-string UPDATE content default to ``KEEP``.
-    The schema should prevent this, but we stay defensive so a buggy LLM or
-    schema-loose backend cannot wipe out the prior WM).
+    缺失整个章节、未知操作名或非字符串 UPDATE content 时沿用 ``KEEP``，避免模型输出破坏已有工作记忆。
+    显式提供的章节操作必须包含 ``op``，否则抛出 ValueError；不能将
+    不完整的更新当作成功的 KEEP，既有工作记忆由调用方保留。
     """
     wm_debug(
         f"merge_wm_sections entry old_wm={len(old_wm or '')}B "
@@ -1026,6 +1026,9 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
     for header in WM_SEVEN_SECTIONS:
         full_header = f"## {header}"
         op = (ops or {}).get(header)
+        # 缺失章节仍允许 KEEP，但显式提供的不完整操作必须在保护逻辑前报错。
+        if isinstance(op, dict) and "op" not in op:
+            raise ValueError(f"Invalid working memory update: {header}.op is required")
         old_content = old_sections.get(full_header, "").rstrip()
 
         if (
