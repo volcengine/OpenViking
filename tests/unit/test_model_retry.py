@@ -9,6 +9,7 @@ import openai
 import pytest
 
 from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
+from openviking.observability.errors import extract_metric_error_code
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSConnectionError,
@@ -26,7 +27,6 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_TRANSIENT,
     ERROR_CLASS_UNKNOWN,
     classify_api_error,
-    extract_metric_error_code,
     retry_async,
     retry_sync,
 )

@@ -42,6 +42,7 @@ async def task_stores(request):
     schema_files = [
         sql_dir / "task_store_init.sql",
         sql_dir / "changes/0001_task_store_service_name.sql",
+        sql_dir / "changes/0002_task_error_codes.sql",
     ]
     try:
         async with admin.begin() as connection:
@@ -373,6 +374,7 @@ async def test_mysql_requeue_and_concurrent_completion_are_durable(deletion):
     schema_files = [
         sql_dir / "task_store_init.sql",
         sql_dir / "changes/0001_task_store_service_name.sql",
+        sql_dir / "changes/0002_task_error_codes.sql",
     ]
     writer, observer = TaskTracker(first), TaskTracker(second)
     isolated = TaskTracker(isolated_store)
@@ -488,32 +490,80 @@ async def test_mysql_requeue_and_concurrent_completion_are_durable(deletion):
 
 
 @pytest.mark.asyncio
-async def test_terminal_work_result_is_monotonic_and_bounded():
-    agfs = _FakeAgfs()
-    tracker = TaskTracker(PersistentTaskStore(agfs))
-    await tracker.create("content_write", task_id="task", **OWNER)
-    await tracker.register_work("task", "work", "Embedding", **OWNER)
-    await tracker.complete("task", {"done": True}, **OWNER)
-    errors = [f"failure {index}" for index in range(150)]
+async def test_terminal_work_result_is_monotonic_and_bounded(task_stores):
+    from openviking.metrics.core.registry import MetricRegistry
+    from openviking.metrics.exporters.prometheus import PrometheusExporter
+    from openviking.metrics.global_api import _build_event_router
+    from openviking.observability.events import (
+        make_payload_subscriber,
+        register_event_subscriber,
+        unregister_event_subscriber,
+    )
+    from openviking.storage.queuefs.process_result import ProcessResult
+    from openviking_cli.exceptions import OpenVikingError
 
-    await tracker.mark_work_failed("task", "work", errors[0], errors=errors, **OWNER)
-    await tracker.mark_work_done("task", "work", context_count_delta=3, **OWNER)
-    await tracker.mark_work_failed("task", "work", "later failure", **OWNER)
+    first, second = task_stores
+    tracker = TaskTracker(first)
+    registry = MetricRegistry()
+    router = _build_event_router(registry)
+    register_event_subscriber("task-contract", make_payload_subscriber(router.dispatch))
+    metric = "openviking_task_end_to_end_duration_seconds"
+    try:
+        await tracker.create("content_write", task_id="task", **OWNER)
+        await tracker.register_work("task", "work", "Embedding", **OWNER)
+        await tracker.register_work("task", "other-work", "Semantic", **OWNER)
+        await tracker.complete("task", {"done": True}, **OWNER)
+        errors = [f"failure {index}" for index in range(150)]
+        failure = ProcessResult.failed(OpenVikingError(errors[0], code="429"))
+        await tracker.mark_work_failed(
+            "task", "work", failure.error, error_code=failure.error_code, errors=errors, **OWNER
+        )
+        assert metric not in PrometheusExporter(registry=registry).render()
+        # Finishing the remaining owned work is the one terminal transition.
+        await TaskTracker(second).mark_work_done("task", "other-work", **OWNER)
+        await tracker.mark_work_done("task", "work", context_count_delta=3, **OWNER)
+        await tracker.mark_work_failed("task", "work", "later failure", **OWNER)
+        await tracker.complete("task", {"late": True}, **OWNER)
 
-    restored = await TaskTracker(PersistentTaskStore(agfs)).get("task", **OWNER)
-    assert restored.status is TaskStatus.FAILED
-    assert restored.error == errors[0]
-    assert restored.result["queue_status"]["Embedding"] == {
-        "processed": 0,
-        "requeue_count": 0,
-        "error_count": 150,
-        "errors": [{"message": error} for error in errors[:100]],
-    }
-    assert await tracker.get_context_count("task", **OWNER) == 0
+        restored_store = (
+            PersistentTaskStore(first._agfs) if isinstance(first, PersistentTaskStore) else second
+        )
+        restored = await TaskTracker(restored_store).get("task", **OWNER)
+        assert restored.status is TaskStatus.FAILED
+        assert restored.error == errors[0]
+        assert restored.error_code == "429"
+        assert restored.result["queue_status"]["Embedding"] == {
+            "processed": 0,
+            "requeue_count": 0,
+            "error_count": 150,
+            "errors": [{"message": error} for error in errors[:100]],
+        }
+        assert await tracker.get_context_count("task", **OWNER) == 0
+        text = PrometheusExporter(registry=registry).render()
+        samples = [line for line in text.splitlines() if line.startswith(metric + "_count{")]
+        assert len(samples) == 1 and float(samples[0].rsplit(" ", 1)[1]) == 1
+        assert 'error_code="429"' in samples[0] and 'status="failed"' in samples[0]
+        elapsed = next(line for line in text.splitlines() if line.startswith(metric + "_sum{"))
+        assert float(elapsed.rsplit(" ", 1)[1]) == pytest.approx(
+            restored.updated_at - restored.created_at
+        )
+        assert errors[0] not in text
+    finally:
+        unregister_event_subscriber("task-contract")
 
 
 @pytest.mark.asyncio
 async def test_finalization_write_failure_keeps_work_retryable(monkeypatch):
+    from openviking.metrics.collectors.task_tracker import TaskDurationCollector
+    from openviking.metrics.core.registry import MetricRegistry
+    from openviking.metrics.exporters.prometheus import PrometheusExporter
+
+    registry = MetricRegistry()
+    collector = TaskDurationCollector()
+    monkeypatch.setattr(
+        "openviking.observability.events.try_publish_event",
+        lambda name, payload: collector.receive(name, payload, registry),
+    )
     agfs = _FakeAgfs()
     tracker = TaskTracker(PersistentTaskStore(agfs))
     await tracker.create("content_write", task_id="task", **OWNER)
@@ -531,10 +581,21 @@ async def test_finalization_write_failure_keeps_work_retryable(monkeypatch):
     restored = await TaskTracker(PersistentTaskStore(agfs)).get("task", **OWNER)
     assert restored.status is TaskStatus.RUNNING
 
+    assert (
+        "openviking_task_end_to_end_duration_seconds"
+        not in PrometheusExporter(registry=registry).render()
+    )
     monkeypatch.setattr(agfs, "write", write)
     await tracker.mark_work_done("task", "work", vector_written=True, **OWNER)
     assert (await tracker.wait("task", timeout=0, **OWNER)).status is TaskStatus.COMPLETED
     assert await tracker.get_context_count("task", **OWNER) == 1
+    counts = [
+        line
+        for line in PrometheusExporter(registry=registry).render().splitlines()
+        if line.startswith("openviking_task_end_to_end_duration_seconds_count{")
+    ]
+    assert len(counts) == 1 and float(counts[0].rsplit(" ", 1)[1]) == 1
+    assert 'status="completed"' in counts[0]
 
 
 @pytest.mark.asyncio

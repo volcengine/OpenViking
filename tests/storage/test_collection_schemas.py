@@ -926,6 +926,7 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
     result = await handler.on_dequeue(_build_queue_payload_for_account("acct"))
 
     assert result.outcome is ProcessOutcome.FAILED
+    assert result.error_code == "401"
     assert result.value is None
     assert result.error == (
         "Failed to generate embedding: "

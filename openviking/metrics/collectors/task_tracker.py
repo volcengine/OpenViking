@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import ClassVar
 
 from openviking.metrics.core.base import MetricCollector
 from openviking.metrics.datasources.task import TaskStateDataSource
+from openviking.observability.errors import normalize_metric_error_code
 
-from .base import CollectorConfig, StateMetricCollector
+from .base import CollectorConfig, EventMetricCollector, StateMetricCollector
 
 
 @dataclass
@@ -96,3 +98,42 @@ class TaskTrackerCollector(StateMetricCollector):
                 labels=labels,
                 label_names=("task_type",),
             )
+
+
+@dataclass
+class TaskDurationCollector(EventMetricCollector):
+    """Observe a task only after its terminal state has been persisted."""
+
+    END_TO_END_DURATION_SECONDS: ClassVar[str] = MetricCollector.metric_name(
+        "task", "end_to_end_duration", unit="seconds"
+    )
+    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"task.finished"})
+
+    def collect(self, registry=None) -> None:
+        return None
+
+    def receive_hook(self, event_name: str, payload: dict, registry) -> None:
+        task_type = str(payload.get("task_type") or "")
+        status = str(payload.get("status") or "")
+        if not task_type or status not in {"completed", "failed", "cancelled"}:
+            return
+        try:
+            duration = float(payload["end_to_end_duration_seconds"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if not math.isfinite(duration) or duration < 0:
+            return
+        registry.observe_histogram(
+            self.END_TO_END_DURATION_SECONDS,
+            duration,
+            labels={
+                "task_type": task_type,
+                "status": status,
+                "error_code": (
+                    normalize_metric_error_code(payload.get("error_code")) or "unknown"
+                    if status == "failed"
+                    else "OK"
+                ),
+            },
+            label_names=("task_type", "status", "error_code"),
+        )

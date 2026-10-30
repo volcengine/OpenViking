@@ -166,14 +166,14 @@ class ReindexProcessor(DequeueHandlerBase):
         except Exception as exc:
             await tracker.fail(
                 msg.task_id,
-                str(exc),
+                exc,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
                 result={"code": exc.code, "details": exc.details}
                 if isinstance(exc, OpenVikingError)
                 else None,
             )
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
         finally:
             await lock_guard.close()
             unregister_telemetry(telemetry_id)
@@ -186,7 +186,7 @@ class ReindexProcessor(DequeueHandlerBase):
                 payload = json.loads(payload)
             msg = ReindexMsg.from_dict(payload)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
 
         if msg.lock_handoff is not None:
             lock_guard = PathLockGuard(self._viking_fs._async_agfs)

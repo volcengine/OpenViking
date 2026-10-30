@@ -1368,8 +1368,11 @@ isolates multiple OpenViking deployments that share one table set. Within one
 authorization and queries. Fresh deployments should run the init SQL and then
 the change scripts in order; existing TaskStore tables created before
 `service_name` must run
-`openviking/service/sql/changes/0001_task_store_service_name.sql` before
-upgrading. Do not use the FileStore tables and MySQL tables as active writers
+`openviking/service/sql/changes/0001_task_store_service_name.sql`, followed by
+`openviking/service/sql/changes/0002_task_error_codes.sql`, before upgrading.
+The second migration preserves structured error codes for tasks and work. Existing
+error messages remain unchanged; unavailable historical codes are not inferred.
+Do not use the FileStore tables and MySQL tables as active writers
 for the same deployment.
 
 #### agfs (RAGFS)

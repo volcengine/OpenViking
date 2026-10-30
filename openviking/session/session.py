@@ -1828,7 +1828,7 @@ class Session:
                 try:
                     await tracker.fail(
                         task_id,
-                        str(exc),
+                        exc,
                         account_id=self.ctx.account_id,
                         user_id=self.ctx.user.user_id,
                     )
@@ -2671,7 +2671,7 @@ class Session:
                 ),
             )
             await tracker.fail(
-                task_id, str(e), account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
+                task_id, e, account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
             )
             logger.exception(f"Memory extraction failed for session {self.session_id}")
 

@@ -269,8 +269,8 @@ Notes:
 | `openviking_queue_errors_total` | Counter | `queue` | total error count per queue |
 | `openviking_queue_pending` | Gauge | `queue` | pending queue items |
 | `openviking_queue_in_progress` | Gauge | `queue` | in-progress queue items |
-| `openviking_queue_process_duration_seconds` | Histogram | `queue, outcome` | handler execution time after a worker dequeues a message |
-| `openviking_queue_end_to_end_duration_seconds` | Histogram | `queue, outcome` | enqueue-to-handler-completion latency, including queue wait time |
+| `openviking_queue_process_duration_seconds` | Histogram | `queue, outcome, error_code` | handler execution time after a worker dequeues a message |
+| `openviking_queue_end_to_end_duration_seconds` | Histogram | `queue, outcome, error_code` | enqueue-to-handler-completion latency, including queue wait time |
 | `openviking_executor_max_workers` | Gauge | `pool, process_role, worker` | maximum workers in the asyncio default executor |
 | `openviking_executor_threads` | Gauge | `pool, process_role, worker` | threads created by the asyncio default executor |
 | `openviking_executor_active_tasks` | Gauge | `pool, process_role, worker` | default executor tasks currently running |
@@ -359,6 +359,22 @@ whole scrape snapshot instead of publishing partial zero lag.
 | `openviking_task_failed` | Gauge | `task_type` | failed tasks tracked by task tracker |
 | `openviking_task_cancelling` | Gauge | `task_type` | tasks being cancelled |
 | `openviking_task_cancelled` | Gauge | `task_type` | cancelled tasks |
+| `openviking_task_end_to_end_duration_seconds` | Histogram | `task_type, status, error_code` | Task creation to persisted terminal state, including queueing and owned work |
+
+### Tasks and queue deliveries
+
+`task.finished` is emitted only after the terminal transition is persisted. Recording an
+error or calling `complete` while owned work remains open does not emit a completion sample.
+Repeated completion or delivery does not repeat the task sample. Use the histogram `_count`
+for terminal outcomes by error code and filter `status="completed"` for successful mean/P99
+latency. Task latency includes queueing from task creation.
+
+Queue histograms describe individual delivery attempts. Semantic and Embedding deliveries
+are task suboperations; `outcome="success"` does not imply business-task success. Requeues
+and cancellations are not failures. Task and queue labels share structured error-code
+extraction: successful records use `OK`, while text-only or legacy errors use `unknown`.
+Error messages, URIs, and task IDs are not metric labels. New samples begin after upgrade;
+historical tasks are not backfilled. Metric emission is best effort, not a transactional audit log.
 
 ### Cache
 

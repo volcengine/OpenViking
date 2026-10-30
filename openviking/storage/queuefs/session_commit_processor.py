@@ -103,7 +103,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
         try:
             msg, ctx = self._parse_message(data)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
 
         await self._finalize_cancelled(msg, ctx)
         return ProcessResult.cancelled()
@@ -115,7 +115,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
         try:
             msg, ctx = self._parse_message(data)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
         # Failed registration must retain queue work; processing errors remain terminal.
         await get_task_tracker().create(
             "session_commit",
@@ -128,5 +128,5 @@ class SessionCommitProcessor(DequeueHandlerBase):
             try:
                 processed = await self._process(msg, ctx)
             except Exception as exc:
-                return ProcessResult.failed(str(exc))
+                return ProcessResult.failed(exc)
         return ProcessResult.success() if processed else ProcessResult.requeued()

@@ -265,8 +265,8 @@ Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`�
 | `openviking_queue_errors_total` | Counter | `queue` | 队列累计错误量 |
 | `openviking_queue_pending` | Gauge | `queue` | 队列待处理数 |
 | `openviking_queue_in_progress` | Gauge | `queue` | 队列执行中数量 |
-| `openviking_queue_process_duration_seconds` | Histogram | `queue, outcome` | 消息被 worker 取出后到 handler 结束的处理耗时 |
-| `openviking_queue_end_to_end_duration_seconds` | Histogram | `queue, outcome` | 消息从入队到 handler 结束的端到端耗时，包含排队时间 |
+| `openviking_queue_process_duration_seconds` | Histogram | `queue, outcome, error_code` | 消息被 worker 取出后到 handler 结束的处理耗时 |
+| `openviking_queue_end_to_end_duration_seconds` | Histogram | `queue, outcome, error_code` | 消息从入队到 handler 结束的端到端耗时，包含排队时间 |
 | `openviking_executor_max_workers` | Gauge | `pool, process_role, worker` | asyncio 默认 executor 最大 worker 数 |
 | `openviking_executor_threads` | Gauge | `pool, process_role, worker` | asyncio 默认 executor 已创建线程数 |
 | `openviking_executor_active_tasks` | Gauge | `pool, process_role, worker` | 默认 executor 当前执行中的任务数 |
@@ -349,6 +349,21 @@ manifest 无法读取或校验时，本次完整 snapshot 失败，不会发布�
 | `openviking_task_failed` | Gauge | `task_type` | task tracker 失败任务数 |
 | `openviking_task_cancelling` | Gauge | `task_type` | 正在取消的任务数 |
 | `openviking_task_cancelled` | Gauge | `task_type` | 已取消任务数 |
+| `openviking_task_end_to_end_duration_seconds` | Histogram | `task_type, status, error_code` | 完整任务从创建到终态的耗时，包含排队及所属子操作 |
+
+### 完整任务与队列子操作
+
+`task.finished` 只在最终状态持久化成功后发布。任务仍有未完成的所属工作时，
+记录错误或调用 `complete` 都不会提前生成完成样本；重复完成、重复消费不会重复记录终态样本。
+`openviking_task_end_to_end_duration_seconds` 的 `_count` 可用于按错误码统计最终失败任务，
+平均与 P99 应筛选 `status="completed"`。计时从任务创建开始，包含排队时间。
+
+队列耗时按每次处理尝试统计，语义、Embedding 等队列是任务的子操作。
+`outcome="success"` 只表示该次队列处理成功；重新入队与取消不属于失败。
+队列的 `error_code` 与任务错误码使用同一结构化提取规则，成功记录为 `OK`，
+只有错误文字或旧记录缺少错误码时为 `unknown`，不会从文字猜测错误码。
+错误正文、URI 和 task ID 不作为指标标签。新指标从升级后开始采集，不回填历史任务。
+指标发布为 best effort，不是事务性审计日志。
 
 ### Cache
 

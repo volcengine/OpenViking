@@ -961,7 +961,7 @@ class _SnapshotMixin:
         except Exception as exc:
             await tracker.fail(
                 task_id,
-                str(exc),
+                exc,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )

@@ -430,13 +430,13 @@ class AddResourceProcessor(DequeueHandlerBase):
                     failure_result["details"] = exc.details
                 await tracker.fail(
                     msg.task_id,
-                    str(exc),
+                    exc,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                     result=failure_result or None,
                 )
                 terminal = True
-                return ProcessResult.failed(str(exc))
+                return ProcessResult.failed(exc)
             finally:
                 unregister_telemetry(telemetry_id)
                 await lock_guard.close()
@@ -459,7 +459,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                 payload = json.loads(payload)
             msg = AddResourceMsg.from_dict(payload)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
         await self._handle_cancelled(
             msg,
             RequestContext(
@@ -484,6 +484,6 @@ class AddResourceProcessor(DequeueHandlerBase):
                 payload = json.loads(payload)
             msg = AddResourceMsg.from_dict(payload)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
 
         return await self._process(msg, data)

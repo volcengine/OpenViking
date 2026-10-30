@@ -27,6 +27,7 @@ from typing import (
 )
 from uuid import uuid4
 
+from openviking.observability.errors import extract_metric_error_code, normalize_metric_error_code
 from openviking.service.task_domain import (
     ACTIVE_TASK_STATUSES,
     MAX_QUEUE_ERROR_DETAILS,
@@ -221,10 +222,12 @@ async def run_tracked_operation(
     except BaseException as exc:
         if created_task is not None:
             failure_message = str(exc) or type(exc).__name__
+            failure_code = extract_metric_error_code(exc)
             await run_to_completion(
                 lambda: tracker.fail(
                     created_task.task_id,
                     failure_message,
+                    error_code=failure_code,
                     account_id=account_id,
                     user_id=user_id,
                 )
@@ -260,10 +263,12 @@ async def run_tracked_operation(
             return result
         except BaseException as exc:
             failure_message = str(exc) or type(exc).__name__
+            failure_code = extract_metric_error_code(exc)
             await run_to_completion(
                 lambda: tracker.fail(
                     task.task_id,
                     failure_message,
+                    error_code=failure_code,
                     account_id=account_id,
                     user_id=user_id,
                 )
@@ -620,16 +625,22 @@ class TaskTracker:
     async def fail(
         self,
         task_id: str,
-        error: str,
+        error: str | BaseException,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
         *,
         result: Optional[Dict[str, Any]] = None,
+        error_code: Optional[str] = None,
     ) -> None:
         await self._record_outcome(
             task_id,
             result=result,
-            error=sanitize_error(error),
+            error=sanitize_error(str(error)),
+            error_code=(
+                extract_metric_error_code(error)
+                if isinstance(error, BaseException)
+                else normalize_metric_error_code(error_code) or "unknown"
+            ),
             resource_id=None,
             cancelled=False,
             account_id=account_id,
@@ -666,6 +677,7 @@ class TaskTracker:
         *,
         result: Optional[Dict[str, Any]],
         error: Optional[str],
+        error_code: Optional[str] = None,
         resource_id: Optional[str],
         cancelled: bool,
         account_id: Optional[str],
@@ -676,6 +688,7 @@ class TaskTracker:
                 task_id,
                 result=result,
                 error=error,
+                error_code=error_code,
                 resource_id=resource_id,
                 cancelled=cancelled,
                 account_id=account_id,
@@ -1113,6 +1126,7 @@ class TaskTracker:
         error: Optional[str] = None,
         *,
         errors: Optional[Collection[str]] = None,
+        error_code: Optional[str] = None,
         account_id: str,
         user_id: str,
     ) -> None:
@@ -1121,6 +1135,7 @@ class TaskTracker:
             work_id,
             WorkState.FAILED,
             error=sanitize_error(error) if error else None,
+            error_code=normalize_metric_error_code(error_code) or "unknown",
             errors=errors,
             context_count_delta=0,
             account_id=account_id,
@@ -1151,6 +1166,7 @@ class TaskTracker:
         state: WorkState,
         *,
         error: Optional[str],
+        error_code: Optional[str] = None,
         errors: Optional[Collection[str]],
         context_count_delta: int,
         account_id: str,
@@ -1162,6 +1178,7 @@ class TaskTracker:
                 work_id,
                 state,
                 error=error,
+                error_code=error_code,
                 errors=errors,
                 context_count_delta=context_count_delta,
                 account_id=account_id,
@@ -1175,6 +1192,7 @@ class TaskTracker:
         work_id: str,
         error: str,
         *,
+        error_code: Optional[str] = None,
         account_id: str,
         user_id: str,
     ) -> None:
@@ -1182,6 +1200,7 @@ class TaskTracker:
             task_id,
             work_id,
             sanitize_error(error),
+            error_code=normalize_metric_error_code(error_code) or "unknown",
             account_id=account_id,
             user_id=user_id,
         )

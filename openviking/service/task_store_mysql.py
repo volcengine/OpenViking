@@ -42,7 +42,11 @@ from openviking.service.task_domain import (
     sanitize_error,
     summarize_works,
 )
-from openviking.service.task_events import TaskEventHistory, append_task_event
+from openviking.service.task_events import (
+    TaskEventHistory,
+    append_task_event,
+    publish_task_finished,
+)
 from openviking.service.task_store import (
     DeleteTasksResult,
     StoreOperationCode,
@@ -316,6 +320,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             stage=row.stage,
             result=_json_copy(row.result),
             error=row.error,
+            error_code=row.error_code,
             auth=_json_copy(row.auth) or {},
             execution_events=_json_copy(execution_events),
             processing_seconds=(
@@ -337,6 +342,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             state=WorkState(row.state),
             requeue_count=int(row.requeue_count),
             error=row.error,
+            error_code=row.error_code,
             errors=list(row.errors or ()),
             context_count=int(row.context_count),
             enqueued_at=float(row.enqueued_at),
@@ -503,6 +509,8 @@ class MySQLTaskWorkStore(TaskWorkStore):
         async with self._session_factory() as session:
             async with session.begin():
                 yield session
+            for task in session.info.pop("finished_tasks", ()):
+                publish_task_finished(task)
 
     async def create(
         self, task: TaskRecord, *, reject_if_active: bool = False
@@ -534,6 +542,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             stage=stored.stage,
             result=_json_copy(stored.result),
             error=stored.error,
+            error_code=stored.error_code,
             auth=_json_copy(stored.auth),
             processing_seconds=stored.processing_seconds,
             reject_if_active=reject_if_active,
@@ -996,6 +1005,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 stage=task.stage,
                 result=_json_copy(task.result),
                 error=task.error,
+                error_code=task.error_code,
                 auth=_json_copy(task.auth),
                 processing_seconds=task.processing_seconds,
                 active_business_key=None,
@@ -1004,6 +1014,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         await self._append_event_history(
             session, task_id, task.execution_events, previous.execution_events
         )
+        session.info.setdefault("finished_tasks", []).append(task)
         return task
 
     async def start_task(
@@ -1186,6 +1197,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         self,
         task_id: str,
         *,
+        error_code: Optional[str] = None,
         result: Optional[Dict[str, Any]],
         error: Optional[str],
         resource_id: Optional[str],
@@ -1200,6 +1212,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     Task.status,
                     Task.stage,
                     Task.error,
+                    Task.error_code,
                     Task.resource_id,
                     Task.auth,
                     Task.updated_at,
@@ -1240,6 +1253,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if error and next_error is None:
                 next_error = sanitize_error(error)
                 values["error"] = next_error
+                values["error_code"] = error_code
 
             next_status = TaskStatus.CANCELLING if cancelled else TaskStatus(row.status)
             events = None
@@ -1251,12 +1265,14 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     status=TaskStatus(row.status),
                     stage=row.stage,
                     error=row.error,
+                    error_code=row.error_code,
                     execution_events=await self._event_history(session, task_id),
                 )
                 previous_events = previous.execution_events
                 task = deepcopy(previous)
                 task.status = next_status
                 task.error = next_error
+                task.error_code = error_code if error and row.error is None else row.error_code
                 append_task_events(task, previous)
                 if cancelled:
                     values["status"] = task.status.value
@@ -1305,6 +1321,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     Task.task_type,
                     Task.stage,
                     Task.error,
+                    Task.error_code,
                     Task.updated_at,
                     Task.resource_id,
                     Task.account_id,
@@ -1342,6 +1359,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 user_id=row.user_id,
                 stage=row.stage,
                 error=row.error,
+                error_code=row.error_code,
                 execution_events=await self._event_history(session, task_id),
             )
             task = deepcopy(previous)
@@ -1414,6 +1432,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     state=work.state.value,
                     requeue_count=work.requeue_count,
                     error=work.error,
+                    error_code=work.error_code,
                     errors=_json_copy(work.errors),
                     context_count=work.context_count,
                     enqueued_at=work.enqueued_at,
@@ -1455,6 +1474,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         state=work.state.value,
                         requeue_count=work.requeue_count,
                         error=work.error,
+                        error_code=work.error_code,
                         errors=_json_copy(work.errors),
                         context_count=work.context_count,
                         enqueued_at=work.enqueued_at,
@@ -1585,6 +1605,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         work_id: str,
         state: WorkState,
         *,
+        error_code: Optional[str] = None,
         error: Optional[str],
         errors: Optional[Collection[str]],
         context_count_delta: int,
@@ -1622,6 +1643,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             }
             if error:
                 values["error"] = sanitize_error(error)
+                values["error_code"] = error_code
             if state == WorkState.FAILED:
                 details = [sanitize_error(str(value)) for value in errors or () if str(value)]
                 values["errors"] = details or (
@@ -1685,6 +1707,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         work_id: str,
         error: str,
         *,
+        error_code: Optional[str] = None,
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult:
@@ -1703,7 +1726,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             await session.execute(
                 update(Work)
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
-                .values(error=sanitize_error(error), updated_at=time.time())
+                .values(error=sanitize_error(error), error_code=error_code, updated_at=time.time())
             )
             return StoreOperationResult.applied()
 

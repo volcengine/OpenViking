@@ -27,7 +27,7 @@ def test_queue_duration_event_is_wired_to_metrics_registry(registry, render_prom
         )
         text = render_prometheus(registry)
         schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
-        labels = f'bucket_schema="{schema}",outcome="success",queue="SessionCommit"'
+        labels = f'bucket_schema="{schema}",error_code="OK",outcome="success",queue="SessionCommit"'
         assert f"openviking_queue_process_duration_seconds_count{{{labels}}} 1" in text
         assert f"openviking_queue_end_to_end_duration_seconds_count{{{labels}}} 1" in text
     finally:

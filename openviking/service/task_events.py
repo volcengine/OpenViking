@@ -1,10 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Bounded, task-owned execution history stored with each task snapshot."""
+"""Task execution history and committed lifecycle notifications."""
 
 import json
 from datetime import datetime, timezone
-from typing import Optional, TypedDict
+from typing import TYPE_CHECKING, Optional, TypedDict
+
+if TYPE_CHECKING:
+    from openviking.service.task_domain import TaskRecord
 
 MAX_TASK_EVENTS = 64
 MAX_TASK_EVENT_BYTES = 32 * 1024
@@ -59,3 +62,18 @@ def append_task_event(
         items.pop(0)
         history["dropped_count"] += 1
     return history
+
+
+def publish_task_finished(task: "TaskRecord") -> None:
+    """Publish a committed terminal transition, never an attempted completion."""
+    from openviking.observability.events import try_publish_event
+
+    try_publish_event(
+        "task.finished",
+        {
+            "task_type": task.task_type,
+            "status": task.status.value,
+            "error_code": task.error_code,
+            "end_to_end_duration_seconds": max(0.0, task.updated_at - task.created_at),
+        },
+    )

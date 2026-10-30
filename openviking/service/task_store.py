@@ -38,7 +38,7 @@ from openviking.service.task_domain import (
     sanitize_error,
     summarize_works,
 )
-from openviking.service.task_events import append_task_event
+from openviking.service.task_events import append_task_event, publish_task_finished
 from openviking.service.task_tracker_concurrency import (
     KeyedAsyncLockPool,
     run_to_completion,
@@ -249,6 +249,7 @@ class TaskWorkStore(Protocol):
         self,
         task_id: str,
         *,
+        error_code: Optional[str] = None,
         result: Optional[Dict[str, Any]],
         error: Optional[str],
         resource_id: Optional[str],
@@ -302,6 +303,7 @@ class TaskWorkStore(Protocol):
         work_id: str,
         state: WorkState,
         *,
+        error_code: Optional[str] = None,
         error: Optional[str],
         errors: Optional[Collection[str]],
         context_count_delta: int,
@@ -325,6 +327,7 @@ class TaskWorkStore(Protocol):
         work_id: str,
         error: str,
         *,
+        error_code: Optional[str] = None,
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult: ...
@@ -572,6 +575,7 @@ class PersistentTaskStore(TaskWorkStore):
         self,
         task_id: str,
         *,
+        error_code: Optional[str] = None,
         result: Optional[Dict[str, Any]],
         error: Optional[str],
         resource_id: Optional[str],
@@ -591,6 +595,7 @@ class PersistentTaskStore(TaskWorkStore):
                 task.resource_id = resource_id
             if error and task.error is None:
                 task.error = sanitize_error(error)
+                task.error_code = error_code
             if cancelled:
                 task.status = TaskStatus.CANCELLING
             enqueue_markers = task.auth.get("enqueue_complete_work_ids")
@@ -781,6 +786,7 @@ class PersistentTaskStore(TaskWorkStore):
         work_id: str,
         state: WorkState,
         *,
+        error_code: Optional[str] = None,
         error: Optional[str],
         errors: Optional[Collection[str]],
         context_count_delta: int,
@@ -806,6 +812,7 @@ class PersistentTaskStore(TaskWorkStore):
             work.updated_at = now
             if error:
                 work.error = sanitize_error(error)
+                work.error_code = error_code
             if state == WorkState.FAILED:
                 details = [sanitize_error(str(value)) for value in errors or () if str(value)]
                 work.errors = details or ([work.error] if work.error else [])
@@ -856,6 +863,7 @@ class PersistentTaskStore(TaskWorkStore):
         work_id: str,
         error: str,
         *,
+        error_code: Optional[str] = None,
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult:
@@ -869,6 +877,7 @@ class PersistentTaskStore(TaskWorkStore):
                     ),
                 )
             work.error = sanitize_error(error)
+            work.error_code = error_code
             work.updated_at = time.time()
             return _WorkMutationResult(True, work)
 
@@ -1445,9 +1454,13 @@ class PersistentTaskStore(TaskWorkStore):
                     cancellation = exc
             write_task.result()
             with self._lock:
+                previous = self._task_cache[owner]
+                finished = not previous.is_terminal() and candidate_task.is_terminal()
                 self._task_cache[owner] = candidate_task
                 if candidate_work_set is not None:
                     self._work_sets[owner] = candidate_work_set
+            if finished:
+                publish_task_finished(candidate_task)
             if cancellation is not None:
                 raise cancellation
         finally:
@@ -1700,6 +1713,7 @@ def _task_to_payload(task: TaskRecord) -> Dict[str, Any]:
         "stage": task.stage,
         "result": deepcopy(task.result),
         "error": task.error,
+        "error_code": task.error_code,
         "execution_events": deepcopy(task.execution_events),
         "auth": deepcopy(task.auth),
     }

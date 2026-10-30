@@ -24,6 +24,7 @@ from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessRes
 from openviking.storage.queuefs.queue_middleware import ProcessContext
 from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking.utils.log_correlation import log_correlation
+from openviking_cli.exceptions import OpenVikingError
 from tests.test_task_tracker import _FakeAgfs
 
 OWNER = {"account_id": "account", "user_id": "user"}
@@ -248,7 +249,7 @@ async def test_requeue_keeps_work_open_for_redelivery(tracked_queue):
     message = await enqueue_task(queue, tracker, transport)
     outcomes = [
         ProcessResult.requeued(),
-        ProcessResult.failed("combined", errors=["first", "second"]),
+        ProcessResult.failed(OpenVikingError("combined", code="429"), errors=["first", "second"]),
     ]
 
     class Handler(DequeueHandlerBase):
@@ -269,6 +270,7 @@ async def test_requeue_keeps_work_open_for_redelivery(tracked_queue):
     task = await tracker.get("task-1", **OWNER)
     assert task.status is TaskStatus.FAILED
     assert task.error == "combined"
+    assert task.error_code == "429"
     assert task.result["queue_status"]["Embedding"] == {
         "processed": 0,
         "requeue_count": 1,

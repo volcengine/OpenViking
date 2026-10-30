@@ -1354,7 +1354,9 @@ MySQL 后端需要安装 `openviking[mysql]` extra。Task mutation、Task
 Task/Work/Event 记录，用于隔离共用同一套表的多个 OpenViking 部署。
 `account_id` 和 `user_id` 用于鉴权和查询范围。新库需要先执行 init SQL，
 再按顺序执行变更脚本；升级使用旧 TaskStore 表的库前，先执行
-`openviking/service/sql/changes/0001_task_store_service_name.sql`。同一部署
+`openviking/service/sql/changes/0001_task_store_service_name.sql`，再执行
+`openviking/service/sql/changes/0002_task_error_codes.sql`，为任务及其子操作保留结构化错误码。
+错误码迁移必须在启动新版服务前完成；旧记录保留原错误文字，缺失的错误码不会推测补齐。同一部署
 不要同时让 FileStore 和 MySQL 表作为写入端。
 
 #### agfs (RAGFS)

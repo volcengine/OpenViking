@@ -11,6 +11,7 @@ from datetime import datetime
 from functools import partial
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, TypeVar, Union
 
+from openviking.observability.errors import extract_metric_error_code
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
@@ -280,17 +281,25 @@ class NamedQueue:
         try:
             result = self._validate_result(await self._run_middleware("process", ctx, process))
         except asyncio.CancelledError:
-            self._publish_duration(data, process_started, "exception")
+            self._publish_duration(data, process_started, "cancelled")
             raise
         except Exception as exc:
             self._record_error(str(exc), data)
-            self._publish_duration(data, process_started, "exception")
+            self._publish_duration(
+                data, process_started, "exception", extract_metric_error_code(exc)
+            )
             raise
         self._record_result(result, data)
-        self._publish_duration(data, process_started, result.outcome.value)
+        self._publish_duration(data, process_started, result.outcome.value, result.error_code)
         return result
 
-    def _publish_duration(self, data: Dict[str, Any], process_started: float, outcome: str) -> None:
+    def _publish_duration(
+        self,
+        data: Dict[str, Any],
+        process_started: float,
+        outcome: str,
+        error_code: Optional[str] = None,
+    ) -> None:
         """Publish best-effort processing and end-to-end timings for one delivery."""
         from openviking.observability.events import try_publish_event
 
@@ -299,6 +308,8 @@ class NamedQueue:
             "outcome": str(outcome),
             "process_duration_seconds": max(0.0, time.perf_counter() - process_started),
         }
+        if error_code is not None:
+            payload["error_code"] = error_code
         enqueued_at = self._extract_enqueued_at(data)
         if enqueued_at is not None:
             end_to_end = time.time() - enqueued_at

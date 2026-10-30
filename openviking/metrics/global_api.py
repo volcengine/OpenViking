@@ -44,6 +44,7 @@ from .collectors.rerank import RerankCollector
 from .collectors.resource import ResourceIngestionCollector
 from .collectors.retrieval import RetrievalCollector
 from .collectors.session import SessionCollector
+from .collectors.task_tracker import TaskDurationCollector
 from .collectors.telemetry_bridge import TelemetryBridgeCollector
 from .collectors.vlm import VLMCollector
 from .core.registry import MetricRegistry
@@ -248,6 +249,7 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
     telemetry_bridge_collector = TelemetryBridgeCollector()
     queue_duration_collector = QueueDurationCollector()
     pathlock_recovery_collector = PathLockRecoveryCollector()
+    task_duration_collector = TaskDurationCollector()
 
     def _receiver(collector, event_name: str):
         """
@@ -292,6 +294,7 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
         ("telemetry.summary", telemetry_bridge_collector),
         ("queue.processed", queue_duration_collector),
         ("pathlock.recovery_blocked", pathlock_recovery_collector),
+        ("task.finished", task_duration_collector),
     ):
         router.register(event_name, _receiver(collector, event_name))
     return router

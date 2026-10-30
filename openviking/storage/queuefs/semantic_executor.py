@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, 
 from weakref import WeakKeyDictionary
 
 from openviking.core.namespace import classify_uri
+from openviking.observability.errors import extract_metric_error_code
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -77,6 +78,7 @@ class SemanticTreeStats:
     in_progress_nodes: int = 0
     done_nodes: int = 0
     failures: List[str] = field(default_factory=list)
+    error_code: Optional[str] = None
     indexed_records: int = 0
 
 
@@ -355,6 +357,8 @@ class SemanticTreeExecutor:
 
     def _record_skill_failure(self, uri: str, error: Exception) -> None:
         if self._context_type == "skill":
+            if not self._stats.failures:
+                self._stats.error_code = extract_metric_error_code(error)
             self._stats.failures.append(f"{uri}: {error}")
 
     async def run(self, root_uri: str) -> None:
@@ -1688,6 +1692,7 @@ class SemanticTreeExecutor:
             in_progress_nodes=self._stats.in_progress_nodes,
             done_nodes=self._stats.done_nodes,
             failures=list(self._stats.failures),
+            error_code=self._stats.error_code,
             indexed_records=self._stats.indexed_records,
         )
 
