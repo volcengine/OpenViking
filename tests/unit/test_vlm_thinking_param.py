@@ -67,6 +67,46 @@ class TestLiteLLMThinkingParam:
         extra_body = kwargs.get("extra_body", {})
         assert "enable_thinking" not in extra_body
 
+    def test_openai_compatible_route_maps_per_call_thinking_without_state_leaks(self):
+        static_body = {
+            "chat_template_kwargs": {"custom_option": "preserved", "mode": "static"},
+            "stops": ["static"],
+        }
+        thinking_body = {
+            "enabled": {
+                "chat_template_kwargs": {"enable_thinking": True, "mode": "dynamic"},
+                "stops": ["enabled"],
+            },
+            "disabled": {"chat_template_kwargs": {"enable_thinking": False}},
+        }
+        vlm = self._make_provider(
+            "LocalModel",
+            api_base="http://localhost:4000/v1",
+            extra_request_body=static_body,
+            thinking_extra_request_body=thinking_body,
+        )
+        model = vlm._resolve_model("LocalModel")
+        messages = [{"role": "user", "content": "hello"}]
+
+        disabled = vlm._build_kwargs(model, messages, thinking=False)["extra_body"]
+        enabled = vlm._build_kwargs(model, messages, thinking=True)["extra_body"]
+        defaulted = vlm._build_kwargs(model, messages, thinking=None)["extra_body"]
+
+        assert disabled["chat_template_kwargs"] == {
+            "custom_option": "preserved",
+            "mode": "static",
+            "enable_thinking": False,
+        }
+        assert enabled["chat_template_kwargs"] == {
+            "custom_option": "preserved",
+            "mode": "dynamic",
+            "enable_thinking": True,
+        }
+        assert enabled["stops"] == ["enabled"]
+        assert defaulted == static_body
+        assert vlm.extra_request_body == static_body
+        assert vlm.thinking_extra_request_body == thinking_body
+
     def test_litellm_anthropic_no_thinking_field(self):
         """Anthropic model should NOT have enable_thinking in extra_body."""
         vlm = self._make_provider("claude-3-opus")

@@ -875,6 +875,22 @@ For example, to disable thinking on Ollama:
 }
 ```
 
+For LiteLLM routes with provider-specific reasoning controls, configure per-call fragments: `thinking=true` selects `enabled`, `thinking=false`
+selects `disabled`, and `thinking=None` leaves the static body or backend default unchanged:
+
+```json
+{
+  "vlm": {
+    "provider": "litellm", "model": "LocalModel",
+    "api_base": "http://localhost:4000/v1",
+    "thinking_extra_request_body": {
+      "enabled": {"chat_template_kwargs": {"enable_thinking": true}},
+      "disabled": {"chat_template_kwargs": {"enable_thinking": false}}
+    }
+  }
+}
+```
+
 **Audio/video understanding**
 
 Audio and video understanding is an optional capability of the configured VLM. It uses the same provider, model, credentials, client, request timeout, retries, headers, maximum output tokens, failover chain, and token accounting as other VLM calls. Enable it with the nested `vlm.media` controls; there is no separate media model configuration.

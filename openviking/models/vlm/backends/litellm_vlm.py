@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
@@ -139,6 +140,17 @@ NATIVE_AUTH_LITELLM_PREFIXES: tuple[str, ...] = (
 
 def _has_litellm_prefix(model: str, prefixes: tuple[str, ...]) -> bool:
     return model.lower().startswith(prefixes)
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Return a recursive merge without mutating either input."""
+    result = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = deepcopy(value)
+    return result
 
 
 def detect_provider_by_model(model: str) -> str | None:
@@ -310,7 +322,12 @@ class LiteLLMVLMProvider(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
-        if self.extra_request_body:
+        extra_body = deepcopy(self.extra_request_body)
+        if thinking is not None:
+            policy = "enabled" if thinking else "disabled"
+            fragment = self.thinking_extra_request_body.get(policy, {})
+            extra_body = _deep_merge(extra_body, fragment)
+        if extra_body:
             if model.startswith("anthropic/"):
                 # LiteLLM serializes extra_body literally on its Anthropic route.
                 # Native body options must be kwargs, but must not become SDK controls.
@@ -324,15 +341,15 @@ class LiteLLMVLMProvider(VLMBase):
                     "extra_headers",
                     "extra_body",
                 }
-                conflicts = reserved.intersection(self.extra_request_body)
+                conflicts = reserved.intersection(extra_body)
                 if conflicts:
                     raise ValueError(
                         "Anthropic extra_request_body cannot set LiteLLM controls: "
                         + ", ".join(sorted(conflicts))
                     )
-                kwargs.update(self.extra_request_body)
+                kwargs.update(extra_body)
             else:
-                kwargs["extra_body"] = dict(self.extra_request_body)
+                kwargs["extra_body"] = extra_body
 
         # Ollama-specific request options. Without an explicit num_ctx the server
         # truncates long prompts to its 4096-token default; thinking models left

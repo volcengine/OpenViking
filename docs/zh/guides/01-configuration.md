@@ -867,6 +867,22 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 }
 ```
 
+对于推理控制格式由 provider 自定义的 LiteLLM 路由，可以分别配置调用级片段：`thinking=true` 选择 `enabled`，`thinking=false` 选择 `disabled`；`thinking=None`
+不应用调用级片段，保留静态请求体或后端默认行为：
+
+```json
+{
+  "vlm": {
+    "provider": "litellm", "model": "LocalModel",
+    "api_base": "http://localhost:4000/v1",
+    "thinking_extra_request_body": {
+      "enabled": {"chat_template_kwargs": {"enable_thinking": true}},
+      "disabled": {"chat_template_kwargs": {"enable_thinking": false}}
+    }
+  }
+}
+```
+
 **音视频理解**
 
 音频和视频理解是当前 VLM 的可选能力，复用相同的 provider、模型、凭据、client、请求超时、重试、请求头、最大输出 token、故障切换链路和 token 统计。通过嵌套的 `vlm.media` 参数启用，不再单独配置媒体模型。

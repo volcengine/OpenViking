@@ -76,6 +76,7 @@ class VLMBase(ABC):
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
         self.extra_request_body = dict(config.get("extra_request_body") or {})
+        self.thinking_extra_request_body = dict(config.get("thinking_extra_request_body") or {})
         self.thinking = config.get("thinking", False)
 
         # Token usage tracking
@@ -769,9 +770,7 @@ class FailoverVLM(VLMBase):
         backup_tracker = self.backup.token_tracker
         if primary_tracker is backup_tracker:
             return primary_tracker.to_dict()
-        merged_tracker = TokenUsageTracker.merge(
-            primary_tracker, backup_tracker
-        )
+        merged_tracker = TokenUsageTracker.merge(primary_tracker, backup_tracker)
         return merged_tracker.to_dict()
 
     def reset_token_usage(self) -> None:
@@ -830,9 +829,7 @@ class MultiCredentialVLM(VLMBase):
             "temperature": first.temperature,
             "max_retries": first.max_retries,
             "timeout": first.timeout,
-            "max_tokens": (
-                min(configured_token_limits) if configured_token_limits else None
-            ),
+            "max_tokens": (min(configured_token_limits) if configured_token_limits else None),
             "thinking": first.thinking,
         }
         super().__init__(config)
