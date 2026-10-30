@@ -28,6 +28,7 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
+from openviking.service.task_domain import collect_queue_work_errors
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -399,10 +400,14 @@ class ContentWriteCoordinator:
         if terminal.status == TaskStatus.FAILED and not (
             accept_failed_result is not None and accept_failed_result(terminal_result)
         ):
+            work_errors = collect_queue_work_errors(terminal_result)
+            details: Dict[str, Any] = {"task_id": task_id}
+            if work_errors:
+                details["errors"] = work_errors
             raise OpenVikingError(
                 terminal.error or "Task processing failed",
                 code="PROCESSING_ERROR",
-                details={"task_id": task_id},
+                details=details,
             )
         if terminal.status == TaskStatus.CANCELLED:
             raise OpenVikingError(
