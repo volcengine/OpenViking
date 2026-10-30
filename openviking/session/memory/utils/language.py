@@ -27,6 +27,15 @@ _URI_LANGUAGE_NOISE_RE = re.compile(
     r"\b(?:(?:viking|https?)://|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}/)"
     r"[^\s<>\]\)\"'`]+"
 )
+# Windows drive-letter paths are machine tokens as well: hex fragments inside
+# them (e.g. "da", "e" from UUIDs) hit the pt/it stopword lists (#6004).
+_WINDOWS_PATH_LANGUAGE_NOISE_RE = re.compile(r"\b[a-zA-Z]:[\\/][^\s<>\"'`]*")
+# ID-like tokens (8+ chars mixing letters and digits, e.g. tool-use IDs and
+# hex task IDs) skew detection the same way (#6004).
+_ID_TOKEN_LANGUAGE_NOISE_RE = re.compile(
+    r"\b(?=[a-zA-Z0-9_-]{8,}\b)(?=[a-zA-Z0-9_-]*\d)(?=[a-zA-Z0-9_-]*[a-zA-Z])"
+    r"[a-zA-Z0-9_-]+\b"
+)
 
 _LATIN_STOPWORDS = {
     "en": set(
@@ -378,8 +387,14 @@ def resolve_output_language_from_text(
 
 
 def strip_language_detection_noise(text: str) -> str:
-    """Remove URIs and bare domain paths that should not affect output language."""
-    return _URI_LANGUAGE_NOISE_RE.sub(" ", text or "")
+    """Remove machine tokens that should not affect output language.
+
+    Covers URIs and bare domain paths (#4542) plus Windows drive-letter paths
+    and ID-like tokens mixing letters and digits (#6004).
+    """
+    text = _URI_LANGUAGE_NOISE_RE.sub(" ", text or "")
+    text = _WINDOWS_PATH_LANGUAGE_NOISE_RE.sub(" ", text)
+    return _ID_TOKEN_LANGUAGE_NOISE_RE.sub(" ", text)
 
 
 def resolve_output_language(text: str, config=None) -> str:
