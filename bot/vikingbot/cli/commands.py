@@ -201,6 +201,9 @@ def get_or_create_machine_id() -> str:
     """Get a unique machine ID using py-machineid.
 
     Uses the system's machine ID, falls back to "default" if unavailable.
+    The fallback is deliberately stable across calls: this value doubles as
+    the default session id, so a per-call value would start a new session
+    on every invocation.
     """
     try:
         from machineid import machine_id
@@ -209,10 +212,10 @@ def get_or_create_machine_id() -> str:
     except ImportError:
         # Fallback if py-machineid is not installed
         pass
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to read system machine id (%s); using fallback", exc)
 
-    # Default fallback
+    # Stable fallback: the caller uses this as the default session id.
     return "default"
 
 
