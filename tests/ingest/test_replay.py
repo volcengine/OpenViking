@@ -2,10 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
+import json
+from typing import cast
+
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
+from openviking.ingest.orchestrator import IngestOrchestrator
+from openviking.ingest.poller import IngestPoller
 from openviking.ingest.replay import ConversationReplayClient, SessionReplayer
+from openviking.ingest.sources.hermes import HermesSource
 from openviking_cli.exceptions import NotFoundError
+from openviking_cli.utils.config.ingest_config import IngestConfig, IngestHarnessConfig
 
 
 class _FakeSDK:
@@ -238,3 +245,118 @@ async def test_commit_if_needed_still_recovers_after_crash(tmp_path):
     replayer = SessionReplayer(fake, store)
     assert await replayer.commit_if_needed("claude_code", ref) is True
     assert fake.committed == ["import__claude_code__s1"]
+
+
+class _TransientCountReplay(_FakeReplay):
+    """The first recovery count read fails, then reports the server's count."""
+
+    def __init__(self, count=1):
+        super().__init__(pending=1 if count else 0, count=count)
+        self.count_reads = 0
+
+    async def message_count(self, sid):
+        self.count_reads += 1
+        if self.count_reads == 1:
+            raise OSError("temporary session read failure")
+        return await super().message_count(sid)
+
+
+def _hermes_source(tmp_path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "s1.jsonl").write_text(json.dumps({"role": "user", "content": "hello"}) + "\n")
+    config = IngestHarnessConfig(enabled=True, paths=[str(log_dir)])
+    source = HermesSource(config, fallback_user="test")
+    ref = next(iter(source.discover_sessions()))
+    messages, cursor = source.read_messages(ref, None)
+    assert len(messages) == 1
+    return config, source, ref, cursor
+
+
+def _pending_hermes_session(tmp_path, *, server_count=1):
+    config, source, ref, cursor = _hermes_source(tmp_path)
+
+    store = CursorStore(tmp_path / "state")
+    store.set_pending(
+        "hermes",
+        ref.native_session_id,
+        "import__hermes__s1",
+        Cursor.zero(BYTE_OFFSET),
+        cursor,
+        1,
+        0,
+    )
+    client = _TransientCountReplay(count=server_count)
+    replayer = SessionReplayer(cast(ConversationReplayClient, client), store)
+    return config, source, ref, store, client, replayer
+
+
+async def test_backfill_imports_new_session_without_pending_intent(tmp_path):
+    config, source, ref, _ = _hermes_source(tmp_path)
+    store = CursorStore(tmp_path / "state")
+    client = _FakeReplay()
+    replayer = SessionReplayer(cast(ConversationReplayClient, client), store)
+
+    stats = await IngestOrchestrator(IngestConfig(), replayer).backfill_source(
+        "hermes", config, source
+    )
+
+    assert client.appended == [("import__hermes__s1", 1)]
+    rec = store.get("hermes", ref.native_session_id)
+    assert rec is not None
+    assert rec.cursor.offset > 0
+    assert stats.sessions == 1
+    assert stats.messages == 1
+    assert stats.errors == []
+
+
+async def test_backfill_does_not_reappend_when_reconcile_read_fails(tmp_path):
+    config, source, ref, store, client, replayer = _pending_hermes_session(tmp_path)
+    orchestrator = IngestOrchestrator(IngestConfig(), replayer)
+
+    first = await orchestrator.backfill_source("hermes", config, source)
+    assert client.appended == []
+    assert store.get("hermes", ref.native_session_id).pending_count == 1
+    assert first.sessions == 0
+    assert first.errors == ["hermes/s1: pending batch reconciliation deferred"]
+
+    second = await orchestrator.backfill_source("hermes", config, source)
+    assert client.appended == []
+    rec = store.get("hermes", ref.native_session_id)
+    assert rec.pending_count == 0
+    assert rec.cursor.offset > 0
+    assert second.sessions == 1
+    assert second.errors == []
+
+
+async def test_watch_does_not_reappend_when_reconcile_read_fails(tmp_path):
+    config, source, ref, store, client, replayer = _pending_hermes_session(tmp_path)
+    poller = IngestPoller([("hermes", config, source)], replayer)
+
+    await poller._tick()
+    assert client.appended == []
+    assert store.get("hermes", ref.native_session_id).pending_count == 1
+
+    await poller._tick()
+    assert client.appended == []
+    rec = store.get("hermes", ref.native_session_id)
+    assert rec.pending_count == 0
+    assert rec.cursor.offset > 0
+
+
+async def test_backfill_retries_unlanded_batch_after_reconcile_read_recovers(tmp_path):
+    config, source, ref, store, client, replayer = _pending_hermes_session(tmp_path, server_count=0)
+    orchestrator = IngestOrchestrator(IngestConfig(), replayer)
+
+    first = await orchestrator.backfill_source("hermes", config, source)
+    assert client.appended == []
+    assert first.errors == ["hermes/s1: pending batch reconciliation deferred"]
+    assert store.get("hermes", ref.native_session_id).pending_count == 1
+
+    second = await orchestrator.backfill_source("hermes", config, source)
+    assert client.appended == [("import__hermes__s1", 1)]
+    rec = store.get("hermes", ref.native_session_id)
+    assert rec.pending_count == 0
+    assert rec.cursor.offset > 0
+    assert second.messages == 1
+    assert second.errors == []

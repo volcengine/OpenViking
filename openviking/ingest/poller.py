@@ -90,7 +90,8 @@ class IngestPoller:
                 await self._poll_session(name, cfg, source, ref)
 
     async def _poll_session(self, name, cfg, source, ref) -> None:
-        await self.replayer.reconcile(name, ref)
+        if not await self.replayer.reconcile(name, ref):
+            return
         appended = False
         while True:
             cursor = self.store.get_cursor(name, ref.native_session_id, source.cursor_kind)
