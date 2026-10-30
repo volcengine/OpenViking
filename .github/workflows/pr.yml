@@ -147,6 +147,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # This job compares Git trees and does not read repository files.
+          sparse-checkout: .
 
       - name: Check for dependency changes
         id: check
