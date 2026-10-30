@@ -47,18 +47,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
-    runs-on: >-
-      ${{ matrix.npm_os == 'linux' && matrix.npm_cpu == 'x64' &&
-          github.repository == 'volcengine/OpenViking' &&
-          (github.event_name == 'pull_request' || github.event_name == 'push') &&
-          !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
-          (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
-          fromJSON('["self-hosted","Linux","X64","ov-ci-runner"]') || matrix.os }}
-    container: ${{ matrix.npm_os == 'linux' && 'ubuntu:24.04' || null }}
-    timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -95,19 +84,7 @@ jobs:
             npm_cpu: x64
 
     steps:
-    - name: Install Git before checkout
-      if: matrix.npm_os == 'linux'
-      run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
     - uses: actions/checkout@v6
-
-    - uses: ./.github/actions/linux-test-env
-      if: matrix.npm_os == 'linux'
-
-    - name: Setup Node.js for Linux package metadata
-      if: matrix.npm_os == 'linux'
-      uses: actions/setup-node@v6
-      with:
-        node-version: '24'
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@v1
@@ -117,7 +94,7 @@ jobs:
 
     # Linux artifacts are produced as fully static musl binaries so they run on
     # any glibc-flavored distro (CentOS 7/8/Stream 9, RHEL 8/9, Amazon Linux,
-    # Alpine, etc.) — the Ubuntu 24.04 build container's glibc 2.39 is newer than
+    # Alpine, etc.) — the ubuntu-24.04 runner's glibc 2.39 is newer than
     # CentOS 7 (2.17) / RHEL 8 (2.28) / RHEL 9 (2.34), so a gnu-linked binary
     # fails with `version 'GLIBC_2.X' not found`. cargo-zigbuild + zig handle
     # both x86_64 and aarch64 musl cross-compilation with one toolchain;

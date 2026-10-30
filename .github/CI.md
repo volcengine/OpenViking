@@ -18,20 +18,19 @@ file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
-Studio, Linux x86_64 wheels, the shared API native runtime and x86_64 musl CLI
-targets use `[self-hosted, Linux, X64, ov-ci-runner]` for official repository
+Only Linux x86_64 wheels use `[self-hosted, Linux, X64, ov-ci-runner]` for official repository
 PRs and branch pushes. Release/tag events, schedules, manual runs, fork PRs and
-other repositories use GitHub-hosted. ARM64 musl cross-compilation stays hosted.
-These jobs select labels directly in `runs-on`; no selector job or token is needed.
-Tests, checks and source packaging retain their hosted runners and can run in
-parallel. Native ARM, macOS and Windows assignments are unchanged.
+other repositories use GitHub-hosted. Labels are selected directly in `runs-on`;
+no selector job or token is needed.
+Studio, the shared API native runtime, both musl CLI targets, tests, checks and
+source packaging use hosted runners and can run in parallel without competing
+for ov-ci-runner. Native ARM, macOS and Windows assignments are unchanged.
 
 Self-hosted builds require Docker access and use disposable containers with
 job-local HOME/Cargo/Rustup directories and post-job ownership cleanup.
-Wheels retain Ubuntu 20.04/glibc 2.31; other builds use Ubuntu 24.04.
-Execution timeouts are 20 minutes for Studio, 30 for the native runtime,
-45 for CLI builds and 60 for Linux wheels. They start when execution begins,
-not while queued; there is no automatic queue fallback.
+Wheels retain Ubuntu 20.04/glibc 2.31. The Linux wheel execution timeout is
+60 minutes. It starts when execution begins, not while queued; there is no
+automatic queue fallback.
 
 If ov-ci-runner is offline or stuck, set repository Actions variable
 `CI_DISABLE_SELF_HOSTED=true`, cancel affected runs and trigger new runs.

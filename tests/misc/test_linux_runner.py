@@ -9,12 +9,6 @@ import yaml
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github/workflows"
 SELF_HOSTED = ["self-hosted", "Linux", "X64", "ov-ci-runner"]
-HEAVY_BUILDS = [
-    ("_build.yml", "build-studio", {}),
-    ("_build.yml", "build-linux", {"arch": "x86_64"}),
-    ("api_test.yml", "native-runtime", {}),
-    ("rust-cli.yml", "build", {"npm_os": "linux", "npm_cpu": "x64", "os": "ubuntu-24.04"}),
-]
 
 
 def jobs(file):
@@ -51,7 +45,6 @@ def labels(
     return result if isinstance(result, list) else [result]
 
 
-@pytest.mark.parametrize("file,name,row", HEAVY_BUILDS)
 @pytest.mark.parametrize(
     "repository,source,expected",
     [
@@ -61,14 +54,20 @@ def labels(
         ("other/OpenViking", None, ["ubuntu-24.04"]),
     ],
 )
-def test_heavy_builds_use_self_hosted_only_for_official_sources(
-    file, name, row, repository, source, expected
-):
+def test_x64_wheels_use_self_hosted_only_for_official_sources(repository, source, expected):
     event = "pull_request" if source else "push"
-    assert labels(jobs(file)[name]["runs-on"], row, repository, source, event) == expected
+    assert (
+        labels(
+            jobs("_build.yml")["build-linux"]["runs-on"],
+            {"arch": "x86_64"},
+            repository,
+            source,
+            event,
+        )
+        == expected
+    )
 
 
-@pytest.mark.parametrize("file,name,row", HEAVY_BUILDS)
 @pytest.mark.parametrize(
     "event,ref,disabled,expected",
     [
@@ -82,13 +81,11 @@ def test_heavy_builds_use_self_hosted_only_for_official_sources(
         ("pull_request", "refs/pull/1/merge", "", SELF_HOSTED),
     ],
 )
-def test_release_routing_and_emergency_hosted_override(
-    file, name, row, event, ref, disabled, expected
-):
+def test_release_routing_and_emergency_hosted_override(event, ref, disabled, expected):
     assert (
         labels(
-            jobs(file)[name]["runs-on"],
-            row,
+            jobs("_build.yml")["build-linux"]["runs-on"],
+            {"arch": "x86_64"},
             source="volcengine/OpenViking",
             event=event,
             ref=ref,
@@ -98,14 +95,14 @@ def test_release_routing_and_emergency_hosted_override(
     )
 
 
-def test_only_heavy_build_jobs_reference_self_hosted():
+def test_only_linux_wheels_reference_self_hosted():
     references = {
         (path.name, name)
         for path in WORKFLOWS.glob("*.yml")
         for name, job in jobs(path.name).items()
         if "self-hosted" in str(job.get("runs-on", ""))
     }
-    assert references == {(file, name) for file, name, _ in HEAVY_BUILDS}
+    assert references == {("_build.yml", "build-linux")}
 
 
 def test_wheels_keep_glibc_baseline_and_native_arm_runner():
@@ -114,7 +111,15 @@ def test_wheels_keep_glibc_baseline_and_native_arm_runner():
     assert labels(wheel["runs-on"], {"arch": "aarch64"}) == ["ubuntu-24.04-arm"]
 
 
-def test_only_x64_musl_uses_self_hosted():
+def test_studio_and_api_native_runtime_stay_hosted():
+    for file, name in [("_build.yml", "build-studio"), ("api_test.yml", "native-runtime")]:
+        job = jobs(file)[name]
+        assert job["runs-on"] == "ubuntu-24.04"
+        assert "container" not in job
+        assert all(step.get("uses") != "./.github/actions/linux-test-env" for step in job["steps"])
+
+
+def test_all_musl_targets_stay_hosted():
     build = jobs("rust-cli.yml")["build"]
     targets = build["strategy"]["matrix"]["include"]
     assert {row["target"] for row in targets if row["npm_os"] == "linux"} == {
@@ -122,15 +127,12 @@ def test_only_x64_musl_uses_self_hosted():
         "aarch64-unknown-linux-musl",
     }
     for row in targets:
-        expected = (
-            SELF_HOSTED if row["npm_os"] == "linux" and row["npm_cpu"] == "x64" else [row["os"]]
-        )
-        assert labels(build["runs-on"], row) == expected
+        assert labels(build["runs-on"], row) == [row["os"]]
+    assert "container" not in build
 
 
-def test_heavy_build_containers_restore_workspace_ownership():
-    for file, name, _ in HEAVY_BUILDS:
-        job = jobs(file)[name]
-        assert "ubuntu:" in job["container"]
-        assert 0 < job["timeout-minutes"] <= 60
-        assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in job["steps"])
+def test_wheel_container_restores_workspace_ownership():
+    job = jobs("_build.yml")["build-linux"]
+    assert job["container"] == "ubuntu:20.04"
+    assert 0 < job["timeout-minutes"] <= 60
+    assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in job["steps"])

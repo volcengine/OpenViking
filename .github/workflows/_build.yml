@@ -48,19 +48,9 @@ jobs:
   build-studio:
     name: Build shared Studio bundle
     if: inputs.build_wheels
-    runs-on: >-
-      ${{ fromJSON(github.repository == 'volcengine/OpenViking' &&
-          (github.event_name == 'pull_request' || github.event_name == 'push') &&
-          !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
-          (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
-          '["self-hosted","Linux","X64","ov-ci-runner"]' || '["ubuntu-24.04"]') }}
-    container: ubuntu:24.04
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
     steps:
-    - name: Install Git before checkout
-      run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
     - uses: actions/checkout@v6
-    - uses: ./.github/actions/linux-test-env
     - uses: actions/setup-node@v6
       with:
         node-version: '22'
@@ -203,9 +193,6 @@ jobs:
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
 
     - uses: ./.github/actions/linux-test-env
-      with:
-        # Keep the wheel's glibc 2.31 baseline and custom Ubuntu 20.04 packages.
-        install-dependencies: 'false'
 
     - name: Fetch all tags
       run: |
