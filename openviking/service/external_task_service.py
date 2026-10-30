@@ -522,12 +522,14 @@ class ExternalTaskService:
                     if task is None or task.task_type != "compile":
                         raise
                     # Keep exhausted cleanup retries on the unacknowledged Work.
-                    await tracker.patch_task(
-                        task_id,
-                        TaskPatch(meta={"cleanup_error": sanitize_error(str(exc))}),
-                        account_id=account_id,
-                        user_id=user_id,
-                    )
+                    cleanup_error = sanitize_error(str(exc))
+                    if task.meta.get("cleanup_error") != cleanup_error:
+                        await tracker.patch_task(
+                            task_id,
+                            TaskPatch(meta={"cleanup_error": cleanup_error}),
+                            account_id=account_id,
+                            user_id=user_id,
+                        )
                     await asyncio.sleep(
                         max(self._provider(task.task_type).poll_interval_seconds, 0.2)
                     )
