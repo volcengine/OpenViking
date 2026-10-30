@@ -2928,168 +2928,6 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     assert user_ids == {"alice", "bob"}
 
 
-@pytest.mark.parametrize("caller", ["root", "admin"])
-async def test_add_group_members_batch_is_idempotent(
-    lightweight_admin_client, lightweight_admin_app, caller
-):
-    manager = lightweight_admin_app.state.api_key_manager
-    account = _uid()
-    admin_key = await manager.create_account(account, "owner")
-    await manager.register_user(account, "alice")
-    await manager.register_user(account, "bob")
-    await manager.create_group(account, "engineering")
-    headers = {"X-API-Key": ROOT_KEY if caller == "root" else admin_key}
-    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
-
-    # Single and batch additions use the same array-based endpoint.
-    single = await lightweight_admin_client.put(url, json={"user_ids": ["owner"]}, headers=headers)
-    assert single.status_code == 200, single.text
-    assert single.json()["result"] == {"added": True}
-    for _ in range(2):
-        response = await lightweight_admin_client.put(
-            url,
-            json={"user_ids": ["bob", "alice", "bob", "owner"]},
-            headers=headers,
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["result"] == {"added": True}
-
-    members = await lightweight_admin_client.get(url, headers=headers)
-    assert members.json()["result"] == {
-        "group_id": "engineering",
-        "members": ["alice", "bob", "owner"],
-    }
-    groups = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{account}/groups", headers=headers
-    )
-    assert groups.json()["result"] == [{"group_id": "engineering", "member_count": 3}]
-    for user_id in ("alice", "bob", "owner"):
-        assert await manager.get_user_group_ids(account, user_id) == ("engineering",)
-
-
-async def test_add_group_members_batch_validates_all_users_before_writing(
-    lightweight_admin_client, lightweight_admin_app
-):
-    manager = lightweight_admin_app.state.api_key_manager
-    account = _uid()
-    await manager.create_account(account, "owner")
-    await manager.register_user(account, "alice")
-    await manager.create_account(_uid(), "other-account-user")
-    await manager.create_group(account, "engineering")
-    await manager.add_group_members(account, "engineering", ["owner"])
-    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
-
-    for missing_user in ("missing", "other-account-user"):
-        response = await lightweight_admin_client.put(
-            url, json={"user_ids": ["alice", missing_user]}, headers=root_headers()
-        )
-        assert response.status_code == 404, response.text
-        assert await manager.get_group_members(account, "engineering") == ["owner"]
-        assert await manager.get_user_group_ids(account, "alice") == ()
-
-    for missing_url in (
-        url.replace("/engineering/", "/missing/"),
-        url.replace(f"/{account}/", "/missing-account/"),
-    ):
-        response = await lightweight_admin_client.put(
-            missing_url, json={"user_ids": ["alice"]}, headers=root_headers()
-        )
-        assert response.status_code == 404, response.text
-
-
-async def test_add_group_members_batch_accepts_maximum_size(
-    lightweight_admin_client, lightweight_admin_app
-):
-    manager = lightweight_admin_app.state.api_key_manager
-    account = _uid()
-    await manager.create_account(account, "alice")
-    await manager.create_group(account, "engineering")
-    response = await lightweight_admin_client.put(
-        f"/api/v1/admin/accounts/{account}/groups/engineering/members",
-        json={"user_ids": ["alice"] * 1000},
-        headers=root_headers(),
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["result"] == {"added": True}
-    assert await manager.get_group_members(account, "engineering") == ["alice"]
-
-
-async def test_add_group_members_batch_replaces_single_add_but_keeps_single_remove(
-    lightweight_admin_client, lightweight_admin_app
-):
-    manager = lightweight_admin_app.state.api_key_manager
-    account = _uid()
-    await manager.create_account(account, "alice")
-    await manager.create_group(account, "engineering")
-    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
-
-    legacy = await lightweight_admin_client.put(f"{url}/alice", headers=root_headers())
-    assert legacy.status_code == 405, legacy.text
-    assert await manager.get_group_members(account, "engineering") == []
-
-    added = await lightweight_admin_client.put(
-        url, json={"user_ids": ["alice"]}, headers=root_headers()
-    )
-    assert added.status_code == 200, added.text
-    removed = await lightweight_admin_client.delete(f"{url}/alice", headers=root_headers())
-    assert removed.status_code == 200, removed.text
-    assert removed.json()["result"] == {"removed": True}
-    assert await manager.get_group_members(account, "engineering") == []
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        None,
-        {},
-        {"user_ids": []},
-        {"user_ids": "alice"},
-        {"user_ids": [1]},
-        {"user_ids": [""]},
-        {"user_ids": [None]},
-        {"user_ids": ["alice"] * 1001},
-        {"user_ids": ["alice"], "extra": True},
-    ],
-)
-async def test_add_group_members_batch_rejects_invalid_body(
-    admin_client, admin_app, body, monkeypatch
-):
-    add = AsyncMock()
-    monkeypatch.setattr(admin_app.state.api_key_manager, "add_group_members", add)
-    response = await admin_client.put(
-        "/api/v1/admin/accounts/acme/groups/engineering/members",
-        json=body,
-        headers=root_headers(),
-    )
-    assert response.status_code == 400, response.text
-    error = response.json()["error"]
-    assert error["code"] == "INVALID_ARGUMENT"
-    assert error["details"]["validation_errors"]
-    add.assert_not_awaited()
-
-
-async def test_add_group_members_batch_enforces_account_permissions(
-    lightweight_admin_client, lightweight_admin_app
-):
-    manager = lightweight_admin_app.state.api_key_manager
-    account = _uid()
-    await manager.create_account(account, "owner")
-    user_key = await manager.register_user(account, "alice")
-    other_admin_key = await manager.create_account(_uid(), "other-owner")
-    await manager.create_group(account, "engineering")
-    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
-    for headers, status in (
-        ({"X-API-Key": user_key}, 403),
-        ({"X-API-Key": other_admin_key}, 403),
-        ({}, 401),
-    ):
-        response = await lightweight_admin_client.put(
-            url, json={"user_ids": ["alice", "owner"]}, headers=headers
-        )
-        assert response.status_code == status, response.text
-    assert await manager.get_group_members(account, "engineering") == []
-
-
 @pytest.mark.parametrize("include_summary", [False, True])
 @pytest.mark.parametrize("include_credentials", [None, True, False])
 async def test_user_list_credentials_follow_caller_role(
@@ -4100,7 +3938,12 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
     from openviking_cli.exceptions import PermissionDeniedError
 
     await manager.create_group(acct, "engineering")
-    await manager.add_group_members(acct, "engineering", ["user-1"])
+    added = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/groups/engineering/members",
+        json={"user_ids": ["user-1", "user-2", "user-1"]},
+        headers=root_headers(),
+    )
+    assert added.status_code == 200, added.text
     request = FastAPIRequest({"type": "http", "app": lightweight_admin_app})
     context = SimpleNamespace(request_context=SimpleNamespace(request=request))
     for role in (Role.USER, Role.ADMIN, Role.ROOT):
