@@ -42,8 +42,8 @@ jobs:
   test:
     needs: linux-runner
     name: Full Test (${{ matrix.os }}, ${{ matrix.python-version }})
-    # Three default Linux Python entries use ov-ci-runner; 3.12 uses hosted.
-    runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(matrix.python-version == '3.12' && needs.linux-runner.outputs.hosted_runs_on || needs.linux-runner.outputs.runs_on) || matrix.os }}
+    # All Linux Python versions use hosted capacity for parallel testing.
+    runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(needs.linux-runner.outputs.hosted_runs_on) || matrix.os }}
     container: ${{ matrix.os == 'ubuntu-24.04' && 'ubuntu:24.04' || '' }}
     defaults:
       run:

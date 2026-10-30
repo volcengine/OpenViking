@@ -7,7 +7,6 @@ import os
 import re
 import subprocess
 import sys
-from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -27,7 +26,7 @@ def test_untrusted_sources_use_hosted_for_both_lanes_even_when_forced(pool):
 
 
 @pytest.mark.parametrize("pool", ["balanced", "auto"])
-def test_fixed_split_requires_no_inventory_or_runner_environment(pool):
+def test_workload_routing_requires_no_inventory_or_runner_environment(pool):
     assert router.select(pool)[:2] == (router.SELF_HOSTED, router.HOSTED)
 
 
@@ -83,7 +82,7 @@ def embedded_selector():
     assert step["working-directory"] == "/"
     assert step["env"] == {
         "TRUSTED_PR_REPOSITORIES": "${{ vars.CI_LINUX_TRUSTED_REPOSITORIES }}",
-        "POOL": "${{ inputs.pool || vars.CI_LINUX_POOL || 'balanced' }}",
+        "POOL": "${{ inputs.pool || vars.CI_LINUX_POOL || 'auto' }}",
     }
     command, script = step["run"].split("\n", 1)
     assert command == "python3 -I - --pool \"$POOL\" <<'PY'"
@@ -188,7 +187,7 @@ def default_matrix(config, job):
     ]
 
 
-def labels_for_slot(expression, matrix, pool="balanced", trusted=True):
+def labels_for_slot(expression, matrix, pool="auto", trusted=True):
     """Evaluate the limited routing expressions against concrete matrix entries."""
     primary, secondary, _ = router.select(pool, trusted)
     expression = expression.removeprefix("${{ ").removesuffix(" }}")
@@ -203,7 +202,7 @@ def labels_for_slot(expression, matrix, pool="balanced", trusted=True):
     return eval(expression, {"__builtins__": {}, "fromJSON": json.loads})
 
 
-def linux_slots(pool="balanced", trusted=True):
+def linux_slots(pool="auto", trusted=True):
     slots = []
     for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
         config = workflow(path.name)
@@ -218,21 +217,45 @@ def linux_slots(pool="balanced", trusted=True):
     return slots
 
 
-def test_regular_workflow_slots_have_exact_two_to_one_split():
-    # Count each workflow definition once with its default matrix. Full/effect
-    # suites are manual-only additions; filtering individual PRs changes counts.
-    slots = [
-        slot for slot in linux_slots() if slot[0] not in ("_test_full.yml", "api_test_effect.yml")
+@pytest.mark.parametrize("pool", ["auto", "balanced"])
+def test_only_heavy_build_slots_use_self_hosted(pool):
+    slots = linux_slots(pool)
+    heavy_slots = [
+        (file, name, row) for file, name, row, labels in slots if labels == router.SELF_HOSTED
     ]
-    counts = Counter("ov" if labels == router.SELF_HOSTED else "hosted" for *_, labels in slots)
-    assert counts == {"ov": 18, "hosted": 9}
+    assert len(heavy_slots) == 5
+    assert {(file, name) for file, name, _ in heavy_slots} == {
+        ("_build.yml", "build-studio"),
+        ("_build.yml", "build-linux"),
+        ("api_test.yml", "native-runtime"),
+        ("rust-cli.yml", "build"),
+    }
+    assert {row["target"] for file, _, row in heavy_slots if file == "rust-cli.yml"} == {
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+    }
+    assert all(row["arch"] == "x86_64" for file, name, row in heavy_slots if name == "build-linux")
 
 
-def test_all_default_slots_include_manual_suites_with_nearest_two_to_one_split():
-    counts = Counter(
-        "ov" if labels == router.SELF_HOSTED else "hosted" for *_, labels in linux_slots()
-    )
-    assert counts == {"ov": 21, "hosted": 11}
+def test_tests_checks_and_source_distribution_all_use_hosted():
+    heavy_jobs = {
+        ("_build.yml", "build-studio"),
+        ("_build.yml", "build-linux"),
+        ("api_test.yml", "native-runtime"),
+        ("rust-cli.yml", "build"),
+    }
+    light_slots = [slot for slot in linux_slots() if (slot[0], slot[1]) not in heavy_jobs]
+    assert light_slots
+    assert all(labels == router.HOSTED for *_, labels in light_slots)
+    assert {
+        ("api_test.yml", "api-tests"),
+        ("gateway.yml", "test"),
+        ("gateway-e2e.yml", "kind"),
+        ("pr.yml", "sdk-python-tests"),
+        ("hermes-plugin-tests.yml", "quick-local-platforms"),
+        ("_test_full.yml", "test"),
+        ("_build.yml", "build-sdist"),
+    } <= {(file, name) for file, name, *_ in light_slots}
 
 
 @pytest.mark.parametrize("pool", router.POOLS)

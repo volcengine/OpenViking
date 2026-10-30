@@ -18,40 +18,37 @@ file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
-Ordinary Linux x64 jobs use a fixed **2:1 split between ov-ci-runner and
-GitHub-hosted**, sized for the requested 8-core/4-core capacity ratio. No runner
-inventory token or repository variable is needed. `_linux-runner.yml` resolves
-two lanes: `runs_on` uses `[self-hosted, Linux, X64, ov-ci-runner]`, and
-`hosted_runs_on` uses `[ubuntu-24.04]`. Jobs and matrix entries choose their lane
-in their `runs-on` expression, so the two pools execute different jobs concurrently.
+Ordinary Linux x64 jobs route **heavy builds to ov-ci-runner and tests and
+checks to GitHub-hosted**. No runner inventory token or repository variable is
+needed. `_linux-runner.yml` resolves
+two lanes: `runs_on` uses `[self-hosted, Linux, X64, ov-ci-runner]` for heavy builds,
+and `hosted_runs_on` uses `[ubuntu-24.04]` for tests and checks. Jobs and matrix
+entries choose their lane in their `runs-on` expression, so the two pools execute
+different jobs concurrently.
 The resolver itself always runs on GitHub-hosted.
 
-The default matrices of the ordinary workflow definitions contain 27 Linux x64
-slots: 18 on ov-ci-runner and 9 on hosted. Each definition is counted once,
-including the cuVS reusable workflow; non-Linux entries, publishing and planning
-jobs are excluded. The manual full/effect suites add 3 self-hosted and 2 hosted
-slots, giving 21:11 across all default definitions. Actual runs trigger different
-subsets, so individual runs and elapsed CPU time need not have a 2:1 ratio.
-Adding jobs or changing matrices should update the routing regression counts.
+The default matrices place five heavy build slots on ov-ci-runner: Studio,
+the Linux x86_64 wheel, the shared API native runtime, and both musl CLI targets.
+All remaining routed slots use hosted runners so independent tests can run in
+parallel while the self-hosted machine handles compilation. Routing follows
+workload rather than a job-count ratio. Regression tests enforce this build list
+and verify that tests, checks and source packaging use hosted runners.
 
 | Jobs or matrix entries | Default lane |
 | --- | --- |
-| Studio, x86_64 wheels, native API runtime, API tests | ov-ci-runner |
-| Source distribution, cuVS/lite, Rust tests | GitHub-hosted |
+| Studio, x86_64 wheels, native API runtime | ov-ci-runner |
 | Both Linux musl CLI targets (including ARM64 cross-build on x64) | ov-ci-runner |
-| Plugin and OpenClaw tests | ov-ci-runner |
-| SDK Python 3.8/3.10/3.12; LangChain Python 3.10 | ov-ci-runner |
-| SDK Python 3.9; LangChain Python 3.12 | GitHub-hosted |
-| Hermes provider tests and Linux main-host Quick Local | ov-ci-runner |
-| Hermes Linux release-host Quick Local | GitHub-hosted |
-| Pinned Microsoft framework contract; host compatibility; Gateway/kind | ov-ci-runner |
-| Floating Microsoft framework contract; framework layout; Gateway chart | GitHub-hosted |
-| Full suite Python 3.10/3.11/3.13 | ov-ci-runner |
-| Full suite Python 3.12; effect tests | GitHub-hosted |
+| API tests reusing the native runtime, cuVS/lite, Rust tests | GitHub-hosted |
+| Source distribution | GitHub-hosted |
+| Plugin, OpenClaw, all SDK and LangChain Python versions | GitHub-hosted |
+| Hermes provider tests and all Linux Quick Local hosts | GitHub-hosted |
+| Microsoft framework contracts, framework layout, host compatibility | GitHub-hosted |
+| Gateway, chart checks and kind acceptance | GitHub-hosted |
+| All full-suite Python versions and effect tests | GitHub-hosted |
 
 Repository variable `CI_LINUX_POOL` and manual/reusable input `linux_pool` remain
-optional overrides: `balanced` is the default, `auto` is a compatibility alias
-for the same fixed split, and `github-hosted` or `ov-ci-runner` puts both lanes
+optional overrides: `auto` is the default, `balanced` is a compatibility alias
+for the same workload routing, and `github-hosted` or `ov-ci-runner` puts both lanes
 on that pool. Manual input takes precedence over the repository variable.
 There is no availability check or automatic fallback: assigned self-hosted jobs
 wait if ov-ci-runner is busy or offline. Already queued jobs retain their labels.

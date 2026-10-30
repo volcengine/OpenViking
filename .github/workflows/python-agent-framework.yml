@@ -24,7 +24,7 @@ jobs:
 
   contracts:
     needs: linux-runner
-    runs-on: ${{ fromJSON(matrix.maf == 'agent-framework-core==1.20.0' && needs.linux-runner.outputs.runs_on || needs.linux-runner.outputs.hosted_runs_on) }}
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
     container: ubuntu:24.04
     strategy:
       matrix:

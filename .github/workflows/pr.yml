@@ -36,7 +36,7 @@ jobs:
   plugin-tests:
     needs: [check-deps, linux-runner]
     if: needs.check-deps.outputs.plugins_changed == 'true'
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
     container: ubuntu:24.04
     defaults:
       run:
@@ -117,7 +117,7 @@ jobs:
   openclaw-tests:
     needs: [check-deps, linux-runner]
     if: ${{ needs.check-deps.outputs.openclaw_changed == 'true' }}
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
     container: ubuntu:24.04
     defaults:
       run:
@@ -214,7 +214,7 @@ jobs:
   sdk-python-tests:
     needs: [check-deps, linux-runner]
     if: ${{ needs.check-deps.outputs.sdk_python_changed == 'true' }}
-    runs-on: ${{ fromJSON(matrix.python-version == '3.9' && needs.linux-runner.outputs.hosted_runs_on || needs.linux-runner.outputs.runs_on) }}
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
     container: ubuntu:24.04
     defaults:
       run:
@@ -259,7 +259,7 @@ jobs:
   langchain-tests:
     needs: [check-deps, linux-runner]
     if: ${{ needs.check-deps.outputs.langchain_changed == 'true' }}
-    runs-on: ${{ fromJSON(matrix.python-version == '3.12' && needs.linux-runner.outputs.hosted_runs_on || needs.linux-runner.outputs.runs_on) }}
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
     container: ubuntu:24.04
     defaults:
       run:
