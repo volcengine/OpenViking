@@ -36,7 +36,9 @@ export function RootSetupGuide({ onCreate }: { onCreate: () => void }) {
         <Button
           variant="outline"
           nativeButton={false}
-          render={<Link to="/connections/user-key" />}
+          render={
+            <Link to="/connections/user-key" search={{ returnTo: '/home' }} />
+          }
         >
           {t('rootSetupExisting')}
         </Button>

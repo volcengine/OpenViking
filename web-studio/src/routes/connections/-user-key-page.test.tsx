@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   flush: vi.fn(),
   success: vi.fn(),
+  search: {} as { returnTo?: '/home' },
 }))
 const connection = {
   baseUrl: 'https://current.test',
@@ -40,6 +41,7 @@ vi.mock('#/features/connection/lib/credential-storage', () => ({
 }))
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mocks.navigate,
+  useSearch: () => mocks.search,
   Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a>,
 }))
 vi.mock('react-i18next', () => ({
@@ -48,6 +50,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('sonner', () => ({ toast: { success: mocks.success, error: vi.fn() } }))
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.search = {}
   mocks.verify.mockResolvedValue({
     ...connection,
     apiKey: 'bob-key',
@@ -112,4 +115,25 @@ it('cancels pending verification when leaving the page', async () => {
   resolve({ ...connection, apiKey: 'bob-key', userId: 'bob' })
   await Promise.resolve()
   expect(mocks.switch).not.toHaveBeenCalled()
+})
+
+it('continues into the workbench after contextual key setup and durable storage', async () => {
+  mocks.search = { returnTo: '/home' }
+  let resolve!: () => void
+  mocks.flush.mockReturnValue(
+    new Promise<void>((done) => {
+      resolve = done
+    }),
+  )
+  render(<UserKeyPage />)
+  fireEvent.change(screen.getByLabelText('profiles.fields.apiKey'), {
+    target: { value: 'bob-key' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'profiles.saveActivate' }))
+  await waitFor(() => expect(mocks.flush).toHaveBeenCalledOnce())
+  expect(mocks.navigate).not.toHaveBeenCalled()
+  resolve()
+  await waitFor(() =>
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/home' }),
+  )
 })

@@ -9,6 +9,12 @@ import {
 } from '#/features/connection/lib/onboarding'
 import type { ConnectionDraft } from '#/features/connection/lib/types'
 
+export function validateUserKeySearch(search: Record<string, unknown>): {
+  returnTo?: '/home'
+} {
+  return search.returnTo === '/home' ? { returnTo: '/home' } : {}
+}
+
 export class UserKeyError extends Error {
   constructor(
     public readonly code: 'rootKey' | 'accountMismatch' | 'identityMissing',

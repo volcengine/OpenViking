@@ -251,19 +251,6 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
                       <span>{t('footer.connection', { ns: 'appShell' })}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-
-            <SidebarGroup
-              className="pb-1"
-              hidden={provider !== 'opensource' || isGatewayHost}
-            >
-              <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
-                {t('sidebar.groups.connections', { ns: 'appShell' })}
-              </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
                   {provider === 'opensource' && !isGatewayHost ? (
                     <SidebarMenuItem>
                       <SidebarMenuButton

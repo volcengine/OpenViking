@@ -37,7 +37,11 @@ export function memoryTypeFromUri(uri: string): string | undefined {
 }
 
 export function isDirectoryResult(item: FindResultItem): boolean {
-  return item.uri.endsWith('/') || item.level < 2
+  const uri = item.uri.trim()
+  // L0/L1 can identify a materialized summary file rather than its directory.
+  const name = fileNameFromUri(uri)
+  if (name === '.abstract.md' || name === '.overview.md') return false
+  return uri.endsWith('/') || item.level < 2
 }
 
 export function resourceSearchForResult(item: FindResultItem): {

@@ -1,6 +1,9 @@
 import { fetchConnectionHealth } from '#/features/connection/lib/health'
 import { verifyStudioSetup } from '#/features/connection/lib/onboarding'
-import { verifyUserKey } from '#/features/connection/lib/user-key'
+import {
+  validateUserKeySearch,
+  verifyUserKey,
+} from '#/features/connection/lib/user-key'
 import { beforeEach, expect, it, vi } from 'vitest'
 
 vi.mock('#/features/connection/lib/health', async (original) => ({
@@ -21,6 +24,19 @@ const source = {
 }
 beforeEach(() => {
   vi.clearAllMocks()
+})
+it('accepts only the workbench destination and ignores arbitrary redirect targets', () => {
+  expect(validateUserKeySearch({ returnTo: '/home' })).toEqual({
+    returnTo: '/home',
+  })
+  for (const returnTo of [
+    '/admin',
+    'https://other.test',
+    '//other.test',
+    undefined,
+  ]) {
+    expect(validateUserKeySearch({ returnTo })).toEqual({})
+  }
 })
 it('resolves the User automatically under the current service/account without submitting Root, and preserves Root', async () => {
   vi.mocked(fetchConnectionHealth).mockResolvedValue({

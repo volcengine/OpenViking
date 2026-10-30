@@ -49,15 +49,16 @@ describe('RetrievalDetailSheet', () => {
   })
 
   it.each([
-    ['en', 'Open in Filesystem'],
-    ['zh-CN', '在文件系统中打开'],
+    ['en', 'Open in Filesystem', 'viking://resources/guide.md', 2],
+    ['zh-CN', '在文件系统中打开', 'viking://resources/guide.md', 2],
+    ['zh-CN', '在文件系统中打开', 'viking://resources/guide/.abstract.md', 0],
+    ['en', 'Open in Filesystem', 'viking://resources/guide/.overview.md', 1],
   ])(
-    'links to the selected file with its translated label in %s',
-    async (lng, label) => {
+    'links to the selected file with its translated label in %s for %s: %s (L%s)',
+    async (lng, label, uri, level) => {
       serviceState.provider = 'opensource'
       const i18n = createInstance()
       await i18n.use(initReactI18next).init({ lng, resources })
-      const uri = 'viking://resources/guide.md'
       const router = createRouter({
         basepath: '/studio',
         history: createMemoryHistory({ initialEntries: ['/studio/'] }),
@@ -72,7 +73,7 @@ describe('RetrievalDetailSheet', () => {
                   abstract: 'Guide summary',
                   category: '',
                   context_type: 'resource',
-                  level: 2,
+                  level,
                   match_reason: '',
                   score: 0.8,
                   uri,
@@ -93,7 +94,9 @@ describe('RetrievalDetailSheet', () => {
       const url = new URL(link!.getAttribute('href')!, 'http://localhost')
       expect(url.pathname).toBe('/studio/filesystem')
       expect(url.searchParams.get('file')).toBe(uri)
-      expect(url.searchParams.get('uri')).toBe('viking://resources/')
+      expect(url.searchParams.get('uri')).toBe(
+        uri.slice(0, uri.lastIndexOf('/') + 1),
+      )
     },
   )
 })

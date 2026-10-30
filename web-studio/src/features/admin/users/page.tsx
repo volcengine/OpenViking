@@ -489,6 +489,8 @@ export function UserManagementPanel() {
                     const identityKey = `${user.accountId}:${user.userId}`
                     const userGroups = memberships.byUser.get(user.userId) ?? []
                     const isCurrentIdentity =
+                      (Boolean(connection.apiKey) ||
+                        serverMode === 'trusted') &&
                       user.accountId === connection.accountId &&
                       user.userId === connection.userId
                     const canSwitchIdentity =

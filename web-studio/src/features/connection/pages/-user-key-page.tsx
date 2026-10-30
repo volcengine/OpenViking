@@ -12,7 +12,7 @@ import {
 } from '#/shared/ui/card'
 import { Field, FieldLabel } from '#/shared/ui/field'
 import { Input } from '#/shared/ui/input'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -21,6 +21,7 @@ export function UserKeyPage() {
   const { t } = useTranslation('studio')
   const { connection, switchIdentity, activeProfileId } = useAppConnection()
   const navigate = useNavigate()
+  const { returnTo } = useSearch({ from: '/connections/user-key' })
   const [apiKey, setApiKey] = React.useState('')
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -65,7 +66,7 @@ export function UserKeyPage() {
     try {
       await flushCredentialStorage()
       toast.success(t('userKey.saved', { user: verified.userId }))
-      await navigate({ to: '/settings' })
+      await navigate({ to: returnTo ?? '/settings' })
     } catch {
       toast.error(t('credentialStorage.saveError'))
     }

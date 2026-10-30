@@ -100,6 +100,11 @@ export function StudioModeSwitch({
         className={buttonClass}
         render={
           <Link
+            search={
+              managementMode && !hasDataIdentity
+                ? { returnTo: '/home' }
+                : undefined
+            }
             to={
               !managementMode
                 ? '/admin'
@@ -159,6 +164,7 @@ export function StudioModeSwitch({
           </div>
           <Link
             to="/connections/user-key"
+            search={{ returnTo: '/home' }}
             onClick={() => request.current?.abort()}
             className="text-sm text-muted-foreground hover:text-foreground"
           >

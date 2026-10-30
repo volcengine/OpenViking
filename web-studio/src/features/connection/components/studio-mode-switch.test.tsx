@@ -38,8 +38,25 @@ vi.mock('#/features/connection/lib/credential-storage', () => ({
 }))
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mocks.navigate,
-  Link: ({ to, children }: { to: string; children: React.ReactNode }) => (
-    <a href={to}>{children}</a>
+  Link: ({
+    to,
+    search,
+    children,
+  }: {
+    to: string
+    search?: { returnTo?: string }
+    children: React.ReactNode
+  }) => (
+    <a
+      href={
+        to +
+        (search?.returnTo
+          ? `?returnTo=${encodeURIComponent(search.returnTo)}`
+          : '')
+      }
+    >
+      {children}
+    </a>
   ),
 }))
 vi.mock('react-i18next', () => ({
@@ -74,7 +91,7 @@ it('always calls the entry Enter Workbench and routes a Root-only connection wit
     screen
       .getByRole('link', { name: 'modes.enterWorkbench' })
       .getAttribute('href'),
-  ).toBe('/connections/user-key')
+  ).toBe('/connections/user-key?returnTo=%2Fhome')
   expect(screen.queryByText('modes.selectUser')).toBeNull()
 })
 it('enters directly when a User key is already active', () => {
