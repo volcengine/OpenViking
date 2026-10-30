@@ -101,7 +101,10 @@ OpenViking automatically detects and converts MCP tool definitions to skill form
 2. Description is preserved
 3. Parameters are extracted from `inputSchema.properties`
 4. Required fields are marked from `inputSchema.required`
-5. Markdown content is generated
+5. Common numeric, string, and array constraints are added to the parameter text
+6. Markdown content is generated
+
+Rendered constraints are `minimum`, `maximum`, `default`, `minLength`, `maxLength`, `pattern`, `minItems`, `maxItems`, and `uniqueItems`.
 
 **Conversion Example**:
 
@@ -119,7 +122,10 @@ Input (MCP format):
             },
             "limit": {
                 "type": "integer",
-                "description": "Max results"
+                "description": "Max results",
+                "minimum": 1,
+                "maximum": 20,
+                "default": 10
             }
         },
         "required": ["query"]
@@ -144,7 +150,7 @@ Search the web
 ## Parameters
 
 - **query** (string) (required): Search query
-- **limit** (integer) (optional): Max results
+- **limit** (integer) (optional): Max results Constraints: minimum: 1; maximum: 20; default: 10.
 
 ## Usage
 
