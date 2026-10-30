@@ -242,6 +242,7 @@ class BotCompileService:
             shuffle_concurrency=self.config.compile.shuffle_concurrency or model_concurrency,
             shuffle_batch_size=self.config.compile.shuffle_batch_size,
             merge_concurrency=self.config.compile.reduce_concurrency or model_concurrency,
+            reduce_evidence_chars=self.config.compile.reduce_evidence_chars,  # type: ignore[union-attr]
         )
         self._semaphore = asyncio.Semaphore(self.limits.concurrent_tasks)
         self._model_slots = asyncio.Semaphore(model_concurrency)

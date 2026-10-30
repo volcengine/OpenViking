@@ -470,6 +470,16 @@ class CompileConfig(BaseModel):
             "None inherits vlm.max_concurrent."
         ),
     )
+    reduce_evidence_chars: int | None = Field(
+        default=None,
+        ge=0,
+        strict=True,
+        description=(
+            "Maximum serialized characters of original evidence automatically included in "
+            "each Reduce assignment; 0 disables preloading, None keeps the default. "
+            "The read_evidence tool remains available."
+        ),
+    )
 
 
 class AgentsConfig(BaseModel):

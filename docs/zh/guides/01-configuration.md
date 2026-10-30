@@ -917,7 +917,7 @@ VLM 的 `model` 填写对应的方舟模型 endpoint ID。`video_fps` 仅用于�
 
 ### bot.compile
 
-配置单个 Resource Compile 任务各阶段的并发工作数，适用于直接模型调用和 agent 执行：
+配置 Resource Compile 任务各阶段的并发工作数和 Reduce 自动证据预算：
 
 ```json
 {
@@ -926,7 +926,8 @@ VLM 的 `model` 填写对应的方舟模型 endpoint ID。`video_fps` 仅用于�
       "map_concurrency": 8,
       "shuffle_concurrency": 4,
       "shuffle_batch_size": 4,
-      "reduce_concurrency": 6
+      "reduce_concurrency": 6,
+      "reduce_evidence_chars": 0
     }
   }
 }
@@ -938,8 +939,11 @@ VLM 的 `model` 填写对应的方舟模型 endpoint ID。`video_fps` 仅用于�
 | `shuffle_concurrency` | 继承 `vlm.max_concurrent` | Shuffle 路由工作及 embedding 批次并发数 |
 | `shuffle_batch_size` | `4` | 每次 Shuffle 路由请求的主记录数上限；与并发数、字符软预算独立 |
 | `reduce_concurrency` | 继承 `vlm.max_concurrent` | Reduce 工作并发数；同路径候选的最终 merge 复用此值 |
+| `reduce_evidence_chars` | `null` | 每次 Reduce/Reduce-merge 任务自动附带的原始证据序列化字符上限；`0` 表示不预加载 |
 
 三个并发配置项必须为正整数；省略或设为 `null` 时继承默认值。`shuffle_batch_size` 必须为正整数，省略时为 `4`，不接受 `null`。路由逐条保存合法结果，仅失败记录重新组批重试，最后一次降为单条；每条记录最多尝试三轮。修改后需重启 VikingBot 服务。一个 VikingBot 服务内的所有 Compile 任务仍共享 `vlm.max_concurrent` 限制的模型请求容量，因此提高阶段并发不会突破这一总上限。Embedding 请求另受 embedding 服务的并发限制。恢复任务默认使用相同的 reduce 配置，显式 `--concurrency` 可覆盖恢复并发数。
+
+`reduce_evidence_chars` 是可选的非负整数。省略或设为 `null` 时维持原有自动预加载行为；设为 `0` 时模型仍可通过 `read_evidence` 按需读取授权原文；正数限制每次任务自动预加载的证据量。它不限制后续工具读取或整项任务的总 token 用量。较小的值可减少初始提示大小，但可能增加证据读取调用。修改后需重启 VikingBot。
 
 Compile 继承模型的 thinking 和 reasoning 配置。模型请求使用有效模型超时配置（`bot.agents.timeout` 或继承的 `vlm.timeout`）。
 

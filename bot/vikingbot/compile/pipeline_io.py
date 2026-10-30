@@ -232,7 +232,8 @@ class JsonModel:
         self.reserve = self.output_tokens * 4
         self.identity = {"version": PROCESSING_VERSION, "model": model, "temperature": temperature}
         self.identity.update(
-            batch_target_chars=self.budget, output_reserve_tokens=self.output_tokens
+            batch_target_chars=self.budget,
+            output_reserve_tokens=self.output_tokens,
         )
         self.identity["thinking"] = {
             "map": False,
@@ -384,14 +385,26 @@ class JsonModel:
             # Inline original excerpts when located; unlocated records retain full shards.
             # The scoped reader can expand partial evidence without catalog access.
             evidence = EvidenceReader(self.files, data)
-            for reference in sorted(evidence.allowed - evidence.delivered):
+            preload_limit = (
+                self.limits.reduce_evidence_chars if stage in {"reduce", "reduce_merge"} else None
+            )
+            preloaded_chars = 0
+            for reference in (
+                sorted(evidence.allowed - evidence.delivered) if preload_limit != 0 else ()
+            ):
                 source = await evidence.read(reference, evidence.spans.get(reference, ()))
+                if preload_limit is not None:
+                    source_chars = len(json.dumps({reference: source}, ensure_ascii=False))
+                    if preloaded_chars + source_chars > preload_limit:
+                        continue
                 candidate = {
                     **data,
                     "original_evidence": {**data.get("original_evidence", {}), reference: source},
                 }
                 if self.fits(system, candidate, schema):
                     data = candidate
+                    if preload_limit is not None:
+                        preloaded_chars += source_chars
         # Combine consolidates supplied evidence without loading Skill instructions or attachments.
         resources = self.resources if stage not in {"plan", "review", "route", "combine"} else None
         if resources and resources.snapshots:

@@ -925,7 +925,7 @@ Media processing sends file content to the configured external provider. Disable
 
 ### bot.compile
 
-Set the number of concurrent workers per Resource Compile task and stage, for both direct model calls and agent execution:
+Set per-stage worker counts and the automatic Reduce evidence budget for Resource Compile tasks:
 
 ```json
 {
@@ -934,7 +934,8 @@ Set the number of concurrent workers per Resource Compile task and stage, for bo
       "map_concurrency": 8,
       "shuffle_concurrency": 4,
       "shuffle_batch_size": 4,
-      "reduce_concurrency": 6
+      "reduce_concurrency": 6,
+      "reduce_evidence_chars": 0
     }
   }
 }
@@ -946,8 +947,11 @@ Set the number of concurrent workers per Resource Compile task and stage, for bo
 | `shuffle_concurrency` | Inherits `vlm.max_concurrent` | Concurrent Shuffle routing jobs and embedding batches |
 | `shuffle_batch_size` | `4` | Maximum primary records per routing request, independent of concurrency and the soft character budget |
 | `reduce_concurrency` | Inherits `vlm.max_concurrent` | Concurrent Reduce jobs; final same-path candidate merges reuse this value |
+| `reduce_evidence_chars` | `null` | Maximum serialized characters of original evidence automatically included per Reduce/Reduce-merge assignment; `0` disables preloading |
 
 Concurrency values must be positive integers; omitted or `null` values inherit the default. `shuffle_batch_size` must be a positive integer, defaults to `4`, and does not accept `null`. Routing saves valid decisions individually and re-batches only failed records; the final retry uses single-record requests, with at most three rounds per record. Restart VikingBot after changing these settings. All Compile tasks within one VikingBot service still share the model-request capacity set by `vlm.max_concurrent`, so raising stage concurrency cannot exceed that total limit. Embedding requests also obey the embedding service's own concurrency limit. Recovery uses the same reduce setting by default; an explicit `--concurrency` overrides recovery concurrency.
+
+`reduce_evidence_chars` is an optional non-negative integer. Omit it or use `null` to retain automatic preloading; use `0` to leave original evidence for the model to request with `read_evidence`, or a positive value to cap preloaded evidence per assignment. This controls only automatic preloading, not later tool reads or total task token use. A smaller value can reduce prompt size but may require more evidence-read calls. Restart VikingBot after changing it.
 
 Compile inherits the model's thinking and reasoning settings. Model requests use the effective model timeout (`bot.agents.timeout`, or inherited `vlm.timeout`).
 
