@@ -10,7 +10,7 @@ POOLS = ("openviking-ecs", "ov-ci-runner")
 HOSTED = ["ubuntu-24.04"]
 
 
-def select(pool, runners, trusted=True, run_id=0):
+def select(pool, runners, trusted=True, run_id=0, selector_runner=""):
     if pool not in ("auto", "github-hosted", *POOLS):
         raise ValueError(f"Unknown Linux test pool: {pool}")
     if not trusted:
@@ -26,7 +26,12 @@ def select(pool, runners, trusted=True, run_id=0):
             if pool not in ("auto", name):
                 continue
             if {"self-hosted", "linux", "x64", name} <= labels:
-                if runner.get("status") == "online" and not runner.get("busy", True):
+                # The selector's own runner becomes available when this job
+                # finishes, before dependent test jobs can start.
+                available = not runner.get("busy", True) or (
+                    selector_runner and runner.get("name") == selector_runner
+                )
+                if runner.get("status") == "online" and available:
                     candidates.append(name)
     candidates = sorted(set(candidates))
     if candidates:
@@ -74,7 +79,13 @@ def main():
             # Do not print request headers, credentials or response bodies.
             print("::warning::Runner inventory unavailable; falling back to GitHub-hosted")
             runners = []
-    labels, reason = select(args.pool, runners, trusted, os.environ["GITHUB_RUN_ID"])
+    labels, reason = select(
+        args.pool,
+        runners,
+        trusted,
+        os.environ["GITHUB_RUN_ID"],
+        os.environ.get("RUNNER_NAME", ""),
+    )
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
         stream.write(f"runs_on={json.dumps(labels)}\n")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:

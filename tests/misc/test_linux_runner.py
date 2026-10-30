@@ -3,6 +3,9 @@
 import importlib.util
 import io
 import json
+import os
+import subprocess
+import sys
 import urllib.error
 from pathlib import Path
 
@@ -19,6 +22,7 @@ SPEC.loader.exec_module(router)
 
 def runner(pool="openviking-ecs", status="online", busy=False, labels=None):
     return {
+        "name": pool,
         "status": status,
         "busy": busy,
         "labels": [{"name": name} for name in (labels or ["self-hosted", "Linux", "X64", pool])],
@@ -51,6 +55,18 @@ def test_auto_rotates_idle_pools_and_ignores_inventory_order():
     assert router.select("auto", inventory, run_id=2)[0][-1] == "openviking-ecs"
     assert router.select("auto", inventory, run_id=3)[0][-1] == "ov-ci-runner"
     assert router.select("auto", inventory[::-1], run_id=3)[0][-1] == "ov-ci-runner"
+
+
+@pytest.mark.parametrize("pool", router.POOLS)
+def test_selector_can_choose_its_own_busy_host_after_finishing(pool):
+    inventory = [runner("openviking-ecs", busy=True), runner("ov-ci-runner", busy=True)]
+    assert router.select("auto", inventory, selector_runner=pool)[0][-1] == pool
+    assert router.select("auto", inventory, selector_runner="unrelated-host")[0] == router.HOSTED
+
+
+def test_selector_does_not_choose_its_own_offline_host():
+    inventory = [runner(status="offline", busy=True)]
+    assert router.select("auto", inventory, selector_runner="openviking-ecs")[0] == router.HOSTED
 
 
 def test_label_matching_is_case_insensitive():
@@ -138,6 +154,52 @@ def test_cli_inventory_failure_falls_back_without_leaking_token(
 
 def workflow(name):
     return yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
+
+
+def embedded_selector():
+    job = workflow("_linux-runner.yml")["jobs"]["select"]
+    assert "ci-linux-selector" in job["runs-on"]
+    assert job["container"] == "python:3.12-slim"
+    assert all("uses" not in step for step in job["steps"])
+    step = job["steps"][0]
+    assert step["working-directory"] == "/"
+    command, script = step["run"].split("\n", 1)
+    assert command == "python3 -I - --pool \"$POOL\" <<'PY'"
+    assert script.endswith("PY\n")
+    return script.removesuffix("PY\n")
+
+
+def test_self_hosted_selector_embeds_the_tested_script_without_checkout():
+    assert embedded_selector() == (ROOT / ".github/scripts/linux_runner.py").read_text()
+
+
+def test_embedded_fork_selector_ignores_workspace_imports_and_pythonpath(tmp_path):
+    (tmp_path / "json.py").write_text("raise RuntimeError('untrusted workspace was imported')\n")
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"head": {"repo": {"full_name": "other/fork"}}}}))
+    output = tmp_path / "output"
+    summary = tmp_path / "summary"
+    env = {
+        **os.environ,
+        "GITHUB_EVENT_PATH": str(event),
+        "GITHUB_REPOSITORY": "volcengine/OpenViking",
+        "GITHUB_RUN_ID": "42",
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_STEP_SUMMARY": str(summary),
+        "PYTHONPATH": str(tmp_path),
+        "RUNNER_READ_TOKEN": "",
+    }
+    result = subprocess.run(
+        [sys.executable, "-I", "-", "--pool", "ov-ci-runner"],
+        input=embedded_selector(),
+        text=True,
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(output.read_text().split("=", 1)[1]) == router.HOSTED
+    assert "Fork PRs" in result.stdout
 
 
 @pytest.mark.parametrize(

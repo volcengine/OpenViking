@@ -28,8 +28,24 @@ checks retain their existing hosted runners.
 Manual test workflows also accept `linux_pool` to override the repository
 variable for one run; reusable full/lite workflows accept the same input.
 
+The selector itself runs on `[self-hosted, Linux, X64, ci-linux-selector]` in
+the official repository. Add the `ci-linux-selector` custom label to both the
+original ECS and ov-ci-runner; GitHub assigns the job to an available matching
+host. It does not need GitHub-hosted Linux capacity to begin selection. If both
+hosts are busy or offline, the selector waits in the self-hosted queue.
+Non-official repositories retain a hosted selector because they do not have
+these prepared hosts.
+
+The selector runs embedded Python in a disposable `python:3.12-slim` container,
+without checkout or local actions. Python isolated mode and working directory
+`/` prevent importing files left in the runner workspace. The embedded script
+is checked against `.github/scripts/linux_runner.py` by the regression suite.
+Fork PRs may run this selection job on the shared hosts, but their test code
+still selects GitHub-hosted and they receive no inventory secret.
+
 In `auto`, the selector queries runner inventory, chooses an online idle Linux
-x64 pool, and alternates ties by workflow run ID. Missing inventory credentials,
+x64 pool (also allowing its own host, which becomes free when selection finishes),
+and alternates ties by workflow run ID. Missing inventory credentials,
 API failures, offline/busy runners or unmatched labels fall back to
 `ubuntu-24.04`. The selector's summary records its decision. This is an
 availability snapshot, not a capacity reservation: concurrent workflows can
