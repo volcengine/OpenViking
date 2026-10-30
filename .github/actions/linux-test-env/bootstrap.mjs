@@ -12,7 +12,7 @@ if (env['INPUT_INSTALL-DEPENDENCIES'] !== 'false') {
   execFileSync('bash', ['-e', '-c', `
   apt-get update
   apt-get install -y --no-install-recommends \
-    ca-certificates curl git sudo build-essential cmake pkg-config \
+    ca-certificates curl git jq sudo build-essential cmake pkg-config \
     zip unzip xz-utils libssl-dev libicu74 python3 ffmpeg
 `], { stdio: 'inherit' });
 }

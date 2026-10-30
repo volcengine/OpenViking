@@ -61,6 +61,12 @@ jobs:
           # 24+: the pi extension tests import .ts glue directly via native type stripping.
           node-version: '24'
 
+      - name: Check plugin installer tools
+        run: |
+          for tool in bash node git curl jq zip unzip tar sha256sum; do
+            command -v "$tool"
+          done
+
       - run: npm ci --prefix examples/dsh-memory-plugin
       - run: npm ci --prefix examples/pi-coding-agent-extension --ignore-scripts
 
