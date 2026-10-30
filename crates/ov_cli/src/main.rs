@@ -941,6 +941,9 @@ enum Commands {
         /// Include the full visible content for every matched URI
         #[arg(long, help_heading = "Advanced options")]
         read_content: bool,
+        /// Include per-query retrieval provenance in JSON output
+        #[arg(long, help_heading = "Advanced options")]
+        include_provenance: bool,
         /// Enable event decay with protection duration: 0 (immediate) or Xm/Xh/Xd
         #[arg(
             long,
@@ -1038,6 +1041,9 @@ enum Commands {
         /// Include the full visible content for every matched URI (list mode only)
         #[arg(long, help_heading = "Advanced options")]
         read_content: bool,
+        /// Include per-query retrieval provenance in list-mode JSON output
+        #[arg(long, help_heading = "Advanced options")]
+        include_provenance: bool,
         /// Enable event decay with protection duration: 0 (immediate) or Xm/Xh/Xd
         #[arg(
             long,
@@ -3944,6 +3950,7 @@ async fn main() {
             context_type,
             tags,
             read_content,
+            include_provenance,
             events_time_decay_protection,
         } => {
             handlers::handle_find(
@@ -3958,6 +3965,7 @@ async fn main() {
                 context_type,
                 tags,
                 read_content,
+                include_provenance,
                 events_time_decay_protection,
                 ctx,
             )
@@ -3978,6 +3986,7 @@ async fn main() {
             context_type,
             tags,
             read_content,
+            include_provenance,
             events_time_decay_protection,
         } => {
             handlers::handle_search(
@@ -3995,6 +4004,7 @@ async fn main() {
                 context_type,
                 tags,
                 read_content,
+                include_provenance,
                 events_time_decay_protection,
                 ctx,
             )
@@ -4198,6 +4208,30 @@ mod tests {
                 );
             }
             _ => panic!("expected find command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_find_provenance_flag() {
+        let find = Cli::try_parse_from(["ov", "find", "invoice", "--include-provenance"])
+            .expect("find provenance flag should parse");
+        match find.command {
+            Commands::Find {
+                include_provenance, ..
+            } => assert!(include_provenance),
+            _ => panic!("expected find command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_search_provenance_flag() {
+        let search = Cli::try_parse_from(["ov", "search", "invoice", "--include-provenance"])
+            .expect("search provenance flag should parse");
+        match search.command {
+            Commands::Search {
+                include_provenance, ..
+            } => assert!(include_provenance),
+            _ => panic!("expected search command"),
         }
     }
 

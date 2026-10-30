@@ -765,6 +765,7 @@ impl HttpClient {
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         read_content: bool,
+        include_provenance: bool,
         events_time_decay_protection: Option<String>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
@@ -781,6 +782,7 @@ impl HttpClient {
             "context_type": context_type,
             "tags": tags,
             "read_content": read_content.then_some(true),
+            "include_provenance": include_provenance.then_some(true),
             "events_time_decay_protection": events_time_decay_protection,
         });
         compact_request_body(&mut body);
@@ -804,6 +806,7 @@ impl HttpClient {
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         read_content: bool,
+        include_provenance: bool,
         events_time_decay_protection: Option<String>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
@@ -824,6 +827,7 @@ impl HttpClient {
             "context_type": context_type,
             "tags": tags,
             "read_content": read_content.then_some(true),
+            "include_provenance": include_provenance.then_some(true),
             "events_time_decay_protection": events_time_decay_protection,
         });
         compact_request_body(&mut body);
@@ -2474,6 +2478,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn find_sends_provenance_only_when_requested() {
+        let (default_url, default_request_rx) = spawn_request_capture_server().await;
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        default_client
+            .find(
+                "architecture".to_string(),
+                String::new(),
+                None,
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                false,
+                None,
+            )
+            .await
+            .expect("default find should succeed");
+
+        let default_request = default_request_rx
+            .await
+            .expect("default request should be captured");
+        assert!(!default_request.contains(r#""include_provenance""#));
+
+        let (opt_in_url, opt_in_request_rx) = spawn_request_capture_server().await;
+        let opt_in_client = HttpClient::new(opt_in_url, None, None, None, None, 5.0, false, None);
+        opt_in_client
+            .find(
+                "architecture".to_string(),
+                String::new(),
+                None,
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                true,
+                None,
+            )
+            .await
+            .expect("provenance find should succeed");
+
+        let opt_in_request = opt_in_request_rx
+            .await
+            .expect("opt-in request should be captured");
+        assert!(opt_in_request.contains(r#""include_provenance":true"#));
+    }
+
+    #[tokio::test]
     async fn search_list_request_preserves_legacy_server_compatibility() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
@@ -2494,6 +2555,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 None,
             )
             .await
@@ -2506,6 +2568,38 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(body).unwrap(),
             json!({"query": "OAuth token", "target_uri": "", "limit": 10})
         );
+    }
+
+    #[tokio::test]
+    async fn search_list_request_sends_provenance_when_requested() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .search(
+                "architecture".to_string(),
+                String::new(),
+                None,
+                "semantic".to_string(),
+                "list".to_string(),
+                None,
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                true,
+                None,
+            )
+            .await
+            .expect("provenance search should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/search/search "));
+        assert!(request.contains(r#""include_provenance":true"#));
     }
 
     #[tokio::test]
@@ -2528,6 +2622,7 @@ mod tests {
                 None,
                 Some(vec!["memory".to_string()]),
                 Some(vec!["project=openviking".to_string()]),
+                false,
                 false,
                 Some("7d".to_string()),
             )
