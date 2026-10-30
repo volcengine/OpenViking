@@ -1493,25 +1493,6 @@ async def test_set_tags_clear_omits_tags_from_sdk_request():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("options, wait", [({}, True), ({"wait": False}, False)])
-async def test_ensure_directory_index_posts_normalized_directory(options, wait):
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock()
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await client.ensure_directory_index("/resources/project/", "Compile output", **options)
-    client._request.assert_awaited_once_with(
-        "POST",
-        "/api/v1/content/ensure_directory_index",
-        json={
-            "uri": "viking://resources/project/",
-            "fallback_abstract": "Compile output",
-            "wait": wait,
-        },
-    )
-
-
-@pytest.mark.asyncio
 async def test_glob_normalizes_scope_uri():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))

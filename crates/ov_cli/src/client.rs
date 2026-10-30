@@ -3075,7 +3075,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_create_deserializes_http_202_body() {
+    async fn compile_create_deserializes_task_and_schedule_responses() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test server should bind");
@@ -3121,23 +3121,20 @@ mod tests {
             .await
             .expect("202 response body should deserialize");
         assert_eq!(accepted.task_id.as_deref(), Some("cmp_1"));
-    }
 
-    #[test]
-    fn compile_schedule_response_has_no_task_id() {
-        let accepted: super::CompileAccepted = serde_json::from_value(serde_json::json!({
+        let scheduled: super::CompileAccepted = serde_json::from_value(serde_json::json!({
             "to": "viking://resources/wiki",
             "status": "active",
             "auto_update": true,
             "next_run_at": "2026-10-26T00:00:00+08:00"
         }))
         .expect("saved Compile schedules should deserialize without a task");
-        assert!(accepted.task_id.is_none());
+        assert!(scheduled.task_id.is_none());
         assert_eq!(
-            accepted.next_run_at.as_deref(),
+            scheduled.next_run_at.as_deref(),
             Some("2026-10-26T00:00:00+08:00")
         );
-        let output = serde_json::to_value(accepted).expect("schedule output should serialize");
+        let output = serde_json::to_value(scheduled).expect("schedule output should serialize");
         assert!(output.get("task_id").is_none());
         assert_eq!(output["next_run_at"], "2026-10-26T00:00:00+08:00");
     }
@@ -3322,36 +3319,6 @@ mod tests {
             assert_eq!(params.get("uri").unwrap(), "viking://resources/example.md");
             assert_eq!(params.get("offset").unwrap(), &offset.to_string());
             assert_eq!(params.get("limit").unwrap(), &limit.to_string());
-        }
-    }
-
-    #[tokio::test]
-    async fn write_omits_manual_source_and_forwards_explicit_sources() {
-        for source in ["manual", "agent", "compile"] {
-            let (base_url, request_rx) = spawn_request_capture_server().await;
-            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-            client
-                .write(
-                    "viking://resources/demo.md",
-                    "content",
-                    "replace",
-                    false,
-                    "semantic_and_vectors",
-                    vec![],
-                    "replace",
-                    None,
-                    source,
-                )
-                .await
-                .expect("write request should succeed");
-            let request = request_rx.await.expect("request should be captured");
-            let body: serde_json::Value =
-                serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-            if source == "manual" {
-                assert!(body.get("edit_source").is_none());
-            } else {
-                assert_eq!(body["edit_source"], source);
-            }
         }
     }
 

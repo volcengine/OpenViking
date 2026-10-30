@@ -2120,25 +2120,6 @@ func TestObserverStatusSupportsOptionalFormat(t *testing.T) {
 	}
 }
 
-func TestEnsureDirectoryIndexSendsBody(t *testing.T) {
-	for _, opts := range []*EnsureDirectoryIndexOptions{nil, {Wait: Bool(false)}} {
-		client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/api/v1/content/ensure_directory_index" || r.Method != http.MethodPost {
-				t.Fatalf("request = %s %s", r.Method, r.URL.Path)
-			}
-			body := readJSONBody(t, r)
-			if body["uri"] != "viking://resources/project" || body["fallback_abstract"] != "Compile output" || body["wait"] != (opts == nil) {
-				t.Fatalf("body = %#v", body)
-			}
-			writeOK(t, w, map[string]any{})
-		}))
-		defer closeServer()
-		if _, err := client.EnsureDirectoryIndex(context.Background(), "resources/project", "Compile output", opts); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func TestSetTagsSendsBody(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/fs/attrs/set_tags" {

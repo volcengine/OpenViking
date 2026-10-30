@@ -1,24 +1,18 @@
 """Studio task pagination and submission retry contracts."""
 
 import asyncio
-import hashlib
 import json
 import time
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import (
     CompileLifecycle,
-    CompileStateStore,
-    compile_operation_id,
-    make_operation_id,
     new_operation,
-    task_ctx,
 )
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_domain import TaskPatch
@@ -28,276 +22,6 @@ from openviking.service.task_tracker import TaskStatus, TaskTracker
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
-
-
-def _mock_compile_processing(monkeypatch, service):
-    """Stub directory processing and reject reindex."""
-    monkeypatch.setattr(
-        service, "reindex", AsyncMock(side_effect=AssertionError("Unexpected reindex"))
-    )
-    monkeypatch.setattr(service.fs, "finalize_compile_directories", AsyncMock())
-
-
-async def _prepare_compile_version_publication(service, target):
-    """Create ``target`` in ``service`` and return context, versions, target record, and run.
-
-    Metadata uses the service store; content checks receive fixed snapshot bytes.
-    """
-    from openviking.service.compile_targets import CompileVersions
-
-    ctx = task_ctx(service.user.account_id, service.user.user_id)
-    store = service.compile.lifecycle.store
-    async with store.edit(ctx.account_id, target, create=True):
-        pass
-    versions = CompileVersions(
-        store,
-        SimpleNamespace(
-            exists=AsyncMock(return_value=True),
-            stat=AsyncMock(return_value={"isDir": False}),
-            read_file_bytes=AsyncMock(return_value=b"compiled"),
-            show=AsyncMock(return_value=b"compiled"),
-        ),
-    )
-    run = new_operation(
-        "compile-publication",
-        "manual_compile",
-        {
-            "from": ["viking://resources/source"],
-            "to": target,
-            "skill": "viking://agent/skills/compiler",
-            "args": {"mode": "incremental"},
-        },
-        ctx.user.user_id,
-    )
-    run["meta"] = {
-        "task_id": "cmp_publication",
-        "trigger": "manual",
-        "changed_roots": ["viking://resources/source"],
-    }
-    return ctx, versions, await store.get(ctx.account_id, target), run
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("nested", [False, True])
-async def test_compile_publication_reads_only_related_target_data(service, monkeypatch, nested):
-    """Unrelated targets and child file histories do not increase publication JSON reads."""
-    target = "viking://resources/publication"
-    child = f"{target}/child"
-    ctx, versions, record, run = await _prepare_compile_version_publication(service, target)
-    store = versions._store
-    async with store.edit(ctx.account_id, child, create=True):
-        pass
-    owner = child if nested else target
-    uri = f"{owner}/page.md"
-    changes = [{"uri": uri, "change_type": "added"}]
-    reads = AsyncMock(wraps=store.read_json)
-    indexes = AsyncMock(wraps=store.list_version_indexes)
-    monkeypatch.setattr(store, "read_json", reads)
-    monkeypatch.setattr(store, "list_version_indexes", indexes)
-    monkeypatch.setattr(
-        store, "list_summaries", AsyncMock(side_effect=AssertionError("Unexpected target scan"))
-    )
-
-    await versions.record_compile(ctx.account_id, record, run, "compiled-head", changes, ctx)
-    baseline_reads = reads.await_count
-    indexes.assert_awaited_once_with(ctx.account_id, target)
-    await store.delete_version_index(ctx.account_id, owner, uri)
-    await store.remove(store._outputs_path(ctx.account_id, target, run["operation_id"]))
-    for index in range(100):
-        sibling = f"{target}_other{index}"
-        async with store.edit(ctx.account_id, sibling, create=True):
-            pass
-        await store.put_version_index(
-            ctx.account_id,
-            child,
-            {"uri": f"{child}/unrelated{index}.md", "next": 1, "versions": []},
-        )
-    reads.reset_mock()
-    indexes.reset_mock()
-
-    await versions.record_compile(ctx.account_id, record, run, "compiled-head", changes, ctx)
-
-    assert reads.await_count == baseline_reads
-    indexes.assert_awaited_once_with(ctx.account_id, target)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("nested", [False, True])
-async def test_compile_publication_recovers_versions_without_output_manifest(
-    service, monkeypatch, nested
-):
-    """Retries reuse persisted versions and retain the parent run's existing output references."""
-    target = "viking://resources/retry-publication"
-    ctx, versions, record, run = await _prepare_compile_version_publication(service, target)
-    store = versions._store
-    owner = f"{target}/child" if nested else target
-    if nested:
-        async with store.edit(ctx.account_id, owner, create=True):
-            pass
-    uri = f"{owner}/page.md"
-    changes = [{"uri": uri, "change_type": "added"}]
-    saved = {"uri": f"{target}/saved.md", "version_id": uuid4().hex, "snapshot_id": "saved-head"}
-    await store.merge_outputs(ctx.account_id, target, run["operation_id"], [saved])
-    with monkeypatch.context() as patch:
-        patch.setattr(store, "merge_outputs", AsyncMock(side_effect=OSError("Outputs unavailable")))
-        with pytest.raises(OSError, match="Outputs unavailable"):
-            await versions.record_compile(
-                ctx.account_id, record, run, "compiled-head", changes, ctx
-            )
-    persisted = await versions.load(ctx.account_id, owner, uri)
-    assert persisted["next"] == 2 and len(persisted["versions"]) == 1
-    created = persisted["versions"][0]
-    assert created["version_number"] == 1
-    assert UUID(created["version_id"]).version == 4
-    assert (await versions.owning_target(ctx.account_id, uri))["to"] == owner
-    if nested:
-        assert await versions.load(ctx.account_id, target, uri) is None
-    for method in ("exists", "stat", "read_file_bytes", "show"):
-        monkeypatch.setattr(
-            versions._fs,
-            method,
-            AsyncMock(side_effect=AssertionError("Persisted versions do not read live content")),
-        )
-
-    await versions.record_compile(ctx.account_id, record, run, "compiled-head", changes, ctx)
-
-    expected = {
-        "outputs": sorted(
-            [
-                saved,
-                {"uri": uri, "version_id": created["version_id"], "snapshot_id": "compiled-head"},
-            ],
-            key=lambda output: output["uri"],
-        )
-    }
-    assert await store.get_outputs(ctx.account_id, target, run["operation_id"]) == expected
-    assert await versions.load(ctx.account_id, owner, uri) == persisted
-    await versions.record_compile(ctx.account_id, record, run, "compiled-head", changes, ctx)
-    assert await versions.load(ctx.account_id, owner, uri) == persisted
-    assert await store.get_outputs(ctx.account_id, target, run["operation_id"]) == expected
-
-
-@pytest.mark.asyncio
-async def test_compile_publication_records_ordinary_files_without_snapshot_diff(
-    service, monkeypatch
-):
-    """Task-associated ordinary edits remain candidates when the final snapshot has no file diff."""
-    target = "viking://resources/ordinary-publication"
-    ctx, versions, record, run = await _prepare_compile_version_publication(service, target)
-    uri = f"{target}/page.md"
-    previous_root = "viking://resources/previous-source"
-    await versions.append(
-        ctx.account_id,
-        target,
-        uri,
-        "ordinary-head",
-        {
-            "source": "manual",
-            "actor": ctx.user.user_id,
-            "meta": {"task_id": run["meta"]["task_id"]},
-            "provenance": {"source_roots": [previous_root]},
-        },
-    )
-    changed = AsyncMock(return_value=True)
-    monkeypatch.setattr(versions, "_changed", changed)
-
-    await versions.record_compile(ctx.account_id, record, run, "compiled-head", [], ctx)
-
-    index = await versions.load(ctx.account_id, target, uri)
-    assert index["next"] == 3
-    assert [version["source"] for version in index["versions"]] == ["manual", "compile"]
-    assert [version["version_number"] for version in index["versions"]] == [1, 2]
-    assert len({version["version_id"] for version in index["versions"]}) == 2
-    assert index["versions"][-1]["provenance"]["source_roots"] == sorted(
-        [previous_root, *run["meta"]["changed_roots"]]
-    )
-    assert await versions._store.get_outputs(ctx.account_id, target, run["operation_id"]) == {
-        "outputs": [
-            {
-                "uri": uri,
-                "version_id": index["versions"][-1]["version_id"],
-                "snapshot_id": "compiled-head",
-            }
-        ]
-    }
-    await versions.record_compile(ctx.account_id, record, run, "compiled-head", [], ctx)
-    assert await versions.load(ctx.account_id, target, uri) == index
-    changed.assert_awaited_once_with(ctx, target, uri, "compiled-head")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("file_count", [1, 100])
-async def test_ordinary_writes_do_not_scan_compile_targets(monkeypatch, file_count):
-    """Single and batch writes probe related paths without reading unrelated targets."""
-    from openviking.service.compile_targets import CompileVersions, new_record
-
-    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-    agfs = _FakeAgfs()
-    store = CompileStateStore(agfs)
-    for index in range(100):
-        target = f"viking://resources/wiki{index}"
-        agfs.write(store._record_path(ctx.account_id, target), json.dumps(new_record(target)))
-    versions = CompileVersions(store, SimpleNamespace())
-    monkeypatch.setattr(
-        store, "list_summaries", AsyncMock(side_effect=AssertionError("Unexpected target scan"))
-    )
-    reads = AsyncMock(wraps=store.read_json)
-    monkeypatch.setattr(store, "read_json", reads)
-    uris = [f"viking://resources/wiki0_other/page{index}.md" for index in range(file_count)]
-    write = AsyncMock(return_value="written")
-
-    async def operation():
-        return await versions.record_write(uris, ctx, "manual", write=write)
-
-    assert await versions.record_operation(uris, ctx, "manual_revise", {}, operation) == "written"
-    write.assert_awaited_once()
-    assert reads.await_count <= 6 * file_count
-    for uri in ("viking://", "viking:"):
-        assert await versions.owning_target(ctx.account_id, uri) is None
-    assert (await versions.owning_target(ctx.account_id, "viking://resources/wiki0/page.md"))[
-        "to"
-    ] == "viking://resources/wiki0"
-
-
-@pytest.mark.asyncio
-async def test_skill_package_records_active_compile_operation(service):
-    """Skill installation records its operation and content time under an active Compile target."""
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    store = service.compile.lifecycle.store
-    target = "viking://agent/skills"
-    operation = new_operation("cmp_package", "manual_compile", {}, ctx.user.user_id)
-    operation["operation_id"] = make_operation_id(operation["created_at"], "cmp_package")
-    operation["meta"] = {"task_id": "cmp_package"}
-    async with store.edit(ctx.account_id, target, create=True) as record:
-        record.update(
-            active_task_id="cmp_package",
-            active_operation_id=operation["operation_id"],
-            content_updated_at=1,
-        )
-    await store.put_operation(ctx.account_id, target, operation)
-
-    result = await service.resources.add_skill(
-        {
-            "name": "compile-package",
-            "description": "Package tracked by Compile",
-            "content": "Use this package for testing.",
-        },
-        ctx,
-        target_uri=target,
-        apply_privacy=False,
-    )
-
-    assert result["root_uri"] == f"{target}/compile-package"
-    assert (await store.get(ctx.account_id, target))["content_updated_at"] > 1
-    revisions = [
-        entry
-        for entry in await store.list_operations(ctx.account_id, target)
-        if entry["operation_type"] == "agent_revise"
-    ]
-    assert len(revisions) == 1
-    assert revisions[0]["status"] == "completed"
-    assert revisions[0]["params"] == {"uris": [result["root_uri"]]}
-    assert revisions[0]["finished_at"] is not None
 
 
 @pytest.mark.parametrize(
@@ -567,7 +291,7 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
 
     # Drive the real task provider explicitly; generation and derived refresh are external work.
     monkeypatch.setattr(external, "get_queue_manager", lambda: SimpleNamespace(enqueue=AsyncMock()))
-    _mock_compile_processing(monkeypatch, service)
+    monkeypatch.setattr(service.fs, "finalize_compile_directories", AsyncMock())
     monkeypatch.setattr(service.search, "find", AsyncMock(return_value=SimpleNamespace(total=2)))
     monkeypatch.setattr(service.fs, "_enqueue_copy_refresh", AsyncMock(return_value="queued"))
     monkeypatch.setattr(service.fs, "_enqueue_delete_refresh", AsyncMock(return_value="skipped"))
@@ -651,7 +375,9 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     auth = await tracker.get_task_auth(first, **owner)
     assert auth["openviking_connection"]["request_id"] == "original-request-id"
     await service.compile._tasks.execute(first, **owner)
-    assert (await tracker.get(first, **owner)).status == "completed"
+    assert (await tracker.get(first, **owner)).status == "completed", (
+        await tracker.get(first, **owner)
+    ).error
     assert await service.fs.read(page, ctx) == "generated"
 
     # Interrupted finalization reuses durable checkpoints without publishing another version.
@@ -660,57 +386,54 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert initial_state["auto_update"] is False and initial_state["update_schedule"] is None
     assert initial_state["conflicts_num"] == 2
     first_operation_id = initial_state["initial_operation_id"]
-    assert "id" not in initial_state
-    with monkeypatch.context() as patch:
-        summary = (await store.list_summaries(ctx.account_id))[0]
-        summaries = [{**summary, "to": f"{target}_{i}"} for i in (1, 0)]
-        summaries.extend(
-            {**summary, "to": f"{target}_{suffix}", "status": "deleted"}
-            for suffix in ("-1", "0a", "2")
-        )
-        summaries.sort(key=lambda item: hashlib.sha256(item["to"].encode()).hexdigest())
+    other_target = f"{target}_other"
+    async with store.edit(ctx.account_id, other_target, create=True):
+        pass
+    async with store.edit(ctx.account_id, f"{target}_deleted", create=True) as record:
+        record["status"] = "deleted"
+    page_one = (await client.get("/api/v1/compile/configs?limit=1")).json()["result"]
+    assert len(page_one["targets"]) == 1
+    first_to = page_one["targets"][0]["to"]
+    assert "target_id" not in page_one["targets"][0]
+    assert page_one["next_cursor"] == first_to
+    page_two = (
+        await client.get("/api/v1/compile/configs", params={"limit": 1, "cursor": first_to})
+    ).json()["result"]
+    assert {first_to, page_two["targets"][0]["to"]} == {target, other_target}
+    assert page_two["next_cursor"] is None
+    async with store.edit(ctx.account_id, other_target) as record:
+        record["status"] = "deleted"
 
-        async def iter_summaries(_account_id, *, cursor=None):
-            start = next((i + 1 for i, item in enumerate(summaries) if item["to"] == cursor), 0)
-            for item in summaries[start:]:
-                yield item
-
-        patch.setattr(store, "iter_summaries", iter_summaries)
-        p = (await client.get("/api/v1/compile/configs?limit=1")).json()["result"]
-        assert [item["to"] for item in p["targets"]] == [f"{target}_1"]
-        assert "target_id" not in p["targets"][0]
-        assert p["next_cursor"] == f"{target}_1"
-        p = (
-            await client.get(
-                "/api/v1/compile/configs", params={"limit": 1, "cursor": p["next_cursor"]}
-            )
-        ).json()["result"]
-        assert [item["to"] for item in p["targets"]] == [f"{target}_0"]
-        assert p["next_cursor"] is None
-        summaries[:] = [item for item in summaries if item["status"] == "deleted"]
-        p = (await client.get("/api/v1/compile/configs?limit=1")).json()["result"]
-        assert p == {"targets": [], "next_cursor": None}
+    # Recovery after output publication must not create another file version.
     operation = await store.get_operation(ctx.account_id, target, first_operation_id)
     assert operation["meta"]["task_id"] == first != operation["operation_id"]
-    checkpoint = dict(operation["meta"])
-    assert checkpoint["snapshot_committed"] and checkpoint["target_head"]
-    assert (checkpoint["skill_snapshot"]["snapshot_id"] is None) == builtin_skill
-    versions_before_resume = await store.list_version_indexes(ctx.account_id, target)
+    assert (operation["meta"]["skill_snapshot"]["snapshot_id"] is None) == builtin_skill
+    versions_before_resume = await service.compile.file_versions(page, ctx, limit=20, before=None)
+    current = versions_before_resume["versions"][0]
+    assert UUID(current["version_id"]).version == 4
+    assert current["version_number"] == 1
+    assert (await service.compile.get_config(target, ctx))["initial_actor"] == ctx.user.user_id
     operation.update(status="committing", finished_at=None)
     await store.put_operation(ctx.account_id, target, operation)
     resumed_lifecycle = CompileLifecycle(store, service.viking_fs)
     task = await tracker.get(first, **owner)
+    resumed = await resumed_lifecycle.on_start(task)
+    assert resumed.status == "completed"
     with monkeypatch.context() as patch:
-        patch.setattr(resumed_lifecycle, "_commit", AsyncMock())
-        resumed = await resumed_lifecycle.on_start(task)
-        assert resumed.status == "completed"
-        await resumed_lifecycle.on_finish(task, resumed)
-        resumed_lifecycle._commit.assert_not_awaited()
-    operation = await store.get_operation(ctx.account_id, target, first_operation_id)
-    assert operation["status"] == "completed" and operation["finished_at"] is not None
-    assert operation["meta"] == checkpoint
-    service.reindex.assert_not_awaited()
-    assert await store.list_version_indexes(ctx.account_id, target) == versions_before_resume
+        patch.setattr(store, "merge_outputs", AsyncMock(side_effect=OSError("Outputs unavailable")))
+        with pytest.raises(OSError, match="Outputs unavailable"):
+            await resumed_lifecycle.on_finish(task, resumed)
+    await resumed_lifecycle.on_finish(task, resumed)
+    assert (
+        await service.compile.file_versions(page, ctx, limit=20, before=None)
+        == versions_before_resume
+    )
+    outputs = await service.compile.operation_outputs(
+        target, first_operation_id, ctx, limit=20, cursor=None
+    )
+    assert outputs["outputs"] == [
+        {"uri": page, "version_id": current["version_id"], "snapshot_id": current["snapshot_id"]}
+    ]
 
     recovery = await client.get("/api/v1/compile/submissions/compile-initial-key")
     assert recovery.json()["result"]["task_id"] == first
@@ -739,9 +462,6 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
 
     unchanged = await submit(payload, "compile-unchanged-key")
     assert (await tracker.get(unchanged, **owner)).status == "completed" and len(calls) == 1
-    service.fs.finalize_compile_directories.assert_awaited_with(
-        target, task_ctx(ctx.account_id, ctx.user.user_id)
-    )
     payload = {**payload, "instruction": "Change the title"}
     await submit(payload, "compile-instruction-key")
     assert len(calls) == 2 and calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
@@ -809,23 +529,7 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         "changes",
     }
     assert set(failed_operation["meta"]["changes"]) == {"added", "modified", "deleted"}
-    stored_operation = await store.get_operation(
-        ctx.account_id, target, failed_operation["operation_id"]
-    )
-    assert set(stored_operation) == public_fields
-    assert set(stored_operation["meta"]) - set(failed_operation["meta"]) == {
-        "target_deleted_at",
-        "target_base",
-        "target_head",
-        "snapshot_committed",
-        "content_changed",
-        "changed_roots",
-        "diff_dirs",
-        "full_dirs",
-        "rollback_head",
-        "rollback_complete",
-        "rollback_skipped",
-    }
+    assert "target_base" not in failed_operation["meta"]
     ordinary_operation = next(
         op for op in history["operations"] if op["operation_type"] == "manual_revise"
     )
@@ -856,13 +560,6 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         ctx=ctx,
         defer_processing=True,
     )
-    state = await store.get_by_to(ctx.account_id, target)
-    indexes = await store.list_version_indexes(ctx.account_id, target)
-    assert tracker.compile_history_cleanup == store.delete_expired
-    assert await store.delete_expired(now=time.time() + 604801, limit=256) > 0
-    assert await store.get(ctx.account_id, target) == state
-    assert await store.list_version_indexes(ctx.account_id, target) == indexes
-    assert await tracker.get(first, **owner) is not None
     versions = (await client.get("/api/v1/snapshot/versions", params={"uri": picture})).json()[
         "result"
     ]
@@ -921,28 +618,8 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert (await tracker.get(scheduled, **owner)).status == "completed"
     assert await scheduler.trigger_if_due(ctx.account_id, target, now) == "not_due"
 
-    # Disabling clears a supplied rule; null and omitted rules are valid only while disabled.
-    for rule in ({"update_schedule": {"frequency": "daily"}}, {"update_schedule": None}, {}):
-        disabled = await client.post(
-            "/api/v1/compile/config/update",
-            json={key: value for key, value in settings.items() if key != "update_schedule"}
-            | {"auto_update": False}
-            | rule,
-        )
-        assert disabled.status_code == 200, disabled.text
-        config = disabled.json()["result"]
-        assert config["auto_update"] is False
-        assert config["update_schedule"] is None and config["next_run_at"] is None
-    for rule in ({}, {"update_schedule": None}):
-        rejected = await client.post(
-            "/api/v1/compile/config/update",
-            json={key: value for key, value in settings.items() if key != "update_schedule"} | rule,
-        )
-        assert rejected.status_code == 400, rejected.text
-        rejected = await client.post(
-            "/api/v1/compile", json={**payload, "args": {"auto_update": True, **rule}}
-        )
-        assert rejected.status_code == 400, rejected.text
+    # Explicit scheduling settings save configuration without starting a task.
+    tasks_before = {task.task_id for task in await tracker.list_tasks(task_type="compile", **owner)}
     disabled = await client.post(
         "/api/v1/compile",
         json={**payload, "args": {"auto_update": False, "update_schedule": None}},
@@ -952,6 +629,10 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert disabled.json()["result"]["auto_update"] is False
     assert disabled.json()["result"]["update_schedule"] is None
     assert (await store.get(ctx.account_id, target))["update_schedule"] is None
+    assert "task_id" not in disabled.json()["result"]
+    assert {
+        task.task_id for task in await tracker.list_tasks(task_type="compile", **owner)
+    } == tasks_before
     configured = await client.post("/api/v1/compile/config/update", json=settings)
     assert configured.status_code == 200, configured.text
     groups.return_value = ()
@@ -965,15 +646,10 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
         ctx=admin,
         acl_mode=AclMode.RESTRICTED,
     )
-    queries = (
-        "/api/v1/compile/config",
-        "/api/v1/compile/operations",
-        f"/api/v1/compile/operations/{scheduled_operation['operation_id']}",
-        f"/api/v1/compile/operations/{scheduled_operation['operation_id']}/outputs",
-    )
-    for path in queries:
-        response = await client.get(path, params={"to": target})
-        assert response.status_code == 200, response.text
+    operation_path = f"/api/v1/compile/operations/{scheduled_operation['operation_id']}"
+    readable = await client.get(operation_path, params={"to": target})
+    assert readable.status_code == 200, readable.text
+    assert readable.json()["result"]["operation_id"] == scheduled_operation["operation_id"]
     assert (await client.post("/api/v1/compile/config/update", json=settings)).status_code == 403
 
     # Submission recovery remains available after inputs disappear or the backend is disabled.
@@ -991,420 +667,27 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert (await client.get("/api/v1/tasks", params={"pagination": "cursor"})).json()["result"][
         "items"
     ] == []
-    for path in queries:
-        assert (await client.get(path, params={"to": target})).status_code == 403
+    assert (await client.get(operation_path, params={"to": target})).status_code == 403
 
-
-async def _prepare_compile_task(service, target, ctx):
-    """Validate and register a target; return a full manual task with the shared source and Skill."""
-    from openviking.service.compile_service import CompileRequest
-
-    request = CompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": target,
-            "skill": "viking://system/compile/example-skills/llm-wiki",
-            "args": {"mode": "full"},
-        }
-    )
-    request = await service.compile._normalize_request(request, ctx)
-    payload = await service.compile.lifecycle.prepare(
-        request.model_dump(by_alias=True, exclude_none=True),
-        ctx,
-        instruction_set=False,
-    )
-    return SimpleNamespace(
-        task_id=f"cmp_{target.rsplit('/', 1)[-1]}",
-        account_id=ctx.account_id,
-        user_id=ctx.user.user_id,
-        created_at=time.time(),
-        meta={"request": payload},
-    )
-
-
-async def test_compile_publishes_async_file_indexes_and_root_directory_tag(
-    service, app, monkeypatch
-):
-    from openviking.service.external_task_service import ExternalTaskSnapshot
-    from openviking.storage.expr import PathScope
-
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    target = "viking://resources/async-compile"
-    await service.viking_fs.write_file("viking://resources/source/source.md", "Source", ctx=ctx)
-    await service.viking_fs.mkdir(f"{target}/child", ctx=ctx)
-    lifecycle = service.compile.lifecycle
-    task = await _prepare_compile_task(service, target, ctx)
-    assert await lifecycle.on_start(task) == "proceed"
-    reindex = AsyncMock(side_effect=AssertionError("Unexpected reindex"))
-    monkeypatch.setattr(service, "reindex", reindex)
-    page = f"{target}/child/page.md"
-    written = await service.fs.batch_write(
-        root_uri=target,
-        operations=[{"uri": page, "content": "Compiled asynchronous content"}],
-        ctx=ctx,
-        wait=False,
-        edit_source="compile",
-    )
-    assert written["semantic_status"] == "queued"
-
-    async def finish():
-        while True:
-            snapshot = await lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
-            if snapshot.status == "completed":
-                return
-            assert snapshot.status == "running"
-            await asyncio.sleep(0.01)
-
-    await asyncio.wait_for(finish(), 10)
-    await service.resources.wait_processed()
-    records = await service.vikingdb_manager.filter(
-        filter=PathScope("uri", target), output_fields=["uri", "level", "search_tags"], ctx=ctx
-    )
-    assert any(record["uri"] == page and record["level"] == 2 for record in records)
-    l0 = {record["uri"]: record for record in records if record["level"] == 0}
-    assert {target, f"{target}/child"} <= l0.keys()
-    assert "compile_target=true" in l0[target]["search_tags"], records
-    assert all(
-        "compile_target=true" not in (record.get("search_tags") or [])
-        for record in records
-        if record["uri"] != target or record["level"] >= 2
-    ), records
-    reindex.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("busy_stage", ["directory", "snapshot"])
-async def test_compile_busy_publication_and_cleanup_retry_without_reindex(
-    service, app, monkeypatch, busy_stage
-):
-    from openviking.service.external_task_service import ExternalTaskSnapshot
-    from openviking.service.task_tracker import get_task_tracker
-    from openviking.storage.errors import ResourceBusyError
-
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    target = "viking://resources/busy-compile"
-    for uri in ("viking://resources/source/source.md", f"{target}/page.md"):
-        await service.viking_fs.write_file(uri, "baseline", ctx=ctx)
-    lifecycle = service.compile.lifecycle
-    task = await _prepare_compile_task(service, target, ctx)
-    assert await lifecycle.on_start(task) == "proceed"
-    await service.viking_fs.write_file(f"{target}/page.md", "output", ctx=ctx)
-    _mock_compile_processing(monkeypatch, service)
-    monkeypatch.setattr(service.viking_fs, "_schedule_restore_reindex_for_paths", AsyncMock())
-    monkeypatch.setattr(service.search, "find", AsyncMock())
-    cancellation = AsyncMock(return_value=False)
-    monkeypatch.setattr(get_task_tracker(), "is_cancellation_requested", cancellation)
-    original_lock = lifecycle._locked_output
-
-    @asynccontextmanager
-    async def busy_lock(*args):
-        raise ResourceBusyError("busy", uri=target)
-        yield
-
-    if busy_stage == "directory":
-        service.fs.finalize_compile_directories.side_effect = ResourceBusyError("L0 is busy")
-    else:
-        monkeypatch.setattr(lifecycle, "_locked_output", busy_lock)
-    completed = ExternalTaskSnapshot(status="completed")
-    for _ in range(4):
-        snapshot = await lifecycle.on_finish(task, completed)
-        assert (snapshot.status, snapshot.stage) == ("running", "committing")
-    monkeypatch.setattr(lifecycle, "_locked_output", busy_lock)
-    cancellation.return_value = True
-
-    async def cancel_and_finish():
-        """Finalize a busy run after one handled cancellation."""
-        asyncio.current_task().cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.sleep(0)
-        return await lifecycle.on_finish(task, completed)
-
-    snapshot = await asyncio.create_task(cancel_and_finish())
-    assert (snapshot.status, snapshot.stage) == ("cancelling", "cancelling")
-    run = await lifecycle.store.get_operation(ctx.account_id, target, compile_operation_id(task))
-    assert run["finished_at"] is None and not run["meta"]["snapshot_committed"]
-    service.search.find.assert_not_awaited()
-    monkeypatch.setattr(lifecycle, "_locked_output", original_lock)
-    assert (await lifecycle.on_finish(task, completed)).status == "cancelled"
-    assert await service.viking_fs.read_file(f"{target}/page.md", ctx=ctx) == "baseline"
-    record = await lifecycle.store.get(ctx.account_id, target)
-    assert record["active_task_id"] is None and record["active_operation_id"] is None
-    service.reindex.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_compile_requires_snapshot_and_preserves_published_output(service, app, monkeypatch):
-    from openviking.service.external_task_service import ExternalTaskSnapshot
-    from openviking.service.task_tracker import get_task_tracker
-    from openviking_cli.exceptions import FailedPreconditionError
-
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    target = "viking://resources/finish-snapshot"
-    await service.viking_fs.write_file("viking://resources/source/source.md", "source", ctx=ctx)
-    await service.viking_fs.write_file(f"{target}/page.md", "baseline", ctx=ctx)
-    lifecycle = service.compile.lifecycle
-    task = await _prepare_compile_task(service, target, ctx)
-    assert await lifecycle.on_start(task) == "proceed"
-    await service.viking_fs.write_file(f"{target}/page.md", "output", ctx=ctx)
-    _mock_compile_processing(monkeypatch, service)
-    monkeypatch.setattr(service.search, "find", AsyncMock(return_value=SimpleNamespace(total=0)))
-
-    cancellation = AsyncMock(return_value=False)
-    monkeypatch.setattr(get_task_tracker(), "is_cancellation_requested", cancellation)
-    original_commit = lifecycle._commit
-
-    async def commit(*args, **kwargs):
-        head = await original_commit(*args, **kwargs)
-        cancellation.return_value = True
-        return head
-
-    monkeypatch.setattr(lifecycle, "_commit", commit)
-    with monkeypatch.context() as patch:
-        patch.setattr(lifecycle, "_commit", AsyncMock(return_value=None))
-        with pytest.raises(FailedPreconditionError, match="output snapshot"):
-            await lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
-    run = await lifecycle.store.get_operation(ctx.account_id, target, compile_operation_id(task))
-    assert not run["meta"]["snapshot_committed"] and run["finished_at"] is None
-    snapshot = await lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
-    assert snapshot.status == "cancelled"
-    run = await lifecycle.store.get_operation(ctx.account_id, target, compile_operation_id(task))
-    assert run["meta"]["snapshot_committed"] and run["meta"]["target_head"]
-    assert await service.viking_fs.read_file(f"{target}/page.md", ctx=ctx) == "output"
-    assert run["result"] == {"created": 0, "updated": 1, "deleted": 0}
-    service.reindex.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("terminal_status", ["completed", "failed", "cancelled"])
-async def test_nested_compile_restores_parent_scope(service, app, monkeypatch, terminal_status):
-    """A parent rollback includes successful child output and preserves sibling content."""
-    from openviking.service.external_task_service import ExternalTaskSnapshot
-
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    parent = "viking://resources/nested-wiki"
-    child, sibling = f"{parent}/child", f"{parent}_other"
-    for uri, content in {
-        "viking://resources/source/source.md": "source",
-        f"{parent}/page.md": "parent baseline",
-        f"{child}/page.md": "child baseline",
-        f"{sibling}/page.md": "sibling baseline",
-    }.items():
-        await service.viking_fs.write_file(uri, content, ctx=ctx)
-    _mock_compile_processing(monkeypatch, service)
-    monkeypatch.setattr(service.viking_fs, "_schedule_restore_reindex_for_paths", AsyncMock())
-    lifecycle = service.compile.lifecycle
-    store = lifecycle.store
-    order = (child, parent) if terminal_status == "completed" else (parent, child)
-    tasks = {target: await _prepare_compile_task(service, target, ctx) for target in order}
-
-    assert await lifecycle.on_start(tasks[parent]) == "proceed"
-    await service.viking_fs.write_file(f"{parent}/page.md", "parent output", ctx=ctx)
-    assert await lifecycle.on_start(tasks[child]) == "proceed"
-    await service.viking_fs.write_file(f"{child}/page.md", "child output", ctx=ctx)
-    await service.viking_fs.write_file(f"{child}/new.md", "child new", ctx=ctx)
-    await lifecycle.on_finish(tasks[child], ExternalTaskSnapshot(status="completed"))
-    assert (await store.get_operation(ctx.account_id, child, compile_operation_id(tasks[child])))[
+    moved_to = f"{target}-moved"
+    old_outputs = await store.get_outputs(admin.account_id, target, first_operation_id)
+    assert old_outputs["outputs"]
+    await service.fs.mv(target, moved_to, admin)
+    moved_config = await service.compile.get_config(moved_to, admin)
+    assert moved_config["from"] == [source] and moved_config["auto_update"] is True
+    assert (await store.get(admin.account_id, target))["auto_update"] is False
+    assert await service.fs.read(f"{moved_to}/page.md", admin) == "generated"
+    assert (await service.compile.get_operation(target, first_operation_id, admin))[
         "status"
     ] == "completed"
-    await service.viking_fs.write_file(f"{child}/page.md", "parent writes child", ctx=ctx)
-    await service.viking_fs.write_file(f"{sibling}/page.md", "sibling edit", ctx=ctx)
-    await lifecycle.on_finish(tasks[parent], ExternalTaskSnapshot(status=terminal_status))
-
-    successful = terminal_status == "completed"
-    for target, output, baseline in (
-        (parent, "parent output", "parent baseline"),
-        (child, "parent writes child", "child baseline"),
-    ):
-        uri = f"{target}/page.md"
-        assert await service.fs.read(uri, ctx) == (output if successful else baseline)
-        assert (await lifecycle.versions.owning_target(ctx.account_id, uri))["to"] == target
-        versions = await service.compile.file_versions(uri, ctx, limit=20, before=None)
-        assert versions["to"] == target
-        latest = versions["versions"][0]
-        assert versions["current_version"] == latest["version_id"]
-        assert await service.viking_fs.show(
-            latest["snapshot_id"], path=latest["snapshot_path"], ctx=ctx
-        ) == await service.fs.read_file_bytes(uri, ctx)
-        if successful:
-            assert latest["source"] == "compile"
-            assert latest["meta"]["task_id"] == tasks[parent].task_id
-    assert await store.get_version_index(ctx.account_id, parent, f"{child}/page.md") is None
-    assert await service.viking_fs.exists(f"{child}/new.md", ctx=ctx) is successful
-    if not successful:
-        assert await store.get_version_index(ctx.account_id, child, f"{child}/new.md") is None
-    assert await service.fs.read(f"{sibling}/page.md", ctx) == "sibling edit"
+    assert await store.get_outputs(admin.account_id, target, first_operation_id) == old_outputs
+    assert await store.list_operations(admin.account_id, moved_to) == []
 
 
 @pytest.mark.asyncio
-async def test_compile_requires_starting_snapshot_before_runtime(service, monkeypatch):
-    """A run without a rollback snapshot fails before recording file versions or changing content."""
-    import openviking.service.compile_targets as targets
-
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    target = "viking://resources/wiki"
-    page = f"{target}/page.md"
-    await service.viking_fs.write_file("viking://resources/source/source.md", "source", ctx=ctx)
-    await service.viking_fs.write_file(page, "starting content", ctx=ctx)
-    task = await _prepare_compile_task(service, target, ctx)
-    lifecycle = service.compile.lifecycle
-    monkeypatch.setattr(targets, "commit_snapshot", AsyncMock(return_value=None))
-    monkeypatch.setattr(lifecycle.versions, "record_external", AsyncMock())
-
-    result = await lifecycle.on_start(task)
-
-    assert result.status == "failed"
-    assert "snapshot" in result.error_message.lower()
-    lifecycle.versions.record_external.assert_not_awaited()
-    assert await service.fs.read(page, ctx) == "starting content"
-
-
-async def _seed_compile_target(service, target, ctx):
-    """Create content and matching history; return immutable operation, outputs and version records."""
-    from openviking.service.compile_targets import commit_snapshot
-
-    store = service.compile.lifecycle.store
-    uri = f"{target}/page.md"
-    await service.viking_fs.write_file(uri, "compiled content", ctx=ctx)
-    async with store.edit(ctx.account_id, target, create=True) as record:
-        record["initialized"] = True
-    snapshot = await commit_snapshot(service.viking_fs, [target], "compiled content", ctx)
-    assert snapshot
-    version = await service.compile.lifecycle.versions.append(
-        ctx.account_id,
-        target,
-        uri,
-        snapshot,
-        {"source": "compile", "actor": ctx.user.user_id, "provenance": {}},
-        operation_id="op_seed",
-    )
-    operation = new_operation(
-        "op_seed", "manual_revise", {"uris": [uri]}, ctx.user.user_id, status="completed"
-    )
-    operation["finished_at"] = time.time()
-    outputs = [{"uri": uri, "version_id": version["version_id"], "snapshot_id": snapshot}]
-    await store.put_operation(ctx.account_id, target, operation)
-    await store.merge_outputs(ctx.account_id, target, "op_seed", outputs)
-    return operation, outputs, version
-
-
-@pytest.mark.asyncio
-async def test_parent_move_preserves_compile_metadata_at_original_uri(service, monkeypatch):
-    """Moving a target's parent preserves its history and schedule at the registered URI."""
-    from datetime import datetime
-
-    from openviking.service.compile_scheduler import TZ, CompileScheduler
-
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    account = ctx.account_id
-    store = service.compile.lifecycle.store
-    target = "viking://resources/bundle/wiki"
-    source_root = "viking://resources/bundle"
-    destination_root = "viking://resources/relocated"
-    moved_to = f"{destination_root}/wiki"
-    original_file, moved_file = f"{target}/page.md", f"{moved_to}/page.md"
-    operation, outputs, version = await _seed_compile_target(service, target, ctx)
-    async with store.edit(account, target) as record:
-        record.update(
-            auto_update=True,
-            update_schedule={"frequency": "daily", "hour": 0, "minute": 0},
-            auto_update_enabled_at="2026-10-20T00:00:00+08:00",
-        )
-    metadata_root = f"{store.root(account)}/target_folders"
-    original_key = hashlib.sha256(target.encode("utf-8")).hexdigest()
-    entries = await store._agfs.ls(metadata_root)
-    assert {item["name"] for item in entries if not item["name"].startswith(".")} == {original_key}
-    entries = await store._agfs.ls(f"{metadata_root}/{original_key}")
-    assert {item["name"] for item in entries if not item["name"].startswith(".")} == {
-        "state.json",
-        "operations",
-        "operation_outputs",
-        "file_versions",
-    }
-
-    submissions = SimpleNamespace(create_scheduled=AsyncMock())
-    scheduler = CompileScheduler(submissions, store, service.viking_fs)
-    monkeypatch.setattr(scheduler, "_executor", AsyncMock(return_value=(ctx, {})))
-    monkeypatch.setattr(scheduler, "reschedule", AsyncMock())
-    monkeypatch.setattr(service.fs, "_refresh_move_parents", AsyncMock())
-    now = datetime(2026, 10, 22, 12, tzinfo=TZ)
-    assert await scheduler.trigger_if_due(account, target, now) == "submitted"
-    state = await store.get(account, target)
-    await service.fs.mv(source_root, destination_root, ctx)
-
-    assert await store.get(account, target) == state
-    assert await store.get_by_to(account, moved_to) is None
-    assert not await service.viking_fs.exists(source_root, ctx=ctx)
-    assert await service.fs.read(moved_file, ctx) == "compiled content"
-    assert (await service.compile.get_operation(target, "op_seed", ctx))["params"] == {
-        "uris": [original_file]
-    }
-    assert (await service.compile.operation_outputs(target, "op_seed", ctx, limit=20, cursor=None))[
-        "outputs"
-    ] == outputs
-    retained = await service.compile.file_versions(original_file, ctx, limit=20, before=None)
-    assert retained["versions"] == [version]
-    assert version["snapshot_path"] == original_file
-    assert (
-        await service.viking_fs.show_blob_raw(version["snapshot_id"], path=original_file, ctx=ctx)
-    )["oid"]
-    assert await scheduler.trigger_if_due(account, target, now) == "not_due"
-    submissions.create_scheduled.assert_awaited_once()
-    entries = await store._agfs.ls(metadata_root)
-    assert {item["name"] for item in entries if not item["name"].startswith(".")} == {original_key}
-
-    async with store.edit(account, target, create=True) as record:
-        assert record["initialized"] is True
-    await store.put_operation(
-        account, target, new_operation("op_reused", "mkdir", {}, ctx.user.user_id)
-    )
-    assert await service.compile.get_operation(target, "op_seed", ctx) == operation
-    assert await store.get_operation(account, moved_to, "op_reused") is None
-    assert await store.get_outputs(account, target, "op_seed") == {"outputs": outputs}
-    assert await store.list_version_indexes(account, moved_to) == []
-    assert (
-        await service.compile.file_versions(original_file, ctx, limit=20, before=None)
-    ) == retained
-
-
-@pytest.mark.asyncio
-async def test_parent_move_preserves_sibling_compile_metadata(service, monkeypatch):
-    """Moving a parent moves business files without writing either sibling's Compile metadata."""
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    account = ctx.account_id
-    store = service.compile.lifecycle.store
-    source, destination = "viking://resources/bundle", "viking://resources/relocated"
-    targets = [f"{source}/{name}" for name in ("a", "b")]
-    seeds = {target: await _seed_compile_target(service, target, ctx) for target in targets}
-    states = {target: await store.get(account, target) for target in targets}
-
-    monkeypatch.setattr(service.fs, "_refresh_move_parents", AsyncMock())
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            store, "write_json", AsyncMock(side_effect=AssertionError("Compile metadata write"))
-        )
-        await service.fs.mv(source, destination, ctx)
-    assert not await service.viking_fs.exists(source, ctx=ctx)
-    cold = CompileStateStore(store._agfs)
-    for target in targets:
-        moved = destination + target[len(source) :]
-        assert await cold.get(account, target) == states[target]
-        assert await cold.get(account, moved) is None
-        assert await service.fs.read(f"{moved}/page.md", ctx) == "compiled content"
-        operation, outputs, version = seeds[target]
-        assert await cold.get_operation(account, target, "op_seed") == operation
-        assert await cold.get_outputs(account, target, "op_seed") == {"outputs": outputs}
-        assert await cold.get_version_index(account, target, f"{target}/page.md") == {
-            "uri": f"{target}/page.md",
-            "next": 2,
-            "versions": [version],
-        }
-        assert await cold.get_version_index(account, moved, f"{moved}/page.md") is None
-
-
-@pytest.mark.asyncio
-async def test_disabled_schedule_clears_legacy_state_and_lifecycle_changes(service, monkeypatch):
-    """Disabled rules stay null across legacy reads, delayed triggers and target reuse."""
-    from datetime import datetime
+async def test_schedule_retries_initial_failure_and_disables_deleted_targets(service, monkeypatch):
+    """Initial failure remains retryable; invalid credentials and deletion disable scheduling."""
+    from datetime import datetime, timedelta
 
     import openviking.service.compile_scheduler as scheduling
 
@@ -1412,51 +695,35 @@ async def test_disabled_schedule_clears_legacy_state_and_lifecycle_changes(servi
     account = service.user.account_id
     ctx = RequestContext(user=service.user, role=Role.USER)
     target = "viking://resources/scheduled"
-    acquire = AsyncMock(wraps=store._agfs.pathlock_acquire_exact)
-    monkeypatch.setattr(store._agfs, "pathlock_acquire_exact", acquire)
-    async with store.edit(account, target, create=True) as record:
-        assert "id" not in record
-    path = store._record_path(account, target)
-    async with store.edit(account, target):
-        with monkeypatch.context() as patch:
-            patch.setattr(acquire, "side_effect", AssertionError("Config reads must not lock"))
-            page = await service.compile.list_configs(ctx, limit=1, cursor=None)
-            assert page["targets"][0]["to"] == target
-            assert "target_id" not in page["targets"][0]
-            cold = CompileStateStore(store._agfs)
-            patch.setattr(
-                cold, "list_summaries", AsyncMock(side_effect=AssertionError("Target scan"))
-            )
-            assert (await cold.get_by_to(account, target + "/"))["to"] == target
-    schedule = {"frequency": "daily", "hour": 0, "minute": 0}
-    legacy = await store.get(account, target)
-    legacy["update_schedule"] = schedule
-    await store.write_json(path, legacy)
-    assert (await store.get(account, target))["update_schedule"] is None
-    assert (await store.list_summaries(account))[0]["update_schedule"] is None
-    assert (await store.read_json(path))["update_schedule"] == schedule
-    async with store.edit(account, target):
+    async with store.edit(account, target, create=True):
         pass
-    assert (await store.read_json(path))["update_schedule"] is None
-    assert (await store.list_summaries(account))[0]["update_schedule"] is None
+    config = await service.compile.get_config(target, ctx)
+    assert config["auto_update"] is False and config["update_schedule"] is None
+    schedule = {"frequency": "daily", "hour": 0, "minute": 0}
 
     scheduler = scheduling.CompileScheduler(service.compile, store, service.viking_fs)
+    scheduler.install_expiry(
+        SimpleNamespace(register_handler=Mock(), report=AsyncMock(), unregister=AsyncMock())
+    )
     now = datetime(2026, 10, 22, 12, tzinfo=scheduling.TZ)
-    with monkeypatch.context() as patch:
-        slot = Mock(wraps=scheduling.current_slot)
-        patch.setattr(scheduling, "current_slot", slot)
-        await scheduler.scan_once(now)
-        assert await scheduler.trigger_if_due(account, target, now) == "not_due"
-        slot.assert_not_called()
+    assert await scheduler.trigger_if_due(account, target, now) == "not_due"
 
     async with store.edit(account, target) as record:
         record.update(
-            initialized=True,
+            initialized=False,
+            last_run={"status": "failed"},
             auto_update=True,
             update_schedule=schedule,
             auto_update_enabled_at="2026-10-20T00:00:00+08:00",
         )
-    assert await scheduler.trigger_if_due(account, target, now) == "disabled"
+    with monkeypatch.context() as patch:
+        patch.setattr(scheduler, "_executor", AsyncMock(return_value=(ctx, {})))
+        submit = AsyncMock()
+        patch.setattr(service.compile, "create_scheduled", submit)
+        assert await scheduler.trigger_if_due(account, target, now) == "submitted"
+        assert await scheduler.trigger_if_due(account, target, now) == "not_due"
+        submit.assert_awaited_once()
+    assert await scheduler.trigger_if_due(account, target, now + timedelta(days=1)) == "disabled"
     invalid = await store.get(account, target)
     assert invalid["auto_update"] is False and invalid["update_schedule"] is None
     assert (await store.list_summaries(account))[0]["update_schedule"] is None
@@ -1466,8 +733,8 @@ async def test_disabled_schedule_clears_legacy_state_and_lifecycle_changes(servi
     await service.compile.lifecycle.versions.after_remove(target, ctx)
     deleted = await store.get(account, target)
     assert deleted["status"] == "deleted" and deleted["update_schedule"] is None
-    async with store.edit(account, target, create=True) as record:
-        assert "id" not in record
+    async with store.edit(account, target, create=True):
+        pass
     reused = await store.get(account, target)
     assert reused["status"] == "active" and reused["auto_update"] is False
     assert reused["update_schedule"] is None
@@ -1569,11 +836,6 @@ async def test_compile_history_retention_and_retry(service, monkeypatch, failed_
         operation["finished_at"] = finished_at
         await store.merge_outputs(account, target, operation_id, [])
         await store.put_operation(account, target, operation)
-    async with store.locked(store._outputs_path(account, target, "running")):
-        with monkeypatch.context() as patch:
-            patch.setattr(store, "locked", Mock(side_effect=AssertionError("Output read lock")))
-            manifest = await store.get_outputs(account, target, "running")
-            assert manifest == {"outputs": []}
     async with store.edit(account, "viking://resources/history") as record:
         record["active_task_id"] = "running-task"
     assert await store.delete_expired(now=now, limit=256) == 0

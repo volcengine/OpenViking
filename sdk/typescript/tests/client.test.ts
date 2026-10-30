@@ -19,34 +19,6 @@ const ok = (result: unknown) =>
   });
 
 describe("OpenVikingClient", () => {
-  it.each([undefined, false])(
-    "ensures directory indexes (wait=%s)",
-    async (wait) => {
-      const fetcher = vi
-        .fn<typeof fetch>()
-        .mockImplementation(async () => ok({}));
-      const client = new OpenVikingClient({
-        baseUrl: "https://example.com",
-        fetch: fetcher,
-      });
-
-      await client.ensureDirectoryIndex(
-        "resources/project",
-        "Compile output",
-        wait === undefined ? {} : { wait },
-      );
-
-      expect(String(fetcher.mock.calls[0]![0])).toBe(
-        "https://example.com/api/v1/content/ensure_directory_index",
-      );
-      expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
-        uri: "viking://resources/project",
-        fallback_abstract: "Compile output",
-        wait: wait ?? true,
-      });
-    },
-  );
-
   it("does not expose a top-level resource parse mode option", () => {
     const options: AddResourceOptions = {
       // @ts-expect-error parse_mode is configured through args

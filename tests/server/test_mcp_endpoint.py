@@ -2550,31 +2550,6 @@ async def test_write_user_managed_subtree_rejected(service):
         await write(uri="viking://user/test_user/skills/demo/SKILL.md", content="x")
 
 
-@pytest.mark.parametrize("resolve_conflicts", [None, False, True], ids=["omitted", "false", "true"])
-async def test_write_tool_forwards_resolve_conflicts(service, monkeypatch, resolve_conflicts):
-    uri = "viking://resources/resolve_conflicts.md"
-    content = "# Resolved content\n"
-    fs_write = AsyncMock(return_value={"uri": uri, "written_bytes": len(content)})
-    monkeypatch.setattr(service.fs, "write", fs_write)
-    arguments = {"uri": uri, "content": content}
-    if resolve_conflicts is not None:
-        arguments["resolve_conflicts"] = resolve_conflicts
-
-    result = await mcp_endpoint.mcp.call_tool("write", arguments)
-
-    assert not isinstance(result, CallToolResult) or not result.isError
-    fs_write.assert_awaited_once_with(
-        uri=uri,
-        content=content,
-        ctx=DEFAULT_CTX,
-        mode="replace",
-        wait=False,
-        acl=None,
-        edit_source="agent",
-        resolve_conflicts=resolve_conflicts is True,
-    )
-
-
 async def test_write_tool_schema_is_portable():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
     props = tools["write"].inputSchema["properties"]

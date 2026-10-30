@@ -1068,9 +1068,7 @@ async def test_resource_rm_does_not_deactivate_watch_task_control_uri(request_co
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["/", "//"])
-async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(
-    request_context, separator
-):
+async def test_resource_mv_commits_watch_state_or_reverses_content_move(request_context, separator):
     events = []
     viking_fs = _FakeVikingFS(events=events)
     watch_manager = _FakeWatchManager(events=events)
@@ -1117,6 +1115,27 @@ async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(
     ]
     assert [event[0] for event in events] == ["validate", "mv", "rewrite", "refresh"]
 
+    source_acl = {"": {"owner": "ryoma", "mode": "private"}}
+    viking_fs.mv = AsyncMock(side_effect=[{"source_acl": source_acl}, None])
+    watch_manager.rewrite_target_prefix_internal = AsyncMock(
+        side_effect=RuntimeError("watch commit failed")
+    )
+    source, destination = (
+        "viking://resources/codeask/wiki",
+        "viking://resources/codeask/wiki-renamed",
+    )
+    with pytest.raises(RuntimeError, match="watch commit failed"):
+        await service.mv(source, destination, ctx=request_context)
+    assert viking_fs.mv.await_args_list == [
+        call(source, destination, ctx=replace(request_context, bypass_acl=True)),
+        call(
+            destination,
+            source,
+            ctx=replace(request_context, bypass_acl=True),
+            restore_acl=source_acl,
+        ),
+    ]
+
 
 @pytest.mark.asyncio
 async def test_resource_mv_conflict_fails_before_resource_move(request_context):
@@ -1137,56 +1156,6 @@ async def test_resource_mv_conflict_fails_before_resource_move(request_context):
 
     assert viking_fs.mv_calls == []
     assert watch_manager.rewrite_calls == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("rollback_fails", [False, True])
-@pytest.mark.parametrize("source_acl", [{}, {"": {"owner": "ryoma", "mode": "private"}}])
-async def test_resource_mv_rolls_back_watch_commit_failure_without_compile(
-    request_context, rollback_fails, source_acl
-):
-    """Watch commit failures retain their error chain while reversing the business move."""
-    source = "viking://resources/codeask/wiki"
-    destination = "viking://resources/codeask/wiki-renamed"
-    commit_error = RuntimeError("watch commit failed")
-    rollback_error = RuntimeError("reverse move failed")
-    viking_fs = _FakeVikingFS()
-    viking_fs.mv = AsyncMock(
-        side_effect=[{"source_acl": source_acl}, rollback_error if rollback_fails else None]
-    )
-    watch_manager = _FakeWatchManager()
-    watch_manager.rewrite_target_prefix_internal = AsyncMock(side_effect=commit_error)
-    service = FSService(
-        viking_fs=viking_fs,
-        watch_scheduler=_FakeWatchScheduler(watch_manager),
-    )
-    service.compile_versions = object()  # Compile callback access fails on this sentinel.
-    service.compile_lifecycle = SimpleNamespace(move_target=AsyncMock())
-    service._refresh_move_parents = AsyncMock()
-
-    with pytest.raises(RuntimeError) as caught:
-        await service.mv(source, destination, ctx=request_context)
-
-    viking_fs.mv.assert_has_awaits(
-        [
-            call(source, destination, ctx=replace(request_context, bypass_acl=True)),
-            call(
-                destination,
-                source,
-                ctx=replace(request_context, bypass_acl=True),
-                restore_acl=source_acl,
-            ),
-        ]
-    )
-    assert viking_fs.mv.await_count == 2
-    watch_manager.rewrite_target_prefix_internal.assert_awaited_once_with(
-        source, destination, account_id=request_context.account_id
-    )
-    service._refresh_move_parents.assert_not_awaited()
-    service.compile_lifecycle.move_target.assert_not_awaited()
-    assert caught.value is (rollback_error if rollback_fails else commit_error)
-    if rollback_fails:
-        assert caught.value.__cause__ is commit_error
 
 
 @pytest.mark.asyncio

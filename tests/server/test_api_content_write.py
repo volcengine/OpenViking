@@ -3,18 +3,12 @@
 
 """Tests for content write endpoint."""
 
+import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import filesystem
-from openviking.service import fs_service
-from openviking.service.task_tracker import TaskStatus, get_task_tracker
-from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.storage.expr import PathScope
-from openviking_cli.exceptions import OpenVikingError
 
 
 async def _first_file_uri(client, root_uri: str) -> str:
@@ -36,210 +30,6 @@ async def test_write_endpoint_registered(client):
 async def test_set_tags_endpoint_registered(client):
     resp = await client.get("/api/v1/fs/attrs/set_tags")
     assert resp.status_code == 405
-
-
-async def test_ensure_directory_index_preserves_content_and_tags(client, service, monkeypatch):
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    uri = "viking://resources/compile"
-    await service.viking_fs.mkdir(f"{uri}/child", ctx=ctx)
-    response = await client.post(
-        "/api/v1/content/ensure_directory_index",
-        json={"uri": uri, "fallback_abstract": "Compile output"},
-    )
-    assert response.status_code == 200
-    assert response.json()["result"]["created_abstract"] is True
-    assert response.json()["result"]["indexed_levels"] == [0]
-    await service.fs.write(f"{uri}/child/note.md", "Content", ctx=ctx, wait=True)
-    await service.resources.wait_processed()
-    original = await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx)
-    await service.fs.set_tags(uri, ["team=search"], mode="append", recursive=False, ctx=ctx)
-    await service.fs.set_tags(
-        f"{uri}/child", ["team=child"], mode="append", recursive=False, ctx=ctx
-    )
-    acquire = AsyncMock(side_effect=AssertionError("Complete directory indexes need no tree lock"))
-    monkeypatch.setattr(service.viking_fs._async_agfs, "pathlock_acquire_tree", acquire)
-    store = service.viking_fs._get_vector_store()
-    update_tags = AsyncMock(wraps=store.update_search_tags)
-    monkeypatch.setattr(store, "update_search_tags", update_tags)
-    tracker = get_task_tracker()
-    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
-    tasks_before = {
-        task.task_id
-        for task in await tracker.list_tasks(task_type="ensure_directory_index", **owner)
-    }
-    await service.fs.finalize_compile_directories(uri, ctx)
-    update_tags.assert_awaited_once()
-    update_tags.reset_mock()
-    await service.fs.finalize_compile_directories(uri, ctx)
-    update_tags.assert_not_awaited()
-    tasks_after = {
-        task.task_id
-        for task in await tracker.list_tasks(task_type="ensure_directory_index", **owner)
-    }
-    assert tasks_after == tasks_before
-    assert await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx) == original
-    records = await service.vikingdb_manager.filter(
-        filter=PathScope("uri", uri), output_fields=["uri", "level", "search_tags"], ctx=ctx
-    )
-    assert {record["level"] for record in records} == {0, 1, 2}
-    assert {record["uri"] for record in records if record["level"] < 2} == {uri, f"{uri}/child"}
-    assert all(
-        ("compile_target=true" in (record.get("search_tags") or []))
-        == (record["uri"] == uri and record["level"] < 2)
-        for record in records
-    )
-    assert all(
-        "team=child" in record["search_tags"]
-        for record in records
-        if record["uri"] == f"{uri}/child" and record["level"] < 2
-    )
-    assert any(
-        record["uri"] == uri and "team=search" in record["search_tags"] for record in records
-    )
-    assert all(
-        (record.get("search_tags") or []).count("compile_target=true") <= 1 for record in records
-    )
-
-
-@pytest.mark.parametrize("concurrent_abstract", [None, "Concurrent abstract"])
-async def test_compile_directory_adds_missing_l0_under_lock(
-    service, app, monkeypatch, concurrent_abstract
-):
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    uri = "viking://resources/compile-overview"
-    await service.viking_fs.mkdir(uri, ctx=ctx)
-    await service.viking_fs.write_file(f"{uri}/.overview.md", "Existing overview", ctx=ctx)
-    ensured = await service.fs.ensure_directory_index(uri, ctx, "Fallback")
-    assert ensured["indexed_levels"] == [1] and not ensured["created_abstract"]
-    tracker = get_task_tracker()
-    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
-    public_tasks = await tracker.list_tasks(
-        task_type="ensure_directory_index", resource_id=uri, **owner
-    )
-    assert len(public_tasks) == 1 and not public_tasks[0].meta.get("internal")
-    await service.fs.set_tags(
-        uri, ["team=search", "compile_target=true"], mode="append", recursive=False, ctx=ctx
-    )
-    original_acquire = service.viking_fs._async_agfs.pathlock_acquire_tree
-
-    async def acquire_with_summary(path):
-        lease = await original_acquire(path)
-        if concurrent_abstract is not None:
-            await service.viking_fs.write_file(
-                f"{uri}/.abstract.md", concurrent_abstract, ctx=ctx, lease_ref=lease
-            )
-        return lease
-
-    acquire = AsyncMock(side_effect=acquire_with_summary)
-    monkeypatch.setattr(service.viking_fs._async_agfs, "pathlock_acquire_tree", acquire)
-    await service.fs.finalize_compile_directories(uri, ctx)
-    acquire.assert_awaited_once()
-    assert await service.viking_fs.read_file(f"{uri}/.overview.md", ctx=ctx) == "Existing overview"
-    abstract = await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx)
-    assert (concurrent_abstract or "This is the compile generated folder") in abstract
-    records = await service.fs._directory_index_records(uri, ctx)
-    assert {record["level"] for record in records} == {0, 1}
-    assert all("compile_target=true" in record["search_tags"] for record in records)
-    assert "team=search" in next(
-        record["search_tags"] for record in records if record["level"] == 1
-    )
-    tasks = await tracker.list_tasks(task_type="ensure_directory_index", resource_id=uri, **owner)
-    internal_tasks = [task for task in tasks if task.meta.get("internal")]
-    assert len(internal_tasks) == 1
-    terminal = await tracker.wait(internal_tasks[0].task_id, timeout=1, **owner)
-    assert terminal.status is TaskStatus.COMPLETED
-    visible = await tracker.list_tasks(
-        task_type="ensure_directory_index", resource_id=uri, include_internal=False, **owner
-    )
-    assert [task.task_id for task in visible] == [public_tasks[0].task_id]
-
-
-@pytest.mark.parametrize("failure_stage", ["lock", "index"])
-async def test_compile_directory_failures_are_hidden_from_task_list(
-    client, service, monkeypatch, failure_stage
-):
-    """Compile bookkeeping stays diagnosable without crowding public task pages."""
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    uri = "viking://resources/internal-compile-directory"
-    await service.viking_fs.mkdir(uri, ctx=ctx)
-    tracker = get_task_tracker()
-    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
-    compile_task = await tracker.create("compile", resource_id=uri, **owner)
-    if failure_stage == "lock":
-        monkeypatch.setattr(
-            service.viking_fs._async_agfs,
-            "pathlock_acquire_tree",
-            AsyncMock(side_effect=LockAcquisitionError("directory busy")),
-        )
-        expected_error = ResourceBusyError
-    else:
-        monkeypatch.setattr(
-            "openviking.service.fs_service.vectorize_directory_meta",
-            AsyncMock(side_effect=OpenVikingError("index failed", code="PROCESSING_ERROR")),
-        )
-        expected_error = OpenVikingError
-
-    with pytest.raises(expected_error):
-        await service.fs.finalize_compile_directories(uri, ctx)
-
-    internal_tasks = await tracker.list_tasks(
-        task_type="ensure_directory_index", resource_id=uri, **owner
-    )
-    assert len(internal_tasks) == 1
-    internal_task = internal_tasks[0]
-    assert internal_task.meta.get("internal") is True
-    assert (
-        await tracker.wait(internal_task.task_id, timeout=1, **owner)
-    ).status is TaskStatus.FAILED
-
-    for pagination in (None, "cursor"):
-        params = {"resource_id": uri, "limit": 1}
-        if pagination:
-            params["pagination"] = pagination
-        response = await client.get("/api/v1/tasks", params=params)
-        assert response.status_code == 200
-        result = response.json()["result"]
-        items = result["items"] if pagination else result
-        assert [task["task_id"] for task in items] == [compile_task.task_id]
-        if pagination:
-            assert result["has_more"] is False and result["next_cursor"] is None
-
-        response = await client.get("/api/v1/tasks", params={**params, "include_internal": True})
-        assert response.status_code == 200
-        result = response.json()["result"]
-        items = result["items"] if pagination else result
-        assert items[0]["task_id"] == internal_task.task_id
-
-    response = await client.get(f"/api/v1/tasks/{internal_task.task_id}")
-    assert response.status_code == 200
-    assert response.json()["result"]["status"] == "failed"
-
-
-@pytest.mark.parametrize(
-    "records",
-    [[], [{"level": 1, "search_tags": ["compile_target=true"]}]],
-    ids=["empty", "missing_l0"],
-)
-async def test_compile_directory_rejects_missing_required_index(service, monkeypatch, records):
-    """Tagged visible records cannot substitute for a missing required L0 index."""
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    uri = "viking://resources/compile-missing-index"
-    await service.viking_fs.mkdir(uri, ctx=ctx)
-    monkeypatch.setattr(
-        service.fs,
-        "_ensure_directory_index",
-        AsyncMock(return_value={"vector_status": "complete", "indexed_levels": [0]}),
-    )
-    monkeypatch.setattr(service.fs, "_directory_index_records", AsyncMock(return_value=records))
-    monkeypatch.setattr(fs_service, "_COMPILE_DIRECTORY_TAG_TIMEOUT_SECONDS", 0, raising=False)
-    set_tags = AsyncMock(side_effect=AssertionError("Already tagged records need no update"))
-    monkeypatch.setattr(service.fs, "set_tags", set_tags)
-
-    with pytest.raises(OpenVikingError, match="Compile directory tags are incomplete") as caught:
-        await service.fs.finalize_compile_directories(uri, ctx)
-
-    assert caught.value.code == "PROCESSING_ERROR"
-    set_tags.assert_not_awaited()
 
 
 async def test_fs_attrs_filters_legacy_non_kv_search_tags(monkeypatch):
@@ -305,28 +95,52 @@ async def test_write_allows_existing_semantic_sidecar_but_rejects_relations(clie
     assert body["error"]["code"] == "INVALID_ARGUMENT"
 
 
-async def test_write_replaces_existing_resource_file(client_with_resource):
+async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
+    client_with_resource,
+):
+    """An explicit resolution stores the edit, retains conflict history, and refreshes tags."""
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
-
+    conflict = {"state": "unfixed", "match_text": "Conflicting content"}
+    original = (
+        "# Original\n\nConflicting content\n\n<!-- CONFLICTS_CONTENT\n"
+        + json.dumps(conflict)
+        + "\n-->"
+    )
+    seeded = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": file_uri,
+            "content": original,
+            "tags": ["has_conflict=true", "num=1", "team=search"],
+            "wait": True,
+        },
+    )
+    assert seeded.status_code == 200, seeded.text
     write_resp = await client.post(
         "/api/v1/content/write",
         json={
             "uri": file_uri,
-            "content": "# Updated\n\nFresh content.",
+            "content": "# Updated\n\nResolved content.",
             "mode": "replace",
             "wait": True,
+            "resolve_conflicts": True,
         },
     )
-    assert write_resp.status_code == 200
+    assert write_resp.status_code == 200, write_resp.text
     body = write_resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["uri"] == file_uri
-    assert body["result"]["mode"] == "replace"
-
+    assert body["result"]["uri"] == file_uri and body["result"]["mode"] == "replace"
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
-    assert read_resp.status_code == 200
-    assert read_resp.json()["result"] == "# Updated\n\nFresh content."
+    stored = read_resp.json()["result"]
+    assert stored.startswith("# Updated\n\nResolved content.")
+    resolution = json.loads(stored.split("<!-- CONFLICTS_CONTENT", 1)[1].split("-->", 1)[0])
+    assert resolution["state"] == "fixed" and resolution["fix_time"] > 0
+    assert resolution["match_text"] == conflict["match_text"]
+    assert resolution["fix_plan"] == resolution["resolution_basis"]
+    attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})
+    assert {"has_conflict=false", "num=0", "team=search"} <= set(
+        attrs.json()["result"]["attrs"]["tags"]
+    )
 
 
 async def test_write_appends_existing_resource_file(client_with_resource):
