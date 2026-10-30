@@ -18,6 +18,7 @@ from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.identity import RequestContext
+from openviking.service.compile_targets import commit_snapshot
 from openviking.service.fs_service import FSService
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_tracker import TaskRecord, get_task_tracker
@@ -224,6 +225,7 @@ class MemoryCompileRunner:
                     ctx.user.user_id,
                     work_id=running_work_id,
                 ):
+                    await self._snapshot(target, task_id, "start", ctx)
                     result = await self._consolidate(
                         target=target,
                         memory_type=memory_type,
@@ -267,7 +269,7 @@ class MemoryCompileRunner:
                     ctx.user.user_id,
                     work_id=running_work_id,
                 ):
-                    await self._fs.finalize_compile_directories(target, ctx)
+                    await self._snapshot(target, task_id, "finish", ctx)
                 await tracker.complete(
                     task_id,
                     result,
@@ -288,6 +290,21 @@ class MemoryCompileRunner:
             if root_token is not None and reset_root_observability_context is not None:
                 reset_root_observability_context(root_token)
             await tracker.unregister_running_task(task_id)
+
+    async def _snapshot(self, target: str, task_id: str, phase: str, ctx: RequestContext) -> None:
+        """Snapshot the target for recovery; failures are logged and cancellation propagates."""
+        try:
+            oid = await commit_snapshot(
+                self._fs._ensure_initialized(),
+                [target],
+                f"memory compile {task_id} {phase}",
+                ctx,
+                wait_busy=False,
+            )
+            if oid is None:
+                logger.warning("Memory compile %s %s snapshot is unavailable", task_id, phase)
+        except Exception as exc:
+            logger.warning("Memory compile %s %s snapshot failed: %s", task_id, phase, exc)
 
     async def _consolidate(
         self,
