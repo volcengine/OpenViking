@@ -21,6 +21,24 @@ const studio = {
   },
   duration: { milliseconds: '{{value}}ms', seconds: '{{value}}s' },
   errors: {
+    requestInvalid: 'The request is invalid. Check your input and try again.',
+    authenticationFailed:
+      'The API Key is missing or invalid. Check your connection credentials.',
+    permissionDenied: 'You do not have permission to perform this action.',
+    resourceNotFound:
+      'The requested resource was not found. Refresh and try again.',
+    requestConflict:
+      'The resource has changed or already exists. Refresh and try again.',
+    payloadTooLarge: 'The upload is too large. Reduce its size and try again.',
+    rateLimited: 'Too many requests. Wait a moment and try again.',
+    serviceUnavailable:
+      'The service could not complete the request. Try again later.',
+    requestTimedOut:
+      'The request timed out. Check the connection and try again.',
+    networkFailed:
+      'Cannot connect to the service. Check the service address and network.',
+    details: 'Technical details',
+
     botHealth: 'Bot health check failed ({{status}})',
     botSteer: 'Bot steer failed ({{status}})',
     botInterrupt: 'Bot interrupt failed ({{status}})',

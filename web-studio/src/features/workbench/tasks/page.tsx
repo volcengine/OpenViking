@@ -1,3 +1,4 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -186,7 +187,7 @@ export function TasksRoute() {
       return { res: json, task }
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : String(error))
+      showErrorToast(error)
     },
     onSuccess: async (result) => {
       if ('skippedReason' in result && result.skippedReason) {

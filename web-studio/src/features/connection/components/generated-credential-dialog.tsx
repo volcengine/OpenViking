@@ -1,3 +1,4 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
 import {
   CheckIcon,
   CopyIcon,
@@ -69,7 +70,7 @@ export function GeneratedCredentialDialog() {
       clearGeneratedCredential()
       await navigate({ to: '/home' })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
+      showErrorToast(error)
     } finally {
       setIsSwitching(false)
     }

@@ -1,3 +1,4 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as React from 'react'
 
@@ -270,7 +271,7 @@ export function WatchManagementPage() {
       setEditingWatch(null)
       toast.success(t('toast.updated'))
     },
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) => showErrorToast(error),
   })
   const triggerMutation = useMutation({
     mutationFn: ({
@@ -317,7 +318,7 @@ export function WatchManagementPage() {
     },
     onError: (error) => {
       setPendingSync(null)
-      toast.error(getErrorMessage(error))
+      showErrorToast(error)
     },
   })
   const deleteMutation = useMutation({
@@ -327,7 +328,7 @@ export function WatchManagementPage() {
       setDeletingWatch(null)
       toast.success(t('toast.deleted'))
     },
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) => showErrorToast(error),
   })
 
   const formatTime = (value: string | null) => {

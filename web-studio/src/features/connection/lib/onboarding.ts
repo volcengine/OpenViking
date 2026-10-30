@@ -39,6 +39,7 @@ export class StudioSetupError extends Error {
 
 export class StudioSetupRequestError extends Error {
   readonly stage: 'health' | 'data'
+  readonly code: string
   readonly statusCode?: number
 
   constructor(
@@ -57,6 +58,7 @@ export class StudioSetupRequestError extends Error {
       cause,
     })
     this.stage = stage
+    this.code = error.code
     this.statusCode = error.statusCode
   }
 }

@@ -349,7 +349,11 @@ function SemanticAdvancedControls({
               aria-label={t('advanced.timeField')}
               className="h-8 w-full"
             >
-              <SelectValue />
+              <SelectValue>
+                {options.timeField === 'created_at'
+                  ? t('advanced.createdAt')
+                  : t('advanced.updatedAt')}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="updated_at">

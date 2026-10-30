@@ -1,3 +1,4 @@
+import { ErrorMessage } from '#/shared/components/error-message'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { flushCredentialStorage } from '#/features/connection/lib/credential-storage'
 import { StudioSetupRequestError } from '#/features/connection/lib/onboarding'
@@ -24,7 +25,7 @@ export function UserKeyPage() {
   const { returnTo } = useSearch({ from: '/connections/user-key' })
   const [apiKey, setApiKey] = React.useState('')
   const [saving, setSaving] = React.useState(false)
-  const [error, setError] = React.useState('')
+  const [error, setError] = React.useState<string | Error>('')
   const request = React.useRef<AbortController | null>(null)
   React.useEffect(
     () => () => request.current?.abort(),
@@ -53,10 +54,12 @@ export function UserKeyPage() {
         setError(
           cause instanceof UserKeyError
             ? t(`userKey.${cause.code}`)
-            : new StudioSetupRequestError('data', cause, {
-                ...connection,
-                apiKey,
-              }).message,
+            : cause instanceof StudioSetupRequestError
+              ? cause
+              : new StudioSetupRequestError('data', cause, {
+                  ...connection,
+                  apiKey,
+                }),
         )
         setSaving(false)
       }
@@ -123,11 +126,7 @@ export function UserKeyPage() {
                 {t('userKey.hint')}
               </p>
             </Field>
-            {error ? (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            ) : null}
+            {error ? <ErrorMessage error={error} /> : null}
             <div className="flex justify-end gap-2">
               <Button
                 type="button"

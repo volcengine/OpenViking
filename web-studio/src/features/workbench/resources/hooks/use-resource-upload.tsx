@@ -1,3 +1,4 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -312,7 +313,7 @@ export function ResourceUploadProvider({
       } catch (error) {
         if (!isOperationCurrent(controller)) return
         if (options.notifyOnError !== false) {
-          toast.error(getErrorMessage(error), { duration: 5000 })
+          showErrorToast(error)
         }
       } finally {
         operationsRef.current.delete(controller)

@@ -108,7 +108,7 @@ it.each([
   ['/admin/settings', '/admin/settings'],
   ['/admin/connections/one', '/admin/settings'],
 ])(
-  'mounts %s without waiting for health and highlights the sidebar connection tab',
+  'mounts %s without waiting for health and keeps connections in the header menu',
   (path, destination) => {
     state.pathname = path
     render(
@@ -117,16 +117,19 @@ it.each([
       </IdentityScopedAppShell>,
     )
     expect(screen.getByTestId('connection-settings')).toBeTruthy()
-    const link = screen.getByRole('link', { name: /Connection settings/i })
-    expect(link.getAttribute('href')).toBe(destination)
-    expect(link.hasAttribute('data-active')).toBe(true)
+    expect(
+      screen.queryByRole('link', { name: /Connection settings/i }),
+    ).toBeNull()
     if (path.startsWith('/admin'))
       expect(screen.getByText('Administration')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Studio settings/i }))
+    const link = screen.getByRole('link', { name: /Manage connections/i })
+    expect(link.getAttribute('href')).toBe(destination)
   },
 )
 
 it.each(['opensource', 'volcengine'])(
-  'keeps the sidebar connection entry visible offline for %s',
+  'keeps the header connection menu reachable offline for %s',
   (provider) => {
     state.provider = provider
     state.mode = 'offline'
@@ -136,11 +139,15 @@ it.each(['opensource', 'volcengine'])(
       </IdentityScopedAppShell>,
     )
     expect(
+      screen.queryByRole('link', { name: /Connection settings/i }),
+    ).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Studio settings/i }))
+    expect(
       screen
-        .getByRole('link', { name: /Connection settings/i })
+        .getByRole('link', { name: /Manage connections/i })
         .getAttribute('href'),
     ).toBe('/settings')
-    expect(screen.queryByRole('group', { name: 'Language' })).toBeNull()
+    expect(screen.getByRole('group', { name: 'Language' })).toBeTruthy()
   },
 )
 
@@ -235,9 +242,10 @@ it.each([
         <span data-testid="shared-page" />
       </IdentityScopedAppShell>,
     )
+    fireEvent.click(screen.getByRole('button', { name: /Studio settings/i }))
     expect(
       screen
-        .getByRole('link', { name: /Connection settings/i })
+        .getByRole('link', { name: /Manage connections/i })
         .getAttribute('href'),
     ).toBe(destination)
     if (role === 'root') {

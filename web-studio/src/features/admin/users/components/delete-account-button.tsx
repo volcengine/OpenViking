@@ -1,3 +1,4 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { LoaderCircleIcon, Trash2Icon } from 'lucide-react'
 import * as React from 'react'
@@ -36,7 +37,7 @@ export function DeleteAccountButton({
 
   const deleteAccount = useMutation({
     mutationFn: () => deleteAdminAccount(adminConnection, accountId),
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) => showErrorToast(error),
     onSuccess: async (taskId) => {
       let nextAccountId = ''
       try {

@@ -19,6 +19,18 @@ const studio = {
   },
   duration: { milliseconds: '{{value}} 毫秒', seconds: '{{value}} 秒' },
   errors: {
+    requestInvalid: '请求参数无效，请检查填写内容后重试。',
+    authenticationFailed: 'API Key 缺失或无效，请检查连接凭据。',
+    permissionDenied: '当前身份没有执行此操作的权限。',
+    resourceNotFound: '请求的资源不存在，请刷新后重试。',
+    requestConflict: '资源已发生变化或已存在，请刷新后重试。',
+    payloadTooLarge: '上传内容过大，请缩小后重试。',
+    rateLimited: '请求过于频繁，请稍后重试。',
+    serviceUnavailable: '服务暂时无法完成请求，请稍后重试。',
+    requestTimedOut: '请求超时，请检查连接后重试。',
+    networkFailed: '无法连接服务，请检查服务地址和网络。',
+    details: '技术详情',
+
     botHealth: 'Bot 健康检查失败（{{status}}）',
     botSteer: '追加 Bot 输入失败（{{status}}）',
     botInterrupt: '中断 Bot 失败（{{status}}）',

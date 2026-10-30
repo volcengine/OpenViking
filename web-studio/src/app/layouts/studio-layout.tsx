@@ -14,7 +14,6 @@ import { useStudioMode } from '#/features/connection/hooks/use-studio-mode'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import {
   connectionSettingsPath,
-  isConnectionSettingsPath,
   isManagementPath,
   isSharedStudioPath,
 } from '#/features/connection/lib/studio-mode'
@@ -40,13 +39,7 @@ import {
   SidebarTrigger,
 } from '#/shared/ui/sidebar'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
-import {
-  BookOpenIcon,
-  BotIcon,
-  BracesIcon,
-  CableIcon,
-  KeyRoundIcon,
-} from 'lucide-react'
+import { BookOpenIcon, BotIcon, BracesIcon, KeyRoundIcon } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -234,23 +227,12 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
                   </SidebarGroup>
                 ))}
 
-            <SidebarGroup className="pb-1">
-              <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
-                {t('sidebar.groups.settings', { ns: 'appShell' })}
-              </SidebarGroupLabel>
+            <SidebarGroup
+              className="pb-1"
+              hidden={provider !== 'opensource' || isGatewayHost}
+            >
               <SidebarGroupContent>
                 <SidebarMenu>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      render={<Link to={settingsPath} />}
-                      isActive={isConnectionSettingsPath(pathname)}
-                      tooltip={t('footer.connection', { ns: 'appShell' })}
-                      className="h-9"
-                    >
-                      <CableIcon />
-                      <span>{t('footer.connection', { ns: 'appShell' })}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
                   {provider === 'opensource' && !isGatewayHost ? (
                     <SidebarMenuItem>
                       <SidebarMenuButton

@@ -1,3 +1,4 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
 import {
   ArrowLeftIcon,
@@ -75,7 +76,6 @@ import {
   cleanVikingUri,
   createEntryFromUri,
   getAncestorUris,
-  getErrorMessage,
   isDirectoryLevelFile,
   mergeExpanded,
   normalizeFilesystemResourceUri,
@@ -324,7 +324,7 @@ function FilesystemWorkbench() {
           file: undefined,
           uri: nextCurrentUri,
         })
-        toast.error(getErrorMessage(error) || t('readFailed', { uri: cleaned }))
+        showErrorToast(error, t('readFailed', { uri: cleaned }))
       } finally {
         setOpeningUri(null)
       }

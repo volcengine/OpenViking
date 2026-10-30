@@ -1,3 +1,4 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { flushCredentialStorage } from '#/features/connection/lib/credential-storage'
 import type { SavedDataIdentity } from '#/features/connection/lib/profiles'
@@ -18,7 +19,6 @@ import {
 } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 
 export function StudioModeSwitch({
   managementMode,
@@ -80,12 +80,7 @@ export function StudioModeSwitch({
       await flushCredentialStorage()
       await navigate({ to: '/home' })
     } catch (error) {
-      if (!controller.signal.aborted)
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('studio:errors.requestFailed'),
-        )
+      if (!controller.signal.aborted) showErrorToast(error)
     } finally {
       setPending(false)
     }

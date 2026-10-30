@@ -1,3 +1,5 @@
+import { ErrorMessage } from '#/shared/components/error-message'
+import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useNavigate } from '@tanstack/react-router'
 import {
@@ -192,7 +194,7 @@ export function UserManagementPanel() {
   const createUser = useMutation({
     mutationFn: (input: CreateUserInput) =>
       createAdminUser(adminConnection, input),
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) => showErrorToast(error),
     onSuccess: async (result) => {
       setGeneratedCredential(result)
       setAddUserOpen(false)
@@ -205,7 +207,7 @@ export function UserManagementPanel() {
   const regenerateKey = useMutation({
     mutationFn: (user: AdminUser) =>
       regenerateAdminUserKey(adminConnection, user.accountId, user.userId),
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) => showErrorToast(error),
     onSuccess: async (result, user) => {
       setGeneratedCredential(result)
       setPendingRegenerateUser(null)
@@ -233,7 +235,7 @@ export function UserManagementPanel() {
   const updateRole = useMutation({
     mutationFn: (input: UpdateUserRoleInput) =>
       updateAdminUserRole(adminConnection, input),
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) => showErrorToast(error),
     onSuccess: async (_, input) => {
       setPendingRoleChange(null)
       toast.success(
@@ -249,7 +251,7 @@ export function UserManagementPanel() {
   const removeUser = useMutation({
     mutationFn: (user: AdminUser) =>
       removeAdminUser(adminConnection, user.accountId, user.userId),
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) => showErrorToast(error),
     onSuccess: async (_, user) => {
       setPendingRemoveUser(null)
       toast.success(t('toast.userRemoved', { user: user.userId }))
@@ -290,7 +292,7 @@ export function UserManagementPanel() {
       await navigate({ to: '/home' })
       toast.success(t('toast.dataKeySelected'))
     } catch (error) {
-      toast.error(getErrorMessage(error))
+      showErrorToast(error)
     } finally {
       setSwitchingIdentityKey('')
     }
@@ -452,9 +454,7 @@ export function UserManagementPanel() {
           ) : usersQuery.isError ? (
             <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
               <p className="font-medium">{t('empty.adminTitle')}</p>
-              <p className="max-w-lg text-sm text-muted-foreground">
-                {getErrorMessage(usersQuery.error)}
-              </p>
+              <ErrorMessage error={usersQuery.error} className="max-w-lg" />
             </div>
           ) : total === 0 ? (
             <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">

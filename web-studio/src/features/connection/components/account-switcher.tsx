@@ -1,3 +1,4 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
 import { newConnectionPath } from '#/features/connection/lib/studio-mode'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
@@ -289,7 +290,7 @@ export function AccountSwitcher({
       }
       throw switchError
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
+      showErrorToast(error)
     } finally {
       setSwitchingAccountId('')
     }
@@ -298,8 +299,7 @@ export function AccountSwitcher({
   const createAccount = useMutation({
     mutationFn: (input: CreateAccountInput) =>
       createAdminAccount(adminConnection, input),
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : String(error)),
+    onError: (error) => showErrorToast(error),
     onSuccess: async (result, input) => {
       const accountId = result.accountId || input.accountId
       const userId = result.userId || input.adminUserId
@@ -839,9 +839,7 @@ export function AccountSwitcher({
                   setManualSwitch(null)
                 })
                 .catch((error: unknown) => {
-                  toast.error(
-                    error instanceof Error ? error.message : String(error),
-                  )
+                  showErrorToast(error)
                 })
                 .finally(() => setSwitchingAccountId(''))
             }}
@@ -897,9 +895,7 @@ export function AccountSwitcher({
                       )
                     })
                     .catch((error: unknown) => {
-                      toast.error(
-                        error instanceof Error ? error.message : String(error),
-                      )
+                      showErrorToast(error)
                     })
                     .finally(() => setSwitchingAccountId(''))
                 }}

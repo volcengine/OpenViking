@@ -1,3 +1,4 @@
+import studioI18n from '#/i18n/core'
 // @vitest-environment jsdom
 
 import en from '#/i18n/locales/en/workspace'
@@ -302,7 +303,10 @@ describe('session commit re-trigger feedback', () => {
     const user = await renderPage()
     await user.click(await screen.findByTitle('Re-trigger Task'))
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('Commit failed'),
+      expect(toast.error).toHaveBeenCalledWith(
+        studioI18n.t('studio:errors.requestFailed'),
+        { description: 'Commit failed' },
+      ),
     )
     expect(toast.info).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()

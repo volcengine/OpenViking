@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -234,7 +235,10 @@ describe('WatchManagementPage', () => {
       }),
     )
     await waitFor(() =>
-      expect(toastMocks.error).toHaveBeenCalledWith('update failed'),
+      expect(toastMocks.error).toHaveBeenCalledWith(
+        i18n.t('studio:errors.requestFailed'),
+        { description: 'update failed' },
+      ),
     )
   })
 

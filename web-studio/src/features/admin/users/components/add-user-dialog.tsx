@@ -136,7 +136,11 @@ export function AddUserDialog({
                     }
                   >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue>
+                        {draft.role === 'admin'
+                          ? t('roles.admin')
+                          : t('roles.user')}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="user">{t('roles.user')}</SelectItem>

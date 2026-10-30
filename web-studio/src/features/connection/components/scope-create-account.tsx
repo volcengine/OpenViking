@@ -1,3 +1,4 @@
+import { showErrorToast } from '#/shared/lib/error-toast'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import type { AdminConnection } from '#/shared/api/admin'
 import { createAdminAccount } from '#/shared/api/admin'
@@ -67,8 +68,7 @@ export function ScopeCreateAccount({
         }),
       )
     } catch (error) {
-      if (active.current && scope.current === source)
-        toast.error(error instanceof Error ? error.message : String(error))
+      if (active.current && scope.current === source) showErrorToast(error)
     } finally {
       if (active.current) setPending(false)
     }

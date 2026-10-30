@@ -16,6 +16,9 @@ const workspace = {
       copied: 'Copied',
     },
     studioSettings: {
+      connections: 'Saved connections',
+      addConnection: 'Add connection',
+      manageConnections: 'Manage connections',
       root: 'Root',
       accountAdmin: 'Account Admin',
       dualCredential: 'Management + User',

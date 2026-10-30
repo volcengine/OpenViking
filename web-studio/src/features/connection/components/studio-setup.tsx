@@ -1,3 +1,4 @@
+import { ErrorMessage } from '#/shared/components/error-message'
 import { SetupIdentityDirectory } from '#/features/connection/components/setup-identity-directory'
 import type { ConnectionDraft } from '#/features/connection/lib/connection-runtime'
 import { readCredentialStorage } from '#/features/connection/lib/credential-storage'
@@ -191,7 +192,7 @@ export function StudioSetup({
     (draft.serviceSelection === 'opensource' && !needsNewAddress) ||
     isValidConnectionUrl(draft.baseUrl)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<string | Error>('')
   const connectionRevisionRef = useRef(0)
   const verifiedSelectionRef = useRef<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -381,13 +382,11 @@ export function StudioSetup({
     } catch (err) {
       if (!controller.signal.aborted)
         setError(
-          err instanceof StudioSetupRequestError
-            ? `${t(err.stage === 'health' ? 'healthRequestFailed' : 'dataRequestFailed')} ${err.message}`
-            : err instanceof StudioSetupError
-              ? t(err.code)
-              : err instanceof Error
-                ? err.message
-                : String(err),
+          err instanceof StudioSetupError
+            ? t(err.code)
+            : err instanceof StudioSetupRequestError
+              ? err
+              : new StudioSetupRequestError('data', err, draft),
         )
     } finally {
       if (abortRef.current === controller) {
@@ -872,12 +871,10 @@ export function StudioSetup({
                     </div>
                   )}
                   {error && error !== t('keyRequired') ? (
-                    <p
-                      role="alert"
-                      className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm leading-6 text-destructive"
-                    >
-                      {t('verifyFailed')} {error}
-                    </p>
+                    <ErrorMessage
+                      error={error}
+                      className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 leading-6"
+                    />
                   ) : null}
                   {verified ? (
                     <p

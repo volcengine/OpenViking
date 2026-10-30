@@ -1,3 +1,6 @@
+import { StudioSetupRequestError } from '#/features/connection/lib/onboarding'
+import { OvClientError } from '#/shared/api/ov-client/errors'
+import i18n from '#/i18n/core'
 // @vitest-environment jsdom
 import {
   ConnectionProfilesList,
@@ -376,3 +379,29 @@ vi.mock('#/features/connection/lib/credential-storage', () => ({
     localStorage.setItem(key, value),
   flushCredentialStorage: async () => {},
 }))
+
+it('keeps a verified request status and redacted details in the profile editor', async () => {
+  const expected = selectDirectoryUser()
+  const error = new StudioSetupRequestError(
+    'health',
+    new OvClientError({
+      code: 'UNAUTHENTICATED',
+      statusCode: 401,
+      message: 'Invalid bob-key',
+    }),
+    { ...expected.connection, apiKey: 'bob-key' },
+  )
+  verify.mockRejectedValueOnce(error)
+  fireEvent.change(screen.getByLabelText('profiles.fields.apiKey'), {
+    target: { value: 'bob-key' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'profiles.save' }))
+  const alert = await screen.findByRole('alert')
+  expect(alert.querySelector('p')?.textContent).toBe(
+    i18n.t('studio:errors.authenticationFailed'),
+  )
+  expect(alert.textContent).toContain('HTTP 401: Invalid [redacted]')
+  expect(alert.textContent).not.toContain('bob-key')
+  expect(alert.querySelector('details')?.open).toBe(false)
+  expect(connectionState.saveProfile).not.toHaveBeenCalled()
+})

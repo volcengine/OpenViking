@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 // @vitest-environment jsdom
 import { StudioModeSwitch } from '#/features/connection/components/studio-mode-switch'
 import type { ConnectionProfile } from '#/features/connection/lib/profiles'
@@ -155,7 +156,12 @@ it('does not enter the workbench when the saved key is rejected', async () => {
   mocks.switch.mockRejectedValue(new Error('invalid-key'))
   render(<StudioModeSwitch managementMode />)
   fireEvent.click(screen.getByRole('button', { name: 'modes.enterWorkbench' }))
-  await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('invalid-key'))
+  await waitFor(() =>
+    expect(mocks.error).toHaveBeenCalledWith(
+      i18n.t('studio:errors.requestFailed'),
+      { description: 'invalid-key' },
+    ),
+  )
   expect(mocks.navigate).not.toHaveBeenCalled()
 })
 it('aborts a pending identity restoration when the control unmounts', () => {

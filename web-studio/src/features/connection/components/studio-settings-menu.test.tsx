@@ -49,6 +49,22 @@ vi.mock('react-i18next', () => ({
 vi.mock('next-themes', () => ({
   useTheme: () => ({ setTheme: state.setTheme, resolvedTheme: 'light' }),
 }))
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({
+    to,
+    children,
+    ...props
+  }: {
+    to: string
+    children: React.ReactNode
+    onClick?: React.MouseEventHandler<HTMLAnchorElement>
+    className?: string
+  }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
+}))
 beforeEach(() => {
   localStorage.clear()
   state.connection.apiKey = 'user-key'
@@ -66,13 +82,17 @@ function openMenu(canManage = true, managementMode = false) {
   )
   fireEvent.click(screen.getByRole('button', { name: 'studioSettings.open' }))
 }
-it('shows current-user preferences without duplicating connection switching', () => {
+it('shows saved local connections and preferences without exposing credentials', () => {
   openMenu()
-  expect(screen.queryByRole('link', { name: 'footer.connection' })).toBeNull()
+  const profiles = within(
+    screen.getByRole('group', { name: 'studioSettings.connections' }),
+  )
   expect(
-    screen.queryByRole('link', { name: 'studioSettings.addKey' }),
-  ).toBeNull()
-  expect(screen.queryByRole('button', { name: /Bob/ })).toBeNull()
+    profiles
+      .getByRole('button', { name: /Alice/ })
+      .getAttribute('aria-pressed'),
+  ).toBe('true')
+  expect(profiles.getByRole('button', { name: /Bob/ })).toBeTruthy()
   expect(
     screen
       .getByRole('button', { name: 'studioSettings.open' })
@@ -80,8 +100,37 @@ it('shows current-user preferences without duplicating connection switching', ()
   ).toBe('alice')
   expect(screen.queryByText('API Key')).toBeNull()
   expect(screen.queryByRole('switch')).toBeNull()
+  expect(document.body.textContent).not.toContain('user-key')
+  expect(document.body.textContent).not.toContain('root-key')
   expect(state.activateProfile).not.toHaveBeenCalled()
 })
+it('activates a saved connection and closes the preferences menu', () => {
+  openMenu()
+  fireEvent.click(screen.getByRole('button', { name: /Bob/ }))
+  expect(state.activateProfile).toHaveBeenCalledWith('other')
+  expect(
+    screen.queryByRole('group', { name: 'studioSettings.connections' }),
+  ).toBeNull()
+})
+it.each([
+  [false, '/connections/new', '/settings'],
+  [true, '/admin/connections/new', '/admin/settings'],
+] as const)(
+  'keeps connection routes within the current management=%s surface',
+  (managementMode, addPath, managePath) => {
+    openMenu(true, managementMode)
+    expect(
+      screen
+        .getByRole('link', { name: 'studioSettings.addConnection' })
+        .getAttribute('href'),
+    ).toBe(addPath)
+    expect(
+      screen
+        .getByRole('link', { name: 'studioSettings.manageConnections' })
+        .getAttribute('href'),
+    ).toBe(managePath)
+  },
+)
 it.each([
   ['root', true, 'studioSettings.root'],
   ['admin', true, 'studioSettings.accountAdmin'],
@@ -159,5 +208,9 @@ it('does not offer administration preferences to a user connection', () => {
   expect(
     screen.queryByRole('group', { name: 'studioSettings.defaultEntry' }),
   ).toBeNull()
-  expect(screen.queryByRole('link', { name: 'footer.connection' })).toBeNull()
+  expect(
+    screen
+      .getByRole('link', { name: 'studioSettings.manageConnections' })
+      .getAttribute('href'),
+  ).toBe('/settings')
 })

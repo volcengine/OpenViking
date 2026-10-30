@@ -68,7 +68,11 @@ export function AdditionalResourceOptions({
             disabled={disabled || !nativeOptions}
           >
             <SelectTrigger className="w-full">
-              <SelectValue />
+              <SelectValue>
+                {value.parseMode === 'no_split'
+                  ? t('parseMode.noSplit')
+                  : t('parseMode.default')}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="default">{t('parseMode.default')}</SelectItem>
@@ -92,7 +96,11 @@ export function AdditionalResourceOptions({
             disabled={disabled || !nativeOptions}
           >
             <SelectTrigger className="w-full">
-              <SelectValue />
+              <SelectValue>
+                {value.processingMode === 'vectors_only'
+                  ? t('processingMode.vectorsOnly')
+                  : t('processingMode.semantic')}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="semantic_and_vectors">
@@ -127,7 +135,11 @@ export function AdditionalResourceOptions({
               className="w-full"
             >
               <SelectValue>
-                {t(`preserveStructure.${preserveStructureMode}`)}
+                {preserveStructureMode === 'server_default'
+                  ? t('preserveStructure.serverDefault')
+                  : preserveStructureMode === 'preserve'
+                    ? t('preserveStructure.preserve')
+                    : t('preserveStructure.flatten')}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -217,7 +229,13 @@ export function AdditionalResourceOptions({
             disabled={disabled}
           >
             <SelectTrigger className="w-full">
-              <SelectValue />
+              <SelectValue>
+                {value.tagMode === 'append'
+                  ? t('tagMode.append')
+                  : value.tagMode === 'clear'
+                    ? t('tagMode.clear')
+                    : t('tagMode.replace')}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="replace">{t('tagMode.replace')}</SelectItem>

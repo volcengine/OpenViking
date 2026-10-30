@@ -5,14 +5,18 @@ import {
   savePreferredMode,
 } from '#/features/connection/lib/studio-mode'
 import { cn } from '#/shared/lib/utils'
+import { Link } from '@tanstack/react-router'
 import { Popover, PopoverContent, PopoverTrigger } from '#/shared/ui/popover'
 import {
   CheckIcon,
+  CableIcon,
   ChevronDownIcon,
   GithubIcon,
   LanguagesIcon,
   MoonIcon,
   PanelsTopLeftIcon,
+  PlusIcon,
+  ServerIcon,
   SettingsIcon,
   ShieldCheckIcon,
   SunIcon,
@@ -45,7 +49,9 @@ export function StudioSettingsMenu({
     connectionRole,
     profiles = [],
     activeProfileId,
+    activateProfile,
   } = useAppConnection()
+  const settingsPath = managementMode ? '/admin/settings' : '/settings'
   const workbenchKey = profiles.find(
     (profile) => profile.id === activeProfileId,
   )?.workbenchIdentity?.apiKey
@@ -132,6 +138,70 @@ export function StudioSettingsMenu({
         sideOffset={10}
         className="max-h-[calc(100svh-5rem)] w-[min(23rem,calc(100vw-1.5rem))] gap-0 overflow-y-auto rounded-xl p-2 shadow-xl"
       >
+        <div
+          role="group"
+          aria-label={t('studioSettings.connections')}
+          className="border-b border-border/60 pb-2"
+        >
+          <p className="px-2.5 py-2 text-xs font-medium text-muted-foreground">
+            {t('studioSettings.connections')}
+          </p>
+          <div className="max-h-52 overflow-y-auto">
+            {profiles.map((profile) => {
+              const active = profile.id === activeProfileId
+              return (
+                <button
+                  key={profile.id}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={active}
+                  className={cn(MENU_ITEM, active && 'bg-accent')}
+                  onClick={() => {
+                    setOpen(false)
+                    activateProfile(profile.id)
+                  }}
+                >
+                  <ServerIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">
+                      {profile.name}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {profile.connection.baseUrl}
+                    </span>
+                  </span>
+                  {active ? (
+                    <>
+                      <CheckIcon
+                        aria-hidden="true"
+                        className="size-4 shrink-0"
+                      />
+                      <span className="sr-only">
+                        {t('studio:profiles.active')}
+                      </span>
+                    </>
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
+          <Link
+            to={managementMode ? '/admin/connections/new' : '/connections/new'}
+            onClick={() => setOpen(false)}
+            className={MENU_ITEM}
+          >
+            <PlusIcon className="size-4 text-muted-foreground" />
+            {t('studioSettings.addConnection')}
+          </Link>
+          <Link
+            to={settingsPath}
+            onClick={() => setOpen(false)}
+            className={MENU_ITEM}
+          >
+            <CableIcon className="size-4 text-muted-foreground" />
+            {t('studioSettings.manageConnections')}
+          </Link>
+        </div>
         {canManage ? (
           <div className="flex items-center justify-between gap-3 px-2.5 py-3">
             <span className="flex items-center gap-2.5 text-xs">

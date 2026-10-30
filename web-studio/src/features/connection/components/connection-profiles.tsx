@@ -1,3 +1,4 @@
+import { ErrorMessage } from '#/shared/components/error-message'
 import { SetupIdentityDirectory } from '#/features/connection/components/setup-identity-directory'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { flushCredentialStorage } from '#/features/connection/lib/credential-storage'
@@ -105,7 +106,7 @@ export function ConnectionProfilesList({ editorId }: { editorId?: string }) {
         ? { ...original, connection: { ...original.connection } }
         : null,
   )
-  const [error, setError] = React.useState('')
+  const [error, setError] = React.useState<string | Error>('')
   const [directoryIdentitySelected, setDirectoryIdentitySelected] =
     React.useState(false)
   const [saving, setSaving] = React.useState(false)
@@ -179,7 +180,9 @@ export function ConnectionProfilesList({ editorId }: { editorId?: string }) {
           setError(
             cause instanceof StudioSetupError
               ? t(`onboarding:${cause.code}`)
-              : new StudioSetupRequestError('data', cause, connection).message,
+              : cause instanceof StudioSetupRequestError
+                ? cause
+                : new StudioSetupRequestError('data', cause, connection),
           )
         }
         return
@@ -533,11 +536,7 @@ export function ConnectionProfilesList({ editorId }: { editorId?: string }) {
                       )}
                     </>
                   )}
-                  {error && (
-                    <p role="alert" className="text-sm text-destructive">
-                      {error}
-                    </p>
-                  )}
+                  {error && <ErrorMessage error={error} />}
                   <div className="flex justify-end gap-2 border-t pt-4">
                     <Button
                       type="button"
