@@ -65,6 +65,9 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 _MEMORY_CHUNK_PATTERN = re.compile(r"^(?P<base>.+)#chunk_[0-9]{4,}$")
 
+# Hidden meta files that should never be indexed as user content.
+SEARCH_TAGS_SIDECAR_FILENAME = ".search_tags.json"
+
 REINDEX_TASK_TYPE = "admin_reindex"
 REINDEX_ENQUEUE_ERROR = "Failed to enqueue reindex processing"
 _MAX_FILE_VECTORIZATION_CONCURRENCY = 64
@@ -2166,7 +2169,11 @@ class ReindexExecutor:
         return name not in _MEMORY_NON_SOURCE_FILENAMES and not is_storage_internal_name(name)
 
     def _is_hidden_meta_file(self, uri: str) -> bool:
-        return uri.endswith("/.abstract.md") or uri.endswith("/.overview.md")
+        return (
+            uri.endswith("/.abstract.md")
+            or uri.endswith("/.overview.md")
+            or uri.endswith(f"/{SEARCH_TAGS_SIDECAR_FILENAME}")
+        )
 
     async def _safe_read_text(self, uri: str, *, ctx: RequestContext) -> str:
         viking_fs = get_viking_fs()
