@@ -6,10 +6,11 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 
 读取或写入文件正文见[内容 API](12-content.md)。通过 WebDAV 客户端访问文件见 [WebDAV](20-webdav.md)。
 
-`viking://system/memory/memory_templates/builtin/` 和
-`viking://system/compile/example-skills/` 由服务自动同步，对所有外部调用只读，ROOT 也不例外。
-写入、追加、删除、移动、覆盖复制及快照恢复均不能修改这些资产；也不能通过操作其父目录绕过限制。
-自定义模板继续写入 `viking://system/memory/memory_templates/custom/`，或使用[模板管理 API](08-admin.md)。
+`viking://system` 的文件系统和内容 API 对所有角色开放读取；ROOT 和 ADMIN
+只能修改 `viking://system/memory/memory_templates/custom/` 下的具体资产。
+`builtin/` 内置模板和 `viking://system/compile/example-skills/` 官方示例由服务自动同步，
+API 不允许写入、追加、删除、移动或覆盖复制，也不能通过操作其父目录绕过限制。
+自定义模板也可以通过[模板管理 API](08-admin.md)发布。
 
 ## API 参考
 

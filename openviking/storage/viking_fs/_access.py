@@ -16,11 +16,7 @@ from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
 )
-from openviking.core.namespace_policy import (
-    affects_system_official_assets,
-    is_system_custom_asset_uri,
-    is_system_uri,
-)
+from openviking.core.namespace_policy import is_system_custom_asset_uri, is_system_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
@@ -181,12 +177,8 @@ class _AccessMixin:
         """Apply the fixed role and path policy for the account system namespace."""
         if action is AclAction.READ:
             return True
-        if affects_system_official_assets(uri):
-            return False
-        if ctx.role == Role.ROOT:
-            return True
         return (
-            ctx.role == Role.ADMIN
+            ctx.role in {Role.ADMIN, Role.ROOT}
             and action in {AclAction.WRITE, AclAction.MANAGE}
             and is_system_custom_asset_uri(uri)
         )

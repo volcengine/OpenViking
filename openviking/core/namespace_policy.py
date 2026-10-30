@@ -70,17 +70,6 @@ def is_system_custom_asset_uri(uri: str) -> bool:
     return len(parts) > len(root_parts) and parts[: len(root_parts)] == root_parts
 
 
-def affects_system_official_assets(uri: str) -> bool:
-    """Include managed assets and parents whose mutation could replace those assets."""
-    parts = uri_parts(uri)
-    for root in SYSTEM_OFFICIAL_ASSET_ROOTS:
-        root_parts = uri_parts(root)
-        common_length = min(len(parts), len(root_parts))
-        if parts[:common_length] == root_parts[:common_length]:
-            return True
-    return False
-
-
 def namespace_policy_for_uri(uri: str) -> NamespacePolicy:
     """Return processing and capability policy for uri's namespace."""
     if is_system_uri(uri):

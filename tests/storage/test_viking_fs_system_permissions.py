@@ -51,16 +51,18 @@ def test_system_namespace_is_readable_by_every_account_role(role, uri):
 @pytest.mark.parametrize("action", [AclAction.WRITE, AclAction.MANAGE])
 @pytest.mark.parametrize("role", [Role.ROOT, Role.ADMIN])
 @pytest.mark.asyncio
-async def test_official_assets_are_read_only_even_with_privileged_identity(action, role):
+async def test_system_writes_are_limited_to_custom_assets_for_privileged_roles(action, role):
     fs = _fs()
     ctx = _ctx(role, bypass_acl=True)
     for uri in (
         SYSTEM_ROOT_URI,
+        "viking://system/local-notes.md",
         "viking://system/memory/memory_templates",
         SYSTEM_MEMORY_BUILTIN_ROOT,
         f"{SYSTEM_MEMORY_BUILTIN_ROOT}/profile.yaml",
         SYSTEM_EXAMPLE_SKILLS_ROOT,
         f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/daily-report/SKILL.md",
+        SYSTEM_MEMORY_CUSTOM_ROOT,
     ):
         with pytest.raises(PermissionDeniedError):
             await fs._ensure_access(uri, ctx, action=action)
