@@ -36,8 +36,6 @@ jobs:
     uses: ./.github/workflows/_linux-runner.yml
     with:
       pool: ${{ inputs.linux_pool || '' }}
-    secrets:
-      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
 
   check:
     needs: linux-runner

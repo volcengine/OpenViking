@@ -1,13 +1,12 @@
-"""Select an ordinary Linux test pool; inventory is a snapshot, not a reservation."""
+"""Resolve labels for fixed Linux job lanes without runner inventory access."""
 
 import argparse
 import json
 import os
-import urllib.error
-import urllib.request
 
-POOLS = ("ov-ci-runner",)
+POOLS = ("balanced", "auto", "github-hosted", "ov-ci-runner")
 HOSTED = ["ubuntu-24.04"]
+SELF_HOSTED = ["self-hosted", "Linux", "X64", "ov-ci-runner"]
 
 
 def trusted_source(repository, event, trusted_pr_repositories=()):
@@ -20,63 +19,23 @@ def trusted_source(repository, event, trusted_pr_repositories=()):
     return source == repository or source in trusted_pr_repositories
 
 
-def select(pool, runners, trusted=True, selector_runner=""):
-    if pool not in ("auto", "github-hosted", *POOLS):
+def select(pool="balanced", trusted=True):
+    if pool not in POOLS:
         raise ValueError(f"Unknown Linux test pool: {pool}")
     if not trusted:
-        return HOSTED, "Untrusted PRs and non-official repositories use GitHub-hosted"
+        return HOSTED, HOSTED, "Untrusted PRs and non-official repositories use GitHub-hosted"
     if pool == "github-hosted":
-        return HOSTED, "GitHub-hosted explicitly selected"
-    if pool in POOLS and runners is None:
-        return ["self-hosted", "Linux", "X64", pool], f"Explicit pool {pool}; wait for capacity"
-    if pool == "auto" and runners is None and selector_runner in POOLS:
-        return (
-            ["self-hosted", "Linux", "X64", selector_runner],
-            "Inventory credentials absent; use prepared selector host",
-        )
-    candidates = []
-    for runner in runners or []:
-        labels = {label["name"].lower() for label in runner.get("labels", [])}
-        for name in POOLS:
-            if pool not in ("auto", name):
-                continue
-            if {"self-hosted", "linux", "x64", name} <= labels:
-                # The selector's own runner becomes available when this job
-                # finishes, before dependent test jobs can start.
-                available = not runner.get("busy", True) or (
-                    selector_runner and runner.get("name") == selector_runner
-                )
-                if runner.get("status") == "online" and available:
-                    candidates.append(name)
-    candidates = sorted(set(candidates))
-    if candidates:
-        chosen = candidates[0]
-        return ["self-hosted", "Linux", "X64", chosen], f"Online idle pool: {chosen}"
-    return HOSTED, "No eligible idle runner or inventory unavailable; use GitHub-hosted"
-
-
-def inventory(api_url, repository, token):
-    runners = []
-    for page in range(1, 101):
-        request = urllib.request.Request(
-            f"{api_url}/repos/{repository}/actions/runners?per_page=100&page={page}",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            batch = json.load(response)["runners"]
-        runners.extend(batch)
-        if len(batch) < 100:
-            return runners
-    raise ValueError("Runner inventory exceeded 100 pages")
+        return HOSTED, HOSTED, "GitHub-hosted explicitly selected for all Linux jobs"
+    if pool == "ov-ci-runner":
+        return SELF_HOSTED, SELF_HOSTED, "ov-ci-runner explicitly selected for all Linux jobs"
+    # Each workflow assigns jobs or matrix entries to one of these fixed lanes.
+    # auto is a compatibility alias; neither mode queries runner availability.
+    return SELF_HOSTED, HOSTED, "Fixed Linux job split: ov-ci-runner : GitHub-hosted = 2:1"
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pool", default="auto", choices=("auto", "github-hosted", *POOLS))
+    parser.add_argument("--pool", default="balanced", choices=POOLS)
     args = parser.parse_args()
     with open(os.environ["GITHUB_EVENT_PATH"]) as stream:
         event = json.load(stream)
@@ -90,26 +49,18 @@ def main():
     except (ValueError, TypeError):
         print("::warning::Invalid trusted PR repository list; no fork repositories are trusted")
         trusted_pr_repositories = []
-    trusted = trusted_source(repository, event, trusted_pr_repositories)
-    token = os.environ.get("RUNNER_READ_TOKEN", "")
-    runners = None
-    if trusted and token and args.pool != "github-hosted":
-        try:
-            runners = inventory(os.environ["GITHUB_API_URL"], repository, token)
-        except (urllib.error.URLError, TimeoutError, ValueError, KeyError):
-            # Do not print request headers, credentials or response bodies.
-            print("::warning::Runner inventory unavailable; falling back to GitHub-hosted")
-            runners = []
-    labels, reason = select(
-        args.pool,
-        runners,
-        trusted,
-        os.environ.get("RUNNER_NAME", ""),
+    primary, secondary, reason = select(
+        args.pool, trusted_source(repository, event, trusted_pr_repositories)
     )
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
-        stream.write(f"runs_on={json.dumps(labels)}\n")
+        stream.write(f"runs_on={json.dumps(primary)}\n")
+        stream.write(f"hosted_runs_on={json.dumps(secondary)}\n")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
-        stream.write(f"Linux test pool: `{json.dumps(labels)}`\n\n{reason}.\n")
+        stream.write(
+            f"{reason}.\n\n"
+            f"Primary lane: `{json.dumps(primary)}`\n\n"
+            f"Secondary lane: `{json.dumps(secondary)}`\n"
+        )
     print(reason)
 
 

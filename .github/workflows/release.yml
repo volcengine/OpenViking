@@ -57,8 +57,6 @@ jobs:
       build_sdist: ${{ github.event_name == 'release' || inputs.build_sdist != false }}
       build_wheels: ${{ github.event_name == 'release' || inputs.build_wheels != false }}
       linux_pool: ${{ inputs.linux_pool || '' }}
-    secrets:
-      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
 
   permission-check:
     name: Check write permission

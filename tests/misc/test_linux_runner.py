@@ -1,12 +1,13 @@
-"""Offline regression coverage for runner inventory, routing and isolation."""
+"""Offline regression coverage for fixed Linux routing and job isolation."""
 
 import importlib.util
-import io
+import itertools
 import json
 import os
+import re
 import subprocess
 import sys
-import urllib.error
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -20,21 +21,28 @@ router = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(router)
 
 
-def runner(pool="ov-ci-runner", status="online", busy=False, labels=None):
-    return {
-        "name": pool,
-        "status": status,
-        "busy": busy,
-        "labels": [{"name": name} for name in (labels or ["self-hosted", "Linux", "X64", pool])],
-    }
+@pytest.mark.parametrize("pool", router.POOLS)
+def test_untrusted_sources_use_hosted_for_both_lanes_even_when_forced(pool):
+    assert router.select(pool, trusted=False)[:2] == (router.HOSTED, router.HOSTED)
 
 
-@pytest.mark.parametrize("pool", ["auto", "github-hosted", *router.POOLS])
-def test_untrusted_forks_use_hosted_even_when_pool_forced(pool):
-    assert (
-        router.select(pool, [runner()], trusted=False, selector_runner="ov-ci-runner")[0]
-        == router.HOSTED
-    )
+@pytest.mark.parametrize("pool", ["balanced", "auto"])
+def test_fixed_split_requires_no_inventory_or_runner_environment(pool):
+    assert router.select(pool)[:2] == (router.SELF_HOSTED, router.HOSTED)
+
+
+@pytest.mark.parametrize(
+    "pool,labels",
+    [("github-hosted", router.HOSTED), ("ov-ci-runner", router.SELF_HOSTED)],
+)
+def test_explicit_override_routes_both_lanes_to_one_pool(pool, labels):
+    assert router.select(pool)[:2] == (labels, labels)
+
+
+@pytest.mark.parametrize("pool", ["typo", "openviking-ecs"])
+def test_invalid_or_retired_pool_fails_clearly(pool):
+    with pytest.raises(ValueError, match="Unknown Linux test pool"):
+        router.select(pool)
 
 
 @pytest.mark.parametrize(
@@ -59,150 +67,24 @@ def test_official_push_remains_trusted_without_fork_configuration():
     assert router.trusted_source("other/OpenViking", {}) is False
 
 
-@pytest.mark.parametrize(
-    "inventory",
-    [
-        None,
-        [],
-        [runner(status="offline")],
-        [runner(busy=True)],
-        [runner(labels=["self-hosted", "Linux", "ARM64", "ov-ci-runner"])],
-        [runner(labels=["self-hosted", "Linux", "X64"])],
-        [runner(labels=["self-hosted", "Windows", "X64", "ov-ci-runner"])],
-        [runner("retired-host")],
-    ],
-)
-def test_auto_falls_back_when_no_eligible_idle_runner(inventory):
-    assert router.select("auto", inventory)[0] == router.HOSTED
-
-
-def test_auto_selects_remaining_pool_and_ignores_inventory_order():
-    inventory = [runner("retired-host"), runner(), runner()]
-    assert router.select("auto", inventory)[0][-1] == "ov-ci-runner"
-    assert router.select("auto", inventory[::-1])[0][-1] == "ov-ci-runner"
-
-
-@pytest.mark.parametrize("pool", router.POOLS)
-def test_selector_can_choose_its_own_busy_host_after_finishing(pool):
-    inventory = [runner("retired-host", busy=True), runner("ov-ci-runner", busy=True)]
-    assert router.select("auto", inventory, selector_runner=pool)[0][-1] == pool
-    assert router.select("auto", inventory, selector_runner="unrelated-host")[0] == router.HOSTED
-
-
-def test_selector_does_not_choose_its_own_offline_host():
-    inventory = [runner(status="offline", busy=True)]
-    assert router.select("auto", inventory, selector_runner="ov-ci-runner")[0] == router.HOSTED
-
-
-@pytest.mark.parametrize("pool", router.POOLS)
-def test_auto_uses_prepared_selector_host_without_inventory_credentials(pool):
-    labels, reason = router.select("auto", None, selector_runner=pool)
-    assert labels == ["self-hosted", "Linux", "X64", pool]
-    assert "Inventory credentials absent" in reason
-    assert router.select("auto", [], selector_runner=pool)[0] == router.HOSTED
-
-
-def test_auto_without_inventory_does_not_guess_unknown_selector_pool():
-    assert router.select("auto", None, selector_runner="unrelated-host")[0] == router.HOSTED
-
-
-def test_label_matching_is_case_insensitive():
-    inventory = [runner(labels=["SELF-HOSTED", "linux", "x64", "OV-CI-RUNNER"])]
-    assert router.select("auto", inventory)[0][-1] == "ov-ci-runner"
-
-
-def test_forced_pool_does_not_choose_another_self_hosted_pool():
-    assert router.select("ov-ci-runner", [runner("retired-host")])[0] == router.HOSTED
-    assert router.select("github-hosted", [runner()])[0] == router.HOSTED
-
-
-def test_explicit_pool_can_be_used_without_inventory_token():
-    labels, reason = router.select("ov-ci-runner", None)
-    assert labels == ["self-hosted", "Linux", "X64", "ov-ci-runner"]
-    assert "wait for capacity" in reason
-
-
-def test_invalid_configuration_fails_clearly():
-    with pytest.raises(ValueError, match="Unknown Linux test pool"):
-        router.select("typo", [])
-
-
-def test_inventory_paginates_and_sets_scoped_headers(monkeypatch):
-    requests = []
-
-    def urlopen(request, timeout):
-        requests.append(request)
-        assert timeout == 10
-        batch = [runner()] * 100 if len(requests) == 1 else [runner("ov-ci-runner")]
-        return io.BytesIO(json.dumps({"runners": batch}).encode())
-
-    monkeypatch.setattr(router.urllib.request, "urlopen", urlopen)
-    result = router.inventory("https://api.github.com", "volcengine/OpenViking", "test-token")
-    assert len(result) == 101
-    assert requests[1].full_url.endswith("per_page=100&page=2")
-    assert requests[0].get_header("Authorization") == "Bearer test-token"
-
-
-@pytest.mark.parametrize("fork", [False, True, None])
-def test_cli_inventory_failure_falls_back_without_leaking_token(
-    tmp_path, monkeypatch, capsys, fork
-):
-    event = tmp_path / "event.json"
-    event.write_text(
-        json.dumps(
-            {
-                "pull_request": {
-                    "head": {
-                        "repo": (
-                            None
-                            if fork is None
-                            else {"full_name": "other/fork" if fork else "volcengine/OpenViking"}
-                        )
-                    }
-                }
-            }
-        )
-    )
-    output = tmp_path / "output"
-    summary = tmp_path / "summary"
-    for key, value in {
-        "GITHUB_EVENT_PATH": str(event),
-        "GITHUB_REPOSITORY": "volcengine/OpenViking",
-        "GITHUB_API_URL": "https://api.github.com",
-        "GITHUB_RUN_ID": "42",
-        "GITHUB_OUTPUT": str(output),
-        "GITHUB_STEP_SUMMARY": str(summary),
-        "RUNNER_READ_TOKEN": "must-not-be-printed",
-    }.items():
-        monkeypatch.setenv(key, value)
-    calls = []
-
-    def inventory(*args):
-        calls.append(args)
-        raise urllib.error.HTTPError("url", 403, "must-not-be-printed", {}, None)
-
-    monkeypatch.setattr(router, "inventory", inventory)
-    monkeypatch.setattr("sys.argv", ["linux_runner.py", "--pool", "auto"])
-    router.main()
-    assert len(calls) == (1 if fork is False else 0)
-    assert json.loads(output.read_text().split("=", 1)[1]) == router.HOSTED
-    assert "must-not-be-printed" not in capsys.readouterr().out + summary.read_text()
-
-
 def workflow(name):
     return yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
 
 
 def embedded_selector():
-    job = workflow("_linux-runner.yml")["jobs"]["select"]
-    assert job["runs-on"] == (
-        "${{ fromJSON(github.repository == 'volcengine/OpenViking' && "
-        "vars.CI_LINUX_SELECTOR_RUNS_ON || '[\"ubuntu-24.04\"]') }}"
-    )
+    config = workflow("_linux-runner.yml")
+    job = config["jobs"]["select"]
+    assert job["runs-on"] == "ubuntu-24.04"
     assert job["container"] == "python:3.12-slim"
     assert all("uses" not in step for step in job["steps"])
+    assert "secrets" not in config[True]["workflow_call"]
+    assert set(config[True]["workflow_call"]["outputs"]) == {"runs_on", "hosted_runs_on"}
     step = job["steps"][0]
     assert step["working-directory"] == "/"
+    assert step["env"] == {
+        "TRUSTED_PR_REPOSITORIES": "${{ vars.CI_LINUX_TRUSTED_REPOSITORIES }}",
+        "POOL": "${{ inputs.pool || vars.CI_LINUX_POOL || 'balanced' }}",
+    }
     command, script = step["run"].split("\n", 1)
     assert command == "python3 -I - --pool \"$POOL\" <<'PY'"
     assert script.endswith("PY\n")
@@ -213,61 +95,34 @@ def test_selector_embeds_the_tested_script_without_checkout():
     assert embedded_selector() == (ROOT / ".github/scripts/linux_runner.py").read_text()
 
 
-def test_embedded_fork_selector_ignores_workspace_imports_and_pythonpath(tmp_path):
-    (tmp_path / "json.py").write_text("raise RuntimeError('untrusted workspace was imported')\n")
-    event = tmp_path / "event.json"
-    event.write_text(json.dumps({"pull_request": {"head": {"repo": {"full_name": "other/fork"}}}}))
-    output = tmp_path / "output"
-    summary = tmp_path / "summary"
-    env = {
-        **os.environ,
-        "GITHUB_EVENT_PATH": str(event),
-        "GITHUB_REPOSITORY": "volcengine/OpenViking",
-        "GITHUB_RUN_ID": "42",
-        "GITHUB_OUTPUT": str(output),
-        "GITHUB_STEP_SUMMARY": str(summary),
-        "PYTHONPATH": str(tmp_path),
-        "RUNNER_READ_TOKEN": "",
-        "TRUSTED_PR_REPOSITORIES": "[]",
-        "RUNNER_NAME": "ov-ci-runner",
-    }
-    result = subprocess.run(
-        [sys.executable, "-I", "-", "--pool", "ov-ci-runner"],
-        input=embedded_selector(),
-        text=True,
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        check=True,
-    )
-    assert json.loads(output.read_text().split("=", 1)[1]) == router.HOSTED
-    assert "Untrusted PRs" in result.stdout
-
-
-@pytest.mark.parametrize("selector_host", [*router.POOLS, "GitHub Actions 1"])
-@pytest.mark.parametrize("source", ["volcengine/OpenViking", "zhanglistar/OpenViking"])
+@pytest.mark.parametrize("pool", router.POOLS)
 @pytest.mark.parametrize(
-    "approved,expected_trusted",
+    "source,approved,trusted",
     [
-        ("", False),
-        ('["zhanglistar/OpenViking"]', True),
-        ("[]", False),
-        ('["other/OpenViking"]', False),
-        ('"zhanglistar/OpenViking"', False),
-        ('{"zhanglistar/OpenViking": true}', False),
-        ('["zhanglistar/OpenViking", null]', False),
-        ("not-json", False),
+        ("volcengine/OpenViking", "", True),
+        ("zhanglistar/OpenViking", '["zhanglistar/OpenViking"]', True),
+        ("zhanglistar/OpenViking", "", False),
+        ("zhanglistar/OpenViking", "[]", False),
+        ("zhanglistar/OpenViking", '["other/OpenViking"]', False),
+        ("zhanglistar/OpenViking", '"zhanglistar/OpenViking"', False),
+        ("zhanglistar/OpenViking", '{"zhanglistar/OpenViking": true}', False),
+        ("zhanglistar/OpenViking", '["zhanglistar/OpenViking", null]', False),
+        ("zhanglistar/OpenViking", "not-json", False),
+        (None, '["zhanglistar/OpenViking"]', False),
     ],
 )
-def test_embedded_pr_shares_hosts_only_for_trusted_sources(
-    tmp_path, selector_host, source, approved, expected_trusted
+def test_embedded_cli_routes_both_lanes_and_ignores_workspace_imports(
+    tmp_path, pool, source, approved, trusted
 ):
+    (tmp_path / "json.py").write_text("raise RuntimeError('untrusted workspace was imported')\n")
     event = tmp_path / "event.json"
-    event.write_text(json.dumps({"pull_request": {"head": {"repo": {"full_name": source}}}}))
+    event.write_text(
+        json.dumps({"pull_request": {"head": {"repo": {"full_name": source} if source else None}}})
+    )
     output = tmp_path / "output"
     summary = tmp_path / "summary"
     result = subprocess.run(
-        [sys.executable, "-I", "-", "--pool", "auto"],
+        [sys.executable, "-I", "-", "--pool", pool],
         input=embedded_selector(),
         text=True,
         cwd=tmp_path,
@@ -275,36 +130,126 @@ def test_embedded_pr_shares_hosts_only_for_trusted_sources(
             **os.environ,
             "GITHUB_EVENT_PATH": str(event),
             "GITHUB_REPOSITORY": "volcengine/OpenViking",
-            "GITHUB_RUN_ID": "42",
             "GITHUB_OUTPUT": str(output),
             "GITHUB_STEP_SUMMARY": str(summary),
-            "RUNNER_NAME": selector_host,
-            "RUNNER_READ_TOKEN": "",
+            "PYTHONPATH": str(tmp_path),
             "TRUSTED_PR_REPOSITORIES": approved,
         },
         capture_output=True,
         check=True,
     )
-    trusted = source == "volcengine/OpenViking" or expected_trusted
-    expected = (
-        ["self-hosted", "Linux", "X64", selector_host]
-        if trusted and selector_host in router.POOLS
-        else router.HOSTED
-    )
-    assert json.loads(output.read_text().split("=", 1)[1]) == expected
-    if not trusted:
-        reason = "Untrusted PRs"
-    elif selector_host in router.POOLS:
-        reason = "Inventory credentials absent"
-    else:
-        reason = "inventory unavailable"
+    primary, secondary, reason = router.select(pool, trusted)
+    assert dict(line.split("=", 1) for line in output.read_text().splitlines()) == {
+        "runs_on": json.dumps(primary),
+        "hosted_runs_on": json.dumps(secondary),
+    }
     assert reason in result.stdout
     assert reason in summary.read_text()
 
 
-def test_workflow_passes_only_configured_fork_trust():
-    env = workflow("_linux-runner.yml")["jobs"]["select"]["steps"][0]["env"]
-    assert env["TRUSTED_PR_REPOSITORIES"] == "${{ vars.CI_LINUX_TRUSTED_REPOSITORIES }}"
+def default_matrix(config, job):
+    """Expand default matrix slots, including entries added with include."""
+    matrix = job.get("strategy", {}).get("matrix", {})
+    axes = {key: value for key, value in matrix.items() if key not in ("include", "exclude")}
+    if not axes:
+        return matrix.get("include") or [{}]
+    defaults = (config[True].get("workflow_call") or {}).get("inputs", {})
+    for key, value in axes.items():
+        if isinstance(value, str):
+            if key == "os":
+                axes[key] = json.loads(
+                    defaults.get("os_json", {}).get("default", '["ubuntu-24.04"]')
+                )
+            elif key == "python-version":
+                axes[key] = json.loads(defaults["python_json"]["default"])
+            elif key == "arch":
+                # Only x64 wheels participate; native ARM remains on its hosted runner.
+                axes[key] = ["x86_64"]
+            else:
+                raise AssertionError(f"Unhandled dynamic matrix axis: {key}")
+    rows = (
+        [dict(zip(axes, values, strict=True)) for values in itertools.product(*axes.values())]
+        if axes
+        else []
+    )
+    for extra in matrix.get("include", []):
+        matched = False
+        for row in rows:
+            if all(key not in axes or row[key] == value for key, value in extra.items()):
+                row.update(extra)
+                matched = True
+        if not matched:
+            rows.append(extra)
+    excludes = matrix.get("exclude", [])
+    return [
+        row
+        for row in (rows or [{}])
+        if not any(all(row.get(key) == value for key, value in rule.items()) for rule in excludes)
+    ]
+
+
+def labels_for_slot(expression, matrix, pool="balanced", trusted=True):
+    """Evaluate the limited routing expressions against concrete matrix entries."""
+    primary, secondary, _ = router.select(pool, trusted)
+    expression = expression.removeprefix("${{ ").removesuffix(" }}")
+    expression = expression.replace(
+        "needs.linux-runner.outputs.hosted_runs_on", repr(json.dumps(secondary))
+    ).replace("needs.linux-runner.outputs.runs_on", repr(json.dumps(primary)))
+    expression = re.sub(
+        r"matrix\.([\w-]+)", lambda match: repr(matrix.get(match[1], "")), expression
+    )
+    expression = expression.replace("&&", " and ").replace("||", " or ")
+    # Only repository routing expressions are evaluated, with no Python builtins.
+    return eval(expression, {"__builtins__": {}, "fromJSON": json.loads})
+
+
+def linux_slots(pool="balanced", trusted=True):
+    slots = []
+    for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        config = workflow(path.name)
+        for name, job in config.get("jobs", {}).items():
+            expression = job.get("runs-on", "")
+            if "needs.linux-runner.outputs." not in expression:
+                continue
+            for row in default_matrix(config, job):
+                labels = labels_for_slot(expression, row, pool, trusted)
+                if isinstance(labels, list) and labels in (router.SELF_HOSTED, router.HOSTED):
+                    slots.append((path.name, name, row, labels))
+    return slots
+
+
+def test_regular_workflow_slots_have_exact_two_to_one_split():
+    # Count each workflow definition once with its default matrix. Full/effect
+    # suites are manual-only additions; filtering individual PRs changes counts.
+    slots = [
+        slot for slot in linux_slots() if slot[0] not in ("_test_full.yml", "api_test_effect.yml")
+    ]
+    counts = Counter("ov" if labels == router.SELF_HOSTED else "hosted" for *_, labels in slots)
+    assert counts == {"ov": 18, "hosted": 9}
+
+
+def test_all_default_slots_include_manual_suites_with_nearest_two_to_one_split():
+    counts = Counter(
+        "ov" if labels == router.SELF_HOSTED else "hosted" for *_, labels in linux_slots()
+    )
+    assert counts == {"ov": 21, "hosted": 11}
+
+
+@pytest.mark.parametrize("pool", router.POOLS)
+def test_no_untrusted_matrix_slot_can_select_self_hosted(pool):
+    slots = linux_slots(pool, trusted=False)
+    assert slots
+    assert all(labels == router.HOSTED for *_, labels in slots)
+
+
+@pytest.mark.parametrize(
+    "pool,expected",
+    [("github-hosted", router.HOSTED), ("ov-ci-runner", router.SELF_HOSTED)],
+)
+def test_override_reaches_every_linux_matrix_slot(pool, expected):
+    slots = linux_slots(pool)
+    assert slots
+    assert all(labels == expected for *_, labels in slots)
 
 
 @pytest.mark.parametrize(
@@ -330,7 +275,7 @@ def test_linux_jobs_route_and_bootstrap_git_before_checkout(file, jobs):
     for name in jobs:
         job = config[name]
         assert "linux-runner" in job["needs"]
-        assert "needs.linux-runner.outputs.runs_on" in job["runs-on"]
+        assert "needs.linux-runner.outputs." in job["runs-on"]
         assert "ubuntu:24.04" in str(job["container"])
         steps = job["steps"]
         checkout = next(
@@ -342,7 +287,14 @@ def test_linux_jobs_route_and_bootstrap_git_before_checkout(file, jobs):
         assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in steps)
 
 
-def test_rust_linux_builds_use_selected_pool_and_isolated_container():
+def test_no_workflow_depends_on_inventory_secret_or_selector_override():
+    for path in (ROOT / ".github/workflows").glob("*.yml"):
+        text = path.read_text()
+        assert "CI_RUNNER_READ_TOKEN" not in text
+        assert "CI_LINUX_SELECTOR_RUNS_ON" not in text
+
+
+def test_rust_linux_builds_use_primary_lane_and_isolated_container():
     build = workflow("rust-cli.yml")["jobs"]["build"]
     assert build["needs"] == "linux-runner"
     assert build["runs-on"] == (
@@ -355,6 +307,9 @@ def test_rust_linux_builds_use_selected_pool_and_isolated_container():
         "x86_64-unknown-linux-musl",
         "aarch64-unknown-linux-musl",
     }
+    for row in targets:
+        if row["npm_os"] != "linux":
+            assert labels_for_slot(build["runs-on"], row) == row["os"]
     steps = build["steps"]
     checkout = next(
         i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", "")
@@ -369,22 +324,17 @@ def test_rust_linux_builds_use_selected_pool_and_isolated_container():
     assert checkout < bootstrap < node < rust
     for step in [*steps[:checkout], steps[bootstrap], steps[node]]:
         assert step["if"] == "matrix.npm_os == 'linux'"
-    assert any(
-        "apt-get" in step.get("run", "") and "git" in step["run"] for step in steps[:checkout]
-    )
 
 
-def test_distribution_builds_route_x64_without_changing_wheel_libc_or_arm_host():
+def test_distribution_routing_preserves_wheel_libc_and_native_arm_host():
     jobs = workflow("_build.yml")["jobs"]
     assert jobs["linux-runner"]["uses"] == "./.github/workflows/_linux-runner.yml"
     wheel = jobs["build-linux"]
     assert wheel["needs"] == ["build-studio", "linux-runner"]
-    assert wheel["runs-on"] == (
-        "${{ matrix.arch == 'aarch64' && fromJSON('[\"ubuntu-24.04-arm\"]') || "
-        "fromJSON(needs.linux-runner.outputs.runs_on) }}"
-    )
     assert wheel["container"] == "ubuntu:20.04"
     assert "(glibc 2.31)" in wheel["name"]
+    assert labels_for_slot(wheel["runs-on"], {"arch": "x86_64"}) == router.SELF_HOSTED
+    assert labels_for_slot(wheel["runs-on"], {"arch": "aarch64"}) == ["ubuntu-24.04-arm"]
     steps = wheel["steps"]
     checkout = next(
         i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", "")
@@ -397,23 +347,18 @@ def test_distribution_builds_route_x64_without_changing_wheel_libc_or_arm_host()
     )
     assert checkout < bootstrap < rust
     assert steps[bootstrap]["with"]["install-dependencies"] == "false"
-    assert any(
-        "apt-get" in step.get("run", "") and "git" in step["run"] for step in steps[:checkout]
-    )
     for name in ["build-studio", "build-sdist"]:
         job = jobs[name]
         assert job["needs"] == "linux-runner"
-        assert job["runs-on"] == "${{ fromJSON(needs.linux-runner.outputs.runs_on) }}"
         assert job["container"] == "ubuntu:24.04"
         assert "git" in job["steps"][0]["run"]
         assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in job["steps"])
 
 
 @pytest.mark.parametrize("caller", ["pr.yml", "release.yml"])
-def test_distribution_callers_forward_pool_override_and_inventory_secret(caller):
+def test_distribution_callers_forward_manual_pool_override(caller):
     build = workflow(caller)["jobs"]["build"]
     assert build["with"]["linux_pool"] == "${{ inputs.linux_pool || '' }}"
-    assert build["secrets"]["CI_RUNNER_READ_TOKEN"] == "${{ secrets.CI_RUNNER_READ_TOKEN }}"
 
 
 def test_gateway_resources_are_isolated():

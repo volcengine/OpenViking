@@ -20,12 +20,10 @@ jobs:
     uses: ./.github/workflows/_linux-runner.yml
     with:
       pool: ${{ inputs.linux_pool || '' }}
-    secrets:
-      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
 
   chart:
     needs: linux-runner
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
     container: ubuntu:24.04
     defaults:
       run:

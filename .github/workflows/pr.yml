@@ -32,8 +32,6 @@ jobs:
     uses: ./.github/workflows/_linux-runner.yml
     with:
       pool: ${{ inputs.linux_pool || '' }}
-    secrets:
-      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
 
   plugin-tests:
     needs: [check-deps, linux-runner]
@@ -212,13 +210,11 @@ jobs:
     with:
       os_json: ${{ needs.check-deps.outputs.wheel_os }}
       linux_pool: ${{ inputs.linux_pool || '' }}
-    secrets:
-      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
 
   sdk-python-tests:
     needs: [check-deps, linux-runner]
     if: ${{ needs.check-deps.outputs.sdk_python_changed == 'true' }}
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    runs-on: ${{ fromJSON(matrix.python-version == '3.9' && needs.linux-runner.outputs.hosted_runs_on || needs.linux-runner.outputs.runs_on) }}
     container: ubuntu:24.04
     defaults:
       run:
@@ -263,7 +259,7 @@ jobs:
   langchain-tests:
     needs: [check-deps, linux-runner]
     if: ${{ needs.check-deps.outputs.langchain_changed == 'true' }}
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    runs-on: ${{ fromJSON(matrix.python-version == '3.12' && needs.linux-runner.outputs.hosted_runs_on || needs.linux-runner.outputs.runs_on) }}
     container: ubuntu:24.04
     defaults:
       run:
