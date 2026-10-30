@@ -2173,6 +2173,7 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def admin_delete_group(self, account_id: str, group_id: str) -> Dict[str, Any]:
+        """Start group/ACL deletion; returns status=deleting and a task_id to poll."""
         response = await self._http.delete(f"/api/v1/admin/accounts/{account_id}/groups/{group_id}")
         return self._handle_response(response)
 

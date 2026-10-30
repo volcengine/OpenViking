@@ -26,6 +26,8 @@ from openviking.server.api_keys import APIKeyManager, generate_api_key
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
@@ -425,7 +427,9 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
         await writer.add_group_member("acme", "engineering", "alice")
         assert await reader.get_user_group_ids("acme", "alice") == ("engineering",)
 
-        await writer.delete_group("acme", "engineering")
+        await writer.begin_group_deletion("acme", "engineering")
+        assert await reader.get_user_group_ids("acme", "alice") == ()
+        assert await writer.finish_group_deletion("acme", "engineering")
 
         assert await reader.get_groups("acme") == []
         assert await reader.get_user_group_ids("acme", "alice") == ()
@@ -560,7 +564,22 @@ async def test_group_deletion_preserves_users_and_persists_membership_removal():
             "reviewers",
         )
 
-        await manager.delete_group("acme", "engineering")
+        await manager.begin_group_deletion("acme", "engineering")
+        await reloaded.load()
+        assert ("acme", "engineering") in await reloaded.iter_deleting_groups()
+        assert (await reloaded.get_groups("acme"))[0] == {
+            "group_id": "engineering",
+            "member_count": 2,
+            "status": "deleting",
+        }
+        assert await reloaded.get_user_group_ids("acme", "alice") == ()
+        assert await reloaded.get_user_group_ids("acme", "bob") == ("reviewers",)
+        with pytest.raises(AlreadyExistsError):
+            await reloaded.create_group("acme", "engineering")
+        with pytest.raises(FailedPreconditionError):
+            await reloaded.add_group_member("acme", "engineering", "bob")
+        assert not await manager.finish_group_deletion("acme", "reviewers")
+        assert await manager.finish_group_deletion("acme", "engineering")
         await reloaded.load()
 
         for reader in (manager, reloaded):
@@ -573,7 +592,7 @@ async def test_group_deletion_preserves_users_and_persists_membership_removal():
                 await reader.get_group_members("acme", "engineering")
 
         with pytest.raises(NotFoundError, match="Group not found"):
-            await manager.delete_group("acme", "engineering")
+            await manager.begin_group_deletion("acme", "engineering")
     finally:
         await reloaded.close()
         await manager.close()

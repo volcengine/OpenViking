@@ -14,7 +14,9 @@ export function useUserGroupMemberships(
     retry: false,
   })
   const populatedGroups =
-    groups.data?.filter((group) => group.member_count > 0) ?? []
+    groups.data?.filter(
+      (group) => group.status !== 'deleting' && group.member_count > 0,
+    ) ?? []
   const members = useQueries({
     queries: populatedGroups.map((group) => ({
       queryKey: ['managed-group-members', ...scope, group.group_id],

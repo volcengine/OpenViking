@@ -42,6 +42,7 @@ import {
   createAdminGroup,
   deleteAdminGroup,
   fetchAdminGroups,
+  fetchAdminDeletionTask,
   fetchAdminGroupMembers,
   fetchAdminUsersPage,
   updateAdminGroupMember,
@@ -72,6 +73,12 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
   const groups = useQuery({
     queryKey,
     queryFn: () => fetchAdminGroups(connection),
+    refetchInterval: (query) =>
+      query.state.data?.some(
+        (group) => group.status === 'deleting' && !group.task_id,
+      )
+        ? 1000
+        : false,
     retry: false,
   })
   const [search, setSearch] = useState('')
@@ -99,7 +106,7 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
     },
     onSuccess: async () => {
       setDeleting(null)
-      toast.success(t('groups.deleted'))
+      toast.info(t('groups.deleting'))
       await client.invalidateQueries({ queryKey })
     },
   })
@@ -170,33 +177,33 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
                     </TableCell>
                     <TableCell>{group.member_count}</TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setSelected(group.group_id)}
-                        >
-                          {t('groups.manage')}
-                        </Button>
-                        <span
-                          title={
-                            group.member_count
-                              ? t('groups.deleteHint')
-                              : undefined
-                          }
-                        >
+                      {group.task_id ? (
+                        <GroupDeletion
+                          connection={connection}
+                          taskId={group.task_id}
+                          retry={() => setDeleting(group.group_id)}
+                        />
+                      ) : group.status === 'deleting' ? (
+                        <p role="status">{t('groups.deleting')}</p>
+                      ) : (
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelected(group.group_id)}
+                          >
+                            {t('groups.manage')}
+                          </Button>
                           <Button
                             size="sm"
                             variant="ghost"
-                            disabled={
-                              group.member_count > 0 || remove.isPending
-                            }
+                            disabled={remove.isPending}
                             onClick={() => setDeleting(group.group_id)}
                           >
                             {t('groups.delete')}
                           </Button>
-                        </span>
-                      </div>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))
@@ -295,6 +302,78 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
         />
       )}
     </div>
+  )
+}
+
+function GroupDeletion({
+  connection,
+  taskId,
+  retry,
+}: {
+  connection: AdminConnection
+  taskId: string
+  retry: () => void
+}) {
+  const { t } = useTranslation('settings')
+  const client = useQueryClient()
+  const task = useQuery({
+    queryKey: [
+      'group-deletion',
+      connection.baseUrl,
+      connection.accountId,
+      connection.apiKey,
+      taskId,
+    ],
+    queryFn: () => fetchAdminDeletionTask(connection, taskId),
+    refetchInterval: (query) =>
+      query.state.error ||
+      ['completed', 'failed', 'cancelled'].includes(
+        query.state.data?.status ?? '',
+      )
+        ? false
+        : 1000,
+    retry: false,
+  })
+  const status = task.data?.status
+  useEffect(() => {
+    if (status === 'completed') {
+      toast.success(t('groups.deleted'))
+      void client.invalidateQueries({
+        queryKey: [
+          'managed-groups',
+          connection.baseUrl,
+          connection.accountId,
+          connection.apiKey,
+        ],
+      })
+    }
+  }, [
+    status,
+    client,
+    connection.baseUrl,
+    connection.accountId,
+    connection.apiKey,
+    t,
+  ])
+  if (task.isError) {
+    return <QueryError error={task.error} retry={() => void task.refetch()} />
+  }
+  if (status === 'failed' || status === 'cancelled') {
+    return (
+      <div className="flex items-center justify-end gap-2">
+        <span className="text-destructive" title={task.data?.error}>
+          {t('groups.deletionFailed')}
+        </span>
+        <Button size="sm" variant="outline" onClick={retry}>
+          {t('groups.retryDeletion')}
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <p role="status" className="text-right text-muted-foreground">
+      {t('groups.deleting')}
+    </p>
   )
 }
 

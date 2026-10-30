@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Durable, idempotent cleanup of accounts and users."""
+"""Durable, idempotent cleanup of accounts, users, and groups."""
 
 from __future__ import annotations
 
@@ -13,14 +13,19 @@ from uuid import uuid4
 from openviking.core.namespace import canonical_user_root
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
+from openviking.service.task_domain import TaskRecord
+from openviking.service.task_store import (
+    SYSTEM_TASK_ACCOUNT_ID,
+    SYSTEM_TASK_USER_ID,
+    TaskAlreadyActive,
+)
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher, run_to_completion
 from openviking.service.task_work_index import bind_task_context, extract_task_metadata
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.viking_fs import LS_ALL_NODES
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import AlreadyExistsError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -47,6 +52,7 @@ def _deletion_message(
     owner_user_id: str,
     target_account_id: str,
     target_user_id: str | None,
+    target_group_id: str | None = None,
 ) -> dict[str, Any]:
     return {
         "task_id": task_id,
@@ -54,7 +60,11 @@ def _deletion_message(
         "user_id": owner_user_id,
         "target": {
             "account_id": target_account_id,
-            "user_id": target_user_id,
+            **(
+                {"group_id": target_group_id}
+                if target_group_id is not None
+                else {"user_id": target_user_id}
+            ),
         },
     }
 
@@ -133,6 +143,112 @@ class DeletionService:
                         )
                     )
                 queued_task_ids.add(task_id)
+
+        # Group task metadata lives in the task store. Recover both queued work
+        # lost after task creation and a group marked deleting before task creation.
+        for task in await tracker.list_tasks(
+            task_type="group_delete",
+            account_id=SYSTEM_TASK_ACCOUNT_ID,
+            user_id=SYSTEM_TASK_USER_ID,
+            limit=None,
+        ):
+            if task.status in _ACTIVE_TASK_STATUSES:
+                target = task.meta["target"]
+                await self._enqueue_if_missing(
+                    task_id=task.task_id,
+                    owner_account_id=task.account_id,
+                    owner_user_id=task.user_id,
+                    target_account_id=target["account_id"],
+                    target_user_id=None,
+                    target_group_id=target["group_id"],
+                )
+        for account_id, group_id in await self._manager.iter_deleting_groups():
+            await self._ensure_group_task(account_id, group_id, retry_failed=False)
+
+    async def _latest_group_task(self, account_id: str, group_id: str) -> TaskRecord | None:
+        tasks = await get_task_tracker().list_tasks(
+            task_type="group_delete",
+            resource_id=f"{account_id}/{group_id}",
+            limit=1,
+            account_id=SYSTEM_TASK_ACCOUNT_ID,
+            user_id=SYSTEM_TASK_USER_ID,
+        )
+        return tasks[0] if tasks else None
+
+    async def create_group(self, account_id: str, group_id: str) -> dict:
+        async with self._request_lock:
+            # The group row may already be gone while its worker is still finishing.
+            # Reserve its ID until the task has settled, including after a restart.
+            task = await self._latest_group_task(account_id, group_id)
+            if task is not None and task.status != TaskStatus.COMPLETED:
+                raise AlreadyExistsError(group_id, "group")
+            return await self._manager.create_group(account_id, group_id)
+
+    async def list_groups(self, account_id: str) -> list[dict]:
+        groups = await self._manager.get_groups(account_id)
+        for group in groups:
+            if group.get("status") == "deleting":
+                task = await self._latest_group_task(account_id, group["group_id"])
+                if task is not None and task.status != TaskStatus.COMPLETED:
+                    group["task_id"] = task.task_id
+        return groups
+
+    async def delete_group(self, account_id: str, group_id: str) -> dict[str, str]:
+        async def submit():
+            async with self._request_lock:
+                try:
+                    await self._manager.begin_group_deletion(account_id, group_id)
+                except NotFoundError:
+                    # Cleanup may have removed the group before persisting its
+                    # final task result. A retry must settle that task as well.
+                    previous = await self._latest_group_task(account_id, group_id)
+                    if previous is None or previous.status == TaskStatus.COMPLETED:
+                        raise
+                task = await self._ensure_group_task(account_id, group_id, retry_failed=True)
+                return {
+                    "account_id": account_id,
+                    "group_id": group_id,
+                    "status": "deleting",
+                    "task_id": task.task_id,
+                }
+
+        return await run_to_completion(submit)
+
+    async def _ensure_group_task(
+        self, account_id: str, group_id: str, *, retry_failed: bool
+    ) -> TaskRecord:
+        tracker = get_task_tracker()
+        task = await self._latest_group_task(account_id, group_id)
+        if (
+            task is None
+            or task.status == TaskStatus.COMPLETED
+            or (retry_failed and task.status in _TERMINAL_TASK_STATUSES)
+        ):
+            try:
+                task = await tracker.create(
+                    "group_delete",
+                    resource_id=f"{account_id}/{group_id}",
+                    account_id=SYSTEM_TASK_ACCOUNT_ID,
+                    user_id=SYSTEM_TASK_USER_ID,
+                    meta={"target": {"account_id": account_id, "group_id": group_id}},
+                    reject_if_active=True,
+                )
+            except TaskAlreadyActive:
+                # Another server accepted the same deletion. Resolve the persisted
+                # task instead of creating a second identity-side task reference.
+                task = await self._latest_group_task(account_id, group_id)
+                if task is None:
+                    raise
+        if task.status in _ACTIVE_TASK_STATUSES:
+            await self._enqueue_if_missing(
+                task_id=task.task_id,
+                owner_account_id=task.account_id,
+                owner_user_id=task.user_id,
+                target_account_id=account_id,
+                target_user_id=None,
+                target_group_id=group_id,
+            )
+        return task
 
     async def _is_deleting(self, account_id: str, user_id: str | None = None) -> bool:
         deletion = await self._manager_dispatcher.run(
@@ -274,6 +390,7 @@ class DeletionService:
         owner_user_id: str,
         target_account_id: str,
         target_user_id: str | None,
+        target_group_id: str | None = None,
     ) -> None:
         queue_manager = self._service._queue_manager
         queue = queue_manager.get_queue(queue_manager.DATA_CLEANUP)
@@ -289,10 +406,13 @@ class DeletionService:
                     owner_user_id=owner_user_id,
                     target_account_id=target_account_id,
                     target_user_id=target_user_id,
+                    target_group_id=target_group_id,
                 )
             )
 
     async def _process(self, message: dict[str, Any]) -> Optional[str]:
+        if message["target"].get("group_id") is not None:
+            return await self._process_group(message)
         task_id = message["task_id"]
         owner = {"account_id": message["account_id"], "user_id": message["user_id"]}
         account_id = message["target"]["account_id"]
@@ -348,7 +468,7 @@ class DeletionService:
                 lambda: tracker.delete_tasks(
                     account_id,
                     user_id,
-                    allow_active_types={"user_delete"} if user_id is None else (),
+                    allow_active_types={"user_delete", "group_delete"} if user_id is None else (),
                 )
             )
 
@@ -388,6 +508,18 @@ class DeletionService:
                     )
                 )
 
+            fs = self._service.viking_fs
+            if user_id is not None and fs.acl_manager is not None:
+                lease = await fs._async_agfs.pathlock_acquire_tree(
+                    fs._uri_to_path("viking://resources", ctx=ctx)
+                )
+                try:
+                    await run_to_completion(
+                        lambda: fs.acl_manager.remove_principal(f"user:{user_id}", ctx)
+                    )
+                finally:
+                    await fs._async_agfs.pathlock_release(lease)
+
             deleted = await run_to_completion(
                 lambda: self._manager.finish_deletion(account_id, user_id, task_id)
             )
@@ -399,6 +531,63 @@ class DeletionService:
             await tracker.fail(task_id, error, **owner)
             return error
         await tracker.complete(task_id, {"deleted": True}, **owner)
+        return None
+
+    async def _process_group(self, message: dict[str, Any]) -> Optional[str]:
+        tracker = get_task_tracker()
+        task_id = message["task_id"]
+        owner = {"account_id": SYSTEM_TASK_ACCOUNT_ID, "user_id": SYSTEM_TASK_USER_ID}
+        target = message["target"]
+        account_id, group_id = target["account_id"], target["group_id"]
+        task = await tracker.get(task_id, **owner)
+        # An expired or terminal delivery must never act on a recreated group.
+        if task is None or task.status in _TERMINAL_TASK_STATUSES:
+            return None
+        if task.task_type != "group_delete" or task.meta["target"] != target:
+            raise ValueError("Group cleanup message does not match its task")
+        fs = self._service.viking_fs
+        ctx = RequestContext(user=UserIdentifier(account_id, SYSTEM_TASK_USER_ID), role=Role.ROOT)
+        try:
+            account = await self._manager.get_account(account_id)
+            if account is None or account["status"] == "deleting":
+                await tracker.complete(
+                    task_id, {"deleted": account is None, "stale": True}, **owner
+                )
+                return None
+            lease = await fs._async_agfs.pathlock_acquire_tree(
+                fs._uri_to_path("viking://resources", ctx=ctx)
+            )
+            try:
+                # Re-read after acquiring the resource lock: another delivery may
+                # already have completed while this delivery was acquiring it.
+                task = await tracker.get(task_id, **owner)
+                if task is None or task.status in _TERMINAL_TASK_STATUSES:
+                    return None
+                groups = await self._manager.get_groups(account_id)
+                group = next((item for item in groups if item["group_id"] == group_id), None)
+                if group is None or group.get("status") != "deleting":
+                    await tracker.complete(
+                        task_id, {"deleted": group is None, "stale": True}, **owner
+                    )
+                    return None
+                await tracker.start(task_id, **owner)
+                if fs.acl_manager is not None:
+                    await run_to_completion(
+                        lambda: fs.acl_manager.remove_principal(f"group:{group_id}", ctx)
+                    )
+                deleted = await run_to_completion(
+                    lambda: self._manager.finish_group_deletion(account_id, group_id)
+                )
+                if not deleted:
+                    raise RuntimeError("Group is no longer pending deletion")
+                await tracker.complete(task_id, {"deleted": True}, **owner)
+            finally:
+                await fs._async_agfs.pathlock_release(lease)
+        except Exception as exc:
+            logger.exception("Group cleanup failed for %s/%s", account_id, group_id)
+            error = f"Group cleanup failed: {exc}"
+            await tracker.fail(task_id, error, **owner)
+            return error
         return None
 
     async def _delete_account_files(self, account_id: str) -> None:
@@ -426,7 +615,7 @@ class DeletionService:
             if task.status in _ACTIVE_TASK_STATUSES
             # The single cleanup consumer cannot be executing a user cleanup
             # concurrently. Later deliveries will skip the deleted account.
-            and not (user_id is None and task.task_type == "user_delete")
+            and not (user_id is None and task.task_type in {"user_delete", "group_delete"})
         ]
         deadline = time.monotonic() + _CANCEL_WAIT_SECONDS
         for task in active:
@@ -508,18 +697,27 @@ class _DeletionProcessor(DequeueHandlerBase):
         required = ("task_id", "account_id", "user_id")
         if any(not payload.get(field) for field in required):
             raise ValueError("Invalid deletion owner")
-        if not target.get("account_id") or "user_id" not in target:
-            raise ValueError("Invalid deletion target")
-        if target["user_id"] is not None and not target["user_id"]:
-            raise ValueError("Invalid deletion user")
+        if not target.get("account_id"):
+            raise ValueError("Invalid deletion account")
+        if "group_id" in target:
+            if not target["group_id"] or target.get("user_id") is not None:
+                raise ValueError("Invalid deletion group")
+            parsed_target = {
+                "account_id": str(target["account_id"]),
+                "group_id": str(target["group_id"]),
+            }
+        else:
+            if "user_id" not in target or target["user_id"] == "":
+                raise ValueError("Invalid deletion user")
+            parsed_target = {
+                "account_id": str(target["account_id"]),
+                "user_id": str(target["user_id"]) if target["user_id"] is not None else None,
+            }
         return {
             "task_id": str(payload["task_id"]),
             "account_id": str(payload["account_id"]),
             "user_id": str(payload["user_id"]),
-            "target": {
-                "account_id": str(target["account_id"]),
-                "user_id": str(target["user_id"]) if target["user_id"] is not None else None,
-            },
+            "target": parsed_target,
         }
 
     async def on_dequeue(self, data: Optional[dict[str, Any]]) -> ProcessResult:

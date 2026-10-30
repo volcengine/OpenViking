@@ -984,7 +984,7 @@ class MySQLAccountStore(AccountStore):
             account = await self._account_for_read(session, account_id)
             rows = (
                 await session.execute(
-                    select(Group.group_id, func.count(GroupMember.user_pk))
+                    select(Group.group_id, func.count(GroupMember.user_pk), Group.deleting)
                     .outerjoin(
                         GroupMember,
                         and_(
@@ -1001,7 +1001,14 @@ class MySQLAccountStore(AccountStore):
                     .order_by(Group.group_id)
                 )
             ).all()
-        return [GroupSummary(group_id=group_id, member_count=count) for group_id, count in rows]
+        return [
+            GroupSummary(
+                group_id=group_id,
+                member_count=count,
+                **({"status": "deleting"} if deleting else {}),
+            )
+            for group_id, count, deleting in rows
+        ]
 
     async def get_group_members(self, account_id: str, group_id: str) -> list[str]:
         async with self._session_factory() as session:
@@ -1015,6 +1022,8 @@ class MySQLAccountStore(AccountStore):
             )
             if group is None:
                 raise NotFoundError(group_id, "group")
+            if group.deleting:
+                raise FailedPreconditionError("Group deletion is in progress")
             return list(
                 (
                     await session.scalars(
@@ -1070,6 +1079,7 @@ class MySQLAccountStore(AccountStore):
                         Account.service_name == self._service_name,
                         Account.account_id == account_id,
                         User.user_id == user_id,
+                        Group.deleting.is_(False),
                     )
                     .order_by(Group.group_id)
                 )
@@ -1091,6 +1101,8 @@ class MySQLAccountStore(AccountStore):
             )
             if group is None:
                 raise NotFoundError(group_id, "group")
+            if group.deleting:
+                raise FailedPreconditionError("Group deletion is in progress")
             user = await self._lock_user(session, account, user_id)
             self._require_active(user)
             if (
@@ -1129,6 +1141,8 @@ class MySQLAccountStore(AccountStore):
             )
             if group is None:
                 raise NotFoundError(group_id, "group")
+            if group.deleting:
+                raise FailedPreconditionError("Group deletion is in progress")
             membership = await session.scalar(
                 select(GroupMember)
                 .join(
@@ -1152,23 +1166,58 @@ class MySQLAccountStore(AccountStore):
             await session.delete(membership)
             return True
 
-    async def delete_group(self, account_id: str, group_id: str) -> None:
-        async with self._transaction() as session:
-            account = await self._lock_account(session, account_id)
-            self._require_active(account)
-            group = await session.scalar(
-                select(Group)
-                .where(
-                    Group.service_name == self._service_name,
-                    Group.account_pk == account.account_pk,
-                    Group.group_id == group_id,
-                )
-                .with_for_update()
+    async def _lock_group(self, session: AsyncSession, account_id: str, group_id: str):
+        account = await self._lock_account(session, account_id)
+        self._require_active(account)
+        group = await session.scalar(
+            select(Group)
+            .where(
+                Group.service_name == self._service_name,
+                Group.account_pk == account.account_pk,
+                Group.group_id == group_id,
             )
-            if group is None:
-                raise NotFoundError(group_id, "group")
-            # The membership foreign key cascades deletion without removing users.
+            .with_for_update()
+        )
+        if group is None:
+            raise NotFoundError(group_id, "group")
+        return group
+
+    async def begin_group_deletion(self, account_id: str, group_id: str) -> None:
+        async with self._transaction() as session:
+            group = await self._lock_group(session, account_id, group_id)
+            group.deleting = True
+
+    async def finish_group_deletion(self, account_id: str, group_id: str) -> bool:
+        async with self._transaction() as session:
+            try:
+                group = await self._lock_group(session, account_id, group_id)
+            except NotFoundError:
+                return False
+            if not group.deleting:
+                return False
             await session.delete(group)
+            return True
+
+    async def iter_deleting_groups(self) -> list[tuple[str, str]]:
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(Account.account_id, Group.group_id)
+                    .join(
+                        Group,
+                        and_(
+                            Group.service_name == Account.service_name,
+                            Group.account_pk == Account.account_pk,
+                        ),
+                    )
+                    .where(
+                        Account.service_name == self._service_name,
+                        Account.deletion_task_id.is_(None),
+                        Group.deleting.is_(True),
+                    )
+                )
+            ).all()
+            return [(account_id, group_id) for account_id, group_id in rows]
 
     async def replace_active_user_api_key(
         self, account_id: str, user_id: str, api_key: str,

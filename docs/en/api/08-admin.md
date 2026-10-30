@@ -59,13 +59,13 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
 
-The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. Groups can be deleted whether empty or non-empty. Deleting a group removes all its memberships, preserves users and their credentials, and does not rewrite resource ACL or context records.
+The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. Groups can be deleted whether empty or non-empty. Deleting a group immediately stops its memberships from granting access. Background cleanup removes its direct and inherited shared-resource ACL grants before removing the group and memberships; users and their credentials are preserved.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"group_id":"engineering"}` |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group and all its memberships, including when the group is non-empty |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Start group, ACL, and membership cleanup; returns HTTP 202 and task_id, including for non-empty groups |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
@@ -80,6 +80,17 @@ ov --sudo admin delete-group acme engineering
 ```
 
 To delete a group that still has members, call `DELETE /api/v1/admin/accounts/acme/groups/engineering`.
+
+The deletion result is `{"account_id":"acme","group_id":"engineering","status":"deleting","task_id":"..."}`.
+Poll `GET /api/v1/tasks/{task_id}` (or `ov --sudo task status <task_id>`); cleanup is complete only when the Task is `completed`.
+The group store holds only a `deleting` flag. Task IDs, ownership and cleanup parameters remain in the task store; the group-list endpoint joins this information to return `status=deleting` and `task_id`. Membership changes and recreating the same ID are blocked.
+Account administrators can inspect their account’s group deletion tasks; ordinary users and administrators of other accounts cannot.
+If the Task is `failed`, repeat the same DELETE request to retry. Other grants and the `restricted` mode remain unchanged, including when the last grant is removed.
+Group identities supplied directly by a `trusted` upstream bypass server-managed membership lookup and are not additionally filtered by this change; their stored ACL grants are cleaned in the background.
+ACL cleanup completes when storage writes succeed; remote index visibility remains eventually consistent.
+Already submitted resource imports are not coordinated with deletion and may subsequently apply their explicit ACL settings.
+
+MySQL / Redis+MySQL deployments must apply `openviking/server/account_stores/sql/changes/0002_group_deletion.sql` before upgrading. This migration adds only the group’s `deleting` flag and lookup index, with no task ID or task ownership columns. New deployments use the updated `init.sql`.
 
 The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 
@@ -1747,6 +1758,7 @@ Remove a user from a workspace. The user's API key is revoked immediately, and o
 - ADMIN can only remove users in their own account
 - Cannot delete the last admin user of an account
 - After deletion starts, the user key is invalid and list_users omits the user
+- Background cleanup also removes the user’s direct and inherited shared-resource ACL grants. The same user_id cannot be recreated until cleanup completes; repeat DELETE to retry a failed Task
 - Vector deletion succeeds when the delete requests succeed, without waiting for remote index synchronization; counts and queries may briefly lag after the Task completes
 
 #### 3. Usage Examples

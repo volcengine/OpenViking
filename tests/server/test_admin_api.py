@@ -3216,14 +3216,16 @@ async def test_user_list_hides_other_prefixes_and_mismatched_keys():
     assert page["users"] == [{"user_id": "alice"}, {"user_id": "hashed"}]
 
 
+@pytest.mark.parametrize("target_kind", ["user", "group"])
 async def test_remove_user(
     admin_client: httpx.AsyncClient,
     admin_service: OpenVikingService,
     admin_app: FastAPI,
     monkeypatch,
+    target_kind,
 ):
-    """Deletion revokes the user and removes only their private data, uploads, tasks,
-    and embedded gateway state."""
+    """Deletion clears all ACL copies before releasing the identity for reuse;
+    failures retain the fence, and group deletion preserves members' data."""
     import openviking_gateway.app as gateway_module
 
     gateway = object()
@@ -3260,9 +3262,52 @@ async def test_remove_user(
         account_id=acct,
         user_id="bob",
     )
-    resp = await admin_client.delete(
-        f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
+    manager = admin_app.state.api_key_manager
+    if target_kind == "group":
+        await manager.create_group(acct, "bob")
+        await manager.add_group_member(acct, "bob", "bob")
+    delete_url = f"/api/v1/admin/accounts/{acct}/{target_kind}s/bob"
+    principal = f"{target_kind}:bob"
+    fs = admin_service.viking_fs
+    vector_store = fs.vector_store
+    # Direct/inherited grants across index levels, and a similarly named
+    # principal that must be retained. Pagination is covered by the ACL contract.
+    records = [
+        {
+            "id": f"{acct}-acl-{index}",
+            "uri": f"viking://resources/acl-delete/{index // 3}.md",
+            "level": index % 3,
+            "context_type": "resource",
+            "type": "resource",
+            "vector": [1.0] + [0.0] * (vector_store.vector_dim - 1),
+            "acl_mode": "restricted" if index % 2 else "inherit",
+            "acl_direct_grants": [f"{(1, 3, 7)[index % 3]}:{principal}", "7:user:alice"],
+            "acl_inherited_grants": [f"3:{principal}", f"1:{principal}-other"],
+        }
+        for index in range(6)
+    ]
+    await vector_store._upsert_many_raw(records, ctx=upload_ctx)
+    other_acct = _uid()
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": other_acct, "admin_user_id": "alice"},
+        headers=root_headers(),
     )
+    other_ctx = RequestContext(user=UserIdentifier(other_acct, "alice"), role=Role.ROOT)
+    other_record = {**records[0], "id": f"{other_acct}-acl"}
+    await vector_store._upsert_many_raw([other_record], ctx=other_ctx)
+    remove_principal = fs.acl_manager.remove_principal
+    calls = 0
+
+    async def fail_cleanup_once(principal, ctx):
+        nonlocal calls
+        calls += 1
+        await remove_principal(principal, ctx)
+        if calls == 1:
+            raise OSError("ACL cleanup interrupted after writing")
+
+    monkeypatch.setattr(fs.acl_manager, "remove_principal", fail_cleanup_once)
+    resp = await admin_client.delete(delete_url, headers=root_headers())
     assert resp.status_code == 202
     task_id = resp.json()["result"]["task_id"]
 
@@ -3271,15 +3316,64 @@ async def test_remove_user(
         "/api/v1/fs/ls?uri=viking://",
         headers={"X-API-Key": bob_key},
     )
-    assert resp.status_code == 401
+    assert resp.status_code == (401 if target_kind == "user" else 200)
+    if target_kind == "group":
+        assert await manager.get_user_group_ids(acct, "bob") == ()
+        alice_key = await manager.regenerate_key(acct, "alice")
+        other_key = await manager.regenerate_key(other_acct, "alice")
+        for key, expected in ((alice_key, 200), (bob_key, 404), (other_key, 404)):
+            task_response = await admin_client.get(
+                f"/api/v1/tasks/{task_id}", headers={"X-API-Key": key}
+            )
+            assert task_response.status_code == expected
 
     deletion_task = await _wait_for_task(admin_client, task_id)
-    assert deletion_task["status"] == "completed"
+    assert deletion_task["status"] == "failed"
+    if target_kind == "user":
+        assert (await manager.get_deletion(acct, "bob"))["task_id"] == task_id
+    else:
+        assert (await manager.get_groups(acct))[0]["status"] == "deleting"
+        groups = await admin_app.state.deletion_service.list_groups(acct)
+        assert groups[0]["task_id"] == task_id
+    create_payload = {f"{target_kind}_id": "bob"}
+    conflict = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/{target_kind}s", json=create_payload, headers=root_headers()
+    )
+    assert conflict.status_code == 409
+    retry = await admin_client.delete(delete_url, headers=root_headers())
+    assert retry.status_code == 202
+    retry_id = retry.json()["result"]["task_id"]
+    assert retry_id != task_id
+    deletion_task = await _wait_for_task(admin_client, retry_id)
+    assert deletion_task["status"] == "completed", deletion_task
+    if target_kind == "user":
+        assert await manager.get_deletion(acct, "bob") is None
+    else:
+        assert await manager.get_groups(acct) == []
+    cleaned = await vector_store.get_strict([record["id"] for record in records], ctx=upload_ctx)
+    assert len(cleaned) == len(records)
+    modes = {record["id"]: record["acl_mode"] for record in records}
+    for record in cleaned:
+        assert record["acl_direct_grants"] == ["7:user:alice"]
+        assert record["acl_inherited_grants"] == [f"1:{principal}-other"]
+        assert record["acl_mode"] == modes[record["id"]]
+    untouched = await vector_store.get_strict([other_record["id"]], ctx=other_ctx)
+    assert untouched[0]["acl_direct_grants"] == other_record["acl_direct_grants"]
+    if target_kind == "group":
+        assert await fs.exists(private_uri, ctx=bob_ctx)
+        assert await fs.exists(bob_upload_uri, ctx=upload_ctx)
+        assert (await manager.resolve_identity(bob_key)).user_id == "bob"
+        assert await get_task_tracker().get(bob_task.task_id, account_id=acct, user_id="bob")
+        delete_gateway_data.assert_not_awaited()
+        await manager.create_group(acct, "bob")
+        await manager.add_group_member(acct, "bob", "bob")
+        return
     assert not await admin_service.viking_fs.exists(private_uri, ctx=bob_ctx)
     assert not await admin_service.viking_fs.exists(bob_upload_uri, ctx=upload_ctx)
     assert await admin_service.viking_fs.exists(alice_upload_uri, ctx=upload_ctx)
     assert not await admin_app.state.api_key_manager.has_user(acct, "bob")
-    delete_gateway_data.assert_awaited_once_with(gateway, acct, "bob")
+    assert delete_gateway_data.await_count == 2
+    delete_gateway_data.assert_awaited_with(gateway, acct, "bob")
     assert (
         await get_task_tracker().get(
             bob_task.task_id,
@@ -3294,6 +3388,9 @@ async def test_remove_user(
         headers=root_headers(),
     )
     assert missing.status_code == 404
+    await manager.register_user(acct, "bob")
+    recreated_acl = await fs.acl_manager.resolve(records[1]["uri"], upload_ctx)
+    assert all(entry.principal != principal for entry in recreated_acl.permissions.entries)
 
 
 # ---- Role management ----

@@ -180,7 +180,8 @@ func (c *Client) AdminListGroups(ctx context.Context, accountID string) ([]any, 
 	return result, err
 }
 
-// AdminDeleteGroup deletes an empty group.
+// AdminDeleteGroup starts background group and ACL cleanup. The result contains
+// status="deleting" and task_id; poll the task until it completes.
 func (c *Client) AdminDeleteGroup(ctx context.Context, accountID, groupID string) (map[string]any, error) {
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID), nil, nil, &result)

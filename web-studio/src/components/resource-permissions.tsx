@@ -594,6 +594,7 @@ function GrantForm({
     kind === 'group'
       ? (groups.data
           ?.filter((group) =>
+            group.status !== 'deleting' &&
             group.group_id.toLowerCase().includes(search.trim().toLowerCase()),
           )
           .map((group) => ({

@@ -59,13 +59,13 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 
 用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。`group_id` 由调用者创建时指定，使用与 `user_id` 相同的标识符规则，是 account 内唯一且稳定的标识；不存在单独的组名。组内只能加入当前 account 已存在的用户，不支持嵌套组。
 
-成员关系由服务端加入每次请求的 `RequestContext.group_ids`。添加或移除成员从下一次请求开始生效，不重写资源 ACL 或 context 记录。用户被删除时会自动退出所有组。无论组是否为空，都可以直接删除；删除组会移除该组的全部成员关系，保留用户及其凭证，也不重写资源 ACL 或 context 记录。
+成员关系由服务端加入每次请求的 `RequestContext.group_ids`。添加或移除成员从下一次请求开始生效，不重写资源 ACL 或 context 记录。用户被删除时会自动退出所有组。无论组是否为空，都可以直接删除；删除开始后，后续请求通过服务端成员关系获得的该组权限停止生效；后台清理该组在共享资源中的直接和继承 ACL，最后移除组及其成员关系，用户及其凭证保留。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建空组，请求体为 `{"group_id":"engineering"}` |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除组及其全部成员关系，允许组内仍有成员 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 异步删除组及其 ACL、成员关系，返回 HTTP 202 和 task_id，允许组内仍有成员 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 幂等添加成员；重复调用返回 `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
@@ -80,6 +80,17 @@ ov --sudo admin delete-group acme engineering
 ```
 
 要直接删除仍有成员的组，可调用 `DELETE /api/v1/admin/accounts/acme/groups/engineering`。
+
+删除接口返回 `{"account_id":"acme","group_id":"engineering","status":"deleting","task_id":"..."}`。
+使用 `GET /api/v1/tasks/{task_id}`（或 `ov --sudo task status <task_id>`）查询结果，Task 为 `completed` 才表示清理完成。
+组表只保存 `deleting` 状态。删除任务 ID、任务归属和清理参数保存在任务系统中；组列表接口读取任务信息后，返回 `status=deleting` 和 `task_id`。此时不能修改成员或重建相同 ID。
+同一 account 的管理员可以查询该组的删除任务，普通用户和其他 account 的管理员不能查询。
+若 Task 为 `failed`，再次调用同一个删除接口可重试。其他授权和 `restricted` 模式保持不变，即使删掉最后一个授权也不会恢复公开访问。
+由 `trusted` 上游直接传入的组身份不经过服务端成员查询，本次不额外过滤；对应的已存 ACL 由后台清理。
+ACL 清理以存储写入成功为准，远程索引可见性仍遵循现有的最终一致性。
+已提交的资源导入不与本次删除协调，其显式 ACL 仍可能随后写入。
+
+MySQL / Redis+MySQL 部署升级前需执行 `openviking/server/account_stores/sql/changes/0002_group_deletion.sql`；该 SQL 只给组表增加 `deleting` 状态字段及查询索引，不增加任务 ID 或任务归属字段。新部署使用更新后的 `init.sql`。
 
 Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 
@@ -1602,6 +1613,7 @@ ov admin list-users acme --limit 50 --page 2
 - ADMIN 只能移除自己所属的 account 中的用户
 - 不能删除账户的最后一个 admin 用户
 - 删除开始后，用户 key 立即失效，list_users 不再返回该用户
+- 后台同时清理共享资源中该用户的直接和继承 ACL；清理完成前不能重建相同 user_id，失败后再次调用删除接口重试
 - 向量删除以删除接口成功为准，不等待远程索引同步；Task 完成后，Count 或查询结果仍可能短暂滞后
 
 #### 3. 使用示例

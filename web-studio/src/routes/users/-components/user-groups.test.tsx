@@ -19,16 +19,21 @@ const api = vi.hoisted(() => ({
   remove: vi.fn(),
   change: vi.fn(),
   error: vi.fn(),
+  task: vi.fn(),
+  success: vi.fn(),
 }))
 vi.mock('#/lib/admin', () => ({
   fetchAdminGroups: api.groups,
+  fetchAdminDeletionTask: api.task,
   fetchAdminGroupMembers: api.members,
   fetchAdminUsersPage: api.users,
   createAdminGroup: api.create,
   deleteAdminGroup: api.remove,
   updateAdminGroupMember: api.change,
 }))
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: api.error } }))
+vi.mock('sonner', () => ({
+  toast: { success: api.success, error: api.error, info: vi.fn() },
+}))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
@@ -61,7 +66,8 @@ beforeEach(() => {
     total: 2,
   })
   api.create.mockResolvedValue({ group_id: 'new', member_count: 0 })
-  api.remove.mockResolvedValue({ deleted: true })
+  api.remove.mockResolvedValue({ status: 'deleting', task_id: 'cleanup' })
+  api.task.mockResolvedValue({ status: 'running' })
   api.change.mockResolvedValue({ added: true })
 })
 afterEach(cleanup)
@@ -82,25 +88,46 @@ it('creates a trimmed group ID using the management connection and refreshes the
   expect(api.groups.mock.calls.length).toBeGreaterThan(1)
 })
 
-it('blocks nonempty deletion and requires confirmation for empty groups', async () => {
+it('deletes populated groups and reports success only after ACL cleanup completes', async () => {
+  let finish!: (task: { status: string }) => void
+  api.task.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  api.remove.mockImplementation(async () => {
+    api.groups.mockResolvedValue([
+      {
+        group_id: 'engineering',
+        member_count: 1,
+        status: 'deleting',
+        task_id: 'cleanup',
+      },
+      { group_id: 'empty', member_count: 0 },
+    ])
+    return { status: 'deleting', task_id: 'cleanup' }
+  })
   const user = mount()
   const populated = (await screen.findByText('engineering')).closest('tr')!
-  expect(
-    within(populated)
-      .getByRole('button', { name: 'groups.delete' })
-      .hasAttribute('disabled'),
-  ).toBe(true)
-  const empty = screen.getByText('empty').closest('tr')!
-  await user.click(within(empty).getByRole('button', { name: 'groups.delete' }))
+  await user.click(
+    within(populated).getByRole('button', { name: 'groups.delete' }),
+  )
   expect(api.remove).not.toHaveBeenCalled()
   await user.click(
     within(screen.getByRole('alertdialog')).getByRole('button', {
       name: 'groups.delete',
     }),
   )
+  await screen.findByText('groups.deleting')
+  expect(api.remove).toHaveBeenCalledWith(connection, 'engineering')
+  expect(api.success).not.toHaveBeenCalled()
+  api.groups.mockResolvedValue([{ group_id: 'empty', member_count: 0 }])
+  finish({ status: 'completed' })
   await waitFor(() =>
-    expect(api.remove).toHaveBeenCalledWith(connection, 'empty'),
+    expect(api.success).toHaveBeenCalledWith('groups.deleted'),
   )
+  await waitFor(() => expect(screen.queryByText('engineering')).toBeNull())
 })
 
 it('adds and removes members, disables duplicate additions and searches account users', async () => {
@@ -157,21 +184,29 @@ it('adds and removes members, disables duplicate additions and searches account 
   )
 })
 
-it('keeps a failed deletion open and refreshes potentially stale member counts', async () => {
-  api.remove.mockRejectedValue(new Error('Group must be empty before deletion'))
+it('keeps a failed cleanup visible and lets the user retry deletion', async () => {
+  api.groups.mockResolvedValue([
+    {
+      group_id: 'engineering',
+      member_count: 1,
+      status: 'deleting',
+      task_id: 'cleanup',
+    },
+  ])
+  api.task.mockResolvedValue({
+    status: 'failed',
+    error: 'ACL storage unavailable',
+  })
   const user = mount()
-  await screen.findByText('empty')
-  await user.click(
-    within(screen.getByText('empty').closest('tr')!).getByRole('button', {
-      name: 'groups.delete',
-    }),
-  )
+  await screen.findByText('groups.deletionFailed')
+  expect(api.success).not.toHaveBeenCalled()
+  await user.click(screen.getByRole('button', { name: 'groups.retryDeletion' }))
   await user.click(
     within(screen.getByRole('alertdialog')).getByRole('button', {
       name: 'groups.delete',
     }),
   )
-  await waitFor(() => expect(api.error).toHaveBeenCalled())
-  expect(screen.getByRole('alertdialog')).toBeTruthy()
-  expect(api.groups.mock.calls.length).toBeGreaterThan(1)
+  await waitFor(() =>
+    expect(api.remove).toHaveBeenCalledWith(connection, 'engineering'),
+  )
 })

@@ -1233,9 +1233,10 @@ async def create_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = await _get_api_key_manager(request).create_group(
-        account_id, body.group_id
-    )
+    deletion_service = request.app.state.deletion_service
+    if deletion_service is None:
+        raise FailedPreconditionError("Deletion service is not initialized.")
+    result = await deletion_service.create_group(account_id, body.group_id)
     return Response(status="ok", result=result)
 
 
@@ -1247,11 +1248,14 @@ async def list_groups(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = await _get_api_key_manager(request).get_groups(account_id)
+    deletion_service = request.app.state.deletion_service
+    if deletion_service is None:
+        raise FailedPreconditionError("Deletion service is not initialized.")
+    result = await deletion_service.list_groups(account_id)
     return Response(status="ok", result=result)
 
 
-@router.delete("/accounts/{account_id}/groups/{group_id}")
+@router.delete("/accounts/{account_id}/groups/{group_id}", status_code=202)
 @require_auth_root_or_admin
 async def delete_group(
     request: Request,
@@ -1260,8 +1264,11 @@ async def delete_group(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    await _get_api_key_manager(request).delete_group(account_id, group_id)
-    return Response(status="ok", result={"deleted": True})
+    deletion_service = request.app.state.deletion_service
+    if deletion_service is None:
+        raise FailedPreconditionError("Deletion service is not initialized.")
+    result = await deletion_service.delete_group(account_id, group_id)
+    return Response(status="ok", result=result)
 
 
 @router.get("/accounts/{account_id}/groups/{group_id}/members")

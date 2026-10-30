@@ -1120,14 +1120,46 @@ class FileStore(AccountStore):
             await self._replace_groups(account_id, account, groups)
             return True
 
-    async def _delete_group(self, account_id: str, group_id: str) -> None:
+    async def begin_group_deletion(self, account_id: str, group_id: str) -> None:
+        await self._refresh_accounts_for_management_read()
         async with self._reload_lock:
             account = self._require_account(account_id)
             await self._load_account_groups_if_needed(account_id, account)
-            self._require_group(account_id, group_id)
+            group = account.groups.get(group_id)
+            if group is None:
+                raise NotFoundError(group_id, "group")
+            if group.get("deleting"):
+                return
+            groups = copy.deepcopy(account.groups)
+            groups[group_id]["deleting"] = True
+            await self._replace_groups(account_id, account, groups)
+
+    async def finish_group_deletion(self, account_id: str, group_id: str) -> bool:
+        await self._refresh_accounts_for_management_read()
+        async with self._reload_lock:
+            account = self._require_account(account_id)
+            await self._load_account_groups_if_needed(account_id, account)
+            group = account.groups.get(group_id)
+            if group is None or not group.get("deleting"):
+                return False
             groups = copy.deepcopy(account.groups)
             del groups[group_id]
             await self._replace_groups(account_id, account, groups)
+            return True
+
+    async def iter_deleting_groups(self) -> list[tuple[str, str]]:
+        result = []
+        async with self._reload_lock:
+            for account_id, account in self._accounts.items():
+                if account.deletion is not None:
+                    continue
+                await self._load_account_groups_if_needed(account_id, account)
+                result.extend(
+                    (account_id, group_id)
+                    for group_id, group in account.groups.items()
+                    if group.get("deleting")
+                )
+        return result
 
     # ---- internal helpers ----
 
@@ -1151,6 +1183,8 @@ class FileStore(AccountStore):
         group = account.groups.get(group_id)
         if group is None:
             raise NotFoundError(group_id, "group")
+        if group.get("deleting"):
+            raise FailedPreconditionError("Group deletion is in progress")
         return group
 
     async def _ensure_account_groups_loaded(self, account_id: str) -> None:
@@ -1173,6 +1207,7 @@ class FileStore(AccountStore):
         return {
             "group_id": group_id,
             "member_count": len(set(group.get("members", []))),
+            **({"status": "deleting"} if group.get("deleting") else {}),
         }
 
     def _discard_account_group_index(self, account_id: str) -> None:
@@ -1199,6 +1234,8 @@ class FileStore(AccountStore):
     ) -> Dict[str, tuple[str, ...]]:
         group_ids_by_user: Dict[str, list[str]] = {}
         for group_id, group in groups.items():
+            if group.get("deleting"):
+                continue
             for user_id in group.get("members", []):
                 if user_id in users:
                     group_ids_by_user.setdefault(user_id, []).append(group_id)
@@ -1697,9 +1734,6 @@ class FileStore(AccountStore):
         await self._refresh_accounts_for_management_read()
         return await self._remove_group_member(account_id, group_id, user_id)
 
-    async def delete_group(self, account_id: str, group_id: str) -> None:
-        await self._refresh_accounts_for_management_read()
-        await self._delete_group(account_id, group_id)
 
     async def replace_active_user_api_key(
         self, account_id: str, user_id: str, api_key: str,

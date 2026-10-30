@@ -370,8 +370,14 @@ class APIKeyManager:
     async def remove_group_member(self, account_id, group_id, user_id):
         return await self._store.remove_group_member(account_id, group_id, user_id)
 
-    async def delete_group(self, account_id, group_id):
-        await self._store.delete_group(account_id, group_id)
+    async def begin_group_deletion(self, account_id, group_id):
+        await self._store.begin_group_deletion(account_id, group_id)
+
+    async def finish_group_deletion(self, account_id, group_id):
+        return await self._store.finish_group_deletion(account_id, group_id)
+
+    async def iter_deleting_groups(self):
+        return await self._store.iter_deleting_groups()
 
     async def get_user_key_fingerprint(self, account_id, user_id):
         return await self._store.get_user_key_fingerprint(account_id, user_id)

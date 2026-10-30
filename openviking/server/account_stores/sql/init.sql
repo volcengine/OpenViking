@@ -46,6 +46,8 @@ CREATE TABLE `ov_accounts_groups` (
     account_pk BIGINT NOT NULL,
     group_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    deleting BOOLEAN NOT NULL DEFAULT 0,
+    INDEX ix_ov_accounts_group_deleting (service_name, deleting),
     PRIMARY KEY (group_pk),
     CONSTRAINT fk_ov_accounts_group_account
         FOREIGN KEY (service_name, account_pk)

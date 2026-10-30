@@ -591,7 +591,12 @@ export async function updateUserMemorySettings(
   )
 }
 
-export type AdminGroup = { group_id: string; member_count: number }
+export type AdminGroup = {
+  group_id: string
+  member_count: number
+  status?: 'deleting'
+  task_id?: string
+}
 
 const groupsUrl = '/api/v1/admin/accounts/{account_id}/groups'
 
@@ -616,10 +621,22 @@ export function createAdminGroup(connection: AdminConnection, groupId: string) {
 }
 
 export function deleteAdminGroup(connection: AdminConnection, groupId: string) {
-  return getOvResult<{ deleted: boolean }>(
+  return getOvResult<{ status: 'deleting'; task_id: string }>(
     createAdminClient(connection).delete({
       url: `${groupsUrl}/{group_id}`,
       path: { account_id: connection.accountId, group_id: groupId },
+    }),
+  )
+}
+
+export function fetchAdminDeletionTask(
+  connection: AdminConnection,
+  taskId: string,
+) {
+  return getOvResult<{ status: string; error?: string }>(
+    createAdminClient(connection).get({
+      url: '/api/v1/tasks/{task_id}',
+      path: { task_id: taskId },
     }),
   )
 }

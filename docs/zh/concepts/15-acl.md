@@ -26,6 +26,8 @@ ACL 条目使用带类型的 principal：
 - `group:{group_id}`：由调用者指定、在当前 account 内唯一的用户组 ID。
 - `user:*`：当前 account 内任意用户。
 
+删除用户或组会触发后台任务，清理当前 account 共享资源中该主体的直接和继承授权。任务完成前不能重建相同 ID；清理不会改变其他授权或 `restricted` 模式。接口和失败重试方式见[多租户 API](../api/08-admin.md)。
+
 不支持 `group:*`。用户组是平铺结构；修改成员关系不会重写资源 ACL 或 context 记录，而是在下一次请求构造 `RequestContext.group_ids` 时生效。
 请求创建的异步解析和语义任务会携带同一份 group 身份。`add-resource` 写入目标通过鉴权后，自动语义维护会保留原调用者身份，并显式使用内部 ACL bypass，不会把调用者角色改成 `ADMIN`。
 

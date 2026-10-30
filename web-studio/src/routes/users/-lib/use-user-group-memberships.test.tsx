@@ -27,6 +27,12 @@ beforeEach(() => {
     { group_id: 'fe-dev', member_count: 2 },
     { group_id: 'reviewers', member_count: 1 },
     { group_id: 'empty', member_count: 0 },
+    {
+      group_id: 'deleting',
+      member_count: 2,
+      status: 'deleting',
+      task_id: 'cleanup',
+    },
   ])
   api.members.mockImplementation(async (_connection, groupId) => ({
     group_id: groupId,
@@ -35,7 +41,7 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-it('maps users to their groups and skips empty groups', async () => {
+it('maps users to active groups and skips empty or deleting groups', async () => {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })

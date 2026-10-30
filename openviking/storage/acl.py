@@ -438,6 +438,63 @@ class AclManager:
     async def get_direct(self, uri: str, ctx: RequestContext) -> DirectAcl:
         return (await self.resolve(uri, ctx)).direct
 
+    async def remove_principal(self, principal: str, ctx: RequestContext) -> None:
+        """Remove an identity's grants from every stored ACL in its account.
+
+        The deletion service holds the shared-resource tree lock. Snapshot IDs
+        before writing: scroll uses offsets, and each write removes a match.
+        Failed batches can be retried while the identity remains fenced.
+        """
+        principal = normalize_acl_principal(principal)
+        if principal == "user:*":
+            raise InvalidArgumentError("Cannot delete the wildcard ACL principal")
+        tokens = acl_grant_tokens([principal], AclAction.READ)
+        refs = await self._scroll_all(
+            And(
+                [
+                    Eq("account_id", ctx.account_id),
+                    PathScope("uri", "viking://resources", depth=-1),
+                    Or(
+                        [
+                            RawDSL({"op": "must", "field": field, "conds": tokens})
+                            for field in ACL_GRANT_FIELDS
+                        ]
+                    ),
+                ]
+            ),
+            ["id"],
+            ctx,
+        )
+        ids = list(dict.fromkeys(str(record["id"]) for record in refs))
+        for offset in range(0, len(ids), 500):
+            records = await self._context_store.get_strict(ids[offset : offset + 500], ctx=ctx)
+            updated = []
+            for record in records:
+                effective = self._effective_from_record(record)
+                cleaned = replace(
+                    effective,
+                    direct=DirectAcl(
+                        tuple(
+                            entry
+                            for entry in effective.direct.entries
+                            if entry.principal != principal
+                        )
+                    ),
+                    inherited=DirectAcl(
+                        tuple(
+                            entry
+                            for entry in effective.inherited.entries
+                            if entry.principal != principal
+                        )
+                    ),
+                )
+                if cleaned != effective:
+                    updated.append({**record, **cleaned.context_fields()})
+            if updated:
+                written = await self._context_store._upsert_many_raw(updated, ctx=ctx)
+                if len(written) != len(updated):
+                    raise RuntimeError("Failed to remove all identity ACL grants")
+
     async def resolve_many(
         self, uris: Iterable[str], ctx: RequestContext, *, update: AclUpdate | None = None
     ) -> dict[str, EffectiveAcl]:

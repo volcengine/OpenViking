@@ -304,12 +304,17 @@ it('shows a local request error and retries without affecting the resource page'
   await user.click(screen.getByRole('button', { name: 'actions.refresh' }))
   await screen.findByText('bob')
 })
-it('grants edit permission to a selected account group', async () => {
+it('grants edit permission to an active group and excludes deleting groups', async () => {
+  mocks.groups.mockResolvedValue([
+    { group_id: 'engineering', member_count: 1 },
+    { group_id: 'retiring', member_count: 1, status: 'deleting', task_id: 'cleanup' },
+  ])
   const { user } = mount()
   await screen.findByText('bob')
   await user.click(screen.getByRole('button', { name: 'acl.addGrant' }))
   await user.click(screen.getByRole('button', { name: 'acl.subjects.group' }))
   await waitFor(() => expect(mocks.groups).toHaveBeenCalled())
+  expect(screen.queryByRole('button', { name: 'retiring' })).toBeNull()
   await user.click(screen.getByRole('button', { name: 'engineering' }))
   await user.click(screen.getByRole('button', { name: 'acl.levels.write' }))
   await user.click(

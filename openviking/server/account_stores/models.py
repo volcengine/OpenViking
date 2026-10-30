@@ -3,6 +3,8 @@
 """Data structures returned by account storage operations."""
 from typing import TypedDict
 
+from typing_extensions import NotRequired
+
 
 class DeletionRecord(TypedDict, total=False):
     task_id: str
@@ -36,3 +38,4 @@ class UsersPage(TypedDict):
 class GroupSummary(TypedDict):
     group_id: str
     member_count: int
+    status: NotRequired[str]

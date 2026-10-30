@@ -52,6 +52,16 @@ async def get_task(
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,
         )
+    if task is None and _ctx.role == Role.ADMIN:
+        candidate = await get_task_record(
+            task_id, account_id=SYSTEM_TASK_ACCOUNT_ID, user_id=SYSTEM_TASK_USER_ID
+        )
+        if (
+            candidate is not None
+            and candidate.task_type == "group_delete"
+            and candidate.meta["target"]["account_id"] == _ctx.account_id
+        ):
+            task = candidate
     if not task:
         raise OpenVikingError(
             "Task not found or expired",

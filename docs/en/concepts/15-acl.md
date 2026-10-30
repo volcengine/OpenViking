@@ -26,6 +26,8 @@ ACL entries use typed principals:
 - `group:{group_id}`: a caller-supplied, account-unique group ID.
 - `user:*`: any user in the current account.
 
+Deleting a user or group starts background cleanup of its direct and inherited shared-resource grants in the account. The ID remains reserved until cleanup completes; other grants and `restricted` mode are preserved. See the [Admin API](../api/08-admin.md) for task status and retries.
+
 `group:*` is not supported. Groups are flat. Membership changes do not rewrite resource ACL or context records; they take effect when the next request builds `RequestContext.group_ids`.
 Asynchronous parse and semantic tasks created by a request carry the same group identity. After an `add-resource` destination write has been authorized, automatic semantic maintenance preserves that identity and uses an explicit internal ACL bypass instead of changing the caller's role.
 

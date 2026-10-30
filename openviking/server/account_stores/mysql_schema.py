@@ -172,6 +172,7 @@ class Group(Base):
             "group_pk",
             name="uq_ov_accounts_group_account_pk",
         ),
+        Index("ix_ov_accounts_group_deleting", "service_name", "deleting"),
         {"mysql_engine": "InnoDB", "mysql_charset": "utf8mb4"},
     )
 
@@ -182,6 +183,7 @@ class Group(Base):
     created_at: Mapped[object] = mapped_column(
         DATETIME(fsp=6), server_default=text("CURRENT_TIMESTAMP(6)")
     )
+    deleting: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
 
 
 class GroupMember(Base):
