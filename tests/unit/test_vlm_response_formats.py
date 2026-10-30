@@ -187,3 +187,71 @@ async def test_openai_async_completion_with_empty_tools_preserves_usage(monkeypa
         "total_tokens": 15,
         "prompt_tokens_details": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("vlm_type", "config"),
+    [
+        (OpenAIVLM, {"provider": "openai", "model": "gpt-5.6-terra"}),
+        (LiteLLMVLMProvider, {"provider": "litellm", "model": "gpt-5.6-terra"}),
+        (VolcEngineVLM, {"provider": "volcengine", "model": "test-model"}),
+    ],
+    ids=["openai", "litellm", "volcengine"],
+)
+def test_tool_completion_preserves_success_with_partial_usage(
+    monkeypatch,
+    vlm_type,
+    config,
+):
+    calls = 0
+    raw_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="plain response", tool_calls=None),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=None, completion_tokens=None, total_tokens=17),
+    )
+
+    def complete(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return raw_response
+
+    vlm = vlm_type(config)
+    if vlm_type is LiteLLMVLMProvider:
+        monkeypatch.setattr(
+            "openviking.models.vlm.backends.litellm_vlm.completion",
+            complete,
+        )
+    else:
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=complete)),
+        )
+        monkeypatch.setattr(vlm, "get_client", lambda: client)
+
+    response = vlm.get_completion(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "test_tool",
+                    "description": "Test tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    assert calls == 1 and isinstance(response, VLMResponse) and response.content == "plain response"
+    assert response.usage["prompt_tokens"] == 0
+    assert response.usage["completion_tokens"] == 0
+    assert response.usage["total_tokens"] == 17
+    tracked = vlm.get_token_usage()["total_usage"]
+    assert (
+        tracked["prompt_tokens"],
+        tracked["completion_tokens"],
+        tracked["call_count"],
+    ) == (0, 0, 1)
