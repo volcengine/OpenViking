@@ -1,4 +1,4 @@
-import type { OpenVikingClient } from "./client.js";
+import type { OpenVikingClient, SessionContextResult } from "./client.js";
 import type { ParsedMemoryOpenVikingConfig } from "./config.js";
 import type { RuntimeQueryConfigStore } from "./query-config.js";
 import {
@@ -245,6 +245,20 @@ function validTokenBudget(raw: unknown): number | undefined {
   return undefined;
 }
 
+function hasStoredSessionContext(ctx: SessionContextResult | undefined): boolean {
+  return Boolean(
+    (ctx?.messages?.length ?? 0) > 0 ||
+      ctx?.latest_archive_overview ||
+      (ctx?.pre_archive_abstracts?.length ?? 0) > 0 ||
+      (ctx?.stats?.totalArchives ?? 0) > 0,
+  );
+}
+
+function isSessionNotFoundError(err: unknown): boolean {
+  const errorMessage = String(err);
+  return errorMessage.includes("[NOT_FOUND]") && errorMessage.includes("Session not found");
+}
+
 // OpenClaw 9.1/9.2 still capture via afterTurn even when commitTurn exists.
 // 9.3 (#140024) defers admitted turns to commitTurn; standalone runners keep
 // afterTurn. The registration API's runtime.version is the HOST version.
@@ -358,6 +372,11 @@ export function createMemoryOpenVikingContextEngine(params: {
 
   const committedTurnKeys = new Set<string>();
   const inFlightTurns = new Map<string, Promise<void>>();
+  // In native mode the host owns the canonical transcript. OpenClaw's durable
+  // commit callback contains only the closed turn, so retain the exact prefix
+  // seen by the corresponding main assemble. This lets us restore continuity
+  // when OpenViking has lost or recreated an otherwise valid server session.
+  const nativePrefixSnapshots = new Map<string, AgentMessage[]>();
   const deferredTurnCapture = usesDeferredTurnCapture(params.hostVersion);
 
   return {
@@ -390,9 +409,23 @@ export function createMemoryOpenVikingContextEngine(params: {
         Object.prototype.hasOwnProperty.call(assembleParams, "availableTools") ||
         Object.prototype.hasOwnProperty.call(assembleParams, "citationsMode") ||
         Object.prototype.hasOwnProperty.call(assembleParams, "prompt");
+      const sessionKey = resolveSessionKey(assembleParams);
+      if (
+        deferredTurnCapture === true &&
+        cfg.autoCapture &&
+        cfg.contextManagementMode === "native" &&
+        isMainAssemble &&
+        !isBypassedSession({ sessionId: assembleParams.sessionId, sessionKey })
+      ) {
+        const ovSessionId = openClawSessionToOvStorageId(assembleParams.sessionId, sessionKey);
+        nativePrefixSnapshots.set(ovSessionId, assembleParams.messages.slice());
+        if (nativePrefixSnapshots.size > 1024) {
+          nativePrefixSnapshots.delete(nativePrefixSnapshots.keys().next().value as string);
+        }
+      }
       return assembleOpenVikingSession({
         sessionId: assembleParams.sessionId,
-        sessionKey: resolveSessionKey(assembleParams),
+        sessionKey,
         messages: assembleParams.messages,
         prompt: assembleParams.prompt,
         tokenBudget,
@@ -435,10 +468,44 @@ export function createMemoryOpenVikingContextEngine(params: {
       // both success and failure. Completion keys are intentionally process-local.
       const capture = Promise.resolve().then(async () => {
         if (deferredTurnCapture) {
+          const sessionKey = resolveSessionKey(commitParams);
+          const ovSessionId = openClawSessionToOvStorageId(sessionId, sessionKey);
+          let captureMessages = commitParams.messages;
+          if (
+            cfg.autoCapture &&
+            cfg.contextManagementMode === "native" &&
+            !commitParams.isHeartbeat &&
+            !isBypassedSession({ sessionId, sessionKey }) &&
+            commitParams.messages.length > 0
+          ) {
+            let sessionContext: SessionContextResult | undefined;
+            try {
+              sessionContext = await (await getClient()).getSessionContext(ovSessionId, 128_000);
+            } catch (err) {
+              if (!isSessionNotFoundError(err)) {
+                throw new Error(
+                  `openviking: cannot verify native session continuity before durable capture: ${String(err)}`,
+                );
+              }
+            }
+            if (!hasStoredSessionContext(sessionContext)) {
+              if (!nativePrefixSnapshots.has(ovSessionId)) {
+                throw new Error(
+                  "openviking: native session is empty and no host transcript prefix is available; refusing partial durable capture",
+                );
+              }
+              const prefix = nativePrefixSnapshots.get(ovSessionId) ?? [];
+              captureMessages = [...prefix, ...commitParams.messages];
+              diag("commitTurn_native_replay", ovSessionId, {
+                prefixMessageCount: prefix.length,
+                currentTurnMessageCount: commitParams.messages.length,
+              });
+            }
+          }
           await afterTurnOpenVikingSession({
             sessionId,
-            sessionKey: resolveSessionKey(commitParams),
-            messages: commitParams.messages,
+            sessionKey,
+            messages: captureMessages,
             prePromptMessageCount: 0, // Host already supplies the closed-turn range.
             isHeartbeat: commitParams.isHeartbeat,
             tokenBudget: 128_000, // Durable delivery does not carry a token budget.
@@ -451,6 +518,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             isBypassedSession,
             diag,
           });
+          nativePrefixSnapshots.delete(ovSessionId);
         }
         committedTurnKeys.add(advancementKey);
         if (committedTurnKeys.size > 1024) {
