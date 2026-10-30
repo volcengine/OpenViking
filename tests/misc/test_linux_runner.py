@@ -13,7 +13,7 @@ HEAVY_BUILDS = [
     ("_build.yml", "build-studio", {}),
     ("_build.yml", "build-linux", {"arch": "x86_64"}),
     ("api_test.yml", "native-runtime", {}),
-    ("rust-cli.yml", "build", {"npm_os": "linux", "os": "ubuntu-24.04"}),
+    ("rust-cli.yml", "build", {"npm_os": "linux", "npm_cpu": "x64", "os": "ubuntu-24.04"}),
 ]
 
 
@@ -21,16 +21,33 @@ def jobs(file):
     return yaml.safe_load((WORKFLOWS / file).read_text())["jobs"]
 
 
-def labels(expression, row, repository="volcengine/OpenViking", source=None):
+def labels(
+    expression,
+    row,
+    repository="volcengine/OpenViking",
+    source=None,
+    event="push",
+    ref="refs/heads/main",
+    disabled="",
+):
     """Evaluate only the routing expressions in these checked-in workflows."""
     expression = expression.strip().removeprefix("${{").removesuffix("}}")
     expression = expression.replace(
         "github.event.pull_request.head.repo.full_name", repr(source)
     ).replace("github.event.pull_request", repr(source is not None))
     expression = expression.replace("github.repository", repr(repository))
+    for key, value in {
+        "github.event_name": event,
+        "github.ref": ref,
+        "vars.CI_DISABLE_SELF_HOSTED": disabled,
+    }.items():
+        expression = expression.replace(key, repr(value))
     expression = re.sub(r"matrix\.(\w+)", lambda match: repr(row[match[1]]), expression)
-    expression = expression.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
-    result = eval(f"({expression})", {"__builtins__": {}, "fromJSON": json.loads})
+    expression = re.sub(r"!(?!=)", " not ", expression.replace("&&", " and ").replace("||", " or "))
+    result = eval(
+        f"({expression})",
+        {"__builtins__": {}, "fromJSON": json.loads, "startsWith": str.startswith},
+    )
     return result if isinstance(result, list) else [result]
 
 
@@ -47,7 +64,38 @@ def labels(expression, row, repository="volcengine/OpenViking", source=None):
 def test_heavy_builds_use_self_hosted_only_for_official_sources(
     file, name, row, repository, source, expected
 ):
-    assert labels(jobs(file)[name]["runs-on"], row, repository, source) == expected
+    event = "pull_request" if source else "push"
+    assert labels(jobs(file)[name]["runs-on"], row, repository, source, event) == expected
+
+
+@pytest.mark.parametrize("file,name,row", HEAVY_BUILDS)
+@pytest.mark.parametrize(
+    "event,ref,disabled,expected",
+    [
+        ("release", "refs/tags/v1.0.0", "", ["ubuntu-24.04"]),
+        ("push", "refs/tags/v1.0.0", "", ["ubuntu-24.04"]),
+        ("release", "refs/heads/main", "", ["ubuntu-24.04"]),
+        ("workflow_dispatch", "refs/heads/main", "", ["ubuntu-24.04"]),
+        ("schedule", "refs/heads/main", "", ["ubuntu-24.04"]),
+        ("push", "refs/heads/main", "true", ["ubuntu-24.04"]),
+        ("pull_request", "refs/pull/1/merge", "true", ["ubuntu-24.04"]),
+        ("pull_request", "refs/pull/1/merge", "", SELF_HOSTED),
+    ],
+)
+def test_release_routing_and_emergency_hosted_override(
+    file, name, row, event, ref, disabled, expected
+):
+    assert (
+        labels(
+            jobs(file)[name]["runs-on"],
+            row,
+            source="volcengine/OpenViking",
+            event=event,
+            ref=ref,
+            disabled=disabled,
+        )
+        == expected
+    )
 
 
 def test_only_heavy_build_jobs_reference_self_hosted():
@@ -66,7 +114,7 @@ def test_wheels_keep_glibc_baseline_and_native_arm_runner():
     assert labels(wheel["runs-on"], {"arch": "aarch64"}) == ["ubuntu-24.04-arm"]
 
 
-def test_musl_targets_use_self_hosted_and_other_platforms_keep_their_runners():
+def test_only_x64_musl_uses_self_hosted():
     build = jobs("rust-cli.yml")["build"]
     targets = build["strategy"]["matrix"]["include"]
     assert {row["target"] for row in targets if row["npm_os"] == "linux"} == {
@@ -74,7 +122,9 @@ def test_musl_targets_use_self_hosted_and_other_platforms_keep_their_runners():
         "aarch64-unknown-linux-musl",
     }
     for row in targets:
-        expected = SELF_HOSTED if row["npm_os"] == "linux" else [row["os"]]
+        expected = (
+            SELF_HOSTED if row["npm_os"] == "linux" and row["npm_cpu"] == "x64" else [row["os"]]
+        )
         assert labels(build["runs-on"], row) == expected
 
 
@@ -82,4 +132,5 @@ def test_heavy_build_containers_restore_workspace_ownership():
     for file, name, _ in HEAVY_BUILDS:
         job = jobs(file)[name]
         assert "ubuntu:" in job["container"]
+        assert 0 < job["timeout-minutes"] <= 60
         assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in job["steps"])

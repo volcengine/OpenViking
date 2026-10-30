@@ -50,9 +50,12 @@ jobs:
     if: inputs.build_wheels
     runs-on: >-
       ${{ fromJSON(github.repository == 'volcengine/OpenViking' &&
+          (github.event_name == 'pull_request' || github.event_name == 'push') &&
+          !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
           (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
           '["self-hosted","Linux","X64","ov-ci-runner"]' || '["ubuntu-24.04"]') }}
     container: ubuntu:24.04
+    timeout-minutes: 20
     steps:
     - name: Install Git before checkout
       run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
@@ -155,9 +158,12 @@ jobs:
     runs-on: >-
       ${{ fromJSON(matrix.arch == 'aarch64' && '["ubuntu-24.04-arm"]' ||
           github.repository == 'volcengine/OpenViking' &&
+          (github.event_name == 'pull_request' || github.event_name == 'push') &&
+          !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
           (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
           '["self-hosted","Linux","X64","ov-ci-runner"]' || '["ubuntu-24.04"]') }}
     container: ubuntu:20.04
+    timeout-minutes: 60
     env:
       DEBIAN_FRONTEND: noninteractive
       TZ: Etc/UTC
