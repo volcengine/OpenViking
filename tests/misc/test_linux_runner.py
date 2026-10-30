@@ -260,9 +260,7 @@ def test_embedded_pr_shares_hosts_only_for_trusted_sources(
     tmp_path, selector_host, source, approved, expected_trusted
 ):
     event = tmp_path / "event.json"
-    event.write_text(
-        json.dumps({"pull_request": {"head": {"repo": {"full_name": source}}}})
-    )
+    event.write_text(json.dumps({"pull_request": {"head": {"repo": {"full_name": source}}}}))
     output = tmp_path / "output"
     summary = tmp_path / "summary"
     result = subprocess.run(
@@ -346,16 +344,64 @@ def test_rust_linux_builds_use_selected_pool_and_isolated_container():
         "aarch64-unknown-linux-musl",
     }
     steps = build["steps"]
-    checkout = next(i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", ""))
+    checkout = next(
+        i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", "")
+    )
     bootstrap = next(
         i for i, step in enumerate(steps) if step.get("uses") == "./.github/actions/linux-test-env"
     )
     node = next(i for i, step in enumerate(steps) if "actions/setup-node@" in step.get("uses", ""))
-    rust = next(i for i, step in enumerate(steps) if "dtolnay/rust-toolchain@" in step.get("uses", ""))
+    rust = next(
+        i for i, step in enumerate(steps) if "dtolnay/rust-toolchain@" in step.get("uses", "")
+    )
     assert checkout < bootstrap < node < rust
     for step in [*steps[:checkout], steps[bootstrap], steps[node]]:
         assert step["if"] == "matrix.npm_os == 'linux'"
-    assert any("apt-get" in step.get("run", "") and "git" in step["run"] for step in steps[:checkout])
+    assert any(
+        "apt-get" in step.get("run", "") and "git" in step["run"] for step in steps[:checkout]
+    )
+
+
+def test_distribution_builds_route_x64_without_changing_wheel_libc_or_arm_host():
+    jobs = workflow("_build.yml")["jobs"]
+    assert jobs["linux-runner"]["uses"] == "./.github/workflows/_linux-runner.yml"
+    wheel = jobs["build-linux"]
+    assert wheel["needs"] == ["build-studio", "linux-runner"]
+    assert wheel["runs-on"] == (
+        "${{ matrix.arch == 'aarch64' && fromJSON('[\"ubuntu-24.04-arm\"]') || "
+        "fromJSON(needs.linux-runner.outputs.runs_on) }}"
+    )
+    assert wheel["container"] == "ubuntu:20.04"
+    assert "(glibc 2.31)" in wheel["name"]
+    steps = wheel["steps"]
+    checkout = next(
+        i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", "")
+    )
+    bootstrap = next(
+        i for i, step in enumerate(steps) if step.get("uses") == "./.github/actions/linux-test-env"
+    )
+    rust = next(
+        i for i, step in enumerate(steps) if "dtolnay/rust-toolchain@" in step.get("uses", "")
+    )
+    assert checkout < bootstrap < rust
+    assert steps[bootstrap]["with"]["install-dependencies"] == "false"
+    assert any(
+        "apt-get" in step.get("run", "") and "git" in step["run"] for step in steps[:checkout]
+    )
+    for name in ["build-studio", "build-sdist"]:
+        job = jobs[name]
+        assert job["needs"] == "linux-runner"
+        assert job["runs-on"] == "${{ fromJSON(needs.linux-runner.outputs.runs_on) }}"
+        assert job["container"] == "ubuntu:24.04"
+        assert "git" in job["steps"][0]["run"]
+        assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in job["steps"])
+
+
+@pytest.mark.parametrize("caller", ["pr.yml", "release.yml"])
+def test_distribution_callers_forward_pool_override_and_inventory_secret(caller):
+    build = workflow(caller)["jobs"]["build"]
+    assert build["with"]["linux_pool"] == "${{ inputs.linux_pool || '' }}"
+    assert build["secrets"]["CI_RUNNER_READ_TOKEN"] == "${{ secrets.CI_RUNNER_READ_TOKEN }}"
 
 
 def test_p0_is_pinned_and_gateway_resources_are_isolated():

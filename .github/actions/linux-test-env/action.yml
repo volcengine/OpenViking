@@ -1,5 +1,9 @@
 name: Bootstrap Linux test container
-description: Supply Ubuntu 24.04 tools and a job-local home before language setup
+description: Supply container tools and a job-local home before language setup
+inputs:
+  install-dependencies:
+    description: Install Ubuntu 24.04 test tools (disable when the job supplies its own)
+    default: 'true'
 runs:
   using: node24
   main: bootstrap.mjs

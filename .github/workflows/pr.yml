@@ -205,6 +205,9 @@ jobs:
     uses: ./.github/workflows/_build.yml
     with:
       os_json: ${{ needs.check-deps.outputs.wheel_os }}
+      linux_pool: ${{ inputs.linux_pool || '' }}
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
 
   sdk-python-tests:
     needs: [check-deps, linux-runner]

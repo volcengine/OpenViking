@@ -18,16 +18,21 @@ file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
-Ordinary Linux x64 tests select a compute pool through `_linux-runner.yml`.
+Ordinary Linux x64 tests and distribution builds select a compute pool through `_linux-runner.yml`.
 Set repository variable `CI_LINUX_POOL` to `auto` (the default), `github-hosted`,
 `openviking-ecs`, or `ov-ci-runner`. This covers API and effect tests, the shared
 API native runtime producer, cuVS, full/lite suites, plugin tests, SDK/framework
 tests, Hermes x64, Rust tests and Linux musl CLI builds (including ARM64
-cross-compilation on x64), and Gateway/chart/kind tests. Native Linux ARM jobs, macOS,
-Windows, wheel distribution builds, publishing and lightweight planning/version
+cross-compilation on x64), Gateway/chart/kind tests, Linux x86_64 wheels, and
+shared Studio/source distribution builds. Native Linux ARM jobs, macOS,
+Windows, publishing and lightweight planning/version
 checks retain their existing hosted runners.
 Manual test workflows also accept `linux_pool` to override the repository
-variable for one run; reusable full/lite workflows accept the same input.
+variable for one run; reusable full/lite/distribution workflows and manual
+release builds accept the same input. The legacy `os_json` value
+`ubuntu-24.04` selects the Linux x86_64 wheel platform; `linux_pool` chooses its
+host. Wheels continue compiling independently in Ubuntu 20.04 containers
+(glibc 2.31) on every x64 pool. Studio/source builds use Ubuntu 24.04 containers.
 
 The selector itself runs on `[self-hosted, Linux, X64, ci-linux-selector]` in
 the official repository. Add the `ci-linux-selector` custom label to both the
@@ -80,6 +85,8 @@ Docker socket access for the runner user, and outbound access to Actions,
 Ubuntu packages and container registries. Limit these custom labels to prepared
 hosts. Linux x64 tests run in disposable Ubuntu 24.04 containers on every pool,
 with job-local HOME/Cargo/Rustup directories and Git installed before checkout.
+Wheel jobs supply their own Ubuntu 20.04 packages and use the bootstrap action
+with dependency installation disabled, retaining job-local HOME/Cargo/Rustup.
 The bootstrap action's post-job hook restores workspace/temp ownership to the
 host runner user, so subsequent host jobs can clean container build outputs.
 This keeps native bundle OS/libc validation consistent and isolates API servers
