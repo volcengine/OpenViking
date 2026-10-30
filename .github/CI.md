@@ -20,7 +20,7 @@ binaries and musl CLI binaries are never reused in release wheels.
 
 Ordinary Linux x64 tests and distribution builds select a compute pool through `_linux-runner.yml`.
 Set repository variable `CI_LINUX_POOL` to `auto` (the default), `github-hosted`,
-`openviking-ecs`, or `ov-ci-runner`. This covers API and effect tests, the shared
+or `ov-ci-runner`. This covers API and effect tests, the shared
 API native runtime producer, cuVS, full/lite suites, plugin tests, SDK/framework
 tests, Hermes x64, Rust tests and Linux musl CLI builds (including ARM64
 cross-compilation on x64), Gateway/chart/kind tests, Linux x86_64 wheels, and
@@ -38,8 +38,8 @@ The selector defaults to `ubuntu-24.04` on GitHub-hosted, so it does not wait
 for self-hosted test capacity before making a decision. In the official
 repository, `CI_LINUX_SELECTOR_RUNS_ON` can override its runner labels with a
 JSON array, for example `["self-hosted","Linux","X64","ci-linux-selector"]`.
-That optional configuration assigns selection to either prepared host carrying
-`ci-linux-selector`; it waits if both hosts are unavailable. An unset or empty
+That optional configuration assigns selection to the prepared host carrying
+`ci-linux-selector`; it waits if that host is unavailable. An unset or empty
 variable uses GitHub-hosted. Non-official repositories always use a hosted
 selector. GitHub matches all labels in an array; it does not treat hosted and
 self-hosted labels as alternative pools.
@@ -57,13 +57,11 @@ destinations remain hosted. Branches in the official repository do not require
 this variable to use self-hosted capacity.
 
 In `auto`, the selector queries runner inventory, chooses an online idle Linux
-x64 pool (also allowing its own host, which becomes free when selection finishes),
-and alternates ties by workflow run ID. Without inventory credentials, trusted
-jobs use `[self-hosted, Linux, X64, ci-linux-tests]` if the selector's runner name
-is `openviking-ecs` or `ov-ci-runner`. Add `ci-linux-tests` to both prepared hosts:
-GitHub can assign each dependent job to either host, instead of pinning a whole
-workflow to the selector's host. This also lets approved fork PRs use the
-self-hosted pools without receiving a secret. API failures, offline/busy
+x64 pool (also allowing its own host, which becomes free when selection finishes).
+Without inventory credentials, trusted jobs use
+`[self-hosted, Linux, X64, ov-ci-runner]` if the selector's runner name
+is `ov-ci-runner`. This also lets approved fork PRs use that prepared host
+without receiving a secret. API failures, offline/busy
 inventory or a GitHub-hosted selector with no credentials fall back to
 `ubuntu-24.04`. With the default hosted selector, automatic selection of idle
 self-hosted capacity requires `CI_RUNNER_READ_TOKEN`. Explicit `linux_pool`
@@ -76,25 +74,24 @@ For inventory-based automatic selection, add repository secret `CI_RUNNER_READ_T
 a fine-grained token scoped to this repository with **Administration: read**,
 or an equivalent GitHub App installation token. The normal workflow token does
 not grant runner inventory access. Never reuse a developer's CLI credential.
-An explicit ECS/ov-ci-runner selection without this secret schedules directly
+An explicit ov-ci-runner selection without this secret schedules directly
 on its labels and waits for capacity; with inventory available, an unavailable
 explicit pool falls back to hosted. Untrusted fork PRs and non-official
 repositories always select hosted.
 
-Each self-hosted pool must have `[self-hosted, Linux, X64]`, the shared label
-`ci-linux-tests`, and its corresponding custom label
-(`openviking-ecs` or `ov-ci-runner`), plus a working Docker daemon,
+The self-hosted pool must have `[self-hosted, Linux, X64, ov-ci-runner]`,
+plus a working Docker daemon,
 Docker socket access for the runner user, and outbound access to Actions,
 Ubuntu packages and container registries. Limit these custom labels to prepared
 hosts. `ci-linux-selector` is only needed when selection is explicitly placed
-on the prepared hosts. Linux x64 tests run in disposable Ubuntu 24.04 containers
+on the prepared host. Linux x64 tests run in disposable Ubuntu 24.04 containers
 on every pool, with job-local HOME/Cargo/Rustup directories and Git installed before checkout.
 Wheel jobs supply their own Ubuntu 20.04 packages and use the bootstrap action
 with dependency installation disabled, retaining job-local HOME/Cargo/Rustup.
 The bootstrap action's post-job hook restores workspace/temp ownership to the
 host runner user, so subsequent host jobs can clean container build outputs.
 This keeps native bundle OS/libc validation consistent and isolates API servers
-and configuration from services already running on ECS.
+and configuration from services already running on the host.
 
 Keep the Actions runner application up to date. GitHub stops assigning jobs to
 runners that have not installed an available update within 30 days, even if
@@ -108,9 +105,8 @@ clusters, but uses a private Python environment, HOME, kubeconfig, npm prefix,
 unique cluster/image names and always-run cleanup. Abrupt host/runner failure
 can still require removing that run's orphaned Docker resources.
 
-The existing P0 Memory Tests remain on their original ECS environment, selected
-with `[self-hosted, Linux, X64, openviking-ecs]`. That runner must have the
-`openviking-ecs` custom label; its display name alone does not select it.
+The legacy P0 Memory Tests workflow was removed in #6807 and has no scheduled,
+prerelease or manual CI entry point. Its test sources remain in the repository.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.
 Its check name stays `cuvs-tests / Lite Test (ubuntu-24.04, 3.11)`, matching the

@@ -1,5 +1,4 @@
 self-hosted-runner:
   labels:
-    - openviking-ecs
     - ov-ci-runner
     - ci-linux-selector

@@ -6,9 +6,8 @@ import os
 import urllib.error
 import urllib.request
 
-POOLS = ("openviking-ecs", "ov-ci-runner")
+POOLS = ("ov-ci-runner",)
 HOSTED = ["ubuntu-24.04"]
-SHARED = ["self-hosted", "Linux", "X64", "ci-linux-tests"]
 
 
 def trusted_source(repository, event, trusted_pr_repositories=()):
@@ -21,7 +20,7 @@ def trusted_source(repository, event, trusted_pr_repositories=()):
     return source == repository or source in trusted_pr_repositories
 
 
-def select(pool, runners, trusted=True, run_id=0, selector_runner=""):
+def select(pool, runners, trusted=True, selector_runner=""):
     if pool not in ("auto", "github-hosted", *POOLS):
         raise ValueError(f"Unknown Linux test pool: {pool}")
     if not trusted:
@@ -31,11 +30,9 @@ def select(pool, runners, trusted=True, run_id=0, selector_runner=""):
     if pool in POOLS and runners is None:
         return ["self-hosted", "Linux", "X64", pool], f"Explicit pool {pool}; wait for capacity"
     if pool == "auto" and runners is None and selector_runner in POOLS:
-        # Fork PRs receive no inventory secret. Both prepared selector hosts
-        # carry this test label, so each dependent job can use either idle host.
         return (
-            SHARED,
-            "Inventory credentials absent; share prepared self-hosted pools",
+            ["self-hosted", "Linux", "X64", selector_runner],
+            "Inventory credentials absent; use prepared selector host",
         )
     candidates = []
     for runner in runners or []:
@@ -53,7 +50,7 @@ def select(pool, runners, trusted=True, run_id=0, selector_runner=""):
                     candidates.append(name)
     candidates = sorted(set(candidates))
     if candidates:
-        chosen = candidates[int(run_id) % len(candidates)]
+        chosen = candidates[0]
         return ["self-hosted", "Linux", "X64", chosen], f"Online idle pool: {chosen}"
     return HOSTED, "No eligible idle runner or inventory unavailable; use GitHub-hosted"
 
@@ -107,7 +104,6 @@ def main():
         args.pool,
         runners,
         trusted,
-        os.environ["GITHUB_RUN_ID"],
         os.environ.get("RUNNER_NAME", ""),
     )
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:

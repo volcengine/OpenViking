@@ -20,7 +20,7 @@ router = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(router)
 
 
-def runner(pool="openviking-ecs", status="online", busy=False, labels=None):
+def runner(pool="ov-ci-runner", status="online", busy=False, labels=None):
     return {
         "name": pool,
         "status": status,
@@ -32,7 +32,7 @@ def runner(pool="openviking-ecs", status="online", busy=False, labels=None):
 @pytest.mark.parametrize("pool", ["auto", "github-hosted", *router.POOLS])
 def test_untrusted_forks_use_hosted_even_when_pool_forced(pool):
     assert (
-        router.select(pool, [runner()], trusted=False, selector_runner="openviking-ecs")[0]
+        router.select(pool, [runner()], trusted=False, selector_runner="ov-ci-runner")[0]
         == router.HOSTED
     )
 
@@ -66,38 +66,38 @@ def test_official_push_remains_trusted_without_fork_configuration():
         [],
         [runner(status="offline")],
         [runner(busy=True)],
-        [runner(labels=["self-hosted", "Linux", "ARM64", "openviking-ecs"])],
+        [runner(labels=["self-hosted", "Linux", "ARM64", "ov-ci-runner"])],
         [runner(labels=["self-hosted", "Linux", "X64"])],
-        [runner(labels=["self-hosted", "Windows", "X64", "openviking-ecs"])],
+        [runner(labels=["self-hosted", "Windows", "X64", "ov-ci-runner"])],
+        [runner("retired-host")],
     ],
 )
 def test_auto_falls_back_when_no_eligible_idle_runner(inventory):
     assert router.select("auto", inventory)[0] == router.HOSTED
 
 
-def test_auto_rotates_idle_pools_and_ignores_inventory_order():
-    inventory = [runner("ov-ci-runner"), runner(), runner()]
-    assert router.select("auto", inventory, run_id=2)[0][-1] == "openviking-ecs"
-    assert router.select("auto", inventory, run_id=3)[0][-1] == "ov-ci-runner"
-    assert router.select("auto", inventory[::-1], run_id=3)[0][-1] == "ov-ci-runner"
+def test_auto_selects_remaining_pool_and_ignores_inventory_order():
+    inventory = [runner("retired-host"), runner(), runner()]
+    assert router.select("auto", inventory)[0][-1] == "ov-ci-runner"
+    assert router.select("auto", inventory[::-1])[0][-1] == "ov-ci-runner"
 
 
 @pytest.mark.parametrize("pool", router.POOLS)
 def test_selector_can_choose_its_own_busy_host_after_finishing(pool):
-    inventory = [runner("openviking-ecs", busy=True), runner("ov-ci-runner", busy=True)]
+    inventory = [runner("retired-host", busy=True), runner("ov-ci-runner", busy=True)]
     assert router.select("auto", inventory, selector_runner=pool)[0][-1] == pool
     assert router.select("auto", inventory, selector_runner="unrelated-host")[0] == router.HOSTED
 
 
 def test_selector_does_not_choose_its_own_offline_host():
     inventory = [runner(status="offline", busy=True)]
-    assert router.select("auto", inventory, selector_runner="openviking-ecs")[0] == router.HOSTED
+    assert router.select("auto", inventory, selector_runner="ov-ci-runner")[0] == router.HOSTED
 
 
 @pytest.mark.parametrize("pool", router.POOLS)
-def test_auto_shares_prepared_hosts_without_inventory_credentials(pool):
+def test_auto_uses_prepared_selector_host_without_inventory_credentials(pool):
     labels, reason = router.select("auto", None, selector_runner=pool)
-    assert labels == ["self-hosted", "Linux", "X64", "ci-linux-tests"]
+    assert labels == ["self-hosted", "Linux", "X64", pool]
     assert "Inventory credentials absent" in reason
     assert router.select("auto", [], selector_runner=pool)[0] == router.HOSTED
 
@@ -112,7 +112,7 @@ def test_label_matching_is_case_insensitive():
 
 
 def test_forced_pool_does_not_choose_another_self_hosted_pool():
-    assert router.select("ov-ci-runner", [runner()])[0] == router.HOSTED
+    assert router.select("ov-ci-runner", [runner("retired-host")])[0] == router.HOSTED
     assert router.select("github-hosted", [runner()])[0] == router.HOSTED
 
 
@@ -229,7 +229,7 @@ def test_embedded_fork_selector_ignores_workspace_imports_and_pythonpath(tmp_pat
         "PYTHONPATH": str(tmp_path),
         "RUNNER_READ_TOKEN": "",
         "TRUSTED_PR_REPOSITORIES": "[]",
-        "RUNNER_NAME": "openviking-ecs",
+        "RUNNER_NAME": "ov-ci-runner",
     }
     result = subprocess.run(
         [sys.executable, "-I", "-", "--pool", "ov-ci-runner"],
@@ -286,7 +286,11 @@ def test_embedded_pr_shares_hosts_only_for_trusted_sources(
         check=True,
     )
     trusted = source == "volcengine/OpenViking" or expected_trusted
-    expected = router.SHARED if trusted and selector_host in router.POOLS else router.HOSTED
+    expected = (
+        ["self-hosted", "Linux", "X64", selector_host]
+        if trusted and selector_host in router.POOLS
+        else router.HOSTED
+    )
     assert json.loads(output.read_text().split("=", 1)[1]) == expected
     if not trusted:
         reason = "Untrusted PRs"
@@ -412,10 +416,7 @@ def test_distribution_callers_forward_pool_override_and_inventory_secret(caller)
     assert build["secrets"]["CI_RUNNER_READ_TOKEN"] == "${{ secrets.CI_RUNNER_READ_TOKEN }}"
 
 
-def test_p0_is_pinned_and_gateway_resources_are_isolated():
-    p0 = workflow("oc2ov_test.yml")["jobs"]["p0-tests"]
-    assert p0["runs-on"] == ["self-hosted", "Linux", "X64", "openviking-ecs"]
-    assert "container" not in p0
+def test_gateway_resources_are_isolated():
     gateway = workflow("gateway.yml")["jobs"]["test"]
     assert "ports" not in gateway["services"]["redis"]
     assert gateway["steps"][-1]["if"] == "always()"
