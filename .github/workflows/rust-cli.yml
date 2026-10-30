@@ -29,23 +29,12 @@ permissions:
   contents: read
 
 jobs:
-  linux-runner:
-    uses: ./.github/workflows/_linux-runner.yml
-
   test:
-    needs: linux-runner
     name: Test Rust CLI
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
-    container: ubuntu:24.04
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-    - name: Install Git before checkout
-      run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
     - uses: actions/checkout@v6
-    - uses: ./.github/actions/linux-test-env
     - uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: stable
@@ -57,9 +46,11 @@ jobs:
       run: cargo test --locked -p ov_cli
 
   build:
-    needs: linux-runner
     name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.npm_os == 'linux' && fromJSON(needs.linux-runner.outputs.runs_on) || matrix.os }}
+    runs-on: >-
+      ${{ matrix.npm_os == 'linux' && github.repository == 'volcengine/OpenViking' &&
+          (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
+          fromJSON('["self-hosted","Linux","X64","ov-ci-runner"]') || matrix.os }}
     container: ${{ matrix.npm_os == 'linux' && 'ubuntu:24.04' || null }}
     defaults:
       run:

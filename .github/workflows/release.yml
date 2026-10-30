@@ -5,10 +5,6 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-      linux_pool:
-        description: Linux x64 build pool (empty uses CI_LINUX_POOL)
-        required: false
-        type: string
       target:
         description: 'Select where to publish'
         required: true
@@ -56,7 +52,6 @@ jobs:
       python_json: ${{ inputs.python_json || '["3.10"]' }}
       build_sdist: ${{ github.event_name == 'release' || inputs.build_sdist != false }}
       build_wheels: ${{ github.event_name == 'release' || inputs.build_wheels != false }}
-      linux_pool: ${{ inputs.linux_pool || '' }}
 
   permission-check:
     name: Check write permission

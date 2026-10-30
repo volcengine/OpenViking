@@ -3,11 +3,6 @@ name: 12. _Test Suite (Lite)
 on:
   workflow_call:
     inputs:
-      linux_pool:
-        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
-        required: false
-        type: string
-        default: ''
       native_artifact:
         description: 'Validated same-run cp310-abi3 native runtime (empty builds locally)'
         required: false
@@ -25,10 +20,6 @@ on:
         default: '["3.10"]'
   workflow_dispatch:
     inputs:
-      linux_pool:
-        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
-        required: false
-        type: string
       os_json:
         description: 'JSON string of OS to run on'
         required: false
@@ -39,19 +30,9 @@ on:
         default: '["3.10"]'
 
 jobs:
-  linux-runner:
-    uses: ./.github/workflows/_linux-runner.yml
-    with:
-      pool: ${{ inputs.linux_pool || '' }}
-
   test-lite:
-    needs: linux-runner
     name: Lite Test (${{ matrix.os }}, ${{ matrix.python-version }})
-    runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(needs.linux-runner.outputs.hosted_runs_on) || matrix.os }}
-    container: ${{ matrix.os == 'ubuntu-24.04' && 'ubuntu:24.04' || '' }}
-    defaults:
-      run:
-        shell: ${{ contains(matrix.os, 'windows') && 'pwsh' || 'bash' }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -59,14 +40,9 @@ jobs:
         python-version: ${{ fromJson(inputs.python_json) }}
 
     steps:
-    - name: Install Git before checkout
-      if: matrix.os == 'ubuntu-24.04'
-      run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
     - uses: actions/checkout@v6
       with:
         submodules: recursive
-    - uses: ./.github/actions/linux-test-env
-      if: matrix.os == 'ubuntu-24.04'
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v6

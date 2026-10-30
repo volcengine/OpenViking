@@ -3,44 +3,23 @@ on:
   pull_request:
     paths: ["openviking_gateway/**", "tests/gateway/**", "scripts/gateway_*", "tests/fixtures/gateway_upstream_urls.json", "openviking_cli/utils/config/openviking_gateway_config.py", "openviking_cli/utils/config/encryption_config.py", "openviking_cli/utils/config/agfs_config.py", "openviking/server/account_stores/redis_client.py", "pyproject.toml", "MANIFEST.in", "openviking_cli/setup_wizard.py", "openviking/crypto/**", ".github/workflows/gateway.yml"]
   workflow_dispatch:
-    inputs:
-      linux_pool:
-        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
-        required: false
-        type: string
 jobs:
-  linux-runner:
-    uses: ./.github/workflows/_linux-runner.yml
-    with:
-      pool: ${{ inputs.linux_pool || '' }}
-
   test:
-    needs: linux-runner
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
-    container:
-      image: ubuntu:24.04
-      options: --volume /var/run/docker.sock:/var/run/docker.sock
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-latest
     services:
       redis:
         image: redis:7.2
+        ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 2s --health-timeout 2s --health-retries 20
     env:
-      OV_TEST_REDIS: redis://redis:6379
-      REDIS_PREFIX: gateway-redis-${{ github.run_id }}-${{ github.run_attempt }}
+      OV_TEST_REDIS: redis://127.0.0.1:6379
+      OV_TEST_REDIS_CLUSTER: redis://127.0.0.1:7000,redis://127.0.0.1:7001,redis://127.0.0.1:7002
       OV_TEST_REDIS_USERNAME: gateway
       OV_TEST_REDIS_PASSWORD: gateway-test-password
     steps:
-      - name: Install Git before checkout
-        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/linux-test-env
-      - name: Install Docker client
-        run: apt-get install -y --no-install-recommends docker.io
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
@@ -49,37 +28,32 @@ jobs:
       - run: pip install "aiohttp>=3.13.3" "async-timeout>=5.0.1" "orjson>=3.11.7" "packaging>=24.0" "fastapi>=0.128.0" "uvicorn>=0.39.0" "pydantic>=2.0.0" "httpx>=0.25.0" "cryptography>=48.0.1" "json-repair>=0.25.0" "loguru>=0.7.3" "mcp>=1.27,<2" "redis==6.4.0" pytest pytest-asyncio
       - name: Start Redis Cluster and configure the gateway ACL
         shell: bash
-        env:
-          TEST_NETWORK: ${{ job.container.network }}
         run: |
           set -euo pipefail
-          echo "OV_TEST_REDIS_CLUSTER=redis://$REDIS_PREFIX-7000:7000,redis://$REDIS_PREFIX-7001:7001,redis://$REDIS_PREFIX-7002:7002" >> "$GITHUB_ENV"
           for port in 7000 7001 7002; do
-            docker run -d --network "$TEST_NETWORK" --name "$REDIS_PREFIX-$port" redis:7.2 \
+            docker run -d --network host --name gateway-redis-$port redis:7.2 \
               redis-server --port "$port" --cluster-enabled yes \
               --cluster-config-file nodes.conf --cluster-node-timeout 5000 \
-              --appendonly no
+              --cluster-announce-ip 127.0.0.1 --appendonly no
           done
           for port in 7000 7001 7002; do
             for attempt in {1..30}; do
-              if docker exec "$REDIS_PREFIX-$port" redis-cli -p "$port" ping; then break; fi
+              if docker exec gateway-redis-$port redis-cli -p "$port" ping; then break; fi
               sleep 1
             done
           done
-          docker exec "$REDIS_PREFIX-7000" redis-cli --cluster create \
-            "$REDIS_PREFIX-7000:7000" "$REDIS_PREFIX-7001:7001" "$REDIS_PREFIX-7002:7002" --cluster-yes
+          docker exec gateway-redis-7000 redis-cli --cluster create \
+            127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 --cluster-yes
           for port in 7000 7001 7002; do
             for attempt in {1..30}; do
-              state=$(docker exec "$REDIS_PREFIX-$port" redis-cli -p "$port" cluster info)
+              state=$(docker exec gateway-redis-$port redis-cli -p "$port" cluster info)
               if [[ "$state" == *cluster_state:ok* ]]; then break; fi
               sleep 1
             done
             [[ "$state" == *cluster_state:ok* ]]
           done
           for port in 6379 7000 7001 7002; do
-            redis_host="$REDIS_PREFIX-$port"
-            if [ "$port" = 6379 ]; then redis_host=redis; fi
-            docker run --rm --network "$TEST_NETWORK" redis:7.2 redis-cli -h "$redis_host" -p "$port" ACL SETUSER \
+            docker run --rm --network host redis:7.2 redis-cli -p "$port" ACL SETUSER \
               gateway reset on '>gateway-test-password' '~ovgw:*' \
               +@read +@write +@scripting +@connection +@transaction \
               +ping +time +scan +unlink '+cluster|slots' '+cluster|shards'
@@ -89,9 +63,3 @@ jobs:
       - run: |
           pip install "redis==5.3.1"
           PYTHONPATH=. pytest tests/gateway/test_storage_ports.py --confcutdir=tests/gateway -o addopts=''
-      - name: Remove this job's Redis Cluster
-        if: always()
-        run: |
-          for port in 7000 7001 7002; do
-            docker rm -f "$REDIS_PREFIX-$port" || true
-          done

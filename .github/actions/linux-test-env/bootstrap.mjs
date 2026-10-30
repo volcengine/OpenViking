@@ -12,11 +12,11 @@ if (env['INPUT_INSTALL-DEPENDENCIES'] !== 'false') {
   execFileSync('bash', ['-e', '-c', `
   apt-get update
   apt-get install -y --no-install-recommends \
-    ca-certificates curl git jq sudo build-essential cmake pkg-config \
-    zip unzip xz-utils libssl-dev libicu74 python3 ffmpeg
+    ca-certificates curl git sudo build-essential cmake pkg-config \
+    unzip xz-utils libssl-dev libicu74 python3
 `], { stdio: 'inherit' });
 }
 appendFileSync(env.GITHUB_ENV, `HOME=${home}\nCARGO_HOME=${home}/.cargo\nRUSTUP_HOME=${home}/.rustup\n`);
 // Checkout used the original container HOME; restrict trust to these workspaces.
 writeFileSync(join(home, '.gitconfig'),
-  `[safe]\n\tdirectory = ${workspace}\n\tdirectory = ${workspace}/.ci/hermes-agent\n`);
+  `[safe]\n\tdirectory = ${workspace}\n`);

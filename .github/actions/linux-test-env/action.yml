@@ -1,8 +1,8 @@
-name: Bootstrap Linux test container
+name: Bootstrap Linux build container
 description: Supply container tools and a job-local home before language setup
 inputs:
   install-dependencies:
-    description: Install Ubuntu 24.04 test tools (disable when the job supplies its own)
+    description: Install Ubuntu 24.04 build tools (disable when the job supplies its own)
     default: 'true'
 runs:
   using: node24

@@ -16,11 +16,6 @@ on:
       - 'scripts/check-hermes-plugin-install.py'
       - 'scripts/check-hermes-quick-local.py'
   workflow_dispatch:
-    inputs:
-      linux_pool:
-        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -30,26 +25,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  linux-runner:
-    uses: ./.github/workflows/_linux-runner.yml
-    with:
-      pool: ${{ inputs.linux_pool || '' }}
-
   hermes-plugin-tests:
-    needs: linux-runner
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
-    container: ubuntu:24.04
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Install Git before checkout
-        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: ./.github/actions/linux-test-env
 
       - name: Check out the reviewed Hermes test host
         uses: actions/checkout@v6
@@ -62,14 +44,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
-
-      - name: Make Python available to the hermetic test runner
-        run: |
-          # Hermes uses env -i, which drops setup-python's LD_LIBRARY_PATH.
-          # Register the library only inside this disposable Linux container.
-          printf '%s\n' "$pythonLocation/lib" > /etc/ld.so.conf.d/hermes-python.conf
-          ldconfig
-          env -i PATH="$PATH" HOME="$HOME" python -c 'import ssl; print(ssl.OPENSSL_VERSION)'
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -111,7 +85,6 @@ jobs:
           if-no-files-found: ignore
 
   quick-local-platforms:
-    needs: linux-runner
     strategy:
       fail-fast: false
       matrix:
@@ -122,24 +95,16 @@ jobs:
             host: release
             python: '3.13'
             hermes_ref: v2026.9.24
-    # Both Linux host versions use hosted capacity for parallel testing.
-    runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(needs.linux-runner.outputs.hosted_runs_on) || matrix.os }}
-    container: ${{ matrix.os == 'ubuntu-24.04' && 'ubuntu:24.04' || '' }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
         working-directory: .ci/hermes-agent
     steps:
-      - name: Install Git before checkout
-        if: matrix.os == 'ubuntu-24.04'
-        working-directory: /
-        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: ./.github/actions/linux-test-env
-        if: matrix.os == 'ubuntu-24.04'
       - uses: actions/checkout@v6
         with:
           repository: NousResearch/hermes-agent
@@ -149,14 +114,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python || '3.14' }}
-      - name: Make Python available to the hermetic test runner
-        if: matrix.os == 'ubuntu-24.04'
-        run: |
-          # Hermes uses env -i, which drops setup-python's LD_LIBRARY_PATH.
-          # Register the library only inside this disposable Linux container.
-          printf '%s\n' "$pythonLocation/lib" > /etc/ld.so.conf.d/hermes-python.conf
-          ldconfig
-          env -i PATH="$PATH" HOME="$HOME" python -c 'import ssl; print(ssl.OPENSSL_VERSION)'
       - uses: astral-sh/setup-uv@v7
         with:
           version: '0.12.3'
@@ -177,10 +134,6 @@ jobs:
             PYTHON="$PWD/.venv/Scripts/python.exe"
           else
             PYTHON="$PWD/.venv/bin/python"
-          fi
-          if [ '${{ matrix.os }}' = ubuntu-24.04 ]; then
-            env -i PATH="$PATH" HOME="$HOME" \
-              "$PYTHON" -c 'import pytest, ssl; print(ssl.OPENSSL_VERSION)'
           fi
           echo "HERMES_PYTHON=$PYTHON" >> "$GITHUB_ENV"
       - name: Check process ownership and installer failures

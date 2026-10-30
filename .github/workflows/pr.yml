@@ -2,11 +2,6 @@ name: 01. Pull Request Checks
 
 on:
   workflow_dispatch:
-    inputs:
-      linux_pool:
-        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
-        required: false
-        type: string
   pull_request:
     branches: [ main, develop ]
     paths-ignore:
@@ -28,19 +23,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  linux-runner:
-    uses: ./.github/workflows/_linux-runner.yml
-    with:
-      pool: ${{ inputs.linux_pool || '' }}
-
   plugin-tests:
-    needs: [check-deps, linux-runner]
+    needs: check-deps
     if: needs.check-deps.outputs.plugins_changed == 'true'
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
-    container: ubuntu:24.04
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-24.04
     env:
       # The tests that fork whole installs, named once: the step below runs
       # exactly what the parallel run subtracts, so renaming one cannot leave
@@ -49,21 +35,12 @@ jobs:
         examples/memory-plugin-shared/install-agent-hooks.test.mjs
         examples/memory-plugin-shared/release-marketplace.test.mjs
     steps:
-      - name: Install Git before checkout
-        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/linux-test-env
 
       - uses: actions/setup-node@v6
         with:
           # 24+: the pi extension tests import .ts glue directly via native type stripping.
           node-version: '24'
-
-      - name: Check plugin installer tools
-        run: |
-          for tool in bash node git curl jq zip unzip tar sha256sum; do
-            command -v "$tool"
-          done
 
       - run: npm ci --prefix examples/dsh-memory-plugin
       - run: npm ci --prefix examples/pi-coding-agent-extension --ignore-scripts
@@ -115,20 +92,14 @@ jobs:
           bash -n examples/codex-memory-plugin/setup-helper/tos-install.sh
 
   openclaw-tests:
-    needs: [check-deps, linux-runner]
+    needs: check-deps
     if: ${{ needs.check-deps.outputs.openclaw_changed == 'true' }}
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-24.04
     defaults:
       run:
-        shell: bash
         working-directory: examples/openclaw-plugin
     steps:
-      - name: Install Git before checkout
-        working-directory: /
-        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/linux-test-env
 
       - uses: actions/setup-node@v6
         with:
@@ -209,25 +180,17 @@ jobs:
     uses: ./.github/workflows/_build.yml
     with:
       os_json: ${{ needs.check-deps.outputs.wheel_os }}
-      linux_pool: ${{ inputs.linux_pool || '' }}
 
   sdk-python-tests:
-    needs: [check-deps, linux-runner]
+    needs: check-deps
     if: ${{ needs.check-deps.outputs.sdk_python_changed == 'true' }}
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
-    container: ubuntu:24.04
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.8", "3.9", "3.10", "3.12"]
     steps:
-      - name: Install Git before checkout
-        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/linux-test-env
 
       - uses: actions/setup-python@v6
         with:
@@ -257,24 +220,17 @@ jobs:
           /tmp/openviking-sdk-wheel/bin/python -c "import openviking_sdk"
 
   langchain-tests:
-    needs: [check-deps, linux-runner]
+    needs: check-deps
     if: ${{ needs.check-deps.outputs.langchain_changed == 'true' }}
-    runs-on: ${{ fromJSON(needs.linux-runner.outputs.hosted_runs_on) }}
-    container: ubuntu:24.04
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.12"]
     steps:
-      - name: Install Git before checkout
-        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/linux-test-env
 
       - uses: actions/setup-python@v6
         with:
