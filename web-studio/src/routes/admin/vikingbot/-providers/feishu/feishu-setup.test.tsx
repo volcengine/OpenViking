@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+import type { Connection } from '#/features/admin/vikingbot/api'
+import { FeishuSetup } from '#/features/admin/vikingbot/providers/feishu/feishu-setup'
+import zh from '#/i18n/locales/zh-CN/vikingbot'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   cleanup,
   fireEvent,
@@ -6,23 +10,19 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
-import { FeishuSetup } from './feishu-setup'
-import zh from '#/i18n/locales/zh-CN/vikingbot'
-import type { Connection } from '../../-api'
 
 const api = vi.hoisted(() => ({
   create: vi.fn(),
   update: vi.fn(),
   users: vi.fn().mockResolvedValue([{ user_id: 'bot-user', available: true }]),
 }))
-vi.mock('../../-api', () => ({
+vi.mock('#/features/admin/vikingbot/api', () => ({
   createConnection: api.create,
   verifyConnection: api.update,
   getBotUsers: api.users,
 }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
 }))
 vi.mock('react-i18next', () => ({

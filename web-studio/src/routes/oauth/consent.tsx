@@ -1,5 +1,5 @@
+import { ConsentPage } from '#/features/oauth/consent-page'
 import { createFileRoute } from '@tanstack/react-router'
-import { ConsentPage } from './-consent-page'
 
 export const Route = createFileRoute('/oauth/consent')({
   validateSearch: (search: Record<string, unknown>) => ({

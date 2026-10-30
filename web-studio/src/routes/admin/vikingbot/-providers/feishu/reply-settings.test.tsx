@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+import type { Connection } from '#/features/admin/vikingbot/api'
+import { ReplySettings } from '#/features/admin/vikingbot/providers/feishu/reply-settings'
+import zh from '#/i18n/locales/zh-CN/vikingbot'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   cleanup,
   fireEvent,
@@ -6,14 +10,12 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
-import { ReplySettings } from './reply-settings'
-import type { Connection } from '../../-api'
-import zh from '#/i18n/locales/zh-CN/vikingbot'
 
 const update = vi.hoisted(() => vi.fn())
-vi.mock('../../-api', () => ({ updateConnectionSettings: update }))
+vi.mock('#/features/admin/vikingbot/api', () => ({
+  updateConnectionSettings: update,
+}))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: keyof typeof zh) => zh[key] }),
 }))

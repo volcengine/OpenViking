@@ -1,6 +1,6 @@
+import { Route } from '#/routes/gateway'
 import { isRedirect } from '@tanstack/react-router'
 import { expect, it } from 'vitest'
-import { Route } from './gateway'
 
 it.each([
   ['/gateway', '', '', '/admin/gateway'],

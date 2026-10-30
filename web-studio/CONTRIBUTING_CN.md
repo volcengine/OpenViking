@@ -83,9 +83,9 @@ i18n.language.startsWith('zh') ? '刷新' : 'Refresh'
 
 监控页面已经采用这一结构：
 
-- [`parse-status.ts`](./src/routes/monitoring/-lib/parse-status.ts) 负责解析传输格式。
-- [`localize-observer-status.ts`](./src/routes/monitoring/-lib/localize-observer-status.ts) 负责把稳定的服务端文本映射到 i18n 键。
-- [`observer-status-content.tsx`](./src/routes/monitoring/-components/observer-status-content.tsx) 负责渲染本地化后的数据。
+- [`parse-status.ts`](./src/features/workbench/monitoring/lib/parse-status.ts) 负责解析传输格式。
+- [`localize-observer-status.ts`](./src/features/workbench/monitoring/lib/localize-observer-status.ts) 负责把稳定的服务端文本映射到 i18n 键。
+- [`observer-status-content.tsx`](./src/features/workbench/monitoring/components/observer-status-content.tsx) 负责渲染本地化后的数据。
 
 不要把本地化映射重新写进路由组件。
 

@@ -1,0 +1,323 @@
+import { useMutation } from '@tanstack/react-query'
+import { Link, getRouteApi, useNavigate } from '@tanstack/react-router'
+import { ArrowLeftIcon, SearchXIcon } from 'lucide-react'
+import * as React from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+
+import { Button } from '#/shared/ui/button'
+import { Card } from '#/shared/ui/card'
+
+import { EditorFooter } from '#/features/admin/gateway/components/editor-footer'
+import {
+  EmptyState,
+  ErrorState,
+  LoadingState,
+} from '#/features/admin/gateway/components/empty-state'
+import { ReadOnlyProvider } from '#/features/admin/gateway/components/read-only'
+import {
+  BackLink,
+  SectionHeader,
+} from '#/features/admin/gateway/components/section-header'
+import {
+  DeleteUpstreamButton,
+  DeleteUpstreamDialog,
+  UpstreamTest,
+} from '#/features/admin/gateway/components/upstreams-actions'
+import type { UpstreamField } from '#/features/admin/gateway/components/upstreams-form'
+import {
+  UPSTREAM_FIELD_LABELS,
+  UpstreamForm,
+} from '#/features/admin/gateway/components/upstreams-form'
+import type { Upstream, UpstreamInput } from '#/features/admin/gateway/lib/api'
+import {
+  keysUsing,
+  newObjectId,
+  saveUpstream,
+} from '#/features/admin/gateway/lib/api'
+import { toastGatewayError } from '#/features/admin/gateway/lib/error-toast'
+import { NEW_ID } from '#/features/admin/gateway/lib/search'
+import {
+  UPSTREAM_DEFAULTS,
+  toUpstreamInput,
+  validateUpstream,
+} from '#/features/admin/gateway/lib/upstream-schema'
+import {
+  useGateway,
+  useKeys,
+  useUpstreams,
+} from '#/features/admin/gateway/lib/use-gateway'
+import { isValid } from '#/features/admin/gateway/lib/validation'
+
+const route = getRouteApi('/admin/gateway/upstreams/$upstreamId')
+
+/** Create (`$upstreamId` = `new`) or edit an upstream. */
+export function UpstreamEditorPage() {
+  const { upstreamId } = route.useParams()
+  return <UpstreamEditor key={upstreamId} upstreamId={upstreamId} />
+}
+
+/** Loads the upstream (unless creating one) and shows the editor or a state. */
+export function UpstreamEditor({ upstreamId }: { upstreamId: string }) {
+  const { t } = useTranslation('gateway')
+  const { readOnly } = useGateway()
+  const isNew = upstreamId === NEW_ID
+  const upstreams = useUpstreams({ enabled: !isNew })
+  const keys = useKeys({ enabled: !isNew })
+
+  // The read-only notice above the tabs explains why and offers to unlock.
+  if (isNew && readOnly)
+    return (
+      <BackLink
+        to="/admin/gateway/upstreams"
+        label={t('upstreams.editor.back')}
+      />
+    )
+  if (isNew) return <UpstreamEditorForm />
+
+  const stored = upstreams.data?.find((item) => item.id === upstreamId)
+  if (stored) {
+    return (
+      <UpstreamEditorForm
+        key={`${stored.id}:${stored.revision}:${readOnly}`}
+        stored={stored}
+        usedBy={keysUsing(keys.data, { upstreamId: stored.id })}
+      />
+    )
+  }
+
+  let state: React.ReactNode
+  if (upstreams.isPending) {
+    state = <LoadingState />
+  } else if (upstreams.isError) {
+    state = (
+      <ErrorState
+        title={t('upstreams.loadFailed')}
+        error={upstreams.error}
+        retrying={upstreams.isFetching}
+        onRetry={() => void upstreams.refetch()}
+      />
+    )
+  } else {
+    state = (
+      <EmptyState
+        icon={<SearchXIcon />}
+        title={t('upstreams.editor.notFound.title')}
+        description={t('upstreams.editor.notFound.description')}
+        action={
+          <Button
+            render={<Link to="/admin/gateway/upstreams" />}
+            nativeButton={false}
+            variant="outline"
+            size="sm"
+          >
+            <ArrowLeftIcon />
+            {t('upstreams.editor.back')}
+          </Button>
+        }
+      />
+    )
+  }
+  return (
+    <div className="flex w-full min-w-0 flex-col gap-5">
+      <BackLink
+        to="/admin/gateway/upstreams"
+        label={t('upstreams.editor.back')}
+      />
+      <Card className="py-0">{state}</Card>
+    </div>
+  )
+}
+
+/** Trims text a user may paste with stray spaces before saving. */
+function cleanInput(input: UpstreamInput): UpstreamInput {
+  return {
+    ...input,
+    name: input.name.trim(),
+    base_url: input.base_url.trim(),
+    api_key: input.api_key.trim(),
+  }
+}
+
+type UpstreamEditorFormProps = {
+  /** The saved upstream; absent when creating one. */
+  stored?: Upstream
+  /** Keys that use the saved upstream, once known. */
+  usedBy?: number
+}
+
+function UpstreamEditorForm({ stored, usedBy }: UpstreamEditorFormProps) {
+  const { t } = useTranslation('gateway')
+  const navigate = useNavigate()
+  const { connection, invalidate, readOnly } = useGateway()
+  const [id] = React.useState(() => stored?.id ?? newObjectId())
+  const [initial] = React.useState(() =>
+    stored ? toUpstreamInput(stored) : UPSTREAM_DEFAULTS,
+  )
+  const [draft, setDraft] = React.useState(initial)
+  const [visited, setVisited] = React.useState<ReadonlySet<UpstreamField>>(
+    () => new Set(),
+  )
+  const [deleting, setDeleting] = React.useState<Upstream | null>(null)
+
+  const errors = React.useMemo(
+    () => validateUpstream(draft, stored),
+    [draft, stored],
+  )
+  const valid = isValid(errors)
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial)
+
+  const visit = React.useCallback((field: UpstreamField) => {
+    setVisited((current) =>
+      current.has(field) ? current : new Set(current).add(field),
+    )
+  }, [])
+
+  /** Sets a field without visiting it, for values the form fills in itself. */
+  const fill = React.useCallback(
+    <TField extends UpstreamField>(
+      field: TField,
+      value: UpstreamInput[TField],
+    ) => {
+      setDraft((current) => ({ ...current, [field]: value }))
+    },
+    [],
+  )
+
+  const change = React.useCallback(
+    <TField extends UpstreamField>(
+      field: TField,
+      value: UpstreamInput[TField],
+    ) => {
+      fill(field, value)
+      visit(field)
+    },
+    [fill, visit],
+  )
+
+  const errorFor = (field: UpstreamField) => {
+    const issue = errors[field]
+    // The editor never picks a protocol the provider lacks, so that error
+    // comes from a stored upstream and shows before any field is visited.
+    const shown = visited.has(field) || field === 'protocol'
+    return issue && shown ? t(issue.key, issue.values) : undefined
+  }
+
+  const save = useMutation({
+    mutationFn: () => saveUpstream(connection, id, cleanInput(draft)),
+    onSuccess: async (saved) => {
+      toast.success(
+        t(stored ? 'upstreams.toast.saved' : 'upstreams.toast.created', {
+          name: saved.name,
+        }),
+      )
+      await invalidate('upstreams')
+      await navigate({ to: '/admin/gateway/upstreams' })
+    },
+    onError: (error) => toastGatewayError(t, error),
+  })
+
+  const canSave = !readOnly && dirty && valid && !save.isPending
+  const missing = Object.keys(errors)
+    .map((field) => UPSTREAM_FIELD_LABELS[field as UpstreamField])
+    .filter((label): label is string => Boolean(label))
+    .map((label) => t(`upstreams.form.${label}.label`))
+    .join(t('upstreams.editor.separator'))
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (canSave) save.mutate()
+  }
+
+  return (
+    <>
+      <form
+        noValidate
+        className="flex w-full min-w-0 flex-col gap-5"
+        onSubmit={submit}
+      >
+        <SectionHeader
+          back={
+            <BackLink
+              to="/admin/gateway/upstreams"
+              label={t('upstreams.editor.back')}
+            />
+          }
+          title={stored ? stored.name : t('upstreams.editor.newTitle')}
+          description={
+            readOnly
+              ? undefined
+              : t(
+                  stored
+                    ? 'upstreams.editor.editDescription'
+                    : 'upstreams.editor.newDescription',
+                )
+          }
+          actions={
+            stored && !readOnly ? (
+              <>
+                <UpstreamTest
+                  upstream={stored}
+                  variant="header"
+                  note={dirty ? t('upstreams.test.savedOnly') : undefined}
+                />
+                <DeleteUpstreamButton
+                  usedBy={usedBy}
+                  onClick={() => setDeleting(stored)}
+                />
+              </>
+            ) : null
+          }
+        />
+
+        <ReadOnlyProvider value={readOnly}>
+          <fieldset disabled={readOnly} className="min-w-0">
+            <UpstreamForm
+              draft={draft}
+              stored={stored}
+              onChange={change}
+              onFill={fill}
+              onBlur={visit}
+              error={readOnly ? () => undefined : errorFor}
+            />
+          </fieldset>
+        </ReadOnlyProvider>
+
+        {readOnly ? (
+          <div className="flex items-center justify-between gap-3">
+            <Button
+              type="button"
+              nativeButton={false}
+              variant="outline"
+              render={<Link to="/admin/gateway/upstreams" />}
+            >
+              {t('actions.back')}
+            </Button>
+            {stored ? (
+              <UpstreamTest upstream={stored} variant="header" />
+            ) : null}
+          </div>
+        ) : (
+          <EditorFooter
+            status={
+              dirty && missing
+                ? t('upstreams.editor.missing', { fields: missing })
+                : undefined
+            }
+            cancelTo="/admin/gateway/upstreams"
+            saveLabel={t(stored ? 'actions.save' : 'upstreams.editor.create')}
+            saving={save.isPending}
+            disabled={!canSave}
+          />
+        )}
+      </form>
+      <DeleteUpstreamDialog
+        upstream={deleting}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null)
+        }}
+        onDeleted={() => void navigate({ to: '/admin/gateway/upstreams' })}
+      />
+    </>
+  )
+}

@@ -1,5 +1,5 @@
+import { UserManagementPanel } from '#/features/admin/users/page'
 import { createFileRoute } from '@tanstack/react-router'
-import { UserManagementPanel } from './route'
 
 export const Route = createFileRoute('/admin/users/')({
   component: UserManagementPanel,

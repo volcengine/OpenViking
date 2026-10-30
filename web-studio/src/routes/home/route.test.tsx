@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { ComponentType } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   act,
   cleanup,
@@ -8,10 +8,10 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ComponentType } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { Route } from './route'
+import { Route } from '#/routes/home/route'
 
 const state = vi.hoisted(() => ({
   role: 'user',
@@ -19,7 +19,7 @@ const state = vi.hoisted(() => ({
   tokens: vi.fn(),
   commits: vi.fn(),
 }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
       baseUrl: 'http://localhost:1933',
@@ -32,7 +32,7 @@ vi.mock('#/hooks/use-app-connection', () => ({
     isConnectionRoleLoading: false,
   }),
 }))
-vi.mock('./-lib/api', () => ({
+vi.mock('#/features/workbench/home/lib/api', () => ({
   fetchConsoleDashboardSummary: state.summary,
   fetchConsoleTokenSeries: state.tokens,
   fetchConsoleContextCommits: state.commits,

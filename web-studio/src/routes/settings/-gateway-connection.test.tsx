@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { GatewayConnectionSettings } from '#/features/connection/components/gateway-connection-settings'
 import {
   cleanup,
   fireEvent,
@@ -7,7 +8,6 @@ import {
   waitFor,
 } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { GatewayConnectionSettings } from './-components/gateway-connection-settings'
 
 const { health, saveConnection, navigate, connectionState } = vi.hoisted(
   () => ({
@@ -28,10 +28,10 @@ const { health, saveConnection, navigate, connectionState } = vi.hoisted(
     },
   }),
 )
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ ...connectionState, saveConnection }),
 }))
-vi.mock('#/lib/connection/health', async (importOriginal) => ({
+vi.mock('#/features/connection/lib/health', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   fetchServerHealth: health,
 }))

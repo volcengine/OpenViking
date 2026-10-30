@@ -1,0 +1,54 @@
+// @vitest-environment jsdom
+import { useDefaultConversationTitles } from '#/features/workbench/sessions/lib/use-default-conversation-titles'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, renderHook, waitFor } from '@testing-library/react'
+import { afterEach, expect, it, vi } from 'vitest'
+
+const mocks = vi.hoisted(() => ({ fetch: vi.fn(), save: vi.fn() }))
+vi.mock('#/features/workbench/sessions/lib/api', () => ({
+  fetchSessionFirstTitle: mocks.fetch,
+}))
+vi.mock('#/features/workbench/sessions/lib/use-session-titles', () => ({
+  useSessionTitles: () => ({
+    getTitle: (id: string) =>
+      id === 'custom'
+        ? 'My title'
+        : id === 'filesystem-draft'
+          ? '新建文件系统会话'
+          : id,
+    setTitle: mocks.save,
+  }),
+}))
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
+it('backfills the first user text without fetching or replacing a custom title', async () => {
+  mocks.fetch.mockResolvedValue('First question')
+  const client = new QueryClient()
+  renderHook(
+    () =>
+      useDefaultConversationTitles('account', [
+        'missing',
+        'filesystem-draft',
+        'custom',
+      ]),
+    {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    },
+  )
+  await waitFor(() =>
+    expect(mocks.save).toHaveBeenCalledWith('missing', 'First question'),
+  )
+  await waitFor(() =>
+    expect(mocks.save).toHaveBeenCalledWith(
+      'filesystem-draft',
+      'First question',
+    ),
+  )
+  expect(mocks.fetch).toHaveBeenCalledWith('missing')
+  expect(mocks.fetch).toHaveBeenCalledWith('filesystem-draft')
+  expect(mocks.fetch).toHaveBeenCalledTimes(2)
+})

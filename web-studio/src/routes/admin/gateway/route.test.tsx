@@ -14,9 +14,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { routeTree } from '#/routeTree.gen'
 
-import { GatewayError } from './-lib/api'
-import type * as Api from './-lib/api'
-import { GatewayLayout, gatewayTabFor } from './-components/gateway-layout'
+import {
+  GatewayLayout,
+  gatewayTabFor,
+} from '#/features/admin/gateway/components/gateway-layout'
+import type * as Api from '#/features/admin/gateway/lib/api'
+import { GatewayError } from '#/features/admin/gateway/lib/api'
 
 const state = vi.hoisted(() => ({
   role: 'admin',
@@ -29,11 +32,11 @@ const api = vi.hoisted(() => ({
   getAccess: vi.fn(),
 }))
 
-vi.mock('#/hooks/use-studio-service', () => ({
+vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => ({ ready: true, provider: 'opensource' }),
 }))
 
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
       baseUrl: 'http://localhost:1933',
@@ -54,7 +57,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
     i18n: { resolvedLanguage: 'en' },
   }),
 }))
-vi.mock('./-lib/api', async (importOriginal) => ({
+vi.mock('#/features/admin/gateway/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof Api>()),
   getConnectionInfo: api.getConnectionInfo,
   getAccess: api.getAccess,

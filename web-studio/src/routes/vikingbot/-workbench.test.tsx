@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
+import { VikingBotPage } from '#/features/workbench/vikingbot/workbench-page'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { VikingBotPage } from './-workbench-page'
 
 const admin = vi.hoisted(() => ({
   capabilities: vi.fn(),
   connections: vi.fn(),
   histories: vi.fn(),
 }))
-vi.mock('#/routes/admin/vikingbot/-api', () => ({
+vi.mock('#/features/admin/vikingbot/api', () => ({
   getCapabilities: admin.capabilities,
   getConnections: admin.connections,
   getConversations: admin.histories,
@@ -19,13 +19,13 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     identityScopeKey: 'root-and-user',
     connection: { apiKey: 'user-key', adminApiKey: 'root-key' },
   }),
 }))
-vi.mock('#/lib/sessions/use-sessions', () => ({
+vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
   useBotHealth: () => ({ isError: false, isPending: false }),
   useSessionListByRecency: () => ({
     data: [
@@ -37,19 +37,22 @@ vi.mock('#/lib/sessions/use-sessions', () => ({
     ],
   }),
 }))
-vi.mock('#/lib/sessions/use-session-titles', () => ({
+vi.mock('#/features/workbench/sessions/lib/use-session-titles', () => ({
   useSessionTitles: () => ({
     getTitle: (id: string) => id,
     removeTitle: vi.fn(),
   }),
 }))
-vi.mock('#/lib/sessions/use-default-conversation-titles', () => ({
-  useDefaultConversationTitles: vi.fn(),
-}))
-vi.mock('#/components/sessions/delete-conversation', () => ({
+vi.mock(
+  '#/features/workbench/sessions/lib/use-default-conversation-titles',
+  () => ({
+    useDefaultConversationTitles: vi.fn(),
+  }),
+)
+vi.mock('#/features/workbench/sessions/components/delete-conversation', () => ({
   DeleteConversation: () => null,
 }))
-vi.mock('#/routes/sessions/-components/thread', () => ({
+vi.mock('#/features/workbench/sessions/components/thread', () => ({
   Thread: ({ sessionId }: { sessionId: string }) => (
     <p data-testid="thread">{sessionId}</p>
   ),

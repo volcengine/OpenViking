@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { PermissionsPage } from '#/features/resource-acl/components/permissions-page'
+import { OvClientError } from '#/shared/api/ov-client/index'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   cleanup,
   render,
@@ -8,9 +10,7 @@ import {
   within,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { OvClientError } from '#/lib/ov-client'
-import { PermissionsPage } from './-components/permissions-page'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const root = 'viking://resources/'
 const mocks = vi.hoisted(() => ({
@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   get: vi.fn(),
 }))
-vi.mock('#/hooks/use-acl-management', () => ({
+vi.mock('#/features/resource-acl/hooks/use-acl-management', () => ({
   useAclManagement: () => ({
     allowed: mocks.allowed,
     hasDataIdentity: true,
@@ -32,19 +32,22 @@ vi.mock('#/hooks/use-acl-management', () => ({
     api: { get: mocks.get, listDirectory: mocks.list },
   }),
 }))
-vi.mock('#/components/account-acl-settings', () => ({
+vi.mock('#/features/resource-acl/components/account-acl-settings', () => ({
   AccountAclSettings: ({ inPopover }: { inPopover?: boolean }) => (
     <div data-testid={inPopover ? 'advanced-settings' : 'account-settings'} />
   ),
 }))
-vi.mock('#/components/resource-permissions', () => ({
+vi.mock('#/features/resource-acl/components/resource-permissions', () => ({
   ResourcePermissionsPanel: ({ uri }: { uri: string }) => (
     <div data-testid="editor">{uri}</div>
   ),
 }))
-vi.mock('#/components/resource-acl-identity-recovery', () => ({
-  ResourceAclIdentityRecovery: () => <div data-testid="identity-recovery" />,
-}))
+vi.mock(
+  '#/features/resource-acl/components/resource-acl-identity-recovery',
+  () => ({
+    ResourceAclIdentityRecovery: () => <div data-testid="identity-recovery" />,
+  }),
+)
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))

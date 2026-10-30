@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import type { ComponentType } from 'react'
+import { Route } from '#/routes/admin/route'
 import { cleanup, render, screen } from '@testing-library/react'
+import type { ComponentType } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Route } from './route'
 
 const state = vi.hoisted(() => ({
   canManage: false,
@@ -10,8 +10,10 @@ const state = vi.hoisted(() => ({
   pathname: '/admin/users',
   gatewayHost: false,
 }))
-vi.mock('#/hooks/use-studio-mode', () => ({ useStudioMode: () => state }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-studio-mode', () => ({
+  useStudioMode: () => state,
+}))
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     isConnectionRoleLoading: state.loading,
     isGatewayHost: state.gatewayHost,

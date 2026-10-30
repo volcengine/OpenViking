@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest'
+import type { Connection } from '#/features/admin/vikingbot/api'
 import {
   createConnection,
   deleteConnection,
@@ -7,9 +7,12 @@ import {
   rotateCredentials,
   updateConnection,
   verifyConnection,
-} from './-api'
-import { currentOnboarding, updateOnboarding } from './-providers/feishu/api'
-import type { Connection } from './-api'
+} from '#/features/admin/vikingbot/api'
+import {
+  currentOnboarding,
+  updateOnboarding,
+} from '#/features/admin/vikingbot/providers/feishu/api'
+import { beforeEach, expect, it, vi } from 'vitest'
 
 const transport = vi.hoisted(() => ({
   get: vi.fn(),
@@ -18,7 +21,7 @@ const transport = vi.hoisted(() => ({
   delete: vi.fn(),
   accountId: 'team',
 }))
-vi.mock('#/lib/ov-client', () => ({
+vi.mock('#/shared/api/ov-client/index', () => ({
   ovClient: {
     client: transport,
     getConnection: () => ({ accountId: transport.accountId }),

@@ -96,7 +96,7 @@ API Key 模式的 User 选择器不调用 `fetchAdminUsers`，即使当前连接
 - Root／Account Admin 权限探测仅在管理态执行，离开时取消未完成的探测。`api_key` 模式以 `/health` 返回的实际角色为准；仅 trusted 管理模式需要额外探测控制面。
 - 工作台的“返回管理模式”入口可以根据本机是否配置管理凭据显示，展示入口不授予管理权限。进入管理态后才校验管理 Key，管理页面仍依据校验结果和服务端授权开放。
 - 工作台不触发 Account ACL 配置读取、管理目录枚举或管理能力诊断。Account/User 列表来自本机保存的 User Key。
-- trusted 认证在服务端要求 Root Key，无法在纯前端实现无 Root 的用户数据访问；工作台在数据组件挂载前明确拦截该模式，管理态继续支持它。
+- trusted 认证在服务端要求 Root Key；服务端确认模式后，工作台按 trusted 协议发送受信凭据及 Account/User 断言。API Key 模式禁止回退到 Root。
 
 ## Account Admin 验收
 
@@ -111,3 +111,7 @@ Admin User Key 可单独配置，无需 Root Key；服务端确认 `admin` 后�
 Trusted 工作台的 Account 选择器读取服务端 Account 目录，User 选择器读取不含凭据的用户目录；可选择已有用户，或在 User 搜索框输入其他合法 User ID 后直接切换。身份切换保留受信凭据及连接配置，清理旧身份查询缓存，不为每个 User 新建连接。普通 API Key 模式仍只展示本机已配置 Key 的身份列表。
 
 验证包括隔离 HTTP 集成测试，以及 Chrome 中使用后端真实 TrustedAuthPlugin 的本地验收环境；业务数据接口使用验收数据，没有修改现有 dev 服务的认证配置。
+
+## 前端工程结构
+
+工作台、管理后台及公共连接流程已按功能迁至 `src/features/`；外壳、导航和路由边界位于 `src/app/`。`src/routes/` 只保留路由声明，公开 URL 不变。目录职责、共享代码规则与依赖检查见[前端工程结构](./frontend-structure.md)。

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { UserKeyPage } from '#/features/connection/pages/-user-key-page'
 import {
   cleanup,
   fireEvent,
@@ -7,7 +8,6 @@ import {
   waitFor,
 } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { UserKeyPage } from './-user-key-page'
 
 const mocks = vi.hoisted(() => ({
   verify: vi.fn(),
@@ -24,18 +24,18 @@ const connection = {
   adminApiKey: 'root-key',
   apiKey: 'alice-key',
 }
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection,
     switchIdentity: mocks.switch,
     activeProfileId: 'profile',
   }),
 }))
-vi.mock('#/lib/connection/user-key', async (original) => ({
+vi.mock('#/features/connection/lib/user-key', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   verifyUserKey: mocks.verify,
 }))
-vi.mock('#/lib/connection/credential-storage', () => ({
+vi.mock('#/features/connection/lib/credential-storage', () => ({
   flushCredentialStorage: mocks.flush,
 }))
 vi.mock('@tanstack/react-router', () => ({

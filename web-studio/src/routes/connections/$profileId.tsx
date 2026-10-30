@@ -1,5 +1,5 @@
+import { ConnectionProfilesList } from '#/features/connection/components/connection-profiles'
 import { createFileRoute } from '@tanstack/react-router'
-import { ConnectionProfilesList } from '#/routes/settings/-components/connection-profiles'
 
 export const Route = createFileRoute('/connections/$profileId')({
   component: Editor,

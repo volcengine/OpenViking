@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
+import {
+  isConnectionSettingsPath,
+  newConnectionPath,
+} from '#/features/connection/lib/studio-mode'
+import { Route } from '#/routes/config'
 import { isRedirect } from '@tanstack/react-router'
 import { expect, it, vi } from 'vitest'
-import { Route } from './config'
-import { isConnectionSettingsPath, newConnectionPath } from '#/lib/studio-mode'
 
 const state = vi.hoisted(() => ({ needsSetup: true }))
-vi.mock('#/lib/connection/onboarding', () => ({
+vi.mock('#/features/connection/lib/onboarding', () => ({
   needsStudioSetup: () => state.needsSetup,
 }))
 it.each([

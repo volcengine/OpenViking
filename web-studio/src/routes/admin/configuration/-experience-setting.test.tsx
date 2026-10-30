@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { PropsWithChildren } from 'react'
+import { EvolutionSettingRow } from '#/features/admin/account-configuration/experience-setting'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   cleanup,
@@ -8,8 +8,8 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react'
+import type { PropsWithChildren } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { EvolutionSettingRow } from './-experience-setting'
 
 const state = vi.hoisted(() => ({
   mode: 'management',
@@ -17,7 +17,7 @@ const state = vi.hoisted(() => ({
   read: vi.fn(),
   write: vi.fn(),
 }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: { accountId: 'team-a' },
     connectionRole: state.role,
@@ -26,7 +26,7 @@ vi.mock('#/hooks/use-app-connection', () => ({
     studioMode: state.mode,
   }),
 }))
-vi.mock('./-experience-api', () => ({
+vi.mock('#/features/admin/account-configuration/experience-api', () => ({
   fetchAgentEvolutionStatus: state.read,
   setAgentEvolutionEnabled: state.write,
 }))

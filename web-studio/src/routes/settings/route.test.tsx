@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import type { ComponentType } from 'react'
-import { cleanup, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, render, screen } from '@testing-library/react'
+import type { ComponentType } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 
-import { Route } from './route'
+import { Route } from '#/routes/settings/route'
 
 const {
   probe,
@@ -35,8 +35,8 @@ const {
   config: { url: 'http://localhost:1933', selection: 'auto' },
   healthState: { value: null as null | Record<string, unknown> },
 }))
-vi.mock('#/lib/admin', () => ({ probeStudioConnection: probe }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/shared/api/admin', () => ({ probeStudioConnection: probe }))
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
       ...Object.assign(connectionState, {
@@ -60,7 +60,7 @@ vi.mock('react-i18next', () => ({
     i18n: { resolvedLanguage: 'en' },
   }),
 }))
-vi.mock('#/hooks/use-studio-service', () => ({
+vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => ({
     provider: serviceState.provider,
     ready: serviceState.ready,
@@ -69,12 +69,17 @@ vi.mock('#/hooks/use-studio-service', () => ({
     health: { refetch: vi.fn() },
   }),
 }))
-vi.mock('./-components/connection-profiles', () => ({
+vi.mock('#/features/connection/components/connection-profiles', () => ({
   ConnectionProfilesList: () => <span data-testid="connection-profiles" />,
 }))
-vi.mock('./-components/server-configuration', () => ({
-  ServerConfigurationEditor: () => <span data-testid="configuration-editor" />,
-}))
+vi.mock(
+  '#/features/admin/server-configuration/components/server-configuration',
+  () => ({
+    ServerConfigurationEditor: () => (
+      <span data-testid="configuration-editor" />
+    ),
+  }),
+)
 afterEach(() => {
   cleanup()
   healthState.value = null

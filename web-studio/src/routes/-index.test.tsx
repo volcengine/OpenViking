@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import type { ComponentType } from 'react'
+import { Route } from '#/routes/index'
 import { cleanup, render, screen } from '@testing-library/react'
+import type { ComponentType } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Route } from './index'
 
 const state = vi.hoisted(() => ({
   isGatewayHost: false,
@@ -18,10 +18,12 @@ const state = vi.hoisted(() => ({
   isConnectionRoleLoading: false,
   serverMode: 'api_key',
 }))
-vi.mock('#/hooks/use-studio-service', () => ({
+vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => ({ provider: state.provider }),
 }))
-vi.mock('#/hooks/use-app-connection', () => ({ useAppConnection: () => state }))
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
+  useAppConnection: () => state,
+}))
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   Navigate: ({ to }: { to: string }) => <output>{to}</output>,

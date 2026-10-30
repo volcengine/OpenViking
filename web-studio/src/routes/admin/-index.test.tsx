@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import type { ComponentType } from 'react'
+import { Route } from '#/routes/admin/index'
 import { cleanup, render, screen } from '@testing-library/react'
+import type { ComponentType } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Route } from './index'
 
 vi.mock('@tanstack/react-router', async (original) => ({
   ...(await original<object>()),

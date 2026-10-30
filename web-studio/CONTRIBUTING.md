@@ -83,9 +83,9 @@ When an endpoint returns display-oriented text such as an ASCII table:
 
 The monitoring page provides the local pattern:
 
-- [`parse-status.ts`](./src/routes/monitoring/-lib/parse-status.ts) parses the wire format.
-- [`localize-observer-status.ts`](./src/routes/monitoring/-lib/localize-observer-status.ts) maps stable server tokens to i18n keys.
-- [`observer-status-content.tsx`](./src/routes/monitoring/-components/observer-status-content.tsx) renders the localized model.
+- [`parse-status.ts`](./src/features/workbench/monitoring/lib/parse-status.ts) parses the wire format.
+- [`localize-observer-status.ts`](./src/features/workbench/monitoring/lib/localize-observer-status.ts) maps stable server tokens to i18n keys.
+- [`observer-status-content.tsx`](./src/features/workbench/monitoring/components/observer-status-content.tsx) renders the localized model.
 
 Do not copy localization mappings into route components.
 

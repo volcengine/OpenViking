@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
 import {
   createVikingBotWebSessionId,
   isVikingBotWebSession,
-} from '#/lib/sessions/vikingbot-sessions'
+} from '#/features/workbench/sessions/lib/vikingbot-sessions'
+import { describe, expect, it } from 'vitest'
 
 describe('VikingBot web session ownership', () => {
   it.each([

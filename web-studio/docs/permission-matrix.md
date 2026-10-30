@@ -93,7 +93,7 @@ Account Admin **不只是能看用户列表**，而是有一组本 Account 管�
 4. 工作台可见的管理入口不等于已获管理授权；进入后必须校验实际管理 Key 的服务端角色。工作台数据请求不能自动回退到 Root Key。
 5. Account Admin 的其他用户 Key 不能复制为完整凭据，是后端明确限制；Root 场景还需检查当前实际使用的管理 Key、服务端明文可用性及响应字段。
 
-依据：[前端管理能力](../src/lib/studio-permissions.ts)、[成员角色编辑](../src/routes/admin/users/-components/user-role-cell.tsx)、[控制凭据目录验证](../src/components/setup-identity-directory.tsx)。
+依据：[前端管理能力](../src/features/connection/lib/studio-permissions.ts)、[成员角色编辑](../src/features/admin/users/components/user-role-cell.tsx)、[控制凭据目录验证](../src/features/connection/components/setup-identity-directory.tsx)。
 
 本表先固定权限边界。是否共用管理入口、如何分组、工作台是否增加用户入口，后续再按这些能力和实际用户任务规划。
 

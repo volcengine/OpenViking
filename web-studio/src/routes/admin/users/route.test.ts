@@ -1,6 +1,6 @@
+import { routeTree } from '#/routeTree.gen'
 import { createMemoryHistory, createRouter } from '@tanstack/react-router'
 import { expect, it } from 'vitest'
-import { routeTree } from '#/routeTree.gen'
 
 it.each([
   ['/admin/users', '/admin/users/'],

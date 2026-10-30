@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
+import { BotManagementPage } from '#/features/admin/vikingbot/management-page'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { BotManagementPage } from './-management-page'
 
 const state = vi.hoisted(() => ({
   role: 'root',
@@ -16,21 +16,21 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     identityScopeKey: 'account-one',
     connectionRole: state.role,
   }),
 }))
-vi.mock('./-api', () => ({
+vi.mock('#/features/admin/vikingbot/api', () => ({
   getCapabilities: state.capabilities,
   getConnections: state.connections,
   getConversations: state.histories,
 }))
-vi.mock('./-components/channels', () => ({
+vi.mock('#/features/admin/vikingbot/components/channels', () => ({
   Channels: () => <p>channel editor</p>,
 }))
-vi.mock('./-components/platform-history', () => ({
+vi.mock('#/features/admin/vikingbot/components/platform-history', () => ({
   PlatformHistory: () => <p>platform messages</p>,
 }))
 const clients: QueryClient[] = []

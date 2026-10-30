@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
+import { OpenVikingConfigurationPage } from '#/features/admin/account-configuration/page'
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { OpenVikingConfigurationPage } from './-page'
 
 const state = vi.hoisted(() => ({ role: 'admin' }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: { accountId: 'team-a' },
     connectionRole: state.role,
@@ -14,7 +14,7 @@ vi.mock('#/hooks/use-app-connection', () => ({
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
-vi.mock('./-experience-setting', () => ({
+vi.mock('#/features/admin/account-configuration/experience-setting', () => ({
   EvolutionSettingRow: () => <span>experience setting</span>,
 }))
 afterEach(cleanup)

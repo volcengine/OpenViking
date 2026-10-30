@@ -1,19 +1,19 @@
 // @vitest-environment jsdom
 
-import * as React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
-  act,
 } from '@testing-library/react'
+import * as React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { WatchManagementPage } from './route'
-import type { WatchTask } from './-lib/api'
+import type { WatchTask } from '#/features/workbench/watches/lib/api'
+import { WatchManagementPage } from '#/features/workbench/watches/page'
 
 const apiMocks = vi.hoisted(() => ({
   deleteWatch: vi.fn(),
@@ -39,17 +39,17 @@ vi.mock('react-i18next', () => ({
 }))
 
 const service = vi.hoisted(() => ({ provider: 'opensource' }))
-vi.mock('#/hooks/use-studio-service', () => ({
+vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => service,
 }))
 
 vi.mock('sonner', () => ({ toast: toastMocks }))
 
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'default/default' }),
 }))
 
-vi.mock('#/routes/resources/resource-upload', () => ({
+vi.mock('#/features/workbench/resources/resource-upload', () => ({
   AddResourceForm: (props: {
     onAccepted?: (result: { rootUri: string | null }) => void
     onCompleted?: () => void
@@ -79,16 +79,16 @@ vi.mock('#/routes/resources/resource-upload', () => ({
     children,
 }))
 
-vi.mock('./-components/edit-watch-dialog', () => ({
+vi.mock('#/features/workbench/watches/components/edit-watch-dialog', () => ({
   EditWatchDialog: () => null,
 }))
 
-vi.mock('./-components/watch-history-sheet', () => ({
+vi.mock('#/features/workbench/watches/components/watch-history-sheet', () => ({
   WatchHistorySheet: ({ watch }: { watch: WatchTask | null }) =>
     watch ? <div data-testid="watch-history">{watch.toUri}</div> : null,
 }))
 
-vi.mock('./-lib/api', () => apiMocks)
+vi.mock('#/features/workbench/watches/lib/api', () => apiMocks)
 
 const watch: WatchTask = {
   createdAt: '2026-08-10T00:00:00Z',

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { verifyConnection } from '#/features/admin/vikingbot/api'
+import { GroupSetup } from '#/features/admin/vikingbot/providers/feishu/group-setup'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { GroupSetup } from './group-setup'
-import { verifyConnection } from '../../-api'
 
-vi.mock('../../-api', () => ({ verifyConnection: vi.fn() }))
+vi.mock('#/features/admin/vikingbot/api', () => ({ verifyConnection: vi.fn() }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
