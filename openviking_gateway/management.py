@@ -564,19 +564,30 @@ def register_management(app):
                 elif not generating and status == 429:
                     result.update(ok=True, reason="rate_limited")
                 elif not generating and 200 <= status < 300:
-                    try:
-                        body = json.loads(response_text) if not truncated else None
-                    except (TypeError, ValueError):
-                        body = None
-                    valid = (
-                        isinstance(body, dict)
-                        and isinstance(body.get("data"), list)
-                        and not body.get("error")
-                    )
-                    result.update(
-                        ok=valid,
-                        reason="passed" if valid else "upstream_key_rejected",
-                    )
+                    body = None
+                    if not truncated:
+                        try:
+                            body = json.loads(response_text)
+                        except (TypeError, ValueError):
+                            body = None
+                    prefix = "".join(response_text.split())
+                    if body is None and truncated and prefix.startswith(
+                        '{"object":"list","data":'
+                    ):
+                        # Too large to buffer, but the prefix proves it is a model list.
+                        result.update(ok=True, reason="passed", truncated=True)
+                    else:
+                        valid = (
+                            isinstance(body, dict)
+                            and isinstance(body.get("data"), list)
+                            and not body.get("error")
+                        )
+                        result.update(
+                            ok=valid,
+                            reason="passed" if valid else (
+                                "response_too_large" if truncated else "upstream_key_rejected"
+                            ),
+                        )
                 elif 200 <= status < 300:
                     try:
                         body = json.loads(response_text) if not truncated else None
