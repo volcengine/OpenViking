@@ -44,17 +44,22 @@ is checked against `.github/scripts/linux_runner.py` by the regression suite.
 Fork PRs may run this selection job on the shared hosts and receive no inventory
 secret. Their test code uses GitHub-hosted unless their source repository is
 explicitly trusted. Set the official repository variable
-`CI_LINUX_TRUSTED_REPOSITORIES` to a JSON list of approved source repositories,
-for example `["zhanglistar/OpenViking"]`. Names are matched exactly; this does
-not trust other repositories owned by the same user. An absent or malformed
-list trusts no forks, and non-official destination repositories remain hosted.
+`CI_LINUX_TRUSTED_REPOSITORIES` to a JSON list of approved source repositories.
+The reviewed default explicitly approves `zhanglistar/OpenViking`, including
+when repository variables are unavailable in a fork run. A visible variable
+replaces this default; `[]` disables fork trust. A malformed value trusts no
+forks. To revoke the default when variables are unavailable, remove that source
+from `DEFAULT_TRUSTED_PR_REPOSITORIES` and the embedded script. Names match
+exactly; other repositories owned by that user and non-official destinations
+remain hosted.
 
 In `auto`, the selector queries runner inventory, chooses an online idle Linux
 x64 pool (also allowing its own host, which becomes free when selection finishes),
 and alternates ties by workflow run ID. Without inventory credentials, trusted
-jobs use the selector's own host if its runner name is `openviking-ecs` or
-`ov-ci-runner`: that prepared host has just accepted the selection job and
-becomes available when it finishes. This also lets approved fork PRs use the
+jobs use `[self-hosted, Linux, X64, ci-linux-tests]` if the selector's runner name
+is `openviking-ecs` or `ov-ci-runner`. Add `ci-linux-tests` to both prepared hosts:
+GitHub can assign each dependent job to either host, instead of pinning a whole
+workflow to the selector's host. This also lets approved fork PRs use the
 self-hosted pools without receiving a secret. API failures, offline/busy
 inventory or an unrecognized selector host with no credentials fall back to
 `ubuntu-24.04`. The selector's summary records its decision. This is an
@@ -71,8 +76,9 @@ on its labels and waits for capacity; with inventory available, an unavailable
 explicit pool falls back to hosted. Untrusted fork PRs and non-official
 repositories always select hosted.
 
-Each self-hosted pool must have `[self-hosted, Linux, X64]` and its corresponding
-custom label (`openviking-ecs` or `ov-ci-runner`), plus a working Docker daemon,
+Each self-hosted pool must have `[self-hosted, Linux, X64]`, both shared labels
+(`ci-linux-selector` and `ci-linux-tests`), and its corresponding custom label
+(`openviking-ecs` or `ov-ci-runner`), plus a working Docker daemon,
 Docker socket access for the runner user, and outbound access to Actions,
 Ubuntu packages and container registries. Limit these custom labels to prepared
 hosts. Linux x64 tests run in disposable Ubuntu 24.04 containers on every pool,

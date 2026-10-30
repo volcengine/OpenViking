@@ -8,6 +8,9 @@ import urllib.request
 
 POOLS = ("openviking-ecs", "ov-ci-runner")
 HOSTED = ["ubuntu-24.04"]
+SHARED = ["self-hosted", "Linux", "X64", "ci-linux-tests"]
+# Explicitly approved fork; keep usable when fork runs cannot read repository vars.
+DEFAULT_TRUSTED_PR_REPOSITORIES = ["zhanglistar/OpenViking"]
 
 
 def trusted_source(repository, event, trusted_pr_repositories=()):
@@ -30,11 +33,11 @@ def select(pool, runners, trusted=True, run_id=0, selector_runner=""):
     if pool in POOLS and runners is None:
         return ["self-hosted", "Linux", "X64", pool], f"Explicit pool {pool}; wait for capacity"
     if pool == "auto" and runners is None and selector_runner in POOLS:
-        # Fork PRs receive no inventory secret. The prepared host running this
-        # selector has proven it can accept jobs and becomes free on completion.
+        # Fork PRs receive no inventory secret. Both prepared selector hosts
+        # carry this test label, so each dependent job can use either idle host.
         return (
-            ["self-hosted", "Linux", "X64", selector_runner],
-            f"Inventory credentials absent; use selector host: {selector_runner}",
+            SHARED,
+            "Inventory credentials absent; share prepared self-hosted pools",
         )
     candidates = []
     for runner in runners or []:
@@ -84,7 +87,10 @@ def main():
         event = json.load(stream)
     repository = os.environ["GITHUB_REPOSITORY"]
     try:
-        trusted_pr_repositories = json.loads(os.environ.get("TRUSTED_PR_REPOSITORIES", "[]"))
+        configured = os.environ.get("TRUSTED_PR_REPOSITORIES", "")
+        trusted_pr_repositories = (
+            json.loads(configured) if configured else DEFAULT_TRUSTED_PR_REPOSITORIES
+        )
         if not isinstance(trusted_pr_repositories, list) or not all(
             isinstance(source, str) and source for source in trusted_pr_repositories
         ):

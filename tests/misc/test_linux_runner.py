@@ -95,9 +95,9 @@ def test_selector_does_not_choose_its_own_offline_host():
 
 
 @pytest.mark.parametrize("pool", router.POOLS)
-def test_auto_uses_prepared_selector_host_without_inventory_credentials(pool):
+def test_auto_shares_prepared_hosts_without_inventory_credentials(pool):
     labels, reason = router.select("auto", None, selector_runner=pool)
-    assert labels == ["self-hosted", "Linux", "X64", pool]
+    assert labels == ["self-hosted", "Linux", "X64", "ci-linux-tests"]
     assert "Inventory credentials absent" in reason
     assert router.select("auto", [], selector_runner=pool)[0] == router.HOSTED
 
@@ -245,6 +245,7 @@ def test_embedded_fork_selector_ignores_workspace_imports_and_pythonpath(tmp_pat
 @pytest.mark.parametrize(
     "approved,expected_trusted",
     [
+        ("", True),
         ('["zhanglistar/OpenViking"]', True),
         ("[]", False),
         ('["other/OpenViking"]', False),
@@ -254,7 +255,7 @@ def test_embedded_fork_selector_ignores_workspace_imports_and_pythonpath(tmp_pat
         ("not-json", False),
     ],
 )
-def test_embedded_approved_fork_uses_selector_host_without_secrets(
+def test_embedded_approved_fork_shares_hosts_without_secrets(
     tmp_path, selector_host, approved, expected_trusted
 ):
     event = tmp_path / "event.json"
@@ -282,11 +283,17 @@ def test_embedded_approved_fork_uses_selector_host_without_secrets(
         capture_output=True,
         check=True,
     )
-    expected = ["self-hosted", "Linux", "X64", selector_host] if expected_trusted else router.HOSTED
+    expected = router.SHARED if expected_trusted else router.HOSTED
     assert json.loads(output.read_text().split("=", 1)[1]) == expected
     reason = "Inventory credentials absent" if expected_trusted else "Untrusted PRs"
     assert reason in result.stdout
     assert reason in summary.read_text()
+
+
+def test_workflow_preserves_missing_vars_for_explicitly_approved_fork_default():
+    env = workflow("_linux-runner.yml")["jobs"]["select"]["steps"][0]["env"]
+    assert env["TRUSTED_PR_REPOSITORIES"] == "${{ vars.CI_LINUX_TRUSTED_REPOSITORIES }}"
+    assert router.DEFAULT_TRUSTED_PR_REPOSITORIES == ["zhanglistar/OpenViking"]
 
 
 @pytest.mark.parametrize(
