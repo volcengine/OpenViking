@@ -1,6 +1,9 @@
+import ast
 import asyncio
 import base64
 import copy
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import orjson
@@ -8,7 +11,7 @@ import pytest
 from conftest import MCP_TOOLS, mcp_tool
 
 from openviking_gateway.capture import capture_messages
-from openviking_gateway.models import Policy, Upstream
+from openviking_gateway.models import WRITE_TOOLS, Policy, Upstream
 from openviking_gateway.notices import TOOL_NOTICE, tool_tail
 from openviking_gateway.storage import SQLiteKernelStore
 from openviking_gateway.tool_catalog import notice_head, select_tools, tool_block_reason
@@ -50,6 +53,33 @@ def test_default_policy_offers_read_only_and_future_tools():
         for tool in select_tools(catalog, policy)
     }
     assert names == {"find", "search", "read", "list", "grep", "glob", "health", "future"}
+
+
+def test_default_disabled_tools_cover_every_server_tool_that_changes_data():
+    # Read the server's MCP tool annotations from source; the gateway suite has no server.
+    root = Path(__file__).parents[2]
+    source = root / "openviking" / "server" / "mcp_endpoint.py"
+    changes_data = set()
+    for node in ast.walk(ast.parse(source.read_text())):
+        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            if not (isinstance(decorator, ast.Call) and ast.unparse(decorator.func) == "mcp.tool"):
+                continue
+            kwargs = {kw.arg: kw.value for kw in decorator.keywords}
+            name = kwargs["name"].value if "name" in kwargs else node.name
+            # A tool without annotations is not known to be read-only.
+            annotations = kwargs.get("annotations")
+            if annotations is None or ast.unparse(annotations) != "_READ_ONLY_TOOL_ANNOTATIONS":
+                changes_data.add(name)
+    # OpenViking marks search as modifying data, but its only write is the session's recall
+    # de-duplication record, so the gateway offers it as a read tool.
+    assert changes_data - {"search"} == set(WRITE_TOOLS) == set(Policy().disabled_tools)
+    # Studio keeps its own copy for new profiles and recommended settings.
+    studio = root / "web-studio" / "src" / "routes" / "gateway" / "-lib" / "profile-schema.ts"
+    block = re.search(r"export const WRITE_TOOLS = \[(.*?)\]", studio.read_text(), re.S)
+    assert block, "WRITE_TOOLS not found in profile-schema.ts"
+    assert re.findall(r"'([^']+)'", block.group(1)) == list(WRITE_TOOLS)
 
 
 def test_tools_default_to_all_and_only_raw_disabled_names_are_excluded():

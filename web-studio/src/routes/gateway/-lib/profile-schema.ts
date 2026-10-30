@@ -13,6 +13,7 @@ export const WRITE_TOOLS = [
   'forget',
   'set_acl',
   'cancel_watch',
+  'privacy_upsert',
 ]
 
 /** Recommended settings; identical to the gateway's own defaults. */

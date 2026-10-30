@@ -224,7 +224,7 @@ Explained in [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04
 | Studio label | API name | Default | Range | Meaning |
 | --- | --- | --- | --- | --- |
 | OpenViking tools | `gateway_tools` | `true` | | Offer OpenViking tools for Chat Completions, full-history Responses and Anthropic Messages. |
-| Tools (unchecked boxes) | `disabled_tools` | The 8 tools that change data | OpenViking tool names, without `openviking_` | Tools new conversations do not get; every other available tool is offered, including ones added later. |
+| Tools (unchecked boxes) | `disabled_tools` | The 9 tools that change data (see [Choose tools](04-openviking-tools.md#choose-tools); `search` stays selected) | OpenViking tool names, without `openviking_` | Tools new conversations do not get; every other available tool is offered, including ones added later. |
 | Show tool calls | `show_tool_calls` | `true` | | Add a one-line notice to the reply for each OpenViking tool call. |
 | Rounds per request | `tool_max_rounds` | `null` (no limit) | 1 or more | Tool rounds after which further OpenViking calls are refused. |
 | Time limit per call | `tool_timeout_seconds` | `30` (seconds) | More than 0, up to 120 | A slower call returns an error to the model. |

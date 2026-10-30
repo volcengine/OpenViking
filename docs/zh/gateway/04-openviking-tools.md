@@ -86,8 +86,8 @@ description: 让模型通过 OpenViking 网关代为执行的工具检索、读�
 
 | 默认状态 | 工具 |
 | --- | --- |
-| 勾选 | `find`、`search`、`grep`、`glob`、`list`、`tree`、`read`、`download`、`list_watches`、`get_acl`、`list_users`、`list_groups`、`health` |
-| 不勾选（会修改数据） | `remember`、`write`、`edit`、`add_resource`、`add_skill`、`forget`、`set_acl`、`cancel_watch` |
+| 勾选 | `find`、`search`、`grep`、`glob`、`list`、`tree`、`read`、`download`、`list_watches`、`get_acl`、`list_users`、`list_groups`、`privacy_tree`、`privacy_resolve`、`health` |
+| 不勾选（会修改数据） | `remember`、`write`、`edit`、`add_resource`、`add_skill`、`forget`、`set_acl`、`cancel_watch`、`privacy_upsert` |
 
 想让模型保存记忆就勾选 `remember`，想让它导入网页或附件就勾选 `add_resource`。勾选任何会修改数据的工具之前，请先看[风险和控制点](#risks-and-controls)中的警告。
 

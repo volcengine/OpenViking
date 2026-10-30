@@ -86,8 +86,8 @@ The **Tools** list in a [context profile](08-context-profiles.md#context-profile
 
 | Default | Tools |
 | --- | --- |
-| Selected | `find`, `search`, `grep`, `glob`, `list`, `tree`, `read`, `download`, `list_watches`, `get_acl`, `list_users`, `list_groups`, `health` |
-| Not selected (they change data) | `remember`, `write`, `edit`, `add_resource`, `add_skill`, `forget`, `set_acl`, `cancel_watch` |
+| Selected | `find`, `search`, `grep`, `glob`, `list`, `tree`, `read`, `download`, `list_watches`, `get_acl`, `list_users`, `list_groups`, `privacy_tree`, `privacy_resolve`, `health` |
+| Not selected (they change data) | `remember`, `write`, `edit`, `add_resource`, `add_skill`, `forget`, `set_acl`, `cancel_watch`, `privacy_upsert` |
 
 Check `remember` to let the model save memories, and `add_resource` to let it import web pages or attachments. Read the warning in [Risks and controls](#risks-and-controls) before checking any tool that changes data.
 

@@ -20,6 +20,7 @@ WRITE_TOOLS = (
     "forget",
     "set_acl",
     "cancel_watch",
+    "privacy_upsert",
 )
 
 

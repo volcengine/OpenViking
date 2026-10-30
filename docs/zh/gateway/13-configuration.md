@@ -224,7 +224,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | Studio 名称 | API 名称 | 默认值 | 取值范围 | 含义 |
 | --- | --- | --- | --- | --- |
 | OpenViking 工具 | `gateway_tools` | `true` | | 为 Chat Completions、完整历史的 Responses 和 Anthropic Messages 提供 OpenViking 工具。 |
-| 工具（未勾选的项） | `disabled_tools` | 会修改数据的 8 个工具 | OpenViking 工具原名，不带 `openviking_` | 新对话不提供这些工具，其余可用工具都提供，包括以后新增的。 |
+| 工具（未勾选的项） | `disabled_tools` | 会修改数据的 9 个工具（见[选择工具](04-openviking-tools.md#choose-tools)；`search` 仍默认勾选） | OpenViking 工具原名，不带 `openviking_` | 新对话不提供这些工具，其余可用工具都提供，包括以后新增的。 |
 | 显示工具调用 | `show_tool_calls` | `true` | | 每次 OpenViking 工具调用都在回复里加一行提示。 |
 | 每次请求的工具轮数 | `tool_max_rounds` | `null`（不限） | 1 及以上 | 工具调用达到这个轮数后，拒绝继续调用 OpenViking 工具。 |
 | 单次调用超时 | `tool_timeout_seconds` | `30`（秒） | 大于 0，最多 120 | 超时的调用向模型返回错误。 |
