@@ -22,8 +22,9 @@ Ordinary Linux x64 tests select a compute pool through `_linux-runner.yml`.
 Set repository variable `CI_LINUX_POOL` to `auto` (the default), `github-hosted`,
 `openviking-ecs`, or `ov-ci-runner`. This covers API and effect tests, the shared
 API native runtime producer, cuVS, full/lite suites, plugin tests, SDK/framework
-tests, Hermes x64, Rust tests and Gateway/chart/kind tests. Linux ARM, macOS,
-Windows, distribution builds, publishing and lightweight planning/version
+tests, Hermes x64, Rust tests and Linux musl CLI builds (including ARM64
+cross-compilation on x64), and Gateway/chart/kind tests. Native Linux ARM jobs, macOS,
+Windows, wheel distribution builds, publishing and lightweight planning/version
 checks retain their existing hosted runners.
 Manual test workflows also accept `linux_pool` to override the repository
 variable for one run; reusable full/lite workflows accept the same input.

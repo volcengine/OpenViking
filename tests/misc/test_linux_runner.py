@@ -237,6 +237,32 @@ def test_linux_jobs_route_and_bootstrap_git_before_checkout(file, jobs):
         assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in steps)
 
 
+def test_rust_linux_builds_use_selected_pool_and_isolated_container():
+    build = workflow("rust-cli.yml")["jobs"]["build"]
+    assert build["needs"] == "linux-runner"
+    assert build["runs-on"] == (
+        "${{ matrix.npm_os == 'linux' && "
+        "fromJSON(needs.linux-runner.outputs.runs_on) || matrix.os }}"
+    )
+    assert build["container"] == "${{ matrix.npm_os == 'linux' && 'ubuntu:24.04' || null }}"
+    targets = build["strategy"]["matrix"]["include"]
+    assert {row["target"] for row in targets if row["npm_os"] == "linux"} == {
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+    }
+    steps = build["steps"]
+    checkout = next(i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", ""))
+    bootstrap = next(
+        i for i, step in enumerate(steps) if step.get("uses") == "./.github/actions/linux-test-env"
+    )
+    node = next(i for i, step in enumerate(steps) if "actions/setup-node@" in step.get("uses", ""))
+    rust = next(i for i, step in enumerate(steps) if "dtolnay/rust-toolchain@" in step.get("uses", ""))
+    assert checkout < bootstrap < node < rust
+    for step in [*steps[:checkout], steps[bootstrap], steps[node]]:
+        assert step["if"] == "matrix.npm_os == 'linux'"
+    assert any("apt-get" in step.get("run", "") and "git" in step["run"] for step in steps[:checkout])
+
+
 def test_p0_is_pinned_and_gateway_resources_are_isolated():
     p0 = workflow("oc2ov_test.yml")["jobs"]["p0-tests"]
     assert p0["runs-on"] == ["self-hosted", "Linux", "X64", "openviking-ecs"]
