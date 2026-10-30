@@ -230,6 +230,9 @@ const workspace = {
       copyFailed: '复制失败，请展开命令后手动复制。',
       enable: '启用 Agent 进化',
       enableHint: '由账号管理员开启 Agent 进化，让后续会话提交生成经验。',
+      enableDev: 'Agent Evolution 由服务端配置控制',
+      enableDevHint:
+        'dev 认证模式下，Studio 无法读取或修改此账号设置。请在 ov.conf 中配置 server.agent_evolution.enabled。',
     },
     title: 'Agent 经验',
     description:

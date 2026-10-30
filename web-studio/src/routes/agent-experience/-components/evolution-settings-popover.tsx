@@ -36,10 +36,12 @@ export function EvolutionSettingsPopover() {
     connectionRole,
     identityScopeKey,
     isConnectionRoleLoading,
+    serverMode,
   } = useAppConnection()
   const queryClient = useQueryClient()
 
   const canManage =
+    serverMode !== 'dev' &&
     !isConnectionRoleLoading &&
     (connectionRole === 'admin' || connectionRole === 'root')
 

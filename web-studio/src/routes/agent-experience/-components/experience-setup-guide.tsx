@@ -17,6 +17,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from '#/components/ui/popover'
+import { useAppConnection } from '#/hooks/use-app-connection'
 import { copyTextToClipboard } from '#/lib/clipboard'
 
 import { EvolutionSettingsPopover } from './evolution-settings-popover'
@@ -27,6 +28,8 @@ const INSTALL_COMMAND =
 export function ExperienceSetupGuide() {
   const [expanded, setExpanded] = useState(false)
   const { t, i18n } = useTranslation('agentExperiencePage')
+  const { serverMode } = useAppConnection()
+  const isDevelopmentMode = serverMode === 'dev'
   const docsLanguage = i18n.language.startsWith('zh') ? 'zh' : 'en'
 
   async function copyCommand() {
@@ -131,11 +134,15 @@ export function ExperienceSetupGuide() {
           <li className="py-3">
             <div className="flex flex-wrap items-center gap-3">
               <StepNumber number={3} />
-              <span>{t('setup.enable')}</span>
+              <span>
+                {t(isDevelopmentMode ? 'setup.enableDev' : 'setup.enable')}
+              </span>
               <EvolutionSettingsPopover />
             </div>
             <p className="mt-2 text-muted-foreground sm:ml-9">
-              {t('setup.enableHint')}
+              {t(
+                isDevelopmentMode ? 'setup.enableDevHint' : 'setup.enableHint',
+              )}
             </p>
           </li>
         </ol>

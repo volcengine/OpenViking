@@ -232,6 +232,9 @@ const workspace = {
       enable: 'Enable Agent Evolution',
       enableHint:
         'Ask an account administrator to enable Agent Evolution so future session commits can generate experiences.',
+      enableDev: 'Agent Evolution is controlled by server configuration',
+      enableDevHint:
+        'Studio cannot read or change this account setting in dev auth mode. Configure server.agent_evolution.enabled in ov.conf.',
     },
     title: 'Agent Experience',
     description:
