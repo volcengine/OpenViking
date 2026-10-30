@@ -1,3 +1,4 @@
+import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import type { TFunction } from 'i18next'
 import { BotIcon, CheckIcon, CopyIcon, UserIcon } from 'lucide-react'
 import { memo, useCallback, useState } from 'react'
@@ -26,7 +27,7 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(text)
+    await copyTextToClipboard(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }, [text])

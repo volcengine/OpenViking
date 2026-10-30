@@ -13,6 +13,9 @@ const FORMAT = 'ov-credentials-aes-gcm-v1'
 const DATABASE = 'ov-studio-credentials'
 const KEY_STORE = 'keys'
 
+class CredentialStorageUnavailable extends Error {}
+class CredentialKeyMissing extends Error {}
+
 function encode(bytes: Uint8Array): string {
   return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))
 }
@@ -29,6 +32,18 @@ function isEncrypted(raw: string): boolean {
 
 /** An atomic read/create transaction makes concurrent first tabs share one key. */
 async function browserKey(create: boolean): Promise<CryptoKey> {
+  try {
+    return await loadBrowserKey(create)
+  } catch (error) {
+    if (error instanceof CredentialKeyMissing) throw error
+    throw new CredentialStorageUnavailable(
+      'Credential key storage unavailable',
+      { cause: error },
+    )
+  }
+}
+
+async function loadBrowserKey(create: boolean): Promise<CryptoKey> {
   if (
     typeof crypto === 'undefined' ||
     typeof crypto.subtle === 'undefined' ||
@@ -55,10 +70,12 @@ async function browserKey(create: boolean): Promise<CryptoKey> {
       const transaction = db.transaction(KEY_STORE, 'readwrite')
       const store = transaction.objectStore(KEY_STORE)
       let key: CryptoKey | undefined
+      let missing = false
       const request = store.get('encryption-key')
       request.onsuccess = () => {
         key = request.result ?? candidate
         if (!key) {
+          missing = true
           transaction.abort()
           return
         }
@@ -66,7 +83,11 @@ async function browserKey(create: boolean): Promise<CryptoKey> {
       }
       transaction.oncomplete = () => resolve(key!)
       transaction.onabort = transaction.onerror = () =>
-        reject(new Error('Credential key unavailable'))
+        reject(
+          missing
+            ? new CredentialKeyMissing('Credential key missing')
+            : new Error('Credential key unavailable'),
+        )
     })
   } finally {
     db.close()
@@ -201,7 +222,13 @@ export async function initializeCredentialStorage(): Promise<void> {
       : new CredentialStorage(window.localStorage, browserKey, () => {
           window.dispatchEvent(new Event('ov-credential-storage-error'))
         })
-  await storage.initialize()
+  try {
+    await storage.initialize()
+  } catch (error) {
+    if (!(error instanceof CredentialStorageUnavailable)) throw error
+    storage = new SessionCredentialStorage()
+    await storage.initialize()
+  }
   // The runtime SDK does not persist its key; remove the obsolete plaintext mirror.
   window.sessionStorage.removeItem('ov_console_api_key')
 }

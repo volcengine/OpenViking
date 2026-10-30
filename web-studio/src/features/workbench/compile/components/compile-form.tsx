@@ -1,3 +1,4 @@
+import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { ArgsEditor } from '#/features/workbench/compile/components/args-editor'
 import {
@@ -636,8 +637,7 @@ export function CompileForm({
                 try {
                   if (!validate()) return
                   const body = request()
-                  void navigator.clipboard
-                    .writeText(compileCommand(body))
+                  void copyTextToClipboard(compileCommand(body))
                     .then(() => toast.success(t('copied')))
                     .catch(setError)
                 } catch (cause) {

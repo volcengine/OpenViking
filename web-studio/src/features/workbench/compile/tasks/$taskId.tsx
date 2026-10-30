@@ -1,3 +1,4 @@
+import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import {
   ContextLink,
@@ -126,8 +127,7 @@ export function CompileDetail() {
                 aria-label={t('copyTaskId')}
                 className="inline-flex min-w-0 items-center gap-2 rounded px-2 py-1 font-mono text-xs text-muted-foreground hover:bg-muted"
                 onClick={() =>
-                  void navigator.clipboard
-                    .writeText(taskId)
+                  void copyTextToClipboard(taskId)
                     .then(() => toast.success(t('copied')))
                     .catch(() => toast.error(t('failedLoad')))
                 }

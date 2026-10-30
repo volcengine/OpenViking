@@ -1,3 +1,4 @@
+import { createRandomUuid } from '#/shared/lib/browser-crypto'
 import {
   active as activeCompileTask,
   fetchCompileSkills,
@@ -929,7 +930,7 @@ export function TerminalPanel({
   }, [history.length, running])
 
   const append = useCallback((entry: Omit<TerminalEntry, 'id'>) => {
-    const id = crypto.randomUUID()
+    const id = createRandomUuid()
     setHistory((prev) =>
       [
         ...prev,

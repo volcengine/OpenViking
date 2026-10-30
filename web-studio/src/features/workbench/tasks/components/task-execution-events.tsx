@@ -1,3 +1,4 @@
+import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import { CopyIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -27,7 +28,7 @@ export function TaskExecutionEvents({ task }: { task: TaskRecord }) {
       resource_id: task.resource_id,
     }
     try {
-      await navigator.clipboard.writeText(
+      await copyTextToClipboard(
         [
           `${t('events.context')}: ${JSON.stringify(context)}`,
           ...notices,
