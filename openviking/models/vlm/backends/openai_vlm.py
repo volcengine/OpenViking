@@ -38,6 +38,7 @@ _DASHSCOPE_HOSTS = {
     "dashscope.aliyuncs.com",
     "dashscope-intl.aliyuncs.com",
 }
+_SENSENOVA_HOST = "token.sensenova.cn"
 
 
 # These names select existing OpenAI request defaults, not general reasoning capability.
@@ -178,6 +179,25 @@ class OpenAIVLM(VLMBase):
 
         return host.lower() in _DASHSCOPE_HOSTS
 
+    def _sanitize_request_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Sanitize chat history for the configured OpenAI-compatible endpoint."""
+        sanitized = sanitize_openai_messages(messages)
+        if not self.api_base:
+            return sanitized
+
+        try:
+            host = urlparse(self.api_base).hostname or ""
+        except ValueError:
+            return sanitized
+
+        if host.lower() == _SENSENOVA_HOST:
+            # SenseNova rejects reasoning_content when an assistant message is
+            # replayed. Keep its supported reasoning alias and all other fields.
+            for message in sanitized:
+                if isinstance(message, dict) and message.get("role") == "assistant":
+                    message.pop("reasoning_content", None)
+        return sanitized
+
     def _apply_completion_params(
         self, kwargs: Dict[str, Any], thinking: bool, max_tokens: Optional[int] = None
     ) -> None:
@@ -283,7 +303,7 @@ class OpenAIVLM(VLMBase):
         max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
         effective_thinking = self.thinking if thinking is None else thinking
-        kwargs_messages = sanitize_openai_messages(
+        kwargs_messages = self._sanitize_request_messages(
             messages or [{"role": "user", "content": prompt}]
         )
         model = self.model or "gpt-4o-mini"
@@ -308,14 +328,16 @@ class OpenAIVLM(VLMBase):
     ) -> Dict[str, Any]:
         effective_thinking = self.thinking if thinking is None else thinking
         if messages:
-            kwargs_messages = sanitize_openai_messages(messages)
+            kwargs_messages = self._sanitize_request_messages(messages)
         else:
             content = []
             if images:
                 content.extend(self._prepare_image(img) for img in images)
             if prompt:
                 content.append({"type": "text", "text": prompt})
-            kwargs_messages = sanitize_openai_messages([{"role": "user", "content": content}])
+            kwargs_messages = self._sanitize_request_messages(
+                [{"role": "user", "content": content}]
+            )
 
         model = self.model or "gpt-4o-mini"
         kwargs: Dict[str, Any] = {
