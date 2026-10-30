@@ -1310,6 +1310,12 @@ class ExtractLoop:
                     self._last_llm_failure_content = content
                     self._last_parse_error = error
                     tracer.set("memory.extraction.parse_error", error)
+                    diagnostic = self._output_protocol.get_parse_error_diagnostic()
+                    if diagnostic:
+                        tracer.set(
+                            "memory.extraction.parse_diagnostic",
+                            json.dumps(diagnostic, ensure_ascii=False),
+                        )
                     # Diagnostic only; the run loop emits the WARNING/ERROR decision.
                     logger.debug(
                         "Failed to parse memory operations "
@@ -1360,11 +1366,17 @@ class ExtractLoop:
         return refetch_uris
 
     def _add_format_error_message(self, messages: List[Dict[str, Any]]) -> None:
-        """Add format error guidance message to prompt."""
+        """Use the existing repair attempt with the complete failed program and context."""
+        guidance = self._output_protocol.render_format_retry(self._last_parse_error)
+        if self._last_llm_failure_kind == "parse_error" and self._last_llm_failure_content:
+            messages.append({"role": "assistant", "content": self._last_llm_failure_content})
+            context = self._output_protocol.render_format_retry_context(self._output_context)
+            if context:
+                guidance += "\n\n" + context
         messages.append(
             {
                 "role": "user",
-                "content": self._output_protocol.render_format_retry(self._last_parse_error),
+                "content": guidance,
             }
         )
 

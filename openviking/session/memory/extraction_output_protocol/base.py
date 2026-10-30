@@ -18,11 +18,18 @@ from openviking.session.memory.merge_op import FieldType, MergeOp
 class ExtractionOutputProtocolError(ValueError):
     """A model response does not satisfy the selected output protocol."""
 
-    def __init__(self, message: str, *, allow_tool_retry: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        allow_tool_retry: bool = False,
+        diagnostic: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         # True when the failure means "the model tried to read/search from the
         # write-only SDK"; the loop should re-open native tools for the retry.
         self.allow_tool_retry = allow_tool_retry
+        self.diagnostic = diagnostic or {}
 
 
 @dataclass(slots=True)
@@ -93,6 +100,15 @@ class ExtractionOutputProtocol(ABC):
     @abstractmethod
     def render_format_retry(self, error: str | None = None) -> str:
         """Render guidance after output parsing fails."""
+
+    def render_format_retry_context(self, context: ExtractionOutputContext) -> str:
+        """Provide optional protocol-specific diagnostics and legal references."""
+        del context
+        return ""
+
+    def get_parse_error_diagnostic(self) -> dict[str, Any]:
+        """Return metadata about the last parse failure, without the failed output."""
+        return {}
 
     @abstractmethod
     def render_patch_repair(self, patch_errors: list[dict[str, Any]]) -> str:

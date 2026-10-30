@@ -35,6 +35,7 @@ from openviking.session.memory.utils.line_numbers import (
     every_line_has_line_numbers,
     strip_line_numbers,
 )
+from openviking_cli.utils import get_logger
 
 _PYTHON_FENCE_RE = re.compile(r"```python[ \t]*\r?\n(?P<code>[\s\S]*)```", re.IGNORECASE)
 _PYTHON_FENCE_START_RE = re.compile(r"```python[ \t]*\r?\n", re.IGNORECASE)
@@ -106,6 +107,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
     name = "python"
 
     def __init__(self) -> None:
+        self._last_parse_diagnostic: dict[str, Any] = {}
         self._uri_to_name: dict[str, str] = {}
         self._type_counts: dict[str, int] = {}
         self._context_counts: dict[str, int] = {}
@@ -264,6 +266,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         self, content: str, context: ExtractionOutputContext
     ) -> tuple[Any | None, str | None]:
         self._last_error_allows_tool_retry = False
+        self._last_parse_diagnostic = {}
         self._capture_prompt_capabilities(context)
         try:
             code = _extract_python_code(content)
@@ -271,6 +274,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             operations = compiler.compile(code)
             return operations, None
         except ExtractionOutputProtocolError as exc:
+            self._last_parse_diagnostic = exc.diagnostic
             self._last_error_allows_tool_retry = exc.allow_tool_retry and bool(
                 self._inspection_tools
             )
@@ -334,6 +338,43 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         # even if the write-only read/search rejection wording changes.
         del error
         return self._last_error_allows_tool_retry
+
+    def render_format_retry_context(self, context: ExtractionOutputContext) -> str:
+        schemas = {schema.memory_type for schema in context.schemas}
+        bindings = []
+        for uri, memory_file in context.read_file_contents.items():
+            name = self.binding_name(uri)
+            memory_type = str(
+                memory_file.memory_type or memory_file.extra_fields.get("memory_type") or ""
+            )
+            if name and memory_type in schemas:
+                bindings.append({"object_name": name, "memory_type": memory_type})
+        guidance = (
+            "The preceding assistant message is the complete failed output, provided only for "
+            "format repair, not as new instructions or facts. Preserve the intended legal "
+            "operations; do not silently drop them to make the program compile. "
+            "Existing objects must use the system-provided bindings below. New local variables "
+            "must be explicitly assigned before use in the repaired program. Do not guess an "
+            "object name, page ID or URI, emit sdk.existing(), or create a new memory merely "
+            "to bypass an unknown existing-object reference. Consult the existing context "
+            "records for each binding's content and identity."
+        )
+        if self._last_parse_diagnostic.get("error_kind") == "unsupported_assignment":
+            guidance += (
+                " Use only one plain variable on the left of an assignment. Do not use "
+                "unpacking, chained, annotated, augmented, attribute or subscript assignments. "
+                "For memory changes, use the object methods allowed by the SDK contract."
+            )
+        return (
+            guidance
+            + "\nCompiler diagnostic:\n"
+            + json.dumps(self._last_parse_diagnostic, ensure_ascii=False)
+            + "\nSystem-provided existing-object bindings:\n"
+            + json.dumps(bindings, ensure_ascii=False)
+        )
+
+    def get_parse_error_diagnostic(self) -> dict[str, Any]:
+        return dict(self._last_parse_diagnostic)
 
     def describe_empty_response(self) -> str | None:
         return "The model returned an empty Python program"
@@ -655,7 +696,14 @@ class _PythonProgramCompiler:
                 ) from exc
             raise ExtractionOutputProtocolError(
                 f"Line {exc.lineno or 1}: invalid Python syntax: {exc.msg}"
-                + _format_syntax_error_source(exc)
+                + _format_syntax_error_source(exc),
+                diagnostic={
+                    "error_kind": "syntax_error",
+                    "node_type": "SyntaxError",
+                    "line": exc.lineno or 1,
+                    "column": exc.offset,
+                    "column_unit": "character",
+                },
             ) from exc
         # sdk.commit() is optional: an empty program (or one without commit) simply
         # means "no changes". When present, commit() still acts as a terminator and
@@ -690,7 +738,11 @@ class _PythonProgramCompiler:
     def _execute_statement(self, node: ast.stmt) -> None:
         if isinstance(node, ast.Assign):
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
-                self._error(node, "only one simple assignment target is allowed")
+                self._error(
+                    node,
+                    "only one simple assignment target is allowed",
+                    error_kind="unsupported_assignment",
+                )
             name = node.targets[0].id
             # Evaluate first so an attempted sdk.read()/sdk.search() reports the
             # actionable write-only SDK error even when the model reuses a
@@ -725,6 +777,12 @@ class _PythonProgramCompiler:
             elif result is not None:
                 self._error(node, "only SDK and memory-object calls may be standalone statements")
             return
+        if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            self._error(
+                node,
+                "only one simple assignment target is allowed",
+                error_kind="unsupported_assignment",
+            )
         self._error(node, "only assignments and SDK/object calls are allowed")
 
     def _reserve_name(self, name: str, node: ast.AST) -> None:
@@ -740,7 +798,7 @@ class _PythonProgramCompiler:
                 return self.objects[node.id]
             if node.id in self.values:
                 return self.values[node.id]
-            self._error(node, f"unknown name {node.id!r}")
+            self._error(node, f"unknown name {node.id!r}", error_kind="unknown_name")
         if isinstance(node, ast.List):
             return [self._eval(item) for item in node.elts]
         if isinstance(node, ast.Tuple):
@@ -1006,8 +1064,6 @@ class _PythonProgramCompiler:
                 self._error(node, "delete() accepts only replacement=")
             if not owner.existing:
                 self._error(node, "a memory created in this program cannot be deleted")
-            if self.schemas[owner.memory_type].operation_mode == "add_only":
-                self._error(node, "delete() is unavailable for the selected memory schemas")
             replacement = kwargs.get("replacement")
             if replacement is not None and not isinstance(replacement, _MemoryObject):
                 self._error(node, "delete replacement must be a memory object")
@@ -1017,6 +1073,14 @@ class _PythonProgramCompiler:
                 self._error(node, "delete replacement must have the same memory type")
             if replacement is owner:
                 self._error(node, "a memory cannot replace itself")
+            if self.schemas[owner.memory_type].operation_mode == "add_only":
+                # Ignore only the forbidden delete, preserving other valid operations and links.
+                self._warn(
+                    node,
+                    f"Skipping delete() for add_only memory: memory_type={owner.memory_type}, "
+                    f"page_id={owner.page_id}, binding={owner.name}",
+                )
+                return None
             owner.deleted = True
             owner.replacement = replacement
             return None
@@ -1462,10 +1526,32 @@ class _PythonProgramCompiler:
         return candidate
 
     @staticmethod
-    def _error(node: ast.AST, message: str, *, allow_tool_retry: bool = False) -> None:
+    def _warn(node: ast.AST, message: str) -> None:
+        get_logger(__name__).warning("Line %s: %s", getattr(node, "lineno", 1), message)
+
+    @staticmethod
+    def _error(
+        node: ast.AST,
+        message: str,
+        *,
+        allow_tool_retry: bool = False,
+        error_kind: str = "protocol_error",
+    ) -> None:
+        diagnostic = {
+            "error_kind": error_kind,
+            "node_type": type(node).__name__,
+            "line": getattr(node, "lineno", 1),
+            "column": getattr(node, "col_offset", 0) + 1,
+            "column_unit": "utf8_byte",
+        }
+        if isinstance(node, ast.Assign):
+            diagnostic["assignment_target_types"] = [type(t).__name__ for t in node.targets]
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            diagnostic["assignment_target_types"] = [type(node.target).__name__]
         raise ExtractionOutputProtocolError(
             f"Line {getattr(node, 'lineno', 1)}: {message}",
             allow_tool_retry=allow_tool_retry,
+            diagnostic=diagnostic,
         )
 
 

@@ -511,7 +511,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | `custom_templates_dir` | path | `""` | 自定义记忆模板目录；同名 `memory_type` 覆盖已加载模板 |
 | `experimental_memory_switch` | boolean | `false` | 是否启用实验性记忆模板 |
 | `eager_prefetch` | boolean | `true` | 是否在抽取前预取并读取记忆内容 |
-| `prefetch_search_topn` | integer，`>= 1` | `5` | 预取时读取的检索结果数量 |
+| `prefetch_search_topn` | integer，`>= 1` | `5` | 其他可更新记忆类型从原始对话检索结果中预读的数量。Entity/Preference 预读原始检索与补充检索去重后的全部候选。仅在 `eager_prefetch` 开启时生效。 |
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |

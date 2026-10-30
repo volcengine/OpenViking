@@ -63,4 +63,10 @@ fields:
       generalize a distinct answerable fact to meet it. When updating, deduplicate exact or
       paraphrased facts about this same entity and preserve every other existing atomic fact
       unless contradicted.
+
+      When updating an existing Entity, read its complete content and prefer a local
+      patch. A new fact about the same entity is an addition unless the conversation
+      explicitly corrects or retracts an old fact. Preserve unrelated facts, exact
+      values, conditions, and stated reasons; absence from this batch is not a correction.
+      If rewriting the full content, carry those facts forward without weakening them.
     merge_op: patch

@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for JSON and restricted-Python memory extraction output protocols."""
 
+import copy
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -168,6 +170,33 @@ def _existing_preference(uri: str, topic: str, content: str, score: int = 0) -> 
 def _bind(protocol, context: ExtractionOutputContext) -> str:
     protocol.render_contract(context)
     return protocol.render_new_bindings(context, source="test read")
+
+
+@pytest.mark.asyncio
+async def test_local_patch_keeps_existing_title_and_amount():
+    old_content = "- Favorite film: Spirited Away.\n- Helmet price: 120 yuan.\n- Plays piano."
+    memory = _existing_preference(
+        "viking://user/test/memories/preferences/music.md", "music", old_content
+    )
+    context = _context([_preference_schema()], files=[memory])
+    protocol = create_extraction_output_protocol("python")
+    _bind(protocol, context)
+    binding = protocol.binding_name(memory.uri)
+    response = (
+        f'{binding}.content.edit(search="""- Plays piano.""", '
+        'replace="""- Plays piano and violin.""")\nsdk.commit()'
+    )
+
+    operations, error = protocol.parse(response, context)
+
+    assert error is None
+    from openviking.session.memory.merge_op import MergeOpFactory
+
+    content_field = context.schemas[0].fields[1]
+    new_content = await MergeOpFactory.from_field(content_field).apply(
+        old_content, operations.preferences[0].content
+    )
+    assert new_content == old_content.replace("- Plays piano.", "- Plays piano and violin.")
 
 
 def test_json_protocol_preserves_stable_parser_and_empty_contract():
@@ -722,6 +751,222 @@ def test_python_non_string_syntax_error_omits_quote_guidance():
     retry = protocol.render_format_retry("Line 3: unexpected indent")
 
     assert "offending line is shown above" not in retry
+
+
+@pytest.mark.parametrize(
+    ("program", "node_type", "targets"),
+    [
+        ("a, b = (1, 2)", "Assign", ["Tuple"]),
+        ("[a, b] = [1, 2]", "Assign", ["List"]),
+        ("a = b = 1", "Assign", ["Name", "Name"]),
+        ("preferences_1.content = 'changed'", "Assign", ["Attribute"]),
+        ("a[0] = 'changed'", "Assign", ["Subscript"]),
+        ("a: str = 'changed'", "AnnAssign", ["Name"]),
+        ("a += 1", "AugAssign", ["Name"]),
+    ],
+)
+def test_python_assignment_repair_identifies_ast_without_accepting_it(program, node_type, targets):
+    protocol = create_extraction_output_protocol("python")
+    context = _context([_preference_schema()])
+
+    operations, error = protocol.parse(program, context)
+    repair = protocol.render_format_retry_context(context)
+    diagnostic = json.loads(repair.split("Compiler diagnostic:\n")[1].split("\nSystem-")[0])
+
+    assert operations is None
+    assert "only one simple assignment target" in error
+    assert diagnostic == {
+        "error_kind": "unsupported_assignment",
+        "node_type": node_type,
+        "assignment_target_types": targets,
+        "line": 1,
+        "column": 1,
+        "column_unit": "utf8_byte",
+    }
+    assert protocol.get_parse_error_diagnostic() == diagnostic
+    assert "one plain variable" in repair
+    assert "object methods allowed by the SDK contract" in repair
+
+
+def test_python_unknown_name_repair_lists_only_bound_existing_objects():
+    uri = "viking://user/test/memories/preferences/music.md"
+    unread_uri = "viking://user/test/memories/preferences/unbound.md"
+    file = _existing_preference(uri, "music", "Original facts")
+    context = _context([_preference_schema()], files=[file])
+    protocol = create_extraction_output_protocol("python")
+    protocol.render_new_bindings(context, source="prefetch")
+    context.read_file_contents[unread_uri] = _existing_preference(unread_uri, "unbound", "Other")
+
+    operations, error = protocol.parse("missing.content.edit(search='x', replace='y')", context)
+    repair = protocol.render_format_retry_context(context)
+
+    assert operations is None and "unknown name 'missing'" in error
+    diagnostic = json.loads(repair.split("Compiler diagnostic:\n")[1].split("\nSystem-")[0])
+    assert diagnostic["error_kind"] == "unknown_name"
+    assert diagnostic["node_type"] == "Name"
+    assert diagnostic["line"] == diagnostic["column"] == 1
+    bindings = json.loads(repair.split("System-provided existing-object bindings:\n")[1])
+    assert bindings == [{"object_name": protocol.binding_name(uri), "memory_type": "preferences"}]
+    assert uri not in repair and unread_uri not in repair
+    assert "Do not guess an object name, page ID or URI" in repair
+    assert "merely to bypass an unknown existing-object reference" in repair
+
+
+@pytest.mark.parametrize(
+    ("program", "line"), [("value = 'unclosed", 1), ("a = 1\n  sdk.commit()", 2)]
+)
+def test_python_syntax_repair_preserves_error_location(program, line):
+    context = _context([_preference_schema()])
+    protocol = create_extraction_output_protocol("python")
+
+    operations, error = protocol.parse(program, context)
+    repair = protocol.render_format_retry_context(context)
+    diagnostic = json.loads(repair.split("Compiler diagnostic:\n")[1].split("\nSystem-")[0])
+
+    assert operations is None and "invalid Python syntax" in error
+    assert diagnostic["error_kind"] == "syntax_error"
+    assert diagnostic["line"] == line and diagnostic["column"] >= 1
+    # A successful parse must not leak the previous error into a later repair phase.
+    assert protocol.parse("sdk.commit()", context)[1] is None
+    assert protocol.get_parse_error_diagnostic() == {}
+    assert "Compiler diagnostic:\n{}" in protocol.render_format_retry_context(context)
+
+
+def test_json_protocol_format_context_is_backwards_compatible():
+    context = _context([_preference_schema()])
+    assert create_extraction_output_protocol("json").render_format_retry_context(context) == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_program",
+    [
+        "missing.update(content='Changed facts')",
+        "preferences_1.update(content='Do not submit partial facts')\nmissing.delete()",
+        "a, b = (1, 2)",
+        "a = b = 1",
+        "preferences_1.content = 'Changed facts'",
+        "value = 'unclosed",
+        "a = 1\n  sdk.commit()",
+    ],
+)
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+async def test_loop_repairs_complete_program_with_bindings_within_existing_budget(
+    bad_program, repair_succeeds
+):
+    uri = "viking://user/test/memories/preferences/music.md"
+    file = _existing_preference(uri, "music", "Original facts")
+    # Prove the failed response is retained in full, beyond the existing 240-char preview.
+    failed = bad_program + "\n# " + "failure context " * 100 + "END_OF_FAILED_PROGRAM\n"
+    repaired = "preferences_1.update(content='Repaired facts')\nsdk.commit()"
+
+    class Provider:
+        read_file_contents = {uri: file}
+
+        def get_memory_schemas(self, ctx):
+            return [_preference_schema()]
+
+        def get_tools(self):
+            return []
+
+        def get_extract_context(self):
+            return SimpleNamespace(page_id_map=PageIdMap())
+
+        def get_output_language(self):
+            return "en"
+
+        def instruction(self):
+            return "Extract memory operations."
+
+        async def prefetch(self):
+            return []
+
+    class Model:
+        model = "synthetic"
+
+        def __init__(self):
+            self.calls = []
+
+        async def get_completion_async(self, **kwargs):
+            self.calls.append(copy.deepcopy(kwargs))
+            assert len(self.calls) <= 2, "The repair must not add unbounded retries"
+            if len(self.calls) == 2 and repair_succeeds:
+                return repaired
+            return failed
+
+    model = Model()
+    isolation = MagicMock()
+    isolation.get_read_scope.return_value = None
+    isolation.fill_identity_fields.side_effect = lambda item, **kwargs: item
+    isolation.calculate_memory_uris.return_value = [uri]
+    loop = ExtractLoop(
+        vlm=model,
+        viking_fs=MagicMock(),
+        context_provider=Provider(),
+        isolation_handler=isolation,
+        max_iterations=1,
+    )
+    loop._check_unread_existing_files = AsyncMock(return_value={})
+    loop._validate_patch_operations = AsyncMock(return_value=[])
+    loop.finalize_operations = AsyncMock()
+    config = SimpleNamespace(
+        memory=SimpleNamespace(link_enabled=False, extraction_output_format="python")
+    )
+    with (
+        patch("openviking.session.memory.extract_loop.get_openviking_config", return_value=config),
+        patch("openviking_cli.utils.config.get_openviking_config", return_value=config),
+        patch("openviking.session.memory.extract_loop.tracer.set") as record_trace,
+    ):
+        if repair_succeeds:
+            operations, _ = await loop.run()
+            assert len(operations.upsert_operations) == 1
+            assert operations.upsert_operations[0].uris == [uri]
+            assert operations.upsert_operations[0].memory_fields["content"] == "Repaired facts"
+            loop.finalize_operations.assert_awaited_once()
+        else:
+            with pytest.raises(RuntimeError, match="failure_kind=parse_error"):
+                await loop.run()
+            loop.finalize_operations.assert_not_awaited()
+
+    assert len(model.calls) == 2
+    second = model.calls[1]["messages"]
+    failed_message = next(i for i, msg in enumerate(second) if msg.get("role") == "assistant")
+    # The parser receives the existing response cleaning (outer whitespace removed).
+    assert second[failed_message]["content"] == failed.strip()
+    feedback = second[failed_message + 1]["content"]
+    assert "Parser error: Line" in feedback
+    assert '"object_name": "preferences_1"' in feedback
+    assert "Do not guess an object name, page ID or URI" in feedback
+    assert "error_kind" in feedback and "column" in feedback
+    assert file.content == "Original facts"
+    diagnostic_records = [
+        json.loads(call.args[1])
+        for call in record_trace.call_args_list
+        if call.args[0] == "memory.extraction.parse_diagnostic"
+    ]
+    assert diagnostic_records
+    feedback_diagnostic = json.loads(
+        feedback.split("Compiler diagnostic:\n")[1].split("\nSystem-")[0]
+    )
+    assert diagnostic_records[0] == feedback_diagnostic
+    assert all("error_kind" in item and "node_type" in item for item in diagnostic_records)
+    assert "END_OF_FAILED_PROGRAM" not in json.dumps(diagnostic_records)
+
+
+@pytest.mark.parametrize("failure_kind", ["empty_response", "refusal_text", "budget_exhausted"])
+def test_format_feedback_does_not_replay_non_program_failures(failure_kind):
+    context = _context([_preference_schema()])
+    loop = ExtractLoop(vlm=SimpleNamespace(model="synthetic"), viking_fs=MagicMock())
+    loop._output_protocol = create_extraction_output_protocol("python")
+    loop._output_context = context
+    loop._last_llm_failure_kind = failure_kind
+    loop._last_llm_failure_content = "Do not repeat this non-program response"
+    messages = []
+
+    loop._add_format_error_message(messages)
+
+    assert len(messages) == 1 and messages[0]["role"] == "user"
+    assert loop._last_llm_failure_content not in messages[0]["content"]
 
 
 def test_resolution_repair_matches_protocol_output_shape():
@@ -1506,7 +1751,8 @@ def test_python_field_edit_and_drop_are_standalone_statements(operation: str):
     assert "must be standalone statements" in error
 
 
-def test_python_delete_replacement_and_links_compile_with_page_id_remapping():
+@pytest.mark.parametrize("operation_mode", ["upsert", "add_only"])
+def test_python_delete_replacement_and_links_compile_with_page_id_remapping(operation_mode):
     duplicate = _existing_preference(
         "viking://user/alice/memories/preferences/duplicate.md",
         "duplicate",
@@ -1519,7 +1765,7 @@ def test_python_delete_replacement_and_links_compile_with_page_id_remapping():
         extra_fields={"name": "openviking"},
     )
     context = _context(
-        [_preference_schema(), _project_schema()],
+        [_preference_schema(operation_mode=operation_mode), _project_schema()],
         files=[duplicate, project],
         link_enabled=True,
     )
@@ -1541,10 +1787,12 @@ sdk.commit()
     assert payload["preferences"] == [
         {"page_id": 100, "topic": "editor", "content": "Use Neovim", "score": 1}
     ]
-    assert payload["delete_ids"] == [{"delete_page_id": 1, "replacement_page_id": 100}]
+    assert payload["delete_ids"] == (
+        [{"delete_page_id": 1, "replacement_page_id": 100}] if operation_mode == "upsert" else []
+    )
     assert payload["links"] == [
         {
-            "f": 100,
+            "f": 100 if operation_mode == "upsert" else 1,
             "t": 2,
             "link_type": "related_to",
             "weight": 0.5,
@@ -1657,7 +1905,7 @@ def test_python_rejects_invalid_or_unsafe_programs(program: str, message: str):
     assert message in error
 
 
-def test_python_rejects_delete_for_add_only_schema():
+def test_python_ignores_delete_for_add_only_schema(caplog, monkeypatch):
     memory_file = _existing_preference(
         "viking://user/alice/memories/preferences/editor.md", "editor", "Use Vim"
     )
@@ -1665,27 +1913,85 @@ def test_python_rejects_delete_for_add_only_schema():
     protocol = create_extraction_output_protocol("python")
     _bind(protocol, context)
 
-    operations, error = protocol.parse("preferences_1.delete()\nsdk.commit()", context)
+    logger = logging.getLogger(
+        "openviking.session.memory.extraction_output_protocol.python_protocol"
+    )
+    monkeypatch.setattr(logger, "handlers", [caplog.handler])
+    with caplog.at_level("WARNING", logger=logger.name):
+        operations, error = protocol.parse("preferences_1.delete()\nsdk.commit()", context)
 
-    assert operations is None
-    assert "delete() is unavailable" in error
+    assert error is None
+    assert operations.model_dump() == {"preferences": []}
+    assert any(
+        record.levelname == "WARNING"
+        and record.getMessage()
+        == "Line 1: Skipping delete() for add_only memory: "
+        "memory_type=preferences, page_id=1, binding=preferences_1"
+        for record in caplog.records
+    )
 
 
-def test_python_rejects_add_only_delete_when_another_schema_enables_deletes():
+def test_python_ignores_add_only_delete_and_keeps_other_operations():
     memory_file = _existing_preference(
         "viking://user/alice/memories/preferences/editor.md", "editor", "Use Vim"
     )
+    project = MemoryFile(
+        uri="viking://user/alice/memories/projects/obsolete.md",
+        memory_type="projects",
+        content="Obsolete project",
+        extra_fields={"name": "obsolete"},
+    )
     context = _context(
         [_preference_schema(operation_mode="add_only"), _project_schema()],
-        files=[memory_file],
+        files=[memory_file, project],
     )
     protocol = create_extraction_output_protocol("python")
     _bind(protocol, context)
 
-    operations, error = protocol.parse("preferences_1.delete()\nsdk.commit()", context)
+    operations, error = protocol.parse(
+        """
+sdk.create_preferences(topic="shell", content="Use zsh", score=1)
+preferences_1.delete()
+projects_1.delete()
+sdk.create_projects(name="active", content="Active project")
+sdk.commit()
+""",
+        context,
+    )
+
+    assert error is None
+    assert operations.model_dump() == {
+        "preferences": [{"page_id": 100, "topic": "shell", "content": "Use zsh", "score": 1}],
+        "projects": [{"page_id": 101, "name": "active", "content": "Active project"}],
+        "delete_ids": [{"delete_page_id": 2, "replacement_page_id": None}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
+        ("preferences_1.delete(1)", "delete() accepts only replacement="),
+        ("preferences_1.delete(force=True)", "delete() accepts only replacement="),
+        (
+            "preferences_1.delete(replacement='invalid')",
+            "delete replacement must be a memory object",
+        ),
+        ("preferences_1.delete(replacement=preferences_1)", "a memory cannot replace itself"),
+        ("missing.delete()", "unknown name"),
+    ],
+)
+def test_python_add_only_delete_still_validates_the_call(call, message):
+    memory_file = _existing_preference(
+        "viking://user/alice/memories/preferences/editor.md", "editor", "Use Vim"
+    )
+    context = _context([_preference_schema(operation_mode="add_only")], files=[memory_file])
+    protocol = create_extraction_output_protocol("python")
+    _bind(protocol, context)
+
+    operations, error = protocol.parse(f"{call}\nsdk.commit()", context)
 
     assert operations is None
-    assert "delete() is unavailable" in error
+    assert message in error
 
 
 def test_python_aliases_non_identifier_memory_type_instead_of_raising():

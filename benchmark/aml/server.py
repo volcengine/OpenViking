@@ -11,6 +11,7 @@ import hmac
 import math
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,9 +19,19 @@ from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, Literal, 
 
 import httpx
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse, Response
 from openviking_sdk import AsyncHTTPClient, OpenVikingError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from benchmark.aml.audit import (
+    audit_event,
+    audit_fields,
+    configure_audit_logging,
+    request_audit,
+)
+from benchmark.aml.commit_guard import commit_session_with_proof
+from benchmark.aml.rerank import RerankError, RerankRetriesExhausted, VikingDBReranker
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8088
@@ -29,6 +40,7 @@ MEMORY_ROOT_URI = "viking://~/memories"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_ADD_IMAGE_BYTES = 30 * 1024 * 1024
 MAX_QUERY_IMAGE_BYTES = 30 * 1024 * 1024
+MAX_NATIVE_BATCH_MESSAGES = 100
 RETRYABLE_OPENVIKING_CODES = {
     "ABORTED",
     "DEADLINE_EXCEEDED",
@@ -66,6 +78,10 @@ class AMLSettings:
     request_timeout_seconds: float = 120.0
     extraction_timeout_seconds: float = 900.0
     task_poll_seconds: float = 1.0
+    search_candidate_limit: int | None = None
+    search_result_limit: int | None = None
+    search_score_threshold: float | None = None
+    search_rerank_config: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "openviking_url", self.openviking_url.rstrip("/"))
@@ -75,6 +91,20 @@ class AMLSettings:
             raise ValueError("OPENVIKING_ACCOUNT must not be blank")
         if self.retry_attempts < 1:
             raise ValueError("retry_attempts must be at least 1")
+        for name in ("search_candidate_limit", "search_result_limit"):
+            value = getattr(self, name)
+            if value is not None and not 1 <= value <= 1000:
+                raise ValueError(f"{name} must be between 1 and 1000")
+        if self.search_score_threshold is not None and not math.isfinite(
+            self.search_score_threshold
+        ):
+            raise ValueError("search_score_threshold must be finite")
+        if (
+            self.search_candidate_limit is not None
+            and self.search_result_limit is not None
+            and self.search_result_limit > self.search_candidate_limit
+        ):
+            raise ValueError("search_result_limit must not exceed search_candidate_limit")
         for name in (
             "retry_delay_seconds",
             "request_timeout_seconds",
@@ -99,6 +129,22 @@ class AMLSettings:
                 "AML_OV_EXTRACTION_TIMEOUT_SECONDS", 900.0
             ),
             task_poll_seconds=_positive_float_env("AML_OV_TASK_POLL_SECONDS", 1.0),
+            search_candidate_limit=(
+                _positive_int_env("AML_SEARCH_CANDIDATE_LIMIT", 200)
+                if os.getenv("AML_SEARCH_CANDIDATE_LIMIT")
+                else None
+            ),
+            search_result_limit=(
+                _positive_int_env("AML_SEARCH_RESULT_LIMIT", 20)
+                if os.getenv("AML_SEARCH_RESULT_LIMIT")
+                else None
+            ),
+            search_score_threshold=(
+                float(os.environ["AML_SEARCH_SCORE_THRESHOLD"])
+                if os.getenv("AML_SEARCH_SCORE_THRESHOLD")
+                else None
+            ),
+            search_rerank_config=os.getenv("AML_SEARCH_RERANK_CONFIG") or None,
         )
 
 
@@ -192,7 +238,7 @@ class AMLAddRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: str = Field(min_length=1)
-    messages: list[AMLMessage] = Field(min_length=1, max_length=20)
+    messages: list[AMLMessage] = Field(min_length=1)
     user_id: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
 
@@ -240,6 +286,23 @@ class OpenVikingBackendError(RuntimeError):
     pass
 
 
+def _commit_failure_kind(error: Any) -> str:
+    """Classify known task failures without putting task error text in audit logs."""
+    if not isinstance(error, str):
+        return "commit_failure_unknown"
+    if "Conflicting add/update/delete" in error:
+        return "memory_operation_conflict"
+    if "MemoryUpdateError" in error:
+        return "memory_update_error"
+    if "failure_kind=empty_response" in error:
+        return "extraction_empty_response"
+    if "failure_kind=budget_exhausted" in error or "output-token budget" in error:
+        return "extraction_output_budget"
+    if "failure_kind=parse_error" in error:
+        return "extraction_parse_error"
+    return "commit_failure_unknown"
+
+
 class OpenVikingBackend:
     def __init__(
         self,
@@ -249,6 +312,7 @@ class OpenVikingBackend:
     ) -> None:
         self.settings = settings
         self._client_factory = client_factory
+        self._user_write_locks: dict[str, asyncio.Lock] = {}
 
     def _new_client(self, user_id: str) -> AsyncHTTPClient:
         if self._client_factory is not None:
@@ -280,6 +344,14 @@ class OpenVikingBackend:
                 retryable = isinstance(exc, httpx.RequestError) or (
                     exc.code in RETRYABLE_OPENVIKING_CODES
                 )
+                audit_event(
+                    "backend_attempt_failed",
+                    operation=operation,
+                    attempt=attempt + 1,
+                    error_type=type(exc).__name__,
+                    error_code=getattr(exc, "code", None),
+                    will_retry=retryable and attempt + 1 < self.settings.retry_attempts,
+                )
                 if not retryable or attempt + 1 == self.settings.retry_attempts:
                     raise OpenVikingBackendError(f"OpenViking {operation} failed: {exc}") from exc
                 await asyncio.sleep(self.settings.retry_delay_seconds * (2**attempt))
@@ -295,33 +367,73 @@ class OpenVikingBackend:
     async def add_and_commit(
         self, *, user_id: str, session_id: str, messages: list[dict[str, Any]]
     ) -> None:
-        async with self._client(user_id) as client:
-            result = await self._retry(
-                "batch add",
-                lambda: client.batch_add_messages(session_id, messages),
+        # Serialize this user's maintenance across Sessions; independent users
+        # still run concurrently. Hold a strong lock reference through polling.
+        lock = self._user_write_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            await self._add_and_commit_locked(
+                user_id=user_id, session_id=session_id, messages=messages
             )
-            if not isinstance(result, dict) or result.get("added") != len(messages):
-                raise OpenVikingBackendError("OpenViking did not add every message")
 
-            commit = await self._retry(
+    async def _write_once(self, operation: str, call: Callable[[], Awaitable[T]]) -> T:
+        try:
+            return await call()
+        except (httpx.RequestError, OpenVikingError) as exc:
+            audit_event(
+                "backend_write_failed",
+                operation=operation,
+                error_type=type(exc).__name__,
+                error_code=getattr(exc, "code", None),
+            )
+            raise OpenVikingBackendError(f"OpenViking {operation} failed: {exc}") from exc
+
+    async def _add_and_commit_locked(
+        self, *, user_id: str, session_id: str, messages: list[dict[str, Any]]
+    ) -> None:
+        async with self._client(user_id) as client:
+            for offset in range(0, len(messages), MAX_NATIVE_BATCH_MESSAGES):
+                batch = messages[offset : offset + MAX_NATIVE_BATCH_MESSAGES]
+                result = await self._write_once(
+                    "batch add",
+                    lambda batch=batch: client.batch_add_messages(session_id, batch),
+                )
+                if not isinstance(result, dict) or result.get("added") != len(batch):
+                    raise OpenVikingBackendError("OpenViking did not add every message")
+            audit_event("messages_added", added_count=len(messages))
+
+            commit = await self._write_once(
                 "commit",
-                lambda: client.commit_session(session_id, keep_recent_count=0),
+                lambda: commit_session_with_proof(client, session_id, audit_event),
             )
             if not isinstance(commit, dict):
                 raise OpenVikingBackendError("OpenViking did not accept the commit")
             task_id = commit.get("task_id")
             if commit.get("status") != "accepted" or not isinstance(task_id, str) or not task_id:
                 raise OpenVikingBackendError("OpenViking did not accept the commit")
+            audit_fields(native_task_id=task_id)
+            audit_event("commit_accepted")
 
             deadline = time.monotonic() + self.settings.extraction_timeout_seconds
+            previous_status = None
             while True:
                 task = await self._retry("task poll", lambda: client.get_task(task_id))
                 if not isinstance(task, dict):
                     raise OpenVikingBackendError("OpenViking returned an invalid commit task")
                 task_status = task.get("status")
+                if task_status != previous_status:
+                    audit_event("commit_progress", task_status=task_status)
+                    previous_status = task_status
                 if task_status == "completed":
+                    task_result = task.get("result") or {}
+                    if isinstance(task_result, dict):
+                        audit_event("commit_completed", archive_uri=task_result.get("archive_uri"))
                     return
                 if task_status in {"failed", "cancelled"}:
+                    audit_fields(
+                        failure_stage="commit_task",
+                        failure_kind=_commit_failure_kind(task.get("error")),
+                    )
+                    audit_event("commit_failed", task_status=task_status)
                     raise OpenVikingBackendError(
                         f"OpenViking commit {task_status}: {task.get('error') or 'unknown error'}"
                     )
@@ -335,6 +447,9 @@ class OpenVikingBackend:
     async def find(
         self, *, user_id: str, query: str, limit: int, image: str | list[str] | None = None
     ) -> list[dict[str, Any]]:
+        options: dict[str, Any] = {"context_type": ["memory"], "level": 2}
+        if self.settings.search_score_threshold is not None:
+            options["score_threshold"] = self.settings.search_score_threshold
         async with self._client(user_id) as client:
             result = await self._retry(
                 "find",
@@ -342,17 +457,27 @@ class OpenVikingBackend:
                     query=query,
                     target_uri=MEMORY_ROOT_URI,
                     limit=limit,
+                    options=options,
                     **({"image": image} if image else {}),
-                    options={
-                        "context_type": ["memory"],
-                        "level": 2,
-                    },
                 ),
             )
         memories = result.get("memories") if isinstance(result, dict) else None
         if not isinstance(memories, list) or any(not isinstance(hit, dict) for hit in memories):
             raise OpenVikingBackendError("OpenViking returned an invalid find result")
         return memories
+
+    async def read_memories(self, *, user_id: str, uris: list[str]) -> list[str]:
+        async with self._client(user_id) as client:
+            slots = asyncio.Semaphore(8)
+
+            async def read_one(uri: str) -> str:
+                async with slots:
+                    content = await self._retry("read", lambda: client.read(uri))
+                if not isinstance(content, str) or not content.strip():
+                    raise OpenVikingBackendError("OpenViking returned an empty memory body")
+                return content
+
+            return await asyncio.gather(*(read_one(uri) for uri in uris))
 
 
 def _format_timestamp(timestamp_ms: int) -> str:
@@ -364,9 +489,19 @@ def _format_timestamp(timestamp_ms: int) -> str:
 
 
 class AMLAdapter:
-    def __init__(self, settings: AMLSettings, backend: OpenVikingBackend) -> None:
+    def __init__(
+        self,
+        settings: AMLSettings,
+        backend: OpenVikingBackend,
+        reranker: VikingDBReranker | None = None,
+    ) -> None:
         self.settings = settings
         self.backend = backend
+        self.reranker = reranker or (
+            VikingDBReranker(settings.search_rerank_config)
+            if settings.search_rerank_config
+            else None
+        )
 
     def authorize(self, request: Request) -> None:
         if self.settings.aml_api_key is None:
@@ -402,6 +537,7 @@ class AMLAdapter:
                 messages=messages,
             )
         except OpenVikingBackendError as exc:
+            audit_event("add_failed", error_type=type(exc).__name__)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
             ) from exc
@@ -418,19 +554,62 @@ class AMLAdapter:
         if isinstance(query, list):
             images = [part.image_url.url for part in query if isinstance(part, AMLImagePart)]
             query = "\n".join(part.text for part in query if isinstance(part, AMLTextPart))
+        image_rerank = not images or bool(query.strip())
         if request.options:
             options = "\n".join(
                 f"{index}. {option}" for index, option in enumerate(request.options, start=1)
             )
             query = f"{query}\n\nAnswer options:\n{options}"
         try:
+            result_limit = min(request.top_k, self.settings.search_result_limit or request.top_k)
             hits = await self.backend.find(
                 user_id=request.user_id,
                 query=query,
-                limit=request.top_k,
+                limit=self.settings.search_candidate_limit or request.top_k,
                 **({"image": images[0] if len(images) == 1 else images} if images else {}),
             )
-        except OpenVikingBackendError as exc:
+            if self.reranker is not None:
+                # URI is the identity; keep the first native hit before reranking.
+                candidates = []
+                seen: set[str] = set()
+                for hit in hits:
+                    uri = hit.get("uri")
+                    if not isinstance(uri, str) or not uri or uri in seen:
+                        continue
+                    seen.add(uri)
+                    candidates.append(hit)
+                if any(
+                    not isinstance(hit["uri"], str)
+                    or not hit["uri"].startswith(f"viking://user/{request.user_id}/memories/")
+                    for hit in candidates
+                ):
+                    raise OpenVikingBackendError("OpenViking returned an out-of-scope memory")
+                ranked = candidates
+                search_event = "search_image_ranked"
+                fallback_fields: dict[str, Any] = {}
+                if image_rerank:
+                    try:
+                        ranked = await self.reranker.rank(query, candidates)
+                        search_event = "search_reranked"
+                    except RerankRetriesExhausted as exc:
+                        search_event = "search_rerank_fallback"
+                        fallback_fields = {
+                            "reason": "technical_retries_exhausted",
+                            "http_status": exc.http_status,
+                            "attempts": exc.attempts,
+                        }
+                hits = ranked[:result_limit]
+                uris = [hit["uri"] for hit in hits]
+                bodies = await self.backend.read_memories(user_id=request.user_id, uris=uris)
+                hits = [{**hit, "content": body} for hit, body in zip(hits, bodies, strict=True)]
+                audit_event(
+                    search_event,
+                    candidate_count=len(candidates),
+                    selected_count=len(hits),
+                    **fallback_fields,
+                )
+        except (OpenVikingBackendError, RerankError) as exc:
+            audit_event("search_failed", error_type=type(exc).__name__)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
             ) from exc
@@ -442,7 +621,7 @@ class AMLAdapter:
             if not isinstance(uri, str) or not uri or not isinstance(content, str) or not content:
                 continue
             data.append({"id": uri, "content": content})
-            if len(data) == request.top_k:
+            if len(data) == result_limit:
                 break
         return {"data": data}
 
@@ -451,14 +630,65 @@ def create_app(
     *,
     settings: AMLSettings | None = None,
     backend: OpenVikingBackend | None = None,
+    reranker: VikingDBReranker | None = None,
 ) -> FastAPI:
     resolved_settings = settings or AMLSettings.from_env()
     resolved_backend = backend or OpenVikingBackend(resolved_settings)
-    adapter = AMLAdapter(resolved_settings, resolved_backend)
+    adapter = AMLAdapter(resolved_settings, resolved_backend, reranker)
     application = FastAPI(title="OpenViking AML Adapter", version="0.1.0")
 
-    async def require_key(request: Request) -> None:
-        adapter.authorize(request)
+    @application.middleware("http")
+    async def require_key(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        # Authenticate before routing, including docs, health, redirects and 404s.
+        trace_id = uuid.uuid4().hex
+        started = time.monotonic()
+        known_paths = {
+            "/",
+            "/health",
+            "/add",
+            "/search",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/docs/oauth2-redirect",
+        }
+        # Never log query strings or arbitrary URL paths, which may contain secrets.
+        path = request.url.path.rstrip("/") or "/"
+        with request_audit(
+            secrets=(resolved_settings.aml_api_key, resolved_settings.openviking_api_key),
+            trace_id=trace_id,
+            method=request.method,
+            path=path if path in known_paths else "<unmatched>",
+            client_ip=request.client.host if request.client else None,
+        ):
+            audit_event("request_received")
+            response = None
+            error_type = None
+            try:
+                try:
+                    adapter.authorize(request)
+                except HTTPException as exc:
+                    response = JSONResponse(
+                        status_code=exc.status_code,
+                        content={"detail": exc.detail},
+                        headers=exc.headers,
+                    )
+                else:
+                    response = await call_next(request)
+                response.headers["X-AML-Trace-Id"] = trace_id
+                return response
+            except BaseException as exc:
+                error_type = type(exc).__name__
+                raise
+            finally:
+                audit_event(
+                    "request_handled",
+                    http_status=response.status_code if response is not None else None,
+                    elapsed_ms=round((time.monotonic() - started) * 1000, 3),
+                    error_type=error_type,
+                )
 
     @application.get("/health")
     async def health() -> dict[str, str]:
@@ -469,13 +699,25 @@ def create_app(
             )
         return {"status": "ok"}
 
-    @application.post("/add", dependencies=[Depends(require_key)])
+    @application.post("/add")
     async def add(request: AMLAddRequest) -> dict[str, Any]:
+        audit_fields(
+            request_id=request.request_id,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            message_count=len(request.messages),
+            message_chars=sum(len(message.content) for message in request.messages),
+        )
+        audit_event("add_started")
         return await adapter.add(request)
 
-    @application.post("/search", dependencies=[Depends(require_key)])
+    @application.post("/search")
     async def search(request: AMLSearchRequest) -> dict[str, list[dict[str, Any]]]:
-        return await adapter.search(request)
+        audit_fields(user_id=request.user_id, top_k=request.top_k, query_chars=len(request.query))
+        audit_event("search_started")
+        result = await adapter.search(request)
+        audit_event("search_completed", result_count=len(result["data"]))
+        return result
 
     application.state.aml_adapter = adapter
     return application
@@ -494,6 +736,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    configure_audit_logging()
     uvicorn.run(
         create_app(),
         host=args.host,

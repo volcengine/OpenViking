@@ -45,7 +45,7 @@ python -m benchmark.aml.server --host 0.0.0.0 --port 8088
 OpenViking's standard `api_key` mode cannot use one root key to switch among
 dynamic AML users: in that mode a request must use the key belonging to the
 target user. `AML_API_KEY` is unrelated; it only protects this adapter's
-incoming `/add` and `/search` endpoints.
+incoming endpoints, including `/health`, documentation and unmatched routes.
 
 The adapter provides:
 
@@ -54,13 +54,34 @@ The adapter provides:
 - `POST /search`
 
 `/add` calls the OpenViking SDK's `batch_add_messages`, `commit_session`, and
-`get_task` in that order. `/search` calls OpenViking `find`, restricted to
+`get_task` in that order. Requests may contain more than 20 messages: the adapter
+sends batches of at most 100 messages and commits once after all batches succeed.
+Writes for the same user are serialized; different users remain concurrent.
+An ambiguous Add failure is returned without resending its messages. A Commit
+lock conflict is retried at most three times only when the original archive,
+unchanged Session and absent task prove it was not accepted. If that proven
+failure cleared the live file, the original archive bytes are restored using a
+revision check before retrying. Transport failures and registered tasks do not
+qualify for this recovery. `request_id` is echoed, not an idempotency key.
+
+`/search` calls OpenViking `find`, restricted to
 `viking://~/memories` and level 2 under the same AML user. Each dataset case is
 isolated by its `user_id`; session IDs only separate histories inside that
-user's space. Transient SDK calls are retried up to three times by
+user's space. Transient read-only SDK calls are retried up to three times by
 default; use `AML_RETRY_ATTEMPTS` and `AML_RETRY_DELAY_SECONDS` to adjust that
-behavior. `Token`, `Bearer`, and `X-Api-Key` authentication are accepted when
+behavior. These settings do not authorize repeating ambiguous writes.
+`Token`, `Bearer`, and `X-Api-Key` authentication are accepted when
 `AML_API_KEY` is set.
+
+Failed Commit tasks emit a metadata-only `commit_failed` audit event with the
+task ID, request trace, failure stage and a known failure category (or
+`commit_failure_unknown`). Task error text and message bodies are not added to
+the audit log. This classification does not replay Add or change task outcomes.
+
+Every response includes `X-AML-Trace-Id`. Set `AML_AUDIT_LOG_FILE` to persist
+metadata-only audit logs with private file permissions and rotation. Logs record
+request IDs, native task IDs, counts, status and timing; message/query bodies,
+credentials and arbitrary URL paths are excluded.
 
 `/add` accepts either a content string (Textual/Coding) or an ordered array of
 `text` and `image_url` parts in `messages[].content` (Multimodal). Strings are
@@ -115,9 +136,73 @@ Keep the configured dense model and dimension consistent with the existing
 index. Search responses remain text memory evidence rather than raw images.
 
 The native `find` call uses quick retrieval without reranking, even when the
-OpenViking server has a reranker configured. The adapter returns each hit's
-`content` when present, otherwise its `abstract`, without an additional
-full-text read.
+OpenViking server has a reranker configured. With no adapter rerank configuration,
+the adapter returns each hit's `content` when present, otherwise its `abstract`.
+
+### Optional reranking and full reads
+
+For the Find40/rerank40 configuration, set:
+
+```bash
+export AML_SEARCH_CANDIDATE_LIMIT=40
+export AML_SEARCH_RESULT_LIMIT=40
+export AML_SEARCH_SCORE_THRESHOLD=-1e308
+export AML_SEARCH_RERANK_CONFIG=/path/to/private-rerank.json
+```
+
+The private rerank JSON requires `ak` and `sk`. Supported settings include
+`model_name` (default `doubao-seed-rerank`), `model_version` (default `251028`),
+`batch_size` (at most 100), `threshold`, `max_concurrent` and `retry_attempts`.
+Keep credentials outside the repository.
+
+Rerank retries honor both delay-seconds and HTTP-date `Retry-After` values on
+HTTP 429 and 503. The cooldown is shared by requests using the same reranker
+instance, including when the triggering request exhausts its retry budget.
+HTTP 429 retains its minimum 65-second cooldown; invalid or missing headers on
+503 use the existing exponential backoff. Retry counts and concurrency are
+unchanged, and a valid longer server delay is not shortened by the backoff cap.
+
+The adapter deduplicates candidate URIs, verifies their user scope, reranks their
+abstracts, selects at most `min(request.top_k, AML_SEARCH_RESULT_LIMIT)` results,
+and reads their complete bodies through the public Read API. Provider document
+IDs are aligned back to input order before global sorting. Empty/invalid rerank
+responses, non-retryable provider errors or failed reads still return an error.
+When retryable HTTP failures (429/500/502/503/504) or transport errors exhaust
+the configured rerank attempts, Search skips reranking for the entire candidate
+set, keeps deduplicated native retrieval order and reads the selected full
+bodies as usual. It discards any scores from earlier successful batches and
+does not apply the rerank score threshold to unscored candidates. The
+`search_rerank_fallback` audit event records the exhausted attempt count and
+last HTTP status, when available. This fallback never replays Add.
+Image-only searches retain native candidate order because this reranker is text
+only; mixed image/text searches rerank using their text query.
+
+### Shared model admission
+
+Use the optional runtime wrapper to share concurrency, RPM, estimated TPM and
+real-throttle cooldown across native and adapter processes on the same host:
+
+```bash
+export OPENVIKING_CONFIG_FILE=/path/to/private-ov.conf
+export AML_MODEL_ADMISSION_DB=/path/to/shared/admission.sqlite
+export AML_MODEL_ADMISSION_BUDGETS=/path/to/admission.json
+
+python -m benchmark.aml.runtime native --host 127.0.0.1 --port 1933
+# In another process with the same environment:
+python -m benchmark.aml.runtime adapter --host 0.0.0.0 --port 8088
+```
+
+Copy `admission.example.json` to the deployment's configuration directory and
+choose budgets appropriate to its provider quota. Both processes must use the
+same local SQLite database. The wrapper requires the benchmark extra's
+`tiktoken`; prepopulate its standard `TIKTOKEN_CACHE_DIR` for offline startup.
+It reads model names from the native config and leaves prompts and model
+parameters unchanged. Provider HTTP 429 and error code `-2004` set a shared
+cooldown of at least 65 seconds, respecting a longer numeric Retry-After.
+Reservations are estimates; actual returned token usage is stored separately,
+and missing usage remains unknown. The example budgets are deployment settings,
+not claims about provider limits. Ordinary server entrypoints remain available
+without this wrapper.
 
 Run these modules from a source checkout with the project's Python dependencies
 installed. The standard OpenViking image and installed package do not include

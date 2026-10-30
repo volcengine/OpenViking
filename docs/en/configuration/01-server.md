@@ -527,7 +527,7 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `custom_templates_dir` | path | `""` | Custom memory template directory; a matching `memory_type` overrides the loaded template |
 | `experimental_memory_switch` | boolean | `false` | Enable experimental templates |
 | `eager_prefetch` | boolean | `true` | Search and read memories before extraction |
-| `prefetch_search_topn` | integer, `>= 1` | `5` | Results read during prefetch |
+| `prefetch_search_topn` | integer, `>= 1` | `5` | Conversation-search results read for other mutable memory types. Entity/Preference maintenance reads the full deduplicated union of conversation and supplemental searches. Applies when `eager_prefetch` is enabled. |
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |

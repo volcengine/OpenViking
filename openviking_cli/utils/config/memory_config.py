@@ -70,9 +70,10 @@ class MemoryConfig(BaseModel):
         default=5,
         ge=1,
         description=(
-            "Number of top search results to read during prefetch. "
+            "Number of top conversation-search results to read for mutable memories "
+            "other than Entity/Preference. Entity/Preference maintenance reads all "
+            "unique candidates from conversation and supplemental searches. "
             "Only applies when eager_prefetch is enabled. "
-            "When multiple directories are searched, results are merged and top-N are read."
         ),
     )
     maintenance_review_tokens: int = Field(

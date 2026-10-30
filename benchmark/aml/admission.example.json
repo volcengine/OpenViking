@@ -1,0 +1,8 @@
+{
+  "budgets": {
+    "source": {"concurrent": 40, "rpm": 240, "estimated_tpm": 4800000},
+    "mini": {"concurrent": 48, "rpm": 600, "estimated_tpm": 6000000},
+    "rerank": {"concurrent": 4, "rpm": 120, "estimated_tpm": 500000},
+    "embedding": {"concurrent": 2, "rpm": 600, "estimated_tpm": 250000}
+  }
+}

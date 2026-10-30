@@ -51,6 +51,12 @@ fields:
       events, dates, and plans. Preserve the specific choice, list members, conditions,
       exceptions, and user-stated reason or emotional meaning when they make the preference
       answerable or distinguish it from nearby preferences.
+      When updating an existing Preference for the same owner and topic, read its
+      complete content and prefer a local patch. A new choice is an addition unless
+      the conversation explicitly corrects or retracts an old choice. Preserve other
+      choices and their conditions, exceptions, and stated reasons; absence from this
+      batch is not a correction. If rewriting the full content, carry those details
+      forward without weakening them.
       Example:
       - Prefers concise written updates with decisions and next actions.
       - Chooses lightweight tools when they cover the workflow.

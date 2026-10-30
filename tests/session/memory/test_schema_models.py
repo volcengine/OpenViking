@@ -144,15 +144,40 @@ class TestSchemaModelGenerator:
 
         assert "First test field" in model.model_fields["field1"].description
 
-    def test_events_ranges_description_requires_user_source(self, real_registry):
+    def test_events_ranges_description_preserves_role_constraints(self, real_registry):
         events = real_registry.get("events")
         model = SchemaModelGenerator([events]).create_flat_data_model(events)
 
         description = model.model_fields["ranges"].description
 
-        assert "MUST include at least one user-role message" in description
-        assert "include both the originating user message and the assistant message" in description
-        assert "Never output assistant-only ranges for events" in description
+        assert "ranges MUST include at least one user-role message" in description
+        assert "Never output assistant-only ranges" in description
+        assert "supporting statements and necessary context" in description
+
+    def test_update_preservation_guidance_is_scoped_to_entity_preference_fields(
+        self, real_registry
+    ):
+        schemas = [
+            real_registry.get(name) for name in ("entities", "preferences", "events", "profile")
+        ]
+        generator = SchemaModelGenerator(schemas)
+        descriptions = {
+            schema.memory_type: generator.create_flat_data_model(schema)
+            .model_fields["content"]
+            .description
+            for schema in schemas
+            if schema.memory_type != "events"
+        }
+        assert "new fact about the same entity is an addition" in descriptions["entities"]
+        assert "new choice is an addition" in descriptions["preferences"]
+        assert "absence from this batch is not a correction" in descriptions["entities"]
+        assert "batch is not a correction" in descriptions["preferences"]
+        for schema in (schemas[2], schemas[3]):
+            model = generator.create_flat_data_model(schema)
+            assert all(
+                "is an addition unless" not in (field.description or "")
+                for field in model.model_fields.values()
+            )
 
     def test_render_description_template_conditional_branch(self):
         memory_type = MemoryTypeSchema(

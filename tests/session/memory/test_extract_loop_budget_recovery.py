@@ -288,7 +288,7 @@ class TestNoTokenCounterInference:
     async def test_stop_at_cap_is_not_truncation(self):
         """finish_reason='stop' that lands exactly on the cap is a complete
         response, not budget exhaustion: an ordinary format error gets the
-        regular single retry with the cap unchanged and no assistant replay."""
+        regular format repair with the cap unchanged and the failed program available."""
         vlm = ScriptedVLM(
             [_length_response(finish_reason="stop"), "sdk.commit()"]
         )
@@ -300,11 +300,11 @@ class TestNoTokenCounterInference:
         assert len(vlm.calls) == 2
         # No cap doubling: the retry reused the same output budget.
         assert vlm.calls[1]["max_tokens"] == _DEFAULT_CAP
-        # No replay of the failed output as an assistant message.
-        assert _assistant_contents(vlm.calls[1]["messages"]) == []
+        # A parse error gets repair context; token counts alone do not imply truncation.
+        assert _assistant_contents(vlm.calls[1]["messages"]) == [_TRUNCATED_PROGRAM.strip()]
 
     @pytest.mark.asyncio
-    async def test_ordinary_format_error_retry_keeps_cap_and_no_assistant_program(self):
+    async def test_ordinary_format_error_retry_keeps_cap_and_failed_program_context(self):
         vlm = ScriptedVLM(["this is not a python program", "sdk.commit()"])
         loop = _make_loop(vlm)
 
@@ -312,7 +312,7 @@ class TestNoTokenCounterInference:
 
         assert len(vlm.calls) == 2
         assert vlm.calls[1]["max_tokens"] == _DEFAULT_CAP
-        assert _assistant_contents(vlm.calls[1]["messages"]) == []
+        assert _assistant_contents(vlm.calls[1]["messages"]) == ["this is not a python program"]
 
 
 class TestExtractionContentBoundary:
