@@ -117,6 +117,7 @@ class PendingResponse:
         self.token_usage: Dict[str, int] = {}
         self.event = asyncio.Event()
         self.stream_queue: asyncio.Queue[Optional[ChatStreamEvent]] = asyncio.Queue()
+        self.consumer_detached = False
 
     async def add_event(self, event_type: str, data: Any):
         """Add an event to the response."""
@@ -270,6 +271,10 @@ class OpenAPIChannel(BaseChannel):
                     f"No pending request for BotChannel {channel_id} session: {session_id}"
                 )
                 return
+            if self._discard_detached_outbound(
+                self._bot_pending[channel_id], session_id, pending, msg.event_type
+            ):
+                return
 
             if (
                 msg.event_type == OutboundEventType.RESPONSE
@@ -309,6 +314,8 @@ class OpenAPIChannel(BaseChannel):
 
         if not pending:
             # No pending request for this session, ignore
+            return
+        if self._discard_detached_outbound(self._pending, session_id, pending, msg.event_type):
             return
 
         if msg.event_type == OutboundEventType.RESPONSE:
@@ -1295,6 +1302,48 @@ class OpenAPIChannel(BaseChannel):
         if storage_key in pending:
             raise HTTPException(status_code=409, detail="Session already has a request in progress")
 
+    @staticmethod
+    def _discard_detached_outbound(
+        pending_map: Dict[str, PendingResponse],
+        storage_key: str,
+        pending: PendingResponse,
+        event_type: OutboundEventType,
+    ) -> bool:
+        """Drop output after its response consumer has detached.
+
+        Keep the detached entry until the turn reaches a terminal event. This
+        preserves the one-request-per-session invariant and prevents an old
+        turn from publishing into a later request that reuses the session key.
+        """
+        if not pending.consumer_detached:
+            return False
+        if event_type in {
+            OutboundEventType.RESPONSE,
+            OutboundEventType.NO_REPLY,
+            OutboundEventType.INTERRUPT,
+        }:
+            if pending_map.get(storage_key) is pending:
+                pending_map.pop(storage_key, None)
+        return True
+
+    @staticmethod
+    def _release_or_detach_pending(
+        pending_map: Dict[str, PendingResponse],
+        storage_key: str,
+        pending: PendingResponse,
+        *,
+        published: bool,
+    ) -> None:
+        """Release a completed request or retain an in-flight detached turn."""
+        if pending_map.get(storage_key) is not pending:
+            return
+        if published and not pending.event.is_set():
+            pending.consumer_detached = True
+            pending.events.clear()
+            pending.stream_queue = asyncio.Queue()
+            return
+        pending_map.pop(storage_key, None)
+
     async def _gateway_health(self, request: Request) -> dict[str, Any]:
         from vikingbot import __version__
 
@@ -1491,6 +1540,7 @@ class OpenAPIChannel(BaseChannel):
         # Create pending response tracker
         pending = PendingResponse()
         self._pending[storage_key] = pending
+        published = False
 
         try:
             # Build session key
@@ -1514,6 +1564,7 @@ class OpenAPIChannel(BaseChannel):
             )
 
             await self.bus.publish_inbound(msg)
+            published = True
 
             # Wait for response with timeout
             try:
@@ -1539,8 +1590,12 @@ class OpenAPIChannel(BaseChannel):
             logger.exception(f"Error handling chat request: {e}")
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
         finally:
-            # Clean up pending
-            self._pending.pop(storage_key, None)
+            self._release_or_detach_pending(
+                self._pending,
+                storage_key,
+                pending,
+                published=published,
+            )
 
     async def _handle_chat_stream(self, request: ChatRequest) -> StreamingResponse:
         """Handle a streaming chat request."""
@@ -1568,6 +1623,7 @@ class OpenAPIChannel(BaseChannel):
         self._pending[storage_key] = pending
 
         async def event_generator():
+            published = False
             try:
                 # Build session key and send message
                 session_key = SessionKey(
@@ -1587,6 +1643,7 @@ class OpenAPIChannel(BaseChannel):
                 )
 
                 await self.bus.publish_inbound(msg)
+                published = True
 
                 # Stream events as they arrive
                 while True:
@@ -1604,7 +1661,12 @@ class OpenAPIChannel(BaseChannel):
                 error_event = ChatStreamEvent(event=EventType.RESPONSE, data={"error": str(e)})
                 yield f"data: {error_event.model_dump_json()}\n\n"
             finally:
-                self._pending.pop(storage_key, None)
+                self._release_or_detach_pending(
+                    self._pending,
+                    storage_key,
+                    pending,
+                    published=published,
+                )
 
         return StreamingResponse(
             event_generator(),
@@ -1684,6 +1746,7 @@ class OpenAPIChannel(BaseChannel):
         # Create pending response tracker
         pending = PendingResponse()
         self._bot_pending[channel_id][storage_key] = pending
+        published = False
 
         try:
             # Build session key with bot_api type
@@ -1708,6 +1771,7 @@ class OpenAPIChannel(BaseChannel):
             )
 
             await self.bus.publish_inbound(msg)
+            published = True
 
             # Wait for response with timeout
             try:
@@ -1733,9 +1797,13 @@ class OpenAPIChannel(BaseChannel):
             logger.exception(f"Error handling bot chat request for channel {channel_id}: {e}")
             raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
         finally:
-            # Clean up pending
             if channel_id in self._bot_pending:
-                self._bot_pending[channel_id].pop(storage_key, None)
+                self._release_or_detach_pending(
+                    self._bot_pending[channel_id],
+                    storage_key,
+                    pending,
+                    published=published,
+                )
 
     async def _handle_bot_chat_stream(
         self, channel_id: str, request: ChatRequest
@@ -1769,6 +1837,7 @@ class OpenAPIChannel(BaseChannel):
         self._bot_pending[channel_id][storage_key] = pending
 
         async def event_generator():
+            published = False
             try:
                 # Build session key with bot_api type
                 session_key = SessionKey(
@@ -1788,6 +1857,7 @@ class OpenAPIChannel(BaseChannel):
                 )
 
                 await self.bus.publish_inbound(msg)
+                published = True
 
                 # Stream events as they arrive
                 while True:
@@ -1805,9 +1875,13 @@ class OpenAPIChannel(BaseChannel):
                 error_event = ChatStreamEvent(event=EventType.RESPONSE, data={"error": str(e)})
                 yield f"data: {error_event.model_dump_json()}\n\n"
             finally:
-                # Clean up pending
                 if channel_id in self._bot_pending:
-                    self._bot_pending[channel_id].pop(storage_key, None)
+                    self._release_or_detach_pending(
+                        self._bot_pending[channel_id],
+                        storage_key,
+                        pending,
+                        published=published,
+                    )
 
         return StreamingResponse(
             event_generator(),
