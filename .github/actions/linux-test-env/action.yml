@@ -1,0 +1,7 @@
+name: Bootstrap Linux test container
+description: Supply Ubuntu 24.04 tools and a job-local home before language setup
+runs:
+  using: node24
+  main: bootstrap.mjs
+  post: cleanup.mjs
+  post-if: always()

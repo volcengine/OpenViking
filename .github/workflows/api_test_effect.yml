@@ -2,6 +2,11 @@ name: 07. API Effect Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      linux_pool:
+        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
+        required: false
+        type: string
   schedule:
     - cron: '0 1,10 * * *'
   release:
@@ -12,9 +17,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux-runner:
+    uses: ./.github/workflows/_linux-runner.yml
+    with:
+      pool: ${{ inputs.linux_pool || '' }}
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
+
   effect-tests:
+    needs: linux-runner
     name: API Effect Tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    container: ubuntu:24.04
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 120
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -27,10 +44,13 @@ jobs:
         os: [ubuntu-24.04]
 
     steps:
+      - name: Install Git before checkout
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 100
+      - uses: ./.github/actions/linux-test-env
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6

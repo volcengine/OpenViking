@@ -2,7 +2,15 @@ name: 13. _Test Suite (Full)
 
 on:
   workflow_call:
+    secrets:
+      CI_RUNNER_READ_TOKEN:
+        required: false
     inputs:
+      linux_pool:
+        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
+        required: false
+        type: string
+        default: ''
       os_json:
         description: 'JSON string of OS to run on'
         required: false
@@ -15,6 +23,10 @@ on:
         default: '["3.10", "3.11", "3.12", "3.13"]'
   workflow_dispatch:
     inputs:
+      linux_pool:
+        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
+        required: false
+        type: string
       os_json:
         description: 'JSON string of OS to run on'
         required: false
@@ -25,9 +37,21 @@ on:
         default: '["3.10", "3.11", "3.12", "3.13"]'
 
 jobs:
+  linux-runner:
+    uses: ./.github/workflows/_linux-runner.yml
+    with:
+      pool: ${{ inputs.linux_pool || '' }}
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
+
   test:
+    needs: linux-runner
     name: Full Test (${{ matrix.os }}, ${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(needs.linux-runner.outputs.runs_on) || matrix.os }}
+    container: ${{ matrix.os == 'ubuntu-24.04' && 'ubuntu:24.04' || '' }}
+    defaults:
+      run:
+        shell: ${{ contains(matrix.os, 'windows') && 'pwsh' || 'bash' }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,9 +59,14 @@ jobs:
         python-version: ${{ fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]') }}
 
     steps:
+    - name: Install Git before checkout
+      if: matrix.os == 'ubuntu-24.04'
+      run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
     - uses: actions/checkout@v6
       with:
         submodules: recursive
+    - uses: ./.github/actions/linux-test-env
+      if: matrix.os == 'ubuntu-24.04'
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v6

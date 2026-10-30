@@ -1,0 +1,35 @@
+name: Select Linux test pool
+
+on:
+  workflow_call:
+    inputs:
+      pool:
+        type: string
+        default: ''
+        required: false
+    secrets:
+      CI_RUNNER_READ_TOKEN:
+        required: false
+    outputs:
+      runs_on:
+        description: JSON runner labels for ordinary Linux x64 tests
+        value: ${{ jobs.select.outputs.runs_on }}
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      runs_on: ${{ steps.select.outputs.runs_on }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - id: select
+        env:
+          RUNNER_READ_TOKEN: ${{ github.repository == 'volcengine/OpenViking' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.CI_RUNNER_READ_TOKEN || '' }}
+          POOL: ${{ inputs.pool || vars.CI_LINUX_POOL || 'auto' }}
+        run: python3 .github/scripts/linux_runner.py --pool "$POOL"
