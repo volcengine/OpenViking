@@ -3891,7 +3891,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.31" },
     { name = "python-socketio", marker = "extra == 'bot'", specifier = ">=5.16.2" },
     { name = "python-socks", extras = ["asyncio"], marker = "extra == 'bot'", specifier = ">=2.4.0" },
-    { name = "python-telegram-bot", extras = ["socks"], marker = "extra == 'bot'", specifier = ">=21.0" },
+    { name = "python-telegram-bot", extras = ["socks"], marker = "extra == 'bot'", specifier = ">=22.4" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "qq-botpy", marker = "extra == 'bot'", specifier = ">=1.0.0" },
     { name = "ragas", marker = "extra == 'eval'", specifier = ">=0.1.0" },

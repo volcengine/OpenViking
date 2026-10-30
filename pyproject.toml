@@ -189,7 +189,7 @@ bot = [
   "mcp>=1,<2",
   # All optional features included by default
   "langfuse>=3.0.0",
-  "python-telegram-bot[socks]>=21.0",
+  "python-telegram-bot[socks]>=22.4",
   "lark-oapi>=1.0.0",
   "dingtalk-stream>=0.4.0",
   "slack-sdk>=3.26.0",
