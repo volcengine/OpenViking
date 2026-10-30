@@ -39,7 +39,9 @@ PROVIDER_BINDING = frozenset(
 # enable_fusion, res_level, max_video_frames) are intentionally not listed: they
 # are behavior/infra defaults, not tenant routing or credentials.
 PROVIDER_SPECIFIC_ISOLATED = frozenset({"extra_body", "model_path"})
-BACKEND_CONNECTIONS = frozenset({"path", "url", "volcengine", "vikingdb", "cuvs", "custom_params"})
+BACKEND_CONNECTIONS = frozenset(
+    {"path", "url", "volcengine", "vikingdb", "qdrant", "opengauss", "cuvs", "custom_params"}
+)
 
 
 def _account_values(section: Any) -> dict:
