@@ -74,12 +74,13 @@ A memory-mode task result includes the **list of changed files** for the run, wi
 | `adds` / `total_adds` | Newly created memory files (e.g. new entities produced by a split) |
 | `updates` / `total_updates` | Modified memory files (a merge target, an in-place compaction) |
 | `deletes` / `total_deletes` | Removed / merged-away memory files |
+| `skipped_operations` / `total_skipped` | Operations reported as skipped by the memory updater and their count, with reason codes; these are not file changes |
 | `trace_id` | The trace of this consolidation run, for troubleshooting |
 | `memory_types` | Types selected for this run; `memory_type` is the selected type for a type-directory request, or `null` for a root request |
 
 The list contains file URIs only, not content — a single run may touch many files, and their bodies are not returned in the result.
 
-If `errors` is non-empty and no file changes succeeded, the task is `failed` and retains its result and trace. Partial success remains `completed`, with successful changes and failures recorded separately in the lists and `errors`; callers must check `errors`, not just the task status. A no-op without errors is `completed`.
+If `errors` is non-empty and no file changes succeeded, the task is `failed` and retains its result and trace. Partial success remains `completed`, with successful changes and failures recorded separately in the lists and `errors`. Skipped operations do not change the task status. Callers should inspect both `errors` and `skipped_operations`, not just the task status.
 
 A typical merge (folding "Ah-Zhen" into "Chen Jingxian"):
 
@@ -93,6 +94,8 @@ A typical merge (folding "Ah-Zhen" into "Chen Jingxian"):
   "total_adds": 0,
   "total_updates": 1,
   "total_deletes": 1,
+  "skipped_operations": [],
+  "total_skipped": 0,
   "errors": []
 }
 ```
