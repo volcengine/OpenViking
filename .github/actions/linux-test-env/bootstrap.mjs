@@ -13,7 +13,7 @@ if (env['INPUT_INSTALL-DEPENDENCIES'] !== 'false') {
   apt-get update
   apt-get install -y --no-install-recommends \
     ca-certificates curl git sudo build-essential cmake pkg-config \
-    unzip xz-utils libssl-dev libicu74 python3 ffmpeg
+    zip unzip xz-utils libssl-dev libicu74 python3 ffmpeg
 `], { stdio: 'inherit' });
 }
 appendFileSync(env.GITHUB_ENV, `HOME=${home}\nCARGO_HOME=${home}/.cargo\nRUSTUP_HOME=${home}/.rustup\n`);
