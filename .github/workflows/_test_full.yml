@@ -27,11 +27,7 @@ on:
 jobs:
   test:
     name: Full Test (${{ matrix.os }}, ${{ matrix.python-version }})
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && matrix.os == 'ubuntu-24.04' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || matrix.os }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && matrix.os == 'ubuntu-24.04' && 'ubuntu:24.04' || null }}
-    defaults:
-      run:
-        shell: ${{ startsWith(matrix.os, 'windows') && 'pwsh' || 'bash' }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,15 +35,6 @@ jobs:
         python-version: ${{ fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]') }}
 
     steps:
-    - name: Prepare Linux CI container
-      if: github.repository == 'volcengine/OpenViking' && matrix.os == 'ubuntu-24.04'
-      working-directory: /
-      shell: bash
-      run: |
-        apt-get update
-        apt-get install -y --no-install-recommends \
-          ca-certificates git curl sudo unzip xz-utils zip jq procps \
-          build-essential cmake ccache pkg-config libssl-dev libffi-dev
     - uses: actions/checkout@v6
       with:
         submodules: recursive

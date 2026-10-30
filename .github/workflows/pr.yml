@@ -21,16 +21,11 @@ concurrency:
   group: pr-checks-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-defaults:
-  run:
-    shell: bash
-
 jobs:
   plugin-tests:
     needs: check-deps
     if: needs.check-deps.outputs.plugins_changed == 'true'
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
+    runs-on: ubuntu-24.04
     env:
       # The tests that fork whole installs, named once: the step below runs
       # exactly what the parallel run subtracts, so renaming one cannot leave
@@ -39,16 +34,6 @@ jobs:
         examples/memory-plugin-shared/install-agent-hooks.test.mjs
         examples/memory-plugin-shared/release-marketplace.test.mjs
     steps:
-      - &prepare-linux-container
-        name: Prepare Linux CI container
-        if: github.repository == 'volcengine/OpenViking'
-        working-directory: /
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates git curl sudo unzip xz-utils zip jq procps \
-            build-essential cmake ccache pkg-config libssl-dev libffi-dev \
-            python3 python3-pip python3-venv
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
@@ -108,13 +93,11 @@ jobs:
   openclaw-tests:
     needs: check-deps
     if: ${{ needs.check-deps.outputs.openclaw_changed == 'true' }}
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: examples/openclaw-plugin
     steps:
-      - *prepare-linux-container
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
@@ -142,11 +125,9 @@ jobs:
 
   plugin-versions:
     needs: check-deps
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request' && needs.check-deps.outputs.plugins_changed == 'true'
     steps:
-      - *prepare-linux-container
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -161,8 +142,7 @@ jobs:
           bash .github/scripts/check-plugin-version-bumps.sh "origin/${{ github.base_ref }}"
 
   check-deps:
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
+    runs-on: ubuntu-24.04
     outputs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
       wheel_os: ${{ steps.check.outputs.wheel_os }}
@@ -171,7 +151,6 @@ jobs:
       openclaw_changed: ${{ steps.check.outputs.openclaw_changed }}
       sdk_python_changed: ${{ steps.check.outputs.sdk_python_changed }}
     steps:
-      - *prepare-linux-container
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -199,14 +178,12 @@ jobs:
   sdk-python-tests:
     needs: check-deps
     if: ${{ needs.check-deps.outputs.sdk_python_changed == 'true' }}
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.8", "3.9", "3.10", "3.12"]
     steps:
-      - *prepare-linux-container
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
@@ -239,14 +216,12 @@ jobs:
   langchain-tests:
     needs: check-deps
     if: ${{ needs.check-deps.outputs.langchain_changed == 'true' }}
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.12"]
     steps:
-      - *prepare-linux-container
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0

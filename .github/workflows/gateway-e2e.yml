@@ -18,24 +18,13 @@ permissions:
   contents: read
 jobs:
   kind:
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-latest"]') }}
-    # kind needs the host Docker daemon; this job cannot use a job container.
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-latest
     timeout-minutes: 65
     env:
-      KIND_CLUSTER_NAME: ovgw-${{ github.run_id }}-${{ github.run_attempt }}
       OV_TEST_GATEWAY_IMAGE: ghcr.io/volcengine/openviking:main
     steps:
       - name: Set kubeconfig path
         run: echo "OV_TEST_KIND_KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
-      - name: Prepare self-hosted Docker test host
-        if: github.repository == 'volcengine/OpenViking'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ca-certificates git curl unzip xz-utils
-          docker info
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
@@ -43,16 +32,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Create isolated test environment
-        run: |
-          python -m venv "$RUNNER_TEMP/gateway-kind-venv"
-          echo "$RUNNER_TEMP/gateway-kind-venv/bin" >> "$GITHUB_PATH"
       - uses: azure/setup-helm@v4.3.1
         with:
           version: v3.17.3
-      - uses: azure/setup-kubectl@v4
-        with:
-          version: v1.32.2
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -60,13 +42,11 @@ jobs:
         run: |
           pip install pytest httpx openai==3.37.0 anthropic==2.2.0
           npm install --global @openai/codex@0.146.0
-          mkdir -p "$RUNNER_TEMP/kind-bin"
-          curl -fsSL https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 -o "$RUNNER_TEMP/kind-bin/kind"
-          chmod +x "$RUNNER_TEMP/kind-bin/kind"
-          echo "$RUNNER_TEMP/kind-bin" >> "$GITHUB_PATH"
+          curl -fsSL https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 -o /usr/local/bin/kind
+          chmod +x /usr/local/bin/kind
           mkdir -p artifacts
       - name: Create dedicated three-node cluster
-        run: kind create cluster --name "$KIND_CLUSTER_NAME" --config tests/gateway/e2e/kind.yaml --kubeconfig "$OV_TEST_KIND_KUBECONFIG" --wait 120s
+        run: kind create cluster --name ovgw-e2e --config tests/gateway/e2e/kind.yaml --kubeconfig "$OV_TEST_KIND_KUBECONFIG" --wait 120s
       - name: Build source overlay for a manual run
         if: github.event_name == 'workflow_dispatch' && inputs.overlay
         env:
@@ -78,19 +58,16 @@ jobs:
         run: |
           docker image inspect "$OV_TEST_GATEWAY_IMAGE" >/dev/null 2>&1 || docker pull "$OV_TEST_GATEWAY_IMAGE"
           docker pull redis:7.2-alpine
-          python tests/gateway/e2e/load_images.py --cluster "$KIND_CLUSTER_NAME" "$OV_TEST_GATEWAY_IMAGE" redis:7.2-alpine
+          python tests/gateway/e2e/load_images.py --cluster ovgw-e2e "$OV_TEST_GATEWAY_IMAGE" redis:7.2-alpine
       - name: Run standalone and Cluster matrices
         run: pytest tests/gateway/e2e --confcutdir=tests/gateway/e2e -o addopts='' -v --basetemp=artifacts/pytest --junitxml=artifacts/results.xml
       - name: Collect cluster evidence
         if: always()
         run: |
-          kind export logs artifacts/kind --name "$KIND_CLUSTER_NAME" || true
+          kind export logs artifacts/kind --name ovgw-e2e || true
           kubectl --kubeconfig "$OV_TEST_KIND_KUBECONFIG" get pods -A -o wide > artifacts/pods.txt || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: gateway-kind-evidence
           path: artifacts
-      - name: Remove this run's kind cluster
-        if: always()
-        run: kind delete cluster --name "$KIND_CLUSTER_NAME"

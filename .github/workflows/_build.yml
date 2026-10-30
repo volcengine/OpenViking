@@ -44,27 +44,12 @@ on:
         required: false
         default: '["3.10"]'
 
-defaults:
-  run:
-    shell: bash
-
 jobs:
   build-studio:
     name: Build shared Studio bundle
     if: inputs.build_wheels
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
+    runs-on: ubuntu-24.04
     steps:
-    - &prepare-linux-container
-      name: Prepare Linux CI container
-      if: github.repository == 'volcengine/OpenViking'
-      working-directory: /
-      run: |
-        apt-get update
-        apt-get install -y --no-install-recommends \
-          ca-certificates git curl sudo unzip xz-utils zip jq procps \
-          build-essential cmake ccache pkg-config libssl-dev libffi-dev \
-          python3 python3-pip python3-venv
     - uses: actions/checkout@v6
     - uses: actions/setup-node@v6
       with:
@@ -86,10 +71,8 @@ jobs:
   build-sdist:
     name: Build source distribution py3.12
     if: inputs.build_sdist
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
+    runs-on: ubuntu-24.04
     steps:
-    - *prepare-linux-container
     - uses: actions/checkout@v6
       with:
         submodules: recursive
@@ -162,7 +145,7 @@ jobs:
         contains(inputs.os_json, '"ubuntu-24.04"') ||
         contains(inputs.os_json, 'ubuntu-24.04-arm')
       )
-    runs-on: ${{ matrix.arch == 'aarch64' && fromJSON('["ubuntu-24.04-arm"]') || github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: ubuntu:20.04
     env:
       DEBIAN_FRONTEND: noninteractive

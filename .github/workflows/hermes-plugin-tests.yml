@@ -24,32 +24,11 @@ concurrency:
   group: hermes-plugin-tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Installer checks change HOME, so checkout's temporary global Git config is
-# insufficient. Keep trust scoped to the two checkouts in every child process.
-env:
-  GIT_CONFIG_COUNT: '2'
-  GIT_CONFIG_KEY_0: safe.directory
-  GIT_CONFIG_VALUE_0: ${{ github.workspace }}
-  GIT_CONFIG_KEY_1: safe.directory
-  GIT_CONFIG_VALUE_1: ${{ github.workspace }}/.ci/hermes-agent
-
 jobs:
   hermes-plugin-tests:
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Prepare Linux CI container
-        if: github.repository == 'volcengine/OpenViking'
-        working-directory: /
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates git curl sudo unzip xz-utils zip jq procps \
-            build-essential cmake ccache pkg-config libssl-dev libffi-dev
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
@@ -116,22 +95,13 @@ jobs:
             host: release
             python: '3.13'
             hermes_ref: v2026.9.24
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && matrix.os == 'ubuntu-24.04' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || matrix.os }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && matrix.os == 'ubuntu-24.04' && 'ubuntu:24.04' || null }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
         working-directory: .ci/hermes-agent
     steps:
-      - name: Prepare Linux CI container
-        if: github.repository == 'volcengine/OpenViking' && matrix.os == 'ubuntu-24.04'
-        working-directory: /
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates git curl sudo unzip xz-utils zip jq procps \
-            build-essential cmake ccache pkg-config libssl-dev libffi-dev
       - uses: actions/checkout@v6
         with:
           persist-credentials: false

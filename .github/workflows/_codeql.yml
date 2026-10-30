@@ -7,11 +7,7 @@ on:
 jobs:
   analyze:
     name: Analyze
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
@@ -23,14 +19,6 @@ jobs:
         language: [ 'python', 'cpp' ]
 
     steps:
-    - name: Prepare Linux CI container
-      if: github.repository == 'volcengine/OpenViking'
-      working-directory: /
-      run: |
-        apt-get update
-        apt-get install -y --no-install-recommends \
-          ca-certificates git curl sudo unzip xz-utils zip jq procps \
-          build-essential cmake ccache pkg-config libssl-dev libffi-dev
     - name: Checkout repository
       uses: actions/checkout@v6
       with:
@@ -40,14 +28,6 @@ jobs:
       uses: actions/setup-python@v6
       with:
         python-version: '3.11'
-
-    - uses: actions/setup-node@v6
-      with:
-        node-version: '22'
-
-    - uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: stable
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7

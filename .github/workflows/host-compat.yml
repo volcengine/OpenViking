@@ -29,20 +29,8 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && 'ubuntu:24.04' || null }}
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-24.04
     steps:
-      - name: Prepare Linux CI container
-        if: github.repository == 'volcengine/OpenViking'
-        working-directory: /
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates git curl sudo unzip xz-utils zip jq procps \
-            build-essential python3 gh
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6

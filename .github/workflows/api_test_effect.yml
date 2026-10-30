@@ -14,11 +14,7 @@ concurrency:
 jobs:
   effect-tests:
     name: API Effect Tests (${{ matrix.os }})
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && matrix.os == 'ubuntu-24.04' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || matrix.os }}
-    container: ${{ github.repository == 'volcengine/OpenViking' && matrix.os == 'ubuntu-24.04' && 'ubuntu:24.04' || null }}
-    defaults:
-      run:
-        shell: bash
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -31,14 +27,6 @@ jobs:
         os: [ubuntu-24.04]
 
     steps:
-      - name: Prepare Linux CI container
-        if: github.repository == 'volcengine/OpenViking' && matrix.os == 'ubuntu-24.04'
-        working-directory: /
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates git curl sudo unzip xz-utils zip jq procps \
-            build-essential cmake ccache pkg-config libssl-dev libffi-dev
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -71,20 +59,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install "setuptools>=70.1" setuptools_scm cmake wheel
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: stable
-
       - name: Install dependencies using uv sync
         run: uv sync --frozen
 
       - name: Install build dependencies (uv pip)
         run: uv pip install setuptools setuptools_scm cmake wheel maturin
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
 
       - name: Build C++ extensions
         shell: bash
