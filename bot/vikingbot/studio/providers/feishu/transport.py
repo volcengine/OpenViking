@@ -12,19 +12,25 @@ import httpx
 import lark_oapi as lark
 import websockets
 from lark_oapi.ws.model import ClientConfig
+from loguru import logger
 
 
 async def run_connection(channel):
     channel._running = True
     channel._loop = asyncio.get_running_loop()
+    domain = channel.config.domain.rstrip("/")
     channel._client = (
         lark.Client.builder()
         .app_id(channel.config.app_id)
         .app_secret(channel.config.app_secret)
+        .domain(domain)
+        .log_level(lark.LogLevel.INFO)
         .build()
     )
     handler = (
-        lark.EventDispatcherHandler.builder("", "")
+        lark.EventDispatcherHandler.builder(
+            channel.config.encrypt_key or "", channel.config.verification_token or ""
+        )
         .register_p2_im_message_receive_v1(channel._on_message_sync)
         .build()
     )
@@ -32,6 +38,8 @@ async def run_connection(channel):
         channel.config.app_id,
         channel.config.app_secret,
         event_handler=handler,
+        domain=domain,
+        log_level=lark.LogLevel.INFO,
         auto_reconnect=False,
     )
     channel._ws_client = client
@@ -40,7 +48,7 @@ async def run_connection(channel):
         try:
             async with httpx.AsyncClient(timeout=15) as http:
                 response = await http.post(
-                    "https://open.feishu.cn/callback/ws/endpoint",
+                    f"{domain}/callback/ws/endpoint",
                     json={"AppID": channel.config.app_id, "AppSecret": channel.config.app_secret},
                 )
                 response.raise_for_status()
@@ -66,6 +74,11 @@ async def run_connection(channel):
         except Exception as exc:
             # No endpoint URL or credentials in public diagnostics.
             channel.last_error = type(exc).__name__
+            logger.warning(
+                "Feishu WebSocket connection for {} failed: {}",
+                channel.config.app_id,
+                channel.last_error,
+            )
         finally:
             client._conn = None
             if ping:
