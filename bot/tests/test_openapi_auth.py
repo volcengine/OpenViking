@@ -365,6 +365,7 @@ class TestOpenAPIAuth:
         scope = channel._principal_scope("standalone")
         storage_key = channel._scoped_session_id(scope, session_id)
         key = SessionKey(type="cli", channel_id="default", chat_id=storage_key)
+        assert channel._session_manager.has_persisted(key)
         old_session = Session(key=key)
         old_session.add_message("user", "deleted history")
         channel._session_manager._save_unlocked(old_session)
@@ -380,6 +381,8 @@ class TestOpenAPIAuth:
         reused_session = Session(key=reused_key)
         reused_session.add_message("user", "new history")
         channel._session_manager._save_unlocked(reused_session)
+        # Simulate a crash after rotating the generation but before deleting the old file.
+        channel._session_manager._save_unlocked(old_session)
 
         restarted = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
         assert restarted._scoped_session_id(scope, session_id) == reused_storage_key
@@ -387,11 +390,13 @@ class TestOpenAPIAuth:
             "new history"
         )
 
-        restarted._sessions[reused_storage_key] = {
-            "session_id": session_id,
-            "principal_scope": scope,
-        }
         restart_client = _make_client(restarted)
+        listed = restart_client.get("/bot/v1/sessions")
+        assert listed.status_code == 200
+        assert [item["id"] for item in listed.json()["sessions"]] == [session_id]
+        detail = restart_client.get(f"/bot/v1/sessions/{session_id}")
+        assert detail.status_code == 200
+        assert [message["content"] for message in detail.json()["messages"]] == ["new history"]
         assert restart_client.delete(f"/bot/v1/sessions/{session_id}").status_code == 200
 
         next_storage_key = restarted._scoped_session_id(scope, session_id)
@@ -936,7 +941,9 @@ class TestOpenAPIAuth:
     ):
         class FakeCompileService:
             async def create_task(self, request, *, principal_scope, task_id=None):
-                raise AssertionError("compile task must not start for keyless authenticated forwards")
+                raise AssertionError(
+                    "compile task must not start for keyless authenticated forwards"
+                )
 
         config = SimpleNamespace(
             gateway=SimpleNamespace(host="127.0.0.1", token=""),
