@@ -155,9 +155,6 @@ def make_task_store_models(table_prefix: str = "ov_tasks") -> TaskStoreModels:
         stage: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
         result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
         error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-        error_code: Mapped[Optional[str]] = mapped_column(
-            String(64, collation="ascii_bin"), nullable=True
-        )
         auth: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
         processing_seconds: Mapped[Optional[float]] = mapped_column(
             DOUBLE(asdecimal=False), nullable=True
@@ -207,9 +204,6 @@ def make_task_store_models(table_prefix: str = "ov_tasks") -> TaskStoreModels:
         state: Mapped[str] = mapped_column(String(16, collation="ascii_bin"))
         requeue_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
         error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-        error_code: Mapped[Optional[str]] = mapped_column(
-            String(64, collation="ascii_bin"), nullable=True
-        )
         errors: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
         context_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
         enqueued_at: Mapped[float] = mapped_column(DOUBLE(asdecimal=False))

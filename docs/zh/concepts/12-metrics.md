@@ -349,21 +349,25 @@ manifest 无法读取或校验时，本次完整 snapshot 失败，不会发布�
 | `openviking_task_failed` | Gauge | `task_type` | task tracker 失败任务数 |
 | `openviking_task_cancelling` | Gauge | `task_type` | 正在取消的任务数 |
 | `openviking_task_cancelled` | Gauge | `task_type` | 已取消任务数 |
-| `openviking_task_end_to_end_duration_seconds` | Histogram | `task_type, status, error_code` | 完整任务从创建到终态的耗时，包含排队及所属子操作 |
+| `openviking_task_end_to_end_duration_seconds` | Histogram | `task_type, status` | 完整任务从创建到终态的耗时，包含排队及所属子操作 |
+| `openviking_task_error_events_total` | Counter | `task_type, error_code` | 运行中被接受的任务错误报告数，不等同于最终失败任务数 |
 
 ### 完整任务与队列子操作
 
-`task.finished` 只在最终状态持久化成功后发布。任务仍有未完成的所属工作时，
-记录错误或调用 `complete` 都不会提前生成完成样本；重复完成、重复消费不会重复记录终态样本。
-`openviking_task_end_to_end_duration_seconds` 的 `_count` 可用于按错误码统计最终失败任务，
-平均与 P99 应筛选 `status="completed"`。计时从任务创建开始，包含排队时间。
+`task.finished` 只在已有终态写入成功后发布。任务仍有所属工作未完成时，
+调用 `complete` 不会提前生成完成样本；重复完成不会重复记录终态样本。
+`openviking_task_end_to_end_duration_seconds` 使用已有创建时间与终态更新时间，
+包含排队和所属子操作。成功平均耗时与 P99 应筛选 `status="completed"`。
 
-队列耗时按每次处理尝试统计，语义、Embedding 等队列是任务的子操作。
-`outcome="success"` 只表示该次队列处理成功；重新入队与取消不属于失败。
-队列的 `error_code` 与任务错误码使用同一结构化提取规则，成功记录为 `OK`，
-只有错误文字或旧记录缺少错误码时为 `unknown`，不会从文字猜测错误码。
-错误正文、URI 和 task ID 不作为指标标签。新指标从升级后开始采集，不回填历史任务。
-指标发布为 best effort，不是事务性审计日志。
+`openviking_task_error_events_total` 在运行中首次接受显式任务错误报告时计数，
+错误码仅用于当次指标，不新增数据库字段、不改变现有持久化记录。
+该指标与最终失败任务数是不同口径：报告错误时任务可能仍在运行，随后也可能被取消。
+队列子操作失败由队列指标单独记录，不自动推导成一条任务错误报告。
+
+队列耗时按每次处理尝试统计，`outcome="success"` 只表示该次队列处理成功。
+重新入队和取消不计入失败。任务错误报告与队列处理使用同一结构化错误码提取规则；
+缺少结构化错误码时使用 `unknown`，不从文字猜测，也不把错误正文、URI 或 task ID
+作为指标标签。指标从升级后开始采集，不回填历史记录，发布为 best effort。
 
 ### Cache
 

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
+from openviking.observability.events import try_publish_event
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.service.task_domain import (
@@ -303,7 +304,6 @@ class TaskWorkStore(Protocol):
         work_id: str,
         state: WorkState,
         *,
-        error_code: Optional[str] = None,
         error: Optional[str],
         errors: Optional[Collection[str]],
         context_count_delta: int,
@@ -327,7 +327,6 @@ class TaskWorkStore(Protocol):
         work_id: str,
         error: str,
         *,
-        error_code: Optional[str] = None,
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult: ...
@@ -583,7 +582,10 @@ class PersistentTaskStore(TaskWorkStore):
         account_id: Optional[str],
         user_id: Optional[str],
     ) -> StoreOperationResult:
+        error_task_type: Optional[str] = None
+
         def mutate(task: TaskRecord, work_set: _WorkSet) -> StoreOperationResult:
+            nonlocal error_task_type
             if task.status not in ACTIVE_TASK_STATUSES:
                 return StoreOperationResult.noop(
                     StoreOperationCode.ALREADY_TERMINAL,
@@ -595,7 +597,7 @@ class PersistentTaskStore(TaskWorkStore):
                 task.resource_id = resource_id
             if error and task.error is None:
                 task.error = sanitize_error(error)
-                task.error_code = error_code
+                error_task_type = task.task_type
             if cancelled:
                 task.status = TaskStatus.CANCELLING
             enqueue_markers = task.auth.get("enqueue_complete_work_ids")
@@ -605,7 +607,12 @@ class PersistentTaskStore(TaskWorkStore):
             finalize_task(task, work_set.works.values())
             return StoreOperationResult.applied()
 
-        return await self._mutate_task(task_id, account_id, user_id, mutate)
+        outcome = await self._mutate_task(task_id, account_id, user_id, mutate)
+        if error_task_type is not None:
+            try_publish_event(
+                "task.error", {"task_type": error_task_type, "error_code": error_code}
+            )
+        return outcome
 
     async def request_cancellation(
         self,
@@ -786,7 +793,6 @@ class PersistentTaskStore(TaskWorkStore):
         work_id: str,
         state: WorkState,
         *,
-        error_code: Optional[str] = None,
         error: Optional[str],
         errors: Optional[Collection[str]],
         context_count_delta: int,
@@ -812,7 +818,6 @@ class PersistentTaskStore(TaskWorkStore):
             work.updated_at = now
             if error:
                 work.error = sanitize_error(error)
-                work.error_code = error_code
             if state == WorkState.FAILED:
                 details = [sanitize_error(str(value)) for value in errors or () if str(value)]
                 work.errors = details or ([work.error] if work.error else [])
@@ -863,7 +868,6 @@ class PersistentTaskStore(TaskWorkStore):
         work_id: str,
         error: str,
         *,
-        error_code: Optional[str] = None,
         account_id: str,
         user_id: str,
     ) -> StoreOperationResult:
@@ -877,7 +881,6 @@ class PersistentTaskStore(TaskWorkStore):
                     ),
                 )
             work.error = sanitize_error(error)
-            work.error_code = error_code
             work.updated_at = time.time()
             return _WorkMutationResult(True, work)
 
@@ -1713,7 +1716,6 @@ def _task_to_payload(task: TaskRecord) -> Dict[str, Any]:
         "stage": task.stage,
         "result": deepcopy(task.result),
         "error": task.error,
-        "error_code": task.error_code,
         "execution_events": deepcopy(task.execution_events),
         "auth": deepcopy(task.auth),
     }

@@ -270,7 +270,7 @@ async def test_requeue_keeps_work_open_for_redelivery(tracked_queue):
     task = await tracker.get("task-1", **OWNER)
     assert task.status is TaskStatus.FAILED
     assert task.error == "combined"
-    assert task.error_code == "429"
+    assert second.error_code == "429"
     assert task.result["queue_status"]["Embedding"] == {
         "processed": 0,
         "requeue_count": 1,

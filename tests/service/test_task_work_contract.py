@@ -42,7 +42,6 @@ async def task_stores(request):
     schema_files = [
         sql_dir / "task_store_init.sql",
         sql_dir / "changes/0001_task_store_service_name.sql",
-        sql_dir / "changes/0002_task_error_codes.sql",
     ]
     try:
         async with admin.begin() as connection:
@@ -374,7 +373,6 @@ async def test_mysql_requeue_and_concurrent_completion_are_durable(deletion):
     schema_files = [
         sql_dir / "task_store_init.sql",
         sql_dir / "changes/0001_task_store_service_name.sql",
-        sql_dir / "changes/0002_task_error_codes.sql",
     ]
     writer, observer = TaskTracker(first), TaskTracker(second)
     isolated = TaskTracker(isolated_store)
@@ -490,7 +488,8 @@ async def test_mysql_requeue_and_concurrent_completion_are_durable(deletion):
 
 
 @pytest.mark.asyncio
-async def test_terminal_work_result_is_monotonic_and_bounded(task_stores):
+@pytest.mark.parametrize("report_operation_error", [False, True])
+async def test_terminal_work_result_is_monotonic_and_bounded(task_stores, report_operation_error):
     from openviking.metrics.core.registry import MetricRegistry
     from openviking.metrics.exporters.prometheus import PrometheusExporter
     from openviking.metrics.global_api import _build_event_router
@@ -515,15 +514,19 @@ async def test_terminal_work_result_is_monotonic_and_bounded(task_stores):
         await tracker.complete("task", {"done": True}, **OWNER)
         errors = [f"failure {index}" for index in range(150)]
         failure = ProcessResult.failed(OpenVikingError(errors[0], code="429"))
-        await tracker.mark_work_failed(
-            "task", "work", failure.error, error_code=failure.error_code, errors=errors, **OWNER
-        )
+        if report_operation_error:
+            await tracker.fail("task", failure.error, error_code=failure.error_code, **OWNER)
+        await tracker.mark_work_failed("task", "work", failure.error, errors=errors, **OWNER)
+        observed = PrometheusExporter(registry=registry).render()
+        error_sample = 'openviking_task_error_events_total{error_code="429",task_type="content_write"} 1'
+        assert (error_sample in observed) is report_operation_error
         assert metric not in PrometheusExporter(registry=registry).render()
         # Finishing the remaining owned work is the one terminal transition.
         await TaskTracker(second).mark_work_done("task", "other-work", **OWNER)
         await tracker.mark_work_done("task", "work", context_count_delta=3, **OWNER)
         await tracker.mark_work_failed("task", "work", "later failure", **OWNER)
         await tracker.complete("task", {"late": True}, **OWNER)
+        await tracker.fail("task", "late failure", error_code="500", **OWNER)
 
         restored_store = (
             PersistentTaskStore(first._agfs) if isinstance(first, PersistentTaskStore) else second
@@ -531,7 +534,6 @@ async def test_terminal_work_result_is_monotonic_and_bounded(task_stores):
         restored = await TaskTracker(restored_store).get("task", **OWNER)
         assert restored.status is TaskStatus.FAILED
         assert restored.error == errors[0]
-        assert restored.error_code == "429"
         assert restored.result["queue_status"]["Embedding"] == {
             "processed": 0,
             "requeue_count": 0,
@@ -542,7 +544,10 @@ async def test_terminal_work_result_is_monotonic_and_bounded(task_stores):
         text = PrometheusExporter(registry=registry).render()
         samples = [line for line in text.splitlines() if line.startswith(metric + "_count{")]
         assert len(samples) == 1 and float(samples[0].rsplit(" ", 1)[1]) == 1
-        assert 'error_code="429"' in samples[0] and 'status="failed"' in samples[0]
+        assert 'status="failed"' in samples[0]
+        assert 'error_code=' not in samples[0]
+        assert (error_sample in text) is report_operation_error
+        assert 'error_code="500"' not in text
         elapsed = next(line for line in text.splitlines() if line.startswith(metric + "_sum{"))
         assert float(elapsed.rsplit(" ", 1)[1]) == pytest.approx(
             restored.updated_at - restored.created_at
@@ -554,12 +559,12 @@ async def test_terminal_work_result_is_monotonic_and_bounded(task_stores):
 
 @pytest.mark.asyncio
 async def test_finalization_write_failure_keeps_work_retryable(monkeypatch):
-    from openviking.metrics.collectors.task_tracker import TaskDurationCollector
+    from openviking.metrics.collectors.task_tracker import TaskEventCollector
     from openviking.metrics.core.registry import MetricRegistry
     from openviking.metrics.exporters.prometheus import PrometheusExporter
 
     registry = MetricRegistry()
-    collector = TaskDurationCollector()
+    collector = TaskEventCollector()
     monkeypatch.setattr(
         "openviking.observability.events.try_publish_event",
         lambda name, payload: collector.receive(name, payload, registry),

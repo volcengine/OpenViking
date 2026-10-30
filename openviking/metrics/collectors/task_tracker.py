@@ -101,21 +101,37 @@ class TaskTrackerCollector(StateMetricCollector):
 
 
 @dataclass
-class TaskDurationCollector(EventMetricCollector):
-    """Observe a task only after its terminal state has been persisted."""
+class TaskEventCollector(EventMetricCollector):
+    """Export terminal task latency and accepted runtime error reports."""
 
     END_TO_END_DURATION_SECONDS: ClassVar[str] = MetricCollector.metric_name(
         "task", "end_to_end_duration", unit="seconds"
     )
-    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"task.finished"})
+    ERROR_EVENTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        "task", "error_events", unit="total"
+    )
+    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"task.finished", "task.error"})
 
     def collect(self, registry=None) -> None:
         return None
 
     def receive_hook(self, event_name: str, payload: dict, registry) -> None:
         task_type = str(payload.get("task_type") or "")
+        if not task_type:
+            return
+        if event_name == "task.error":
+            registry.inc_counter(
+                self.ERROR_EVENTS_TOTAL,
+                labels={
+                    "task_type": task_type,
+                    "error_code": normalize_metric_error_code(payload.get("error_code"))
+                    or "unknown",
+                },
+                label_names=("task_type", "error_code"),
+            )
+            return
         status = str(payload.get("status") or "")
-        if not task_type or status not in {"completed", "failed", "cancelled"}:
+        if status not in {"completed", "failed", "cancelled"}:
             return
         try:
             duration = float(payload["end_to_end_duration_seconds"])
@@ -129,11 +145,6 @@ class TaskDurationCollector(EventMetricCollector):
             labels={
                 "task_type": task_type,
                 "status": status,
-                "error_code": (
-                    normalize_metric_error_code(payload.get("error_code")) or "unknown"
-                    if status == "failed"
-                    else "OK"
-                ),
             },
-            label_names=("task_type", "status", "error_code"),
+            label_names=("task_type", "status"),
         )

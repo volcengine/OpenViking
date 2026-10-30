@@ -73,7 +73,6 @@ def publish_task_finished(task: "TaskRecord") -> None:
         {
             "task_type": task.task_type,
             "status": task.status.value,
-            "error_code": task.error_code,
             "end_to_end_duration_seconds": max(0.0, task.updated_at - task.created_at),
         },
     )

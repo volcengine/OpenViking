@@ -1126,7 +1126,6 @@ class TaskTracker:
         error: Optional[str] = None,
         *,
         errors: Optional[Collection[str]] = None,
-        error_code: Optional[str] = None,
         account_id: str,
         user_id: str,
     ) -> None:
@@ -1135,7 +1134,6 @@ class TaskTracker:
             work_id,
             WorkState.FAILED,
             error=sanitize_error(error) if error else None,
-            error_code=normalize_metric_error_code(error_code) or "unknown",
             errors=errors,
             context_count_delta=0,
             account_id=account_id,
@@ -1166,7 +1164,6 @@ class TaskTracker:
         state: WorkState,
         *,
         error: Optional[str],
-        error_code: Optional[str] = None,
         errors: Optional[Collection[str]],
         context_count_delta: int,
         account_id: str,
@@ -1178,7 +1175,6 @@ class TaskTracker:
                 work_id,
                 state,
                 error=error,
-                error_code=error_code,
                 errors=errors,
                 context_count_delta=context_count_delta,
                 account_id=account_id,
@@ -1192,7 +1188,6 @@ class TaskTracker:
         work_id: str,
         error: str,
         *,
-        error_code: Optional[str] = None,
         account_id: str,
         user_id: str,
     ) -> None:
@@ -1200,7 +1195,6 @@ class TaskTracker:
             task_id,
             work_id,
             sanitize_error(error),
-            error_code=normalize_metric_error_code(error_code) or "unknown",
             account_id=account_id,
             user_id=user_id,
         )

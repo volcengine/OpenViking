@@ -5,7 +5,6 @@
 import asyncio
 from typing import TYPE_CHECKING
 
-from openviking.observability.errors import extract_metric_error_code
 from openviking.service.task_domain import TERMINAL_TASK_STATUSES
 from openviking.service.task_store import WorkRegistration
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
@@ -101,13 +100,11 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                 record_enqueued_work(ctx.queue, metadata.work_id)
             elif registration is WorkRegistration.CREATED:
                 failure_message = str(exc) or type(exc).__name__
-                failure_code = extract_metric_error_code(exc)
                 await run_to_completion(
                     lambda: self._tracker.mark_work_failed(
                         metadata.task_id,
                         metadata.work_id,
                         failure_message,
-                        error_code=failure_code,
                         account_id=metadata.account_id,
                         user_id=metadata.user_id,
                     )
@@ -187,7 +184,6 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                         metadata.task_id,
                         metadata.work_id,
                         str(exc) or type(exc).__name__,
-                        error_code=extract_metric_error_code(exc),
                         account_id=metadata.account_id,
                         user_id=metadata.user_id,
                     )
@@ -254,7 +250,6 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                 metadata.work_id,
                 result.error or "Queue handler failed",
                 errors=result.errors,
-                error_code=result.error_code,
                 account_id=metadata.account_id,
                 user_id=metadata.user_id,
             )

@@ -189,7 +189,6 @@ class TaskRecord:
     stage: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
-    error_code: Optional[str] = None
     auth: Dict[str, Any] = field(default_factory=dict, repr=False)
     execution_events: Optional[Any] = None
     processing_seconds: Optional[float] = None
@@ -237,7 +236,6 @@ class WorkRecord:
     state: WorkState = WorkState.PENDING
     requeue_count: int = 0
     error: Optional[str] = None
-    error_code: Optional[str] = None
     errors: list[str] = field(default_factory=list)
     context_count: int = 0
     enqueued_at: float = field(default_factory=time.time)
@@ -301,6 +299,13 @@ def summarize_works(works: Iterable[WorkRecord]) -> WorkSummary:
     return summary
 
 
+def first_work_error(works: Iterable[WorkRecord]) -> Optional[str]:
+    return next(
+        (work.error for work in works if work.state == WorkState.FAILED and work.error),
+        None,
+    )
+
+
 def append_task_events(task: TaskRecord, previous: Optional[TaskRecord]) -> None:
     """Append lifecycle events shared by all TaskStore implementations."""
     recorded_at = datetime.now(timezone.utc).isoformat()
@@ -356,19 +361,15 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     if task.status == TaskStatus.CANCELLING:
         task.status = TaskStatus.CANCELLED
     else:
-        failed_work = next(
-            (work for work in works if work.state == WorkState.FAILED and work.error), None
-        )
-        if failed_work is not None and task.error is None:
-            task.error = sanitize_error(failed_work.error)
-            task.error_code = failed_work.error_code
+        work_error = first_work_error(works)
+        if work_error and task.error is None:
+            task.error = sanitize_error(work_error)
         if task.error is not None:
             task.status = TaskStatus.FAILED
         elif task.result is not None:
             task.status = TaskStatus.COMPLETED
         else:
             task.error = "Task operation interrupted before its result was persisted"
-            task.error_code = "ABORTED"
             task.status = TaskStatus.FAILED
     if isinstance(task.result, dict):
         summary = summarize_works(works)

@@ -359,22 +359,28 @@ whole scrape snapshot instead of publishing partial zero lag.
 | `openviking_task_failed` | Gauge | `task_type` | failed tasks tracked by task tracker |
 | `openviking_task_cancelling` | Gauge | `task_type` | tasks being cancelled |
 | `openviking_task_cancelled` | Gauge | `task_type` | cancelled tasks |
-| `openviking_task_end_to_end_duration_seconds` | Histogram | `task_type, status, error_code` | Task creation to persisted terminal state, including queueing and owned work |
+| `openviking_task_end_to_end_duration_seconds` | Histogram | `task_type, status` | Task creation to persisted terminal state, including queueing and owned work |
+| `openviking_task_error_events_total` | Counter | `task_type, error_code` | Accepted runtime task error reports, not terminal failed-task counts |
 
 ### Tasks and queue deliveries
 
-`task.finished` is emitted only after the terminal transition is persisted. Recording an
-error or calling `complete` while owned work remains open does not emit a completion sample.
-Repeated completion or delivery does not repeat the task sample. Use the histogram `_count`
-for terminal outcomes by error code and filter `status="completed"` for successful mean/P99
-latency. Task latency includes queueing from task creation.
+`task.finished` is emitted only after the existing terminal-state write succeeds.
+Calling `complete` while owned work remains open does not emit a completion sample;
+repeated completion does not repeat the terminal sample. Task latency uses the existing
+creation and terminal-update timestamps, including queueing and owned work. Filter
+`status="completed"` for successful mean/P99 latency.
 
-Queue histograms describe individual delivery attempts. Semantic and Embedding deliveries
-are task suboperations; `outcome="success"` does not imply business-task success. Requeues
-and cancellations are not failures. Task and queue labels share structured error-code
-extraction: successful records use `OK`, while text-only or legacy errors use `unknown`.
-Error messages, URIs, and task IDs are not metric labels. New samples begin after upgrade;
-historical tasks are not backfilled. Metric emission is best effort, not a transactional audit log.
+`openviking_task_error_events_total` counts the first explicit task error report accepted
+while a task is active. Error codes are used only by the current metric event: no database
+columns or persisted record fields are added. These reports are not terminal failed-task
+counts: a task may still be running when it reports an error and may subsequently be cancelled.
+Queue suboperation failures are recorded separately and do not automatically create task error reports.
+
+Queue histograms describe individual delivery attempts. A successful delivery does not
+imply business-task success; requeues and cancellations are not failures. Task error reports
+and queue deliveries share structured error-code extraction. Missing codes use `unknown`,
+without parsing messages or putting error text, URIs, or task IDs in metric labels. Collection
+begins after upgrade without historical backfill; emission is best effort.
 
 ### Cache
 
