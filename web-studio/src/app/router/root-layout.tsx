@@ -5,6 +5,7 @@ import { lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AppShell } from '#/app/layouts/app-shell'
+import { CredentialStorageNotice } from '#/features/connection/components/credential-storage-notice'
 import { Button } from '#/shared/ui/button'
 import {
   Card,
@@ -32,6 +33,7 @@ export function RootComponent() {
         <Outlet />
       </AppShell>
       <Toaster />
+      <CredentialStorageNotice />
       <DevtoolsSlot />
     </>
   )

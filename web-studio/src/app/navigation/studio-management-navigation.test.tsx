@@ -89,3 +89,20 @@ it('groups gateway management with bot management and highlights every gateway s
     botManagement.closest('[data-slot="sidebar-group"]'),
   )
 })
+
+it('keeps unavailable membership pages out of local development while exposing service configuration', () => {
+  render(
+    <SidebarProvider>
+      <StudioManagementNavigation
+        pathname="/admin/configuration/server"
+        isRoot
+        developmentMode
+      />
+    </SidebarProvider>,
+  )
+  expect(
+    screen.getByRole('link', { name: 'Server configuration' }),
+  ).toBeTruthy()
+  expect(screen.queryByRole('link', { name: /^Users$/ })).toBeNull()
+  expect(screen.queryByRole('link', { name: /^User groups$/ })).toBeNull()
+})

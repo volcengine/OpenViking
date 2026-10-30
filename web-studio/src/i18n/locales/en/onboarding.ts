@@ -1,6 +1,12 @@
 export default {
+  directoryOptions: 'Choose another data identity (advanced)',
+  rootSetupTitle: 'Start using the workbench',
+  rootSetupDescription:
+    'A Root key manages the service and cannot access user data directly. Current Account: {{account}}. Create a user, then enter the workbench from the credential result. Creating a teammate never replaces your workbench identity automatically.',
+  rootSetupCreate: 'Create a workbench identity',
+  rootSetupExisting: 'Configure an existing User key',
   verifyDirectoryHint:
-    'Optional. After Verify Connection, choose an Account and User with this Root or Admin key. A User API Key is still needed for data access.',
+    'Optional. Add a separate management credential. Account Admin manages its Account; Root manages the service and all Accounts.',
   loadDirectory: 'Load Accounts & Users',
   directoryHint: 'Use a Root or Admin API Key to browse identities.',
   directoryControlRequired:
@@ -63,7 +69,8 @@ export default {
   dataRequestFailed: 'Memory access check failed:',
   enter: 'Enter Studio',
   keyHelp:
-    'Use the API Key provided by your service. Open-source development mode does not require a key.',
+    'Enter a User, Account Admin or Root key. Verification identifies its permissions and identity automatically. Development mode needs no key.',
+  keyLabel: 'API Key',
   hostedKeyHelp: 'Enter your Volcengine User API Key to access your memories.',
   advanced: 'Advanced open-source connection (optional)',
   loadUsers: 'Load users in this account',

@@ -302,7 +302,7 @@ describe('management bootstrap', () => {
     },
   )
   it.each(['root', 'admin'])(
-    'verifies %s control access without calling tenant data APIs',
+    'recognizes %s capabilities regardless of the credential input field',
     async (role) => {
       get
         .mockResolvedValueOnce({
@@ -324,14 +324,14 @@ describe('management bootstrap', () => {
         new AbortController().signal,
       )
       expect(get.mock.calls[1][0].url).toBe(
-        role === 'root'
-          ? '/api/v1/admin/accounts'
-          : '/api/v1/admin/accounts/{account_id}/users',
+        role === 'root' ? '/api/v1/admin/accounts' : '/api/v1/fs/ls',
       )
-      expect(studioSetupDestination(connection)).toBe('/admin')
+      expect(studioSetupDestination(connection)).toBe(
+        role === 'root' ? '/admin' : '/home',
+      )
       expect(
         get.mock.calls.some(([options]) => options.url === '/api/v1/fs/ls'),
-      ).toBe(false)
+      ).toBe(role === 'admin')
     },
   )
   it('rejects denied management access and does not save it', async () => {
@@ -377,7 +377,7 @@ it.each([
   ['root', 'chosen-account'],
   ['admin', 'bound-account'],
 ])(
-  'keeps the selected user when verifying a %s control credential',
+  'binds a standalone %s key to the appropriate data or management identity',
   async (role, expectedAccount) => {
     get
       .mockResolvedValueOnce({
@@ -405,9 +405,10 @@ it.each([
       new AbortController().signal,
     )
     expect(result.accountId).toBe(expectedAccount)
-    expect(result.userId).toBe('alice')
-    expect(result.apiKey).toBe('')
-    expect(get.mock.calls[1][0].path.account_id).toBe(expectedAccount)
+    expect(result.userId).toBe(role === 'root' ? 'alice' : 'default')
+    expect(result.apiKey).toBe(role === 'root' ? '' : 'control-key')
+    if (role === 'root')
+      expect(get.mock.calls[1][0].path.account_id).toBe(expectedAccount)
   },
 )
 
@@ -465,3 +466,120 @@ vi.mock('#/features/connection/lib/credential-storage', () => ({
     localStorage.setItem(key, value),
   flushCredentialStorage: async () => {},
 }))
+
+it.each(['user', 'admin'])(
+  'recognizes reversed Root + %s inputs without losing either credential',
+  async (role) => {
+    get
+      .mockResolvedValueOnce({
+        data: { version: 'test', auth_mode: 'api_key', role: 'root' },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          version: 'test',
+          auth_mode: 'api_key',
+          role,
+          account_id: 'team',
+          user_id: 'alice',
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: {},
+        data: { status: 'ok', result: [] },
+      })
+    const result = await verifyStudioSetup(
+      { ...draft, apiKey: 'synthetic-root', adminApiKey: 'synthetic-user' },
+      new AbortController().signal,
+    )
+    expect(result).toMatchObject({
+      apiKey: 'synthetic-user',
+      adminApiKey: 'synthetic-root',
+      accountId: 'team',
+      userId: 'alice',
+    })
+    expect(get.mock.calls[2][0].url).toBe('/api/v1/fs/ls')
+    expect(studioSetupDestination(result)).toBe('/home')
+  },
+)
+
+it('uses the credential that actually authenticated trusted mode when both fields are supplied', async () => {
+  get
+    .mockResolvedValueOnce({
+      data: {
+        version: 'test',
+        auth_mode: 'trusted',
+        role: 'user',
+        account_id: 'team',
+        user_id: 'alice',
+      },
+    })
+    .mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      data: { status: 'ok', result: [] },
+    })
+  const result = await verifyStudioSetup(
+    { ...draft, apiKey: 'verified-root', adminApiKey: 'ordinary-user-key' },
+    new AbortController().signal,
+  )
+  expect(result).toMatchObject({ apiKey: '', adminApiKey: 'verified-root' })
+  expect(vi.mocked(createClient).mock.calls.at(-1)?.[0]?.headers).toMatchObject(
+    { 'X-API-Key': 'verified-root' },
+  )
+})
+it('recovers a stale User key only after confirming trusted mode and validating the separate Root key', async () => {
+  get
+    .mockRejectedValueOnce(
+      new OvClientError({
+        code: 'Unauthorized',
+        statusCode: 401,
+        message: 'invalid data credential',
+      }),
+    )
+    .mockResolvedValueOnce({ data: { version: 'test', auth_mode: 'trusted' } })
+    .mockResolvedValueOnce({
+      data: {
+        version: 'test',
+        auth_mode: 'trusted',
+        role: 'user',
+        account_id: 'team',
+        user_id: 'alice',
+      },
+    })
+    .mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      data: { status: 'ok', result: [] },
+    })
+  const result = await verifyStudioSetup(
+    { ...draft, apiKey: 'stale-user', adminApiKey: 'root' },
+    new AbortController().signal,
+  )
+  expect(result).toMatchObject({
+    apiKey: '',
+    adminApiKey: 'root',
+    accountId: 'team',
+    userId: 'alice',
+  })
+  expect(vi.mocked(createClient).mock.calls[1][0]?.headers).toEqual({})
+})
+it('does not retry an invalid data credential with Root in API Key mode', async () => {
+  get
+    .mockRejectedValueOnce(
+      new OvClientError({
+        code: 'Unauthorized',
+        statusCode: 401,
+        message: 'invalid data credential',
+      }),
+    )
+    .mockResolvedValueOnce({ data: { version: 'test', auth_mode: 'api_key' } })
+  await expect(
+    verifyStudioSetup(
+      { ...draft, apiKey: 'stale-user', adminApiKey: 'root' },
+      new AbortController().signal,
+    ),
+  ).rejects.toMatchObject({ stage: 'health', statusCode: 401 })
+  expect(get).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(createClient).mock.calls[1][0]?.headers).toEqual({})
+})

@@ -1,3 +1,4 @@
+import type { WorkbenchIdentity } from '#/features/connection/lib/surface-context'
 import {
   readCredentialStorage,
   writeCredentialStorage,
@@ -85,6 +86,8 @@ export type ConnectionProfile = {
   name: string
   connection: ConnectionDraft
   identities?: SavedDataIdentity[]
+  workbenchIdentity?: WorkbenchIdentity
+  managementAccountId?: string
 }
 export type ConnectionProfiles = {
   activeId: string

@@ -1,6 +1,12 @@
 export default {
+  directoryOptions: '选择其他数据身份（高级）',
+  rootSetupTitle: '开始使用工作台',
+  rootSetupDescription:
+    'Root Key 用于管理服务，不能直接访问用户数据。当前 Account：{{account}}。创建使用身份后，可在凭据结果中进入工作台；团队成员的身份不会自动替换你的工作台身份。',
+  rootSetupCreate: '创建使用身份',
+  rootSetupExisting: '配置已有 User Key',
   verifyDirectoryHint:
-    '可选。填写 Root 或 Admin Key 并验证连接后，可选择 Account 和 User；访问数据仍需对应的 User API Key。',
+    '可选。需要额外的管理权限时填写。Account Admin 管理本 Account，Root 管理服务与所有 Account。',
   loadDirectory: '加载 Account 和 User',
   directoryHint: '使用 Root 或 Admin API Key 浏览可选身份。',
   directoryControlRequired:
@@ -56,7 +62,9 @@ export default {
   healthRequestFailed: '检查服务健康状态时失败：',
   dataRequestFailed: '检查记忆访问权限时失败：',
   enter: '进入 Studio',
-  keyHelp: '填写服务提供的 API Key。开源开发模式无需填写。',
+  keyLabel: 'API Key',
+  keyHelp:
+    '可填写 User、Account Admin 或 Root Key，验证后自动识别权限和身份。开发模式无需填写。',
   hostedKeyHelp: '填写火山服务的用户 API Key，以访问当前用户的记忆。',
   advanced: '开源高级连接配置（选填）',
   loadUsers: '读取此账号的用户',

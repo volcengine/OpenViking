@@ -47,6 +47,8 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
   else if (!service.ready)
     reason = service.isChecking ? 'checking' : 'connectionFailed'
   else if (service.provider === 'unknown') reason = 'unknownProvider'
+  else if (feature?.domain === 'management' && isConnectionRoleLoading)
+    reason = 'checking'
   else if (feature?.domain === 'management') {
     const permissions = resolveStudioManagementCapabilities({
       serviceProvider: service.provider,
@@ -64,6 +66,12 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     )
       reason = 'gatewayAuthMode'
     else if (
+      serverMode === 'dev' &&
+      (feature.id === 'configuration' || feature.id === 'botManagement')
+    ) {
+      if (isConnectionRoleLoading || connectionRole !== 'root')
+        reason = 'managementRequired'
+    } else if (
       feature.id === 'gateway'
         ? !canManageStudioGateway({
             serviceProvider: service.provider,

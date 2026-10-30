@@ -52,6 +52,12 @@ export function canManageStudioGateway(input: ManagementInput): boolean {
 }
 
 export function canEditStudioConfiguration(input: ManagementInput): boolean {
+  if (input.serverMode === 'dev')
+    return (
+      !input.isRoleLoading &&
+      input.role === 'root' &&
+      (input.serviceProvider ?? 'opensource') === 'opensource'
+    )
   return (
     (input.serverMode === 'api_key' || input.serverMode === 'trusted') &&
     resolveStudioManagementCapabilities(input).canManageAccounts

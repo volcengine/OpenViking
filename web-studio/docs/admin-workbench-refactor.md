@@ -38,7 +38,6 @@ Root-only 连接仍可管理 Account 级 ACL 配置，但资源目录与授权�
 
 本轮建立管理路由、服务配置分离、入口与数据凭据防回退的基础。以下仍需独立完成，不能视为本轮已交付：
 
-- 独立管理 Account 上下文，避免管理 Account 切换改变工作台 User。
 - 管理监控、任务、日志页面与对应凭据范围适配。
 - 抽出完整工作台版本包，并在独立站点宿主验证消费。
 - 邮箱 Session 的宿主适配与服务端接口联调。
@@ -86,7 +85,7 @@ API Key 模式的 User 选择器不调用 `fetchAdminUsers`，即使当前连接
 - Connection and profile payloads are encrypted with AES-GCM (256-bit key, fresh 96-bit IV per write, storage-slot name as authenticated additional data). A non-exportable Web Crypto key is persisted in IndexedDB. Startup restores credentials automatically; no password, unlock screen, or repeated key entry is required.
 - Existing plaintext connection/profile records are migrated before the application mounts. The obsolete SDK session-storage key is removed after successful migration. New credentials are not written to plaintext Web Storage. Save errors are surfaced; onboarding and credential forms wait for encrypted persistence before completing.
 - This is encryption at rest against casual plaintext storage disclosure, not isolation from same-origin code, XSS, browser-profile compromise, or extensions with sufficient site/debugger access. A non-exportable key can still be used for decryption by authorized origin code. Stronger isolation would require a backend credential broker or native keystore integration and is outside this frontend-only change.
-- Web Crypto requires HTTPS or a trustworthy local origin such as localhost/127.0.0.1. If encrypted storage cannot initialize, startup stops with an actionable message and preserves existing records rather than silently falling back to plaintext. Clearing site data removes both saved connections and their encryption key.
+- Web Crypto requires HTTPS or a trustworthy local origin such as localhost/127.0.0.1. When Web Crypto or IndexedDB is unavailable, connections live only in page memory with a persistent notice; refreshing requires reconfiguration. Existing records remain untouched and no plaintext persistence is used. Decryption failures still stop startup and preserve existing records. Clearing site data removes both saved connections and their encryption key.
 
 
 ### Workbench request credential isolation
@@ -115,3 +114,7 @@ Trusted 工作台的 Account 选择器读取服务端 Account 目录，User 选�
 ## 前端工程结构
 
 工作台、管理后台及公共连接流程已按功能迁至 `src/features/`；外壳、导航和路由边界位于 `src/app/`。`src/routes/` 只保留路由声明，公开 URL 不变。目录职责、共享代码规则与依赖检查见[前端工程结构](./frontend-structure.md)。
+
+## 接入与复访流程
+
+首次接入、三类 Key 组合、团队成员创建、两种区域的身份恢复及受限浏览器存储规则见[用户使用流程](./user-journeys.md)。

@@ -1,5 +1,7 @@
 const studio = {
   credentialStorage: {
+    sessionOnly:
+      '当前环境无法安全保存凭据，连接仅在本页有效，刷新或关闭后需重新配置。已有本地记录保留；使用 HTTPS 可自动加密保存。',
     startError:
       '无法读取本地加密凭据。请使用 HTTPS 或 localhost，并允许此站点使用浏览器存储后刷新。已有凭据未被清除。',
     saveError:

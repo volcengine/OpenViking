@@ -148,8 +148,7 @@ it.each([
       view.rerender(tree())
       await settled('root')
       expect(api.connection).toMatchObject({
-        accountId: 'other',
-        userId: 'bob',
+        accountId: entry.startsWith('/admin') ? 'team' : 'other',
         adminApiKey: 'trusted-root',
       })
       await ovClient.client.get({ url: '/api/v1/admin/accounts' })
@@ -168,6 +167,10 @@ it.each([
       view.rerender(tree())
       await settled('user')
       expect(canManage).toBe(true)
+      expect(api.connection).toMatchObject({
+        accountId: 'other',
+        userId: 'bob',
+      })
     } finally {
       view.unmount()
       client.clear()

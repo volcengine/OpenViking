@@ -26,14 +26,20 @@ export function StudioModeSwitch({
   managementMode: boolean
 }) {
   const { t } = useTranslation('appShell')
-  const { connection, profiles, serverMode, switchIdentity } =
+  const { connection, profiles, activeProfileId, serverMode, switchIdentity } =
     useAppConnection()
   const navigate = useNavigate()
   const [open, setOpen] = React.useState(false)
   const [pending, setPending] = React.useState(false)
   const request = React.useRef<AbortController | null>(null)
   React.useEffect(() => () => request.current?.abort(), [])
-  const hasDataIdentity = Boolean(connection.apiKey) || serverMode === 'trusted'
+  const previousUser = profiles.find(
+    (profile) => profile.id === activeProfileId,
+  )?.workbenchIdentity
+  const hasDataIdentity =
+    Boolean(connection.apiKey || previousUser?.apiKey) ||
+    serverMode === 'trusted' ||
+    serverMode === 'dev'
   const users = savedDataIdentities(profiles, connection)
     .filter((identity) => identity.accountId === connection.accountId)
     .filter(

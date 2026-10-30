@@ -67,6 +67,12 @@ export function canOpenManagement(input: {
   isRoleLoading: boolean
   serverMode: ServerMode
 }): boolean {
+  if (input.serverMode === 'dev')
+    return (
+      input.provider === 'opensource' &&
+      !input.isRoleLoading &&
+      input.role === 'root'
+    )
   return resolveStudioManagementCapabilities({
     serviceProvider: input.provider,
     hasControlCredential: Boolean(input.connection.adminApiKey.trim()),
@@ -81,9 +87,13 @@ function preferenceKey(connection: ConnectionDraft): string {
 }
 export function readPreferredMode(
   connection: ConnectionDraft,
+  profileId?: string,
 ): StudioMode | null {
   try {
-    const mode = localStorage.getItem(preferenceKey(connection))
+    const mode =
+      (profileId
+        ? localStorage.getItem(`ov_studio_entry_profile:${profileId}`)
+        : null) ?? localStorage.getItem(preferenceKey(connection))
     return mode === 'management' || mode === 'workbench' ? mode : null
   } catch {
     return null
@@ -92,9 +102,15 @@ export function readPreferredMode(
 export function savePreferredMode(
   connection: ConnectionDraft,
   mode: StudioMode,
+  profileId?: string,
 ): void {
   try {
-    localStorage.setItem(preferenceKey(connection), mode)
+    localStorage.setItem(
+      profileId
+        ? `ov_studio_entry_profile:${profileId}`
+        : preferenceKey(connection),
+      mode,
+    )
   } catch {
     // Preferences are optional when storage is unavailable.
   }
@@ -112,8 +128,11 @@ export function resolveStudioEntry({
   preferredMode: StudioMode | null
   serverMode?: ServerMode
 }): '/admin' | '/home' | '/filesystem' {
-  const hasDataIdentity = Boolean(connection.apiKey) || serverMode === 'trusted'
-  if (canManage && (preferredMode !== 'workbench' || !hasDataIdentity))
+  const hasDataIdentity =
+    Boolean(connection.apiKey) ||
+    serverMode === 'trusted' ||
+    serverMode === 'dev'
+  if (canManage && (preferredMode === 'management' || !hasDataIdentity))
     return '/admin'
   return provider === 'opensource' ? '/home' : '/filesystem'
 }

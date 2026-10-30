@@ -80,7 +80,12 @@ function newConnectionDraft(
 ): ConnectionDraft {
   return {
     serviceSelection: provider,
-    baseUrl: provider === 'volcengine' ? CLOUD_SETUP_URL : '',
+    baseUrl:
+      provider === 'volcengine'
+        ? CLOUD_SETUP_URL
+        : window.location.pathname.startsWith('/studio')
+          ? window.location.origin
+          : '',
     apiKey: '',
     adminApiKey: '',
     accountId: 'default',
@@ -102,6 +107,7 @@ export function StudioSetup({
   const [step, setStep] = useState(0)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [controlVerified, setControlVerified] = useState(false)
+  const [directoryOpen, setDirectoryOpen] = useState(false)
   const [selectedDirectoryIdentity, setSelectedDirectoryIdentity] =
     useState(false)
   const [activeProfileId] = useState(() => {
@@ -358,7 +364,6 @@ export function StudioSetup({
       ) {
         if (
           selectedDirectoryIdentity &&
-          draft.apiKey &&
           (result.accountId !== draft.accountId ||
             result.userId !== draft.userId)
         ) {
@@ -722,7 +727,7 @@ export function StudioSetup({
                       className="grid gap-2 text-sm font-medium"
                       htmlFor="setup-key"
                     >
-                      {t('settings:fields.userApiKey')}
+                      {t('keyLabel')}
                       <Input
                         ref={keyInputRef}
                         className="h-11 rounded-lg bg-background/60 text-sm"
@@ -740,7 +745,7 @@ export function StudioSetup({
                           update({ apiKey: event.target.value })
                         }
                         {...PLAIN_INPUT_PROPS}
-                        autoComplete="new-password"
+                        autoComplete="off"
                       />
                     </label>
                     {error === t('keyRequired') ? (
@@ -774,7 +779,7 @@ export function StudioSetup({
                           }
                           className="h-11 rounded-lg"
                           {...PLAIN_INPUT_PROPS}
-                          autoComplete="new-password"
+                          autoComplete="off"
                         />
                         <p
                           id="setup-control-hint"
@@ -838,20 +843,33 @@ export function StudioSetup({
                     ) : null}
                   </fieldset>
                   {controlVerified && (
-                    <SetupIdentityDirectory
-                      connection={draft}
-                      disabled={busy}
-                      onSelect={(identity) => {
-                        const changed =
-                          identity.accountId !== draft.accountId ||
-                          identity.userId !== draft.userId
-                        update({
-                          ...identity,
-                          ...(changed ? { apiKey: '' } : {}),
-                        })
-                        setSelectedDirectoryIdentity(true)
-                      }}
-                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      aria-expanded={directoryOpen}
+                      aria-controls="setup-identity-options"
+                      onClick={() => setDirectoryOpen(!directoryOpen)}
+                    >
+                      {t('directoryOptions')}
+                    </Button>
+                  )}
+                  {controlVerified && directoryOpen && (
+                    <div id="setup-identity-options">
+                      <SetupIdentityDirectory
+                        connection={draft}
+                        disabled={busy}
+                        onSelect={(identity) => {
+                          const changed =
+                            identity.accountId !== draft.accountId ||
+                            identity.userId !== draft.userId
+                          update({
+                            ...identity,
+                            ...(changed ? { apiKey: '' } : {}),
+                          })
+                          setSelectedDirectoryIdentity(true)
+                        }}
+                      />
+                    </div>
                   )}
                   {error && error !== t('keyRequired') ? (
                     <p

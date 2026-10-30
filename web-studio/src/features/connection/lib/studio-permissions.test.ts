@@ -126,3 +126,5 @@ describe('new management feature permissions', () => {
     },
   )
 })
+
+it('exposes local development service configuration without nonexistent account membership management', () => { const input = { serverMode: 'dev' as const, role: 'root' as const, isRoleLoading: false, hasControlCredential: false }; expect(canEditStudioConfiguration(input)).toBe(true); expect(resolveStudioManagementCapabilities(input)).toEqual({ canManageAccounts: false, canManageUsers: false }) })

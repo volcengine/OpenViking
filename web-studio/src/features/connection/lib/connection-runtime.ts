@@ -68,6 +68,8 @@ export type AppConnectionContextValue = {
     allowLegacyIdentityFallback?: boolean
     /** Keep the selected connection configuration while changing its scope. */
     preserveProfile?: boolean
+    /** A management-only resource identity must not replace the user's workspace. */
+    rememberWorkbench?: boolean
     signal?: AbortSignal
     apiKey: string
     userId: string
@@ -180,6 +182,7 @@ export function normalizeConnectionDraft(
   connection: ConnectionDraft,
 ): ConnectionDraft {
   return {
+    authMode: connection.authMode,
     serviceSelection:
       connection.serviceSelection === 'opensource' ||
       connection.serviceSelection === 'volcengine'

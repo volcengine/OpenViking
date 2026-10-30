@@ -411,6 +411,7 @@ it('offers an existing account admin after a 403 without changing grants', async
       userId: 'owner',
       apiKey: 'user-key',
       allowLegacyIdentityFallback: true,
+      rememberWorkbench: false,
     }),
   )
   expect(mocks.change).not.toHaveBeenCalled()

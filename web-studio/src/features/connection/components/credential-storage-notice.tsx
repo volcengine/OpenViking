@@ -1,0 +1,17 @@
+import { credentialStorageMode } from '#/features/connection/lib/credential-storage'
+import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+
+export function CredentialStorageNotice() {
+  const { t } = useTranslation('studio')
+  useEffect(() => {
+    if (credentialStorageMode() === 'session') {
+      toast.warning(t('credentialStorage.sessionOnly'), {
+        id: 'credential-storage-session',
+        duration: Infinity,
+      })
+    }
+  }, [t])
+  return null
+}

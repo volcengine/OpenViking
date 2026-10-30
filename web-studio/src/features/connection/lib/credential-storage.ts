@@ -176,11 +176,31 @@ export class CredentialStorage {
   }
 }
 
-let storage: CredentialStorage | undefined
+class SessionCredentialStorage {
+  private values = new Map<Slot, string>()
+  async initialize() {}
+  read(slot: Slot): string | null {
+    return this.values.get(slot) ?? null
+  }
+  write(slot: Slot, value: string) {
+    this.values.set(slot, value)
+  }
+  async flush() {}
+}
+
+let storage: CredentialStorage | SessionCredentialStorage | undefined
+export function credentialStorageMode(): 'persistent' | 'session' {
+  return storage instanceof SessionCredentialStorage ? 'session' : 'persistent'
+}
 export async function initializeCredentialStorage(): Promise<void> {
-  storage ??= new CredentialStorage(window.localStorage, browserKey, () => {
-    window.dispatchEvent(new Event('ov-credential-storage-error'))
-  })
+  storage ??=
+    typeof crypto === 'undefined' ||
+    typeof crypto.subtle === 'undefined' ||
+    typeof indexedDB === 'undefined'
+      ? new SessionCredentialStorage()
+      : new CredentialStorage(window.localStorage, browserKey, () => {
+          window.dispatchEvent(new Event('ov-credential-storage-error'))
+        })
   await storage.initialize()
   // The runtime SDK does not persist its key; remove the obsolete plaintext mirror.
   window.sessionStorage.removeItem('ov_console_api_key')

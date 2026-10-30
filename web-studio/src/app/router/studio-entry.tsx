@@ -10,8 +10,13 @@ import { useAppConnection } from '#/features/connection/hooks/use-app-connection
 
 export function IndexRoute() {
   const { provider } = useStudioService()
-  const { isGatewayHost, connection, isConnectionRoleLoading, serverMode } =
-    useAppConnection()
+  const {
+    isGatewayHost,
+    connection,
+    isConnectionRoleLoading,
+    serverMode,
+    activeProfileId,
+  } = useAppConnection()
   const { canManage } = useStudioMode()
   if (isConnectionRoleLoading) return null
   return (
@@ -24,7 +29,7 @@ export function IndexRoute() {
               canManage,
               connection,
               provider,
-              preferredMode: readPreferredMode(connection),
+              preferredMode: readPreferredMode(connection, activeProfileId),
               serverMode,
             })
       }

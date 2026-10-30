@@ -54,6 +54,7 @@ export function ResourceAclIdentityRecovery({
         userId: selected.userId,
         apiKey: trusted ? '' : selected.apiKey || apiKey.trim(),
         allowLegacyIdentityFallback: true,
+        rememberWorkbench: false,
       })
       setApiKey('')
       toast.success(t('acl.recovery.switched'))

@@ -39,7 +39,16 @@ export function StudioSettingsMenu({
 }) {
   const { t, i18n } = useTranslation('appShell')
   const { setTheme, resolvedTheme } = useTheme()
-  const { connection, serverMode, connectionRole } = useAppConnection()
+  const {
+    connection,
+    serverMode,
+    connectionRole,
+    profiles = [],
+    activeProfileId,
+  } = useAppConnection()
+  const workbenchKey = profiles.find(
+    (profile) => profile.id === activeProfileId,
+  )?.workbenchIdentity?.apiKey
   const userName = connection.userId.trim()
   const showUser =
     !managementMode &&
@@ -61,18 +70,21 @@ export function StudioSettingsMenu({
   const initials = Array.from(userName).slice(0, 2).join('').toLocaleUpperCase()
   const [open, setOpen] = React.useState(false)
   const [preferredMode, setPreferredMode] = React.useState(() =>
-    readPreferredMode(connection),
+    readPreferredMode(connection, activeProfileId),
   )
   const language = (i18n.resolvedLanguage ?? i18n.language).startsWith('zh')
     ? 'zh-CN'
     : 'en'
   const effectiveDefault =
-    preferredMode === 'workbench' &&
-    (connection.apiKey || serverMode === 'trusted')
+    preferredMode !== 'management' &&
+    (connection.apiKey ||
+      workbenchKey ||
+      serverMode === 'trusted' ||
+      serverMode === 'dev')
       ? 'workbench'
       : 'management'
   function chooseDefault(mode: StudioMode) {
-    savePreferredMode(connection, mode)
+    savePreferredMode(connection, mode, activeProfileId)
     setPreferredMode(mode)
   }
   const segmentClass = (active: boolean) =>
@@ -139,7 +151,9 @@ export function StudioSettingsMenu({
                   disabled={
                     mode === 'workbench' &&
                     !connection.apiKey &&
-                    serverMode !== 'trusted'
+                    !workbenchKey &&
+                    serverMode !== 'trusted' &&
+                    serverMode !== 'dev'
                   }
                   className={segmentClass(effectiveDefault === mode)}
                   onClick={() => chooseDefault(mode)}

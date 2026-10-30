@@ -9,6 +9,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { flushCredentialStorage } from '#/features/connection/lib/credential-storage'
+import { useNavigate } from '@tanstack/react-router'
 import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import { Badge } from '#/shared/ui/badge'
 import { Button } from '#/shared/ui/button'
@@ -22,6 +24,7 @@ import {
 } from '#/shared/ui/dialog'
 
 export function GeneratedCredentialDialog() {
+  const navigate = useNavigate()
   const { t } = useTranslation('settings')
   const {
     clearGeneratedCredential,
@@ -34,6 +37,7 @@ export function GeneratedCredentialDialog() {
   if (!generatedCredential?.apiKey) {
     return null
   }
+  const credential = generatedCredential
 
   const accountId = generatedCredential.accountId || connection.accountId
   const userId = generatedCredential.userId || connection.userId
@@ -44,7 +48,7 @@ export function GeneratedCredentialDialog() {
 
   async function copyKey(): Promise<void> {
     try {
-      await copyTextToClipboard(generatedCredential.apiKey)
+      await copyTextToClipboard(credential.apiKey)
       toast.success(t('toast.copied'))
     } catch {
       toast.error(t('toast.copyFailed'))
@@ -57,10 +61,13 @@ export function GeneratedCredentialDialog() {
       await switchIdentity({
         accountId,
         allowLegacyIdentityFallback: true,
-        apiKey: generatedCredential.apiKey,
+        apiKey: credential.apiKey,
         userId,
+        preserveProfile: true,
       })
-      toast.success(t('toast.dataKeySelected'))
+      await flushCredentialStorage()
+      clearGeneratedCredential()
+      await navigate({ to: '/home' })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
@@ -106,20 +113,19 @@ export function GeneratedCredentialDialog() {
               <CheckIcon />
               {t('actions.currentIdentity')}
             </Badge>
-          ) : (
-            <Button
-              type="button"
-              disabled={isSwitching}
-              onClick={() => void useIdentity()}
-            >
-              {isSwitching ? (
-                <LoaderCircleIcon className="animate-spin" />
-              ) : (
-                <KeyRoundIcon />
-              )}
-              {t('actions.switchIdentity')}
-            </Button>
-          )}
+          ) : null}
+          <Button
+            type="button"
+            disabled={isSwitching}
+            onClick={() => void useIdentity()}
+          >
+            {isSwitching ? (
+              <LoaderCircleIcon className="animate-spin" />
+            ) : (
+              <KeyRoundIcon />
+            )}
+            {t('appShell:modes.enterWorkbench')}
+          </Button>
           <Button
             type="button"
             variant="ghost"

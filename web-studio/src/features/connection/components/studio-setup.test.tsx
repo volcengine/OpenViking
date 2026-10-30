@@ -169,19 +169,15 @@ it('shows the hosted server address on step one and requires a fresh API key eac
     screen.queryByRole('combobox', { name: 'connectionChoice' }),
   ).toBeNull()
   expect(screen.queryByLabelText('hostedEndpoint')).toBeNull()
-  const key = screen.getByLabelText<HTMLInputElement>(
-    'settings:fields.userApiKey',
-  )
+  const key = screen.getByLabelText<HTMLInputElement>('keyLabel')
   expect(key.value).toBe('')
-  expect(key.autocomplete).toBe('new-password')
+  expect(key.autocomplete).toBe('off')
   fireEvent.change(key, { target: { value: 'entered-key' } })
   first.unmount()
 
   render(<StudioSetup onComplete={vi.fn()} />)
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
-  expect(
-    screen.getByLabelText<HTMLInputElement>('settings:fields.userApiKey').value,
-  ).toBe('')
+  expect(screen.getByLabelText<HTMLInputElement>('keyLabel').value).toBe('')
 })
 it('reuses an existing hosted profile only after the user reenters its API key', async () => {
   localStorage.setItem(
@@ -210,9 +206,7 @@ it('reuses an existing hosted profile only after the user reenters its API key',
     'https://saved.hosted.test/ov',
   )
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
-  const key = screen.getByLabelText<HTMLInputElement>(
-    'settings:fields.userApiKey',
-  )
+  const key = screen.getByLabelText<HTMLInputElement>('keyLabel')
   expect(key.value).toBe('')
   fireEvent.change(key, { target: { value: 'saved-user-key' } })
   fireEvent.click(screen.getByRole('button', { name: 'verify' }))
@@ -251,7 +245,7 @@ it('accepts an older hosted profile without an API key after manual verification
     'https://saved.hosted.test/ov',
   )
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
-  fireEvent.change(screen.getByLabelText('settings:fields.userApiKey'), {
+  fireEvent.change(screen.getByLabelText('keyLabel'), {
     target: { value: 'newly-entered-key' },
   })
   fireEvent.click(screen.getByRole('button', { name: 'verify' }))
@@ -360,7 +354,7 @@ it('combines preferences, applies changes immediately and retains connection fie
     target: { value: 'http://service.test' },
   })
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
-  fireEvent.change(screen.getByLabelText('settings:fields.userApiKey'), {
+  fireEvent.change(screen.getByLabelText('keyLabel'), {
     target: { value: 'synthetic-key' },
   })
   fireEvent.click(screen.getByRole('button', { name: 'back' }))
@@ -368,9 +362,9 @@ it('combines preferences, applies changes immediately and retains connection fie
     screen.getByLabelText<HTMLInputElement>('settings:fields.baseUrl').value,
   ).toBe('http://service.test')
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
-  expect(
-    screen.getByLabelText<HTMLInputElement>('settings:fields.userApiKey').value,
-  ).toBe('synthetic-key')
+  expect(screen.getByLabelText<HTMLInputElement>('keyLabel').value).toBe(
+    'synthetic-key',
+  )
 })
 it('keeps advanced fields out of keyboard navigation while collapsed and preserves their values', () => {
   render(<StudioSetup onComplete={vi.fn()} />)
@@ -426,7 +420,7 @@ it('enters only after verification, invalidates verification when fields change,
   await screen.findByRole('status')
   expect(done).not.toHaveBeenCalled()
   expect(mocks.complete).not.toHaveBeenCalled()
-  fireEvent.change(screen.getByLabelText('settings:fields.userApiKey'), {
+  fireEvent.change(screen.getByLabelText('keyLabel'), {
     target: { value: 'changed' },
   })
   expect(screen.queryByRole('status')).toBeNull()
@@ -460,7 +454,7 @@ it('displays the hosted endpoint without offering an editable address', async ()
   expect(screen.queryByRole('radio')).toBeNull()
   expect(screen.getByText('studio:providers.volcengine')).toBeTruthy()
   expect(screen.getByText(endpoint)).toBeTruthy()
-  fireEvent.change(screen.getByLabelText('settings:fields.userApiKey'), {
+  fireEvent.change(screen.getByLabelText('keyLabel'), {
     target: { value: 'hosted-key' },
   })
   fireEvent.click(screen.getByRole('button', { name: 'verify' }))
@@ -476,8 +470,7 @@ it('keeps each workspace draft isolated when switching on the first step', () =>
   render(<StudioSetup onComplete={vi.fn()} />)
   const url = () =>
     screen.getByLabelText<HTMLInputElement>('settings:fields.baseUrl')
-  const key = () =>
-    screen.getByLabelText<HTMLInputElement>('settings:fields.userApiKey')
+  const key = () => screen.getByLabelText<HTMLInputElement>('keyLabel')
   fireEvent.change(url(), { target: { value: 'http://oss.test' } })
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
   fireEvent.change(key(), { target: { value: 'synthetic-oss' } })
@@ -559,17 +552,18 @@ it('opens the account/user picker only after Verify and rejects a mismatched use
   })
   expect(screen.queryByText('choose-directory-user')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'verify' }))
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'directoryOptions' }),
+  )
   fireEvent.click(await screen.findByText('choose-directory-user'))
-  expect(
-    screen.getByLabelText<HTMLInputElement>('settings:fields.userApiKey').value,
-  ).toBe('')
+  expect(screen.getByLabelText<HTMLInputElement>('keyLabel').value).toBe('')
   expect(screen.queryByRole('button', { name: 'enter' })).toBeNull()
   mocks.verify.mockImplementationOnce(async (draft) => ({
     ...draft,
     accountId: 'other',
     userId: 'bob',
   }))
-  fireEvent.change(screen.getByLabelText('settings:fields.userApiKey'), {
+  fireEvent.change(screen.getByLabelText('keyLabel'), {
     target: { value: 'wrong-user-key' },
   })
   fireEvent.click(screen.getByRole('button', { name: 'verify' }))
@@ -588,3 +582,18 @@ vi.mock('#/features/connection/lib/credential-storage', () => ({
     localStorage.setItem(key, value),
   flushCredentialStorage: async () => {},
 }))
+
+it('prefills the serving OpenViking origin for an embedded first launch', () => {
+  window.history.replaceState(null, '', '/studio/onboarding')
+  try {
+    render(<StudioSetup onComplete={vi.fn()} />)
+    expect(
+      screen.getByLabelText<HTMLInputElement>('settings:fields.baseUrl').value,
+    ).toBe(window.location.origin)
+    expect(
+      screen.getByRole('button', { name: 'next' }).hasAttribute('disabled'),
+    ).toBe(false)
+  } finally {
+    window.history.replaceState(null, '', '/')
+  }
+})

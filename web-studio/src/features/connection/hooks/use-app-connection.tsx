@@ -1,3 +1,16 @@
+import {
+  rememberSurface,
+  restoreSurface,
+} from '#/features/connection/lib/surface-context'
+import {
+  canOpenManagement,
+  isConnectionSettingsPath,
+  connectionSettingsPath,
+  isSharedStudioPath,
+  readRememberedStudioMode,
+  rememberStudioMode,
+  resolveStudioMode,
+} from '#/features/connection/lib/studio-mode'
 import { createConnectionHealthHeaders } from '#/features/connection/lib/auth'
 import type {
   AppConnectionContextValue,
@@ -34,19 +47,13 @@ import {
 import type { ConnectionProfiles } from '#/features/connection/lib/profiles'
 import {
   activateIdentityProfile,
+  connectionProfileFingerprint,
   isValidConnectionUrl,
   normalizeProfileConnection,
   persistConnectionProfiles,
   readConnectionProfiles,
   updateActiveProfile,
 } from '#/features/connection/lib/profiles'
-import {
-  connectionSettingsPath,
-  isSharedStudioPath,
-  readRememberedStudioMode,
-  rememberStudioMode,
-  resolveStudioMode,
-} from '#/features/connection/lib/studio-mode'
 import type {
   ConnectionDraft,
   ConnectionRole,
@@ -86,6 +93,7 @@ export function AppConnectionProvider({
     string,
     unknown
   > | null> | null>(null)
+  const profileEntryPending = React.useRef(false)
   const navigate = useNavigate()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
@@ -103,9 +111,12 @@ export function AppConnectionProvider({
     queryClient.clear()
     profilesRef.current = readConnectionProfiles(readInitialConnection())
     initialConnectionRef.current = normalizeConnectionDraft(
-      profilesRef.current.profiles.find(
-        (p) => p.id === profilesRef.current!.activeId,
-      )!.connection,
+      restoreSurface(
+        profilesRef.current.profiles.find(
+          (p) => p.id === profilesRef.current!.activeId,
+        )!,
+        resolveStudioMode(pathname),
+      ),
     )
     applyConnection(
       initialConnectionRef.current,
@@ -121,7 +132,7 @@ export function AppConnectionProvider({
     setProfileState(next)
   }, [])
 
-  const [connection, setConnection] = React.useState<ConnectionDraft>(
+  const [rawConnection, setConnection] = React.useState<ConnectionDraft>(
     initialConnectionRef.current,
   )
   const [connectionRole, setConnectionRole] =
@@ -162,9 +173,59 @@ export function AppConnectionProvider({
     pathname,
     readRememberedStudioMode(
       profileState.activeId,
-      connection.adminApiKey && !connection.apiKey ? 'management' : 'workbench',
+      rawConnection.adminApiKey && !rawConnection.apiKey
+        ? 'management'
+        : 'workbench',
     ),
   )
+  const [surface, setSurface] = React.useState({
+    profileId: profileState.activeId,
+    mode: studioMode,
+  })
+  const changingSurface =
+    surface.profileId !== profileState.activeId || surface.mode !== studioMode
+  const connection = React.useMemo(() => {
+    if (!changingSurface) return rawConnection
+    const profile = profileState.profiles.find(
+      (p) => p.id === profileState.activeId,
+    )!
+    const remembered =
+      surface.profileId === profileState.activeId
+        ? rememberSurface(profile, rawConnection, surface.mode)
+        : { ...profile, connection: rawConnection }
+    return restoreSurface(remembered, studioMode)
+  }, [changingSurface, rawConnection, profileState, surface, studioMode])
+  React.useLayoutEffect(() => {
+    if (!changingSurface) return
+    connectionGenerationRef.current += 1
+    connectionRevisionRef.current += 1
+    queryClient.clear()
+    const next = {
+      ...profilesRef.current!,
+      profiles: profilesRef.current!.profiles.map((profile) => {
+        if (profile.id !== profileState.activeId) return profile
+        const remembered =
+          surface.profileId === profileState.activeId
+            ? rememberSurface(profile, rawConnection, surface.mode)
+            : profile
+        return { ...remembered, connection }
+      }),
+    }
+    persistConnection(connection)
+    storeProfiles(next)
+    setConnection(connection)
+    setSurface({ profileId: profileState.activeId, mode: studioMode })
+  }, [
+    changingSurface,
+    connection,
+    rawConnection,
+    surface,
+    studioMode,
+    profileState.activeId,
+    queryClient,
+    storeProfiles,
+  ])
+
   React.useEffect(() => {
     if (pathname !== '/' && !isSharedStudioPath(pathname)) {
       rememberStudioMode(profileState.activeId, resolveStudioMode(pathname))
@@ -174,6 +235,60 @@ export function AppConnectionProvider({
   // Child effects may issue requests before provider effects run. Restrict the
   // shared client synchronously when crossing the management/workbench boundary.
   applyConnection(connection, serverMode, studioMode)
+
+  React.useEffect(() => {
+    if (
+      !profileEntryPending.current ||
+      serverMode === 'checking' ||
+      serverMode === 'offline' ||
+      isConnectionRoleLoading ||
+      changingSurface
+    )
+      return
+    // Editors finish their save before a profile change can select a surface.
+    if (pathname.includes('/connections/')) return
+    profileEntryPending.current = false
+    const allowed = canOpenManagement({
+      provider: identifyServiceProvider(connection.baseUrl),
+      connection,
+      role: connectionRole,
+      isRoleLoading: false,
+      serverMode,
+    })
+    const dataIdentity =
+      Boolean(connection.apiKey) ||
+      serverMode === 'trusted' ||
+      serverMode === 'dev'
+    const targetMode =
+      studioMode === 'management' && !allowed
+        ? 'workbench'
+        : studioMode === 'workbench' && !dataIdentity && connection.adminApiKey
+          ? 'management'
+          : studioMode
+    if (targetMode !== studioMode) {
+      void navigate({
+        replace: true,
+        to: isConnectionSettingsPath(pathname)
+          ? targetMode === 'management'
+            ? '/admin/settings'
+            : '/settings'
+          : targetMode === 'management'
+            ? '/admin'
+            : identifyServiceProvider(connection.baseUrl) === 'volcengine'
+              ? '/filesystem'
+              : '/home',
+      })
+    }
+  }, [
+    connection,
+    connectionRole,
+    isConnectionRoleLoading,
+    serverMode,
+    studioMode,
+    changingSurface,
+    pathname,
+    navigate,
+  ])
 
   const openConnectionSettings = React.useCallback(() => {
     const to = connectionSettingsPath(pathname, studioMode)
@@ -411,7 +526,7 @@ export function AppConnectionProvider({
         if (isCancelled()) {
           return
         }
-        const { accountId, role } = controlIdentity
+        const { accountId, userId, role } = controlIdentity
         // An account-admin User key is scoped to its own account. Pin that
         // account as the assumed identity so admin and data calls target the
         // right tenant instead of failing with a mismatch (the server rejects
@@ -420,13 +535,28 @@ export function AppConnectionProvider({
         if (
           management &&
           role === 'admin' &&
-          (!connection.apiKey ||
-            connection.apiKey === connection.adminApiKey) &&
           accountId &&
-          connection.accountId !== accountId
+          (connection.accountId !== accountId ||
+            (serverMode === 'api_key' && !connection.apiKey && Boolean(userId)))
         ) {
+          storeProfiles({
+            ...profilesRef.current!,
+            profiles: profilesRef.current!.profiles.map((profile) =>
+              profile.id === profilesRef.current!.activeId &&
+              !profile.workbenchIdentity &&
+              connection.apiKey
+                ? rememberSurface(profile, connection, 'workbench')
+                : profile,
+            ),
+          })
           const next = synchronizeConnectionRuntime(
-            { ...connection, accountId },
+            {
+              ...connection,
+              accountId,
+              ...(serverMode === 'api_key' && userId
+                ? { apiKey: connection.adminApiKey, userId }
+                : {}),
+            },
             serverMode,
             studioMode,
           )
@@ -500,6 +630,7 @@ export function AppConnectionProvider({
       next: ConnectionDraft,
       preserveIdentity = false,
       rememberIdentity = false,
+      dataSelection = false,
     ) => {
       connectionGenerationRef.current += 1
       connectionRevisionRef.current += 1
@@ -517,11 +648,24 @@ export function AppConnectionProvider({
           updateActiveProfile(profilesRef.current!, normalized, true),
         )
       }
+      storeProfiles({
+        ...profilesRef.current!,
+        profiles: profilesRef.current!.profiles.map((profile) =>
+          profile.id === profilesRef.current!.activeId
+            ? rememberSurface(
+                profile,
+                normalized,
+                dataSelection ? 'workbench' : studioMode,
+              )
+            : profile,
+        ),
+      })
       queryClient.clear()
       setConnection(normalized)
     }
 
     const activateConnection = (next: ConnectionDraft) => {
+      profileEntryPending.current = true
       connectionGenerationRef.current += 1
       // Apply the new credentials before any new route effects can issue requests.
       const normalized = synchronizeConnectionRuntime(
@@ -540,8 +684,18 @@ export function AppConnectionProvider({
       saveProfile: (profile) => {
         if (!isValidConnectionUrl(profile.connection.baseUrl))
           throw new Error(i18n.t('studio:profiles.invalidUrl'))
+        const previous = profilesRef.current!.profiles.find(
+          (entry) => entry.id === profile.id,
+        )
+        const keepSurfaces =
+          previous &&
+          connectionProfileFingerprint(previous.connection) ===
+            connectionProfileFingerprint(profile.connection)
         const normalized = {
           ...profile,
+          ...(!keepSurfaces
+            ? { workbenchIdentity: undefined, managementAccountId: undefined }
+            : {}),
           name: profile.name.trim(),
           connection: normalizeConnectionDraft(
             normalizeProfileConnection(profile.connection),
@@ -604,7 +758,8 @@ export function AppConnectionProvider({
       switchIdentity: async ({
         accountId,
         allowLegacyIdentityFallback,
-        preserveProfile = false,
+        preserveProfile = true,
+        rememberWorkbench = true,
         signal,
         apiKey,
         userId,
@@ -662,13 +817,22 @@ export function AppConnectionProvider({
           },
           !preserveProfile,
           preserveProfile,
+          rememberWorkbench,
         )
       },
-      switchManagementAccount: async (accountId, options) => {
+      switchManagementAccount: async (accountId, _options) => {
         assertSourceConnection()
         if (connectionRole !== 'root') {
           throw createConnectionError('rootRequired')
         }
+        storeProfiles({
+          ...profilesRef.current!,
+          profiles: profilesRef.current!.profiles.map((profile) =>
+            profile.id === profilesRef.current!.activeId
+              ? rememberSurface(profile, connection, studioMode)
+              : profile,
+          ),
+        })
         commitConnection(
           serverMode === 'trusted'
             ? { ...connection, accountId: accountId.trim(), userId: 'default' }
@@ -677,8 +841,8 @@ export function AppConnectionProvider({
                 accountId,
                 isGatewayHost,
               ),
-          !options?.preserveProfile,
-          options?.preserveProfile,
+          false,
+          true,
         )
       },
     }
@@ -703,7 +867,7 @@ export function AppConnectionProvider({
 
   return (
     <AppConnectionContext.Provider value={value}>
-      {children}
+      {changingSurface ? null : children}
     </AppConnectionContext.Provider>
   )
 }

@@ -174,6 +174,7 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
                 isRoot={connectionRole === 'root' && !isGatewayHost}
                 showGateway={showGateway}
                 gatewayOnly={isGatewayHost}
+                developmentMode={serverMode === 'dev'}
               />
             ) : null}
             {!managementMode &&

@@ -130,3 +130,48 @@ it('isolates remembered mode by profile and defaults a Root-only profile to mana
   expect(readRememberedStudioMode('ordinary-user')).toBe('workbench')
   sessionStorage.clear()
 })
+
+it.each([
+  ['', '', false, '/home'],
+  ['user', '', false, '/home'],
+  ['admin', 'admin', true, '/home'],
+  ['', 'root', true, '/admin'],
+  ['user', 'root', true, '/home'],
+  ['user', 'admin', true, '/home'],
+  ['admin', 'root', true, '/home'],
+] as const)(
+  'uses a consistent automatic entry for data=%s control=%s',
+  (apiKey, adminApiKey, canManage, expected) => {
+    expect(
+      resolveStudioEntry({
+        connection: { ...connection, apiKey, adminApiKey },
+        provider: 'opensource',
+        canManage,
+        preferredMode: null,
+        serverMode: 'api_key',
+      }),
+    ).toBe(expected)
+  },
+)
+it('honors explicit administration preference while development defaults to data access without a Key', () => {
+  expect(
+    resolveStudioEntry({
+      connection,
+      provider: 'opensource',
+      canManage: true,
+      preferredMode: 'management',
+      serverMode: 'api_key',
+    }),
+  ).toBe('/admin')
+  expect(
+    resolveStudioEntry({
+      connection: { ...connection, apiKey: '', adminApiKey: '' },
+      provider: 'opensource',
+      canManage: true,
+      preferredMode: null,
+      serverMode: 'dev',
+    }),
+  ).toBe('/home')
+})
+
+it('retains a connection entry preference while management and workbench use different Accounts', () => { savePreferredMode(connection, 'management', 'profile-1'); expect(readPreferredMode({ ...connection, accountId: 'other-account' }, 'profile-1')).toBe('management'); expect(readPreferredMode(connection, 'profile-2')).toBeNull() })

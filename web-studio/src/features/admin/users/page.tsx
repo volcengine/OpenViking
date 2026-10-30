@@ -67,6 +67,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '#/shared/ui/tooltip'
 
 import { AddUserDialog } from '#/features/admin/users/components/add-user-dialog'
+import { RootSetupGuide } from '#/features/admin/users/components/root-setup-guide'
 import { DeleteAccountButton } from '#/features/admin/users/components/delete-account-button'
 import { UserMemoryPolicyCell } from '#/features/admin/users/components/user-memory-policy-cell'
 import { UserRoleCell } from '#/features/admin/users/components/user-role-cell'
@@ -101,7 +102,12 @@ export function UserManagementPanel() {
     setGeneratedCredential,
     serverMode,
     switchIdentity,
+    profiles = [],
+    activeProfileId,
   } = useAppConnection()
+  const workbenchIdentity = profiles.find(
+    (profile) => profile.id === activeProfileId,
+  )?.workbenchIdentity
   const [addUserOpen, setAddUserOpen] = React.useState(false)
   const [pendingRegenerateUser, setPendingRegenerateUser] =
     React.useState<AdminUser | null>(null)
@@ -187,21 +193,9 @@ export function UserManagementPanel() {
     mutationFn: (input: CreateUserInput) =>
       createAdminUser(adminConnection, input),
     onError: (error) => toast.error(getErrorMessage(error)),
-    onSuccess: async (result, input) => {
+    onSuccess: async (result) => {
       setGeneratedCredential(result)
       setAddUserOpen(false)
-      if (result.apiKey) {
-        try {
-          await switchIdentity({
-            accountId: result.accountId || input.accountId,
-            allowLegacyIdentityFallback: true,
-            apiKey: result.apiKey,
-            userId: result.userId || input.userId,
-          })
-        } catch (error) {
-          toast.error(getErrorMessage(error))
-        }
-      }
       toast.success(t('toast.userCreated'))
       await queryClient.invalidateQueries({ queryKey: ['managed-users'] })
       await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
@@ -225,6 +219,10 @@ export function UserManagementPanel() {
           allowLegacyIdentityFallback: true,
           apiKey: result.apiKey,
           userId: user.userId,
+          rememberWorkbench:
+            !workbenchIdentity ||
+            (workbenchIdentity.accountId === user.accountId &&
+              workbenchIdentity.userId === user.userId),
         })
       }
       toast.success(t('toast.keyRegenerated'))
@@ -390,6 +388,8 @@ export function UserManagementPanel() {
           </Button>
         </div>
       </header>
+
+      <RootSetupGuide onCreate={() => setAddUserOpen(true)} />
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Card className="bg-card/70 py-4">

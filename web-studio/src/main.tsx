@@ -1,6 +1,9 @@
 import { registerServiceWorker } from '#/app/lib/service-worker'
 import { queryClient } from '#/app/providers/query-client'
-import { initializeCredentialStorage } from '#/features/connection/lib/credential-storage'
+import {
+  initializeCredentialStorage,
+  credentialStorageMode,
+} from '#/features/connection/lib/credential-storage'
 import '#/i18n'
 import i18n from '#/i18n/core'
 import { routeTree } from '#/routeTree.gen'
@@ -40,6 +43,9 @@ const rootElement = document.getElementById('app')!
 async function start() {
   try {
     await initializeCredentialStorage()
+    if (credentialStorageMode() === 'session') {
+      window.sessionStorage.removeItem('ov_studio_workspace_selected')
+    }
   } catch {
     rootElement.textContent = i18n.t('studio:credentialStorage.startError')
     return

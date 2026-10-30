@@ -17,6 +17,10 @@ import {
   PROFILES_STORAGE_KEY,
 } from '#/features/connection/lib/profiles'
 import type { ConnectionDraft } from '#/features/connection/lib/types'
+import {
+  readPreferredMode,
+  resolveStudioEntry,
+} from '#/features/connection/lib/studio-mode'
 import { createClient } from '#/gen/ov-client/client'
 import i18n from '#/i18n/core'
 import {
@@ -159,18 +163,44 @@ export async function verifyStudioSetup(
   if (!isValidConnectionUrl(connection.baseUrl))
     throw new Error(i18n.t('studio:errors.invalidServerUrl'))
   if (connection.serviceSelection === 'volcengine') connection.adminApiKey = ''
-  const health = await fetchConnectionHealth(
+  let verifiedKey = connection.apiKey || connection.adminApiKey
+  let health = await fetchConnectionHealth(
     connection,
     signal,
     connection.apiKey ? 'data' : 'control',
-  ).catch((error: unknown) => {
+  ).catch(async (error: unknown) => {
+    if (connection.apiKey && connection.adminApiKey) {
+      try {
+        const discovery = await fetchConnectionHealth(
+          { ...connection, apiKey: '', adminApiKey: '' },
+          signal,
+          'data',
+        )
+        // Only server-confirmed trusted mode may replace a data key with Root.
+        if (
+          isUsableServerHealth(discovery) &&
+          resolveServerAuthMode(discovery) === 'trusted'
+        ) {
+          const trusted = await fetchConnectionHealth(
+            connection,
+            signal,
+            'control',
+          )
+          verifiedKey = connection.adminApiKey
+          return trusted
+        }
+      } catch (cause) {
+        throw new StudioSetupRequestError('health', cause, connection)
+      }
+    }
     throw new StudioSetupRequestError('health', error, connection)
   })
   if (!isUsableServerHealth(health))
     throw new StudioSetupError('invalidService')
   const mode = resolveServerAuthMode(health)
+  connection.authMode = mode
   if (mode === 'trusted') {
-    connection.adminApiKey = connection.adminApiKey || connection.apiKey
+    connection.adminApiKey = verifiedKey
     connection.apiKey = ''
     if (!connection.adminApiKey) throw new StudioSetupError('keyRequired')
   } else if (
@@ -188,14 +218,29 @@ export async function verifyStudioSetup(
     health.role === 'root' &&
     connection.apiKey
   ) {
-    connection.adminApiKey = connection.apiKey
-    connection.apiKey = ''
+    const rootKey = connection.apiKey
+    const otherKey = connection.adminApiKey
+    connection.adminApiKey = rootKey
+    connection.apiKey = otherKey && otherKey !== rootKey ? otherKey : ''
+    // Recognize reversed Root + User/Admin inputs without discarding either key.
+    if (connection.apiKey) {
+      health = await fetchConnectionHealth(connection, signal, 'data').catch(
+        (error: unknown) => {
+          throw new StudioSetupRequestError('health', error, connection)
+        },
+      )
+      if (
+        !isUsableServerHealth(health) ||
+        (health.role !== 'admin' && health.role !== 'user')
+      )
+        throw new StudioSetupError('keyRequired')
+    }
   } else if (
     connection.serviceSelection === 'opensource' &&
-    health.role === 'admin' &&
-    !connection.adminApiKey
+    health.role === 'admin'
   ) {
-    connection.adminApiKey = connection.apiKey
+    connection.adminApiKey ||= connection.apiKey
+    connection.apiKey ||= connection.adminApiKey
   }
   const managementOnly =
     mode === 'api_key' &&
@@ -261,7 +306,13 @@ export function studioSetupDestination(
   connection: ConnectionDraft,
 ): '/filesystem' | '/admin' | '/home' {
   if (connection.serviceSelection === 'volcengine') return '/filesystem'
-  return !connection.apiKey && connection.adminApiKey ? '/admin' : '/home'
+  return resolveStudioEntry({
+    connection,
+    provider: 'opensource',
+    canManage: Boolean(connection.adminApiKey),
+    preferredMode: readPreferredMode(connection),
+    serverMode: connection.authMode,
+  })
 }
 
 export async function completeStudioSetup(

@@ -52,11 +52,13 @@ export function StudioManagementNavigation({
   isRoot,
   showGateway = false,
   gatewayOnly = false,
+  developmentMode = false,
 }: {
   pathname: string
   isRoot: boolean
   showGateway?: boolean
   gatewayOnly?: boolean
+  developmentMode?: boolean
 }) {
   const { t } = useTranslation(['appShell', 'settings'])
   const serviceItems = [
@@ -89,7 +91,7 @@ export function StudioManagementNavigation({
       : []),
   ]
   const groups = [
-    ...(!gatewayOnly
+    ...(!gatewayOnly && !developmentMode
       ? [{ label: 'appShell:modes.management', items: managementItems }]
       : []),
     ...(serviceItems.length

@@ -132,13 +132,13 @@ it('persists the default entry and keeps language and appearance controls togeth
   )
   expect(
     entries
-      .getByRole('button', { name: 'studioSettings.management' })
+      .getByRole('button', { name: 'studioSettings.workbench' })
       .getAttribute('aria-pressed'),
   ).toBe('true')
   fireEvent.click(
     entries.getByRole('button', { name: 'studioSettings.workbench' }),
   )
-  expect(readPreferredMode(state.connection)).toBe('workbench')
+  expect(readPreferredMode(state.connection, 'active')).toBe('workbench')
   fireEvent.click(screen.getByRole('button', { name: '中文' }))
   expect(state.changeLanguage).toHaveBeenCalledWith('zh-CN')
   fireEvent.click(screen.getByRole('button', { name: 'studioSettings.dark' }))
