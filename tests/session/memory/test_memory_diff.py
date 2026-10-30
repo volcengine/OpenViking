@@ -505,3 +505,74 @@ class TestMemoryDiffStructure:
 
         # We verify this through the actual implementation tests above
         assert set(expected_ops_keys).issubset(set(expected_ops_keys))
+
+
+class TestMergeMemoryDiffsDedup:
+    """_merge_memory_diffs must collapse identical (uri, before, after) rows (#6037)."""
+
+    def test_identical_update_rows_from_two_batches_collapse(self):
+        from openviking.session.compressor_v3 import _merge_memory_diffs
+
+        diff_a = {
+            "operations": {
+                "adds": [],
+                "updates": [{"uri": "u", "memory_type": "entities", "before": "X", "after": "Y"}],
+                "deletes": [],
+            }
+        }
+        diff_b = {
+            "operations": {
+                "adds": [],
+                "updates": [{"uri": "u", "memory_type": "entities", "before": "X", "after": "Y"}],
+                "deletes": [],
+            }
+        }
+        merged = _merge_memory_diffs([diff_a, diff_b], archive_uri="viking://archive_021")
+        assert len(merged["operations"]["updates"]) == 1
+        assert merged["summary"]["total_updates"] == 1
+        assert merged["operations"]["updates"][0]["uri"] == "u"
+
+    def test_distinct_progress_on_same_uri_is_kept(self):
+        from openviking.session.compressor_v3 import _merge_memory_diffs
+
+        # Same URI, different before/after — two real edits must both survive.
+        batches = [
+            {
+                "operations": {
+                    "updates": [
+                        {"uri": "u", "before": "2977", "after": "2581"},
+                    ]
+                }
+            },
+            {
+                "operations": {
+                    "updates": [
+                        {"uri": "u", "before": "2977", "after": "2581"},  # duplicate of batch 1
+                        {"uri": "u", "before": "2581", "after": "2052"},  # next real write
+                    ]
+                }
+            },
+        ]
+        merged = _merge_memory_diffs(batches, archive_uri="viking://archive_021")
+        updates = merged["operations"]["updates"]
+        assert len(updates) == 2
+        assert updates[0]["after"] == "2581"
+        assert updates[1]["after"] == "2052"
+        assert merged["summary"]["total_updates"] == 2
+
+    def test_identical_adds_and_deletes_collapse(self):
+        from openviking.session.compressor_v3 import _merge_memory_diffs
+
+        add = {"uri": "a", "memory_type": "identity", "after": "body"}
+        delete = {"uri": "d", "memory_type": "events", "deleted_content": "gone"}
+        merged = _merge_memory_diffs(
+            [
+                {"operations": {"adds": [add], "deletes": [delete]}},
+                {"operations": {"adds": [add], "deletes": [delete]}},
+            ],
+            archive_uri="viking://archive_021",
+        )
+        assert len(merged["operations"]["adds"]) == 1
+        assert len(merged["operations"]["deletes"]) == 1
+        assert merged["summary"]["total_adds"] == 1
+        assert merged["summary"]["total_deletes"] == 1
