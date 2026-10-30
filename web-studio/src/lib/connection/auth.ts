@@ -26,7 +26,7 @@ export function createConnectionHealthHeaders(
     auth === 'bearer'
       ? connection.apiKey
       : credential === 'data'
-        ? connection.apiKey || connection.adminApiKey
+        ? connection.apiKey
         : connection.adminApiKey || connection.apiKey
   if (!apiKey) return headers
   Object.assign(headers, createApiKeyHeaders(apiKey, auth))

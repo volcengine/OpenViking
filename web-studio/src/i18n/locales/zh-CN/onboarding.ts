@@ -18,7 +18,7 @@ export default {
   openSourceConnection: 'OpenSource',
   cancel: '取消',
   exit: '退出 Studio',
-  connectionTitle: '连接你的工作区。',
+  connectionTitle: '连接 OpenViking 服务。',
   preferencesHint: '选择你熟悉的语言与外观。',
   connectionHint: '连接并验证你的 OpenViking 服务。',
 
@@ -28,8 +28,8 @@ export default {
   keyRequired: '此服务需要 API Key，请填写后重试。',
 
   steps: '选择工作区',
-  workspace: '选择 Workspace',
-  workspaceHint: '选择已有连接，或添加新连接。',
+  workspace: '选择服务',
+  workspaceHint: '选择服务类型与地址，完成首次接入。',
   savedWorkspaces: '已有连接',
   connectionChoice: '选择连接',
   newConnection: '添加新服务地址',
@@ -40,7 +40,7 @@ export default {
   preferences: '基础偏好',
   connection: '连接服务',
   welcome: '欢迎使用\nOpenViking Studio',
-  welcomeDescription: '选择已有连接或添加新连接，再配置语言与外观。',
+  welcomeDescription: '完成服务连接与语言、外观设置，即可开始使用。',
   connectionDescription: '配置服务连接。验证成功后，将显示对应的工作区和功能。',
   language: '语言',
   theme: '外观',

@@ -1,5 +1,7 @@
 import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useRouterState } from '@tanstack/react-router'
+import { isManagementPath } from '#/lib/studio-mode'
 
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { fetchAdminAccounts, fetchAdminUsers } from '#/lib/admin'
@@ -21,8 +23,16 @@ export type UseIdentityDirectory = IdentityDirectory & {
  * 403 on `GET /admin/accounts` and is therefore pinned to their own account.
  */
 export function useIdentityDirectory(): UseIdentityDirectory {
-  const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
-    useAppConnection()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const {
+    connection,
+    connectionRole,
+    isConnectionRoleLoading,
+    serverMode,
+    studioMode,
+  } = useAppConnection()
 
   const controlApiKey =
     connection.adminApiKey.trim() || connection.apiKey.trim()
@@ -30,6 +40,8 @@ export function useIdentityDirectory(): UseIdentityDirectory {
   const baseUserId = connection.userId || DEFAULT_USER_ID
 
   const available =
+    studioMode === 'management' &&
+    isManagementPath(pathname) &&
     serverMode === 'api_key' &&
     !isConnectionRoleLoading &&
     (connectionRole === 'root' || connectionRole === 'admin') &&

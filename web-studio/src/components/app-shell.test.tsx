@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -64,7 +64,7 @@ describe('ConnectionScopedRouteContent', () => {
   )
 })
 
-it('routes first use to the configuration page before mounting business routes', () => {
+it('routes first use to the onboarding before mounting business routes', () => {
   localStorage.clear()
   sessionStorage.clear()
   render(
@@ -73,18 +73,17 @@ it('routes first use to the configuration page before mounting business routes',
     </AppShell>,
   )
   expect(screen.queryByTestId('business-route')).toBeNull()
-  expect(screen.getByText('/config')).toBeTruthy()
+  expect(screen.getByText('/onboarding')).toBeTruthy()
   expect(localStorage.getItem('ov_console_connection_profiles')).toBeNull()
 })
 
-it('shows the setup wizard at /config even after selecting a workspace', () => {
+it('keeps existing connections out of first-use onboarding', () => {
   localStorage.clear()
   sessionStorage.setItem('ov_studio_workspace_selected', 'selected')
-  bootstrap.pathname = '/config'
+  bootstrap.pathname = '/onboarding'
   render(<AppShell>{null}</AppShell>)
-  expect(screen.getByRole('heading', { level: 1 }).textContent).toContain(
-    'Choose a workspace',
-  )
+  expect(screen.getByText('/settings')).toBeTruthy()
+  expect(screen.queryByRole('heading')).toBeNull()
 })
 
 describe('gateway navigation', () => {
@@ -138,13 +137,29 @@ it('opens a fresh standalone Gateway Studio without the data-connection wizard',
   }
 })
 
-it('cancels setup back to the existing workspace without changing its marker', () => {
+it('renders first-use onboarding only at /onboarding', () => {
   localStorage.clear()
-  localStorage.setItem('ov_studio_setup', 'complete')
-  sessionStorage.setItem('ov_studio_workspace_selected', 'selected')
-  bootstrap.pathname = '/config'
+  sessionStorage.clear()
+  bootstrap.pathname = '/onboarding'
   render(<AppShell>{null}</AppShell>)
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-  expect(bootstrap.navigate).toHaveBeenCalledWith({ to: '/', replace: true })
-  expect(localStorage.getItem('ov_studio_setup')).toBe('complete')
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toContain(
+    'Choose a service',
+  )
+  expect(screen.queryByTestId('connected-provider')).toBeNull()
 })
+
+it.each([true, false])(
+  'redirects a mounted legacy /config surface with first-use=%s',
+  (firstUse) => {
+    localStorage.clear()
+    sessionStorage.clear()
+    if (!firstUse)
+      sessionStorage.setItem('ov_studio_workspace_selected', 'selected')
+    bootstrap.pathname = '/config'
+    render(<AppShell>{null}</AppShell>)
+    expect(
+      screen.getByText(firstUse ? '/onboarding' : '/settings'),
+    ).toBeTruthy()
+    expect(screen.queryByRole('heading')).toBeNull()
+  },
+)

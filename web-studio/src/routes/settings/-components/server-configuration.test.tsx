@@ -14,7 +14,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { ServerConfigurationEditor } from './server-configuration'
-import { Route } from '../route'
 import zh from '#/i18n/locales/zh-CN/workspace'
 import en from '#/i18n/locales/en/workspace'
 import type { ModelConfig } from '../-lib/config-file-api'
@@ -181,7 +180,6 @@ function mount(
   payload: typeof data & {
     overrides?: { cluster: string[]; account: string[] }
   } = data,
-  withSettingsTabs = false,
 ) {
   state.get.mockResolvedValue({ ...structuredClone(payload), content })
   state.preview.mockImplementation(async (text: string, changes = {}) => {
@@ -211,10 +209,9 @@ function mount(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
-  const SettingsRoute = Route.options.component!
   render(
     <QueryClientProvider client={client}>
-      {withSettingsTabs ? <SettingsRoute /> : <ServerConfigurationEditor />}
+      <ServerConfigurationEditor />
     </QueryClientProvider>,
   )
   return client
@@ -1032,38 +1029,6 @@ it('keeps the entire environment-bound form read-only and offers verbatim file e
   fireEvent.change(await screen.findByLabelText('models.fileContent'), {
     target: { value: text },
   })
-  fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
-  await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
-})
-
-it('retains the configuration draft when switching settings tabs', async () => {
-  await act(async () => {
-    mount(data, true)
-  })
-  fireEvent.click(
-    await screen.findByRole('tab', { name: 'tabs.configuration' }),
-  )
-  await screen.findByText('model-a')
-  fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
-  const text = content.replace('default-model', 'unsaved-model')
-  fireEvent.change(
-    await screen.findByRole<HTMLTextAreaElement>('textbox', {
-      name: 'models.fileContent',
-    }),
-    { target: { value: text } },
-  )
-  fireEvent.click(screen.getByRole('tab', { name: 'tabs.connection' }))
-  await waitFor(() =>
-    expect(
-      screen.queryByRole('textbox', { name: 'models.fileContent' }),
-    ).toBeNull(),
-  )
-  fireEvent.click(screen.getByRole('tab', { name: 'tabs.configuration' }))
-  expect(
-    screen.getByRole<HTMLTextAreaElement>('textbox', {
-      name: 'models.fileContent',
-    }).value,
-  ).toBe(text)
   fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
   await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
 })

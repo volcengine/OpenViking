@@ -10,17 +10,19 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import { AppConnectionProvider, useAppConnection } from './use-app-connection'
+import * as adminApi from '#/lib/admin'
 import { ovClient } from '#/lib/ov-client'
 import { PROFILES_STORAGE_KEY } from '#/lib/connection/profiles'
 import type * as ServerModeModule from '#/lib/connection/health'
 
-const { health, navigate } = vi.hoisted(() => ({
+const { health, navigate, routing } = vi.hoisted(() => ({
   health: vi.fn(),
+  routing: { pathname: '/settings' },
   navigate: vi.fn(),
 }))
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
-  useRouterState: () => '/settings',
+  useRouterState: () => routing.pathname,
 }))
 vi.mock('#/lib/connection/health', async (original) => ({
   ...(await original<typeof ServerModeModule>()),
@@ -28,8 +30,10 @@ vi.mock('#/lib/connection/health', async (original) => ({
 }))
 afterEach(() => {
   cleanup()
+  routing.pathname = '/settings'
   localStorage.clear()
   health.mockReset()
+  vi.restoreAllMocks()
 })
 const source = {
   baseUrl: 'http://10.0.0.1:1933',
@@ -119,6 +123,7 @@ it('saves without activation, switches credentials, clears cache and restores th
   expect(health).toHaveBeenCalledWith(
     'https://api.vikingdb.cn-beijing.volces.com/openviking',
     { Authorization: 'Bearer cloud-key' },
+    expect.any(AbortSignal),
   )
   view.unmount()
   mount(client)
@@ -297,3 +302,77 @@ it('rejects an identity switch started by an obsolete profile callback', async (
   ).toBe(false)
   client.clear()
 })
+
+it('keeps the selected connection profile stable while changing Account and User through scope controls', async () => {
+  routing.pathname = '/admin/settings'
+  vi.spyOn(adminApi, 'fetchAdminAccounts').mockResolvedValue([])
+  localStorage.setItem(
+    'ov_console_connection',
+    JSON.stringify({ ...source, adminApiKey: 'root-key' }),
+  )
+  health.mockImplementation(async (_url, headers) => ({
+    auth_mode: 'api_key',
+    version: '0.5.1',
+    role: headers['X-API-Key'] === 'root-key' ? 'root' : 'user',
+    account_id: headers['X-API-Key'] === 'bob-key' ? 'team-b' : 'default',
+    user_id: headers['X-API-Key'] === 'bob-key' ? 'bob' : 'alice',
+  }))
+  let api!: ReturnType<typeof useAppConnection>
+  function Capture() {
+    api = useAppConnection()
+    return null
+  }
+  const client = new QueryClient()
+  render(
+    <QueryClientProvider client={client}>
+      <AppConnectionProvider>
+        <Capture />
+      </AppConnectionProvider>
+    </QueryClientProvider>,
+  )
+  await waitFor(() => expect(api.connectionRole).toBe('root'))
+  const profileId = api.activeProfileId
+  const profileName = api.profiles.find(
+    (profile) => profile.id === profileId,
+  )!.name
+  await act(async () => {
+    await api.switchManagementAccount('team-b', { preserveProfile: true })
+  })
+  expect(api.activeProfileId).toBe(profileId)
+  expect(api.connection).toMatchObject({
+    accountId: 'team-b',
+    userId: '',
+    apiKey: '',
+    adminApiKey: 'root-key',
+  })
+  await waitFor(() => expect(api.connectionRole).toBe('root'))
+  await act(async () => {
+    await api.switchIdentity({
+      accountId: 'team-b',
+      userId: 'bob',
+      apiKey: 'bob-key',
+      preserveProfile: true,
+    })
+  })
+  expect(api.activeProfileId).toBe(profileId)
+  expect(api.profiles).toHaveLength(1)
+  expect(api.profiles[0].name).toBe(profileName)
+  expect(api.connection).toMatchObject({
+    accountId: 'team-b',
+    userId: 'bob',
+    apiKey: 'bob-key',
+    adminApiKey: 'root-key',
+  })
+  const saved = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY)!)
+  expect(saved.activeId).toBe(profileId)
+  expect(saved.profiles[0].connection.userId).toBe('bob')
+  client.clear()
+})
+
+// Persistence is tested separately with real Web Crypto in credential-storage.test.ts.
+vi.mock('#/lib/connection/credential-storage', () => ({
+  readCredentialStorage: (key: string) => localStorage.getItem(key),
+  writeCredentialStorage: (key: string, value: string) =>
+    localStorage.setItem(key, value),
+  flushCredentialStorage: async () => {},
+}))

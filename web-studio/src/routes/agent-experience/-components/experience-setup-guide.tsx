@@ -19,8 +19,6 @@ import {
 } from '#/components/ui/popover'
 import { copyTextToClipboard } from '#/lib/clipboard'
 
-import { EvolutionSettingsPopover } from './evolution-settings-popover'
-
 const INSTALL_COMMAND =
   'npx skills add https://github.com/volcengine/OpenViking/tree/main/examples/skills/ov-experience-memory'
 
@@ -132,7 +130,6 @@ export function ExperienceSetupGuide() {
             <div className="flex flex-wrap items-center gap-3">
               <StepNumber number={3} />
               <span>{t('setup.enable')}</span>
-              <EvolutionSettingsPopover />
             </div>
             <p className="mt-2 text-muted-foreground sm:ml-9">
               {t('setup.enableHint')}

@@ -92,6 +92,7 @@ it('does not add a skill when the runtime connection changes before React unmoun
   vi.spyOn(ovClient, 'getOptions').mockImplementation(() => ({
     apiKeyAuth: 'header',
     apiKeyStorageKey: 'test',
+    credentialScope: 'data',
     baseUrl,
     defaultTelemetry: false,
   }))

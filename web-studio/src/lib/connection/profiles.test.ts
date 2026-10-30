@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import {
   readConnectionProfiles,
   activateIdentityProfile,
   persistConnectionProfiles,
   updateActiveProfile,
+  savedDataIdentities,
   normalizeProfileConnection,
   isValidConnectionUrl,
+  groupProfilesByService,
 } from '#/lib/connection/profiles'
 import type { ConnectionDraft } from '#/lib/connection/types'
 
@@ -18,6 +20,40 @@ const fallback: ConnectionDraft = {
   userId: 'alice',
 }
 afterEach(() => localStorage.clear())
+it('groups navigation by service address and provider regardless of credentials or identity', () => {
+  const original = { id: 'first', name: 'Development', connection: fallback }
+  const anotherUser = {
+    id: 'second',
+    name: 'other/bob',
+    connection: {
+      ...fallback,
+      baseUrl: `${fallback.baseUrl}/`,
+      accountId: 'other',
+      userId: 'bob',
+      apiKey: 'bob-key',
+      adminApiKey: '',
+    },
+  }
+  const anotherPath = {
+    ...original,
+    id: 'path',
+    connection: { ...fallback, baseUrl: `${fallback.baseUrl}/another-service` },
+  }
+  const anotherProvider = {
+    ...original,
+    id: 'provider',
+    connection: { ...fallback, serviceSelection: 'volcengine' as const },
+  }
+  const profiles = [original, anotherUser, anotherPath, anotherProvider]
+  expect(groupProfilesByService(profiles)).toEqual([
+    [original, anotherUser],
+    [anotherPath],
+    [anotherProvider],
+  ])
+  // Grouping never merges stored credentials or rewrites the saved profiles.
+  expect(profiles).toHaveLength(4)
+  expect(anotherUser.connection.adminApiKey).toBe('')
+})
 it('aligns saved and restored provider labels with official hosted authentication', () => {
   const hosted = {
     ...fallback,
@@ -110,3 +146,65 @@ it('preserves identities on one endpoint and reuses an exact saved identity', ()
   })
   expect(otherCredential.profiles).toHaveLength(3)
 })
+
+it('retains configured User keys across scope changes without adding connection configurations', () => {
+  const initial = readConnectionProfiles(fallback)
+  const bob = { ...fallback, userId: 'bob', apiKey: 'bob-key' }
+  const updated = updateActiveProfile(initial, bob, true)
+  expect(updated.activeId).toBe(initial.activeId)
+  expect(updated.profiles).toHaveLength(1)
+  persistConnectionProfiles(updated)
+  const restored = readConnectionProfiles(bob)
+  expect(
+    savedDataIdentities(restored.profiles, bob).map((entry) => entry.userId),
+  ).toEqual(['bob', fallback.userId])
+})
+it('isolates remembered User keys by service and excludes Root-only or keyless identities', () => {
+  const initial = readConnectionProfiles(fallback)
+  const updated = updateActiveProfile(
+    initial,
+    {
+      ...fallback,
+      baseUrl: 'http://other.test',
+      userId: 'bob',
+      apiKey: 'bob-key',
+    },
+    true,
+  )
+  expect(
+    savedDataIdentities(updated.profiles, fallback).map(
+      (entry) => entry.userId,
+    ),
+  ).toEqual([fallback.userId])
+  const rootOnly = { ...fallback, apiKey: '', adminApiKey: 'root-key' }
+  expect(
+    savedDataIdentities(
+      [{ id: 'root', name: 'Root', connection: rootOnly }],
+      rootOnly,
+    ),
+  ).toEqual([])
+})
+
+it('does not retain a replaced or cleared configured key as a selectable history entry', () => {
+  const initial = readConnectionProfiles(fallback)
+  const bob = { ...fallback, userId: 'bob', apiKey: 'bob-key' }
+  const switched = updateActiveProfile(
+    updateActiveProfile(initial, bob, true),
+    fallback,
+    true,
+  )
+  const cleared = updateActiveProfile(switched, { ...fallback, apiKey: '' })
+  expect(
+    savedDataIdentities(cleared.profiles, { ...fallback, apiKey: '' }).some(
+      (entry) => entry.apiKey === fallback.apiKey,
+    ),
+  ).toBe(false)
+})
+
+// Persistence is tested separately with real Web Crypto in credential-storage.test.ts.
+vi.mock('#/lib/connection/credential-storage', () => ({
+  readCredentialStorage: (key: string) => localStorage.getItem(key),
+  writeCredentialStorage: (key: string, value: string) =>
+    localStorage.setItem(key, value),
+  flushCredentialStorage: async () => {},
+}))

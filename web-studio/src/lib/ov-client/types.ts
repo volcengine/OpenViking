@@ -14,6 +14,7 @@ export interface OvConnectionState {
 }
 
 export interface OvClientOptions {
+  credentialScope?: 'auto' | 'data' | 'control'
   apiKeyAuth?: ApiKeyAuth
   apiKeyStorageKey?: string
   axios?: AxiosInstance
@@ -33,7 +34,11 @@ export interface OvClientAdapter {
     Required<
       Pick<
         OvClientOptions,
-        'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry' | 'apiKeyAuth'
+        | 'apiKeyStorageKey'
+        | 'baseUrl'
+        | 'defaultTelemetry'
+        | 'apiKeyAuth'
+        | 'credentialScope'
       >
     >
   >
@@ -42,14 +47,22 @@ export interface OvClientAdapter {
     next: Partial<
       Pick<
         OvClientOptions,
-        'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry' | 'apiKeyAuth'
+        | 'apiKeyStorageKey'
+        | 'baseUrl'
+        | 'defaultTelemetry'
+        | 'apiKeyAuth'
+        | 'credentialScope'
       >
     >,
   ) => Readonly<
     Required<
       Pick<
         OvClientOptions,
-        'apiKeyStorageKey' | 'baseUrl' | 'defaultTelemetry' | 'apiKeyAuth'
+        | 'apiKeyStorageKey'
+        | 'baseUrl'
+        | 'defaultTelemetry'
+        | 'apiKeyAuth'
+        | 'credentialScope'
       >
     >
   >

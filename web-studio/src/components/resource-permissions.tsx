@@ -55,7 +55,7 @@ import type {
   AclReport,
 } from '#/lib/resource-acl'
 import { fetchAdminGroups, fetchAdminUsersPage } from '#/lib/admin'
-import { getErrorMessage } from '#/routes/users/-lib/error'
+import { getErrorMessage } from '#/routes/admin/users/-lib/error'
 import { useDebouncedValue } from '#/routes/resources/-hooks/viking-fm'
 
 const subjectTypes = ['user', 'group', 'everyone'] as const

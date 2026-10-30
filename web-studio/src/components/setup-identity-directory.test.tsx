@@ -67,6 +67,7 @@ it('loads root accounts and a credential-free user directory without changing id
   expect(mocks.health).toHaveBeenCalledWith(
     expect.objectContaining({ apiKey: '', adminApiKey: 'root-secret' }),
     expect.any(AbortSignal),
+    'control',
   )
   expect(mocks.users).toHaveBeenCalledWith(
     expect.objectContaining({ apiKey: 'root-secret' }),
@@ -113,7 +114,7 @@ it('restricts an admin key to its authoritative account instead of listing all a
   )
   await user.click(screen.getByRole('combobox', { name: 'directoryAccount' }))
   expect(screen.queryByRole('option', { name: 'team' })).toBeNull()
-  await user.click(screen.getByRole('option', { name: 'bound-account' }))
+  await user.click(await screen.findByRole('option', { name: 'bound-account' }))
   expect(mocks.users).toHaveBeenCalledWith(
     expect.objectContaining({ accountId: 'bound-account' }),
     'bound-account',

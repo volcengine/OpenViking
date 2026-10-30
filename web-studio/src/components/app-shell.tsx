@@ -1,3 +1,12 @@
+import { StudioHeader } from './studio-header'
+import { StudioManagementNavigation } from './studio-management-navigation'
+import { useStudioMode } from '#/hooks/use-studio-mode'
+import {
+  isManagementPath,
+  isSharedStudioPath,
+  isConnectionSettingsPath,
+  connectionSettingsPath,
+} from '#/lib/studio-mode'
 import { Button } from '#/components/ui/button'
 import studioI18n from '#/i18n'
 import { StudioSetup } from './studio-setup'
@@ -15,29 +24,23 @@ import {
 import {
   MessagesSquareIcon,
   BookOpenIcon,
+  CableIcon,
   BracesIcon,
   BrainIcon,
   ChevronRightIcon,
   ListChecksIcon,
   HistoryIcon,
   HomeIcon,
-  GithubIcon,
   KeyRoundIcon,
-  MoonIcon,
   ActivityIcon,
   BotIcon,
   PanelsTopLeftIcon,
-  CableIcon,
   ScrollTextIcon,
   SearchIcon,
   SparklesIcon,
-  SunIcon,
-  UsersRoundIcon,
-  WaypointsIcon,
   WorkflowIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useTheme } from 'next-themes'
 
 import {
   Collapsible,
@@ -45,7 +48,6 @@ import {
   CollapsibleTrigger,
 } from '#/components/ui/collapsible'
 import { CrossDeviceVerifyDialog } from '#/components/cross-device-verify-dialog'
-import { AccountSwitcher } from '#/components/account-switcher'
 import { GeneratedCredentialDialog } from '#/components/generated-credential-dialog'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import {
@@ -55,10 +57,8 @@ import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarInset,
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -72,17 +72,12 @@ import {
   useAppConnection,
 } from '#/hooks/use-app-connection'
 import type { ServerMode } from '#/lib/connection/health'
-import { cn } from '#/lib/utils'
-import { useGateway } from '#/routes/gateway/-lib/use-gateway'
 import { fetchServerHealth } from '#/lib/connection/health'
 import { useStudioService } from '#/hooks/use-studio-service'
 import { useStudioCapabilities } from '#/hooks/use-studio-capabilities'
 import { featureForPath, isStudioFeatureVisible } from '#/lib/studio-service'
 import { StudioFeatureBoundary } from './studio-feature-boundary'
-import {
-  canManageStudioGateway,
-  resolveStudioManagementCapabilities,
-} from '#/lib/studio-permissions'
+import { canManageStudioGateway } from '#/lib/studio-permissions'
 
 type NavItem = {
   icon: React.ComponentType
@@ -206,25 +201,7 @@ const NAV_SECTIONS = [
   },
 ] as const
 
-const LANGUAGE_OPTIONS = [
-  {
-    shortLabel: '中',
-    title: '中文',
-    value: 'zh-CN',
-  },
-  {
-    shortLabel: 'EN',
-    title: 'English',
-    value: 'en',
-  },
-] as const
-
-const HEADER_ICON_BUTTON_CLASS =
-  'relative inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border/80 bg-muted/60 text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
-
-function resolveLanguage(
-  value: string | undefined,
-): (typeof LANGUAGE_OPTIONS)[number]['value'] {
+function resolveLanguage(value: string | undefined): 'zh-CN' | 'en' {
   if (value?.toLowerCase().startsWith('zh')) {
     return 'zh-CN'
   }
@@ -322,6 +299,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
     )
   if (pathname === '/config')
+    return <Navigate replace to={needsSetup ? '/onboarding' : '/settings'} />
+  if (pathname === '/onboarding' && !needsSetup)
+    return <Navigate replace to="/settings" />
+  if (pathname === '/onboarding')
     return (
       <StudioSetup
         canReturnToWorkspace={!needsSetup}
@@ -340,7 +321,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }}
       />
     )
-  if (needsSetup) return <Navigate replace to="/config" />
+  if (needsSetup) return <Navigate replace to="/onboarding" />
   return (
     <AppConnectionProvider>
       <IdentityScopedAppShell>{children}</IdentityScopedAppShell>
@@ -353,11 +334,12 @@ export function IdentityScopedAppShell({
 }: {
   children: React.ReactNode
 }) {
-  const { identityScopeKey, activeProfileId, serverMode } = useAppConnection()
+  const { identityScopeKey, activeProfileId, serverMode, studioMode } =
+    useAppConnection()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const isSettings = pathname === '/settings'
+  const isSettings = isConnectionSettingsPath(pathname)
   // Keep the settings tree stable across health transitions, but reset it when
   // an actual profile changes. Business routes retain identity isolation.
   if (serverMode === 'checking' && !isSettings)
@@ -370,7 +352,7 @@ export function IdentityScopedAppShell({
         <Button
           nativeButton={false}
           variant="outline"
-          render={<Link to="/settings" />}
+          render={<Link to={connectionSettingsPath(pathname, studioMode)} />}
         >
           {studioI18n.t('studio:connectionSettings')}
         </Button>
@@ -412,7 +394,7 @@ export function shouldShowGatewayNavigation({
 }: {
   isGatewayHost: boolean
   serverMode: ServerMode
-  /** `useGateway().allowed`: the gateway can be asked for /access. */
+  /** Gateway administration is available for the connected service. */
   allowed: boolean
 }): boolean {
   return (
@@ -427,7 +409,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const { setTheme, resolvedTheme } = useTheme()
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
@@ -445,6 +426,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     isConnectionRoleLoading,
     isGatewayHost,
     serverMode,
+    studioMode,
   } = useAppConnection()
   const service = useStudioService()
   const { provider } = service
@@ -452,10 +434,14 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     provider === 'volcengine'
       ? 'https://docs.volcengine.com/docs/84313/2381937'
       : opensourceApiHref
-  const settingsActive = pathname === '/settings'
-  const usersActive = pathname === '/users' || pathname.startsWith('/users/')
-  const gatewayActive =
-    pathname === '/gateway' || pathname.startsWith('/gateway/')
+  const { canManage } = useStudioMode()
+  const managementMode =
+    isManagementPath(pathname) ||
+    (isSharedStudioPath(pathname) && canManage && studioMode === 'management')
+  const settingsPath = connectionSettingsPath(
+    pathname,
+    managementMode ? 'management' : 'workbench',
+  )
   const permissionInput = {
     serviceProvider: provider,
     hasControlCredential: Boolean(connection.adminApiKey.trim()),
@@ -463,26 +449,18 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     role: connectionRole,
     serverMode,
   }
-  const gateway = useGateway()
   const canManageGateway =
     service.ready && canManageStudioGateway(permissionInput)
   const showGateway = shouldShowGatewayNavigation({
     isGatewayHost,
     serverMode,
-    allowed: canManageGateway && gateway.allowed,
+    allowed: canManageGateway,
   })
   const navSections = isGatewayHost ? [] : NAV_SECTIONS
-  const { canManageUsers: canManageServiceUsers } =
-    resolveStudioManagementCapabilities({
-      serviceProvider: provider,
-      hasControlCredential: Boolean(connection.adminApiKey.trim()),
-      isRoleLoading: isConnectionRoleLoading,
-      role: connectionRole,
-      serverMode,
-    })
-  const canManageUsers = !isGatewayHost && canManageServiceUsers
   const crossDeviceVerifyActive =
-    pathname === '/oauth/verify' || pathname.startsWith('/oauth/verify/')
+    pathname === '/oauth/verify' ||
+    pathname.startsWith('/oauth/verify/') ||
+    pathname === '/admin/oauth/verify'
   const capabilities = useStudioCapabilities()
   const visibleNavItems = NAV_ITEMS.filter((item) => {
     const feature = featureForPath(item.to)
@@ -511,292 +489,225 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     if (useDialog) {
       setCrossDeviceVerifyOpen(true)
     } else {
-      void navigate({ to: '/oauth/verify' })
+      void navigate({
+        to: managementMode ? '/admin/oauth/verify' : '/oauth/verify',
+      })
     }
   }
 
   return (
     <SidebarProvider
       defaultOpen
-      className="flex h-svh overflow-hidden bg-sidebar"
+      className="flex h-svh min-h-0 flex-col overflow-hidden bg-sidebar"
     >
-      <Sidebar variant="sidebar" collapsible="icon">
-        <SidebarHeader className="h-12 border-b border-sidebar-border/70 px-2 py-0">
-          <div className="flex h-full items-center gap-1 group-data-[collapsible=icon]:justify-center">
-            <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
-              <AccountSwitcher />
-            </div>
-          </div>
-        </SidebarHeader>
+      <StudioHeader
+        managementMode={managementMode}
+        canManage={canManage}
+        isGatewayHost={isGatewayHost}
+        settingsPath={settingsPath}
+      />
+      <div className="flex min-h-0 flex-1">
+        <Sidebar
+          variant="sidebar"
+          collapsible="icon"
+          className="top-14 h-[calc(100svh-3.5rem)]"
+        >
+          <SidebarContent className="gap-0 py-1">
+            {managementMode && (canManage || isGatewayHost) ? (
+              <StudioManagementNavigation
+                pathname={pathname}
+                isRoot={connectionRole === 'root' && !isGatewayHost}
+                showGateway={showGateway}
+                gatewayOnly={isGatewayHost}
+              />
+            ) : null}
+            {!managementMode &&
+              navSections
+                .filter((section) =>
+                  visibleNavItems.some((item) => item.section === section.id),
+                )
+                .map((section) => (
+                  <SidebarGroup key={section.id} className="pb-1">
+                    <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+                      {t(section.titleKey, { ns: 'appShell' })}
+                    </SidebarGroupLabel>
+                    <SidebarGroupContent>
+                      <SidebarMenu>
+                        {visibleNavItems
+                          .filter((item) => item.section === section.id)
+                          .map((item) => {
+                            const isActive =
+                              pathname === item.to ||
+                              pathname.startsWith(`${item.to}/`)
+                            const title = t(item.titleKey, { ns: 'appShell' })
 
-        <SidebarContent className="gap-0 py-1">
-          {navSections
-            .filter((section) =>
-              visibleNavItems.some((item) => item.section === section.id),
-            )
-            .map((section) => (
-              <SidebarGroup key={section.id} className="pb-1">
-                <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
-                  {t(section.titleKey, { ns: 'appShell' })}
-                </SidebarGroupLabel>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {visibleNavItems
-                      .filter((item) => item.section === section.id)
-                      .map((item) => {
-                        const isActive =
-                          pathname === item.to ||
-                          pathname.startsWith(`${item.to}/`)
-                        const title = t(item.titleKey, { ns: 'appShell' })
+                            if (item.children) {
+                              return (
+                                <NavGroupItem
+                                  key={item.id}
+                                  item={
+                                    item as NavItem & {
+                                      children: readonly NavSubItem[]
+                                    }
+                                  }
+                                  pathname={pathname}
+                                  title={title}
+                                  t={t}
+                                />
+                              )
+                            }
 
-                        if (item.children) {
-                          return (
-                            <NavGroupItem
-                              key={item.id}
-                              item={
-                                item as NavItem & {
-                                  children: readonly NavSubItem[]
-                                }
-                              }
-                              pathname={pathname}
-                              title={title}
-                              t={t}
-                            />
-                          )
-                        }
+                            const Icon = item.icon
 
-                        const Icon = item.icon
+                            return (
+                              <SidebarMenuItem key={item.id}>
+                                <SidebarMenuButton
+                                  render={<Link to={item.to} />}
+                                  isActive={isActive}
+                                  tooltip={title}
+                                  className="h-9"
+                                >
+                                  <Icon />
+                                  <span>{title}</span>
+                                </SidebarMenuButton>
+                              </SidebarMenuItem>
+                            )
+                          })}
+                      </SidebarMenu>
+                    </SidebarGroupContent>
+                  </SidebarGroup>
+                ))}
 
-                        return (
-                          <SidebarMenuItem key={item.id}>
-                            <SidebarMenuButton
-                              render={<Link to={item.to} />}
-                              isActive={isActive}
-                              tooltip={title}
-                              className="h-9"
-                            >
-                              <Icon />
-                              <span>{title}</span>
-                            </SidebarMenuButton>
-                          </SidebarMenuItem>
-                        )
-                      })}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
-            ))}
-
-          <SidebarGroup className="pb-1">
-            <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
-              {t('sidebar.groups.settings', { ns: 'appShell' })}
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    render={<Link to="/settings" />}
-                    isActive={settingsActive}
-                    tooltip={t('footer.connection', { ns: 'appShell' })}
-                    className="h-9"
-                  >
-                    <CableIcon />
-                    <span>{t('footer.connection', { ns: 'appShell' })}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                {showGateway ? (
+            <SidebarGroup className="pb-1">
+              <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+                {t('sidebar.groups.settings', { ns: 'appShell' })}
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
                   <SidebarMenuItem>
                     <SidebarMenuButton
-                      render={<Link to="/gateway" />}
-                      isActive={gatewayActive}
-                      tooltip={t('footer.gatewayBeta', {
-                        ns: 'appShell',
-                      })}
-                      className="h-9 pr-12"
-                    >
-                      <WaypointsIcon />
-                      <span>{t('footer.gateway', { ns: 'appShell' })}</span>
-                    </SidebarMenuButton>
-                    {/* Hidden while the sidebar is collapsed; the tooltip says Beta then. */}
-                    <SidebarMenuBadge className="h-4.5 rounded-full border border-sidebar-border px-1.5 text-[10px] font-medium text-sidebar-foreground/55 peer-data-[size=default]/menu-button:top-[9px]">
-                      {t('footer.beta', { ns: 'appShell' })}
-                    </SidebarMenuBadge>
-                  </SidebarMenuItem>
-                ) : null}
-                {canManageUsers ? (
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      render={<Link to="/users" />}
-                      isActive={usersActive}
-                      tooltip={t('footer.users', { ns: 'appShell' })}
+                      render={<Link to={settingsPath} />}
+                      isActive={isConnectionSettingsPath(pathname)}
+                      tooltip={t('footer.connection', { ns: 'appShell' })}
                       className="h-9"
                     >
-                      <UsersRoundIcon />
-                      <span>{t('footer.users', { ns: 'appShell' })}</span>
+                      <CableIcon />
+                      <span>{t('footer.connection', { ns: 'appShell' })}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                ) : null}
-                {provider === 'opensource' && !isGatewayHost ? (
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      onClick={openCrossDeviceVerify}
-                      isActive={crossDeviceVerifyActive}
-                      tooltip={t('navigation.crossDeviceVerify.title', {
-                        ns: 'appShell',
-                      })}
-                      className="h-9"
-                    >
-                      <KeyRoundIcon />
-                      <span>
-                        {t('navigation.crossDeviceVerify.title', {
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+
+            <SidebarGroup
+              className="pb-1"
+              hidden={provider !== 'opensource' || isGatewayHost}
+            >
+              <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+                {t('sidebar.groups.connections', { ns: 'appShell' })}
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {provider === 'opensource' && !isGatewayHost ? (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        onClick={openCrossDeviceVerify}
+                        isActive={crossDeviceVerifyActive}
+                        tooltip={t('navigation.crossDeviceVerify.title', {
                           ns: 'appShell',
                         })}
-                      </span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ) : null}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+                        className="h-9"
+                      >
+                        <KeyRoundIcon />
+                        <span>
+                          {t('navigation.crossDeviceVerify.title', {
+                            ns: 'appShell',
+                          })}
+                        </span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ) : null}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
 
-          <SidebarGroup className="pb-1" hidden={isGatewayHost}>
-            <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
-              {t('sidebar.groups.resources', { ns: 'appShell' })}
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    render={
-                      <a
-                        href={
-                          provider === 'volcengine'
-                            ? sdkApiHref
-                            : 'https://docs.openviking.ai/'
-                        }
-                        target="_blank"
-                        rel="noreferrer"
-                      />
-                    }
-                    tooltip={t('footer.docs', { ns: 'appShell' })}
-                    className="h-9"
-                  >
-                    <BookOpenIcon />
-                    <span>{t('footer.docs', { ns: 'appShell' })}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    render={
-                      <a href={sdkApiHref} target="_blank" rel="noreferrer" />
-                    }
-                    tooltip={t('footer.sdkApi', { ns: 'appShell' })}
-                    className="h-9"
-                  >
-                    <BracesIcon />
-                    <span>{t('footer.sdkApi', { ns: 'appShell' })}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                {provider === 'opensource' && !isGatewayHost ? (
+            <SidebarGroup className="pb-1" hidden={isGatewayHost}>
+              <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+                {t('sidebar.groups.resources', { ns: 'appShell' })}
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       render={
                         <a
-                          href={agentIntegrationsHref}
+                          href={
+                            provider === 'volcengine'
+                              ? sdkApiHref
+                              : 'https://docs.openviking.ai/'
+                          }
                           target="_blank"
                           rel="noreferrer"
                         />
                       }
-                      tooltip={t('footer.agentIntegrations', {
-                        ns: 'appShell',
-                      })}
+                      tooltip={t('footer.docs', { ns: 'appShell' })}
                       className="h-9"
                     >
-                      <BotIcon />
-                      <span>
-                        {t('footer.agentIntegrations', { ns: 'appShell' })}
-                      </span>
+                      <BookOpenIcon />
+                      <span>{t('footer.docs', { ns: 'appShell' })}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                ) : null}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-        <SidebarFooter className="hidden items-end border-t border-sidebar-border/70 px-2 py-1 group-data-[collapsible=icon]:items-center md:flex">
-          <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
-        </SidebarFooter>
-      </Sidebar>
-
-      <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
-        <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-sidebar px-4 backdrop-blur-md md:px-6">
-          <SidebarTrigger className="mr-auto shrink-0 md:hidden" />
-          <div className="flex items-center gap-2">
-            <div
-              aria-label={t('language.label', { ns: 'common' })}
-              className="relative flex h-8 items-center rounded-lg border border-border/80 bg-muted/60 p-1 text-xs shadow-xs"
-              role="group"
-            >
-              <span
-                className={cn(
-                  'absolute h-6 min-w-8 rounded-md bg-background shadow-sm transition-transform duration-200 ease-in-out',
-                  currentLanguage === 'en' && 'translate-x-full',
-                )}
-              />
-              {LANGUAGE_OPTIONS.map((item) => {
-                const isActive = item.value === currentLanguage
-
-                return (
-                  <button
-                    key={item.value}
-                    type="button"
-                    aria-pressed={isActive}
-                    className={cn(
-                      'relative z-10 h-6 min-w-8 rounded-md px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                      isActive && 'text-foreground',
-                    )}
-                    onClick={() => {
-                      if (!isActive) {
-                        void i18n.changeLanguage(item.value)
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      render={
+                        <a href={sdkApiHref} target="_blank" rel="noreferrer" />
                       }
-                    }}
-                  >
-                    {item.shortLabel}
-                  </button>
-                )
-              })}
+                      tooltip={t('footer.sdkApi', { ns: 'appShell' })}
+                      className="h-9"
+                    >
+                      <BracesIcon />
+                      <span>{t('footer.sdkApi', { ns: 'appShell' })}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  {provider === 'opensource' && !isGatewayHost ? (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        render={
+                          <a
+                            href={agentIntegrationsHref}
+                            target="_blank"
+                            rel="noreferrer"
+                          />
+                        }
+                        tooltip={t('footer.agentIntegrations', {
+                          ns: 'appShell',
+                        })}
+                        className="h-9"
+                      >
+                        <BotIcon />
+                        <span>
+                          {t('footer.agentIntegrations', { ns: 'appShell' })}
+                        </span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ) : null}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </SidebarContent>
+          <SidebarFooter className="hidden items-end border-t border-sidebar-border/70 px-2 py-1 group-data-[collapsible=icon]:items-center md:flex">
+            <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
+          </SidebarFooter>
+        </Sidebar>
+
+        <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="flex w-full flex-col gap-6 px-4 py-6 md:px-6">
+              {children}
             </div>
-
-            <button
-              type="button"
-              aria-label={t('theme.toggle', { ns: 'common' })}
-              className={HEADER_ICON_BUTTON_CLASS}
-              onClick={() =>
-                setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
-              }
-            >
-              <MoonIcon className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <SunIcon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-            </button>
-
-            <a
-              href="https://github.com/volcengine/OpenViking"
-              target="_blank"
-              rel="noreferrer"
-              aria-label={t('footer.github', { ns: 'appShell' })}
-              className={HEADER_ICON_BUTTON_CLASS}
-            >
-              <GithubIcon className="size-4" />
-            </a>
-
-          </div>
-        </header>
-
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="flex w-full flex-col gap-6 px-4 py-6 md:px-6">
-            {children}
-          </div>
-        </ScrollArea>
-      </SidebarInset>
+          </ScrollArea>
+        </SidebarInset>
+      </div>
 
       {provider === 'opensource' && !isGatewayHost ? (
         <CrossDeviceVerifyDialog

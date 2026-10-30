@@ -433,7 +433,7 @@ function extractErrorMessage(text: string, fallback: string): string {
 function buildFetchHeaders(): Record<string, string> {
   const conn = ovClient.getConnection()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const apiKey = conn.apiKey || conn.adminApiKey
+  const apiKey = conn.apiKey || (conn.identityHeaders ? conn.adminApiKey : '')
   if (apiKey) headers['X-API-Key'] = apiKey
   if (conn.identityHeaders) {
     if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId

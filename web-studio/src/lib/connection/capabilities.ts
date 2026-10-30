@@ -27,13 +27,11 @@ export async function fetchStudioCapability(
     // can otherwise attach a new key to an old connection's request.
     const client = createOvClient({
       apiKeyStorageKey: '',
+      credentialScope: 'data',
       apiKeyAuth: auth,
       baseUrl: connection.baseUrl,
       connection: {
-        apiKey:
-          auth === 'bearer'
-            ? connection.apiKey
-            : connection.apiKey || connection.adminApiKey,
+        apiKey: connection.apiKey,
       },
     })
     const response = await client.instance.get(feature.probe, {

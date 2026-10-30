@@ -14,15 +14,19 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { useStudioService } from './use-studio-service'
 import { AppConnectionProvider, useAppConnection } from './use-app-connection'
 
-const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }))
+const { navigate, routing } = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  routing: { pathname: '/home' },
+}))
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
-  useRouterState: () => '/home',
+  useRouterState: () => routing.pathname,
 }))
 
 afterEach(() => {
   cleanup()
   navigate.mockReset()
+  routing.pathname = '/home'
   localStorage.removeItem('ov_console_connection_profiles')
 })
 
@@ -37,7 +41,7 @@ function Identity() {
 }
 
 it.each(['', 'root-key'])(
-  'detects trusted mode on cold startup and resolves identity only with a key: %s',
+  'detects trusted mode without sending the configured Root key from the workbench: %s',
   async (rootKey) => {
     const observed: Array<
       [string | undefined, string | undefined, string | undefined]
@@ -99,14 +103,10 @@ it.each(['', 'root-key'])(
       )
       await waitFor(() =>
         expect(screen.getByTestId('identity').textContent).toBe(
-          rootKey ? 'trusted:user' : 'trusted:unknown',
+          'trusted:unknown',
         ),
       )
-      if (rootKey) {
-        expect(observed).toContainEqual(['account-a', 'alice', rootKey])
-      } else {
-        expect(observed).toEqual([[undefined, undefined, undefined]])
-      }
+      expect(observed).toEqual([[undefined, undefined, undefined]])
     } finally {
       cleanup()
       queryClient.clear()
@@ -131,9 +131,15 @@ function ConnectionState() {
   )
 }
 
-it.each([401, 503])(
-  'opens connection settings only for rejected credentials on startup (HTTP %s)',
-  async (status) => {
+it.each([
+  [401, '/home', '/settings'],
+  [503, '/home', '/settings'],
+  [401, '/admin/users', '/admin/settings'],
+  [503, '/admin/users', '/admin/settings'],
+] as const)(
+  'opens connection recovery only for rejected credentials (HTTP %s at %s)',
+  async (status, pathname, destination) => {
+    routing.pathname = pathname
     const server = createServer((req, res) => {
       res.setHeader('Access-Control-Allow-Origin', '*')
       res.setHeader('Access-Control-Allow-Headers', '*')
@@ -177,7 +183,7 @@ it.each([401, 503])(
         ).toBe('offline'),
       )
       if (status === 401)
-        expect(navigate).toHaveBeenCalledWith({ to: '/settings' })
+        expect(navigate).toHaveBeenCalledWith({ to: destination })
       else expect(navigate).not.toHaveBeenCalled()
     } finally {
       cleanup()
@@ -248,13 +254,13 @@ it('keeps a valid data connection and its resolved identity when a separate cont
         JSON.parse(screen.getByTestId('connection-state').textContent),
       ).toEqual({
         mode: 'api_key',
-        role: 'unknown',
+        role: 'user',
         account: 'account-a',
         user: 'alice',
       }),
     )
     expect(keys[0]).toBe('user-key')
-    expect(keys).toContain('expired-control-key')
+    expect(keys).not.toContain('expired-control-key')
   } finally {
     cleanup()
     client.clear()
@@ -466,3 +472,11 @@ it('exposes the resolved data user before a slow management probe completes', as
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 })
+
+// Persistence is tested separately with real Web Crypto in credential-storage.test.ts.
+vi.mock('#/lib/connection/credential-storage', () => ({
+  readCredentialStorage: (key: string) => localStorage.getItem(key),
+  writeCredentialStorage: (key: string, value: string) =>
+    localStorage.setItem(key, value),
+  flushCredentialStorage: async () => {},
+}))

@@ -1,3 +1,5 @@
+import { useStudioMode } from '#/hooks/use-studio-mode'
+import { readPreferredMode, resolveStudioEntry } from '#/lib/studio-mode'
 import { useStudioService } from '#/hooks/use-studio-service'
 import { Navigate, createFileRoute } from '@tanstack/react-router'
 
@@ -9,16 +11,22 @@ export const Route = createFileRoute('/')({
 
 function IndexRoute() {
   const { provider } = useStudioService()
-  const { isGatewayHost } = useAppConnection()
+  const { isGatewayHost, connection, isConnectionRoleLoading } =
+    useAppConnection()
+  const { canManage } = useStudioMode()
+  if (isConnectionRoleLoading) return null
   return (
     <Navigate
       replace
       to={
         isGatewayHost
-          ? '/gateway'
-          : provider === 'opensource'
-            ? '/home'
-            : '/filesystem'
+          ? '/admin/gateway'
+          : resolveStudioEntry({
+              canManage,
+              connection,
+              provider,
+              preferredMode: readPreferredMode(connection),
+            })
       }
     />
   )

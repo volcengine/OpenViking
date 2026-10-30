@@ -1,17 +1,112 @@
+import {
+  readCredentialStorage,
+  writeCredentialStorage,
+} from './credential-storage'
 import { createRandomUuid } from '#/lib/browser-crypto'
 import type { ConnectionDraft } from '#/lib/connection/types'
 import { resolveConfiguredServiceProvider } from '../studio-service'
 
 export const PROFILES_STORAGE_KEY = 'ov_console_connection_profiles'
 
+export type SavedDataIdentity = Pick<
+  ConnectionDraft,
+  'baseUrl' | 'serviceSelection' | 'accountId' | 'userId' | 'apiKey'
+>
+
+function isSavedDataIdentity(value: unknown): value is SavedDataIdentity {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Record<string, unknown>
+  return (
+    (entry.serviceSelection === undefined ||
+      entry.serviceSelection === 'auto' ||
+      entry.serviceSelection === 'opensource' ||
+      entry.serviceSelection === 'volcengine') &&
+    typeof entry.baseUrl === 'string' &&
+    isValidConnectionUrl(entry.baseUrl) &&
+    ['baseUrl', 'accountId', 'userId', 'apiKey'].every(
+      (key) => typeof entry[key] === 'string' && Boolean(entry[key].trim()),
+    )
+  )
+}
+
+function uniqueDataIdentities(values: readonly unknown[]): SavedDataIdentity[] {
+  const seen = new Set<string>()
+  return values.filter(isSavedDataIdentity).flatMap((entry) => {
+    const provider = resolveConfiguredServiceProvider(
+      entry.baseUrl,
+      entry.serviceSelection,
+    )
+    if (provider === 'unknown') return []
+    const normalized: SavedDataIdentity = {
+      baseUrl: entry.baseUrl.trim(),
+      serviceSelection: provider,
+      accountId: entry.accountId.trim(),
+      userId: entry.userId.trim(),
+      apiKey: entry.apiKey.trim(),
+    }
+    const key = JSON.stringify([
+      normalized.serviceSelection,
+      normalized.baseUrl.replace(/\/+$/, ''),
+      normalized.accountId,
+      normalized.userId,
+      normalized.apiKey,
+    ])
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [normalized]
+  })
+}
+
+/** Local credentials only; never discovers identities from a server directory. */
+export function savedDataIdentities(
+  profiles: readonly ConnectionProfile[],
+  connection: ConnectionDraft,
+): SavedDataIdentity[] {
+  const provider = resolveConfiguredServiceProvider(
+    connection.baseUrl,
+    connection.serviceSelection,
+  )
+  const url = connection.baseUrl.trim().replace(/\/+$/, '')
+  return uniqueDataIdentities([
+    connection,
+    ...profiles.flatMap((profile) => [
+      profile.connection,
+      ...(Array.isArray(profile.identities) ? profile.identities : []),
+    ]),
+  ]).filter(
+    (identity) =>
+      identity.baseUrl.replace(/\/+$/, '') === url &&
+      identity.serviceSelection === provider,
+  )
+}
+
 export type ConnectionProfile = {
   id: string
   name: string
   connection: ConnectionDraft
+  identities?: SavedDataIdentity[]
 }
 export type ConnectionProfiles = {
   activeId: string
   profiles: Array<ConnectionProfile>
+}
+
+/** Service navigation groups credentials without changing the saved profiles. */
+export function groupProfilesByService(
+  profiles: readonly ConnectionProfile[],
+): ConnectionProfile[][] {
+  const groups = new Map<string, ConnectionProfile[]>()
+  for (const profile of profiles) {
+    const connection = normalizeProfileConnection(profile.connection)
+    const key = JSON.stringify([
+      connection.serviceSelection,
+      connection.baseUrl.trim().replace(/\/+$/, ''),
+    ])
+    const group = groups.get(key)
+    if (group) group.push(profile)
+    else groups.set(key, [profile])
+  }
+  return [...groups.values()]
 }
 
 export function isValidConnectionUrl(value: string): boolean {
@@ -60,7 +155,7 @@ export function readConnectionProfiles(
 ): ConnectionProfiles {
   try {
     const raw: unknown = JSON.parse(
-      localStorage.getItem(PROFILES_STORAGE_KEY) || 'null',
+      readCredentialStorage(PROFILES_STORAGE_KEY) || 'null',
     )
     if (
       raw &&
@@ -92,10 +187,16 @@ export function readConnectionProfiles(
           (profile, index) =>
             profiles.findIndex((p) => p.id === profile.id) === index,
         )
-        .map((profile) => ({
-          ...profile,
-          connection: normalizeProfileConnection(profile.connection),
-        }))
+        .map((profile) => {
+          const { identities, ...saved } = profile
+          return {
+            ...saved,
+            connection: normalizeProfileConnection(profile.connection),
+            ...(Array.isArray(identities)
+              ? { identities: uniqueDataIdentities(identities) }
+              : {}),
+          }
+        })
       if (unique.length) {
         return {
           profiles: unique,
@@ -122,7 +223,7 @@ export function readConnectionProfiles(
 
 export function persistConnectionProfiles(value: ConnectionProfiles): void {
   try {
-    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(value))
+    writeCredentialStorage(PROFILES_STORAGE_KEY, JSON.stringify(value))
   } catch {
     // Match the existing connection persistence in restricted browsers.
   }
@@ -131,14 +232,35 @@ export function persistConnectionProfiles(value: ConnectionProfiles): void {
 export function updateActiveProfile(
   value: ConnectionProfiles,
   connection: ConnectionDraft,
+  rememberIdentity = false,
 ): ConnectionProfiles {
   return {
     ...value,
-    profiles: value.profiles.map((profile) =>
-      profile.id === value.activeId
-        ? { ...profile, connection: normalizeProfileConnection(connection) }
-        : profile,
-    ),
+    profiles: value.profiles.map((profile) => {
+      if (profile.id !== value.activeId) return profile
+      const previous = profile.connection
+      const history = Array.isArray(profile.identities)
+        ? profile.identities
+        : []
+      const identities = uniqueDataIdentities(
+        rememberIdentity ? [previous, ...history] : history,
+      ).filter((identity) => {
+        if (rememberIdentity || previous.apiKey === connection.apiKey)
+          return true
+        // Replacing/removing a configured key must not resurrect it from history.
+        return (
+          identity.baseUrl.replace(/\/+$/, '') !==
+            previous.baseUrl.trim().replace(/\/+$/, '') ||
+          identity.accountId !== previous.accountId ||
+          identity.userId !== previous.userId
+        )
+      })
+      return {
+        ...profile,
+        connection: normalizeProfileConnection(connection),
+        ...(identities.length || profile.identities ? { identities } : {}),
+      }
+    }),
   }
 }
 

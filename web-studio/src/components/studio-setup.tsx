@@ -1,3 +1,4 @@
+import { readCredentialStorage } from '#/lib/connection/credential-storage'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
@@ -106,7 +107,7 @@ export function StudioSetup({
   const [activeProfileId] = useState(() => {
     try {
       return JSON.parse(
-        localStorage.getItem('ov_console_connection_profiles') || '{}',
+        readCredentialStorage('ov_console_connection_profiles') || '{}',
       ).activeId as string | undefined
     } catch {
       return undefined
@@ -316,13 +317,14 @@ export function StudioSetup({
         setError(t('savedConnectionUnavailable'))
         return
       }
+      setBusy(true)
       try {
         const matchingProfile = savedSetupConnections().find(
           (profile) =>
             connectionProfileFingerprint(profile.connection) ===
             connectionProfileFingerprint(verified),
         )
-        completeStudioSetup(
+        await completeStudioSetup(
           verified,
           t(`studio:providers.${verified.serviceSelection}`),
           matchingProfile?.id,
@@ -330,6 +332,8 @@ export function StudioSetup({
         onComplete(verified)
       } catch {
         setError(t('storageError'))
+      } finally {
+        setBusy(false)
       }
       return
     }
@@ -863,7 +867,7 @@ export function StudioSetup({
                       className="rounded-lg border border-emerald-600/20 bg-emerald-600/5 p-3 text-sm leading-6 text-emerald-700 dark:text-emerald-400"
                     >
                       {t(
-                        studioSetupDestination(verified) === '/users'
+                        studioSetupDestination(verified) === '/admin'
                           ? 'verifiedManagement'
                           : 'verified',
                       )}

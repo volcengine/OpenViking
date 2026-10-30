@@ -25,6 +25,7 @@ export function resolveConnectionDataRoot(
 export function probeConnection(
   connection: ConnectionDraft,
   serverMode: ServerMode,
+  allowManagement = true,
 ) {
   return probeStudioConnection({
     ...connection,
@@ -35,6 +36,7 @@ export function probeConnection(
     accountId: connection.accountId || DEFAULT_ACCOUNT_ID,
     userId: connection.userId || DEFAULT_USER_ID,
     skipAdmin:
+      !allowManagement ||
       resolveConfiguredServiceProvider(
         connection.baseUrl,
         connection.serviceSelection,

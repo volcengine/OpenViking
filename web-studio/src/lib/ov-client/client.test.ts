@@ -194,3 +194,58 @@ it('scopes Studio root management to the selected account without asserting a da
   expect(readRequestHeader(requests[0], 'X-OpenViking-Account')).toBe('')
   expect(readRequestHeader(requests[1], 'X-OpenViking-Studio-Account')).toBe('')
 })
+
+it.each([
+  '/api/v1/fs/ls',
+  '/api/v1/sessions',
+  '/api/v1/acl',
+  '/api/v1/search/find',
+  '/api/v1/tasks/task-a/cancel',
+])(
+  'never falls back to the Root credential for tenant operation %s',
+  async (url) => {
+    const { client, requests } = createRecordingClient()
+    client.setConnection({ apiKey: '', adminApiKey: 'root-only' })
+    await client.instance.request({
+      url,
+      method: url.endsWith('/cancel') ? 'POST' : 'GET',
+    })
+    expect(readRequestHeader(requests[0], 'X-API-Key')).toBe('')
+  },
+)
+
+describe('workbench credential isolation', () => {
+  it.each([
+    '/health',
+    '/api/v1/console/dashboard/summary',
+    '/api/v1/observer/system',
+    '/api/v1/tasks',
+    '/api/v1/fs/ls',
+  ])(
+    'uses only User credentials and never falls back to Root for %s',
+    async (path) => {
+      const { client, requests } = createRecordingClient()
+      client.setOptions({ credentialScope: 'data' })
+      client.setConnection({ apiKey: 'user-key', adminApiKey: 'root-key' })
+      await client.instance.get(path, {
+        headers: { 'X-API-Key': 'root-key', Authorization: 'Bearer root-key' },
+      })
+      expect(readRequestHeader(requests[0], 'X-API-Key')).toBe('user-key')
+      expect(readRequestHeader(requests[0], 'Authorization')).toBe('')
+      client.setConnection({ apiKey: '' })
+      await client.instance.get(path)
+      expect(readRequestHeader(requests[1], 'X-API-Key')).toBe('')
+    },
+  )
+  it('blocks admin requests before transport, including a request queued before switching to the workbench', async () => {
+    const { client, requests } = createRecordingClient()
+    client.setConnection({ apiKey: 'user-key', adminApiKey: 'root-key' })
+    const pending = client.instance.get('/api/v1/admin/accounts')
+    client.setOptions({ credentialScope: 'data' })
+    await expect(pending).rejects.toMatchObject({ statusCode: 403 })
+    expect(requests).toHaveLength(0)
+    client.setOptions({ credentialScope: 'control' })
+    await client.instance.get('/api/v1/admin/accounts')
+    expect(readRequestHeader(requests[0], 'X-API-Key')).toBe('root-key')
+  })
+})

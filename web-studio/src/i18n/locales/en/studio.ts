@@ -1,4 +1,22 @@
 const studio = {
+  credentialStorage: {
+    startError:
+      'Cannot read encrypted local credentials. Use HTTPS or localhost, allow browser storage for this site, and reload. Existing credentials have not been cleared.',
+    saveError:
+      'Credentials have not been saved locally. Keep this page open, check browser storage permissions, and retry saving.',
+  },
+  userKey: {
+    title: 'Configure User API Key',
+    description:
+      'Add a User to the current connection and Account without configuring the service again.',
+    hint: 'User ID is detected automatically. Existing User API Keys remain saved on this device for switching later.',
+    rootKey: 'Enter a User API Key here, not a Root API Key.',
+    accountMismatch:
+      'This API Key belongs to another Account. Configure it under its corresponding connection.',
+    identityMissing:
+      'The service did not return a valid Account and User ID to verify this identity.',
+    saved: 'Saved and switched to {{user}}',
+  },
   duration: { milliseconds: '{{value}}ms', seconds: '{{value}}s' },
   errors: {
     botHealth: 'Bot health check failed ({{status}})',
@@ -71,6 +89,13 @@ const studio = {
   oauthClient: 'MCP client',
   localConnection: 'Local OpenViking',
   profiles: {
+    managementHint:
+      'Accepts a Root or Account Admin API Key. Root can manage all Accounts; Account Admin can manage only its own Account.',
+    back: 'Back to connection settings',
+    editorHint:
+      'Configure the service address and credentials. New or changed credentials are verified before saving.',
+    saveActivate: 'Save and activate',
+    notFound: 'This connection configuration no longer exists.',
     connectionChanged:
       'The connection changed. Select the identity again on the active connection.',
     identityPending: 'Identity unconfirmed',
@@ -159,6 +184,11 @@ const studio = {
   directoryError:
     'Unable to open this directory. It may be missing or inaccessible to your identity.',
   states: {
+    trustedWorkbench: {
+      title: 'This authentication mode cannot be used in the workbench',
+      description:
+        'Trusted authentication requires a Root API Key on every request. The workbench does not send Root credentials. Connect to a service using api_key authentication and configure a User API Key.',
+    },
     gatewayAuthMode: {
       title: 'Gateway requires API key authentication',
       description:

@@ -262,7 +262,7 @@ it('accepts an older hosted profile without an API key after manual verification
     'studio:providers.volcengine',
     undefined,
   )
-  expect(done).toHaveBeenCalledOnce()
+  await waitFor(() => expect(done).toHaveBeenCalledOnce())
   expect(screen.queryByRole('alert')).toBeNull()
 })
 it('selects the configured open-source address when switching from hosted', () => {
@@ -434,7 +434,7 @@ it('enters only after verification, invalidates verification when fields change,
   await screen.findByRole('status')
   fireEvent.click(screen.getByRole('button', { name: 'enter' }))
   expect(mocks.complete).toHaveBeenCalledOnce()
-  expect(done).toHaveBeenCalledOnce()
+  await waitFor(() => expect(done).toHaveBeenCalledOnce())
 })
 it('keeps the user in setup on verification failure', async () => {
   mocks.verify.mockRejectedValueOnce(new Error('Forbidden'))
@@ -580,3 +580,11 @@ it('opens the account/user picker only after Verify and rejects a mismatched use
   )
   expect(screen.queryByRole('button', { name: 'enter' })).toBeNull()
 })
+
+// Persistence is tested separately with real Web Crypto in credential-storage.test.ts.
+vi.mock('#/lib/connection/credential-storage', () => ({
+  readCredentialStorage: (key: string) => localStorage.getItem(key),
+  writeCredentialStorage: (key: string, value: string) =>
+    localStorage.setItem(key, value),
+  flushCredentialStorage: async () => {},
+}))

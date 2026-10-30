@@ -139,7 +139,7 @@ it('keeps the no-admin recovery link inside the Studio base path', async () => {
   )
   mount()
   const link = await screen.findByRole('link', { name: 'acl.recovery.users' })
-  expect(link.getAttribute('href')).toBe('/studio/users')
+  expect(link.getAttribute('href')).toBe('/studio/admin/users')
 })
 it('shows current access and source of each grant without explanatory panels', async () => {
   mount()

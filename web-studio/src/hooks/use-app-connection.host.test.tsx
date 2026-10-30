@@ -119,3 +119,11 @@ it('discovers the Studio gateway origin before using a stale saved Base URL or k
   ).toBe(true)
   queryClient.clear()
 })
+
+// Persistence is tested separately with real Web Crypto in credential-storage.test.ts.
+vi.mock('#/lib/connection/credential-storage', () => ({
+  readCredentialStorage: (key: string) => localStorage.getItem(key),
+  writeCredentialStorage: (key: string, value: string) =>
+    localStorage.setItem(key, value),
+  flushCredentialStorage: async () => {},
+}))

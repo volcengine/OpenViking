@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { newConnectionPath } from '#/lib/studio-mode'
 import { Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -11,10 +12,12 @@ import {
   LoaderCircleIcon,
   PlusIcon,
   SearchIcon,
+  UserRoundIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { OpenVikingMark } from './openviking-mark'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -77,19 +80,6 @@ function currentRuntimeIdentity(): string {
   ])
 }
 
-function OpenVikingMark() {
-  return (
-    <svg
-      viewBox="0 0 100 100"
-      className="size-7"
-      fill="currentColor"
-      aria-hidden="true"
-    >
-      <path d="M20.5 84H31L70 16.45H67ZM37 84 76 16.45V84Z" />
-    </svg>
-  )
-}
-
 function serviceKey(connection: ConnectionProfile['connection']): string {
   return JSON.stringify([
     resolveConfiguredServiceProvider(
@@ -108,7 +98,15 @@ function serviceHost(baseUrl: string): string {
   }
 }
 
-export function AccountSwitcher() {
+export function AccountSwitcher({
+  allowManagement = true,
+  settingsPath = '/settings',
+  variant = 'sidebar',
+}: {
+  variant?: 'sidebar' | 'header'
+  allowManagement?: boolean
+  settingsPath?: '/settings' | '/admin/settings'
+}) {
   const { t } = useTranslation('accountSwitcher')
   const queryClient = useQueryClient()
   const {
@@ -168,9 +166,11 @@ export function AccountSwitcher() {
     serverMode,
   })
 
-  const canManageAccounts = isGatewayHost
-    ? connectionRole === 'root' && !isConnectionRoleLoading
-    : capabilities.canManageAccounts
+  const canManageAccounts =
+    allowManagement &&
+    (isGatewayHost
+      ? connectionRole === 'root' && !isConnectionRoleLoading
+      : capabilities.canManageAccounts)
 
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
@@ -394,6 +394,7 @@ export function AccountSwitcher() {
       .includes(identitySearch.trim().toLowerCase()),
   )
   const showAccountsTab =
+    allowManagement &&
     resolveConfiguredServiceProvider(
       selected.connection.baseUrl,
       selected.connection.serviceSelection,
@@ -417,23 +418,64 @@ export function AccountSwitcher() {
       <Popover open={open} onOpenChange={changeOpen}>
         <PopoverTrigger
           aria-label={t('connections.switch')}
-          className="flex min-h-12 w-full min-w-0 items-center gap-2 rounded-lg px-1 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center"
+          className={cn(
+            'flex min-w-0 items-center text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+            variant === 'header'
+              ? 'h-9 max-w-full gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 text-xs hover:bg-accent sm:text-sm'
+              : 'min-h-12 w-full gap-2 rounded-lg px-1 hover:bg-sidebar-accent group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center',
+          )}
         >
-          <span className="flex size-8 shrink-0 items-center justify-center text-sidebar-foreground">
-            <OpenVikingMark />
-          </span>
-          <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
-            <span
-              className="block truncate text-sm font-semibold"
-              title={connection.baseUrl}
-            >
-              {titleFor(connection)}
-            </span>
-            <span className="block truncate text-xs text-muted-foreground">
-              [{identityFor(connection)}]
-            </span>
-          </span>
-          <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
+          {variant === 'header' ? (
+            <>
+              <span
+                className="hidden min-w-0 items-center gap-2 sm:flex"
+                title={connection.baseUrl}
+              >
+                <CloudIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="max-w-44 truncate">
+                  {titleFor(connection)}
+                </span>
+                <span className="text-border" aria-hidden="true">
+                  /
+                </span>
+              </span>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Building2Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="max-w-24 truncate">
+                  {connection.accountId}
+                </span>
+              </span>
+              <span className="text-border" aria-hidden="true">
+                /
+              </span>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <UserRoundIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="max-w-24 truncate">
+                  {connection.apiKey || serverMode === 'trusted'
+                    ? connection.userId
+                    : t('appShell:modes.selectUser')}
+                </span>
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="flex size-8 shrink-0 items-center justify-center text-sidebar-foreground">
+                <OpenVikingMark className="size-7" />
+              </span>
+              <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
+                <span
+                  className="block truncate text-sm font-semibold"
+                  title={connection.baseUrl}
+                >
+                  {titleFor(connection)}
+                </span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  [{identityFor(connection)}]
+                </span>
+              </span>
+            </>
+          )}
+          <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
         </PopoverTrigger>
         <PopoverContent
           side="bottom"
@@ -494,7 +536,7 @@ export function AccountSwitcher() {
                 )}
               </div>
               <Link
-                to="/config"
+                to={newConnectionPath(settingsPath)}
                 onClick={() => setOpen(false)}
                 className="mt-auto flex h-11 shrink-0 items-center gap-2 border-t px-3 text-xs hover:bg-accent"
               >
@@ -575,7 +617,7 @@ export function AccountSwitcher() {
                     {selectedKey === currentService &&
                       !isConnectionRoleLoading && (
                         <Link
-                          to="/settings"
+                          to={settingsPath}
                           onClick={() => setOpen(false)}
                           className="text-foreground underline underline-offset-4"
                         >
@@ -754,7 +796,9 @@ export function AccountSwitcher() {
               </div>
               <Link
                 to={
-                  accountsVisible && accountAccessReady ? '/users' : '/settings'
+                  accountsVisible && accountAccessReady
+                    ? '/admin/users'
+                    : settingsPath
                 }
                 onClick={() => setOpen(false)}
                 className="mt-auto flex h-11 shrink-0 items-center border-t px-4 text-xs hover:bg-accent"

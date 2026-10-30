@@ -70,8 +70,15 @@ export const STUDIO_FEATURES = [
     to: '/monitoring',
     probe: '/api/v1/observer/system',
   },
-  { id: 'gateway', domain: 'management', to: '/gateway' },
-  { id: 'users', domain: 'management', to: '/users' },
+  { id: 'gateway', domain: 'management', to: '/admin/gateway' },
+  { id: 'botManagement', domain: 'management', to: '/admin/vikingbot' },
+  { id: 'configuration', domain: 'management', to: '/admin/configuration' },
+  {
+    id: 'agentEvolutionSettings',
+    domain: 'management',
+    to: '/admin/agent-evolution',
+  },
+  { id: 'users', domain: 'management', to: '/admin/users' },
   { id: 'permissions', domain: 'management', to: '/permissions' },
 ] as const satisfies ReadonlyArray<{
   id: string

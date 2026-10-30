@@ -43,7 +43,7 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 describe('first-use detection', () => {
-  it('starts setup for a new tab and retains unfinished setup on reload', () => {
+  it('starts setup for a new tab and retains unfinished setup on reload', async () => {
     expect(needsStudioSetup()).toBe(true)
     localStorage.setItem(SETUP_STORAGE_KEY, 'pending')
     localStorage.setItem(
@@ -52,12 +52,12 @@ describe('first-use detection', () => {
     )
     expect(needsStudioSetup()).toBe(true)
   })
-  it('restores a legacy connection even after the upgrade marked setup pending', () => {
+  it('restores a legacy connection even after the upgrade marked setup pending', async () => {
     localStorage.setItem(SETUP_STORAGE_KEY, 'pending')
     localStorage.setItem('ov_console_connection', JSON.stringify(draft))
     expect(needsStudioSetup()).toBe(false)
   })
-  it('restores saved profiles in a new tab without a session marker', () => {
+  it('restores saved profiles in a new tab without a session marker', async () => {
     localStorage.setItem(
       PROFILES_STORAGE_KEY,
       JSON.stringify({
@@ -67,15 +67,15 @@ describe('first-use detection', () => {
     )
     expect(needsStudioSetup()).toBe(false)
   })
-  it('does not treat an automatically persisted empty same-origin connection as configured', () => {
+  it('does not treat an automatically persisted empty same-origin connection as configured', async () => {
     localStorage.setItem(
       'ov_console_connection',
       JSON.stringify({ ...draft, baseUrl: window.location.origin, apiKey: '' }),
     )
     expect(needsStudioSetup()).toBe(true)
   })
-  it('completes a verified development connection without a key', () => {
-    completeStudioSetup(
+  it('completes a verified development connection without a key', async () => {
+    await completeStudioSetup(
       { ...draft, baseUrl: window.location.origin, apiKey: '' },
       'Development',
     )
@@ -88,11 +88,11 @@ describe('first-use detection', () => {
     localStorage.removeItem('ov_console_connection')
     expect(needsStudioSetup()).toBe(true)
   })
-  it('completes setup when randomUUID is unavailable on an HTTP origin', () => {
+  it('completes setup when randomUUID is unavailable on an HTTP origin', async () => {
     vi.stubGlobal('crypto', {
       getRandomValues: (bytes: Uint8Array) => bytes.fill(7),
     })
-    completeStudioSetup(draft, 'OpenViking')
+    await completeStudioSetup(draft, 'OpenViking')
     const saved = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY) || '{}')
     expect(saved.profiles).toHaveLength(1)
     expect(saved.profiles[0].id).toMatch(
@@ -101,7 +101,7 @@ describe('first-use detection', () => {
     expect(saved.activeId).toBe(saved.profiles[0].id)
     expect(needsStudioSetup()).toBe(false)
   })
-  it('retains other saved workspaces when selecting a new connection', () => {
+  it('retains other saved workspaces when selecting a new connection', async () => {
     localStorage.setItem(
       PROFILES_STORAGE_KEY,
       JSON.stringify({
@@ -109,7 +109,7 @@ describe('first-use detection', () => {
         profiles: [{ id: 'one', name: 'Original', connection: draft }],
       }),
     )
-    completeStudioSetup(
+    await completeStudioSetup(
       {
         ...draft,
         serviceSelection: 'volcengine',
@@ -122,7 +122,7 @@ describe('first-use detection', () => {
     expect(saved.profiles[0].name).toBe('Original')
     expect(saved.profiles[1].connection.serviceSelection).toBe('volcengine')
   })
-  it('keeps the selected profile when saved profiles share an address', () => {
+  it('keeps the selected profile when saved profiles share an address', async () => {
     localStorage.setItem(
       PROFILES_STORAGE_KEY,
       JSON.stringify({
@@ -133,7 +133,7 @@ describe('first-use detection', () => {
         ],
       }),
     )
-    completeStudioSetup(
+    await completeStudioSetup(
       { ...draft, apiKey: 'updated-key' },
       'OpenViking',
       'second',
@@ -143,16 +143,16 @@ describe('first-use detection', () => {
     expect(saved.profiles[0].connection.apiKey).toBe('synthetic-key')
     expect(saved.profiles[1].connection.apiKey).toBe('updated-key')
   })
-  it('keeps both workspaces when a new connection uses an existing service address', () => {
+  it('keeps both workspaces when a new connection uses an existing service address', async () => {
     const hosted = {
       ...draft,
       serviceSelection: 'volcengine' as const,
       baseUrl: 'https://hosted.test',
     }
-    completeStudioSetup({ ...hosted, apiKey: 'alice-key' }, 'Alice')
+    await completeStudioSetup({ ...hosted, apiKey: 'alice-key' }, 'Alice')
     const first = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY) || '{}')
 
-    completeStudioSetup({ ...hosted, apiKey: 'bob-key' }, 'Bob')
+    await completeStudioSetup({ ...hosted, apiKey: 'bob-key' }, 'Bob')
     const saved = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY) || '{}')
     expect(saved.profiles).toHaveLength(2)
     expect(saved.profiles[0]).toEqual(first.profiles[0])
@@ -165,7 +165,7 @@ describe('first-use detection', () => {
   })
 })
 describe('verification', () => {
-  it('identifies the failed verification stage and masks credentials', () => {
+  it('identifies the failed verification stage and masks credentials', async () => {
     const error = new StudioSetupRequestError(
       'health',
       new OvClientError({
@@ -284,7 +284,7 @@ describe('management bootstrap', () => {
           ? '/api/v1/admin/accounts'
           : '/api/v1/admin/accounts/{account_id}/users',
       )
-      expect(studioSetupDestination(connection)).toBe('/users')
+      expect(studioSetupDestination(connection)).toBe('/admin')
       expect(
         get.mock.calls.some(([options]) => options.url === '/api/v1/fs/ls'),
       ).toBe(false)
@@ -321,7 +321,7 @@ describe('management bootstrap', () => {
     ).rejects.toThrow('keyRequired')
     expect(get).toHaveBeenCalledTimes(1)
   })
-  it('keeps data connections on their normal landing page', () => {
+  it('keeps data connections on their normal landing page', async () => {
     expect(studioSetupDestination(draft)).toBe('/home')
     expect(
       studioSetupDestination({ ...draft, serviceSelection: 'volcengine' }),
@@ -393,3 +393,31 @@ it('uses the User API Key identity when a separate control key is also configure
     'synthetic-key',
   )
 })
+
+it('classifies a Root key entered in the ordinary key field before verifying access', async () => {
+  get
+    .mockResolvedValueOnce({
+      data: { version: 'test', auth_mode: 'api_key', role: 'root' },
+    })
+    .mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      data: { status: 'ok', result: [] },
+    })
+  const connection = await verifyStudioSetup(
+    draft,
+    new AbortController().signal,
+  )
+  expect(connection.apiKey).toBe('')
+  expect(connection.adminApiKey).toBe('synthetic-key')
+  expect(get.mock.calls[1][0].url).toBe('/api/v1/admin/accounts')
+  expect(studioSetupDestination(connection)).toBe('/admin')
+})
+
+// Persistence is tested separately with real Web Crypto in credential-storage.test.ts.
+vi.mock('#/lib/connection/credential-storage', () => ({
+  readCredentialStorage: (key: string) => localStorage.getItem(key),
+  writeCredentialStorage: (key: string, value: string) =>
+    localStorage.setItem(key, value),
+  flushCredentialStorage: async () => {},
+}))

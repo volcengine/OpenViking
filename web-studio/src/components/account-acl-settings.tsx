@@ -16,7 +16,7 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from '#/components/ui/alert-dialog'
-import { getErrorMessage } from '#/routes/users/-lib/error'
+import { getErrorMessage } from '#/routes/admin/users/-lib/error'
 import {
   Popover,
   PopoverContent,

@@ -61,7 +61,9 @@ it('shows one key input and logs in with the OV key against the gateway host', a
     target: { value: 'ov-user-key' },
   })
   fireEvent.click(screen.getByText('gatewayConnection.connect'))
-  await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: '/gateway' }))
+  await waitFor(() =>
+    expect(navigate).toHaveBeenCalledWith({ to: '/admin/gateway' }),
+  )
   expect(health).toHaveBeenCalledWith('http://gateway.test', {
     'X-API-Key': 'ov-user-key',
   })

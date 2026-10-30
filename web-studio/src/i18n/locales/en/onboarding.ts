@@ -19,7 +19,7 @@ export default {
   openSourceConnection: 'OpenSource',
   cancel: 'Cancel',
   exit: 'Exit Studio',
-  connectionTitle: 'Connect your workspace.',
+  connectionTitle: 'Connect to OpenViking.',
   preferencesHint: 'Choose your language and appearance.',
   connectionHint: 'Connect and verify an OpenViking service.',
 
@@ -31,8 +31,9 @@ export default {
   keyRequired: 'This service requires an API Key. Enter it and retry.',
 
   steps: 'Choose a workspace',
-  workspace: 'Choose a workspace',
-  workspaceHint: 'Choose a saved connection or add a new one.',
+  workspace: 'Choose a service',
+  workspaceHint:
+    'Choose the service type and address for your first connection.',
   savedWorkspaces: 'Saved connections',
   connectionChoice: 'Choose a connection',
   newConnection: 'Add a new service address',

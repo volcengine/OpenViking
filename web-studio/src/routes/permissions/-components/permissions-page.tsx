@@ -31,7 +31,7 @@ import {
   normalizeFsEntries,
   parentUri,
 } from '#/routes/resources/-lib/normalize'
-import { getErrorMessage } from '#/routes/users/-lib/error'
+import { getErrorMessage } from '#/routes/admin/users/-lib/error'
 import { isOvClientError } from '#/lib/ov-client'
 import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
 
@@ -80,7 +80,7 @@ function DirectoryPermissions() {
           parentUri(entry.uri) === currentUri,
       )
     },
-    enabled: state.allowed,
+    enabled: state.allowed && state.hasDataIdentity,
     retry: false,
   })
   const pathParts = currentUri.slice(root.length).split('/').filter(Boolean)
@@ -93,6 +93,8 @@ function DirectoryPermissions() {
   ]
 
   if (!state.allowed) return <p>{t('acl.page.unavailable')}</p>
+  if (!state.hasDataIdentity)
+    return <ResourceAclIdentityRecovery missingDataIdentity />
 
   return (
     <section className="min-w-0 space-y-4">

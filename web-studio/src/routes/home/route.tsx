@@ -38,16 +38,12 @@ function getMetricsScopeKey(
   connection: ConnectionDraft,
   connectionRole: ConnectionRole,
 ) {
-  const metricsKey = connection.apiKey || connection.adminApiKey
+  const metricsKey = connection.apiKey
   return {
     accountId: connection.accountId,
     baseUrl: connection.baseUrl,
     keyHash: metricsKey ? hashSecret(metricsKey) : 'none',
-    keySource: connection.apiKey
-      ? 'api'
-      : connection.adminApiKey
-        ? 'admin'
-        : 'none',
+    keySource: connection.apiKey ? 'api' : 'none',
     role: connectionRole,
     userId: connection.userId,
   }

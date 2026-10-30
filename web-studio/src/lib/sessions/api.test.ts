@@ -421,6 +421,24 @@ describe('Bot fetch credentials', () => {
     vi.unstubAllGlobals()
   })
 
+  it('does not fall back to a Root key for user Bot requests in api_key mode', async () => {
+    ovClient.setOptions({ baseUrl: 'http://localhost:1933' })
+    ovClient.setConnection({
+      accountId: 'account-1',
+      userId: 'user-1',
+      apiKey: '',
+      adminApiKey: 'root-key',
+      identityHeaders: false,
+    })
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.stubGlobal('fetch', fetchMock)
+    await fetchBotHealth()
+    expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty('X-API-Key')
+    expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty(
+      'X-OpenViking-User',
+    )
+  })
+
   it.each([
     { apiKey: '', expectedKey: 'root-key' },
     { apiKey: 'data-key', expectedKey: 'data-key' },

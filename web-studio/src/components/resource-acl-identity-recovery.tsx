@@ -15,14 +15,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '#/components/ui/select'
-import { getErrorMessage } from '#/routes/users/-lib/error'
+import { getErrorMessage } from '#/routes/admin/users/-lib/error'
 
 export function ResourceAclIdentityRecovery({
   onRetry,
   error,
+  missingDataIdentity = false,
 }: {
   onRetry?: () => void
   error?: string
+  missingDataIdentity?: boolean
 } = {}) {
   const { t } = useTranslation('settings')
   const state = useAclManagement(false)
@@ -66,9 +68,19 @@ export function ResourceAclIdentityRecovery({
 
   return (
     <section className="mx-auto flex max-w-lg flex-col gap-3 py-8">
-      <h2 className="font-medium">{t('acl.recovery.title')}</h2>
+      <h2 className="font-medium">
+        {t(
+          missingDataIdentity
+            ? 'acl.recovery.dataIdentityTitle'
+            : 'acl.recovery.title',
+        )}
+      </h2>
       <p className="text-sm text-muted-foreground">
-        {t('acl.recovery.description')}
+        {t(
+          missingDataIdentity
+            ? 'acl.recovery.dataIdentityDescription'
+            : 'acl.recovery.description',
+        )}
       </p>
       <details className="text-xs text-muted-foreground">
         <summary className="cursor-pointer">
@@ -150,7 +162,7 @@ export function ResourceAclIdentityRecovery({
         </>
       )}
       {admins.length === 0 && (
-        <Link to="/users" className="text-sm underline">
+        <Link to="/admin/users" className="text-sm underline">
           {t('acl.recovery.users')}
         </Link>
       )}

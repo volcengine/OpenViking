@@ -127,6 +127,21 @@ function shouldUseAdminApiKey(config: InternalAxiosRequestConfig): boolean {
   )
 }
 
+// Root credentials may serve read-only operational endpoints, never tenant data.
+function canUseControlCredential(config: InternalAxiosRequestConfig): boolean {
+  if (config.method?.toUpperCase() !== 'GET') return false
+  const path = resolvePathname(config.url)
+  return (
+    ['/health', '/api/v1/system/status', '/api/v1/debug/health'].includes(
+      path,
+    ) ||
+    ['/api/v1/console/', '/api/v1/observer/'].some((prefix) =>
+      path.startsWith(prefix),
+    ) ||
+    /^\/api\/v1\/tasks(?:\/|$)/.test(path)
+  )
+}
+
 function maybeInjectTelemetry(
   config: InternalAxiosRequestConfig,
   defaultTelemetry: boolean,
@@ -155,6 +170,7 @@ function isEnvelopeError(value: unknown): value is OvErrorEnvelope & {
 export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   const bindSdkClient = options.bindSdkClient ?? false
   let runtimeOptions = {
+    credentialScope: options.credentialScope ?? 'auto',
     apiKeyAuth:
       options.apiKeyAuth ??
       resolveApiKeyAuth(normalizeBaseUrl(options.baseUrl)),
@@ -189,15 +205,36 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       headers.set(key, value)
     }
 
+    if (
+      runtimeOptions.credentialScope === 'data' &&
+      shouldUseAdminApiKey(config)
+    ) {
+      throw new OvClientError({
+        code: 'PERMISSION_DENIED',
+        statusCode: 403,
+        message: i18n.t('studio:states.managementRequired.title'),
+      })
+    }
+
+    // Workbench callers cannot override the data credential with a control
+    // header left over from management mode.
+    if (runtimeOptions.credentialScope === 'data') {
+      headers.delete('X-API-Key')
+      headers.delete('Authorization')
+    }
     const credentialHeader =
       runtimeOptions.apiKeyAuth === 'bearer' ? 'Authorization' : 'X-API-Key'
     if (!readHeader(headers, credentialHeader)?.trim()) {
       const apiKey =
-        runtimeOptions.apiKeyAuth === 'bearer'
+        runtimeOptions.apiKeyAuth === 'bearer' ||
+        runtimeOptions.credentialScope === 'data'
           ? connection.apiKey
           : shouldUseAdminApiKey(config)
             ? connection.adminApiKey || connection.apiKey
-            : connection.apiKey || connection.adminApiKey
+            : connection.apiKey ||
+              (connection.identityHeaders || canUseControlCredential(config)
+                ? connection.adminApiKey
+                : '')
       setOptionalHeader(
         headers,
         credentialHeader,
@@ -306,6 +343,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   ): Readonly<typeof runtimeOptions> {
     const previousStorageKey = runtimeOptions.apiKeyStorageKey
     runtimeOptions = {
+      credentialScope: next.credentialScope ?? runtimeOptions.credentialScope,
       apiKeyAuth:
         next.apiKeyAuth ??
         (next.baseUrl !== undefined
@@ -344,6 +382,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
 }
 
 export const ovClient = createOvClient({
+  credentialScope: 'data',
   apiKeyStorageKey: '',
   baseUrl: ENV_BASE_URL,
   bindSdkClient: true,

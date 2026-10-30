@@ -12,6 +12,7 @@ export function useAclManagement(load = true) {
     serverMode,
     identityScopeKey,
     switchIdentity,
+    studioMode,
   } = useAppConnection()
   const { canManageUsers } = resolveStudioManagementCapabilities({
     hasControlCredential: Boolean(connection.adminApiKey.trim()),
@@ -20,6 +21,7 @@ export function useAclManagement(load = true) {
     serverMode,
   })
   const allowed =
+    studioMode === 'management' &&
     canManageUsers &&
     Boolean(connection.accountId) &&
     serverMode !== 'checking' &&
@@ -60,6 +62,10 @@ export function useAclManagement(load = true) {
     serverMode,
     switchIdentity,
     allowed,
+    hasDataIdentity:
+      serverMode !== 'api_key' ||
+      useAccountAdminCredential ||
+      Boolean(connection.apiKey),
     settings,
     settingsKey,
     adminConnection,

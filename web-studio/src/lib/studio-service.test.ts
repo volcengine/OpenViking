@@ -85,7 +85,7 @@ describe('service and permission boundaries', () => {
     expect(classifyCapabilityError({})).toBe('unknown')
   })
   it('guards nested deep links with the same domain as navigation', () => {
-    expect(featureForPath('/users/memory-templates')?.domain).toBe('management')
+    expect(featureForPath('/admin/users/memory-templates')?.domain).toBe('management')
     expect(featureForPath('/filesystem')?.domain).toBe('workspace')
     expect(featureForPath('/directory')?.domain).toBe('workspace')
   })
@@ -118,7 +118,7 @@ describe('hosted feature visibility', () => {
     expect(
       isStudioFeatureVisible(
         'volcengine',
-        featureForPath('/users')!,
+        featureForPath('/admin/users')!,
         'supported',
       ),
     ).toBe(false)

@@ -45,6 +45,7 @@ function forgetFailedHealthRequest(
 export async function fetchServerHealth(
   baseUrl: string,
   headers: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl)
   if (!normalizedBaseUrl) {
@@ -58,7 +59,11 @@ export async function fetchServerHealth(
     ),
   ])
   const now = Date.now()
-  if (recentHealthRequest?.key === key && recentHealthRequest.expiresAt > now) {
+  if (
+    !signal &&
+    recentHealthRequest?.key === key &&
+    recentHealthRequest.expiresAt > now
+  ) {
     return recentHealthRequest.promise
   }
 
@@ -71,6 +76,7 @@ export async function fetchServerHealth(
     },
     timeout: 10000,
     throwOnError: true,
+    signal,
   }).then((response) => {
     const data = response.data
     return data && typeof data === 'object'
@@ -78,11 +84,12 @@ export async function fetchServerHealth(
       : {}
   })
 
-  recentHealthRequest = {
-    expiresAt: now + HEALTH_REQUEST_REUSE_MS,
-    key,
-    promise,
-  }
+  if (!signal)
+    recentHealthRequest = {
+      expiresAt: now + HEALTH_REQUEST_REUSE_MS,
+      key,
+      promise,
+    }
 
   try {
     return await promise
@@ -127,10 +134,11 @@ export function readServerIdentity(health: Record<string, unknown>) {
 export async function fetchConnectionHealth(
   connection: ConnectionDraft,
   signal: AbortSignal,
+  credential: 'control' | 'data' = 'data',
 ) {
   const client = createClient({
     baseURL: normalizeBaseUrl(connection.baseUrl),
-    headers: createConnectionHealthHeaders(connection, 'data'),
+    headers: createConnectionHealthHeaders(connection, credential),
     timeout: 10000,
     throwOnError: true,
   })

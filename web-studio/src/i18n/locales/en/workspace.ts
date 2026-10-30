@@ -1,5 +1,62 @@
 const workspace = {
   appShell: {
+    apiKey: {
+      title: 'API Key',
+      userId: 'User ID',
+      account: 'Account',
+      credentialType: 'Credential type',
+      root: 'Root API Key',
+      management: 'Management API Key',
+      unset: 'Not selected',
+      empty: 'No API Key configured for this identity',
+      show: 'Show API Key',
+      hide: 'Hide API Key',
+      copy: 'Copy API Key',
+      copied: 'Copied',
+    },
+    studioSettings: {
+      root: 'Root',
+      accountAdmin: 'Account Admin',
+      dualCredential: 'Management + User',
+      controlCredential: 'Management key',
+      brand: 'OpenViking',
+      open: 'Studio settings',
+      settings: 'Settings',
+      defaultEntry: 'Default entry',
+      workbench: 'Workbench',
+      management: 'Administration',
+      language: 'Language',
+      theme: 'Theme',
+      light: 'Light',
+      dark: 'Dark',
+    },
+    modes: {
+      botManagement: 'VikingBot management',
+      agentEvolution: 'Agent experience settings',
+      management: 'Administration',
+      workbench: 'Workbench',
+      managementDescription:
+        'Manage accounts, users, permissions and service configuration. Select a user to open their workbench.',
+      enterWorkbench: 'Open workbench',
+      returnManagement: 'Admin console',
+      selectUser: 'Select a user',
+      selectUserDescription:
+        'Select a user with a valid data credential before opening the workbench.',
+      unavailable: 'Administration unavailable',
+      unavailableDescription:
+        'This connection does not provide administration access. Check your connection credentials.',
+      checking: 'Checking permissions…',
+      makeDefault: 'Use as default',
+      isDefault: 'Default entry',
+      configuration: 'Configuration',
+      configurationDescription:
+        'Manage OpenViking features for the current Account.',
+      accountConfiguration: 'Account {{account}}',
+      serverConfiguration: 'Server configuration',
+      serverConfigurationHint:
+        'Manage models, storage, and runtime parameters. Only server administrators can change these settings.',
+      rootRequired: 'Service configuration requires a Root API Key.',
+    },
     footer: {
       agentIntegrations: 'Agent Integrations',
       beta: 'Beta',
@@ -75,9 +132,11 @@ const workspace = {
     },
     sidebar: {
       groups: {
+        services: 'Service management',
         operations: 'Activity',
         resources: 'Resources',
         settings: 'Settings',
+        connections: 'Connections',
         workspace: 'Workspace',
       },
       loadingSessions: 'Loading...',
@@ -272,6 +331,9 @@ const workspace = {
       reasonCommit: 'Whether those sessions were committed to OpenViking',
     },
     settings: {
+      toggleLabel: 'Experience extraction',
+      toggleHint:
+        'Account {{account}} · Extract experiences and trajectories from new session commits.',
       title: 'Experience settings',
       description:
         'Agent Evolution switch for the target account. When off, new session commits in that account stop extracting experiences and trajectories.',
@@ -682,6 +744,40 @@ const workspace = {
     },
   },
   accountSwitcher: {
+    scope: {
+      managementCredential: 'Current management credential',
+      managementAccount: 'Current managed Account',
+      rootManagement: 'Root API Key',
+      accountManagement: 'Account Admin API Key',
+      checkingManagement: 'Verifying management credential…',
+      trustedManagement: 'Server authentication',
+      devManagement: 'Development mode',
+      unverifiedManagement: 'Unverified management credential',
+      assertedIdentity:
+        'The current identity is supplied by the server authentication mode.',
+      savedAccounts: 'Saved Accounts',
+      savedAccountsHint: 'Accounts with API Keys saved on this device.',
+      savedUsersHint: 'Only User API Keys saved on this device are listed.',
+      noSavedUsers: 'No saved User API Key for this Account.',
+      addUserKey: 'Configure User API Key',
+      userCredential: 'User API Key',
+      createDescription:
+        'Create an Account and its first administrator, then switch to that Account for management.',
+      searchConnections: 'Search connection configurations',
+      noConnections: 'No matching connection configurations',
+      switchAccount: 'Switch Account',
+      switchUser: 'Switch User ID',
+      searchUsers: 'Search User IDs',
+      usersInAccount: 'Saved User API Keys · {{account}}',
+      loadingUsers: 'Loading users…',
+      noUsers: 'No matching users in this Account',
+      accountBound:
+        'This credential is restricted to the current Account. Use a Root connection to select another Account.',
+      userBound:
+        'This credential can only use the current User ID. Select a connection authorized to manage users to switch identities.',
+      loadFailed: 'Could not load the list.',
+      retry: 'Retry',
+    },
     accountsConnectFirst:
       'Select a saved identity to connect to this service before browsing its accounts.',
     accountsChecking: 'Checking account management access…',
@@ -1098,6 +1194,9 @@ const workspace = {
       retryHint:
         'The request failed. Retry, or inspect the error details if it persists.',
       recovery: {
+        dataIdentityTitle: 'Select an account administrator identity',
+        dataIdentityDescription:
+          'The Root key manages accounts and users. Browsing resource permissions requires an account administrator data identity. Select an identity below to continue.',
         loadFailed: 'Failed to load account administrators.',
         switchFailed: 'Failed to switch user.',
         title: 'Switch to a user with permission',

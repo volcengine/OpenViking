@@ -1,4 +1,9 @@
 export default {
+  managementTitle: 'VikingBot management',
+  managementHint:
+    'Manage account bot channels, application credentials, and platform conversation history.',
+  workbenchUnavailable:
+    'VikingBot is unavailable. Ask the server administrator to check that it is enabled and configured.',
   replyMode: 'Group reply mode',
   withoutMention: 'Reply without @mention',
   mentionModeHint:
@@ -123,7 +128,7 @@ export default {
   search: 'Search conversations',
   empty: 'Start a conversation',
   emptyHint:
-    'Ask a question, explore your resources, or connect a bot to your messaging platform.',
+    'Ask questions, explore resources, and continue your Web conversations using the current user identity.',
   manageBots: 'Manage bots',
   enable: 'Enable VikingBot to begin',
   enableHint:

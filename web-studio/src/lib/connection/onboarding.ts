@@ -1,3 +1,8 @@
+import {
+  readCredentialStorage,
+  writeCredentialStorage,
+  flushCredentialStorage,
+} from './credential-storage'
 import i18n from '#/i18n/core'
 import { resolveConnectionDataRoot } from './probe'
 import type { ConnectionDraft } from '#/lib/connection/types'
@@ -87,7 +92,7 @@ export function savedSetupConnections(): Array<{
 }> {
   try {
     const saved: unknown = JSON.parse(
-      localStorage.getItem(PROFILES_STORAGE_KEY) || 'null',
+      readCredentialStorage(PROFILES_STORAGE_KEY) || 'null',
     )
     if (
       saved &&
@@ -109,7 +114,7 @@ export function savedSetupConnections(): Array<{
           hasConnection(profile.connection, true),
       )
     const legacy: unknown = JSON.parse(
-      localStorage.getItem('ov_console_connection') || 'null',
+      readCredentialStorage('ov_console_connection') || 'null',
     )
     if (
       hasConnection(
@@ -151,11 +156,13 @@ export async function verifyStudioSetup(
   if (!isValidConnectionUrl(connection.baseUrl))
     throw new Error(i18n.t('studio:errors.invalidServerUrl'))
   if (connection.serviceSelection === 'volcengine') connection.adminApiKey = ''
-  const health = await fetchConnectionHealth(connection, signal).catch(
-    (error: unknown) => {
-      throw new StudioSetupRequestError('health', error, connection)
-    },
-  )
+  const health = await fetchConnectionHealth(
+    connection,
+    signal,
+    connection.apiKey ? 'data' : 'control',
+  ).catch((error: unknown) => {
+    throw new StudioSetupRequestError('health', error, connection)
+  })
   if (!isUsableServerHealth(health))
     throw new StudioSetupError('invalidService')
   const mode = resolveServerAuthMode(health)
@@ -168,6 +175,20 @@ export async function verifyStudioSetup(
   if (connection.serviceSelection === 'volcengine') {
     connection.accountId = ''
     connection.userId = ''
+  }
+  if (
+    connection.serviceSelection === 'opensource' &&
+    health.role === 'root' &&
+    connection.apiKey
+  ) {
+    connection.adminApiKey = connection.apiKey
+    connection.apiKey = ''
+  } else if (
+    connection.serviceSelection === 'opensource' &&
+    health.role === 'admin' &&
+    !connection.adminApiKey
+  ) {
+    connection.adminApiKey = connection.apiKey
   }
   const managementOnly =
     mode === 'api_key' &&
@@ -186,7 +207,10 @@ export async function verifyStudioSetup(
   }
   const dataClient = createClient({
     baseURL: connection.baseUrl,
-    headers: createConnectionHealthHeaders(connection, 'data'),
+    headers: createConnectionHealthHeaders(
+      connection,
+      managementOnly ? 'control' : 'data',
+    ),
     timeout: 10000,
     throwOnError: true,
   })
@@ -227,12 +251,12 @@ export async function verifyStudioSetup(
 
 export function studioSetupDestination(
   connection: ConnectionDraft,
-): '/filesystem' | '/users' | '/home' {
+): '/filesystem' | '/admin' | '/home' {
   if (connection.serviceSelection === 'volcengine') return '/filesystem'
-  return !connection.apiKey && connection.adminApiKey ? '/users' : '/home'
+  return !connection.apiKey && connection.adminApiKey ? '/admin' : '/home'
 }
 
-export function completeStudioSetup(
+export async function completeStudioSetup(
   connection: ConnectionDraft,
   name: string,
   selectedProfileId?: string,
@@ -243,7 +267,7 @@ export function completeStudioSetup(
     ? saved.find((profile) => profile.id === selectedProfileId)
     : undefined
   const id = existing?.id ?? createRandomUuid()
-  localStorage.setItem(
+  writeCredentialStorage(
     PROFILES_STORAGE_KEY,
     JSON.stringify({
       activeId: id,
@@ -254,7 +278,8 @@ export function completeStudioSetup(
         : [...saved, { id, name, connection }],
     }),
   )
-  localStorage.setItem('ov_console_connection', JSON.stringify(connection))
+  writeCredentialStorage('ov_console_connection', JSON.stringify(connection))
+  await flushCredentialStorage()
   localStorage.setItem(SETUP_STORAGE_KEY, 'complete')
   sessionStorage.setItem(WORKSPACE_SESSION_KEY, 'selected')
 }

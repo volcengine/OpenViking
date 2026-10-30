@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('#/hooks/use-acl-management', () => ({
   useAclManagement: () => ({
     allowed: mocks.allowed,
+    hasDataIdentity: true,
     settings: { data: mocks.enabled, isSuccess: true, isFetching: false },
     settingsKey: ['account-acl', mocks.accountId],
     connection: { baseUrl: 'http://localhost', accountId: mocks.accountId },

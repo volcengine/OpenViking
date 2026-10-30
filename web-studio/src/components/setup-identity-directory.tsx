@@ -82,6 +82,7 @@ export function SetupIdentityDirectory({
       const health = await fetchConnectionHealth(
         { ...connection, apiKey: '' },
         signal,
+        'control',
       )
       if (!current()) return
       if (

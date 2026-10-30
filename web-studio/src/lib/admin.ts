@@ -364,10 +364,12 @@ function normalizeKeyResult(value: unknown): KeyResult {
 
 export async function fetchAdminAccounts(
   connection: AdminConnection,
+  signal?: AbortSignal,
 ): Promise<AdminAccount[]> {
   const result = await getOvResult<unknown[]>(
     getAdminAccounts({
       client: createAdminClient(connection),
+      signal,
     }),
   )
   return result

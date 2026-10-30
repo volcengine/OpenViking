@@ -7,6 +7,16 @@ import { Route } from './index'
 const state = vi.hoisted(() => ({
   isGatewayHost: false,
   provider: 'opensource',
+  connection: {
+    baseUrl: 'http://service.test',
+    apiKey: 'user-key',
+    adminApiKey: '',
+    accountId: 'default',
+    userId: 'alice',
+  },
+  connectionRole: 'user',
+  isConnectionRoleLoading: false,
+  serverMode: 'api_key',
 }))
 vi.mock('#/hooks/use-studio-service', () => ({
   useStudioService: () => ({ provider: state.provider }),
@@ -26,7 +36,9 @@ it.each([false, true])(
     }
     await Index.preload?.()
     render(<Index />)
-    expect(screen.getByText(isGatewayHost ? '/gateway' : '/home')).toBeTruthy()
+    expect(
+      screen.getByText(isGatewayHost ? '/admin/gateway' : '/home'),
+    ).toBeTruthy()
   },
 )
 

@@ -12,69 +12,20 @@ import {
   FieldLabel,
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
-import { canEditStudioConfiguration } from '#/lib/studio-permissions'
-import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
-import { ConnectionProfilesList } from './-components/connection-profiles'
-import { ServerConfigurationEditor } from './-components/server-configuration'
+import { ConnectionSettingsPage } from './-components/connection-settings-page'
 
 export const Route = createFileRoute('/settings')({
   component: ConnectionSettingsRoute,
 })
 
 function ConnectionSettingsRoute() {
-  const { t } = useTranslation('settings')
-  const {
-    identityScopeKey,
-    isGatewayHost,
-    connection,
-    connectionRole,
-    isConnectionRoleLoading,
-    serverMode,
-  } = useAppConnection()
-  const service = useStudioService()
-  const canConfigure =
-    service.ready &&
-    canEditStudioConfiguration({
-      serviceProvider: service.provider,
-      hasControlCredential: Boolean(connection.adminApiKey.trim()),
-      isRoleLoading: isConnectionRoleLoading,
-      role: connectionRole,
-      serverMode,
-    })
-  const [activeTab, setActiveTab] = React.useState('connection')
-  React.useEffect(() => {
-    setActiveTab('connection')
-  }, [identityScopeKey, canConfigure])
-  if (isGatewayHost) return <GatewayConnectionSettings />
-  return (
-    <div className="flex w-full min-w-0 flex-col gap-5">
-      <h1 className="text-2xl font-semibold">{t('pageTitle')}</h1>
-      <Tabs
-        value={canConfigure ? activeTab : 'connection'}
-        onValueChange={setActiveTab}
-        className="min-w-0 gap-5"
-      >
-        <TabsList variant="line">
-          <TabsTrigger value="connection">{t('tabs.connection')}</TabsTrigger>
-          {canConfigure ? (
-            <TabsTrigger value="configuration">
-              {t('tabs.configuration')}
-            </TabsTrigger>
-          ) : null}
-        </TabsList>
-        <TabsContent value="connection">
-          <ConnectionProfilesList />
-        </TabsContent>
-        {canConfigure ? (
-          <TabsContent value="configuration" keepMounted>
-            <ServerConfigurationEditor key={identityScopeKey} />
-          </TabsContent>
-        ) : null}
-      </Tabs>
-    </div>
+  const { isGatewayHost } = useAppConnection()
+  return isGatewayHost ? (
+    <GatewayConnectionSettings />
+  ) : (
+    <ConnectionSettingsPage />
   )
 }
 
@@ -101,9 +52,7 @@ export function GatewayConnectionSettings() {
   const { connection, openvikingUrl, saveConnection, serverMode } =
     useAppConnection()
   const navigate = useNavigate()
-  const [apiKey, setApiKey] = React.useState(
-    connection.apiKey || connection.adminApiKey,
-  )
+  const [apiKey, setApiKey] = React.useState(connection.apiKey)
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState('')
   const misplacedKey = apiKey.startsWith('ovgw_') || apiKey.startsWith('ovgm_')
@@ -141,7 +90,7 @@ export function GatewayConnectionSettings() {
             ? health.user_id
             : connection.userId,
       })
-      await navigate({ to: '/gateway' })
+      await navigate({ to: '/admin/gateway' })
     } catch {
       setError(t('gatewayConnection.gatewayUnreachable'))
     } finally {

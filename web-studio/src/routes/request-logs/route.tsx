@@ -40,7 +40,7 @@ function RequestLogsRoute() {
   const auditScopeKey = {
     accountId: connection.accountId,
     baseUrl: connection.baseUrl,
-    keyHash: hashSecret(connection.adminApiKey || connection.apiKey),
+    keyHash: hashSecret(connection.apiKey),
     role: connectionRole,
     userId: connection.userId,
   }

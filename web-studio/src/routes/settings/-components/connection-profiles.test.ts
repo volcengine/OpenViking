@@ -19,9 +19,19 @@ import {
 const connectionState = vi.hoisted(() => ({
   profiles: [] as ConnectionProfile[],
   activeProfileId: 'active',
+  studioMode: 'workbench',
+  connection: {
+    serviceSelection: 'opensource',
+    baseUrl: '',
+    apiKey: '',
+    adminApiKey: '',
+    accountId: 'default',
+    userId: 'default',
+  },
   saveProfile: vi.fn(),
   activateProfile: vi.fn(),
   deleteProfile: vi.fn(),
+  navigate: vi.fn(),
 }))
 const verify = vi.hoisted(() => vi.fn())
 vi.mock('#/lib/connection/onboarding', async (original) => ({
@@ -45,6 +55,7 @@ vi.mock('#/components/setup-identity-directory', () => ({
 }))
 
 vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => connectionState.navigate,
   Link: ({
     to,
     children,
@@ -85,6 +96,7 @@ beforeEach(() => {
   verify.mockReset()
   connectionState.profiles = []
   connectionState.activeProfileId = 'active'
+  connectionState.studioMode = 'workbench'
 })
 afterEach(() => {
   cleanup()
@@ -143,6 +155,27 @@ it('compacts default/default and shows other hosted account/user identities', ()
   expect(screen.getByText('[study/bob]')).toBeTruthy()
 })
 
+it('shows only Account scope in management connection rows and duplicate summaries', () => {
+  const profile = hosted('Default', 'team', 'alice')
+  connectionState.profiles = [
+    profile,
+    { ...profile, id: 'duplicate', name: 'team/alice' },
+  ]
+  connectionState.studioMode = 'management'
+  const { container, rerender } = render(
+    React.createElement(ConnectionProfilesList),
+  )
+  expect(screen.queryByText('[team/alice]')).toBeNull()
+  expect(screen.queryByText('team/alice')).toBeNull()
+  expect(
+    within(container.querySelector('summary')!).getByText('[team]'),
+  ).toBeTruthy()
+  expect(connectionState.profiles[0].connection.userId).toBe('alice')
+  connectionState.studioMode = 'workbench'
+  rerender(React.createElement(ConnectionProfilesList))
+  expect(screen.getAllByText('[team/alice]').length).toBeGreaterThan(0)
+})
+
 it('lets every record in an identical connection group be managed', () => {
   connectionState.profiles = [
     hosted('duplicate', 'default', 'default'),
@@ -174,11 +207,11 @@ it('lets every record in an identical connection group be managed', () => {
   expect(connectionState.activateProfile).toHaveBeenCalledWith('duplicate')
 })
 
-it('routes adding a profile to the connection wizard without creating a modal draft', () => {
+it('routes adding a profile to its dedicated configuration page', () => {
   render(React.createElement(ConnectionProfilesList))
   expect(
     screen.getByRole('link', { name: 'profiles.add' }).getAttribute('href'),
-  ).toBe('/config')
+  ).toBe('/connections/new')
   expect(screen.queryByRole('dialog')).toBeNull()
   expect(connectionState.saveProfile).not.toHaveBeenCalled()
 })
@@ -187,8 +220,7 @@ it('preserves a saved hosted proxy address when editing its name', () => {
   const profile = hosted('proxy', 'team', 'alice')
   profile.connection.baseUrl = 'https://hosted-proxy.example/openviking'
   connectionState.profiles = [profile]
-  render(React.createElement(ConnectionProfilesList))
-  fireEvent.click(screen.getByRole('button', { name: 'profiles.edit' }))
+  render(React.createElement(ConnectionProfilesList, { editorId: profile.id }))
   const address = screen.getByDisplayValue(profile.connection.baseUrl)
   expect(address.hasAttribute('readonly')).toBe(true)
   fireEvent.change(screen.getByLabelText('profiles.name'), {
@@ -208,8 +240,7 @@ function selectDirectoryUser() {
   profile.connection.baseUrl = 'https://service.example'
   profile.connection.adminApiKey = 'root-key'
   connectionState.profiles = [profile]
-  render(React.createElement(ConnectionProfilesList))
-  fireEvent.click(screen.getByRole('button', { name: 'profiles.edit' }))
+  render(React.createElement(ConnectionProfilesList, { editorId: profile.id }))
   fireEvent.click(screen.getByRole('button', { name: 'onboarding:verify' }))
   fireEvent.click(screen.getByRole('button', { name: 'Select Bob' }))
   return {
@@ -232,7 +263,7 @@ it.each([
     fireEvent.click(screen.getByRole('button', { name: 'profiles.save' }))
     await screen.findByText('onboarding:directoryIdentityMismatch')
     expect(connectionState.saveProfile).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'profiles.edit' })).toBeTruthy()
     verify.mockResolvedValueOnce({ ...expected.connection, apiKey: 'bob-key' })
     fireEvent.change(key, { target: { value: 'bob-key' } })
     fireEvent.click(screen.getByRole('button', { name: 'profiles.save' }))
@@ -293,5 +324,55 @@ it('retains the draft and redacts keys when verification fails', async () => {
   expect(alert.textContent).not.toContain('bob-key')
   expect(alert.textContent).not.toContain('root-key')
   expect(connectionState.saveProfile).not.toHaveBeenCalled()
-  expect(screen.getByRole('dialog')).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'profiles.edit' })).toBeTruthy()
 })
+
+it('verifies a new connection before saving and activating it inside the connected Studio', async () => {
+  const connection = {
+    serviceSelection: 'opensource' as const,
+    baseUrl: 'https://service.example',
+    apiKey: '',
+    adminApiKey: 'root-key',
+    accountId: 'default',
+    userId: 'default',
+  }
+  verify.mockResolvedValue(connection)
+  render(React.createElement(ConnectionProfilesList, { editorId: 'new' }))
+  fireEvent.change(screen.getByLabelText('profiles.name'), {
+    target: { value: 'My server' },
+  })
+  fireEvent.change(screen.getByLabelText('profiles.fields.baseUrl'), {
+    target: { value: connection.baseUrl },
+  })
+  fireEvent.change(screen.getByLabelText('profiles.fields.apiKey'), {
+    target: { value: 'root-key' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'profiles.saveActivate' }))
+  await waitFor(() =>
+    expect(connectionState.saveProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'My server', connection }),
+    ),
+  )
+  const saved = connectionState.saveProfile.mock.calls[0][0]
+  expect(connectionState.activateProfile).toHaveBeenCalledWith(saved.id)
+  expect(connectionState.navigate).toHaveBeenCalledWith({ to: '/settings' })
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+it('navigates editing to a dedicated configuration URL instead of opening a modal', () => {
+  connectionState.profiles = [hosted('active', 'team')]
+  render(React.createElement(ConnectionProfilesList))
+  fireEvent.click(screen.getByRole('button', { name: 'profiles.edit' }))
+  expect(connectionState.navigate).toHaveBeenCalledWith({
+    to: '/connections/$profileId',
+    params: { profileId: 'active' },
+  })
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+// Persistence is tested separately with real Web Crypto in credential-storage.test.ts.
+vi.mock('#/lib/connection/credential-storage', () => ({
+  readCredentialStorage: (key: string) => localStorage.getItem(key),
+  writeCredentialStorage: (key: string, value: string) =>
+    localStorage.setItem(key, value),
+  flushCredentialStorage: async () => {},
+}))

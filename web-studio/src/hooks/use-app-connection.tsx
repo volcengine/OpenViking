@@ -1,4 +1,16 @@
 import {
+  readCredentialStorage,
+  writeCredentialStorage,
+} from '#/lib/connection/credential-storage'
+import {
+  connectionSettingsPath,
+  resolveStudioMode,
+  isSharedStudioPath,
+  readRememberedStudioMode,
+  rememberStudioMode,
+} from '#/lib/studio-mode'
+import type { StudioMode } from '#/lib/studio-mode'
+import {
   resolveApiKeyAuth,
   createConnectionHealthHeaders,
 } from '#/lib/connection/auth'
@@ -74,13 +86,20 @@ type AppConnectionContextValue = {
   saveConnection: (next: ConnectionDraft) => void
   setGeneratedCredential: (credential: GeneratedCredential) => void
   serverMode: ServerMode
+  studioMode: StudioMode
   switchIdentity: (identity: {
     accountId: string
     allowLegacyIdentityFallback?: boolean
+    /** Keep the selected connection configuration while changing its scope. */
+    preserveProfile?: boolean
+    signal?: AbortSignal
     apiKey: string
     userId: string
   }) => Promise<void>
-  switchManagementAccount: (accountId: string) => Promise<void>
+  switchManagementAccount: (
+    accountId: string,
+    options?: { preserveProfile?: boolean },
+  ) => Promise<void>
 }
 
 const CONNECTION_STORAGE_KEY = 'ov_console_connection'
@@ -152,7 +171,7 @@ function readStoredConnection(): Partial<ConnectionDraft> {
   }
 
   try {
-    const raw = window.localStorage.getItem(CONNECTION_STORAGE_KEY)
+    const raw = readCredentialStorage(CONNECTION_STORAGE_KEY)
     if (!raw) {
       return {}
     }
@@ -171,10 +190,7 @@ function persistConnection(connection: ConnectionDraft): void {
   }
 
   try {
-    window.localStorage.setItem(
-      CONNECTION_STORAGE_KEY,
-      JSON.stringify(connection),
-    )
+    writeCredentialStorage(CONNECTION_STORAGE_KEY, JSON.stringify(connection))
   } catch {
     // Ignore localStorage failures in restricted environments.
   }
@@ -309,8 +325,10 @@ export function shouldRedirectToLoginOnApiError(
 function applyConnection(
   connection: ConnectionDraft,
   serverMode: ServerMode,
+  studioMode: StudioMode = 'management',
 ): void {
   ovClient.setOptions({
+    credentialScope: studioMode === 'management' ? 'control' : 'data',
     baseUrl: connection.baseUrl,
     apiKeyAuth: resolveApiKeyAuth(
       connection.baseUrl,
@@ -319,8 +337,11 @@ function applyConnection(
   })
   ovClient.setConnection({
     accountId: connection.accountId,
-    adminApiKey: connection.adminApiKey,
-    apiKey: connection.apiKey,
+    adminApiKey: studioMode === 'management' ? connection.adminApiKey : '',
+    apiKey:
+      studioMode !== 'management' && serverMode === 'trusted'
+        ? ''
+        : connection.apiKey,
     identityHeaders: serverMode === 'trusted' || serverMode === 'dev',
     userId: connection.userId,
   })
@@ -329,12 +350,13 @@ function applyConnection(
 export function synchronizeConnectionRuntime(
   connection: ConnectionDraft,
   serverMode: ServerMode,
+  studioMode: StudioMode = 'management',
 ): ConnectionDraft {
   const normalized = normalizeConnectionDraft(connection)
   // Keep the imperative request client ahead of the React tree. Identity
   // changes remount route content, whose child effects may start requests
   // before this provider's passive effects run.
-  applyConnection(normalized, serverMode)
+  applyConnection(normalized, serverMode, studioMode)
   persistConnection(normalized)
   return normalized
 }
@@ -345,7 +367,10 @@ type ConnectionIdentity = {
   userId: string
 }
 
-async function canListAccounts(connection: ConnectionDraft): Promise<boolean> {
+async function canListAccounts(
+  connection: ConnectionDraft,
+  signal?: AbortSignal,
+): Promise<boolean> {
   if (
     !connection.adminApiKey ||
     identifyServiceProvider(connection.baseUrl) === 'volcengine' ||
@@ -355,12 +380,15 @@ async function canListAccounts(connection: ConnectionDraft): Promise<boolean> {
   }
 
   try {
-    await fetchAdminAccounts({
-      accountId: connection.accountId,
-      apiKey: connection.adminApiKey,
-      baseUrl: connection.baseUrl,
-      userId: connection.userId,
-    })
+    await fetchAdminAccounts(
+      {
+        accountId: connection.accountId,
+        apiKey: connection.adminApiKey,
+        baseUrl: connection.baseUrl,
+        userId: connection.userId,
+      },
+      signal,
+    )
     return true
   } catch {
     return false
@@ -370,10 +398,12 @@ async function canListAccounts(connection: ConnectionDraft): Promise<boolean> {
 async function detectConnectionIdentity(
   connection: ConnectionDraft,
   credential: 'control' | 'data' = 'control',
+  signal?: AbortSignal,
 ): Promise<ConnectionIdentity> {
   const data = await fetchServerHealth(
     connection.baseUrl,
     createConnectionHealthHeaders(connection, credential),
+    signal,
   )
 
   // /health resolves the presented key and echoes back its identity:
@@ -387,7 +417,8 @@ async function detectConnectionIdentity(
   const role =
     credential === 'control' &&
     connection.adminApiKey &&
-    (await canListAccounts(connection))
+    resolveServerAuthMode(data) === 'trusted' &&
+    (await canListAccounts(connection, signal))
       ? 'root'
       : healthRole
 
@@ -554,7 +585,11 @@ export function AppConnectionProvider({
         (p) => p.id === profilesRef.current!.activeId,
       )!.connection,
     )
-    applyConnection(initialConnectionRef.current, 'checking')
+    applyConnection(
+      initialConnectionRef.current,
+      'checking',
+      resolveStudioMode(pathname),
+    )
   }
 
   const [profileState, setProfileState] = React.useState(profilesRef.current!)
@@ -601,19 +636,36 @@ export function AppConnectionProvider({
   const [generatedCredential, setGeneratedCredential] =
     React.useState<GeneratedCredential | null>(null)
 
-  const openConnectionSettings = React.useCallback(() => {
-    if (pathname !== '/settings') {
-      void navigate({ to: '/settings' })
+  const studioMode = resolveStudioMode(
+    pathname,
+    readRememberedStudioMode(
+      profileState.activeId,
+      connection.adminApiKey && !connection.apiKey ? 'management' : 'workbench',
+    ),
+  )
+  React.useEffect(() => {
+    if (pathname !== '/' && !isSharedStudioPath(pathname)) {
+      rememberStudioMode(profileState.activeId, resolveStudioMode(pathname))
     }
-  }, [navigate, pathname])
+  }, [pathname, profileState.activeId])
+
+  // Child effects may issue requests before provider effects run. Restrict the
+  // shared client synchronously when crossing the management/workbench boundary.
+  applyConnection(connection, serverMode, studioMode)
+
+  const openConnectionSettings = React.useCallback(() => {
+    const to = connectionSettingsPath(pathname, studioMode)
+    if (pathname !== to) {
+      void navigate({ to })
+    }
+  }, [navigate, pathname, studioMode])
   const onBootstrapAuthError = React.useEffectEvent(() => {
     openConnectionSettings()
   })
 
   React.useEffect(() => {
-    applyConnection(connection, serverMode)
     persistConnection(connection)
-  }, [connection, serverMode])
+  }, [connection])
 
   React.useEffect(() => {
     storeProfiles(updateActiveProfile(profilesRef.current!, connection))
@@ -621,6 +673,7 @@ export function AppConnectionProvider({
 
   React.useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
 
     const isCancelled = () => cancelled
     setServerMode('checking')
@@ -654,6 +707,7 @@ export function AppConnectionProvider({
               userId: 'default',
             },
             'checking',
+            studioMode,
           )
           queryClient.clear()
           connectionGenerationRef.current += 1
@@ -666,7 +720,11 @@ export function AppConnectionProvider({
         // The gateway answers an invalid OV key with health minus identity.
         health = await fetchServerHealth(
           connection.baseUrl,
-          createConnectionHealthHeaders(connection, 'data'),
+          createConnectionHealthHeaders(
+            connection,
+            studioMode === 'management' ? 'control' : 'data',
+          ),
+          controller.signal,
         )
       } catch (error) {
         if (!isCancelled()) {
@@ -685,14 +743,30 @@ export function AppConnectionProvider({
             : '',
         )
         const mode = resolveServerAuthMode(health)
-        const resolved = synchronizeResolvedDataIdentity(connection, {
-          accountId:
-            typeof health.account_id === 'string' ? health.account_id : '',
-          userId: typeof health.user_id === 'string' ? health.user_id : '',
-          role: isConnectionRole(health.role) ? health.role : 'unknown',
-        })
+        const healthUsesDataKey =
+          studioMode !== 'management' || !connection.adminApiKey
+        const resolvedDataIdentity = healthUsesDataKey
+          ? synchronizeResolvedDataIdentity(connection, {
+              ...readServerIdentity(health),
+              role: isConnectionRole(health.role) ? health.role : 'unknown',
+            })
+          : null
+        const dataConnection = resolvedDataIdentity ?? connection
+        const classified =
+          healthUsesDataKey &&
+          identifyServiceProvider(connection.baseUrl) === 'opensource' &&
+          connection.serviceSelection !== 'volcengine'
+            ? health.role === 'root' && connection.apiKey
+              ? { ...connection, adminApiKey: connection.apiKey, apiKey: '' }
+              : health.role === 'admin' &&
+                  !connection.adminApiKey &&
+                  connection.apiKey
+                ? { ...dataConnection, adminApiKey: connection.apiKey }
+                : null
+            : null
+        const resolved = classified ?? resolvedDataIdentity
         const next = resolved
-          ? synchronizeConnectionRuntime(resolved, mode)
+          ? synchronizeConnectionRuntime(resolved, mode, studioMode)
           : connection
         if (resolved) {
           queryClient.clear()
@@ -700,7 +774,7 @@ export function AppConnectionProvider({
           setConnection(next)
         }
         setServerHealth({
-          key: createConnectionRoleProbeKey(next, 'checking'),
+          key: studioMode + createConnectionRoleProbeKey(next, 'checking'),
           data: health,
         })
         setServerMode(mode)
@@ -709,6 +783,7 @@ export function AppConnectionProvider({
 
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [
     connection.accountId,
@@ -718,19 +793,27 @@ export function AppConnectionProvider({
     connection.serviceSelection,
     connection.userId,
     connectionAttempt,
+    studioMode,
     queryClient,
   ])
 
   React.useEffect(() => {
     let cancelled = false
     const isCancelled = () => cancelled
-    const apiKey = connection.adminApiKey || connection.apiKey
+    const controller = new AbortController()
+    const management = studioMode === 'management'
+    const apiKey = management
+      ? connection.adminApiKey || connection.apiKey
+      : serverMode === 'trusted'
+        ? ''
+        : connection.apiKey
     const roleProbe = resolveConnectionRoleProbeState({
       apiKey,
       baseUrl: connection.baseUrl,
       serverMode,
     })
-    const probeKey = createConnectionRoleProbeKey(connection, serverMode)
+    const probeKey =
+      studioMode + createConnectionRoleProbeKey(connection, serverMode)
     const synchronizedProbe = synchronizedRoleProbeRef.current
 
     if (synchronizedProbe?.key === probeKey) {
@@ -739,6 +822,7 @@ export function AppConnectionProvider({
       setConnectionRoleLoading(false)
       return () => {
         cancelled = true
+        controller.abort()
       }
     }
 
@@ -747,10 +831,15 @@ export function AppConnectionProvider({
     if (!roleProbe.shouldProbe) {
       return () => {
         cancelled = true
+        controller.abort()
       }
     }
 
-    void detectConnectionIdentity(connection)
+    void detectConnectionIdentity(
+      connection,
+      management ? 'control' : 'data',
+      controller.signal,
+    )
       .catch(() => ({
         accountId: '',
         role: 'unknown' as const,
@@ -761,12 +850,13 @@ export function AppConnectionProvider({
           return
         }
         const { accountId, role } = controlIdentity
-        // An account-admin Root key is scoped to its own account. Pin that
+        // An account-admin User key is scoped to its own account. Pin that
         // account as the assumed identity so admin and data calls target the
         // right tenant instead of failing with a mismatch (the server rejects
         // a foreign account with "ADMIN can only manage account: <x>"). A root
         // key is not account-scoped, so its account selection is left intact.
         if (
+          management &&
           role === 'admin' &&
           (!connection.apiKey ||
             connection.apiKey === connection.adminApiKey) &&
@@ -776,9 +866,10 @@ export function AppConnectionProvider({
           const next = synchronizeConnectionRuntime(
             { ...connection, accountId },
             serverMode,
+            studioMode,
           )
           synchronizedRoleProbeRef.current = {
-            key: createConnectionRoleProbeKey(next, serverMode),
+            key: studioMode + createConnectionRoleProbeKey(next, serverMode),
             role,
           }
           queryClient.clear()
@@ -798,6 +889,7 @@ export function AppConnectionProvider({
 
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [
     connection.accountId,
@@ -808,6 +900,7 @@ export function AppConnectionProvider({
     connection.userId,
     queryClient,
     serverMode,
+    studioMode,
   ])
 
   React.useEffect(() => {
@@ -844,14 +937,23 @@ export function AppConnectionProvider({
     const commitConnection = (
       next: ConnectionDraft,
       preserveIdentity = false,
+      rememberIdentity = false,
     ) => {
       connectionGenerationRef.current += 1
       connectionRevisionRef.current += 1
       authPromptSuppressedUntilRef.current =
         Date.now() + AUTH_PROMPT_SUPPRESSION_MS
-      const normalized = synchronizeConnectionRuntime(next, serverMode)
+      const normalized = synchronizeConnectionRuntime(
+        next,
+        serverMode,
+        studioMode,
+      )
       if (preserveIdentity) {
         storeProfiles(activateIdentityProfile(profilesRef.current!, normalized))
+      } else if (rememberIdentity) {
+        storeProfiles(
+          updateActiveProfile(profilesRef.current!, normalized, true),
+        )
       }
       queryClient.clear()
       setConnection(normalized)
@@ -860,7 +962,11 @@ export function AppConnectionProvider({
     const activateConnection = (next: ConnectionDraft) => {
       connectionGenerationRef.current += 1
       // Apply the new credentials before any new route effects can issue requests.
-      const normalized = synchronizeConnectionRuntime(next, 'checking')
+      const normalized = synchronizeConnectionRuntime(
+        next,
+        'checking',
+        studioMode,
+      )
       reconnect()
       setGeneratedCredential(null)
       setConnection(normalized)
@@ -922,7 +1028,7 @@ export function AppConnectionProvider({
       reconnect,
       serverHealth:
         serverHealth?.key ===
-        createConnectionRoleProbeKey(connection, 'checking')
+        studioMode + createConnectionRoleProbeKey(connection, 'checking')
           ? serverHealth.data
           : null,
       saveConnection: (next) => {
@@ -932,9 +1038,12 @@ export function AppConnectionProvider({
       },
       setGeneratedCredential,
       serverMode,
+      studioMode,
       switchIdentity: async ({
         accountId,
         allowLegacyIdentityFallback,
+        preserveProfile = false,
+        signal,
         apiKey,
         userId,
       }) => {
@@ -945,6 +1054,7 @@ export function AppConnectionProvider({
 
         const revision = ++connectionRevisionRef.current
         const assertCurrentConnection = () => {
+          signal?.throwIfAborted()
           assertSourceConnection()
           if (revision !== connectionRevisionRef.current)
             throw connectionChangedError()
@@ -956,7 +1066,11 @@ export function AppConnectionProvider({
           apiKey: serverMode === 'trusted' ? '' : apiKey,
           userId,
         })
-        const identity = await detectConnectionIdentity(requested, 'data')
+        const identity = await detectConnectionIdentity(
+          requested,
+          'data',
+          signal,
+        )
         assertCurrentConnection()
         const resolvedIdentity = resolveSwitchedIdentity(
           requested,
@@ -983,10 +1097,11 @@ export function AppConnectionProvider({
             ...requested,
             ...resolvedIdentity,
           },
-          true,
+          !preserveProfile,
+          preserveProfile,
         )
       },
-      switchManagementAccount: async (accountId) => {
+      switchManagementAccount: async (accountId, options) => {
         assertSourceConnection()
         if (connectionRole !== 'root') {
           throw createConnectionError('rootRequired')
@@ -997,7 +1112,8 @@ export function AppConnectionProvider({
             accountId,
             isGatewayHost,
           ),
-          true,
+          !options?.preserveProfile,
+          options?.preserveProfile,
         )
       },
     }
@@ -1017,6 +1133,7 @@ export function AppConnectionProvider({
     reconnect,
     serverHealth,
     serverMode,
+    studioMode,
   ])
 
   return (

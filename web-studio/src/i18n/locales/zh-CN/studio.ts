@@ -1,4 +1,20 @@
 const studio = {
+  credentialStorage: {
+    startError:
+      '无法读取本地加密凭据。请使用 HTTPS 或 localhost，并允许此站点使用浏览器存储后刷新。已有凭据未被清除。',
+    saveError:
+      '凭据尚未保存到本机，请勿关闭或刷新页面。请检查浏览器存储权限后重试保存。',
+  },
+  userKey: {
+    title: '配置 User API Key',
+    description: '为当前连接和 Account 添加一个 User，无需重复配置服务。',
+    hint: 'User ID 将自动识别。已有 User API Key 会保留在本机，供之后切换使用。',
+    rootKey: '这里需要 User API Key，请勿填写 Root API Key。',
+    accountMismatch: '此 API Key 不属于当前 Account，请在对应连接下配置。',
+    identityMissing:
+      '服务未返回有效的 Account 和 User ID，无法确认此用户身份。',
+    saved: '已保存并切换为 {{user}}',
+  },
   duration: { milliseconds: '{{value}} 毫秒', seconds: '{{value}} 秒' },
   errors: {
     botHealth: 'Bot 健康检查失败（{{status}}）',
@@ -71,6 +87,12 @@ const studio = {
   oauthClient: 'MCP 客户端',
   localConnection: '本地 OpenViking',
   profiles: {
+    managementHint:
+      '支持 Root 或 Account Admin API Key。Root 可管理所有 Account；Account Admin 仅管理所属 Account。',
+    back: '返回连接设置',
+    editorHint: '配置服务地址和访问凭据，新增或更改的凭据会在保存前校验。',
+    saveActivate: '保存并启用',
+    notFound: '此连接配置不存在或已被删除。',
     connectionChanged: '连接已切换，请在当前连接上重新选择身份。',
     identityPending: '身份待确认',
     typeHint: '为这份配置选择服务类型。保存后应用到当前连接。',
@@ -145,6 +167,11 @@ const studio = {
   directoryDescription: '浏览自己的上下文，以及获得授权的共享资源。',
   directoryError: '无法打开目录：目录可能不存在，或当前身份没有访问权限。',
   states: {
+    trustedWorkbench: {
+      title: '此认证模式不能用于用户工作台',
+      description:
+        'trusted 认证要求每个请求携带 Root API Key。用户工作台禁止使用 Root 凭据，请连接采用 api_key 认证的服务并配置 User API Key。',
+    },
     gatewayAuthMode: {
       title: 'Gateway 需要 API Key 认证模式',
       description:

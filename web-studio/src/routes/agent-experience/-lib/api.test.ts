@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { fetchExperiences, searchExperiences } from './api'
 import {
   fetchAgentEvolutionStatus,
-  fetchExperiences,
-  searchExperiences,
   setAgentEvolutionEnabled,
-} from './api'
+} from '#/routes/admin/configuration/-experience-api'
 
 const { get, patch, post } = vi.hoisted(() => ({
   get: vi.fn(),

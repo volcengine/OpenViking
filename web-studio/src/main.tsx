@@ -1,3 +1,6 @@
+import i18n from '#/i18n/core'
+import { initializeCredentialStorage } from './lib/connection/credential-storage'
+import { toast } from 'sonner'
 import '#/i18n'
 import ReactDOM from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -34,15 +37,30 @@ declare module '@tanstack/react-router' {
 
 const rootElement = document.getElementById('app')!
 
-if (!rootElement.innerHTML) {
-  const root = ReactDOM.createRoot(rootElement)
-  root.render(
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <RouterProvider router={router} />
-        </TooltipProvider>
-      </QueryClientProvider>
-    </ThemeProvider>,
-  )
+async function start() {
+  try {
+    await initializeCredentialStorage()
+  } catch {
+    rootElement.textContent = i18n.t('studio:credentialStorage.startError')
+    return
+  }
+  window.addEventListener('ov-credential-storage-error', () => {
+    toast.error(i18n.t('studio:credentialStorage.saveError'), {
+      id: 'credential-storage',
+      duration: Infinity,
+    })
+  })
+  if (!rootElement.innerHTML) {
+    const root = ReactDOM.createRoot(rootElement)
+    root.render(
+      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <RouterProvider router={router} />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </ThemeProvider>,
+    )
+  }
 }
+void start()

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ComponentType } from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 
@@ -82,7 +82,7 @@ afterEach(() => {
   reconnect.mockClear()
 })
 
-it('unmounts the configuration editor and resets the active tab when switching to a hosted connection', async () => {
+it('keeps service configuration out of connection settings for both providers', async () => {
   Object.assign(serviceState, {
     provider: 'opensource',
     ready: true,
@@ -101,17 +101,13 @@ it('unmounts the configuration editor and resets the active tab when switching t
     </QueryClientProvider>
   )
   const view = render(content())
-  fireEvent.click(screen.getByRole('tab', { name: 'tabs.configuration' }))
-  expect(await screen.findByTestId('configuration-editor')).toBeTruthy()
+  expect(screen.queryByRole('tab', { name: 'tabs.configuration' })).toBeNull()
+  expect(screen.getByTestId('connection-profiles')).toBeTruthy()
   serviceState.provider = 'volcengine'
   view.rerender(content())
   expect(screen.queryByRole('tab', { name: 'tabs.configuration' })).toBeNull()
   expect(screen.queryByTestId('configuration-editor')).toBeNull()
-  expect(
-    screen
-      .getByRole('tab', { name: 'tabs.connection' })
-      .getAttribute('aria-selected'),
-  ).toBe('true')
+  expect(screen.getByTestId('connection-profiles')).toBeTruthy()
   client.clear()
   Object.assign(serviceState, { provider: 'opensource', role: 'user', key: '' })
 })

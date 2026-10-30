@@ -1,3 +1,9 @@
+import {
+  isManagementPath,
+  isConnectionSettingsPath,
+  connectionSettingsPath,
+  isSharedStudioPath,
+} from '#/lib/studio-mode'
 import type { ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -20,6 +26,7 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     isConnectionRoleLoading,
     isGatewayHost,
     serverMode,
+    studioMode,
   } = useAppConnection()
   const service = useStudioService()
   const feature = featureForPath(pathname)
@@ -29,13 +36,15 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
   const capabilities = useStudioCapabilities()
   const capability = feature ? capabilities[feature.id] : undefined
   if (
-    pathname === '/settings' ||
+    isConnectionSettingsPath(pathname) ||
     pathname === '/' ||
     (isGatewayHost && feature?.id === 'gateway')
   )
     return children
   let reason: string | undefined
-  if (!service.ready)
+  if (studioMode !== 'management' && serverMode === 'trusted')
+    reason = 'trustedWorkbench'
+  else if (!service.ready)
     reason = service.isChecking ? 'checking' : 'connectionFailed'
   else if (service.provider === 'unknown') reason = 'unknownProvider'
   else if (feature?.domain === 'management') {
@@ -63,7 +72,9 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
             role: connectionRole,
             serverMode,
           })
-        : !permissions.canManageUsers
+        : feature.id === 'botManagement'
+          ? !permissions.canManageAccounts
+          : !permissions.canManageUsers
     )
       reason = 'managementRequired'
   } else if (pathname.startsWith('/oauth') && service.provider !== 'opensource')
@@ -77,6 +88,15 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     else if (capability?.data !== 'supported')
       reason = capability?.data ?? 'unknown'
   }
+  if (
+    !reason &&
+    !isManagementPath(pathname) &&
+    !isSharedStudioPath(pathname) &&
+    serverMode === 'api_key' &&
+    !connection.apiKey &&
+    connection.adminApiKey
+  )
+    reason = 'managementRequired'
   if (!reason) return children
   return (
     <section
@@ -88,7 +108,10 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
         {t(`states.${reason}.description`)}
       </p>
       <div className="flex flex-wrap gap-2">
-        <Button nativeButton={false} render={<Link to="/settings" />}>
+        <Button
+          nativeButton={false}
+          render={<Link to={connectionSettingsPath(pathname, studioMode)} />}
+        >
           {t('connectionSettings')}
         </Button>
         <Button
