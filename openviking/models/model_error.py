@@ -37,12 +37,14 @@ class ModelError(Exception):
         provider: str | None = None,
         status_code: int | None = None,
         code: str | None = None,
+        remediation: str | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.provider = provider
         self.status_code = status_code
         self.code = code
+        self.remediation = remediation
 
 
 _CODE_KINDS = {
