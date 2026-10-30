@@ -245,7 +245,7 @@ def test_embedded_fork_selector_ignores_workspace_imports_and_pythonpath(tmp_pat
 @pytest.mark.parametrize(
     "approved,expected_trusted",
     [
-        ("", True),
+        ("", False),
         ('["zhanglistar/OpenViking"]', True),
         ("[]", False),
         ('["other/OpenViking"]', False),
@@ -290,10 +290,9 @@ def test_embedded_approved_fork_shares_hosts_without_secrets(
     assert reason in summary.read_text()
 
 
-def test_workflow_preserves_missing_vars_for_explicitly_approved_fork_default():
+def test_workflow_passes_only_configured_fork_trust():
     env = workflow("_linux-runner.yml")["jobs"]["select"]["steps"][0]["env"]
     assert env["TRUSTED_PR_REPOSITORIES"] == "${{ vars.CI_LINUX_TRUSTED_REPOSITORIES }}"
-    assert router.DEFAULT_TRUSTED_PR_REPOSITORIES == ["zhanglistar/OpenViking"]
 
 
 @pytest.mark.parametrize(

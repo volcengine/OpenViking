@@ -45,13 +45,10 @@ Fork PRs may run this selection job on the shared hosts and receive no inventory
 secret. Their test code uses GitHub-hosted unless their source repository is
 explicitly trusted. Set the official repository variable
 `CI_LINUX_TRUSTED_REPOSITORIES` to a JSON list of approved source repositories.
-The reviewed default explicitly approves `zhanglistar/OpenViking`, including
-when repository variables are unavailable in a fork run. A visible variable
-replaces this default; `[]` disables fork trust. A malformed value trusts no
-forks. To revoke the default when variables are unavailable, remove that source
-from `DEFAULT_TRUSTED_PR_REPOSITORIES` and the embedded script. Names match
-exactly; other repositories owned by that user and non-official destinations
-remain hosted.
+No fork is trusted by default. An absent, empty or malformed variable trusts no
+forks; `[]` explicitly disables fork trust. Names match exactly, and non-official
+destinations remain hosted. Branches in the official repository do not require
+this variable to use self-hosted capacity.
 
 In `auto`, the selector queries runner inventory, chooses an online idle Linux
 x64 pool (also allowing its own host, which becomes free when selection finishes),

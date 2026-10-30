@@ -49,8 +49,6 @@ jobs:
           POOLS = ("openviking-ecs", "ov-ci-runner")
           HOSTED = ["ubuntu-24.04"]
           SHARED = ["self-hosted", "Linux", "X64", "ci-linux-tests"]
-          # Explicitly approved fork; keep usable when fork runs cannot read repository vars.
-          DEFAULT_TRUSTED_PR_REPOSITORIES = ["zhanglistar/OpenViking"]
 
 
           def trusted_source(repository, event, trusted_pr_repositories=()):
@@ -127,10 +125,7 @@ jobs:
                   event = json.load(stream)
               repository = os.environ["GITHUB_REPOSITORY"]
               try:
-                  configured = os.environ.get("TRUSTED_PR_REPOSITORIES", "")
-                  trusted_pr_repositories = (
-                      json.loads(configured) if configured else DEFAULT_TRUSTED_PR_REPOSITORIES
-                  )
+                  trusted_pr_repositories = json.loads(os.environ.get("TRUSTED_PR_REPOSITORIES") or "[]")
                   if not isinstance(trusted_pr_repositories, list) or not all(
                       isinstance(source, str) and source for source in trusted_pr_repositories
                   ):
