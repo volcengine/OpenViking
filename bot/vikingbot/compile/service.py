@@ -1234,6 +1234,13 @@ class BotCompileService:
                 link_count=rendered.link_count,
                 warnings=pipeline.warnings,
             )
+            incomplete_message = "No output was acknowledged."
+            if rendered.review_exclusions and not rendered.operations and not rendered.unchanged:
+                first_reason = next(iter(rendered.review_exclusions.values()))[:300]
+                incomplete_message = (
+                    f"Final review excluded all {len(rendered.review_exclusions)} staged outputs. "
+                    f"First reason: {first_reason}"
+                )
 
             def complete(task):
                 if task.status not in TERMINAL_STATUSES and task.status != "cancelling":
@@ -1242,9 +1249,7 @@ class BotCompileService:
                     task.stage = "completed" if published or pipeline.noop else "writing"
                     task.result = compiled
                     task.error = (
-                        CompileErrorInfo(
-                            code="COMPILE_INCOMPLETE", message="No output was acknowledged."
-                        )
+                        CompileErrorInfo(code="COMPILE_INCOMPLETE", message=incomplete_message)
                         if not published and not pipeline.noop
                         else None
                     )

@@ -53,6 +53,7 @@ class RenderedBundle:
     unchanged: list[str] = field(default_factory=list)
     wiki_uris: list[str] = field(default_factory=list)
     link_count: int = 0
+    review_exclusions: dict[str, str] = field(default_factory=dict)
 
 
 def wiki_page_path_from_title(title: str) -> str:
