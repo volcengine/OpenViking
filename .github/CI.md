@@ -34,21 +34,22 @@ release builds accept the same input. The legacy `os_json` value
 host. Wheels continue compiling independently in Ubuntu 20.04 containers
 (glibc 2.31) on every x64 pool. Studio/source builds use Ubuntu 24.04 containers.
 
-The selector itself runs on `[self-hosted, Linux, X64, ci-linux-selector]` in
-the official repository. Add the `ci-linux-selector` custom label to both the
-original ECS and ov-ci-runner; GitHub assigns the job to an available matching
-host. It does not need GitHub-hosted Linux capacity to begin selection. If both
-hosts are busy or offline, the selector waits in the self-hosted queue.
-Non-official repositories retain a hosted selector because they do not have
-these prepared hosts.
+The selector defaults to `ubuntu-24.04` on GitHub-hosted, so it does not wait
+for self-hosted test capacity before making a decision. In the official
+repository, `CI_LINUX_SELECTOR_RUNS_ON` can override its runner labels with a
+JSON array, for example `["self-hosted","Linux","X64","ci-linux-selector"]`.
+That optional configuration assigns selection to either prepared host carrying
+`ci-linux-selector`; it waits if both hosts are unavailable. An unset or empty
+variable uses GitHub-hosted. Non-official repositories always use a hosted
+selector. GitHub matches all labels in an array; it does not treat hosted and
+self-hosted labels as alternative pools.
 
 The selector runs embedded Python in a disposable `python:3.12-slim` container,
 without checkout or local actions. Python isolated mode and working directory
 `/` prevent importing files left in the runner workspace. The embedded script
 is checked against `.github/scripts/linux_runner.py` by the regression suite.
-Fork PRs may run this selection job on the shared hosts and receive no inventory
-secret. Their test code uses GitHub-hosted unless their source repository is
-explicitly trusted. Set the official repository variable
+Fork PRs receive no inventory secret. Their test code uses GitHub-hosted unless
+their source repository is explicitly trusted. Set the official repository variable
 `CI_LINUX_TRUSTED_REPOSITORIES` to a JSON list of approved source repositories.
 No fork is trusted by default. An absent, empty or malformed variable trusts no
 forks; `[]` explicitly disables fork trust. Names match exactly, and non-official
@@ -63,9 +64,11 @@ is `openviking-ecs` or `ov-ci-runner`. Add `ci-linux-tests` to both prepared hos
 GitHub can assign each dependent job to either host, instead of pinning a whole
 workflow to the selector's host. This also lets approved fork PRs use the
 self-hosted pools without receiving a secret. API failures, offline/busy
-inventory or an unrecognized selector host with no credentials fall back to
-`ubuntu-24.04`. The selector's summary records its decision. This is an
-availability snapshot, not a capacity reservation: concurrent workflows can
+inventory or a GitHub-hosted selector with no credentials fall back to
+`ubuntu-24.04`. With the default hosted selector, automatic selection of idle
+self-hosted capacity requires `CI_RUNNER_READ_TOKEN`. Explicit `linux_pool`
+selection still works without it. The selector's summary records its decision.
+This is an availability snapshot, not a capacity reservation: concurrent workflows can
 select the same runner, and GitHub cannot move an already queued job to another
 pool. Matrix jobs may queue behind other jobs on the selected pool.
 
@@ -78,13 +81,14 @@ on its labels and waits for capacity; with inventory available, an unavailable
 explicit pool falls back to hosted. Untrusted fork PRs and non-official
 repositories always select hosted.
 
-Each self-hosted pool must have `[self-hosted, Linux, X64]`, both shared labels
-(`ci-linux-selector` and `ci-linux-tests`), and its corresponding custom label
+Each self-hosted pool must have `[self-hosted, Linux, X64]`, the shared label
+`ci-linux-tests`, and its corresponding custom label
 (`openviking-ecs` or `ov-ci-runner`), plus a working Docker daemon,
 Docker socket access for the runner user, and outbound access to Actions,
 Ubuntu packages and container registries. Limit these custom labels to prepared
-hosts. Linux x64 tests run in disposable Ubuntu 24.04 containers on every pool,
-with job-local HOME/Cargo/Rustup directories and Git installed before checkout.
+hosts. `ci-linux-selector` is only needed when selection is explicitly placed
+on the prepared hosts. Linux x64 tests run in disposable Ubuntu 24.04 containers
+on every pool, with job-local HOME/Cargo/Rustup directories and Git installed before checkout.
 Wheel jobs supply their own Ubuntu 20.04 packages and use the bootstrap action
 with dependency installation disabled, retaining job-local HOME/Cargo/Rustup.
 The bootstrap action's post-job hook restores workspace/temp ownership to the

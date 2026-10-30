@@ -195,7 +195,10 @@ def workflow(name):
 
 def embedded_selector():
     job = workflow("_linux-runner.yml")["jobs"]["select"]
-    assert "ci-linux-selector" in job["runs-on"]
+    assert job["runs-on"] == (
+        "${{ fromJSON(github.repository == 'volcengine/OpenViking' && "
+        "vars.CI_LINUX_SELECTOR_RUNS_ON || '[\"ubuntu-24.04\"]') }}"
+    )
     assert job["container"] == "python:3.12-slim"
     assert all("uses" not in step for step in job["steps"])
     step = job["steps"][0]
@@ -206,7 +209,7 @@ def embedded_selector():
     return script.removesuffix("PY\n")
 
 
-def test_self_hosted_selector_embeds_the_tested_script_without_checkout():
+def test_selector_embeds_the_tested_script_without_checkout():
     assert embedded_selector() == (ROOT / ".github/scripts/linux_runner.py").read_text()
 
 
@@ -241,7 +244,7 @@ def test_embedded_fork_selector_ignores_workspace_imports_and_pythonpath(tmp_pat
     assert "Untrusted PRs" in result.stdout
 
 
-@pytest.mark.parametrize("selector_host", router.POOLS)
+@pytest.mark.parametrize("selector_host", [*router.POOLS, "GitHub Actions 1"])
 @pytest.mark.parametrize("source", ["volcengine/OpenViking", "zhanglistar/OpenViking"])
 @pytest.mark.parametrize(
     "approved,expected_trusted",
@@ -283,9 +286,14 @@ def test_embedded_pr_shares_hosts_only_for_trusted_sources(
         check=True,
     )
     trusted = source == "volcengine/OpenViking" or expected_trusted
-    expected = router.SHARED if trusted else router.HOSTED
+    expected = router.SHARED if trusted and selector_host in router.POOLS else router.HOSTED
     assert json.loads(output.read_text().split("=", 1)[1]) == expected
-    reason = "Inventory credentials absent" if trusted else "Untrusted PRs"
+    if not trusted:
+        reason = "Untrusted PRs"
+    elif selector_host in router.POOLS:
+        reason = "Inventory credentials absent"
+    else:
+        reason = "inventory unavailable"
     assert reason in result.stdout
     assert reason in summary.read_text()
 

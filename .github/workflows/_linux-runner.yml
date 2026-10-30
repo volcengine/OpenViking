@@ -20,8 +20,9 @@ permissions:
 
 jobs:
   select:
-    # GitHub assigns this job to either prepared host, using one shared label.
-    runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ci-linux-selector"]') || fromJSON('["ubuntu-24.04"]') }}
+    # Selection must not wait for self-hosted test capacity by default.
+    # An explicit JSON label override can place this small job on a prepared host.
+    runs-on: ${{ fromJSON(github.repository == 'volcengine/OpenViking' && vars.CI_LINUX_SELECTOR_RUNS_ON || '["ubuntu-24.04"]') }}
     container: python:3.12-slim
     timeout-minutes: 5
     outputs:
