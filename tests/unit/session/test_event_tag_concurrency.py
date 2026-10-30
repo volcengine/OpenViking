@@ -15,12 +15,15 @@ class _PathLock:
         self.acquired = 0
         self.released = 0
 
-    async def pathlock_acquire_exact(self, path, timeout_secs):
+    async def pathlock_acquire_exact(self, path, timeout_secs=0.0):
         del path, timeout_secs
         self.acquired += 1
         return "lease-1"
 
-    async def pathlock_acquire_exact_batch(self, paths, timeout_secs, owner_lease_ref):
+    async def pathlock_acquire_exact_batch(
+        self, paths, timeout_secs=0.0, owner_lease_ref=None
+    ):
+        del paths, timeout_secs, owner_lease_ref
         self.acquired += 1
         return "file-lease"
 

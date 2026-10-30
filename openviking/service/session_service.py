@@ -458,6 +458,7 @@ class SessionService:
         min_raw_tail_steps: Optional[int] = None,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
+        lock_timeout_secs: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -490,6 +491,8 @@ class SessionService:
             commit_kwargs["event_tags"] = event_tags
         if reset_context:
             commit_kwargs["reset_context"] = True
+        if lock_timeout_secs is not None:
+            commit_kwargs["lock_timeout_secs"] = lock_timeout_secs
         result = await session.commit_async(**commit_kwargs)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
