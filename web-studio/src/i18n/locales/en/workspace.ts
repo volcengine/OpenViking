@@ -6,6 +6,7 @@ const workspace = {
       account: 'Account',
       credentialType: 'Credential type',
       root: 'Root API Key',
+      trusted: 'Trusted credential (Root API Key)',
       management: 'Management API Key',
       unset: 'Not selected',
       empty: 'No API Key configured for this identity',
@@ -750,7 +751,7 @@ const workspace = {
       rootManagement: 'Root API Key',
       accountManagement: 'Account Admin API Key',
       checkingManagement: 'Verifying management credential…',
-      trustedManagement: 'Server authentication',
+      trustedManagement: 'Trusted authentication (Root)',
       devManagement: 'Development mode',
       unverifiedManagement: 'Unverified management credential',
       assertedIdentity:
@@ -769,6 +770,8 @@ const workspace = {
       switchUser: 'Switch User ID',
       searchUsers: 'Search User IDs',
       usersInAccount: 'Saved User API Keys · {{account}}',
+      trustedUsersInAccount: 'User IDs · {{account}}',
+      useTrustedUser: 'Switch to {{user}}',
       loadingUsers: 'Loading users…',
       noUsers: 'No matching users in this Account',
       accountBound:

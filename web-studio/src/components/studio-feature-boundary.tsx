@@ -42,8 +42,8 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
   )
     return children
   let reason: string | undefined
-  if (studioMode !== 'management' && serverMode === 'trusted')
-    reason = 'trustedWorkbench'
+  if (serverMode === 'trusted' && !connection.adminApiKey.trim())
+    reason = 'trustedCredentialRequired'
   else if (!service.ready)
     reason = service.isChecking ? 'checking' : 'connectionFailed'
   else if (service.provider === 'unknown') reason = 'unknownProvider'

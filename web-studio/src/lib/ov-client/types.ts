@@ -10,6 +10,7 @@ export interface OvConnectionState {
   apiKey: string
   accountId: string
   identityHeaders: boolean
+  trustedAuth?: boolean
   userId: string
 }
 

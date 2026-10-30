@@ -167,10 +167,10 @@ const studio = {
   directoryDescription: '浏览自己的上下文，以及获得授权的共享资源。',
   directoryError: '无法打开目录：目录可能不存在，或当前身份没有访问权限。',
   states: {
-    trustedWorkbench: {
-      title: '此认证模式不能用于用户工作台',
+    trustedCredentialRequired: {
+      title: '请配置 Trusted 认证凭据',
       description:
-        'trusted 认证要求每个请求携带 Root API Key。用户工作台禁止使用 Root 凭据，请连接采用 api_key 认证的服务并配置 User API Key。',
+        '此服务使用 trusted 认证。请在连接设置中配置服务的 Root API Key，之后可通过 Account 和 User ID 切换访问身份，无需 User API Key。',
     },
     gatewayAuthMode: {
       title: 'Gateway 需要 API Key 认证模式',

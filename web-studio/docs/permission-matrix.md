@@ -96,3 +96,7 @@ Account Admin **不只是能看用户列表**，而是有一组本 Account 管�
 依据：[前端管理能力](../src/lib/studio-permissions.ts)、[成员角色编辑](../src/routes/admin/users/-components/user-role-cell.tsx)、[控制凭据目录验证](../src/components/setup-identity-directory.tsx)。
 
 本表先固定权限边界。是否共用管理入口、如何分组、工作台是否增加用户入口，后续再按这些能力和实际用户任务规划。
+
+## Trusted 模式补充
+
+以上角色矩阵主要针对 API Key 模式。Trusted 模式要求每个认证请求使用服务配置的 Root Key；数据接口结合 Account/User 断言解析数据身份，管理接口将有效受信凭据识别为 Root。因此持有该凭据的 Studio 可以进入工作台和管理后台，切换数据 User 不会撤销 Root 管理能力，也无需逐个配置 User Key。工作台的服务端 Account/User 目录是此模式的显式能力，不适用于普通 API Key 模式。

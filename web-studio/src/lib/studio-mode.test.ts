@@ -16,6 +16,17 @@ const connection = {
   adminApiKey: 'root-key',
 }
 afterEach(() => localStorage.clear())
+it('honors the trusted workbench preference without a User Key', () => {
+  expect(
+    resolveStudioEntry({
+      connection: { ...connection, apiKey: '' },
+      provider: 'opensource',
+      canManage: true,
+      preferredMode: 'workbench',
+      serverMode: 'trusted',
+    }),
+  ).toBe('/home')
+})
 it.each(['/admin/configuration/server', '/admin/configuration/server/'])(
   'omits Account scope on global server configuration route %s',
   (path) => {

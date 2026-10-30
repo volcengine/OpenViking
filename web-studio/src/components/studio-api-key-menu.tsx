@@ -34,9 +34,10 @@ export function StudioApiKeyMenu({
 }) {
   const { t } = useTranslation('appShell')
   const { connection, connectionRole, serverMode } = useAppConnection()
-  const apiKey = managementMode
-    ? connection.adminApiKey || (isGatewayHost ? connection.apiKey : '')
-    : connection.apiKey
+  const apiKey =
+    managementMode || serverMode === 'trusted'
+      ? connection.adminApiKey || (isGatewayHost ? connection.apiKey : '')
+      : connection.apiKey
   const identityLabel = managementMode
     ? connectionRole === 'admin'
       ? t('apiKey.account')
@@ -53,6 +54,9 @@ export function StudioApiKeyMenu({
       apiKey={apiKey}
       identityLabel={identityLabel}
       identityValue={identityValue}
+      credentialLabel={
+        serverMode === 'trusted' ? t('apiKey.trusted') : undefined
+      }
     />
   )
 }
@@ -61,10 +65,12 @@ function CredentialPopover({
   apiKey,
   identityLabel,
   identityValue,
+  credentialLabel,
 }: {
   apiKey: string
   identityLabel: string
   identityValue: string
+  credentialLabel?: string
 }) {
   const { t } = useTranslation('appShell')
   const [open, setOpen] = React.useState(false)
@@ -110,7 +116,7 @@ function CredentialPopover({
           </div>
           <div className="space-y-1.5">
             <dt className="text-xs text-muted-foreground">
-              {t('apiKey.title')}
+              {credentialLabel || t('apiKey.title')}
             </dt>
             <dd className="flex min-w-0 items-end justify-between gap-3">
               {apiKey ? (

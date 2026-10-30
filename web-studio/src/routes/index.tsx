@@ -11,7 +11,7 @@ export const Route = createFileRoute('/')({
 
 function IndexRoute() {
   const { provider } = useStudioService()
-  const { isGatewayHost, connection, isConnectionRoleLoading } =
+  const { isGatewayHost, connection, isConnectionRoleLoading, serverMode } =
     useAppConnection()
   const { canManage } = useStudioMode()
   if (isConnectionRoleLoading) return null
@@ -26,6 +26,7 @@ function IndexRoute() {
               connection,
               provider,
               preferredMode: readPreferredMode(connection),
+              serverMode,
             })
       }
     />

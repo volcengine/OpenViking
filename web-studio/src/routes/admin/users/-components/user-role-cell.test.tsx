@@ -29,11 +29,13 @@ it.each(['root', 'admin'] as const)(
       />,
     )
     const user = userEvent.setup()
-    await user.click(
-      screen.getByRole('combobox', { name: 'actions.changeRole' }),
-    )
+    await user.tab()
+    await user.keyboard('[ArrowDown]')
+    const adminOption = await screen.findByRole('option', {
+      name: 'roles.admin',
+    })
     expect(screen.queryByRole('option', { name: 'roles.root' })).toBeNull()
-    await user.click(screen.getByRole('option', { name: 'roles.admin' }))
+    await user.click(adminOption)
     expect(onChange).toHaveBeenCalledWith('admin')
   },
 )

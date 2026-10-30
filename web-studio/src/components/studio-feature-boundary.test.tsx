@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   capability: 'unavailable',
   role: 'admin',
   mode: 'api_key',
+  controlKey: 'mock-admin',
 }))
 vi.mock('@tanstack/react-router', () => ({
   useRouterState: () => state.pathname,
@@ -17,7 +18,7 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
-    connection: { adminApiKey: 'mock-admin', apiKey: 'mock-user' },
+    connection: { adminApiKey: state.controlKey, apiKey: 'mock-user' },
     connectionRole: state.role,
     isConnectionRoleLoading: false,
     serverMode: state.mode,
@@ -47,6 +48,7 @@ afterEach(() => {
   state.ready = true
   state.mode = 'api_key'
   state.role = 'admin'
+  state.controlKey = 'mock-admin'
 })
 it.each(['user', 'admin'])(
   'blocks Root-only bot management before child effects for %s',
@@ -166,7 +168,7 @@ it('allows trusted connections to reach Gateway access verification', () => {
   expect(screen.getByTestId('gateway-child')).toBeTruthy()
 })
 
-it('blocks trusted workbench requests before mounting tenant pages', () => {
+it('allows a configured trusted connection to mount workbench pages', () => {
   state.provider = 'opensource'
   state.mode = 'trusted'
   state.pathname = '/filesystem'
@@ -175,6 +177,23 @@ it('blocks trusted workbench requests before mounting tenant pages', () => {
       <span data-testid="trusted-data-child" />
     </StudioFeatureBoundary>,
   )
+  expect(screen.getByTestId('trusted-data-child')).toBeTruthy()
+})
+
+it('requires the trusted credential before mounting data pages', () => {
+  Object.assign(state, {
+    provider: 'opensource',
+    mode: 'trusted',
+    pathname: '/filesystem',
+    controlKey: '',
+  })
+  render(
+    <StudioFeatureBoundary>
+      <span data-testid="trusted-data-child" />
+    </StudioFeatureBoundary>,
+  )
   expect(screen.queryByTestId('trusted-data-child')).toBeNull()
-  expect(screen.getByText('states.trustedWorkbench.title')).toBeTruthy()
+  expect(
+    screen.getByText('states.trustedCredentialRequired.title'),
+  ).toBeTruthy()
 })

@@ -9,7 +9,7 @@ export function useConnectionProbe() {
     placeholderData: keepPreviousData,
     queryFn: () =>
       probeConnection(
-        studioMode === 'management'
+        studioMode === 'management' || serverMode === 'trusted'
           ? connection
           : { ...connection, adminApiKey: '' },
         serverMode,

@@ -300,6 +300,7 @@ export function UserManagementPanel() {
         allowLegacyIdentityFallback: true,
         apiKey: user.apiKey || '',
         userId,
+        preserveProfile: true,
       })
       await navigate({ to: '/home' })
       toast.success(t('toast.dataKeySelected'))

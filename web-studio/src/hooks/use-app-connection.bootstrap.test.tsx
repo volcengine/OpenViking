@@ -41,7 +41,7 @@ function Identity() {
 }
 
 it.each(['', 'root-key'])(
-  'detects trusted mode without sending the configured Root key from the workbench: %s',
+  'discovers trusted mode before authenticating the workbench with its configured key: %s',
   async (rootKey) => {
     const observed: Array<
       [string | undefined, string | undefined, string | undefined]
@@ -103,10 +103,13 @@ it.each(['', 'root-key'])(
       )
       await waitFor(() =>
         expect(screen.getByTestId('identity').textContent).toBe(
-          'trusted:unknown',
+          rootKey ? 'trusted:user' : 'trusted:unknown',
         ),
       )
-      expect(observed).toEqual([[undefined, undefined, undefined]])
+      expect(observed[0]).toEqual([undefined, undefined, undefined])
+      if (rootKey) {
+        expect(observed).toContainEqual(['account-a', 'alice', rootKey])
+      } else expect(observed).toHaveLength(1)
     } finally {
       cleanup()
       queryClient.clear()

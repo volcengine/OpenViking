@@ -11,7 +11,7 @@
 - Root Key 误填到普通 Key 输入框时，经服务端确认后归类为管理凭据，不用于数据访问。
 - 普通 Key 解析为 ADMIN 且未配置单独控制凭据时，该 Key 同时提供本 Account 管理能力。
 - 普通用户不能通过路由、默认入口偏好或已保存的管理 Key 获得管理权限。
-- 文件、会话、检索、资源 ACL 等数据请求不能在缺少 User Key 时自动回退到 Root Key。trusted 模式要求 Root 授权声明身份，因此当前用户工作台不支持此模式。
+- 文件、会话、检索、资源 ACL 等数据请求不能在缺少 User Key 时自动回退到 Root Key。trusted 模式使用服务端验证的 Root 凭据授权 Account/User 身份声明；工作台数据请求和管理请求分别遵守 trusted 协议。
 - 仅管理态允许对只读运维端点使用控制凭据；工作台禁止 Root 兜底，任务取消也只使用数据凭据。
 
 ## 公共页面与身份恢复
@@ -55,13 +55,13 @@ OpenViking 配置通过管理侧栏的统一入口访问，Root 和 Account Admi
 
 ## 连接、Account、User 独立选择
 
-工作台顶部左侧依次为三个独立下拉框：连接配置、Account、User ID。管理态只保留连接和管理 Account，并展示经过验证的 Root API Key／Account Admin API Key 类型；不展示工作台 User 选择器。Account Admin 的管理 Account 以静态文本展示，不提供只有一个选项的下拉框；只有 Root 能查询和切换服务端 Account。管理态连接列表与分组摘要仅展示 Account，不展示数据 User ID；回到工作台后恢复 Account/User 标识。顶部身份范围按页面用途展示：连接设置、连接编辑、新增凭据以及用户管理、Bot 管理、Account 功能配置和数据工作台均保留身份切换；工作台展示 Account 与 User，管理态只展示 Account；只有服务端全局参数页仅保留服务连接入口，以独立图标区分 Account 与 User，不添加 Account: 文字前缀。切换模式保留数据身份，进入管理态不会将 User Key 当作管理凭据。连接入口按服务类型和地址分组，同一服务下的多份凭据只显示一项，条目仅展示连接名称和地址；Account 与 User 信息分别放在后两个选择器。分组不合并、删除或提升任何已保存凭据，重复选择当前服务不会切换身份；工作台的 Account 和 User 列表均由本机已配置的 User API Key 整理，不请求服务端 Account/User 目录；管理态 Root 的 Account 选择器可读取服务端 Account，工作台的 User 选择器只展示本机保存的 Key。工作台跨 Account 切换时同步恢复该 Account 已保存的 User 凭据，避免携带旧 Account 的 Key；管理态切换 Account 则清空旧 User，等待显式选择。切换 Account/User 保留当前连接配置 ID、名称与管理凭据。缓存及下拉状态按身份作用域隔离。
+工作台顶部左侧依次为三个独立下拉框：连接配置、Account、User ID。管理态只保留连接和管理 Account，并展示经过验证的 Root API Key／Account Admin API Key 类型；不展示工作台 User 选择器。Account Admin 的管理 Account 以静态文本展示，不提供只有一个选项的下拉框；只有 Root 能查询和切换服务端 Account。管理态连接列表与分组摘要仅展示 Account，不展示数据 User ID；回到工作台后恢复 Account/User 标识。顶部身份范围按页面用途展示：连接设置、连接编辑、新增凭据以及用户管理、Bot 管理、Account 功能配置和数据工作台均保留身份切换；工作台展示 Account 与 User，管理态只展示 Account；只有服务端全局参数页仅保留服务连接入口，以独立图标区分 Account 与 User，不添加 Account: 文字前缀。切换模式保留数据身份，进入管理态不会将 User Key 当作管理凭据。连接入口按服务类型和地址分组，同一服务下的多份凭据只显示一项，条目仅展示连接名称和地址；Account 与 User 信息分别放在后两个选择器。分组不合并、删除或提升任何已保存凭据，重复选择当前服务不会切换身份；API Key 模式下工作台的 Account 和 User 列表均由本机已配置的 User API Key 整理，不请求服务端 Account/User 目录；管理态 Root 的 Account 选择器可读取服务端 Account，工作台的 User 选择器只展示本机保存的 Key。工作台跨 Account 切换时同步恢复该 Account 已保存的 User 凭据，避免携带旧 Account 的 Key；管理态切换 Account 则清空旧 User，等待显式选择。切换 Account/User 保留当前连接配置 ID、名称与管理凭据。缓存及下拉状态按身份作用域隔离。
 
 ## 右侧 Studio 设置
 
 Studio 使用服务连接及 API Key 授权。右侧入口展示当前作用身份：工作台显示当前 User ID 和首字母头像；Root 管理范围显示 Root，Account 管理范围显示 Account Admin。展开后仍为默认入口、语言、主题与 GitHub 等 Studio 偏好。连接设置放在左侧导航，两个模式均可访问；右侧不复制切换连接、切换 User 或添加 API Key 的操作。连接配置、Account、User 的切换和添加连接统一在左侧选择器中完成，避免把 User ID 当成登录账号。顶部 API Key 入口只用于查看和复制当前模式的凭据，不承担连接配置或身份选择。工作台展示 User ID 与当前 User Key，管理态展示管理凭据类型；Key 默认脱敏，支持显隐和复制，关闭弹层或切换身份后重置显隐状态。工作台的模式入口使用宫格图标和“管理后台”文案。
 
-User 选择器不调用 `fetchAdminUsers`，即使当前连接同时持有 Root Key。显式切换身份时将之前的 User Key 保存在当前连接的本地历史中，重载后可恢复，且不增加连接配置条目。历史按服务地址、提供方、Account 和 User 隔离；替换或清除当前配置的 Key 时清除对应旧 Key 历史。服务端全量用户管理保留在管理页面。
+API Key 模式的 User 选择器不调用 `fetchAdminUsers`，即使当前连接同时持有 Root Key。显式切换身份时将之前的 User Key 保存在当前连接的本地历史中，重载后可恢复，且不增加连接配置条目。历史按服务地址、提供方、Account 和 User 隔离；替换或清除当前配置的 Key 时清除对应旧 Key 历史。服务端全量用户管理保留在管理页面。
 
 ## 首次引导与连接配置
 
@@ -76,7 +76,7 @@ User 选择器不调用 `fetchAdminUsers`，即使当前连接同时持有 Root 
 - `/admin/vikingbot` 仅 Root 可进入，集中管理飞书等渠道、应用凭据、运行用户、启停、删除、验证，以及平台会话历史。Account Admin 和普通 User 深链访问在组件挂载前被拒绝。
 - `/admin/configuration` 是统一的 OpenViking 配置页，Account 级经验提取开关作为其中一个配置项，支持 Root 和 Account Admin。Root 可通过左侧独立的“服务端配置”导航进入 `/admin/configuration/server` 管理模型、存储及服务运行参数。`/admin/agent-evolution` 只兼容跳转到统一配置页，不再有独立经验设置导航。右上角 Studio 设置仅保留默认入口、语言和主题等本地偏好；工作台不挂载经验提取配置。
 - OAuth 公共入口只使用当前或手动提供的用户凭据；服务器身份目录只在 `/admin/oauth/verify` 和 `/admin/oauth/consent` 中启用。
-- API Key 模式的 Bot 健康检查、聊天、打断和引导请求不会回退到 Root Key；trusted 协议要求每次请求携带 Root，因此用户工作台明确拒绝此模式；管理态按服务端认证约定工作。
+- API Key 模式的 Bot 健康检查、聊天、打断和引导请求不会回退到 Root Key；trusted 协议要求每次认证请求携带 Root，工作台使用该凭据与 Account/User 断言头；管理接口不附加数据身份断言，避免与目标用户或 Account 冲突。API Key 模式的工作台仍禁止 Root 兜底。
 - 已迁移的用户、用户组、ACL、抽取规则、服务配置和网关管理继续保留在 `/admin`。资源导入导出、快照、检索、会话、日志、任务及监控接口支持普通用户，按其数据权限使用，继续保留在工作台。
 - 本次只变更 Studio，未更改服务端权限规则。
 
@@ -103,3 +103,11 @@ User 选择器不调用 `fetchAdminUsers`，即使当前连接同时持有 Root 
 Admin User Key 可单独配置，无需 Root Key；服务端确认 `admin` 后可进入本 Account 管理后台。识别为管理凭据时同步采用服务端 Account/User，避免从旧连接继承错误身份。后台允许管理成员、USER/ADMIN 角色、用户组、抽取规则和 Account 配置；服务端配置、Account 生命周期与 Bot 连接管理仍仅 Root 可用。
 
 自动化回归覆盖从工作台与后台直达入口启动、没有 Root 凭据、创建用户及角色更新请求，以及工作台不发送 Root 管理请求。Chrome 使用已有 Admin User Key 单独配置验证了成员列表、角色编辑入口、新增用户表单及模式切换；未对真实成员执行增删、角色修改或 Key 重置。
+
+## Trusted 认证兼容
+
+首次接入自动识别 trusted；配置服务的 Root Key 后可通过直接路由或顶部按钮进入工作台与管理后台。工作台通过 Root 凭据和 Account/User 头声明数据身份；管理接口使用 Root 凭据，不附带数据身份断言。当前 User 的数据角色不限制该受信凭据本身的服务管理权限。默认入口偏好在 trusted 模式下也可选择工作台，不要求另行配置 User Key。
+
+Trusted 工作台的 Account 选择器读取服务端 Account 目录，User 选择器读取不含凭据的用户目录；可选择已有用户，或在 User 搜索框输入其他合法 User ID 后直接切换。身份切换保留受信凭据及连接配置，清理旧身份查询缓存，不为每个 User 新建连接。普通 API Key 模式仍只展示本机已配置 Key 的身份列表。
+
+验证包括隔离 HTTP 集成测试，以及 Chrome 中使用后端真实 TrustedAuthPlugin 的本地验收环境；业务数据接口使用验收数据，没有修改现有 dev 服务的认证配置。

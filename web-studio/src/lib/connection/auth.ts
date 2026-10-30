@@ -1,4 +1,5 @@
 import type { ConnectionDraft } from './types'
+import type { ServerMode } from './health'
 import { resolveConfiguredServiceProvider } from '../studio-service'
 import type { ServiceSelection } from '../studio-service'
 
@@ -16,6 +17,7 @@ export function resolveApiKeyAuth(
 export function createConnectionHealthHeaders(
   connection: ConnectionDraft,
   credential: 'control' | 'data' = 'control',
+  serverMode?: ServerMode,
 ): Record<string, string> {
   const headers: Record<string, string> = {}
   const auth = resolveApiKeyAuth(
@@ -25,16 +27,21 @@ export function createConnectionHealthHeaders(
   const apiKey =
     auth === 'bearer'
       ? connection.apiKey
-      : credential === 'data'
-        ? connection.apiKey
-        : connection.adminApiKey || connection.apiKey
+      : serverMode === 'trusted'
+        ? connection.adminApiKey || connection.apiKey
+        : credential === 'data'
+          ? connection.apiKey
+          : connection.adminApiKey || connection.apiKey
   if (!apiKey) return headers
   Object.assign(headers, createApiKeyHeaders(apiKey, auth))
   const isHosted = auth === 'bearer'
-  if (!isHosted && connection.accountId) {
+  const assertedIdentity = !(
+    serverMode === 'trusted' && credential === 'control'
+  )
+  if (!isHosted && assertedIdentity && connection.accountId) {
     headers['X-OpenViking-Account'] = connection.accountId
   }
-  if (!isHosted && connection.userId) {
+  if (!isHosted && assertedIdentity && connection.userId) {
     headers['X-OpenViking-User'] = connection.userId
   }
   return headers

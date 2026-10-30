@@ -42,6 +42,39 @@ function createRecordingClient(baseUrl = 'http://openviking.test') {
   return { client, requests }
 }
 
+it('uses Root for trusted data assertions only while preserving data-scope admin blocking', async () => {
+  const { client, requests } = createRecordingClient()
+  client.setOptions({ credentialScope: 'data' })
+  client.setConnection({
+    trustedAuth: true,
+    identityHeaders: true,
+    adminApiKey: 'trusted-root',
+    accountId: 'team',
+    userId: 'bob',
+  })
+  await client.instance.get('/api/v1/fs/ls')
+  expect(readRequestHeader(requests[0], 'X-API-Key')).toBe('trusted-root')
+  expect(readRequestHeader(requests[0], 'X-OpenViking-User')).toBe('bob')
+  await expect(
+    client.instance.get('/api/v1/admin/accounts'),
+  ).rejects.toMatchObject({ statusCode: 403 })
+  expect(requests).toHaveLength(1)
+  client.setOptions({ credentialScope: 'control' })
+  await client.instance.get('/api/v1/admin/accounts')
+  expect(readRequestHeader(requests[1], 'X-OpenViking-Account')).toBe('')
+  expect(readRequestHeader(requests[1], 'X-OpenViking-User')).toBe('')
+  client.setOptions({ credentialScope: 'data' })
+  client.setConnection({
+    trustedAuth: false,
+    identityHeaders: false,
+    adminApiKey: '',
+    apiKey: 'user-key',
+  })
+  await client.instance.get('/api/v1/fs/ls')
+  expect(readRequestHeader(requests[2], 'X-API-Key')).toBe('user-key')
+  expect(readRequestHeader(requests[2], 'X-OpenViking-User')).toBe('')
+})
+
 it('uses the documented hosted Bearer credential and returns to source headers after switching', async () => {
   const { client, requests } = createRecordingClient(
     'https://api.vikingdb.cn-beijing.volces.com/openviking',

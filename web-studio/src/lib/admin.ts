@@ -380,14 +380,21 @@ export async function fetchAdminAccounts(
 export async function fetchAdminUsers(
   connection: AdminConnection,
   accountId: string,
+  includeCredentials = true,
 ): Promise<AdminUser[]> {
   const result = await getOvResult<unknown[]>(
-    getAdminAccountIdUsers({
-      client: createAdminClient(connection),
-      path: {
-        account_id: accountId,
-      },
-    }),
+    includeCredentials
+      ? getAdminAccountIdUsers({
+          client: createAdminClient(connection),
+          path: {
+            account_id: accountId,
+          },
+        })
+      : createAdminClient(connection).get({
+          url: '/api/v1/admin/accounts/{account_id}/users',
+          path: { account_id: accountId },
+          query: { include_credentials: false },
+        }),
   )
   return result
     .map((item) => normalizeUser(accountId, item))

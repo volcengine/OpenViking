@@ -184,10 +184,10 @@ const studio = {
   directoryError:
     'Unable to open this directory. It may be missing or inaccessible to your identity.',
   states: {
-    trustedWorkbench: {
-      title: 'This authentication mode cannot be used in the workbench',
+    trustedCredentialRequired: {
+      title: 'Configure trusted authentication',
       description:
-        'Trusted authentication requires a Root API Key on every request. The workbench does not send Root credentials. Connect to a service using api_key authentication and configure a User API Key.',
+        'This service uses trusted authentication. Configure its Root API Key in connection settings, then select an Account and User ID without a User API Key.',
     },
     gatewayAuthMode: {
       title: 'Gateway requires API key authentication',

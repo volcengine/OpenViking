@@ -186,6 +186,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       readSessionStorage(runtimeOptions.apiKeyStorageKey),
     accountId: options.connection?.accountId ?? '',
     identityHeaders: options.connection?.identityHeaders ?? false,
+    trustedAuth: options.connection?.trustedAuth ?? false,
     userId: options.connection?.userId ?? '',
   }
 
@@ -228,7 +229,9 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       const apiKey =
         runtimeOptions.apiKeyAuth === 'bearer' ||
         runtimeOptions.credentialScope === 'data'
-          ? connection.apiKey
+          ? connection.trustedAuth
+            ? connection.adminApiKey
+            : connection.apiKey
           : shouldUseAdminApiKey(config)
             ? connection.adminApiKey || connection.apiKey
             : connection.apiKey ||
@@ -243,7 +246,10 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
           : apiKey,
       )
     }
-    if (connection.identityHeaders) {
+    if (
+      connection.identityHeaders &&
+      !(connection.trustedAuth && shouldUseAdminApiKey(config))
+    ) {
       if (!readHeader(headers, 'X-OpenViking-Account')?.trim()) {
         setOptionalHeader(headers, 'X-OpenViking-Account', connection.accountId)
       }
@@ -328,6 +334,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
       apiKey: '',
       accountId: '',
       identityHeaders: false,
+      trustedAuth: false,
       userId: '',
     }
     persistApiKey()

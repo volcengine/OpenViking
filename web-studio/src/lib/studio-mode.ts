@@ -101,13 +101,16 @@ export function resolveStudioEntry({
   connection,
   provider,
   preferredMode,
+  serverMode,
 }: {
   canManage: boolean
   connection: ConnectionDraft
   provider: ServiceProvider
   preferredMode: StudioMode | null
+  serverMode?: ServerMode
 }): '/admin' | '/home' | '/filesystem' {
-  if (canManage && (preferredMode !== 'workbench' || !connection.apiKey))
+  const hasDataIdentity = Boolean(connection.apiKey) || serverMode === 'trusted'
+  if (canManage && (preferredMode !== 'workbench' || !hasDataIdentity))
     return '/admin'
   return provider === 'opensource' ? '/home' : '/filesystem'
 }

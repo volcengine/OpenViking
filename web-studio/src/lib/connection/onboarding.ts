@@ -166,7 +166,11 @@ export async function verifyStudioSetup(
   if (!isUsableServerHealth(health))
     throw new StudioSetupError('invalidService')
   const mode = resolveServerAuthMode(health)
-  if (
+  if (mode === 'trusted') {
+    connection.adminApiKey = connection.adminApiKey || connection.apiKey
+    connection.apiKey = ''
+    if (!connection.adminApiKey) throw new StudioSetupError('keyRequired')
+  } else if (
     mode !== 'dev' &&
     !connection.apiKey &&
     !(connection.serviceSelection === 'opensource' && connection.adminApiKey)
@@ -210,6 +214,7 @@ export async function verifyStudioSetup(
     headers: createConnectionHealthHeaders(
       connection,
       managementOnly ? 'control' : 'data',
+      mode,
     ),
     timeout: 10000,
     throwOnError: true,

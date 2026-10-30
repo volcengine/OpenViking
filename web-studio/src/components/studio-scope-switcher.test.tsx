@@ -13,6 +13,7 @@ import { StudioScopeSwitcher } from './studio-scope-switcher'
 
 const state = vi.hoisted(() => ({
   role: 'root',
+  serverMode: 'api_key',
   accountId: 'team-a',
   scope: 'first',
   apiKey: 'alice-key',
@@ -86,7 +87,7 @@ vi.mock('#/hooks/use-app-connection', () => ({
     identityScopeKey: state.scope,
     connectionRole: state.role,
     isConnectionRoleLoading: false,
-    serverMode: 'api_key',
+    serverMode: state.serverMode,
     isGatewayHost: false,
     activateProfile: state.activateProfile,
     switchIdentity: state.switchIdentity,
@@ -117,6 +118,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   Object.assign(state, {
     role: 'root',
+    serverMode: 'api_key',
     accountId: 'team-a',
     scope: 'first',
     apiKey: 'alice-key',
@@ -170,6 +172,45 @@ function mount(
       view.rerender(tree(managementMode)),
   }
 }
+
+it('lists trusted users without credentials and switches without a User Key', async () => {
+  state.serverMode = 'trusted'
+  state.apiKey = ''
+  mount()
+  fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'bob' }))
+  expect(state.users).toHaveBeenCalledWith(
+    expect.objectContaining({ apiKey: 'root-key' }),
+    'team-a',
+    false,
+  )
+  expect(state.switchIdentity).toHaveBeenCalledWith(
+    expect.objectContaining({
+      accountId: 'team-a',
+      userId: 'bob',
+      apiKey: '',
+      preserveProfile: true,
+    }),
+  )
+})
+
+it('accepts an unlisted trusted User ID without asking for another key', async () => {
+  state.serverMode = 'trusted'
+  state.apiKey = ''
+  mount()
+  fireEvent.click(screen.getByRole('button', { name: 'scope.switchUser' }))
+  fireEvent.change(screen.getByRole('textbox', { name: 'scope.searchUsers' }), {
+    target: { value: 'new-user' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'scope.useTrustedUser' }))
+  expect(state.switchIdentity).toHaveBeenCalledWith(
+    expect.objectContaining({
+      accountId: 'team-a',
+      userId: 'new-user',
+      apiKey: '',
+    }),
+  )
+})
 it('shows each service once, leaving Account and User details out of its menu', () => {
   mount()
   expect(

@@ -257,6 +257,50 @@ describe('verification', () => {
 })
 
 describe('management bootstrap', () => {
+  it.each(['data', 'control'])(
+    'verifies trusted tenant access using a Root key entered as %s without requiring a User Key',
+    async (field) => {
+      get
+        .mockResolvedValueOnce({
+          data: {
+            version: 'test',
+            auth_mode: 'trusted',
+            role: 'user',
+            account_id: 'team',
+            user_id: 'alice',
+          },
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: {},
+          data: { status: 'ok', result: [] },
+        })
+      const connection = await verifyStudioSetup(
+        {
+          ...draft,
+          apiKey: field === 'data' ? 'trusted-root' : '',
+          adminApiKey: field === 'control' ? 'trusted-root' : '',
+          accountId: 'team',
+          userId: 'alice',
+        },
+        new AbortController().signal,
+      )
+      expect(connection).toMatchObject({
+        apiKey: '',
+        adminApiKey: 'trusted-root',
+        accountId: 'team',
+        userId: 'alice',
+      })
+      expect(get.mock.calls[1][0].url).toBe('/api/v1/fs/ls')
+      expect(
+        vi.mocked(createClient).mock.calls.at(-1)?.[0]?.headers,
+      ).toMatchObject({
+        'X-API-Key': 'trusted-root',
+        'X-OpenViking-Account': 'team',
+        'X-OpenViking-User': 'alice',
+      })
+    },
+  )
   it.each(['root', 'admin'])(
     'verifies %s control access without calling tenant data APIs',
     async (role) => {

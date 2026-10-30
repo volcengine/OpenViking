@@ -337,12 +337,13 @@ function applyConnection(
   })
   ovClient.setConnection({
     accountId: connection.accountId,
-    adminApiKey: studioMode === 'management' ? connection.adminApiKey : '',
-    apiKey:
-      studioMode !== 'management' && serverMode === 'trusted'
-        ? ''
-        : connection.apiKey,
+    adminApiKey:
+      studioMode === 'management' || serverMode === 'trusted'
+        ? connection.adminApiKey
+        : '',
+    apiKey: serverMode === 'trusted' ? '' : connection.apiKey,
     identityHeaders: serverMode === 'trusted' || serverMode === 'dev',
+    trustedAuth: serverMode === 'trusted',
     userId: connection.userId,
   })
 }
@@ -399,10 +400,11 @@ async function detectConnectionIdentity(
   connection: ConnectionDraft,
   credential: 'control' | 'data' = 'control',
   signal?: AbortSignal,
+  serverMode?: ServerMode,
 ): Promise<ConnectionIdentity> {
   const data = await fetchServerHealth(
     connection.baseUrl,
-    createConnectionHealthHeaders(connection, credential),
+    createConnectionHealthHeaders(connection, credential, serverMode),
     signal,
   )
 
@@ -417,6 +419,7 @@ async function detectConnectionIdentity(
   const role =
     credential === 'control' &&
     connection.adminApiKey &&
+    healthRole !== 'root' &&
     resolveServerAuthMode(data) === 'trusted' &&
     (await canListAccounts(connection, signal))
       ? 'root'
@@ -718,14 +721,45 @@ export function AppConnectionProvider({
       let health: Record<string, unknown>
       try {
         // The gateway answers an invalid OV key with health minus identity.
-        health = await fetchServerHealth(
-          connection.baseUrl,
-          createConnectionHealthHeaders(
-            connection,
-            studioMode === 'management' ? 'control' : 'data',
-          ),
-          controller.signal,
-        )
+        try {
+          health = await fetchServerHealth(
+            connection.baseUrl,
+            createConnectionHealthHeaders(
+              connection,
+              studioMode === 'management' ? 'control' : 'data',
+            ),
+            controller.signal,
+          )
+        } catch (error) {
+          // A service may have changed from api_key to trusted while this
+          // profile still holds an old User key. Discover the mode without
+          // credentials; never retry that data request with Root in api_key mode.
+          if (controller.signal.aborted || !connection.adminApiKey) throw error
+          const discovery = await fetchServerHealth(
+            connection.baseUrl,
+            {},
+            controller.signal,
+          ).catch(() => null)
+          if (!discovery || resolveServerAuthMode(discovery) !== 'trusted')
+            throw error
+          health = discovery
+        }
+        // Discovery is credential-free when only a control key is configured.
+        // Only a server-confirmed trusted mode may use it for tenant assertions.
+        if (
+          resolveServerAuthMode(health) === 'trusted' &&
+          (connection.adminApiKey || connection.apiKey)
+        ) {
+          health = await fetchServerHealth(
+            connection.baseUrl,
+            createConnectionHealthHeaders(
+              connection,
+              studioMode === 'management' ? 'control' : 'data',
+              'trusted',
+            ),
+            controller.signal,
+          )
+        }
       } catch (error) {
         if (!isCancelled()) {
           setServerMode('offline')
@@ -753,17 +787,26 @@ export function AppConnectionProvider({
           : null
         const dataConnection = resolvedDataIdentity ?? connection
         const classified =
-          healthUsesDataKey &&
-          identifyServiceProvider(connection.baseUrl) === 'opensource' &&
-          connection.serviceSelection !== 'volcengine'
-            ? health.role === 'root' && connection.apiKey
-              ? { ...connection, adminApiKey: connection.apiKey, apiKey: '' }
-              : health.role === 'admin' &&
-                  !connection.adminApiKey &&
-                  connection.apiKey
-                ? { ...dataConnection, adminApiKey: connection.apiKey }
-                : null
-            : null
+          mode === 'trusted' &&
+          (connection.adminApiKey || connection.apiKey) &&
+          connection.apiKey
+            ? {
+                ...connection,
+                adminApiKey: connection.adminApiKey || connection.apiKey,
+                apiKey: '',
+              }
+            : healthUsesDataKey &&
+                mode !== 'trusted' &&
+                identifyServiceProvider(connection.baseUrl) === 'opensource' &&
+                connection.serviceSelection !== 'volcengine'
+              ? health.role === 'root' && connection.apiKey
+                ? { ...connection, adminApiKey: connection.apiKey, apiKey: '' }
+                : health.role === 'admin' &&
+                    !connection.adminApiKey &&
+                    connection.apiKey
+                  ? { ...dataConnection, adminApiKey: connection.apiKey }
+                  : null
+              : null
         const resolved = classified ?? resolvedDataIdentity
         const next = resolved
           ? synchronizeConnectionRuntime(resolved, mode, studioMode)
@@ -802,10 +845,9 @@ export function AppConnectionProvider({
     const isCancelled = () => cancelled
     const controller = new AbortController()
     const management = studioMode === 'management'
-    const apiKey = management
-      ? connection.adminApiKey || connection.apiKey
-      : serverMode === 'trusted'
-        ? ''
+    const apiKey =
+      management || serverMode === 'trusted'
+        ? connection.adminApiKey || connection.apiKey
         : connection.apiKey
     const roleProbe = resolveConnectionRoleProbeState({
       apiKey,
@@ -839,6 +881,7 @@ export function AppConnectionProvider({
       connection,
       management ? 'control' : 'data',
       controller.signal,
+      serverMode,
     )
       .catch(() => ({
         accountId: '',
@@ -1070,6 +1113,7 @@ export function AppConnectionProvider({
           requested,
           'data',
           signal,
+          serverMode,
         )
         assertCurrentConnection()
         const resolvedIdentity = resolveSwitchedIdentity(
@@ -1107,11 +1151,13 @@ export function AppConnectionProvider({
           throw createConnectionError('rootRequired')
         }
         commitConnection(
-          createManagementAccountConnection(
-            connection,
-            accountId,
-            isGatewayHost,
-          ),
+          serverMode === 'trusted'
+            ? { ...connection, accountId: accountId.trim(), userId: 'default' }
+            : createManagementAccountConnection(
+                connection,
+                accountId,
+                isGatewayHost,
+              ),
           !options?.preserveProfile,
           options?.preserveProfile,
         )

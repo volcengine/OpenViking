@@ -7,7 +7,7 @@ import {
   waitFor,
 } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { GatewayConnectionSettings } from './route'
+import { GatewayConnectionSettings } from './-components/gateway-connection-settings'
 
 const { health, saveConnection, navigate, connectionState } = vi.hoisted(
   () => ({

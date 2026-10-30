@@ -19,7 +19,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { useStudioService } from '#/hooks/use-studio-service'
-import { fetchAdminAccounts } from '#/lib/admin'
+import { fetchAdminAccounts, fetchAdminUsers } from '#/lib/admin'
 import {
   groupProfilesByService,
   savedDataIdentities,
@@ -120,6 +120,7 @@ export function StudioScopeSwitcher({
     switchManagementAccount,
   } = useAppConnection()
   const { provider } = useStudioService()
+  const trusted = serverMode === 'trusted' && Boolean(connection.adminApiKey)
   const [open, setOpen] = React.useState<Scope | null>(null)
   const [search, setSearch] = React.useState('')
   const [pending, setPending] = React.useState(false)
@@ -154,8 +155,9 @@ export function StudioScopeSwitcher({
   })
   const canListAccounts =
     showAccountScope &&
-    managementMode &&
-    (capabilities.canManageAccounts ||
+    (managementMode || trusted) &&
+    ((trusted && !isConnectionRoleLoading) ||
+      capabilities.canManageAccounts ||
       (isGatewayHost && connectionRole === 'root' && !isConnectionRoleLoading))
   const adminConnection = {
     ...connection,
@@ -174,15 +176,28 @@ export function StudioScopeSwitcher({
     ],
     connection,
   )
-  const savedUsers = identities.filter(
-    (entry, index) =>
-      entry.accountId === connection.accountId &&
-      identities.findIndex(
-        (candidate) =>
-          candidate.accountId === entry.accountId &&
-          candidate.userId === entry.userId,
-      ) === index,
-  )
+  const trustedUsers = useQuery({
+    queryKey: ['trusted-scope-users', identityScopeKey],
+    queryFn: () =>
+      fetchAdminUsers(adminConnection, connection.accountId, false),
+    enabled: trusted && open === 'user' && Boolean(connection.accountId),
+    retry: false,
+  })
+  const savedUsers = trusted
+    ? (trustedUsers.data ?? []).map((user) => ({
+        accountId: connection.accountId,
+        userId: user.userId,
+        apiKey: '',
+      }))
+    : identities.filter(
+        (entry, index) =>
+          entry.accountId === connection.accountId &&
+          identities.findIndex(
+            (candidate) =>
+              candidate.accountId === entry.accountId &&
+              candidate.userId === entry.userId,
+          ) === index,
+      )
   const savedAccounts = [
     ...new Set([
       connection.accountId,
@@ -220,6 +235,10 @@ export function StudioScopeSwitcher({
       setOpen(null)
       return
     }
+    if (trusted && !managementMode) {
+      await chooseSavedIdentity({ accountId, userId: 'default', apiKey: '' })
+      return
+    }
     setPending(true)
     try {
       await switchManagementAccount(accountId, { preserveProfile: true })
@@ -230,7 +249,9 @@ export function StudioScopeSwitcher({
       setPending(false)
     }
   }
-  async function chooseSavedIdentity(identity: SavedDataIdentity) {
+  async function chooseSavedIdentity(
+    identity: Pick<SavedDataIdentity, 'accountId' | 'userId' | 'apiKey'>,
+  ) {
     if (pending) return
     if (
       identity.accountId === connection.accountId &&
@@ -459,7 +480,7 @@ export function StudioScopeSwitcher({
                   {notice(t('scope.savedAccountsHint'))}
                 </>
               )}
-              {canListAccounts && !isGatewayHost ? (
+              {canListAccounts && managementMode && !isGatewayHost ? (
                 <ScopeCreateAccount
                   connection={adminConnection}
                   onCreated={() => setOpen(null)}
@@ -483,12 +504,23 @@ export function StudioScopeSwitcher({
                   icon={UserRoundIcon}
                 >
                   <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">
-                    {t('scope.usersInAccount', {
-                      account: connection.accountId,
-                    })}
+                    {t(
+                      trusted
+                        ? 'scope.trustedUsersInAccount'
+                        : 'scope.usersInAccount',
+                      {
+                        account: connection.accountId,
+                      },
+                    )}
                   </p>
                   {searchField(t('scope.searchUsers'))}
                   <div className="max-h-64 overflow-y-auto">
+                    {trusted && trustedUsers.isPending
+                      ? notice(t('loading'))
+                      : null}
+                    {trusted && trustedUsers.isError
+                      ? loadError(() => trustedUsers.refetch())
+                      : null}
                     {savedUsers
                       .filter((identity) => matches(identity.userId))
                       .map((identity) => (
@@ -536,6 +568,27 @@ export function StudioScopeSwitcher({
                       ? notice(t('scope.noSavedUsers'))
                       : null}
                   </div>
+                  {trusted &&
+                  search.trim() &&
+                  !savedUsers.some(
+                    (identity) => identity.userId === search.trim(),
+                  ) ? (
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start"
+                      disabled={pending}
+                      onClick={() =>
+                        void chooseSavedIdentity({
+                          accountId: connection.accountId,
+                          userId: search.trim(),
+                          apiKey: '',
+                        })
+                      }
+                    >
+                      <UserRoundIcon className="size-4" />
+                      {t('scope.useTrustedUser', { user: search.trim() })}
+                    </Button>
+                  ) : null}
                   {notice(
                     t(
                       assertedIdentity
