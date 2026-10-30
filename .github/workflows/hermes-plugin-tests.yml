@@ -65,6 +65,14 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Make Python available to the hermetic test runner
+        run: |
+          # Hermes uses env -i, which drops setup-python's LD_LIBRARY_PATH.
+          # Register the library only inside this disposable Linux container.
+          printf '%s\n' "$pythonLocation/lib" > /etc/ld.so.conf.d/hermes-python.conf
+          ldconfig
+          env -i PATH="$PATH" HOME="$HOME" python -c 'import ssl; print(ssl.OPENSSL_VERSION)'
+
       - uses: astral-sh/setup-uv@v7
         with:
           version: '0.12.3'
@@ -142,6 +150,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python || '3.14' }}
+      - name: Make Python available to the hermetic test runner
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          # Hermes uses env -i, which drops setup-python's LD_LIBRARY_PATH.
+          # Register the library only inside this disposable Linux container.
+          printf '%s\n' "$pythonLocation/lib" > /etc/ld.so.conf.d/hermes-python.conf
+          ldconfig
+          env -i PATH="$PATH" HOME="$HOME" python -c 'import ssl; print(ssl.OPENSSL_VERSION)'
       - uses: astral-sh/setup-uv@v7
         with:
           version: '0.12.3'
@@ -162,6 +178,10 @@ jobs:
             PYTHON="$PWD/.venv/Scripts/python.exe"
           else
             PYTHON="$PWD/.venv/bin/python"
+          fi
+          if [ '${{ matrix.os }}' = ubuntu-24.04 ]; then
+            env -i PATH="$PATH" HOME="$HOME" \
+              "$PYTHON" -c 'import pytest, ssl; print(ssl.OPENSSL_VERSION)'
           fi
           echo "HERMES_PYTHON=$PYTHON" >> "$GITHUB_ENV"
       - name: Check process ownership and installer failures
