@@ -656,6 +656,19 @@ async def test_restore_without_project_dir_restores_full_account_tree(
     )
     assert missing_resp.status_code == 404
 
+    from openviking.system_assets.sync import system_asset_sync_lock
+
+    profile = "viking://system/memory/memory_templates/builtin/profile.yaml"
+    updated = await service.viking_fs.read_file_bytes(profile, ctx=ctx) + b"\n# package update\n"
+    agfs = service.viking_fs._async_agfs
+    async with system_asset_sync_lock(agfs):
+        await agfs.write(
+            service.viking_fs._uri_to_path(profile, ctx=ctx), updated, auto_pathlock=False
+        )
+    denied = await client.post("/api/v1/snapshot/restore", json={"source_commit": c1_oid})
+    assert denied.status_code == 403, denied.text
+    assert await service.viking_fs.read_file_bytes(profile, ctx=ctx) == updated
+
 
 async def test_restore_apply_triggers_reindex_hook(
     client_with_resource_and_blob, service, monkeypatch

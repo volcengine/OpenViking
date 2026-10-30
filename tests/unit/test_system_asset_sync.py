@@ -1,4 +1,4 @@
-import base64
+from pathlib import PurePosixPath
 
 import pytest
 
@@ -9,47 +9,57 @@ from openviking.core.namespace_policy import (
     SYSTEM_MEMORY_CUSTOM_ROOT,
 )
 from openviking.server.identity import RequestContext, Role
-from openviking.system_assets.sync import SystemAssetSynchronizer
+from openviking.storage.viking_fs import VikingFS
+from openviking.system_assets.sync import SYSTEM_ASSET_MANIFEST_PATH, SystemAssetSynchronizer
 from openviking_cli.session.user_id import UserIdentifier
 from scripts.build_support.system_assets_manifest import write_system_assets_manifest
 
 
-class _FakeVikingFS:
+class _FakeAGFS:
     def __init__(self, files=None):
         self.directories = set()
-        self.files = dict(files or {})
-        self.mkdir_contexts = []
+        self.files = {
+            "/local/acme/" + uri.removeprefix("viking://"): content
+            for uri, content in (files or {}).items()
+        }
+        self.writes = []
+        self.sync_locks = 0
+        self.held = False
 
-    async def mkdir(self, uri, exist_ok, ctx):
-        assert exist_ok is True
-        self.directories.add(uri)
-        self.mkdir_contexts.append(ctx)
+    async def pathlock_acquire_batch_async(self, ctx, requests, *args):
+        assert requests == [{"path": SYSTEM_ASSET_MANIFEST_PATH, "kind": "exact"}]
+        assert not self.held
+        self.held = True
+        self.sync_locks += 1
+        return {"lease_ref": "manifest-lease"}
 
-    async def read_file_bytes(self, uri, ctx):
-        assert ctx.role == Role.ROOT
-        if uri not in self.files:
-            raise FileNotFoundError(uri)
-        return self.files[uri]
+    def pathlock_release(self, ctx, lease):
+        assert self.held
+        self.held = False
 
+    def ensure_parent_dirs(self, path, ctx=None):
+        self.directories.update(str(parent) for parent in PurePosixPath(path).parents)
 
-class _FakeCoordinator:
-    def __init__(self, viking_fs):
-        self._viking_fs = viking_fs
-        self.calls = []
+    def mkdir(self, path, ctx=None):
+        self.directories.add(path)
 
-    async def batch_write(self, *, root_uri, operations, ctx):
-        assert ctx.role == Role.ROOT
-        self.calls.append((root_uri, operations, ctx))
-        for operation in operations:
-            self._viking_fs.files[operation["uri"]] = base64.b64decode(
-                operation["content_base64"]
-            )
+    def read(self, path, ctx=None):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    def stat(self, path, ctx=None):
+        return {"size": len(self.read(path)), "isDir": False}
+
+    def write(self, path, content, ctx=None):
+        assert self.held or ctx.get("lease_ref") == "account-init"
+        assert ctx.get("disable_auto_pathlock") == "true" or ctx.get("lease_ref") == "account-init"
+        self.files[path] = content
+        self.writes.append(path)
 
 
 @pytest.mark.asyncio
-async def test_system_asset_sync_converges_managed_roots_without_touching_custom(
-    tmp_path, monkeypatch
-):
+async def test_system_asset_sync_converges_managed_roots_without_touching_custom(tmp_path):
     compile_source = tmp_path / "compile/example-skills/demo/SKILL.md"
     reference_source = tmp_path / "compile/example-skills/demo/references/guide.bin"
     memory_source = tmp_path / "memory/memory_templates/builtin/profile.yaml"
@@ -66,7 +76,7 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
     memory_target = f"{SYSTEM_MEMORY_BUILTIN_ROOT}/profile.yaml"
     stale_target = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/retired/SKILL.md"
     custom_target = f"{SYSTEM_MEMORY_CUSTOM_ROOT}/profile.yaml"
-    viking_fs = _FakeVikingFS(
+    agfs = _FakeAGFS(
         {
             compile_target: b"same skill",
             memory_target: b"old profile",
@@ -74,68 +84,58 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
             custom_target: b"custom",
         }
     )
-    coordinator = _FakeCoordinator(viking_fs)
-    monkeypatch.setattr(
-        "openviking.system_assets.sync.ContentWriteCoordinator",
-        lambda **kwargs: coordinator,
-    )
-    synchronizer = SystemAssetSynchronizer(
-        viking_fs=viking_fs,
-        assets_dir=tmp_path,
-    )
+    viking_fs = VikingFS(agfs=agfs)
+    synchronizer = SystemAssetSynchronizer(viking_fs=viking_fs, assets_dir=tmp_path)
     ctx = RequestContext(
-        user=UserIdentifier("acme", "admin"),
-        role=Role.ADMIN,
-        actor_peer_id="peer",
+        user=UserIdentifier("acme", "admin"), role=Role.ADMIN, actor_peer_id="peer"
     )
+    paths = {
+        uri: viking_fs._uri_to_path(uri, ctx=ctx)
+        for uri in (
+            compile_target,
+            reference_target,
+            memory_target,
+            stale_target,
+            custom_target,
+        )
+    }
 
-    assert await synchronizer.sync(ctx) == 2
-    assert viking_fs.directories == set(SYSTEM_FIXED_DIRECTORIES)
+    assert await synchronizer.sync(ctx, lease_ref={"lease_ref": "account-init"}) == 2
+    assert agfs.sync_locks == 0
     assert all(
-        item.role == Role.ROOT and item.actor_peer_id is None
-        for item in viking_fs.mkdir_contexts
+        viking_fs._uri_to_path(uri, ctx=ctx) in agfs.directories for uri in SYSTEM_FIXED_DIRECTORIES
     )
-    assert [call[0] for call in coordinator.calls] == [
-        SYSTEM_EXAMPLE_SKILLS_ROOT,
-        SYSTEM_MEMORY_BUILTIN_ROOT,
-    ]
-    assert viking_fs.files[reference_target] == b"\x00guide"
-    assert viking_fs.files[memory_target] == b"new profile"
-    assert viking_fs.files[stale_target] == b"keep"
-    assert viking_fs.files[custom_target] == b"custom"
+    assert agfs.writes == [paths[reference_target], paths[memory_target]]
+    assert agfs.files[paths[reference_target]] == b"\x00guide"
+    assert agfs.files[paths[memory_target]] == b"new profile"
+    assert agfs.files[paths[stale_target]] == b"keep"
+    assert agfs.files[paths[custom_target]] == b"custom"
 
-    coordinator.calls.clear()
+    agfs.writes.clear()
     assert await synchronizer.sync(ctx) == 0
-    assert coordinator.calls == []
+    assert agfs.writes == []
+    assert agfs.sync_locks == 1
+    assert not agfs.held
 
     previous_digest = synchronizer.manifest_digest
     compile_source.write_bytes(b"updated skill")
     write_system_assets_manifest(tmp_path)
     updated = SystemAssetSynchronizer(viking_fs=viking_fs, assets_dir=tmp_path)
-
     assert updated.manifest_digest != previous_digest
     assert await updated.sync(ctx) == 1
-    assert viking_fs.files[compile_target] == b"updated skill"
-    assert viking_fs.files[custom_target] == b"custom"
+    assert agfs.files[paths[compile_target]] == b"updated skill"
+    assert agfs.files[paths[custom_target]] == b"custom"
+    assert not agfs.held
 
 
 @pytest.mark.asyncio
-async def test_system_asset_sync_rejects_missing_packaged_root(tmp_path, monkeypatch):
+async def test_system_asset_sync_rejects_missing_packaged_root(tmp_path):
     (tmp_path / "compile/example-skills").mkdir(parents=True)
-    viking_fs = _FakeVikingFS()
-    monkeypatch.setattr(
-        "openviking.system_assets.sync.ContentWriteCoordinator",
-        lambda **kwargs: _FakeCoordinator(viking_fs),
-    )
-    synchronizer = SystemAssetSynchronizer(
-        viking_fs=viking_fs,
-        assets_dir=tmp_path,
-    )
-
+    agfs = _FakeAGFS()
+    synchronizer = SystemAssetSynchronizer(viking_fs=VikingFS(agfs=agfs), assets_dir=tmp_path)
     with pytest.raises(FileNotFoundError, match="memory/memory_templates/builtin"):
         await synchronizer.sync(
-            RequestContext(
-                user=UserIdentifier("acme", "admin"),
-                role=Role.ADMIN,
-            )
+            RequestContext(user=UserIdentifier("acme", "admin"), role=Role.ADMIN)
         )
+    assert not agfs.held
+    assert agfs.writes == []

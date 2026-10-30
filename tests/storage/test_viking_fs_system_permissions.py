@@ -49,12 +49,23 @@ def test_system_namespace_is_readable_by_every_account_role(role, uri):
 
 
 @pytest.mark.parametrize("action", [AclAction.WRITE, AclAction.MANAGE])
-def test_root_can_manage_every_system_path(action):
+@pytest.mark.parametrize("role", [Role.ROOT, Role.ADMIN])
+@pytest.mark.asyncio
+async def test_official_assets_are_read_only_even_with_privileged_identity(action, role):
     fs = _fs()
-
-    assert fs._system_permission_allows(SYSTEM_ROOT_URI, _ctx(Role.ROOT), action)
-    assert fs._system_permission_allows(SYSTEM_MEMORY_BUILTIN_ROOT, _ctx(Role.ROOT), action)
-    assert fs._system_permission_allows(CUSTOM_ASSET_URI, _ctx(Role.ROOT), action)
+    ctx = _ctx(role, bypass_acl=True)
+    for uri in (
+        SYSTEM_ROOT_URI,
+        "viking://system/memory/memory_templates",
+        SYSTEM_MEMORY_BUILTIN_ROOT,
+        f"{SYSTEM_MEMORY_BUILTIN_ROOT}/profile.yaml",
+        SYSTEM_EXAMPLE_SKILLS_ROOT,
+        f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/daily-report/SKILL.md",
+    ):
+        with pytest.raises(PermissionDeniedError):
+            await fs._ensure_access(uri, ctx, action=action)
+        await fs._ensure_access(uri, ctx, action=AclAction.READ)
+    await fs._ensure_access(CUSTOM_ASSET_URI, ctx, action=action)
 
 
 @pytest.mark.parametrize("action", [AclAction.WRITE, AclAction.MANAGE])

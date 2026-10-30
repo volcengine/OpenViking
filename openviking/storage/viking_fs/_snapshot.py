@@ -440,15 +440,16 @@ class _SnapshotMixin:
         try:
             if acl_project_dir is not None:
                 await self._ensure_access(acl_project_dir, real_ctx)
-                plan = await self._async_agfs.run(
-                    "git_restore",
-                    **{**kwargs, "dry_run": True},
-                )
-                await self._ensure_restore_plan_access(
-                    plan,
-                    tree_dir=tree_dir or "",
-                    ctx=real_ctx,
-                )
+            # ROOT restores also honor immutable packaged system assets.
+            plan = await self._async_agfs.run(
+                "git_restore",
+                **{**kwargs, "dry_run": True},
+            )
+            await self._ensure_restore_plan_access(
+                plan,
+                tree_dir=tree_dir or "",
+                ctx=real_ctx,
+            )
             try:
                 result = await self._async_agfs.run(
                     "git_restore", **kwargs, ctx=self._pathlock_fs_ctx(real_ctx, lease)

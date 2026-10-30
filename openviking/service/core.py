@@ -37,7 +37,9 @@ from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
 from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import init_context_collection
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.index_consistency import check_index_consistency
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
@@ -1048,11 +1050,26 @@ class OpenVikingService:
         return await self._directory_initializer.initialize_account_directories(ctx)
 
     async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
-        """Initialize account and first-user preset directories in one batch."""
+        """Initialize a new account's workspace under one account Tree lease."""
         self._ensure_initialized()
         if not self._directory_initializer:
             return 0, 0
-        return await self._directory_initializer.initialize_account_workspace(ctx)
+        agfs = self._viking_fs._async_agfs
+        path = self._viking_fs._uri_to_path("viking://", ctx=ctx)
+        guard = PathLockGuard(agfs)
+        try:
+            try:
+                lease = await guard.acquire(lambda: agfs.pathlock_acquire_tree(path))
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    f"Account workspace is busy and cannot be initialized now: {ctx.account_id}",
+                    uri="viking://",
+                ) from exc
+            return await self._directory_initializer.initialize_account_workspace(
+                ctx, lease_ref=lease
+            )
+        finally:
+            await guard.close()
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
         """Synchronize packaged system assets for every active account."""
