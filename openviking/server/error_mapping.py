@@ -37,6 +37,7 @@ from openviking.utils.exceptions import (
     AllCredentialsFailedError,
     error_code_from_http_status,
 )
+from openviking.utils.model_retry import is_retryable_api_error
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -303,6 +304,7 @@ def _build_upstream_error(
     status: int | None = None,
     source: BaseException | None = None,
     vlm_context: BaseException | None = None,
+    retryable: bool | None = None,
 ) -> OpenVikingError:
     labels = {
         "INVALID_ARGUMENT": "Upstream model request was rejected",
@@ -325,6 +327,8 @@ def _build_upstream_error(
         details["upstream_status_code"] = status
     if source is not None:
         details["upstream_error_type"] = type(source).__name__
+    if retryable is not None:
+        details["retryable"] = retryable
     # Search for VLM model/api_base annotations. vlm_context is the outermost
     # exception (where failover wrappers attach the annotation); source may be
     # an inner exception from the chain.
@@ -349,11 +353,13 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             # from whichever credential happens to appear first in the message.
             if len(codes) != 1 or "INTERNAL" in codes:
                 return InternalError(str(exc))
+            code = codes.pop()
             return _build_upstream_error(
-                code=codes.pop(),
+                code=code,
                 message=_upstream_detail_message(exc),
                 source=item,
                 vlm_context=exc,
+                retryable=(is_retryable_api_error(item) if code == "RESOURCE_EXHAUSTED" else None),
             )
 
     if _is_model_api_key_configuration_error(exc):
@@ -388,6 +394,7 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             source=source,
             message=_upstream_detail_message(exc),
             vlm_context=exc,
+            retryable=is_retryable_api_error(exc) if code == "RESOURCE_EXHAUSTED" else None,
         )
 
     if not _looks_like_upstream_model_error(exc):
@@ -424,6 +431,7 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             message=_upstream_detail_message(exc),
             source=exc,
             vlm_context=exc,
+            retryable=is_retryable_api_error(exc),
         )
     return None
 

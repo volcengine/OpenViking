@@ -6,6 +6,7 @@
 import httpx
 import pytest
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -46,6 +47,16 @@ class _HTTPStatusError(Exception):
     def __init__(self, status_code: int, message: str):
         super().__init__(message)
         self.response = _Response(status_code)
+
+
+class _ProviderRateLimitError(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.status_code = 429
+        self.body = {"error": {"code": code, "message": code}}
+
+
+_ProviderRateLimitError.__module__ = "openai"
 
 
 def test_agfs_client_does_not_exist_maps_to_not_found():
@@ -178,6 +189,42 @@ def test_upstream_response_429_maps_to_resource_exhausted():
     assert mapped is not None
     assert mapped.code == "RESOURCE_EXHAUSTED"
     assert mapped.details["upstream_status_code"] == 429
+    assert mapped.details["retryable"] is True
+
+
+def test_upstream_quota_429_is_not_retryable():
+    mapped = map_exception(_ProviderRateLimitError("insufficient_quota"))
+
+    assert mapped is not None
+    assert mapped.code == "RESOURCE_EXHAUSTED"
+    assert mapped.details["upstream_status_code"] == 429
+    assert mapped.details["retryable"] is False
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_retryable"),
+    [
+        (ModelErrorKind.RATE_LIMIT_ERROR, True),
+        (ModelErrorKind.QUOTA_EXHAUSTED, False),
+    ],
+)
+def test_all_credentials_resource_exhausted_keeps_retryability(kind, expected_retryable):
+    aggregate = AllCredentialsFailedError(
+        [
+            (
+                "credential-0",
+                kind,
+                ModelError(kind, kind.value, status_code=429),
+                0,
+            )
+        ]
+    )
+
+    mapped = map_exception(aggregate)
+
+    assert mapped is not None
+    assert mapped.code == "RESOURCE_EXHAUSTED"
+    assert mapped.details["retryable"] is expected_retryable
 
 
 def test_upstream_text_status_maps_to_permission_denied():
@@ -340,6 +387,9 @@ def test_git_auth_failure_remains_a_client_error():
     assert error.code == GIT_AUTH_FAILED
     assert ERROR_CODE_TO_HTTP_STATUS.get(error.code, 500) == 400
     assert error_response(error.code, error.message).status_code == 400
-    assert response_from_result(
-        {"status": "error", "code": error.code, "errors": [error.message]}
-    ).status_code == 400
+    assert (
+        response_from_result(
+            {"status": "error", "code": error.code, "errors": [error.message]}
+        ).status_code
+        == 400
+    )
