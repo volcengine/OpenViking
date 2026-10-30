@@ -79,6 +79,23 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 
 三种场景是不同的运行入口，可以共用同一份 `ov.conf`。
 
+## 了解 Agent 拓扑
+
+一个 VikingBot Gateway 只运行一个主 Agent。所有已配置的 Channel（包括同类型的多个
+实例）都会把任务交给这个 Agent。`bot.agents` 用于配置该 Agent 的模型、凭证和运行时
+限制；虽然字段名是复数，但它不定义声明式 Agent 团队。不同会话仍通过
+`type + channel_id + chat_id` 隔离，但使用同一个主 Agent。
+
+`spawn` 工具用于在一次会话中进行有界的任务并行。它会创建短生命周期的后台
+Subagent。Subagent 与主 Agent 共用模型和对应的 Workspace，只获得受限工具，并把结果
+返回主会话。涉及身份的操作和最终交付仍由主 Agent 负责。Subagent 不是可以在
+Telegram、Slack 或 Discord 中独立寻址的 Agent。
+
+如果需要多个具有独立角色或身份的常驻 Agent，请分别运行独立的 VikingBot 部署。
+每个进程应使用独立的 `OPENVIKING_CONFIG_FILE`、`storage.workspace` 和
+`bot.gateway.port`。这些部署可以使用不同用户身份连接同一个 OpenViking Server，
+但 VikingBot 不会把它们编排成 Agent 团队。
+
 ## 场景 A：OpenViking + Bot 一体启动
 
 这是本地完整体验的推荐方式。OpenViking Server 和 VikingBot Gateway 会一起启动：
