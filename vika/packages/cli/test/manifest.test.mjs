@@ -35,7 +35,7 @@ function tempHome(t) {
 }
 
 test('setup defaults only /root data paths to a per-instance /tmp directory and preserves explicit choices', () => {
-  for (const dataDir of ['/root', '/root/.vika/data/primary', '/root/.local/share/lark-daemon-primary', '/srv/../root/data']) {
+  for (const dataDir of ['/root', '/root/.vika/data/primary', '/root/.local/share/vika-primary', '/srv/../root/data']) {
     const original = agent('primary', { dataDir });
     const configured = withDefaultTempDir(original, { TMPDIR: '/root/tmp' });
     assert.deepEqual(configured, { ...original, tempDir: '/tmp/vika-primary' });

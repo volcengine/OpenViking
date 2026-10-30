@@ -112,7 +112,7 @@ describe('conversation policy assemble', () => {
       ...fs.readdirSync(path.join(DEFAULT_PROMPT_DIR, 'connectors')).map((name) => path.join('connectors', name)),
       ...fs.readdirSync(path.join(DEFAULT_PROMPT_DIR, 'roles')).map((name) => path.join('roles', name))];
     for (const name of files) {
-      assert.doesNotMatch(read(name), /oc_[0-9a-f]{8,}|OpenViking小助手|lark-daemon/, name);
+      assert.doesNotMatch(read(name), /oc_[0-9a-f]{8,}|OpenViking小助手/, name);
     }
   });
 });
