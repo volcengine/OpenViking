@@ -178,6 +178,10 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
         min_raw_tail_steps: int | None = None,
+        session_window_context: int | None = None,
+        summary_token_ratio: float | None = None,
+        retained_token_ratio: float | None = None,
+        reasoning_effort: str | None = None,
         event_tags: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Commit with optional Turn-aware retention fields understood by the server."""
@@ -191,6 +195,10 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
             "keep_recent_turn_count": keep_recent_turn_count,
             "retained_message_token_budget": retained_message_token_budget,
             "min_raw_tail_steps": min_raw_tail_steps,
+            "session_window_context": session_window_context,
+            "summary_token_ratio": summary_token_ratio,
+            "retained_token_ratio": retained_token_ratio,
+            "reasoning_effort": reasoning_effort,
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
         if event_tags is not None:

@@ -286,6 +286,7 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         thinking: Optional[bool] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         """Build kwargs for LiteLLM call."""
         kwargs: dict[str, Any] = {
@@ -298,6 +299,8 @@ class LiteLLMVLMProvider(VLMBase):
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
             kwargs["max_tokens"] = effective_max_tokens
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
 
         if self._should_forward_api_key(model):
             kwargs["api_key"] = self.api_key
@@ -427,11 +430,18 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         model = self._resolve_model(self.model or "gpt-4o-mini")
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         return self._build_kwargs(
-            model, kwargs_messages, tools, tool_choice, thinking=thinking, max_tokens=max_tokens
+            model,
+            kwargs_messages,
+            tools,
+            tool_choice,
+            thinking=thinking,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def _build_vision_kwargs(
@@ -491,10 +501,17 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously."""
         kwargs = self._build_text_kwargs(
-            prompt, thinking, tools, tool_choice, messages, max_tokens=max_tokens
+            prompt,
+            thinking,
+            tools,
+            tool_choice,
+            messages,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
         # 用 tracer.info 打印请求（人类可读格式）
         tracer.info(

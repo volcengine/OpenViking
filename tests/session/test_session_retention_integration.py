@@ -827,6 +827,61 @@ async def test_wm_creation_detects_language_from_multiline_user_message(client, 
     assert "zh-CN" in prompts[0]["prompt"]
 
 
+@pytest.mark.parametrize(
+    "retry_enabled,summary_ratio", [(False, 0.0002), (True, 0.0002), (True, None)]
+)
+async def test_wm_creation_retries_over_budget_summary_with_reasoning_effort(
+    monkeypatch, retry_enabled, summary_ratio
+):
+    session = Session(viking_fs=None)
+    calls: list[dict] = []
+    outputs = ["x" * 12000, "y" * 12000, "final compact summary"]
+
+    class FakeVLM:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        async def get_completion_async(self, *args, **kwargs):
+            if args:
+                kwargs["prompt"] = args[0]
+            calls.append(kwargs)
+            return outputs[len(calls) - 1]
+
+    vlm = FakeVLM()
+    session._vlm_resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(
+            vlm=vlm, memory=SimpleNamespace(summary_budget_retry_enabled=retry_enabled)
+        ),
+    )
+
+    result = await session._generate_archive_summary_async(
+        [_text_message("u1", "user", "summarize the latest deployment status")],
+        session_window_context=10000,
+        **({"summary_token_ratio": summary_ratio} if summary_ratio is not None else {}),
+        reasoning_effort="low",
+    )
+
+    if not retry_enabled:
+        assert result == outputs[0]
+        assert len(calls) == 1
+        assert calls[0]["reasoning_effort"] == "low"
+        return
+    assert result == "final compact summary"
+    from openviking.utils.token_estimation import estimate_text_tokens
+
+    assert calls[0]["max_tokens"] == 10000 - estimate_text_tokens(calls[0]["prompt"]) - 4
+    assert calls[1]["max_tokens"] < calls[0]["max_tokens"]
+    assert calls[2]["max_tokens"] == (2500 if summary_ratio is None else 2)
+    assert [call["reasoning_effort"] for call in calls] == ["low", "low", "low"]
+    assert "prompt" in calls[0]
+    assert calls[1]["messages"][0]["role"] == "system"
+    assert calls[0]["prompt"] == calls[1]["messages"][1]["content"]
+    assert "tools" not in calls[2]
+
+
 async def test_wm_update_returns_two_products_in_one_model_call(
     client,
     monkeypatch,

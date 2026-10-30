@@ -199,21 +199,33 @@ VikingBot Session metadata 记录 OpenViking 同步状态：
 
 | 配置 | 作用 |
 |------|------|
-| `agents.commit_token_threshold` | pending token 达到该值后 commit |
+| `agents.context_window_tokens` | 模型上下文窗口，作为 session 预算源；默认 `128000` |
+| `agents.async_compress_ratio` | pending token 达到模型窗口乘以该比例时 commit；默认 `0.7` |
+| `agents.summary_token_ratio` | Working Memory 摘要的目标预算占模型窗口的比例；默认 `0.25` |
+| `agents.retained_token_ratio` | retained messages 与 checkpoint 的预算占模型窗口的比例；默认 `0.05` |
 | `agents.commit_keep_recent_turn_count` | commit 后最多保留的最近逻辑 Turn 数；默认 `3` |
-| `agents.commit_retained_message_token_budget` | commit 后 retained messages 与 checkpoint 的 token 预算；默认 `6000` |
 | `agents.commit_min_raw_tail_steps` | 最新 Turn 超出预算时，至少原样保留的末尾 assistant Step 数；默认 `1` |
 | `agents.commit_keep_recent_count` | 已废弃的物理消息数配置，仅为兼容旧配置文件而保留 |
 | `agents.memory_window` | 本地历史窗口，也可触发消息数阈值提交 |
+| `agents.commit_token_threshold` | Deprecated：旧的固定 token 触发阈值；新 `async_compress_ratio` 优先 |
+| `agents.session_context_token_budget` | Deprecated：旧的独立历史读取预算；显式配置新 `context_window_tokens` 时以新配置为准 |
+| `agents.commit_retained_message_token_budget` | Deprecated：旧的 retained token 预算；新 `retained_token_ratio` 优先 |
 
-一个逻辑 Turn 从真实 user query 开始，包含下一条真实 user query 之前的全部 assistant Step；每个 Step 会将 assistant 文本、工具调用和对应工具结果作为不可拆分的整体处理。系统先按 `commit_keep_recent_turn_count` 选择最近 Turn，再用 `commit_retained_message_token_budget` 约束 retained 内容。如果最新 Turn 本身超出预算，则保留 user query 和至少 `commit_min_raw_tail_steps` 个最新 Step，较早 Step 进入同一次归档生成的 checkpoint。
+VikingBot 不提供 `reasoning_effort` 的 `agents` 配置项；Working Memory summary 生成沿用 OpenViking 服务端 VLM provider 的默认推理强度。需要单次调整时，应直接调用 OpenViking 服务端 commit API。
 
-迁移旧配置时，`commit_keep_recent_count` 不会自动换算为 Turn 数，当前 VikingBot 的 Turn-aware commit 也不再读取它。该字段仍被配置模型接受，因此已有 `ov.conf` 不会因未知字段而加载失败。如果只保留旧字段，系统会使用三个新字段的默认值；需要保持自定义保留策略时，应显式配置新字段，例如：
+一个逻辑 Turn 从真实 user query 开始，包含下一条真实 user query 之前的全部 assistant Step；每个 Step 会将 assistant 文本、工具调用和对应工具结果作为不可拆分的整体处理。系统先按 `commit_keep_recent_turn_count` 选择最近 Turn，再用 `context_window_tokens * retained_token_ratio` 约束 retained 内容。如果最新 Turn 本身超出预算，则保留 user query 和至少 `commit_min_raw_tail_steps` 个最新 Step，较早 Step 进入同一次归档生成的 checkpoint。
+
+旧预算字段保持独立语义，不会因为读取预算小于触发阈值而被清空。未配置对应新参数时，旧读取预算继续生效；旧触发阈值不超过模型窗口时转换为比例，超过时仍按原阈值判断；旧 retained 预算转换为比例，模型窗口不会被旧字段改写。例如，旧配置 `读取=3000、触发=200000、retained=6000` 仍使用这些预算值。
+
+`commit_keep_recent_count` 不会自动换算为 Turn 数，当前 VikingBot 的 Turn-aware commit 也不再读取它。建议迁移为以下配置：
 
 ```yaml
 agents:
+  context_window_tokens: 128000
+  async_compress_ratio: 0.7
+  summary_token_ratio: 0.25
+  retained_token_ratio: 0.05
   commit_keep_recent_turn_count: 3
-  commit_retained_message_token_budget: 6000
   commit_min_raw_tail_steps: 1
 ```
 
@@ -221,9 +233,11 @@ agents:
 
 ## 压缩会话上下文
 
-默认模型历史来自本地 Session 最近 `memory_window` 条消息。设置 `agents.session_context_enabled=true` 后，VikingBot 可以从 OpenViking Session 获取压缩后的历史，并使用 `session_context_token_budget` 控制预算。
+`agents.session_context_enabled` 默认开启，VikingBot 从 OpenViking Session 获取压缩后的历史，使用 `context_window_tokens` 派生读取预算；兼容旧配置时可继续使用独立读取预算。关闭后，模型历史来自本地 Session 最近 `memory_window` 条消息。
 
 在新一轮开始前，如果历史达到阈值，AgentLoop 会先同步和 commit OpenViking Session，再构建新的提示上下文，从而避免超长对话持续膨胀。
+
+压缩材料超过模型窗口的 `0.7` 时，使用 rolling summary 按顺序分段处理。摘要超预算后的第 2、3 轮再生成由 OpenViking 服务端 `memory.summary_budget_retry_enabled` 控制，默认开启；开启后会执行摘要目标预算检查和再生成。
 
 ## 显式记忆提交
 

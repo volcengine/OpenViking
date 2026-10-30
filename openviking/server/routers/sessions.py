@@ -635,6 +635,25 @@ class CommitRequest(BaseModel):
         le=10_000,
         description="Minimum number of latest atomic assistant Steps kept raw.",
     )
+    session_window_context: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Model context window used to derive Working Memory budgets.",
+    )
+    summary_token_ratio: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="Working Memory summary budget ratio of session_window_context.",
+    )
+    retained_token_ratio: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="Retained raw-message budget ratio of session_window_context.",
+    )
+    reasoning_effort: Optional[str] = Field(
+        default=None,
+        description="Per-call reasoning effort forwarded to Working Memory generation.",
+    )
     extraction_metadata: Optional[ExtractionMetadataRequest] = Field(
         default=None,
         description=(
@@ -683,6 +702,10 @@ async def commit_session(
         "keep_recent_turn_count": body.keep_recent_turn_count,
         "retained_message_token_budget": body.retained_message_token_budget,
         "min_raw_tail_steps": body.min_raw_tail_steps,
+        "session_window_context": body.session_window_context,
+        "summary_token_ratio": body.summary_token_ratio,
+        "retained_token_ratio": body.retained_token_ratio,
+        "reasoning_effort": body.reasoning_effort,
     }
     commit_kwargs.update(
         {key: value for key, value in optional_retention.items() if value is not None}

@@ -305,6 +305,7 @@ class SessionDetailResponse(BaseModel):
 
     session: SessionInfo = Field(..., description="Session information")
     messages: List[ChatMessage] = Field(default_factory=list, description="Session messages")
+    estimated_tokens: int = Field(default=0, description="Estimated tokens in returned messages.")
 
 
 class HealthResponse(BaseModel):

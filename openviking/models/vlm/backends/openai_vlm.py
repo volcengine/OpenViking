@@ -179,7 +179,11 @@ class OpenAIVLM(VLMBase):
         return host.lower() in _DASHSCOPE_HOSTS
 
     def _apply_completion_params(
-        self, kwargs: Dict[str, Any], thinking: bool, max_tokens: Optional[int] = None
+        self,
+        kwargs: Dict[str, Any],
+        thinking: bool,
+        max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         """Apply model defaults, explicit settings, and provider-specific body fields."""
         if _OPENAI_REASONING_MODEL_PATTERN.match(kwargs["model"].lower()):
@@ -195,8 +199,11 @@ class OpenAIVLM(VLMBase):
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
             kwargs[max_tokens_param] = effective_max_tokens
-        if self.reasoning_effort is not None:
-            kwargs["reasoning_effort"] = self.reasoning_effort
+        effective_reasoning_effort = (
+            self.reasoning_effort if reasoning_effort is None else reasoning_effort
+        )
+        if effective_reasoning_effort is not None:
+            kwargs["reasoning_effort"] = effective_reasoning_effort
 
         extra_body = dict(self.extra_request_body)
         if self._supports_enable_thinking():
@@ -281,6 +288,7 @@ class OpenAIVLM(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
         thinking: Optional[bool] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         effective_thinking = self.thinking if thinking is None else thinking
         kwargs_messages = sanitize_openai_messages(
@@ -294,7 +302,12 @@ class OpenAIVLM(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
-        self._apply_completion_params(kwargs, effective_thinking, max_tokens=max_tokens)
+        self._apply_completion_params(
+            kwargs,
+            effective_thinking,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        )
         return kwargs
 
     def _build_vision_kwargs(
@@ -372,12 +385,19 @@ class OpenAIVLM(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously"""
         effective_thinking = self.thinking if thinking is None else thinking
         client = self.get_async_client()
         kwargs = self._build_text_kwargs(
-            prompt, tools, tool_choice, messages, effective_thinking, max_tokens=max_tokens
+            prompt,
+            tools,
+            tool_choice,
+            messages,
+            effective_thinking,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
         async def _call() -> Union[str, VLMResponse]:

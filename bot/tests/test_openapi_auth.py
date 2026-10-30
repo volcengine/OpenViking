@@ -309,9 +309,7 @@ class TestOpenAPIAuth:
         assert agent_loop.msg.sender_id == "user-1"
         assert message_bus.inbound_size == 0
 
-    def test_steer_rejects_pending_session_without_active_turn(
-        self, message_bus, temp_workspace
-    ):
+    def test_steer_rejects_pending_session_without_active_turn(self, message_bus, temp_workspace):
         class FakeAgentLoop:
             def steer(self, msg):
                 return False
@@ -481,9 +479,9 @@ class TestOpenAPIAuth:
         assert created.status_code == 200
         session_id = created.json()["session_id"]
 
-        assert (
-            client.get(f"/bot/v1/sessions/{session_id}", headers=alice_headers).status_code == 200
-        )
+        detail = client.get(f"/bot/v1/sessions/{session_id}", headers=alice_headers)
+        assert detail.status_code == 200
+        assert detail.json()["estimated_tokens"] == 0
         assert client.get(f"/bot/v1/sessions/{session_id}", headers=bob_headers).status_code == 404
         assert client.get("/bot/v1/sessions", headers=bob_headers).json()["total"] == 0
 
@@ -936,7 +934,9 @@ class TestOpenAPIAuth:
     ):
         class FakeCompileService:
             async def create_task(self, request, *, principal_scope, task_id=None):
-                raise AssertionError("compile task must not start for keyless authenticated forwards")
+                raise AssertionError(
+                    "compile task must not start for keyless authenticated forwards"
+                )
 
         config = SimpleNamespace(
             gateway=SimpleNamespace(host="127.0.0.1", token=""),

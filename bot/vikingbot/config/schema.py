@@ -519,8 +519,41 @@ class AgentsConfig(BaseModel):
         description="Maximum number of background subagents running at once.",
     )
     session_context_enabled: bool = True
-    session_context_token_budget: int = 3000
-    commit_token_threshold: int = 200000
+    context_window_tokens: int = Field(
+        default=128_000,
+        gt=0,
+        description="Model context window used as the single source for session budgets.",
+    )
+    async_compress_ratio: float = Field(
+        default=0.7,
+        gt=0.0,
+        description="Asynchronous compression trigger ratio of context_window_tokens.",
+    )
+    summary_token_ratio: float = Field(
+        default=0.25,
+        gt=0.0,
+        description="Working Memory summary budget ratio of context_window_tokens.",
+    )
+    retained_token_ratio: float = Field(
+        default=0.05,
+        gt=0.0,
+        description="Retained raw-message budget ratio of context_window_tokens.",
+    )
+    commit_token_threshold: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description="Deprecated fixed compression threshold; maps to async_compress_ratio.",
+    )
+    session_context_token_budget: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description="Deprecated independent session context read budget.",
+    )
+    commit_retained_message_token_budget: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description="Deprecated retained raw-message budget; maps to retained_token_ratio.",
+    )
     commit_keep_recent_count: int = Field(
         default=10,
         description=(
@@ -532,11 +565,6 @@ class AgentsConfig(BaseModel):
         default=3,
         ge=0,
         description="Number of newest logical user Turns retained after an OpenViking commit.",
-    )
-    commit_retained_message_token_budget: int = Field(
-        default=6_000,
-        gt=0,
-        description="Token budget for retained raw OpenViking session messages and checkpoints.",
     )
     commit_min_raw_tail_steps: int = Field(
         default=1,
@@ -573,6 +601,43 @@ class AgentsConfig(BaseModel):
 
     def inherits_root_vlm(self) -> bool:
         return self._inherits_root_vlm
+
+    @model_validator(mode="after")
+    def map_deprecated_session_budget_fields(self) -> "AgentsConfig":
+        configured_fields = self.model_fields_set
+        threshold = self.commit_token_threshold
+        if (
+            threshold is not None
+            and threshold <= self.context_window_tokens
+            and "async_compress_ratio" not in configured_fields
+        ):
+            self.async_compress_ratio = threshold / self.context_window_tokens
+        if (
+            self.commit_retained_message_token_budget is not None
+            and "retained_token_ratio" not in configured_fields
+        ):
+            self.retained_token_ratio = float(
+                self.commit_retained_message_token_budget / max(1, self.context_window_tokens)
+            )
+        return self
+
+    @property
+    def effective_commit_token_threshold(self) -> int:
+        if (
+            self.commit_token_threshold is not None
+            and "async_compress_ratio" not in self.model_fields_set
+        ):
+            return self.commit_token_threshold
+        return max(1, int(self.context_window_tokens * self.async_compress_ratio))
+
+    @property
+    def effective_session_context_token_budget(self) -> int:
+        if (
+            self.session_context_token_budget is not None
+            and "context_window_tokens" not in self.model_fields_set
+        ):
+            return self.session_context_token_budget
+        return self.context_window_tokens
 
 
 class ProviderConfig(BaseModel):
