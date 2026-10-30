@@ -204,3 +204,35 @@ it('leaves the data workbench for a Root-only connection without using Root for 
   )
   expect(mocks.requests.some((request) => request.key === 'root')).toBe(false)
 })
+
+it.each(['root', 'admin-a'])(
+  'attaches %s from a User workbench without probing it until administration and restores the User on return',
+  async (key) => {
+    const original = {
+      ...base,
+      adminApiKey: '',
+      accountId: 'b',
+      userId: 'bob',
+      apiKey: 'bob-key',
+    }
+    seed([], original)
+    const view = render(tree())
+    await settled('user')
+    act(() => api.saveConnection({ ...api.connection, adminApiKey: key }))
+    await settled('user')
+    expect(api.connection).toMatchObject({ ...original, adminApiKey: key })
+    expect(
+      mocks.requests
+        .filter((request) => !request.path.startsWith('/admin'))
+        .some((request) => request.key === key),
+    ).toBe(false)
+    mocks.path = '/admin/users'
+    view.rerender(tree())
+    await settled(key === 'root' ? 'root' : 'admin')
+    if (key === 'admin-a') expect(api.connection.accountId).toBe('a')
+    mocks.path = '/home'
+    view.rerender(tree())
+    await settled('user')
+    expect(api.connection).toMatchObject({ ...original, adminApiKey: key })
+  },
+)

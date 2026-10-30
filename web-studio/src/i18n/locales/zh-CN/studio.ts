@@ -7,6 +7,19 @@ const studio = {
     saveError:
       '凭据尚未保存到本机，请勿关闭或刷新页面。请检查浏览器存储权限后重试保存。',
   },
+  managementKey: {
+    title: '配置管理权限',
+    description:
+      '为当前服务添加 Root API Key 或 Account Admin API Key。现有 User API Key 和工作台身份会保留。',
+    label: '管理 API Key',
+    scopeHint:
+      'Root 可管理所有 Account；Account Admin 仅管理该 Key 所属的 Account。',
+    submit: '验证并进入管理后台',
+    verifying: '正在验证…',
+    notAdmin: '这是普通 User API Key，请填写 Root 或 Account Admin API Key。',
+    identityMissing: '服务未返回该管理员所属的 Account，无法确认管理范围。',
+    invalidService: '此地址未返回有效的 OpenViking 服务响应。',
+  },
   userKey: {
     title: '配置 User API Key',
     description: '为当前连接和 Account 添加一个 User，无需重复配置服务。',

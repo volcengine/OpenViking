@@ -7,6 +7,22 @@ const studio = {
     saveError:
       'Credentials have not been saved locally. Keep this page open, check browser storage permissions, and retry saving.',
   },
+  managementKey: {
+    title: 'Configure management access',
+    description:
+      'Add a Root API Key or Account Admin API Key for this service. Your current User API Key and workbench identity will be preserved.',
+    label: 'Management API Key',
+    scopeHint:
+      'Root manages all Accounts. An Account Admin manages only the Account its key belongs to.',
+    submit: 'Verify and enter management',
+    verifying: 'Verifying…',
+    notAdmin:
+      'This is a regular User API Key. Enter a Root or Account Admin API Key.',
+    identityMissing:
+      'The service did not return the Account this administrator manages.',
+    invalidService:
+      'The address did not return a valid OpenViking service response.',
+  },
   userKey: {
     title: 'Configure User API Key',
     description:

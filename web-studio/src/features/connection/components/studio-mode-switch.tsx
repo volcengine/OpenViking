@@ -1,4 +1,5 @@
 import { showErrorToast } from '#/shared/lib/error-toast'
+import { ManagementKeyDialog } from './management-key-dialog'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { flushCredentialStorage } from '#/features/connection/lib/credential-storage'
 import type { SavedDataIdentity } from '#/features/connection/lib/profiles'
@@ -22,8 +23,10 @@ import { useTranslation } from 'react-i18next'
 
 export function StudioModeSwitch({
   managementMode,
+  canManage = true,
 }: {
   managementMode: boolean
+  canManage?: boolean
 }) {
   const { t } = useTranslation('appShell')
   const { connection, profiles, activeProfileId, serverMode, switchIdentity } =
@@ -85,6 +88,8 @@ export function StudioModeSwitch({
       setPending(false)
     }
   }
+  if (!managementMode && !canManage)
+    return <ManagementKeyDialog className={buttonClass} />
   if (!managementMode || hasDataIdentity || users.length === 0) {
     return (
       <Button

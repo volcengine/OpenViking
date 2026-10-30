@@ -273,3 +273,22 @@ it('keeps gateway management out of the workbench even when a Root credential is
     screen.queryByRole('link', { name: 'OpenViking configuration' }),
   ).toBeNull()
 })
+
+it('keeps management setup reachable from an ordinary User workbench without a control key', () => {
+  state.pathname = '/settings'
+  state.mode = 'api_key'
+  state.surface = 'workbench'
+  state.role = 'user'
+  state.control = ''
+  render(
+    <IdentityScopedAppShell>
+      <span data-testid="settings" />
+    </IdentityScopedAppShell>,
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Admin console' }))
+  expect(
+    screen.getByRole('dialog', { name: 'Configure management access' }),
+  ).toBeTruthy()
+  expect(screen.getByLabelText('Management API Key')).toBeTruthy()
+  expect(screen.getByText('http://service.test')).toBeTruthy()
+})
