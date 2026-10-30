@@ -117,25 +117,47 @@ function useToggleUpstream() {
   return { toggle: mutate, pending: new Set(pending) }
 }
 
+/**
+ * Imports OpenViking's model settings as upstreams. Keeps what the last run
+ * saved until it is dismissed or the gateway scope changes.
+ */
+export function useVlmImport({
+  onSuccess,
+  onError,
+}: {
+  onSuccess?: (result: VlmImportResult) => void
+  onError?: (error: unknown) => void
+} = {}) {
+  const { connection, invalidate, scope } = useGateway()
+  const [result, setResult] = React.useState<VlmImportResult | null>(null)
+  React.useEffect(() => setResult(null), [scope])
+  const importer = useMutation({
+    mutationFn: () => importVlm(connection),
+    onSuccess: async (next) => {
+      setResult(next)
+      onSuccess?.(next)
+      await invalidate('upstreams')
+    },
+    onError: (error) => {
+      onError?.(error)
+      // A stale /access offered the import; the refreshed one hides it.
+      return toGatewayError(error).reason === 'vlm_import_forbidden'
+        ? invalidate('access')
+        : undefined
+    },
+  })
+  return { importer, result, dismiss: () => setResult(null) }
+}
+
 /** Model providers the gateway forwards requests to. */
 export function UpstreamsPage() {
   const { t } = useTranslation('gateway')
-  const { connection, access, invalidate, scope, readOnly } = useGateway()
-  const [importResult, setImportResult] =
-    React.useState<VlmImportResult | null>(null)
-  React.useEffect(() => setImportResult(null), [scope])
-  const importer = useMutation({
-    mutationFn: () => importVlm(connection),
-    onSuccess: async (result) => {
-      setImportResult(result)
-      await invalidate('upstreams')
-    },
-    // A stale /access offered the import; the refreshed one hides it.
-    onError: (error) =>
-      toGatewayError(error).reason === 'vlm_import_forbidden'
-        ? invalidate('access')
-        : undefined,
-  })
+  const { access, readOnly } = useGateway()
+  const {
+    importer,
+    result: importResult,
+    dismiss: dismissImport,
+  } = useVlmImport()
   const upstreams = useUpstreams()
   const keys = useKeys()
   const { toggle, pending: toggling } = useToggleUpstream()
@@ -300,10 +322,7 @@ export function UpstreamsPage() {
         </Notice>
       ) : null}
       {importResult ? (
-        <ImportResultNotice
-          result={importResult}
-          onDismiss={() => setImportResult(null)}
-        />
+        <ImportResultNotice result={importResult} onDismiss={dismissImport} />
       ) : null}
       <Card className="gap-0 overflow-hidden py-0">
         <CardContent className="p-0">{body}</CardContent>

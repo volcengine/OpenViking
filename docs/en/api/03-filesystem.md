@@ -6,6 +6,13 @@ OpenViking provides Unix-like file system operations for managing context.
 
 For reading and writing file contents, see [Content](12-content.md). [WebDAV](20-webdav.md) provides file access through WebDAV clients.
 
+The file system and content APIs allow every role to read `viking://system`. ROOT and ADMIN
+may modify only concrete assets below `viking://system/memory/memory_templates/custom/`.
+Builtin templates and official examples below `viking://system/compile/example-skills/`
+are synchronized by the service. API writes, appends, deletes, moves, and overwrite copies
+cannot modify them or bypass the restriction through their parent directories.
+Custom templates can also be published through the [template management API](08-admin.md).
+
 ## API Reference
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>

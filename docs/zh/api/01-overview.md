@@ -527,7 +527,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出用户组 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除用户组 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出用户组成员 |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 添加用户组成员 |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 批量添加用户组成员 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除用户组成员 |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
 | GET | `/api/v1/privacy-configs/tree` | 树形列出当前目标和字段元数据，不返回值 |

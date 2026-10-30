@@ -26,31 +26,31 @@ const overview = {
     confirm: 'Review',
 
     title: 'Get started',
-    description:
-      'Four steps to the first conversation with memory. This card goes away once a client sends its first request.',
     progress: '{{done}} of {{total}} done',
     done: 'Done',
     view: 'View',
     upstream: {
       title: 'Add an upstream',
       description:
-        'The model provider the gateway forwards requests to, such as Anthropic, OpenAI or Volcano Engine Ark.',
+        'The model service the gateway forwards to, such as OpenAI or Volcano Engine Ark.',
       done_one: '{{count}} upstream added',
       done_other: '{{count}} upstreams added',
       action: 'Add upstream',
+      manual: 'Add manually',
     },
     profile: {
       title: 'Create a context profile',
       description:
-        'Decides how memory is added to new messages and how conversations are saved. The recommended settings suit most clients.',
+        'How memory is added to new messages and how conversations are saved.',
       done_one: '{{count}} context profile ready',
       done_other: '{{count}} context profiles ready',
+      action: 'Use recommended',
     },
     key: {
       title: 'Issue a gateway key',
-      description:
-        'Clients use this key to call the gateway. It belongs to one OpenViking user, whose memory the gateway reads and writes.',
-      blocked: 'Add an upstream and a context profile first.',
+      description: 'Clients call the gateway with this key.',
+      blocked: 'Available once the first two steps are done.',
+      name: 'My key',
       waiting:
         'You can issue a key once your gateway admin adds an upstream and a profile.',
       done_one: '{{count}} key issued',
@@ -60,7 +60,7 @@ const overview = {
     connect: {
       title: 'Connect a client',
       description:
-        'Point Claude Code, Codex CLI or a chat app at the gateway address with the key, then send a message.',
+        'Point a client at the gateway address with the key, then send a message.',
       action: 'Open setup guides',
     },
   },
