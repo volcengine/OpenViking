@@ -19,8 +19,15 @@ permissions:
   contents: read
 
 jobs:
+  linux-runner:
+    uses: ./.github/workflows/_linux-runner.yml
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
+
   contracts:
-    runs-on: ubuntu-24.04
+    needs: linux-runner
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    container: ubuntu:24.04
     strategy:
       matrix:
         include:
@@ -30,9 +37,14 @@ jobs:
             sdk: 'openviking-sdk>=0.1.13,<0.2'
     defaults:
       run:
+        shell: bash
         working-directory: integrations/frameworks/microsoft-agent-framework
     steps:
+      - name: Install Git before checkout
+        working-directory: /
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/linux-test-env
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'

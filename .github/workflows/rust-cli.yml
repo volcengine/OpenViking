@@ -2,6 +2,9 @@ name: Rust CLI Build
 
 on:
   workflow_call:
+    secrets:
+      CI_RUNNER_READ_TOKEN:
+        required: false
   push:
     branches: [ main, feat/rust-cli ]
     paths:
@@ -29,12 +32,25 @@ permissions:
   contents: read
 
 jobs:
+  linux-runner:
+    uses: ./.github/workflows/_linux-runner.yml
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
+
   test:
+    needs: linux-runner
     name: Test Rust CLI
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    container: ubuntu:24.04
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 15
     steps:
+    - name: Install Git before checkout
+      run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
     - uses: actions/checkout@v6
+    - uses: ./.github/actions/linux-test-env
     - uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: stable
@@ -46,8 +62,13 @@ jobs:
       run: cargo test --locked -p ov_cli
 
   build:
+    needs: linux-runner
     name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.npm_os == 'linux' && fromJSON(needs.linux-runner.outputs.runs_on) || matrix.os }}
+    container: ${{ matrix.npm_os == 'linux' && 'ubuntu:24.04' || null }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -84,7 +105,19 @@ jobs:
             npm_cpu: x64
 
     steps:
+    - name: Install Git before checkout
+      if: matrix.npm_os == 'linux'
+      run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
     - uses: actions/checkout@v6
+
+    - uses: ./.github/actions/linux-test-env
+      if: matrix.npm_os == 'linux'
+
+    - name: Setup Node.js for Linux package metadata
+      if: matrix.npm_os == 'linux'
+      uses: actions/setup-node@v6
+      with:
+        node-version: '24'
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@v1
@@ -94,7 +127,7 @@ jobs:
 
     # Linux artifacts are produced as fully static musl binaries so they run on
     # any glibc-flavored distro (CentOS 7/8/Stream 9, RHEL 8/9, Amazon Linux,
-    # Alpine, etc.) — the ubuntu-24.04 runner's glibc 2.39 is newer than
+    # Alpine, etc.) — the Ubuntu 24.04 build container's glibc 2.39 is newer than
     # CentOS 7 (2.17) / RHEL 8 (2.28) / RHEL 9 (2.34), so a gnu-linked binary
     # fails with `version 'GLIBC_2.X' not found`. cargo-zigbuild + zig handle
     # both x86_64 and aarch64 musl cross-compilation with one toolchain;

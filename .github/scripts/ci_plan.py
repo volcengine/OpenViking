@@ -12,7 +12,7 @@ FULL_OS = [
     "macos-15-intel",
     "windows-latest",
 ]
-CI = r"^\.github/(workflows/(pr|api_test|_build|_test_lite|_test_full)\.yml|actions/|scripts/(ci_plan|native_bundle|test_ci_helpers)\.py)"
+CI = r"^\.github/(workflows/(pr|api_test|_build|_test_lite|_test_full|_linux-runner)\.yml|actions/|scripts/(ci_plan|native_bundle|linux_runner|test_ci_helpers)\.py)"
 PACKAGING = r"^(pyproject\.toml|uv\.lock|setup\.py|MANIFEST\.in|Cargo\.(toml|lock))$|^scripts/build_support/"
 NATIVE = r"^(src/|third_party/|crates/(?!ov_cli/))"
 

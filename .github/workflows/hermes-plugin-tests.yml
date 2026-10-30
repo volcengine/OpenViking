@@ -16,6 +16,11 @@ on:
       - 'scripts/check-hermes-plugin-install.py'
       - 'scripts/check-hermes-quick-local.py'
   workflow_dispatch:
+    inputs:
+      linux_pool:
+        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -25,13 +30,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux-runner:
+    uses: ./.github/workflows/_linux-runner.yml
+    with:
+      pool: ${{ inputs.linux_pool || '' }}
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
+
   hermes-plugin-tests:
-    runs-on: ubuntu-24.04
+    needs: linux-runner
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    container: ubuntu:24.04
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 15
     steps:
+      - name: Install Git before checkout
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - uses: ./.github/actions/linux-test-env
 
       - name: Check out the reviewed Hermes test host
         uses: actions/checkout@v6
@@ -85,6 +105,7 @@ jobs:
           if-no-files-found: ignore
 
   quick-local-platforms:
+    needs: linux-runner
     strategy:
       fail-fast: false
       matrix:
@@ -95,16 +116,23 @@ jobs:
             host: release
             python: '3.13'
             hermes_ref: v2026.9.24
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(needs.linux-runner.outputs.runs_on) || matrix.os }}
+    container: ${{ matrix.os == 'ubuntu-24.04' && 'ubuntu:24.04' || '' }}
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
         working-directory: .ci/hermes-agent
     steps:
+      - name: Install Git before checkout
+        if: matrix.os == 'ubuntu-24.04'
+        working-directory: /
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - uses: ./.github/actions/linux-test-env
+        if: matrix.os == 'ubuntu-24.04'
       - uses: actions/checkout@v6
         with:
           repository: NousResearch/hermes-agent

@@ -12,6 +12,10 @@ on:
     - cron: '0 16 * * *'  # Daily at 00:00 SGT (16:00 UTC)
   workflow_dispatch:
     inputs:
+      linux_pool:
+        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
+        required: false
+        type: string
       host:
         description: Host id from .github/host-compat.json (empty for all)
         required: false
@@ -28,10 +32,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  linux-runner:
+    uses: ./.github/workflows/_linux-runner.yml
+    with:
+      pool: ${{ inputs.linux_pool || '' }}
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
+
   check:
-    runs-on: ubuntu-24.04
+    needs: linux-runner
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    container: ubuntu:24.04
+    defaults:
+      run:
+        shell: bash
     steps:
+      - name: Install Git before checkout
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/linux-test-env
 
       - uses: actions/setup-node@v6
         with:

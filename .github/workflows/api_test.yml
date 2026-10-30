@@ -2,6 +2,11 @@ name: 06. API & CLI Integration Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      linux_pool:
+        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
+        required: false
+        type: string
   schedule:
     - cron: '0 1,4,7,10,13 * * *'
   pull_request:
@@ -29,6 +34,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  linux-runner:
+    uses: ./.github/workflows/_linux-runner.yml
+    with:
+      pool: ${{ inputs.linux_pool || '' }}
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
+
   prepare:
     runs-on: ubuntu-24.04
     outputs:
@@ -49,19 +61,26 @@ jobs:
           fi
 
   native-runtime:
-    needs: prepare
+    needs: [prepare, linux-runner]
     if: >-
       (needs.prepare.outputs.api_changed == 'true' || needs.prepare.outputs.cuvs_changed == 'true') &&
       (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ||
        (github.repository == 'volcengine/OpenViking' &&
         (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    container: ubuntu:24.04
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 30
     steps:
+      - name: Install Git before checkout
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 0
+      - uses: ./.github/actions/linux-test-env
       - uses: actions/setup-python@v6
         with:
           python-version: '3.10'
@@ -84,15 +103,22 @@ jobs:
     needs: [prepare, native-runtime]
     if: needs.prepare.outputs.cuvs_changed == 'true'
     uses: ./.github/workflows/_test_lite.yml
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
     with:
       os_json: '["ubuntu-24.04"]'
       python_json: '["3.11"]'
       native_artifact: native-runtime-linux-x64-cp310-abi3
+      linux_pool: ${{ inputs.linux_pool || '' }}
 
   api-tests:
-    needs: [prepare, native-runtime]
+    needs: [prepare, native-runtime, linux-runner]
     name: API & CLI Integration Tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(needs.linux-runner.outputs.runs_on) || matrix.os }}
+    container: ${{ matrix.os == 'ubuntu-24.04' && 'ubuntu:24.04' || '' }}
+    defaults:
+      run:
+        shell: ${{ contains(matrix.os, 'windows') && 'pwsh' || 'bash' }}
     timeout-minutes: 60
     if: >-
       needs.prepare.outputs.api_changed == 'true' &&
@@ -107,10 +133,15 @@ jobs:
         os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'release') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
+      - name: Install Git before checkout
+        if: matrix.os == 'ubuntu-24.04'
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 100
+      - uses: ./.github/actions/linux-test-env
+        if: matrix.os == 'ubuntu-24.04'
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6

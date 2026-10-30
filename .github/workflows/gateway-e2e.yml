@@ -4,6 +4,10 @@ on:
     - cron: "17 2 * * *"
   workflow_dispatch:
     inputs:
+      linux_pool:
+        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
+        required: false
+        type: string
       ref:
         description: "Git ref to test (empty uses the selected workflow ref)"
         required: false
@@ -17,14 +21,32 @@ on:
 permissions:
   contents: read
 jobs:
+  linux-runner:
+    uses: ./.github/workflows/_linux-runner.yml
+    with:
+      pool: ${{ inputs.linux_pool || '' }}
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
+
   kind:
-    runs-on: ubuntu-latest
+    needs: linux-runner
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
     timeout-minutes: 65
     env:
       OV_TEST_GATEWAY_IMAGE: ghcr.io/volcengine/openviking:main
+      KIND_CLUSTER: ovgw-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+      OVERLAY_IMAGE: ovgw-e2e:${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Set kubeconfig path
-        run: echo "OV_TEST_KIND_KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+        run: |
+          test_home=$(mktemp -d "$RUNNER_TEMP/gateway-kind-home.XXXXXX")
+          echo "HOME=$test_home" >> "$GITHUB_ENV"
+          echo "OV_TEST_KIND_KUBECONFIG=$test_home/kubeconfig" >> "$GITHUB_ENV"
+          echo "NPM_CONFIG_PREFIX=$test_home/npm" >> "$GITHUB_ENV"
+          mkdir -p "$test_home/bin"
+          echo "$test_home/bin" >> "$GITHUB_PATH"
+          echo "$test_home/npm/bin" >> "$GITHUB_PATH"
+          docker info >/dev/null
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
@@ -32,9 +54,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - name: Isolate Python dependencies
+        run: |
+          python -m venv "$HOME/venv"
+          echo "$HOME/venv/bin" >> "$GITHUB_PATH"
       - uses: azure/setup-helm@v4.3.1
         with:
           version: v3.17.3
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.2
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -42,32 +71,37 @@ jobs:
         run: |
           pip install pytest httpx openai==3.37.0 anthropic==2.2.0
           npm install --global @openai/codex@0.146.0
-          curl -fsSL https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 -o /usr/local/bin/kind
-          chmod +x /usr/local/bin/kind
+          curl -fsSL https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 -o "$HOME/bin/kind"
+          chmod +x "$HOME/bin/kind"
           mkdir -p artifacts
       - name: Create dedicated three-node cluster
-        run: kind create cluster --name ovgw-e2e --config tests/gateway/e2e/kind.yaml --kubeconfig "$OV_TEST_KIND_KUBECONFIG" --wait 120s
+        run: kind create cluster --name "$KIND_CLUSTER" --config tests/gateway/e2e/kind.yaml --kubeconfig "$OV_TEST_KIND_KUBECONFIG" --wait 120s
       - name: Build source overlay for a manual run
         if: github.event_name == 'workflow_dispatch' && inputs.overlay
         env:
           BASE_REF: ${{ inputs.base_ref }}
         run: |
-          python tests/gateway/e2e/build_overlay.py ${BASE_REF:+--base-ref "$BASE_REF"} --tag ovgw-e2e:local
-          echo 'OV_TEST_GATEWAY_IMAGE=ovgw-e2e:local' >> "$GITHUB_ENV"
+          python tests/gateway/e2e/build_overlay.py ${BASE_REF:+--base-ref "$BASE_REF"} --tag "$OVERLAY_IMAGE"
+          echo "OV_TEST_GATEWAY_IMAGE=$OVERLAY_IMAGE" >> "$GITHUB_ENV"
       - name: Load test images
         run: |
           docker image inspect "$OV_TEST_GATEWAY_IMAGE" >/dev/null 2>&1 || docker pull "$OV_TEST_GATEWAY_IMAGE"
           docker pull redis:7.2-alpine
-          python tests/gateway/e2e/load_images.py --cluster ovgw-e2e "$OV_TEST_GATEWAY_IMAGE" redis:7.2-alpine
+          python tests/gateway/e2e/load_images.py --cluster "$KIND_CLUSTER" "$OV_TEST_GATEWAY_IMAGE" redis:7.2-alpine
       - name: Run standalone and Cluster matrices
         run: pytest tests/gateway/e2e --confcutdir=tests/gateway/e2e -o addopts='' -v --basetemp=artifacts/pytest --junitxml=artifacts/results.xml
       - name: Collect cluster evidence
         if: always()
         run: |
-          kind export logs artifacts/kind --name ovgw-e2e || true
+          kind export logs artifacts/kind --name "$KIND_CLUSTER" || true
           kubectl --kubeconfig "$OV_TEST_KIND_KUBECONFIG" get pods -A -o wide > artifacts/pods.txt || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: gateway-kind-evidence
           path: artifacts
+      - name: Remove this run's cluster and overlay image
+        if: always()
+        run: |
+          kind delete cluster --name "$KIND_CLUSTER" || true
+          docker image rm "$OVERLAY_IMAGE" || true

@@ -10,11 +10,31 @@ on:
       - "scripts/gateway_chart_check.py"
       - ".github/workflows/gateway-chart.yml"
   workflow_dispatch:
+    inputs:
+      linux_pool:
+        description: Ordinary Linux test pool (empty uses CI_LINUX_POOL)
+        required: false
+        type: string
 jobs:
+  linux-runner:
+    uses: ./.github/workflows/_linux-runner.yml
+    with:
+      pool: ${{ inputs.linux_pool || '' }}
+    secrets:
+      CI_RUNNER_READ_TOKEN: ${{ secrets.CI_RUNNER_READ_TOKEN }}
+
   chart:
-    runs-on: ubuntu-latest
+    needs: linux-runner
+    runs-on: ${{ fromJSON(needs.linux-runner.outputs.runs_on) }}
+    container: ubuntu:24.04
+    defaults:
+      run:
+        shell: bash
     steps:
+      - name: Install Git before checkout
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/linux-test-env
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
