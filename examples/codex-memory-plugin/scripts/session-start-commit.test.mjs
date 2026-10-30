@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { enqueue } from "./shared/pending-queue.mjs";
+import { PEER_PIN_VERSION } from "./session-state.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +62,7 @@ function baseEnv(baseUrl, stateDir) {
     OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
     OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
     OPENVIKING_CODEX_STATE_DIR: stateDir,
+    OPENVIKING_PENDING_DIR: join(stateDir, "pending"),
     OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP: "0",
     OPENVIKING_TIMEOUT_MS: "5000",
     OPENVIKING_CAPTURE_TIMEOUT_MS: "5000",
@@ -541,7 +543,12 @@ function sweepHandler(requests, { onBatch, batchStatus = 200 } = {}) {
     const url = new URL(req.url, "http://127.0.0.1");
     if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
       const body = await readRequestBody(req);
-      requests.push({ method: req.method, path: url.pathname, body });
+      requests.push({
+        method: req.method,
+        path: url.pathname,
+        actorPeerId: req.headers["x-openviking-actor-peer"] || "",
+        body,
+      });
       await onBatch?.(body);
       if (batchStatus !== 200) {
         res.writeHead(batchStatus, { "Content-Type": "application/json" });
@@ -555,50 +562,68 @@ function sweepHandler(requests, { onBatch, batchStatus = 200 } = {}) {
   };
 }
 
-test("the sweep catches up the recorded transcript before committing", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-sweep-catchup-"));
-  const transcriptPath = join(stateDir, "orphan.jsonl");
-  const requests = [];
-  try {
-    const now = Date.now();
-    await writeFile(transcriptPath, [
-      turn("user", "first request"),
-      turn("assistant", "first reply"),
-      turn("user", "second request"),
-    ].join("\n"));
-    await writeFile(join(stateDir, "orphan.json"), JSON.stringify({
-      codexSessionId: "orphan",
-      ovSessionId: "cx-orphan",
-      transcriptPath,
-      capturedTurnCount: 1,
-      createdAt: now - 5_000,
-      lastUpdatedAt: now,
-    }));
-    await writeEndedMarker(stateDir, "orphan", now);
+for (const oldPeer of ["", "project-a"]) {
+  for (const newPeer of ["", "project-b"]) {
+    test(`the sweep preserves peer ${JSON.stringify(oldPeer)} when startup uses ${JSON.stringify(newPeer)}`, async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-sweep-catchup-"));
+      const transcriptPath = join(stateDir, "orphan.jsonl");
+      const requests = [];
+      try {
+        const now = Date.now();
+        await writeFile(transcriptPath, [
+          turn("user", "first request"),
+          turn("assistant", "first reply"),
+          turn("user", "second request"),
+        ].join("\n"));
+        await writeFile(join(stateDir, "orphan.json"), JSON.stringify({
+          codexSessionId: "orphan",
+          ovSessionId: "cx-orphan",
+          transcriptPath,
+          workspacePeerId: oldPeer,
+          peerPinVersion: PEER_PIN_VERSION,
+          capturedTurnCount: 1,
+          createdAt: now - 5_000,
+          lastUpdatedAt: now,
+        }));
+        await writeEndedMarker(stateDir, "orphan", now);
 
-    await withMockOpenViking(sweepHandler(requests), async (baseUrl) => {
-      const { output } = await runSessionStart(
-        { session_id: "new-session", source: "startup", cwd: "/tmp/codex-sweep-catchup" },
-        { ...baseEnv(baseUrl, stateDir), OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1" },
-      );
-      assert.match(output.systemMessage, /cx-orphan is committed/);
+        await withMockOpenViking(sweepHandler(requests), async (baseUrl) => {
+          const { output } = await runSessionStart(
+            { session_id: "new-session", source: "startup", cwd: "/tmp/codex-sweep-catchup" },
+            {
+              ...baseEnv(baseUrl, stateDir),
+              OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+              OPENVIKING_PEER_ID: newPeer,
+            },
+          );
+          assert.match(output.systemMessage, /cx-orphan is committed/);
+        });
+
+        const sent = requests
+          .filter((r) => r.path === "/api/v1/sessions/cx-orphan/messages/batch")
+          .flatMap((r) => r.body?.messages ?? []);
+        assert.equal(sent.length, 2);
+        assert.equal(sent[0].parts?.[0]?.text ?? sent[0].content, "first reply");
+        assert.ok(sent.every((message) => (message.peer_id || "") === oldPeer));
+        const sessionRequests = requests.filter((r) => r.path.startsWith("/api/v1/sessions/cx-orphan/"));
+        assert.ok(sessionRequests.some((r) => r.path.endsWith("/commit")));
+        assert.ok(sessionRequests.every((r) => r.actorPeerId === oldPeer));
+        const profileRequests = requests.filter((r) => r.path === "/api/v1/content/read");
+        assert.ok(profileRequests.length > 0);
+        assert.ok(profileRequests.every((r) => r.actorPeerId === newPeer));
+        const newState = JSON.parse(await readFile(join(stateDir, "new-session.json"), "utf-8"));
+        assert.equal(newState.workspacePeerId, newPeer);
+
+        const state = JSON.parse(await readFile(join(stateDir, "orphan.json"), "utf-8"));
+        assert.equal(state.ovSessionId, null);
+        assert.equal(state.capturedTurnCount, 3);
+        assert.equal(await endedMarkerExists(stateDir, "orphan"), false);
+      } finally {
+        await rm(stateDir, { recursive: true, force: true });
+      }
     });
-
-    const sent = requests
-      .filter((r) => r.path === "/api/v1/sessions/cx-orphan/messages/batch")
-      .flatMap((r) => r.body?.messages ?? []);
-    assert.equal(sent.length, 2);
-    assert.equal(sent[0].parts?.[0]?.text ?? sent[0].content, "first reply");
-    assert.ok(requests.some((r) => r.path === "/api/v1/sessions/cx-orphan/commit"));
-
-    const state = JSON.parse(await readFile(join(stateDir, "orphan.json"), "utf-8"));
-    assert.equal(state.ovSessionId, null);
-    assert.equal(state.capturedTurnCount, 3);
-    assert.equal(await endedMarkerExists(stateDir, "orphan"), false);
-  } finally {
-    await rm(stateDir, { recursive: true, force: true });
   }
-});
+}
 
 test("the sweep catches up an ended session that PreCompact already released", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-sweep-released-"));
