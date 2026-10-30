@@ -64,7 +64,7 @@ describe('fetchSessionMessages', () => {
     getContentReadMock.mockReset()
   })
 
-  it('combines completed archives with current context in chronological order', async () => {
+  it('combines completed archives with complete current history in chronological order', async () => {
     getSessionBySessionIdMock.mockReturnValue(response({ commit_count: 2 }))
     getSessionIdArchiveByArchiveIdMock
       .mockReturnValueOnce(
@@ -86,6 +86,10 @@ describe('fetchSessionMessages', () => {
     const result = await fetchSessionMessages('session-1')
 
     expect(result.map(({ id }) => id)).toEqual(['1', '2', '3'])
+    expect(getSessionIdContextMock).toHaveBeenCalledWith({
+      path: { session_id: 'session-1' },
+      query: { token_budget: Number.MAX_SAFE_INTEGER },
+    })
     expect(getSessionIdArchiveByArchiveIdMock).toHaveBeenNthCalledWith(1, {
       path: { archive_id: 'archive_001', session_id: 'session-1' },
     })
