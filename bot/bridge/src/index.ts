@@ -25,7 +25,12 @@ import { join } from 'path';
 
 const PORT = parseInt(process.env.BRIDGE_PORT || '3001', 10);
 const AUTH_DIR = process.env.AUTH_DIR || join(homedir(), '.vikingbot', 'whatsapp-auth');
-const TOKEN = process.env.BRIDGE_TOKEN || undefined;
+const TOKEN = process.env.BRIDGE_TOKEN;
+
+if (!TOKEN) {
+  console.error('BRIDGE_TOKEN is required. Start the bridge with vikingbot channels login.');
+  process.exit(1);
+}
 
 console.log('🐈 vikingbot WhatsApp Bridge');
 console.log('========================\n');
