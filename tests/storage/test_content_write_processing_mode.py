@@ -8,6 +8,8 @@ import pytest
 import yaml
 
 from openviking.core.context import ContextLevel
+from openviking.privacy import ambiguity
+from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.account_templates import memory_template_data
 from openviking.session.memory.memory_type_registry import get_default_registry
@@ -377,3 +379,64 @@ def test_plan_statuses_prioritize_parent_freshness_over_file_semantic_work(
     )
 
     assert coordinator._plan_statuses(work, wait=wait, queue_status=queue_status) == expected
+
+
+_AMBIGUOUS_SECRET = "acme-secret-host.example"
+_AMBIGUOUS_URI = "viking://resources/demo/note.md"
+
+
+class _AmbiguousPrivacyCatalog:
+    """One literal registered under two skill/field pairs — ambiguous by design."""
+
+    def catalog_revision(self, _ctx):
+        return 1
+
+    async def list_categories(self, _ctx):
+        return ["skill"]
+
+    async def list_targets(self, _ctx, _category):
+        return ["skill-a", "skill-b"]
+
+    async def get_current(self, _ctx, _category, target_key):
+        values = {"skill-a": {"host": _AMBIGUOUS_SECRET}, "skill-b": {"endpoint": _AMBIGUOUS_SECRET}}
+        return SimpleNamespace(values=values.get(target_key, {}))
+
+
+def test_candidate_references_normalizes_matcher_groups():
+    assert ambiguity.candidate_references([("a", "b")]) == [["a", "b"]]
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
+def test_strict_ambiguity_flag_accepts_truthy_spellings(value, monkeypatch):
+    monkeypatch.setenv(ambiguity.STRICT_AMBIGUITY_ENV, value)
+    assert ambiguity.strict_ambiguity_enabled() is True
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "no", "off"])
+def test_strict_ambiguity_flag_is_off_by_default(value, monkeypatch):
+    monkeypatch.setenv(ambiguity.STRICT_AMBIGUITY_ENV, value)
+    assert ambiguity.strict_ambiguity_enabled() is False
+
+
+async def test_ambiguous_value_is_tolerated_by_default(monkeypatch, ctx):
+    monkeypatch.delenv(ambiguity.STRICT_AMBIGUITY_ENV, raising=False)
+    coordinator = ContentWriteCoordinator(
+        viking_fs=None, privacy_sanitizer=PrivacySanitizer(_AmbiguousPrivacyCatalog())
+    )
+
+    content = await coordinator._sanitize_text(f"connect to {_AMBIGUOUS_SECRET}\n", uri=_AMBIGUOUS_URI, ctx=ctx)
+
+    assert "{{ov_privacy:ambiguous}}" in content
+    assert _AMBIGUOUS_SECRET not in content
+
+
+async def test_ambiguous_value_still_rejects_under_strict_flag(monkeypatch, ctx):
+    monkeypatch.setenv(ambiguity.STRICT_AMBIGUITY_ENV, "1")
+    coordinator = ContentWriteCoordinator(
+        viking_fs=None, privacy_sanitizer=PrivacySanitizer(_AmbiguousPrivacyCatalog())
+    )
+
+    with pytest.raises(InvalidArgumentError) as excinfo:
+        await coordinator._sanitize_text(f"connect to {_AMBIGUOUS_SECRET}\n", uri=_AMBIGUOUS_URI, ctx=ctx)
+
+    assert excinfo.value.details["candidate_references"]

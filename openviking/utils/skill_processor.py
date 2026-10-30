@@ -23,6 +23,7 @@ from openviking.config.vlm import VLMHandle, VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.privacy.ambiguity import candidate_references, strict_ambiguity_enabled
 from openviking.privacy.reference import parse_privacy_field_reference
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
@@ -546,15 +547,18 @@ class SkillProcessor:
             return content
         result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
         if result.ambiguous_references:
-            raise InvalidArgumentError(
-                "Skill content contains a Privacy value mapped to multiple fields; "
-                "insert the intended owner-bound reference explicitly",
-                details={
-                    "uri": uri,
-                    "candidate_references": [
-                        list(candidates) for candidates in result.ambiguous_references
-                    ],
-                },
+            candidates = candidate_references(result.ambiguous_references)
+            if strict_ambiguity_enabled():
+                raise InvalidArgumentError(
+                    "Skill content contains a Privacy value mapped to multiple fields; "
+                    "insert the intended owner-bound reference explicitly",
+                    details={"uri": uri, "candidate_references": candidates},
+                )
+            logger.warning(
+                "privacy: %d ambiguous value(s) left as placeholders for %s: %s",
+                len(candidates),
+                uri,
+                candidates[:3],
             )
         return result.content
 
