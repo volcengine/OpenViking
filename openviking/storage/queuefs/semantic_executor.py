@@ -11,6 +11,7 @@ from weakref import WeakKeyDictionary
 
 from openviking.core.namespace import classify_uri
 from openviking.parse.parsers.media import get_media_type
+from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
@@ -733,8 +734,16 @@ class SemanticTreeExecutor:
                 raise
             if parent_uri:
                 await self._on_child_done(parent_uri, dir_uri, "")
-            elif self._root_done:
-                self._root_done.set()
+            elif isinstance(e, (FileNotFoundError, NotADirectoryError, AGFSNotADirectoryError)):
+                # Missing or file-shaped roots are skipped on purpose
+                # (#4461 / #4474); the run finishes without sidecars.
+                if self._root_done:
+                    self._root_done.set()
+            else:
+                # Any other root failure produced no summaries and no sidecars;
+                # surface it so SemanticProcessor fails or requeues the message
+                # instead of acknowledging unfinished work as success.
+                self.fail(e)
             return True
 
     @staticmethod
