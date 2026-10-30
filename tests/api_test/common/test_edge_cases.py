@@ -2,6 +2,21 @@ import os
 import tempfile
 import uuid
 
+import pytest
+
+
+def skip_write_failure_without_secrets(response):
+    if response.status_code == 200 or os.getenv("HAS_SECRETS", "true").lower() == "true":
+        return
+    try:
+        error = response.json().get("error")
+    except Exception:
+        error = response.text
+    pytest.skip(
+        f"fs_write failed on this environment: {error}. "
+        "Embedding/VLM credentials are not available without secrets."
+    )
+
 
 class TestResourceEdgeCases:
     def test_add_resource_with_temp_file_id_and_path_returns_400(self, api_client):
@@ -96,6 +111,7 @@ class TestContentEdgeCases:
             assert mkdir_resp.status_code == 200
 
             write_resp = api_client.fs_write(test_uri, "new file content", mode="create", wait=True)
+            skip_write_failure_without_secrets(write_resp)
             assert write_resp.status_code == 200, (
                 f"write to new file with create mode should return 200, got {write_resp.status_code}: {write_resp.text[:200]}"
             )
@@ -121,6 +137,7 @@ class TestContentEdgeCases:
             assert mkdir_resp.status_code == 200
 
             write_resp = api_client.fs_write(test_uri, "", mode="create", wait=True)
+            skip_write_failure_without_secrets(write_resp)
             assert write_resp.status_code == 200, (
                 f"write empty content with create mode should return 200, got {write_resp.status_code}: {write_resp.text[:200]}"
             )
