@@ -38,7 +38,6 @@ If ov-ci-runner is offline or stuck, set repository Actions variable
 New jobs use hosted runners; already queued jobs retain their original labels.
 After repairing/updating the runner, remove the variable to resume PR/push
 acceleration. Release builds remain hosted regardless of the variable.
-The legacy ECS P0 workflow was removed in #6807.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.
 Its check name stays `cuvs-tests / Lite Test (ubuntu-24.04, 3.11)`, matching the
