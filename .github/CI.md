@@ -41,26 +41,35 @@ The selector runs embedded Python in a disposable `python:3.12-slim` container,
 without checkout or local actions. Python isolated mode and working directory
 `/` prevent importing files left in the runner workspace. The embedded script
 is checked against `.github/scripts/linux_runner.py` by the regression suite.
-Fork PRs may run this selection job on the shared hosts, but their test code
-still selects GitHub-hosted and they receive no inventory secret.
+Fork PRs may run this selection job on the shared hosts and receive no inventory
+secret. Their test code uses GitHub-hosted unless their source repository is
+explicitly trusted. Set the official repository variable
+`CI_LINUX_TRUSTED_REPOSITORIES` to a JSON list of approved source repositories,
+for example `["zhanglistar/OpenViking"]`. Names are matched exactly; this does
+not trust other repositories owned by the same user. An absent or malformed
+list trusts no forks, and non-official destination repositories remain hosted.
 
 In `auto`, the selector queries runner inventory, chooses an online idle Linux
 x64 pool (also allowing its own host, which becomes free when selection finishes),
-and alternates ties by workflow run ID. Missing inventory credentials,
-API failures, offline/busy runners or unmatched labels fall back to
+and alternates ties by workflow run ID. Without inventory credentials, trusted
+jobs use the selector's own host if its runner name is `openviking-ecs` or
+`ov-ci-runner`: that prepared host has just accepted the selection job and
+becomes available when it finishes. This also lets approved fork PRs use the
+self-hosted pools without receiving a secret. API failures, offline/busy
+inventory or an unrecognized selector host with no credentials fall back to
 `ubuntu-24.04`. The selector's summary records its decision. This is an
 availability snapshot, not a capacity reservation: concurrent workflows can
 select the same runner, and GitHub cannot move an already queued job to another
 pool. Matrix jobs may queue behind other jobs on the selected pool.
 
-For automatic selection, add repository secret `CI_RUNNER_READ_TOKEN` containing
+For inventory-based automatic selection, add repository secret `CI_RUNNER_READ_TOKEN` containing
 a fine-grained token scoped to this repository with **Administration: read**,
 or an equivalent GitHub App installation token. The normal workflow token does
 not grant runner inventory access. Never reuse a developer's CLI credential.
 An explicit ECS/ov-ci-runner selection without this secret schedules directly
 on its labels and waits for capacity; with inventory available, an unavailable
-explicit pool falls back to hosted. Fork PRs and non-official repositories
-always select hosted.
+explicit pool falls back to hosted. Untrusted fork PRs and non-official
+repositories always select hosted.
 
 Each self-hosted pool must have `[self-hosted, Linux, X64]` and its corresponding
 custom label (`openviking-ecs` or `ov-ci-runner`), plus a working Docker daemon,

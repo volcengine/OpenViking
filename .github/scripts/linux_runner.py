@@ -10,15 +10,32 @@ POOLS = ("openviking-ecs", "ov-ci-runner")
 HOSTED = ["ubuntu-24.04"]
 
 
+def trusted_source(repository, event, trusted_pr_repositories=()):
+    if repository != "volcengine/OpenViking":
+        return False
+    pr = event.get("pull_request")
+    if not pr:
+        return True
+    source = (pr.get("head", {}).get("repo") or {}).get("full_name", "")
+    return source == repository or source in trusted_pr_repositories
+
+
 def select(pool, runners, trusted=True, run_id=0, selector_runner=""):
     if pool not in ("auto", "github-hosted", *POOLS):
         raise ValueError(f"Unknown Linux test pool: {pool}")
     if not trusted:
-        return HOSTED, "Fork PRs and non-official repositories use GitHub-hosted"
+        return HOSTED, "Untrusted PRs and non-official repositories use GitHub-hosted"
     if pool == "github-hosted":
         return HOSTED, "GitHub-hosted explicitly selected"
     if pool in POOLS and runners is None:
         return ["self-hosted", "Linux", "X64", pool], f"Explicit pool {pool}; wait for capacity"
+    if pool == "auto" and runners is None and selector_runner in POOLS:
+        # Fork PRs receive no inventory secret. The prepared host running this
+        # selector has proven it can accept jobs and becomes free on completion.
+        return (
+            ["self-hosted", "Linux", "X64", selector_runner],
+            f"Inventory credentials absent; use selector host: {selector_runner}",
+        )
     candidates = []
     for runner in runners or []:
         labels = {label["name"].lower() for label in runner.get("labels", [])}
@@ -66,10 +83,16 @@ def main():
     with open(os.environ["GITHUB_EVENT_PATH"]) as stream:
         event = json.load(stream)
     repository = os.environ["GITHUB_REPOSITORY"]
-    pr = event.get("pull_request")
-    trusted = repository == "volcengine/OpenViking" and (
-        not pr or (pr.get("head", {}).get("repo") or {}).get("full_name") == repository
-    )
+    try:
+        trusted_pr_repositories = json.loads(os.environ.get("TRUSTED_PR_REPOSITORIES", "[]"))
+        if not isinstance(trusted_pr_repositories, list) or not all(
+            isinstance(source, str) and source for source in trusted_pr_repositories
+        ):
+            raise ValueError("Expected a JSON list of repository names")
+    except (ValueError, TypeError):
+        print("::warning::Invalid trusted PR repository list; no fork repositories are trusted")
+        trusted_pr_repositories = []
+    trusted = trusted_source(repository, event, trusted_pr_repositories)
     token = os.environ.get("RUNNER_READ_TOKEN", "")
     runners = None
     if trusted and token and args.pool != "github-hosted":

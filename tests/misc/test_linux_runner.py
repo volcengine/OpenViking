@@ -30,8 +30,33 @@ def runner(pool="openviking-ecs", status="online", busy=False, labels=None):
 
 
 @pytest.mark.parametrize("pool", ["auto", "github-hosted", *router.POOLS])
-def test_forks_always_use_hosted_even_when_pool_forced(pool):
-    assert router.select(pool, [runner()], trusted=False)[0] == router.HOSTED
+def test_untrusted_forks_use_hosted_even_when_pool_forced(pool):
+    assert (
+        router.select(pool, [runner()], trusted=False, selector_runner="openviking-ecs")[0]
+        == router.HOSTED
+    )
+
+
+@pytest.mark.parametrize(
+    "repository,source,approved,expected",
+    [
+        ("volcengine/OpenViking", "volcengine/OpenViking", [], True),
+        ("volcengine/OpenViking", "zhanglistar/OpenViking", ["zhanglistar/OpenViking"], True),
+        ("volcengine/OpenViking", "zhanglistar/OpenViking", [], False),
+        ("volcengine/OpenViking", "zhanglistar/other", ["zhanglistar/OpenViking"], False),
+        ("volcengine/OpenViking", "other/OpenViking", ["zhanglistar/OpenViking"], False),
+        ("volcengine/OpenViking", None, ["zhanglistar/OpenViking"], False),
+        ("other/OpenViking", "zhanglistar/OpenViking", ["zhanglistar/OpenViking"], False),
+    ],
+)
+def test_only_exact_approved_pr_sources_are_trusted(repository, source, approved, expected):
+    event = {"pull_request": {"head": {"repo": {"full_name": source} if source else None}}}
+    assert router.trusted_source(repository, event, approved) is expected
+
+
+def test_official_push_remains_trusted_without_fork_configuration():
+    assert router.trusted_source("volcengine/OpenViking", {}) is True
+    assert router.trusted_source("other/OpenViking", {}) is False
 
 
 @pytest.mark.parametrize(
@@ -67,6 +92,18 @@ def test_selector_can_choose_its_own_busy_host_after_finishing(pool):
 def test_selector_does_not_choose_its_own_offline_host():
     inventory = [runner(status="offline", busy=True)]
     assert router.select("auto", inventory, selector_runner="openviking-ecs")[0] == router.HOSTED
+
+
+@pytest.mark.parametrize("pool", router.POOLS)
+def test_auto_uses_prepared_selector_host_without_inventory_credentials(pool):
+    labels, reason = router.select("auto", None, selector_runner=pool)
+    assert labels == ["self-hosted", "Linux", "X64", pool]
+    assert "Inventory credentials absent" in reason
+    assert router.select("auto", [], selector_runner=pool)[0] == router.HOSTED
+
+
+def test_auto_without_inventory_does_not_guess_unknown_selector_pool():
+    assert router.select("auto", None, selector_runner="unrelated-host")[0] == router.HOSTED
 
 
 def test_label_matching_is_case_insensitive():
@@ -188,6 +225,8 @@ def test_embedded_fork_selector_ignores_workspace_imports_and_pythonpath(tmp_pat
         "GITHUB_STEP_SUMMARY": str(summary),
         "PYTHONPATH": str(tmp_path),
         "RUNNER_READ_TOKEN": "",
+        "TRUSTED_PR_REPOSITORIES": "[]",
+        "RUNNER_NAME": "openviking-ecs",
     }
     result = subprocess.run(
         [sys.executable, "-I", "-", "--pool", "ov-ci-runner"],
@@ -199,7 +238,55 @@ def test_embedded_fork_selector_ignores_workspace_imports_and_pythonpath(tmp_pat
         check=True,
     )
     assert json.loads(output.read_text().split("=", 1)[1]) == router.HOSTED
-    assert "Fork PRs" in result.stdout
+    assert "Untrusted PRs" in result.stdout
+
+
+@pytest.mark.parametrize("selector_host", router.POOLS)
+@pytest.mark.parametrize(
+    "approved,expected_trusted",
+    [
+        ('["zhanglistar/OpenViking"]', True),
+        ("[]", False),
+        ('["other/OpenViking"]', False),
+        ('"zhanglistar/OpenViking"', False),
+        ('{"zhanglistar/OpenViking": true}', False),
+        ('["zhanglistar/OpenViking", null]', False),
+        ("not-json", False),
+    ],
+)
+def test_embedded_approved_fork_uses_selector_host_without_secrets(
+    tmp_path, selector_host, approved, expected_trusted
+):
+    event = tmp_path / "event.json"
+    event.write_text(
+        json.dumps({"pull_request": {"head": {"repo": {"full_name": "zhanglistar/OpenViking"}}}})
+    )
+    output = tmp_path / "output"
+    summary = tmp_path / "summary"
+    result = subprocess.run(
+        [sys.executable, "-I", "-", "--pool", "auto"],
+        input=embedded_selector(),
+        text=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "volcengine/OpenViking",
+            "GITHUB_RUN_ID": "42",
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "RUNNER_NAME": selector_host,
+            "RUNNER_READ_TOKEN": "",
+            "TRUSTED_PR_REPOSITORIES": approved,
+        },
+        capture_output=True,
+        check=True,
+    )
+    expected = ["self-hosted", "Linux", "X64", selector_host] if expected_trusted else router.HOSTED
+    assert json.loads(output.read_text().split("=", 1)[1]) == expected
+    reason = "Inventory credentials absent" if expected_trusted else "Untrusted PRs"
+    assert reason in result.stdout
+    assert reason in summary.read_text()
 
 
 @pytest.mark.parametrize(
