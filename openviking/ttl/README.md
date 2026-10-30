@@ -43,24 +43,17 @@ With the adapter enabled, writes only enqueue in-memory candidates. The
 registration worker loads policy and drops disabled candidates before Redis I/O.
 UserConfig cold reads stay off the business write path. A reader uses
 `config.writer=false`: expiry display is
-available, but it never scans or recycles. User-scoped find/search adds an Event
-TTL predicate before vector ranking, keyword retrieval or a filter-only lookup.
-Tagged Events must have `created_at + effective TTL > now`; User Events and Peer
-Events use their independent policies. Caller filters, limits and tenant/ACL
-scopes remain in effect. No directory index lookup or per-record filesystem probe
-is added. The existing UserConfig cache can read configuration on a cold miss or
-refresh; cache hits require no configuration I/O. With the adapter absent, no
-TTL policy is read. An unbounded ROOT query retains its administrative view;
-it does not enumerate users to build a predicate. Missing tags/timestamps in
-malformed historical vectors have no full-coverage guarantee, and are not repaired
-by directory backfill.
-
-Session visibility, file reads and listings remain soft: expired data stays
-accessible until physical deletion. Historical Event writes are allowed; they
-do not renew the date directory's lifetime. Event retrieval uses each vector's
-creation time, while physical recycling uses the date directory, so their expiry
-times can differ. A TTL predicate is not a barrier for arbitrary manual vector
-deletion or index propagation.
+available, but it never scans or recycles. User-scoped semantic, keyword and
+filter-only retrieval requires tagged Events to satisfy
+`created_at + effective TTL > now`, before ranking and `limit`. User and Peer
+Events use their independent policies; caller filters and ACL scopes still apply.
+This reuses the UserConfig cache (cold/expired entries read configuration), with
+no user enumeration, Redis lookup or per-record filesystem probe. An absent
+adapter adds no policy I/O; unbounded ROOT queries keep their administrative view.
+Malformed historical vectors are not repaired. Session visibility, file reads/listings
+and Event writes remain soft until physical deletion. Recycling still uses the
+date directory, so its timing can differ from vector expiry; the predicate is
+not a barrier for arbitrary manual deletion or index propagation.
 
 The existing write path buffers successful writes and flushes them asynchronously
 in batches. Session directory scores use the write time (`ZADD GT`); Event date
