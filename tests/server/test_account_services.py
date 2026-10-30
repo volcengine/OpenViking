@@ -438,11 +438,16 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
             )
     finally:
         try:
-            redis_client = writer._store._redis
-            if redis_client is not None:
+
+            async def clear_test_cache():
+                redis_client = writer._store._redis
+                if redis_client is None:
+                    return
                 keys = [key async for key in redis_client.scan_iter(match=f"{key_prefix}:*")]
                 if keys:
                     await redis_client.delete(*keys)
+
+            await writer._store._redis_runtime.run(clear_test_cache)
             async with engine.begin() as connection:
                 await connection.execute(
                     delete(Account).where(
