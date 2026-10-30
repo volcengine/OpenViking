@@ -41,6 +41,60 @@ tags:
 """
 
 
+def _write_source_skill(root, relative_path: str) -> None:
+    skill_dir = root / relative_path
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Source Skill\n", encoding="utf-8")
+
+
+def test_skill_source_discovery_skips_inactive_collection_containers(tmp_path):
+    from openviking.service.skill_sources import _skill_paths
+
+    for relative_path in (
+        "active-skill",
+        "_legitimate_skill",
+        ".private/grouped-skill",
+        "_group/grouped-skill",
+        ".archive/old-skill",
+        ".trash/deleted-skill",
+        "_archive/old-skill",
+        "_staging/staged-skill",
+        "_staging-matt/third-party-skill",
+    ):
+        _write_source_skill(tmp_path, relative_path)
+    _write_source_skill(tmp_path, "active-skill/attachments/nested-skill")
+
+    discovered = {
+        path.relative_to(tmp_path).as_posix() for path in _skill_paths(tmp_path, [], None)
+    }
+
+    assert discovered == {
+        ".private/grouped-skill",
+        "_group/grouped-skill",
+        "_legitimate_skill",
+        "active-skill",
+    }
+
+
+def test_skill_source_discovery_preserves_control_named_skill_packages(tmp_path):
+    from openviking.service.skill_sources import _skill_paths
+
+    for name in (".archive", ".trash", "_archive", "_staging", "_staging-matt"):
+        _write_source_skill(tmp_path, name)
+        _write_source_skill(tmp_path, f"{name}/attachments/nested-skill")
+
+    discovered = {
+        path.relative_to(tmp_path).as_posix() for path in _skill_paths(tmp_path, [], None)
+    }
+
+    assert discovered == {".archive", ".trash", "_archive", "_staging", "_staging-matt"}
+    assert _skill_paths(tmp_path, ["_archive"], None) == [tmp_path / "_archive"]
+
+    explicit_root = tmp_path / "explicit" / "_archive"
+    _write_source_skill(explicit_root, "old-skill")
+    assert _skill_paths(explicit_root, [], None) == [explicit_root / "old-skill"]
+
+
 async def _add_skill(client, name: str = "api-skill", description: str = "API skill"):
     response = await client.post(
         "/api/v1/skills",
