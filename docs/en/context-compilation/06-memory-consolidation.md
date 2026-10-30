@@ -17,28 +17,26 @@ Running memory consolidation over a memory directory makes such a collection cle
 
 ## How to use it
 
-Set `--skill` to the sentinel value **`memory`** and point `--to` at a **memories root or memory-type directory**:
+Use `ov compile memory`, which is equivalent to `ov compile --skill memory`. `--to` is optional and defaults to `viking://~/memories`, where `~` identifies the current request user. To choose a narrower scope, point `--to` at a **memories root or memory-type directory**:
 
 ```bash
 # Consolidate entities (dedup / merge / normalize in place)
-ov compile \
+ov compile memory \
   --to viking://user/<user_id>/memories/entities \
-  --skill memory \
   --instruction "Merge clearly duplicate entities, but do not merge distinct ones; keep each entity's unique facts"
 ```
 
 You can consolidate other memory types too, e.g. preferences:
 
 ```bash
-ov compile \
-  --to viking://user/<user_id>/memories/preferences \
-  --skill memory
+ov compile memory \
+  --to viking://user/<user_id>/memories/preferences
 ```
 
 To consolidate all existing, enabled memory types in one task and one ExtractLoop:
 
 ```bash
-ov compile --to viking://user/<user_id>/memories --skill memory \
+ov compile memory \
   --instruction "Consolidate existing memories without losing facts; keep distinct objects separate"
 ```
 
@@ -50,8 +48,8 @@ The command returns a task ID immediately. Use `ov task status <id>` to check th
 
 | Parameter | Description |
 |-----------|-------------|
-| `--skill memory` | The fixed sentinel value that triggers memory-consolidation mode (it is not resolved as a real Skill). |
-| `--to` | Required: a **memories root** (`.../memories`) or a **memory-type directory** (e.g. `.../memories/entities`). User roots are not accepted. |
+| `memory` | The memory-consolidation subcommand, equivalent to `--skill memory`; the two forms cannot be combined. |
+| `--to` | Optional only in memory mode; defaults to `viking://~/memories`. Other Compile skills require an explicit target. Accepts a **memories root** (`.../memories`) or a **memory-type directory** (e.g. `.../memories/entities`). User roots are not accepted. |
 | `--from` | **Not accepted** in memory mode — consolidation pulls in no external sources; it only reorganizes memories already under `--to`. |
 | `--instruction` | Optional. Passed to the model as a consolidation instruction (a soft hint). Use it to make merges the model cannot infer on its own, e.g. "Ah-Zhen is Chen Jingxian, please merge them." |
 
