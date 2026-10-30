@@ -5,29 +5,49 @@ const MAX_BYTES = 8 * 1024 * 1024;
 
 // Codex rollout JSONL is not a stable API. Require an identified turn and
 // accept only developer messages, never user text or tool/assistant output.
-export function recallFromTranscript(text, turnId) {
+
+/** Walk rollout records, yielding each with the Codex turn it belongs to. */
+export function* recordsWithTurn(records) {
   let currentTurn = null;
-  const recalled = new Map();
-  for (const line of String(text).split("\n")) {
-    let record;
-    try { record = JSON.parse(line); } catch { continue; }
+  for (const record of records) {
     const item = record?.payload;
-    if (!item || typeof item !== "object") continue;
+    if (!item || typeof item !== "object") {
+      yield { record, turnId: currentTurn };
+      continue;
+    }
     if (record.type === "turn_context" ||
         (record.type === "event_msg" && item.type === "task_started")) {
       currentTurn = item.turn_id || null;
     }
-    if (record.type !== "response_item" || item.type !== "message" ||
-        item.role !== "developer" || !Array.isArray(item.content)) continue;
-    const itemTurn = item.internal_chat_message_metadata_passthrough?.turn_id || currentTurn;
-    if (itemTurn !== turnId) continue;
-    for (const part of item.content) {
-      if (part?.type !== "input_text" || typeof part.text !== "string") continue;
-      for (const block of part.text.matchAll(/<openviking-context\b([^>]*)>([\s\S]*?)<\/openviking-context>/g)) {
-        if (/\bsource\s*=/.test(block[1])) continue;
-        for (const entry of parseRecall(block[2])) recalled.set(entry.uri, entry);
-      }
+    yield { record, turnId: item.internal_chat_message_metadata_passthrough?.turn_id || currentTurn };
+  }
+}
+
+/** What auto-recall injected through one developer message record. */
+export function recallInRecord(record) {
+  const item = record?.payload;
+  if (record?.type !== "response_item" || item?.type !== "message" ||
+      item.role !== "developer" || !Array.isArray(item.content)) return [];
+  const recalled = [];
+  for (const part of item.content) {
+    if (part?.type !== "input_text" || typeof part.text !== "string") continue;
+    for (const block of part.text.matchAll(/<openviking-context\b([^>]*)>([\s\S]*?)<\/openviking-context>/g)) {
+      if (/\bsource\s*=/.test(block[1])) continue;
+      recalled.push(...parseRecall(block[2]));
     }
+  }
+  return recalled;
+}
+
+export function recallFromTranscript(text, turnId) {
+  const records = [];
+  for (const line of String(text).split("\n")) {
+    try { records.push(JSON.parse(line)); } catch { /* skip */ }
+  }
+  const recalled = new Map();
+  for (const { record, turnId: itemTurn } of recordsWithTurn(records)) {
+    if (itemTurn !== turnId) continue;
+    for (const entry of recallInRecord(record)) recalled.set(entry.uri, entry);
   }
   return [...recalled.values()];
 }

@@ -143,3 +143,47 @@ test("shortened transcript resumes at the latest human turn", async () => {
 });
 
 test.after(async () => { await rm(stateDir, { recursive: true, force: true }); });
+
+function developer(text) {
+  return { type: "response_item", payload: {
+    type: "message", role: "developer", content: [{ type: "input_text", text }],
+  } };
+}
+
+test("each turn reports recalled and looked-up URIs as content-free ContextParts", async () => {
+  const id = "used-sources";
+  const { writeLookup } = await import("./usage/state.mjs");
+  const memory = "viking://user/u/memories/preferences/tabs.md";
+  const looked = "viking://resources/team/guide.md";
+  await writeLookup(id, "turn-1", "call-1", { query: "guide", opened: [looked], found: [], isError: false });
+  await writeLookup(id, "turn-1", "call-2", { query: "bad", opened: ["viking://resources/x.md"], found: [], isError: true });
+  const sent = [];
+  const path = await writeRollout(id, rollout(
+    message("user", "Format my file"),
+    developer(`<openviking-context>\n<memory uri="${memory}" score="0.9">Prefers tabs.</memory>\n</openviking-context>`),
+    message("assistant", "Done with tabs"),
+    { type: "turn_context", payload: { turn_id: "turn-2" } },
+    message("user", "Thanks"),
+  ));
+  await withSessionLock(id, async () => {
+    const state = await loadState(id);
+    await catchUpTurns({
+      state, transcriptPath: path, cfg,
+      fetchJSONRes: async (_path, init) => {
+        sent.push(...JSON.parse(init.body).messages);
+        return { ok: true, result: {} };
+      },
+    });
+  });
+
+  assert.equal(sent.length, 3, "turn count is unchanged");
+  assert.deepEqual(sent[0].parts, [
+    { type: "text", text: "Format my file" },
+    { type: "context", uri: memory, context_type: "memory", abstract: "" },
+    { type: "context", uri: looked, context_type: "resource", abstract: "" },
+  ]);
+  assert.equal(sent[1].parts.some((part) => part.type === "context"), false);
+  assert.deepEqual(sent[2].parts, [{ type: "text", text: "Thanks" }]);
+  assert.equal(JSON.stringify(sent).includes("Prefers tabs."), false, "recalled content never enters the session");
+  assert.equal(JSON.stringify(sent).includes("entryIndex"), false);
+});

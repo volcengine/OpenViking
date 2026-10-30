@@ -13,6 +13,7 @@
 import { readFile } from "node:fs/promises";
 import { extractCaptureTranscript, findLastHumanTurnIndex } from "./capture-utils.mjs";
 import { CAPTURE_FORMAT_VERSION, resolveOvSessionId, saveState } from "./session-state.mjs";
+import { readTurn } from "./usage/state.mjs";
 import { makeAgentFetchJSON } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
 
@@ -75,6 +76,30 @@ export async function readTranscriptTurns(transcriptPath, cfg, logError) {
     logError?.("transcript_read", err);
     return { turns: [], excludedLegacyTurnIndices: [], ok: false };
   }
+}
+
+function contextTypeOf(uri) {
+  if (uri.includes("/memories/")) return "memory";
+  if (uri.includes("/skills/")) return "skill";
+  return "resource";
+}
+
+/**
+ * URIs one Codex turn put in front of the model, as URI-only ContextParts so
+ * commit can score them. Contents stay out of the session on purpose: capture
+ * strips recalled context so it is never extracted back into memory.
+ */
+async function usedContextParts(codexSessionId, turn) {
+  if (!turn.usageTurnId) return [];
+  const uris = new Set(turn.usedUris || []);
+  if (codexSessionId) {
+    const { lookups } = await readTurn(codexSessionId, turn.usageTurnId);
+    for (const lookup of lookups) {
+      if (lookup?.isError) continue;
+      for (const uri of [...(lookup.opened || []), ...(lookup.found || [])]) uris.add(uri);
+    }
+  }
+  return [...uris].map((uri) => ({ type: "context", uri, context_type: contextTypeOf(uri), abstract: "" }));
 }
 
 export function hasCaptureKeyword(turns) {
@@ -172,13 +197,15 @@ export async function catchUpTurns({
     return { newTurns, added: 0, ovSessionId: "" };
   }
 
-  const payloads = newTurns.map((turn) => {
-    const body = turn.parts?.length
-      ? { role: turn.role, parts: turn.parts }
+  const payloads = await Promise.all(newTurns.map(async (turn) => {
+    const contextParts = await usedContextParts(state.codexSessionId, turn);
+    const parts = turn.parts?.length ? turn.parts : contextParts.length && turn.text ? [{ type: "text", text: turn.text }] : [];
+    const body = parts.length
+      ? { role: turn.role, parts: [...parts, ...contextParts] }
       : { role: turn.role, content: turn.text };
     if (activePeerId) body.peer_id = activePeerId;
     return body;
-  });
+  }));
 
   const r = await sendSessionMessages(fetchJSONRes, ovSessionId, payloads, {
     // The transcript and persisted cursor own retries, including SessionStart

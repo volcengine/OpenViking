@@ -67,6 +67,14 @@ test("usage lookup hook records lookups without returning additionalContext", ()
       assert.deepEqual(run(input("three", "viking://resources/team/d.md"), { OPENVIKING_USAGE_OUTPUT: channel }), {});
     }
     assert.deepEqual(run(input("off", "viking://resources/team/a.md"), { OPENVIKING_USAGE_VIEW: "off" }), {});
+    // Capture reports lookups to the server, so they are recorded with the display off.
+    assert.equal(existsSync(join(dir, "ov-usage", "display-contract", "turn-off")), true);
+    const offReport = (turn) => JSON.parse(execFileSync(process.execPath, [join(scriptsDir, "usage", "report.mjs")], {
+      input: JSON.stringify({ session_id: "display-contract", turn_id: turn }),
+      env: { ...env, OPENVIKING_USAGE_VIEW: "off" }, encoding: "utf8",
+    }));
+    assert.deepEqual(offReport("off"), {});
+    assert.equal(existsSync(join(dir, "ov-usage", "display-contract", "turn-off")), true, "current turn survives pruning");
     assert.deepEqual(run(input("other", "ignored", { tool_name: "unrelated" })), {});
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
