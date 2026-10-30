@@ -21,12 +21,40 @@ import {
 // CopyButton
 // ---------------------------------------------------------------------------
 
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  // navigator.clipboard is only available in secure contexts; Studio may be served over plain HTTP.
+  const clipboard = (navigator as unknown as { clipboard?: Clipboard }).clipboard
+  if (clipboard?.writeText) {
+    try {
+      await clipboard.writeText(text)
+      return true
+    } catch {
+      // Fall through to the legacy path when the browser denies clipboard access.
+    }
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '-1000px'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
 function CopyButton({ text }: { text: string }) {
   const { t } = useTranslation('sessions')
   const [copied, setCopied] = useState(false)
 
   const handleCopy = useCallback(async () => {
-    await navigator.clipboard.writeText(text)
+    if (!(await copyTextToClipboard(text))) return
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }, [text])
