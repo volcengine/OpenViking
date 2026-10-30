@@ -8,6 +8,7 @@ Parses local HTML files.
 For URL downloading, use HTTPAccessor in the new two-layer architecture.
 """
 
+import asyncio
 import re
 import time
 from pathlib import Path
@@ -235,7 +236,11 @@ class HTMLParser(BaseParser):
             ParseResult with document tree
         """
         # Convert HTML to Markdown
-        markdown_content = self._html_to_markdown(content, base_url=source_path or "")
+        markdown_content = await asyncio.to_thread(
+            self._html_to_markdown,
+            content,
+            base_url=source_path or "",
+        )
 
         # Delegate to MarkdownParser
         md_parser = self._get_markdown_parser()
