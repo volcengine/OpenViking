@@ -24,6 +24,15 @@ concurrency:
   group: hermes-plugin-tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Installer checks change HOME, so checkout's temporary global Git config is
+# insufficient. Keep trust scoped to the two checkouts in every child process.
+env:
+  GIT_CONFIG_COUNT: '2'
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: ${{ github.workspace }}
+  GIT_CONFIG_KEY_1: safe.directory
+  GIT_CONFIG_VALUE_1: ${{ github.workspace }}/.ci/hermes-agent
+
 jobs:
   hermes-plugin-tests:
     runs-on: ${{ github.repository == 'volcengine/OpenViking' && fromJSON('["self-hosted", "Linux", "X64", "ov-ci-runner"]') || fromJSON('["ubuntu-24.04"]') }}

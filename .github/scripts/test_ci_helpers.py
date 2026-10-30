@@ -3,6 +3,7 @@
 import fnmatch
 import io
 import json
+import os
 import re
 import subprocess
 import tarfile
@@ -145,6 +146,54 @@ class PlanTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_hermes_git_trust_survives_home_change_and_rejects_other_repositories(self):
+        text = (ROOT / ".github/workflows/hermes-plugin-tests.yml").read_text()
+        block = text.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0]
+        config = dict(re.findall(r"^  (GIT_CONFIG_\w+): (.+)$", block, re.M))
+        self.assertEqual(config["GIT_CONFIG_COUNT"], "'2'")
+        self.assertEqual(config["GIT_CONFIG_KEY_0"], "safe.directory")
+        self.assertEqual(config["GIT_CONFIG_KEY_1"], "safe.directory")
+        self.assertEqual(config["GIT_CONFIG_VALUE_0"], "${{ github.workspace }}")
+        self.assertEqual(config["GIT_CONFIG_VALUE_1"], "${{ github.workspace }}/.ci/hermes-agent")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            host = workspace / ".ci/hermes-agent"
+            unrelated = Path(tmp) / "unrelated"
+            isolated_home = Path(tmp) / "home"
+            isolated_home.mkdir()
+            env = {
+                key: value for key, value in os.environ.items() if not key.startswith("GIT_CONFIG")
+            }
+            env.update(
+                HOME=str(isolated_home),
+                GIT_CONFIG_NOSYSTEM="1",
+                GIT_CONFIG_GLOBAL=os.devnull,
+                GIT_TEST_ASSUME_DIFFERENT_OWNER="1",
+            )
+            for repository in (workspace, host, unrelated):
+                subprocess.run(["git", "init", "-q", str(repository)], env=env, check=True)
+            command = ["git", "rev-parse", "--show-toplevel"]
+            rejected = subprocess.run(
+                command, cwd=workspace, env=env, text=True, capture_output=True
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("dubious ownership", rejected.stderr)
+            env.update(
+                {
+                    key: value.strip("'").replace("${{ github.workspace }}", str(workspace))
+                    for key, value in config.items()
+                }
+            )
+            for repository in (workspace, host):
+                result = subprocess.run(
+                    command, cwd=repository, env=env, text=True, capture_output=True
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(Path(result.stdout.strip()).resolve(), repository.resolve())
+            result = subprocess.run(command, cwd=unrelated, env=env, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("dubious ownership", result.stderr)
+
     @staticmethod
     def workflow_jobs(workflow):
         text = (ROOT / ".github/workflows" / workflow).read_text().split("\njobs:\n", 1)[1]
