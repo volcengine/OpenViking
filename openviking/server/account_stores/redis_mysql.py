@@ -30,6 +30,10 @@ from openviking.server.account_stores.redis_client import (
     RedisClientHandle,
     create_redis_client,
 )
+from openviking.server.account_stores.redis_runtime import (
+    get_shared_redis_runtime,
+    wait_redis_cleanup,
+)
 from openviking_cli.exceptions import InvalidArgumentError, UnavailableError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.config_utils import normalize_service_name
@@ -255,15 +259,62 @@ class RedisMySQLAccountStore(AccountStore):
         self._mysql_fallback_admission = threading.BoundedSemaphore(fallback_concurrency * 2)
         self._index_ttl_seconds = self._ttl_seconds + self._lock_ttl_seconds
         self._service_name = normalized_service_name
-        self._redis = redis_client
+        self._provided_redis = redis_client
+        self._redis: Any | None = None
         self._redis_config = redis_values
         self._redis_handle: RedisClientHandle | None = None
         self._owns_redis = redis_client is None
+        self._redis_runtime = get_shared_redis_runtime()
+        self._redis_lease = False
+        self._redis_lifecycle_lock: tuple[asyncio.AbstractEventLoop, asyncio.Lock] | None = None
 
     async def load(self) -> None:
-        await self._mysql.load()
+        await self._run_lifecycle(self._load_store)
+
+    async def close(self) -> None:
+        await wait_redis_cleanup(self._run_lifecycle(self._close_store))
+
+    async def _run_lifecycle(self, operation: Callable[[], Awaitable[None]]) -> None:
+        async def invoke() -> None:
+            loop = asyncio.get_running_loop()
+            lifecycle = self._redis_lifecycle_lock
+            if lifecycle is None or lifecycle[0] is not loop:
+                lifecycle = (loop, asyncio.Lock())
+                self._redis_lifecycle_lock = lifecycle
+            async with lifecycle[1]:
+                await operation()
+
+        await self._redis_runtime.run(invoke)
+
+    async def _load_store(self) -> None:
         try:
-            if self._redis is None:
+            await self._mysql.load()
+            if not self._redis_lease:
+                # Both steps run on the Redis loop without a cancellation point.
+                await self._redis_runtime.acquire()
+                self._redis_lease = True
+            await self._load_redis()
+        except BaseException:
+            # Keep the lifecycle lock until failed-load cleanup has completed.
+            await wait_redis_cleanup(self._close_store())
+            raise
+
+    async def _close_store(self) -> None:
+        try:
+            if self._redis_lease:
+                try:
+                    await self._close_redis()
+                finally:
+                    self._redis_lease = False
+                    await self._redis_runtime.release()
+        finally:
+            await self._mysql.close()
+
+    async def _load_redis(self) -> None:
+        if self._redis is None:
+            if self._provided_redis is not None:
+                self._redis = self._provided_redis
+            else:
                 try:
                     self._redis_handle = create_redis_client(self._redis_config)
                 except ImportError:
@@ -271,19 +322,22 @@ class RedisMySQLAccountStore(AccountStore):
                         "Redis MySQL account storage requires openviking[redis-mysql]"
                     ) from None
                 self._redis = self._redis_handle.client
-            await self._redis.ping()
-        except BaseException:
-            await self.close()
-            raise
+        await self._redis.ping()
 
-    async def close(self) -> None:
+    async def _close_redis(self) -> None:
         try:
             if self._redis_handle is not None and self._owns_redis:
                 await self._redis_handle.close()
         finally:
             self._redis = None
             self._redis_handle = None
-            await self._mysql.close()
+
+    async def _redis_call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        async def invoke() -> Any:
+            assert self._redis is not None
+            return await getattr(self._redis, method)(*args, **kwargs)
+
+        return await self._redis_runtime.run(invoke)
 
     def _account_tag(self, account_id: str) -> str:
         return _key_part(f"{self._service_name}\0{account_id}")
@@ -331,9 +385,8 @@ class RedisMySQLAccountStore(AccountStore):
         )
 
     async def _delete(self, *keys: str) -> None:
-        assert self._redis is not None
         if keys:
-            await self._redis.delete(*keys)
+            await self._redis_call("delete", *keys)
 
     @asynccontextmanager
     async def _account_lock(self, account_id: str) -> AsyncIterator[str]:
@@ -343,7 +396,8 @@ class RedisMySQLAccountStore(AccountStore):
         deadline = time.monotonic() + self._lock_wait_seconds
         try:
             while True:
-                if await self._redis.set(
+                if await self._redis_call(
+                    "set",
                     key,
                     token,
                     nx=True,
@@ -365,7 +419,7 @@ class RedisMySQLAccountStore(AccountStore):
             yield token
         finally:
             try:
-                await self._redis.eval(_RELEASE_LOCK_SCRIPT, 1, key, token)
+                await self._redis_call("eval", _RELEASE_LOCK_SCRIPT, 1, key, token)
             except Exception:
                 logger.exception("Failed to release account cache lock")
 
@@ -382,8 +436,8 @@ class RedisMySQLAccountStore(AccountStore):
     async def _get_if_locked(
         self, account_id: str, token: str, key: str
     ) -> tuple[bool, dict[str, Any] | None]:
-        assert self._redis is not None
-        result = await self._redis.eval(
+        result = await self._redis_call(
+            "eval",
             _GET_IF_LOCKED_SCRIPT,
             2,
             self._lock_key(account_id),
@@ -408,8 +462,8 @@ class RedisMySQLAccountStore(AccountStore):
         *,
         index: bool = True,
     ) -> bool:
-        assert self._redis is not None
-        result = await self._redis.eval(
+        result = await self._redis_call(
+            "eval",
             _SET_IF_LOCKED_SCRIPT,
             3,
             self._lock_key(account_id),
@@ -450,7 +504,7 @@ class RedisMySQLAccountStore(AccountStore):
         loader: Callable[[], Awaitable[T]],
     ) -> T:
         try:
-            hit, value = self._read_nullable(_decode(await self._redis.get(key)))
+            hit, value = self._read_nullable(_decode(await self._redis_call("get", key)))
             if hit:
                 return value
         except Exception:
@@ -490,9 +544,9 @@ class RedisMySQLAccountStore(AccountStore):
         return await self._read_mysql_fallback(loader)
 
     async def _delete_and_unindex(self, account_id: str, *keys: str) -> None:
-        assert self._redis is not None
         if keys:
-            await self._redis.eval(
+            await self._redis_call(
+                "eval",
                 _DELETE_AND_UNINDEX_SCRIPT,
                 len(keys) + 1,
                 self._cache_keys_index_key(account_id),
@@ -506,20 +560,20 @@ class RedisMySQLAccountStore(AccountStore):
             logger.exception("Failed to invalidate Redis account cache")
 
     async def _prune_cache_index(self, account_id: str) -> None:
-        assert self._redis is not None
-        await self._redis.eval(
+        await self._redis_call(
+            "eval",
             _PRUNE_CACHE_INDEX_SCRIPT,
             1,
             self._cache_keys_index_key(account_id),
         )
 
     async def _clear_account_cache(self, account_id: str) -> None:
-        assert self._redis is not None
         index_key = self._cache_keys_index_key(account_id)
         try:
             await self._prune_cache_index(account_id)
             while True:
-                keys = await self._redis.zrange(
+                keys = await self._redis_call(
+                    "zrange",
                     index_key,
                     0,
                     _ACCOUNT_CACHE_CLEAR_BATCH_SIZE - 1,
@@ -602,7 +656,7 @@ class RedisMySQLAccountStore(AccountStore):
         api_key: str,
         user_id_hint: str | None,
     ) -> tuple[bool, tuple[str, str] | None]:
-        binding = _decode(await self._redis.get(self._binding_key(account_id, api_key)))
+        binding = _decode(await self._redis_call("get", self._binding_key(account_id, api_key)))
         hit, value = self._read_nullable(binding)
         if hit and value is None:
             return True, None
@@ -617,13 +671,13 @@ class RedisMySQLAccountStore(AccountStore):
             else:
                 if user_id_hint is None or user_id == user_id_hint:
                     current_account_fence = _decode(
-                        await self._redis.get(
-                            self._account_credential_fence_key(binding_account_id)
+                        await self._redis_call(
+                            "get", self._account_credential_fence_key(binding_account_id)
                         )
                     )
                     current_user_fence = _decode(
-                        await self._redis.get(
-                            self._user_credential_fence_key(binding_account_id, user_id)
+                        await self._redis_call(
+                            "get", self._user_credential_fence_key(binding_account_id, user_id)
                         )
                     )
                     if (
@@ -634,7 +688,10 @@ class RedisMySQLAccountStore(AccountStore):
                     ):
                         return True, (binding_account_id, user_id)
         negative = _decode(
-            await self._redis.get(self._negative_binding_key(account_id, api_key, user_id_hint))
+            await self._redis_call(
+                "get",
+                self._negative_binding_key(account_id, api_key, user_id_hint),
+            )
         )
         negative_hit, negative_value = self._read_nullable(negative)
         return (True, None) if negative_hit and negative_value is None else (False, None)
@@ -663,8 +720,8 @@ class RedisMySQLAccountStore(AccountStore):
         user_fence = secrets.token_urlsafe(18)
         account_fence_key = self._account_credential_fence_key(account_id)
         user_fence_key = self._user_credential_fence_key(account_id, user_id)
-        existing_account_fence = _decode(await self._redis.get(account_fence_key))
-        existing_user_fence = _decode(await self._redis.get(user_fence_key))
+        existing_account_fence = _decode(await self._redis_call("get", account_fence_key))
+        existing_user_fence = _decode(await self._redis_call("get", user_fence_key))
         if existing_account_fence is not None:
             account_fence = str(existing_account_fence.get("value", account_fence))
         elif not await self._set_if_locked(
