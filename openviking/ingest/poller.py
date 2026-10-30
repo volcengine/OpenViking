@@ -114,14 +114,16 @@ class IngestPoller:
 
         rec = self.store.get(name, ref.native_session_id)
         if appended or (rec and rec.needs_commit):
-            self._dirty[(name, ref.native_session_id)] = _Dirty(
-                name, cfg, source, ref, time.monotonic()
-            )
+            key = (name, ref.native_session_id)
+            # Recovered needs_commit state has no in-memory timer after a restart.
+            # Arm it once; unchanged polls must not keep postponing the idle commit.
+            if appended or key not in self._dirty:
+                self._dirty[key] = _Dirty(name, cfg, source, ref, time.monotonic())
             committed = await self.replayer.maybe_commit_on_threshold(
                 name, ref, cfg.commit.commit_token_threshold, cfg.commit.keep_recent_count
             )
             if committed:
-                self._dirty.pop((name, ref.native_session_id), None)
+                self._dirty.pop(key, None)
 
     async def _commit_idle(self) -> None:
         now = time.monotonic()
