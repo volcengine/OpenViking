@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import time
 from typing import Any
 
@@ -31,6 +32,95 @@ except ImportError:
     CallbackMessage = None  # type: ignore[assignment,misc]
     AckMessage = None  # type: ignore[assignment,misc]
     ChatbotMessage = None  # type: ignore[assignment,misc]
+
+
+_TABLE_SEPARATOR_CELL_RE = re.compile(r":?-{3,}:?")
+
+
+def _split_markdown_table_row(line: str) -> list[str]:
+    """Split one table row without treating escaped pipes as delimiters."""
+    cells: list[str] = []
+    cell_start = 0
+    backslash_count = 0
+    for index, character in enumerate(line):
+        if character == "\\":
+            backslash_count += 1
+            continue
+        if character == "|" and backslash_count % 2 == 0:
+            cells.append(line[cell_start:index])
+            cell_start = index + 1
+        backslash_count = 0
+    cells.append(line[cell_start:])
+
+    # Remove one optional border on each side. Additional empty edge cells are data.
+    if cells and not cells[0].strip():
+        cells.pop(0)
+    if cells and not cells[-1].strip():
+        cells.pop()
+    return [cell.strip() for cell in cells]
+
+
+def _is_markdown_table_separator(line: str, column_count: int) -> bool:
+    cells = _split_markdown_table_row(line)
+    return len(cells) == column_count and all(
+        _TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in cells
+    )
+
+
+def _adapt_markdown_for_dingtalk(text: str) -> str:
+    """Replace unsupported pipe tables with labeled Markdown blockquotes."""
+    lines = text.split("\n")
+    result: list[str] = []
+    index = 0
+    fence: str | None = None
+
+    while index < len(lines):
+        stripped = lines[index].lstrip()
+        fence_marker = stripped[:3]
+        if fence_marker in {"```", "~~~"}:
+            if fence is None:
+                fence = fence_marker
+            elif fence == fence_marker:
+                fence = None
+            result.append(lines[index])
+            index += 1
+            continue
+
+        if fence is not None or index + 2 >= len(lines):
+            result.append(lines[index])
+            index += 1
+            continue
+
+        headers = _split_markdown_table_row(lines[index])
+        if len(headers) < 2 or not _is_markdown_table_separator(lines[index + 1], len(headers)):
+            result.append(lines[index])
+            index += 1
+            continue
+
+        table_rows: list[list[str]] = []
+        row_index = index + 2
+        while row_index < len(lines):
+            cells = _split_markdown_table_row(lines[row_index])
+            if len(cells) != len(headers):
+                break
+            table_rows.append(cells)
+            row_index += 1
+
+        if not table_rows:
+            result.append(lines[index])
+            index += 1
+            continue
+
+        for row_number, cells in enumerate(table_rows):
+            if row_number:
+                result.append("")
+            result.extend(
+                f"> **{header}**: {cell}".rstrip()
+                for header, cell in zip(headers, cells, strict=True)
+            )
+        index = row_index
+
+    return "\n".join(result)
 
 
 class NanobotDingTalkHandler(CallbackHandler):
@@ -209,7 +299,7 @@ class DingTalkChannel(BaseChannel):
             "msgKey": "sampleMarkdown",
             "msgParam": json.dumps(
                 {
-                    "text": msg.content,
+                    "text": _adapt_markdown_for_dingtalk(msg.content),
                     "title": "Nanobot Reply",
                 }
             ),
