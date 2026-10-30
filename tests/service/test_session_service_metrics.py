@@ -86,6 +86,75 @@ async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
     assert debug.call_count == 1
 
 
+@pytest.mark.parametrize("session_count", [999, 1000, 1001, 10_000])
+@pytest.mark.asyncio
+async def test_sessions_returns_every_storage_page_in_recency_order(session_count):
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+    entries = [
+        {
+            "name": f"session-{index:05d}",
+            "isDir": True,
+            "modTime": f"2026-07-13T{session_count - index:05d}Z",
+        }
+        for index in range(session_count)
+    ]
+    offsets = []
+
+    async def _ls(uri, ctx, **kwargs):
+        assert uri == "viking://user/alice/sessions"
+        assert ctx == _make_ctx()
+        assert kwargs["node_limit"] == 1000
+        assert kwargs["sort_by"] == "mtime"
+        assert kwargs["sort_order"] == "desc"
+        offset = kwargs["offset"]
+        offsets.append(offset)
+        return entries[offset : offset + kwargs["node_limit"]]
+
+    service._viking_fs.ls = AsyncMock(side_effect=_ls)
+
+    result = await service.sessions(ctx)
+
+    assert [item["session_id"] for item in result] == [
+        f"session-{index:05d}" for index in range(session_count)
+    ]
+    assert offsets == list(range(0, session_count + 1, 1000))
+
+
+@pytest.mark.asyncio
+async def test_sessions_returns_empty_when_a_later_storage_page_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+    debug = Mock()
+    offsets = []
+
+    async def _ls(_uri, ctx, **kwargs):
+        assert ctx == _make_ctx()
+        offset = kwargs["offset"]
+        offsets.append(offset)
+        if offset:
+            raise RuntimeError("page 2 failed")
+        return [
+            {
+                "name": f"session-{index:04d}",
+                "isDir": True,
+                "modTime": f"2026-07-13T{1000 - index:04d}Z",
+            }
+            for index in range(1000)
+        ]
+
+    service._viking_fs.ls = AsyncMock(side_effect=_ls)
+    monkeypatch.setattr(session_service_module.logger, "debug", debug)
+
+    result = await service.sessions(ctx)
+
+    assert result == []
+    assert offsets == [0, 1000]
+    assert debug.call_count == 1
+
+
 @pytest.mark.asyncio
 async def test_sessions_uses_canonical_scope():
     service = SessionService(viking_fs=Mock())
@@ -93,7 +162,12 @@ async def test_sessions_uses_canonical_scope():
 
     async def _ls(uri, ctx, **kwargs):
         assert uri == "viking://user/alice/sessions"
-        assert kwargs == {"sort_by": "mtime", "sort_order": "desc"}
+        assert kwargs == {
+            "node_limit": 1000,
+            "sort_by": "mtime",
+            "sort_order": "desc",
+            "offset": 0,
+        }
         return [
             {"name": "duplicate", "isDir": True, "modTime": "2026-07-13T01:00:00Z"},
             {"name": "new-session", "isDir": True, "modTime": "2026-07-13T02:00:00Z"},
