@@ -126,7 +126,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
         return None
 
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid CLI config in {path}: {exc.msg}") from exc
 
