@@ -79,7 +79,7 @@ async def test_key_identity_supplies_groups_to_both_contexts(runtime, groups, mo
     key = await runtime.register_user("acme", "bob")
     for group in groups:
         await runtime.create_group("acme", group)
-        await runtime.add_group_member("acme", group, "bob")
+        await runtime.add_group_members("acme", group, ["bob"])
     request = await make_request(runtime, headers=[(b"x-openviking-user", b"spoof")])
     plugin = request.app.state.auth_plugin
     identity = await plugin.resolve_identity(
@@ -134,7 +134,7 @@ async def test_trusted_explicit_user_role_with_root_key(runtime):
 
 async def test_trusted_group_header_overrides_internal_group_lookup(runtime):
     await runtime.create_group("acme", "local-team")
-    await runtime.add_group_member("acme", "local-team", "alice")
+    await runtime.add_group_members("acme", "local-team", ["alice"])
     request = await make_request(
         runtime,
         "trusted",
@@ -154,7 +154,7 @@ async def test_trusted_group_header_overrides_internal_group_lookup(runtime):
 
 async def test_trusted_empty_group_header_falls_back_to_internal_group_lookup(runtime):
     await runtime.create_group("acme", "local-team")
-    await runtime.add_group_member("acme", "local-team", "alice")
+    await runtime.add_group_members("acme", "local-team", ["alice"])
     request = await make_request(
         runtime,
         "trusted",

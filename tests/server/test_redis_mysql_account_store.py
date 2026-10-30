@@ -164,7 +164,7 @@ async def test_mysql_snapshot_verifies_credentials_and_scopes_identity(backend, 
     }
     await mysql.create_user_with_api_key("acme", "bob", "admin", "bob-key")
     await mysql.create_group("acme", "team")
-    await mysql.add_group_member("acme", "team", "bob")
+    await mysql.add_group_members("acme", "team", ["bob"])
     assert (await mysql.get_auth_snapshot("bob-key"))["group_ids"] == ("team",)
     assert await mysql.get_auth_snapshot("bob-key", user_id_hint="alice") is None
     assert await mysql.get_auth_snapshot("bob-key", account_id_hint="other") is None
@@ -183,7 +183,7 @@ async def test_cached_snapshot_observes_role_groups_and_deletion(backend, user_i
     await snapshot(reader)
     await writer.set_role("acme", "alice", "admin")
     await writer.create_group("acme", "team")
-    await writer.add_group_member("acme", "team", "alice")
+    await writer.add_group_members("acme", "team", ["alice"])
     assert await snapshot(reader) == {
         "account_id": "acme",
         "user_id": "alice",
