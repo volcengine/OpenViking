@@ -78,6 +78,18 @@ class PlanTests(unittest.TestCase):
         self.assertTrue(result["sdk_python_changed"])
         self.assertFalse(result["api_changed"])
 
+    def test_marketplace_only_changes_run_plugin_contract_tests(self):
+        for path in (
+            ".claude-plugin/marketplace.json",
+            ".agents/plugins/marketplace.json",
+            "examples/.agents/plugins/marketplace.json",
+            "examples/.claude-plugin/marketplace.json",
+        ):
+            with self.subTest(path=path):
+                result = ci_plan.plan([path])
+                self.assertTrue(result["plugins_changed"])
+                self.assertFalse(result["deps_changed"])
+
     def test_unknown_path_and_mixed_pr_keep_api(self):
         self.assertTrue(ci_plan.plan(["new-runtime/file.py"])["api_changed"])
         result = ci_plan.plan(["sdk/python/client.py", "openviking/server/app.py"])

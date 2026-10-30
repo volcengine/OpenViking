@@ -28,7 +28,8 @@ def plan(paths, full=False):
     plugins = changed(
         r"^(examples/[^/]*(plugin|extension)[^/]*/|examples/memory-plugin-shared/|"
         r"agent-plugins/|\.github/scripts/.*(plugin|marketplace|installer)|"
-        r"\.github/workflows/pr\.yml)"
+        r"\.github/workflows/pr\.yml)|"
+        r"^(examples/)?(\.claude-plugin|\.agents/plugins)/marketplace\.json$"
     )
     # Keep unfamiliar paths on the safe side: only known independent trees
     # bypass API tests. Added/removed/renamed paths are all included in the diff.
