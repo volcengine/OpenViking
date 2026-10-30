@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openviking.core.skill_loader import SkillLoader
+from openviking.core.skill_loader import SkillLoader, validate_skill_format
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.compressor_v3 import _v3_extraction_response
@@ -499,4 +499,81 @@ def test_skill_loader_preserves_metadata():
 
     assert SkillLoader.parse(skill_md)["metadata"] == {
         "vikingbot": {"requires": {"bins": ["lark-cli"]}}
+    }
+
+
+def test_skill_loader_normalizes_yaml_pairs_to_safe_sequences():
+    skill_md = (
+        "---\nname: yaml-boundary\ndescription: Validate metadata\n"
+        "metadata:\n  settings: !!pairs\n    - api_key: synthetic-marker\n"
+        "    - theme: dark\n---\nBody.\n"
+    )
+
+    parsed = SkillLoader.parse(skill_md)
+    emitted = SkillLoader.to_skill_md(parsed)
+    reparsed = SkillLoader.parse(emitted)
+
+    validation = validate_skill_format(skill_md, strict=True)
+    assert validation["valid"] is True
+    assert "!!python/" not in emitted
+    assert reparsed["metadata"] == {
+        "settings": [["api_key", "synthetic-marker"], ["theme", "dark"]]
+    }
+
+
+def test_skill_loader_rejects_cyclic_metadata_alias():
+    skill_md = """---
+name: yaml-boundary
+description: Validate metadata
+metadata: &node
+  safe: ok
+  loop: *node
+---
+Body.
+"""
+
+    with pytest.raises(ValueError, match="cyclic alias at 'metadata.loop'"):
+        SkillLoader.parse(skill_md)
+
+    validation = validate_skill_format(skill_md, strict=True)
+    assert validation["valid"] is False
+    assert "cyclic alias at 'metadata.loop'" in validation["errors"][0]["message"]
+
+
+def test_skill_loader_to_skill_md_rejects_cyclic_structured_metadata():
+    metadata = {"safe": "ok"}
+    metadata["loop"] = metadata
+
+    with pytest.raises(ValueError, match="cyclic alias at 'metadata.loop'"):
+        SkillLoader.to_skill_md(
+            {
+                "name": "yaml-boundary",
+                "description": "Validate metadata",
+                "metadata": metadata,
+            }
+        )
+
+
+def test_skill_loader_allows_shared_acyclic_metadata_aliases():
+    skill_md = """---
+name: shared-metadata
+description: Preserve shared metadata
+metadata:
+  primary: &shared
+    voice: nova
+  secondary: *shared
+---
+Body.
+"""
+
+    parsed = SkillLoader.parse(skill_md)
+    assert parsed["metadata"]["primary"] is parsed["metadata"]["secondary"]
+
+    emitted = SkillLoader.to_skill_md(parsed)
+    reparsed = SkillLoader.parse(emitted)
+
+    assert "!!python/" not in emitted
+    assert reparsed["metadata"] == {
+        "primary": {"voice": "nova"},
+        "secondary": {"voice": "nova"},
     }
