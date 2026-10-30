@@ -719,6 +719,21 @@ export class OpenVikingClient {
       body: mergeExtra(body, options.extra),
     });
   }
+  /** Index uri; use fallbackAbstract only when both summaries are absent. */
+  ensureDirectoryIndex(
+    uri: string,
+    fallbackAbstract: string,
+    options: WaitOptions = {},
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/content/ensure_directory_index", {
+      body: compact({
+        uri: normalizeURI(uri),
+        fallback_abstract: fallbackAbstract,
+        wait: options.wait ?? true,
+        telemetry: options.telemetry,
+      }),
+    });
+  }
   /** Set retrieval tags. */
   setTags(
     uri: string,

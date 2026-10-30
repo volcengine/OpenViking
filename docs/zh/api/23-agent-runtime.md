@@ -18,11 +18,9 @@ Agent Runtime Server 负责执行 Agent 任务，当前支持 Compile。应用�
 | `to` | string | 是 | - | 目标 Resource 或 Memory 目录，或受支持的 Skill namespace |
 | `skill` | string | 是 | - | Skill 目录或其 `SKILL.md` URI |
 | `instruction` | string | 否 | Skill 驱动的默认值 | 本次 Compile 的补充指令 |
-| `args` | object | 否 | - | 执行端扩展参数；`model_name` 可传模型 Endpoint ID |
+| `args` | object | 否 | - | 执行端扩展参数和 Compile 调度控制字段 |
 
-`args` 整体可省略，模型 Endpoint ID 也不是顶层字段。需要指定模型时使用 `args.model_name`；不传时由执行端使用其默认模型配置。
-
-下面的模型选择示例要求执行端支持 `args.model_name`。使用内置 VikingBot 时，省略 `args` 和 CLI 的 `--args`，它不接受非空扩展参数。Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时需 `await compile()`。
+调度控制字段 `auto_update` 和 `update_schedule` 由 OpenViking 处理。Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时需 `await compile()`。
 
 **HTTP API**
 
@@ -39,12 +37,11 @@ curl -X POST http://localhost:1933/api/v1/compile \
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://user/default/skills/research-compiler",
-    "instruction": "追踪历史进展，并保留支撑证据。",
-    "args": {"model_name": "your-model-endpoint-id"}
+    "instruction": "追踪历史进展，并保留支撑证据。"
   }'
 ```
 
-接口返回 `202 Accepted` 和 OV TaskRecord：
+未传调度控制字段时，接口立即将 Compile 任务入队，并返回 `202 Accepted` 和 OV TaskRecord：
 
 ```json
 {
@@ -59,6 +56,22 @@ curl -X POST http://localhost:1933/api/v1/compile \
 }
 ```
 
+当 `args` 显式包含 `auto_update` 或 `update_schedule` 时，请求只保存目标配置并注册或移除调度。接口返回 `200 OK`，结果包含已保存配置和 `next_run_at`，不包含 `task_id`；到下一计划时间才创建 Compile 任务并调用 Runtime。例如：
+
+```json
+{
+  "from": ["viking://resources/research"],
+  "to": "viking://resources/research-wiki",
+  "skill": "viking://user/default/skills/research-compiler",
+  "args": {
+    "auto_update": true,
+    "update_schedule": {"frequency": "daily", "hour": 0, "minute": 0}
+  }
+}
+```
+
+传入非空 `update_schedule` 时会开启自动更新，除非显式指定 `auto_update=false`。关闭后返回 `next_run_at: null`。不传这两个调度控制字段时仍立即编译，即使目标已有定时策略。计划按 `to` 更新，不会创建供 `GET /api/v1/compile/submissions/{key}` 查询的任务提交记录。
+
 **CLI**
 
 ```bash
@@ -66,11 +79,10 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://user/default/skills/research-compiler \
-  --instruction "追踪历史进展，并保留支撑证据。" \
-  --args '{"model_name":"your-model-endpoint-id"}'
+  --instruction "追踪历史进展，并保留支撑证据。"
 ```
 
-`--args` 必须是 JSON object。命令提交后立即返回 Task ID。
+`--args` 必须是 JSON object。立即编译返回 Task ID；保存计划返回下次执行时间。
 
 **SDK**
 
@@ -83,7 +95,6 @@ task = client.compile(
     ["viking://resources/research"],
     "viking://resources/research-wiki",
     "viking://user/default/skills/research-compiler",
-    {"args": {"model_name": "your-model-endpoint-id"}},
 )
 ```
 
@@ -92,7 +103,6 @@ const task = await client.compile(
   ["viking://resources/research"],
   "viking://resources/research-wiki",
   "viking://user/default/skills/research-compiler",
-  { args: { model_name: "your-model-endpoint-id" } },
 );
 ```
 
@@ -102,9 +112,7 @@ task, err := client.Compile(
     []string{"viking://resources/research"},
     "viking://resources/research-wiki",
     "viking://user/default/skills/research-compiler",
-    &openviking.CompileOptions{
-        Args: map[string]any{"model_name": "your-model-endpoint-id"},
-    },
+    nil,
 )
 ```
 
@@ -112,23 +120,26 @@ task, err := client.Compile(
 
 ### 目标配置与操作历史
 
-这些接口使用当前账号和认证上下文。`to` 为已注册目标的 `viking://` URI。读取或更新单个目标需要写权限；目标列表仅返回有访问权限的目标。
+这些接口使用当前账号和认证上下文。`to` 为已注册目标的 `viking://` URI。查询配置、操作历史、操作详情或产出需要读权限；更新配置需要写权限。目标列表仅返回有访问权限的目标。
 
 | HTTP API | 说明与返回结果（`status: "ok"`） |
 |----------|--------------------------|
 | `GET /api/v1/compile/config?to={to}` | `result` 包含目标配置和运行状态 |
 | `POST /api/v1/compile/config/update` | 请求体必填 `to`，指定要更新配置的已注册编译产物目录；`result` 包含更新后的配置和运行状态 |
-| `GET /api/v1/compile/configs` | 可选查询参数 `limit`（1–100，默认 20）和 `cursor`；`result.targets` 按 `target_id` 升序返回本页可见目标摘要；将 `result.next_cursor` 原样作为下一页的 `cursor`，末页为 `null` |
+| `GET /api/v1/compile/configs` | 可选查询参数 `limit`（1–100，默认 20）和 `cursor`；`result.targets` 按 `sha256(to)` 升序返回本页有读取权限的 active 目标摘要，已删除目标在分页前排除；`result.next_cursor` 为本页最后一个目标 URI，原样作为下一页的 `cursor`，从其哈希之后继续读取，末页为 `null` |
 | `GET /api/v1/compile/operations?to={to}` | `result.operations` 按时间倒序返回操作记录；`result.next_cursor` 用于翻页 |
+| `GET /api/v1/compile/operations/{operation_id}?to={to}` | `result` 返回单条操作详情，字段与操作列表中的记录一致，包含 `params` 和公开的 `meta`，不包含私有执行检查点 |
 | `GET /api/v1/compile/operations/{operation_id}/outputs?to={to}` | `result.outputs` 按 URI 排序返回产出文件及冻结版本引用；`result.next_cursor` 用于翻页 |
 
 更新请求体必填 `to`、`from`（非空来源 URI 数组）、`skill` 和 `auto_update`（布尔值）。`auto_update=true` 时必须提供有效的 `update_schedule`；`auto_update=false` 时可省略或传 `null`，已保存的规则会清空，返回值为 `null`。新目标不设置默认规则，关闭后重新开启需要提供规则。可选 `instruction` 省略时保留已保存的值，传 `null` 或空字符串时清空。更新配置不提交 Compile 任务。
 
 `update_schedule` 必填 `frequency`（`daily` 或 `weekly`）。可选 `hour`（0–23）和 `minute`（0–59）默认均为 0。每周计划还接受 `weekday`（1 为周一，7 为周日，默认 1）。计划使用 `Asia/Shanghai` 时区。
 
-定时自动更新需要显式配置 `compile_api.scheduler_enabled=true`（默认 `false`），并提供有效的 `expiry.service_name` 和 `expiry.redis` 配置。`compile_api.scheduler_backend` 仅接受 `redis`（默认值），配置 `local` 无效。调度关闭时开启 `auto_update` 会返回 `COMPILE_SCHEDULER_DISABLED`。手动增量编译和版本管理不依赖 Redis。
+定时自动更新需要显式配置 `compile_api.scheduler_enabled=true`（默认 `false`），并提供有效的 `expiry.service_name` 和 `expiry.redis` 配置。`compile_api.scheduler_backend` 仅接受 `redis`（默认值），配置 `local` 无效。定时请求会同步校验：调度未启用或缺少配置时返回 HTTP 412（`COMPILE_SCHEDULER_DISABLED`），Redis 注册不可用时返回 HTTP 503。保存计划失败不会提交 Compile 任务。编译失败本身不会取消后续定时执行，包括首次编译失败。手动增量编译和版本管理不依赖 Redis。
 
-两个历史接口均接受可选查询参数 `limit`（1–100，默认 20）和 `cursor`。翻页时原样传入返回的 `next_cursor`，其为 `null` 时表示最后一页。`operation_id` 长度为 1–128 个字符，以字母或数字开头，其余字符允许字母、数字、`:`、`.`、`_` 和 `-`。目标删除后仍可查询操作记录。目标、操作或产出清单不存在时返回 `404`。产出项的 `version_id` 或 `snapshot_id` 为 `null` 时，表示对应引用不可用。
+操作列表和产出列表接口均接受可选查询参数 `limit`（1–100，默认 20）和 `cursor`。翻页时原样传入返回的 `next_cursor`，其为 `null` 时表示最后一页。
+
+`operation_id` 包含固定宽度的创建时间前缀和唯一后缀，操作历史按该 ID 倒序分页；游标对应的记录被清理后仍可继续翻页。Compile 操作通过 `meta.task_id` 关联执行任务，`operation_id` 与 `task_id` 不同；任务查询和取消使用 `task_id`，操作详情和产出查询使用操作列表返回的 `operation_id`。
 
 ### 检查 Compile 可用性
 
@@ -200,6 +211,7 @@ ov task status cmp_01abc
 
 任务进入终态后，响应还会包含结果或错误。
 
+
 ### 取消任务
 
 ```http
@@ -210,7 +222,7 @@ POST /api/v1/tasks/{task_id}/cancel
 ov task cancel cmp_01abc
 ```
 
-任务会先进入 `cancelling`，待当前进程内工作和清理完成后进入 `cancelled`；已经完成的写入不会回滚。重复取消已经 `cancelled` 的任务是幂等的。
+运行中的 Compile 任务会先进入 `cancelling`，待执行端确认取消并完成清理后进入 `cancelled`。产物快照提交前取消时，回滚将 `to` 子树的文件恢复到该次 Compile 开始执行时的快照，期间其他操作及子任务在该范围内的修改也会撤销；`to` 范围外的路径不补偿。产物快照提交后，索引和标签收尾阶段的失败或取消会保留已提交产物，此时索引或标签可能尚未完整。重复取消已经 `cancelled` 的任务是幂等的。
 
 | Status | 常见 Stage |
 |--------|------------|
@@ -251,13 +263,12 @@ Idempotency-Key: <OV task_id>
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://agent/skills/wiki",
-    "instruction": "整理成知识库",
-    "args": {"model_name": "your-model-endpoint-id"}
+    "instruction": "整理成知识库"
   }
 }
 ```
 
-`task_type` 和 `payload` 均必填。当前只支持 `task_type="compile"`；`payload` 使用本页创建任务的字段及校验规则，`instruction`、`args` 可省略。内置 VikingBot 不支持非空 `args`。不支持的类型或无效的 payload 返回 `4xx`，不创建执行任务。
+`task_type` 和 `payload` 均必填。当前只支持 `task_type="compile"`；`payload` 使用本页创建任务的字段及校验规则，`instruction`、`args` 可省略。不支持的类型或无效的 payload 返回 `4xx`，不创建执行任务。
 
 OV 通过 `X-API-Key` 传递当前用户的 OV API Key；配置 `compile_api.gateway_token` 时还会发送 `X-Gateway-Token`。这些凭证不能出现在公开任务结果中。
 

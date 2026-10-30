@@ -4,8 +4,9 @@
 Jev (TypeSafe System One) Rerank API Client.
 
 Choice compares candidates in one question and returns relative probabilities.
-Noul returns a yes probability per document. Candidates share state by default;
-set candidates_visible=False to keep each candidate in its own question.
+Noul returns a yes probability per document. Its candidates are isolated by default;
+set candidates_visible=True to share them in state. Choice ignores this Noul-only
+option and always compares the full candidate set.
 
 Speaks only the TypeSafe System One protocol. Vercel AI Gateway exposes a
 TypeSafe-compatible endpoint (https://ai-gateway.vercel.sh/typesafe/v1/systemone),
@@ -47,7 +48,7 @@ def _validate_score(score: object) -> float:
 class NoulRerankMode:
     """One relevance question per document, with optional candidate isolation."""
 
-    def __init__(self, *, candidates_visible: bool = True):
+    def __init__(self, *, candidates_visible: bool = False):
         self.candidates_visible = candidates_visible
 
     def build_questions(self, documents: List[str]) -> Dict[str, dict]:
@@ -135,13 +136,11 @@ class JevRerankClient(RerankBase):
         log_payloads: bool = False,
         mode: str = MODE_NOUL,
         extra_headers: Optional[Dict[str, str]] = None,
-        candidates_visible: bool = True,
+        candidates_visible: bool = False,
     ):
         super().__init__()
         if mode not in (MODE_NOUL, MODE_CHOICE):
             raise ValueError(f"Unknown Jev rerank mode: {mode!r}")
-        if mode == MODE_CHOICE and not candidates_visible:
-            raise ValueError("Jev choice rerank requires candidates_visible=True")
         self.mode = mode
         self.candidates_visible = candidates_visible
         self._strategy: _RerankMode = (
@@ -180,7 +179,8 @@ class JevRerankClient(RerankBase):
 
         try:
             state: dict[str, object] = {"query": query}
-            if self.candidates_visible:
+            # Only Noul uses the visibility option; Choice always compares all candidates.
+            if self.mode == MODE_CHOICE or self.candidates_visible:
                 state["candidate_documents"] = documents
             body = {
                 "model": self.model_name,

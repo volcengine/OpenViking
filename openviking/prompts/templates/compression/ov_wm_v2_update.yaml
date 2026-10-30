@@ -29,7 +29,6 @@ variables:
     description: "Optional instructions for checkpoint summaries produced by the same call."
     required: false
     default: ""
-
 template: |
   You are the Working Memory maintainer for a long-running session. Produce a
   per-section decision via the `update_working_memory` tool{% if checkpoint_instructions %}
@@ -63,6 +62,11 @@ template: |
   consolidated into patterns — "Tim competed in 5 swimming contests" is better
   than 5 separate entries. The test: can a new assistant answer the user's
   likely follow-up questions from this WM alone?
+
+  <new_content> is grouped into <turn created_at="YYYY-MM-DD"> blocks. Interpret
+  relative time expressions such as "today", "yesterday", and "last week" using
+  the created_at of the turn that contains that statement. For temporal facts,
+  record the event date, not the compression/update date.
 
   Before you choose an op for a section, mentally list the CONCRETE FACTS it
   currently holds:

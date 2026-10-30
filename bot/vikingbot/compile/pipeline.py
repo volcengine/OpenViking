@@ -163,11 +163,8 @@ class Pipeline:
                     "model_settings": self.model.identity,
                     "time": utc_now(),
                     "skill": self.request.skill,
-                    "wiki_links": self.request.wiki_links,
                 }
                 await self.files.put("runtime", runtime)
-            if runtime.get("wiki_links", False) != self.request.wiki_links:
-                raise ValueError("Wiki link setting differs from the task runtime")
             prompt_runtime = {
                 key: value for key, value in runtime.items() if key in {"time", "skill"}
             }

@@ -8,7 +8,7 @@
 | 跨会话复用记忆 | [会话与记忆模型](../concepts/08-session.md) → [会话 API](../api/05-sessions.md) → [记忆 API](../api/16-memory.md) | 提交会话并确认后台任务完成，再检查记忆内容和归属 |
 | 让 Agent 复用技能 | [技能 API](../api/04-skills.md) → [隐私模型](../concepts/13-privacy.md) | 检查安装后的技能内容、可见范围和调用方式 |
 | 规则校验（Beta） | [规则概念](../concepts/17-rule-scenarios.md) → [编译、召回与核验](./02-rule-validation.md) → [规则 API](../api/26-rules.md) | 检查编译与索引任务、原文证据，再由 Agent 逐条核验适用条件、例外及计划动作 |
-| 从已有资料产出 Wiki、图谱或日报 | [上下文编译](../context-compilation/01-overview.md) → 选择产物教程 | 检查任务状态、产物目录，以及产物与输入来源的对应关系 |
+| 从已有资料产出 Wiki、图谱或日报 | [上下文编译](../context-compilation/01-overview.md) → [Wiki](../context-compilation/02-llm-wiki.md) / [知识图谱](../context-compilation/03-knowledge-graph.md) / [日报](../context-compilation/04-daily-report.md) | 检查任务状态、产物目录，以及产物与输入来源的对应关系 |
 | 同步或迁移已有上下文 | [项目资源同步](../guides/18-openviking-assets.md)、[OVPack](../guides/09-ovpack.md)或[版本恢复](../guides/15-snapshot.md) | 按对应指南核对同步状态、导入结果或恢复后的内容 |
 
 ## 先验证检索，再接入应用

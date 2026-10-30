@@ -3204,7 +3204,6 @@ class Session:
             language_conversation, config=get_openviking_config()
         )
         checkpoint_instructions = wm.checkpoint_prompt_instructions(len(checkpoint_requests))
-
         vlm = await self._get_vlm_config()
         if not (vlm and vlm.is_available()):
             if checkpoint_requests:

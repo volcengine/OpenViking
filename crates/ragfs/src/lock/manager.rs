@@ -21,9 +21,9 @@ use super::path::normalize_logical_path;
 use super::provider::{AcquisitionChange, AtomicAcquisition, PathLockHandleMode, PathLockProvider};
 use super::resolver::{LockPathResolver, ResolvedExactPaths};
 use super::types::{
-    BorrowedPathLockLease, LockToken, OwnedPathLockLease, PathLockConflict, PathLockError,
-    PathLockHandoffRef, PathLockKind, PathLockLease, PathLockObserveSnapshot, PathLockRequest,
-    PathLockResult,
+    BorrowedPathLockLease, HandoffRecoveryReason, LockToken, OwnedPathLockLease, PathLockConflict,
+    PathLockError, PathLockHandoffRef, PathLockKind, PathLockLease, PathLockObserveSnapshot,
+    PathLockRequest, PathLockResult,
 };
 
 /// Configuration for the PathLockManager.
@@ -1891,6 +1891,7 @@ impl PathLockManager {
     pub fn to_handoff(&self, lease: &OwnedPathLockLease) -> PathLockHandoffRef {
         PathLockHandoffRef {
             lease_ref: Some(lease.lease.lease_ref.clone()),
+            handle_mode: Some(self.provider.handle_mode()),
             owner_id: lease.lease.owner_id.clone(),
             lock_paths: lease.lease.lock_paths.clone(),
             covered_paths: lease.lease.covered_paths.clone(),
@@ -2001,15 +2002,53 @@ impl PathLockManager {
 
         let legacy_handoff = handoff.covered_paths.is_empty();
         let handle_mode = self.provider.handle_mode();
-        if handle_mode == PathLockHandleMode::LogicalPath && legacy_handoff {
-            return Err(PathLockError::HandoffFailed(
-                "logical-path provider handoff requires covered_paths".to_string(),
-            ));
-        }
         if !legacy_handoff && handoff.covered_paths.len() != handoff.lock_paths.len() {
             return Err(PathLockError::InvalidRequest(
                 "handoff lock_paths and covered_paths must have equal lengths".to_string(),
             ));
+        }
+        // Shapes classify historic payloads only. Same-provider adoption still
+        // validates resolver mappings and live tokens below; migration acquires
+        // fresh coverage through the consumer and never authorizes old handles.
+        let source_mode = match handoff.handle_mode {
+            Some(mode) => mode,
+            None => {
+                let is_file = |lp: &str| {
+                    let name = lp.rsplit('/').next().unwrap_or("");
+                    name == PATH_LOCK_FILE || name.starts_with(EXACT_LOCK_FILE_PREFIX)
+                };
+                if handoff.lock_paths.iter().all(|lp| is_file(lp)) {
+                    PathLockHandleMode::LockPath
+                } else if handoff.lock_paths.iter().any(|lp| is_file(lp)) {
+                    return Err(PathLockError::InvalidRequest(
+                        "handoff mixes logical and lock-file handles".to_string(),
+                    ));
+                } else if legacy_handoff {
+                    return Err(PathLockError::HandoffRecoveryRequired {
+                        reason: HandoffRecoveryReason::CoverageMissing,
+                    });
+                } else if handoff.lock_paths.iter().zip(&handoff.covered_paths).all(
+                    |(lp, request)| {
+                        normalize_logical_path(&request.path).is_ok_and(|path| lp == path)
+                    },
+                ) {
+                    PathLockHandleMode::LogicalPath
+                } else {
+                    return Err(PathLockError::InvalidRequest(
+                        "cannot infer handoff handle representation".to_string(),
+                    ));
+                }
+            }
+        };
+        if source_mode != handle_mode {
+            return Err(PathLockError::HandoffRecoveryRequired {
+                reason: HandoffRecoveryReason::ProviderChanged,
+            });
+        }
+        if handle_mode == PathLockHandleMode::LogicalPath && legacy_handoff {
+            return Err(PathLockError::HandoffRecoveryRequired {
+                reason: HandoffRecoveryReason::CoverageMissing,
+            });
         }
         let mut expected_kinds = Vec::with_capacity(handoff.lock_paths.len());
 
@@ -2042,10 +2081,8 @@ impl PathLockManager {
                     self.provider
                         .read_token(lp)
                         .await?
-                        .ok_or_else(|| {
-                            PathLockError::HandoffFailed(format!(
-                                "lock path '{lp}' no longer exists"
-                            ))
+                        .ok_or_else(|| PathLockError::HandoffRecoveryRequired {
+                            reason: HandoffRecoveryReason::TokenUnavailable,
                         })?
                         .lock_type
                 }
@@ -2115,11 +2152,17 @@ impl PathLockManager {
                         && token.lock_type == *expected_kind
                         && now_ns.saturating_sub(token.time_ns)
                             < (self.lock_expire_ns() as f64 * LEASE_VALIDITY_RATIO) as u128 => {}
-                _ => {
-                    return Err(PathLockError::HandoffFailed(format!(
-                        "lock path '{lock_path}' is no longer owned by '{}'",
-                        handoff.owner_id
+                Some(token)
+                    if token.owner_id == handoff.owner_id && token.lock_type != *expected_kind =>
+                {
+                    return Err(PathLockError::InvalidRequest(format!(
+                        "handoff kind does not match token at '{lock_path}'"
                     )));
+                }
+                _ => {
+                    return Err(PathLockError::HandoffRecoveryRequired {
+                        reason: HandoffRecoveryReason::TokenUnavailable,
+                    });
                 }
             }
             match self
@@ -2129,10 +2172,9 @@ impl PathLockManager {
             {
                 Ok(true) => {}
                 Ok(false) => {
-                    return Err(PathLockError::HandoffFailed(format!(
-                        "lock path '{lock_path}' changed while adopting owner '{}'",
-                        handoff.owner_id
-                    )));
+                    return Err(PathLockError::HandoffRecoveryRequired {
+                        reason: HandoffRecoveryReason::TokenUnavailable,
+                    });
                 }
                 Err(error) => return Err(error),
             }
@@ -3334,6 +3376,7 @@ mod tests {
         // Historic payload: no lease_ref, no covered_paths.
         let legacy = PathLockHandoffRef {
             lease_ref: None,
+            handle_mode: None,
             owner_id: lease.lease.owner_id.clone(),
             lock_paths: lease.lease.lock_paths.clone(),
             covered_paths: Vec::new(),
@@ -3359,6 +3402,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_adopt_rejects_forged_kind_without_recovery() {
+        let (producer, consumer) = make_filesystem_managers().await;
+        let lease = producer
+            .acquire_exact("/data/a", Duration::ZERO, None)
+            .await
+            .unwrap();
+        let mut handoff = producer.to_handoff(&lease);
+        producer.handoff(&lease).await.unwrap();
+        handoff.covered_paths[0].kind = PathLockKind::Tree;
+        assert!(matches!(
+            consumer.adopt(&handoff).await,
+            Err(PathLockError::InvalidRequest(_))
+        ));
+        // Rejection does not change the original Exact token or consume the handoff.
+        let adopted = consumer.adopt(&producer.to_handoff(&lease)).await.unwrap();
+        assert_eq!(adopted.lease.covered_paths[0].kind, PathLockKind::Exact);
+        consumer.release(&adopted).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn adopt_accepts_legacy_tree_path_with_covered_paths() {
         let mgr = make_manager().await;
         let owner_id = "legacy-covered-owner".to_string();
@@ -3376,6 +3439,7 @@ mod tests {
             .unwrap();
         let handoff = PathLockHandoffRef {
             lease_ref: Some("legacy-covered-lease".to_string()),
+            handle_mode: None,
             owner_id,
             lock_paths: vec![lock_path],
             covered_paths: vec![PathLockRequest {

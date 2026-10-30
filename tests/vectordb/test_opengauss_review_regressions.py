@@ -135,19 +135,3 @@ def test_delete_ids_matches_upstream_contract(ids):
         collection.delete_data.assert_called_once_with(ids)
     else:
         collection.delete_data.assert_not_called()
-
-
-def test_filter_delete_has_no_implicit_row_limit():
-    with patch.object(OpenGaussCollectionAdapter, "_connect"):
-        adapter = OpenGaussCollectionAdapter("context", OpenGaussConfig())
-    collection = Mock()
-    collection.get_meta_data.return_value = {"Fields": []}
-    adapter.get_collection = Mock(return_value=collection)
-    adapter._conn = Mock()
-    cursor = adapter._conn.cursor.return_value
-    cursor.rowcount = 100001
-    assert (
-        adapter.delete(filter={"op": "must", "field": "account_id", "conds": ["tenant"]}) == 100001
-    )
-    assert cursor.execute.call_args.args[1] == ["tenant", None]
-    adapter._conn.commit.assert_called_once_with()

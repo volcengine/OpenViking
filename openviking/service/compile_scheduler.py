@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
@@ -19,7 +20,12 @@ from zoneinfo import ZoneInfo
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import CompileStore, task_ctx
-from openviking_cli.exceptions import ConflictError, FailedPreconditionError, NotFoundError
+from openviking_cli.exceptions import (
+    ConflictError,
+    FailedPreconditionError,
+    NotFoundError,
+    UnavailableError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
@@ -53,7 +59,7 @@ def next_slot(schedule: Dict[str, Any], now: datetime) -> datetime:
 
 
 def next_run_at(record: Dict[str, Any], now: Optional[datetime] = None) -> Optional[str]:
-    if not (record.get("auto_update") and record.get("initialized")):
+    if not record.get("auto_update"):
         return None
     return next_slot(record["update_schedule"], now or datetime.now(TZ)).isoformat()
 
@@ -65,7 +71,6 @@ def is_due(record: Dict[str, Any], slot: datetime) -> bool:
     enabled_at = record.get("auto_update_enabled_at")
     return (
         record.get("status") == "active"
-        and bool(record.get("initialized"))
         and bool(record.get("auto_update"))
         and enabled_at is not None
         and datetime.fromisoformat(enabled_at) < slot
@@ -185,27 +190,40 @@ class CompileScheduler:
                     if item.get("auto_update") and is_due(
                         item, current_slot(item["update_schedule"], now)
                     ):
-                        await self.trigger_if_due(account_id, item["id"], now)
+                        await self.trigger_if_due(account_id, item["to"], now)
                     elif item.get("auto_update"):
                         await self.reschedule(account_id, item)
                 except Exception:
-                    logger.exception("Compile schedule check failed for %s", item.get("id"))
+                    logger.exception("Compile schedule check failed for %s", item.get("to"))
 
     async def reschedule(
-        self, account_id: str, record: Dict[str, Any], *, raise_on_error: bool = False
+        self,
+        account_id: str,
+        record: Dict[str, Any],
+        *,
+        raise_on_error: bool = False,
     ) -> None:
-        """Mirror a schedule; raise_on_error lets expiry callbacks retry Redis failures."""
+        """Mirror the target URI's current schedule in the expiry scheduler.
+
+        Strict callers receive 412 when enabling without Redis and 503 on registration failure.
+        """
         if self._expiry is None:
+            if raise_on_error and record.get("auto_update"):
+                raise FailedPreconditionError(
+                    "Scheduled Compile requires a configured Redis scheduler",
+                    details={"reason": "COMPILE_SCHEDULER_DISABLED"},
+                )
             return
         from openviking.scheduling.expiry import ExpiryMode, ExpiryRegistration, ItemIdentity
 
-        identity = ItemIdentity(COMPILE_TARGET_ITEM_TYPE, account_id, "_system", record["id"])
+        identity = ItemIdentity(
+            COMPILE_TARGET_ITEM_TYPE,
+            account_id,
+            "_system",
+            record["to"],
+        )
         try:
-            if (
-                record.get("status") == "active"
-                and record.get("initialized")
-                and record.get("auto_update")
-            ):
+            if record.get("status") == "active" and record.get("auto_update"):
                 schedule = record["update_schedule"]
                 due = next_slot(schedule, datetime.now(TZ))
                 await self._expiry.report(
@@ -218,31 +236,41 @@ class CompileScheduler:
                 )
             else:
                 await self._expiry.unregister(identity)
-        except Exception:
+        except Exception as exc:
             # The compensation scan repairs a missing or stale registration.
-            logger.warning("Compile reschedule failed for %s", record["id"], exc_info=True)
+            logger.warning("Compile reschedule failed for %s", record["to"], exc_info=True)
             if raise_on_error:
-                raise
+                raise UnavailableError(
+                    "compile scheduler", "Cannot register scheduled Compile; retry the request"
+                ) from exc
 
     # ---------- decision and submission ----------
 
-    async def trigger_if_due(
-        self, account_id: str, target_id: str, now: Optional[datetime] = None
-    ) -> str:
-        """Submit the target's scheduled task for the current slot at most once."""
+    async def trigger_if_due(self, account_id: str, to: str, now: Optional[datetime] = None) -> str:
+        """Submit the URI's due slot once under its state lock.
+
+        ``now`` defaults to Beijing time. Return submitted, disabled or not_due;
+        missing targets raise LookupError. Saved slots prevent duplicate submissions.
+        """
+        to = to.rstrip("/")
         now = now or datetime.now(TZ)
-        async with self._store.edit(account_id, target_id) as record:
+        async with self._store.edit(account_id, to) as record:
+            if record["to"] != to:
+                raise LookupError(f"Compile target not found: {to}")
             slot = current_slot(record["update_schedule"], now) if record["auto_update"] else None
             if slot is None or not is_due(record, slot):
                 await self.reschedule(account_id, record, raise_on_error=True)
                 return "not_due"
             slot_iso = slot.isoformat()
-            key = f"compile-schedule:{target_id}:{slot_iso}"
+            key = f"compile-schedule:{hashlib.sha256(to.encode('utf-8')).hexdigest()}:{slot_iso}"
             outcome = "submitted"
             try:
                 ctx, connection = await self._executor(record)
                 owner_ctx = task_ctx(account_id, ctx.user.user_id)
-                if not await self._fs.exists(record["to"], ctx=owner_ctx):
+                # Initial failures can leave the output directory uncreated.
+                if record.get("initialized") and not await self._fs.exists(
+                    record["to"], ctx=owner_ctx
+                ):
                     raise NotFoundError(record["to"], "compile target")
             except (FailedPreconditionError, NotFoundError) as exc:
                 record["auto_update"] = False
@@ -319,11 +347,15 @@ class _ExpiryHandler:
         self._scheduler = scheduler
 
     async def handle(self, request: Any) -> Any:
+        """Trigger the callback's target URI; missing targets complete and failures retry."""
         from openviking.scheduling.expiry import CallbackResult, CallbackStatus
 
         identity = request.identity
+        to = identity.local_id
+        if not isinstance(to, str) or not to:
+            return CallbackResult(CallbackStatus.COMPLETED, "not_found")
         try:
-            outcome = await self._scheduler.trigger_if_due(identity.account_id, identity.local_id)
+            outcome = await self._scheduler.trigger_if_due(identity.account_id, to)
         except LookupError:
             return CallbackResult(CallbackStatus.COMPLETED, "not_found")
         except Exception:

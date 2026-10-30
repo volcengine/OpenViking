@@ -18,11 +18,9 @@ Agent Runtime Server executes Agent tasks and currently supports Compile. Applic
 | `to` | string | Yes | - | Target Resource or Memory directory, or a supported Skill namespace |
 | `skill` | string | Yes | - | Skill directory or its `SKILL.md` URI |
 | `instruction` | string | No | Skill-driven default | Additional instructions for this Compile run |
-| `args` | object | No | - | Execution backend extensions; `model_name` accepts a model endpoint ID |
+| `args` | object | No | - | Execution backend extensions and Compile scheduling controls |
 
-The entire `args` object is optional, and the model endpoint ID is not a top-level field. Use `args.model_name` to select a model; when omitted, the execution backend uses its default model configuration.
-
-The model-selection examples below require a backend that accepts `args.model_name`. When using bundled VikingBot, omit `args` and CLI `--args`; it rejects non-empty arguments. The Python example uses `SyncHTTPClient`; await `compile()` with `AsyncHTTPClient`.
+The scheduling controls `auto_update` and `update_schedule` are handled by OpenViking. The Python example uses `SyncHTTPClient`; await `compile()` with `AsyncHTTPClient`.
 
 **HTTP API**
 
@@ -39,12 +37,11 @@ curl -X POST http://localhost:1933/api/v1/compile \
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://user/default/skills/research-compiler",
-    "instruction": "Track the historical progress and preserve supporting evidence.",
-    "args": {"model_name": "your-model-endpoint-id"}
+    "instruction": "Track the historical progress and preserve supporting evidence."
   }'
 ```
 
-The endpoint returns `202 Accepted` with an OV task record:
+Without scheduling controls, the endpoint immediately queues a Compile task and returns `202 Accepted` with an OV task record:
 
 ```json
 {
@@ -59,6 +56,22 @@ The endpoint returns `202 Accepted` with an OV task record:
 }
 ```
 
+When `args` explicitly contains `auto_update` or `update_schedule`, the request only saves target settings and registers or removes the schedule. It returns `200 OK` with the saved configuration and `next_run_at`, without a `task_id`. No Compile task or Runtime call occurs until the next scheduled time. For example:
+
+```json
+{
+  "from": ["viking://resources/research"],
+  "to": "viking://resources/research-wiki",
+  "skill": "viking://user/default/skills/research-compiler",
+  "args": {
+    "auto_update": true,
+    "update_schedule": {"frequency": "daily", "hour": 0, "minute": 0}
+  }
+}
+```
+
+A non-null `update_schedule` enables automatic updates unless `auto_update=false` is explicit. Disabling updates returns `next_run_at: null`. A request without either scheduling control still compiles immediately, including targets that already have a saved schedule. Schedule saves update the target by `to`; they do not create a task submission for `GET /api/v1/compile/submissions/{key}`.
+
 **CLI**
 
 ```bash
@@ -66,11 +79,10 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://user/default/skills/research-compiler \
-  --instruction "Track the historical progress and preserve supporting evidence." \
-  --args '{"model_name":"your-model-endpoint-id"}'
+  --instruction "Track the historical progress and preserve supporting evidence."
 ```
 
-`--args` must be a JSON object. The command returns a task ID immediately after submission.
+`--args` must be a JSON object. Immediate submissions return a task ID; schedule saves return the next run time.
 
 **SDKs**
 
@@ -83,7 +95,6 @@ task = client.compile(
     ["viking://resources/research"],
     "viking://resources/research-wiki",
     "viking://user/default/skills/research-compiler",
-    {"args": {"model_name": "your-model-endpoint-id"}},
 )
 ```
 
@@ -92,7 +103,6 @@ const task = await client.compile(
   ["viking://resources/research"],
   "viking://resources/research-wiki",
   "viking://user/default/skills/research-compiler",
-  { args: { model_name: "your-model-endpoint-id" } },
 );
 ```
 
@@ -102,9 +112,7 @@ task, err := client.Compile(
     []string{"viking://resources/research"},
     "viking://resources/research-wiki",
     "viking://user/default/skills/research-compiler",
-    &openviking.CompileOptions{
-        Args: map[string]any{"model_name": "your-model-endpoint-id"},
-    },
+    nil,
 )
 ```
 
@@ -112,23 +120,26 @@ task, err := client.Compile(
 
 ### Target settings and operation history
 
-These endpoints use the current account and authentication context. `to` is the registered target's `viking://` URI. Reading or updating one target requires write access; listing targets returns only accessible targets.
+These endpoints use the current account and authentication context. `to` is the registered target's `viking://` URI. Reading settings, operation history, operation details or outputs requires read access; updating settings requires write access. Listing targets returns only accessible targets.
 
 | HTTP API | Description and result (`status: "ok"`) |
 |----------|------------------------|
 | `GET /api/v1/compile/config?to={to}` | `result` contains target settings and run status |
 | `POST /api/v1/compile/config/update` | Required JSON body field `to` identifies the registered Compile output directory to configure; `result` contains the updated settings and run status |
-| `GET /api/v1/compile/configs` | Optional query parameters: `limit` (1–100, default 20) and `cursor`; `result.targets` contains this page of visible target summaries ordered by `target_id` ascending; pass `result.next_cursor` unchanged as the next page's `cursor`; null marks the last page |
+| `GET /api/v1/compile/configs` | Optional query parameters: `limit` (1–100, default 20) and `cursor`; `result.targets` contains this page of readable active target summaries ordered by `sha256(to)` ascending, excluding deleted targets before pagination; `result.next_cursor` is the last returned target URI; pass it unchanged as the next page's `cursor` to continue after its hash; null marks the last page |
 | `GET /api/v1/compile/operations?to={to}` | `result.operations` contains operations, newest first; `result.next_cursor` continues pagination |
+| `GET /api/v1/compile/operations/{operation_id}?to={to}` | `result` contains one operation with the same fields as a history item, including `params` and public `meta`, excluding private execution checkpoints |
 | `GET /api/v1/compile/operations/{operation_id}/outputs?to={to}` | `result.outputs` contains output files and frozen version references, ordered by URI; `result.next_cursor` continues pagination |
 
 The update body requires `to`, `from` (a non-empty source URI array), `skill`, and `auto_update` (boolean). When `auto_update=true`, a valid `update_schedule` is required. When `auto_update=false`, the schedule can be omitted or null; the saved rule is cleared and the returned value is null. New targets have no default rule, and enabling updates after disabling them requires a rule. Optional `instruction` preserves the saved value when omitted; `null` or an empty string clears it. Updating settings does not submit a Compile task.
 
 `update_schedule` requires `frequency` (`daily` or `weekly`). Optional `hour` (0–23) and `minute` (0–59) default to 0. Weekly schedules also accept `weekday` (1=Monday through 7=Sunday, default 1). Schedules use `Asia/Shanghai` time.
 
-Scheduled updates require `compile_api.scheduler_enabled=true` (default `false`) and valid `expiry.service_name` and `expiry.redis` configuration. `compile_api.scheduler_backend` only accepts `redis` (the default); `local` is invalid. Enabling `auto_update` while scheduling is disabled returns `COMPILE_SCHEDULER_DISABLED`. Manual incremental Compile and version management do not require Redis.
+Scheduled updates require `compile_api.scheduler_enabled=true` (default `false`) and valid `expiry.service_name` and `expiry.redis` configuration. `compile_api.scheduler_backend` only accepts `redis` (the default); `local` is invalid. A schedule request synchronously rejects disabled or missing scheduling configuration with HTTP 412 (`COMPILE_SCHEDULER_DISABLED`), and unavailable Redis registration with HTTP 503. A failed schedule save does not submit a Compile task. Compile failures, including the first run, do not cancel subsequent scheduled runs. Manual incremental Compile and version management do not require Redis.
 
-Both history endpoints accept optional query parameters `limit` (1–100, default 20) and `cursor`. Pass the returned `next_cursor` unchanged; `null` marks the last page. `operation_id` is 1–128 characters, starts with a letter or digit, and otherwise allows letters, digits, `:`, `.`, `_`, and `-`. Operations remain queryable after target deletion. Missing targets, operations, or output manifests return `404`. A null `version_id` or `snapshot_id` on an output item indicates that the corresponding reference is unavailable.
+The history and output list endpoints accept optional query parameters `limit` (1–100, default 20) and `cursor`. Pass the returned `next_cursor` unchanged; `null` marks the last page.
+
+An `operation_id` contains a fixed-width creation timestamp and a unique suffix. History pages follow descending operation ID order, and a cursor remains usable after its record is cleaned up. Compile operations link to execution tasks through `meta.task_id`; `operation_id` differs from `task_id`. Use `task_id` to query or cancel a task and the history item's `operation_id` to read operation details or outputs.
 
 ### Check Compile availability
 
@@ -200,6 +211,7 @@ ov task status cmp_01abc
 
 Terminal task responses also contain the result or error.
 
+
 ### Cancel a task
 
 ```http
@@ -210,7 +222,7 @@ POST /api/v1/tasks/{task_id}/cancel
 ov task cancel cmp_01abc
 ```
 
-The task first enters `cancelling`, then becomes `cancelled` after in-process work and cleanup settle. Writes that already completed are not rolled back. Repeated cancellation of an already `cancelled` task is idempotent.
+A running Compile task first enters `cancelling`, then becomes `cancelled` after the execution backend confirms cancellation and cleanup finishes. Before the output snapshot is committed, cancellation rolls files in the `to` subtree back to the snapshot taken when that Compile run started, including changes made there by other operations and child tasks during the run. Paths outside `to` are not restored. After the output snapshot is committed, failure or cancellation during index and tag finalization preserves the committed output; indexes or tags can remain incomplete. Repeated cancellation of an already `cancelled` task is idempotent.
 
 | Status | Typical stages |
 |--------|----------------|
@@ -251,13 +263,12 @@ Idempotency-Key: <OV task_id>
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
     "skill": "viking://agent/skills/wiki",
-    "instruction": "Organize the sources into a knowledge base.",
-    "args": {"model_name": "your-model-endpoint-id"}
+    "instruction": "Organize the sources into a knowledge base."
   }
 }
 ```
 
-Both `task_type` and `payload` are required. Only `task_type="compile"` is supported. The `payload` uses the task creation fields and validation rules described on this page; `instruction` and `args` are optional. Bundled VikingBot does not support non-empty `args`. Unsupported types or invalid payloads return `4xx` without creating an execution task.
+Both `task_type` and `payload` are required. Only `task_type="compile"` is supported. The `payload` uses the task creation fields and validation rules described on this page; `instruction` and `args` are optional. Unsupported types or invalid payloads return `4xx` without creating an execution task.
 
 OV forwards the current user's OV API key in `X-API-Key`. It also sends `X-Gateway-Token` when `compile_api.gateway_token` is configured. These credentials must not appear in public task results.
 

@@ -589,12 +589,14 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project -m "restore to v1" -o
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | path | str | Compile 产物文件的 `viking://` URI |
-| restore_version | str | 提供恢复内容的历史版本，例如 `v1` |
-| current_version | str | 写入前要求匹配的当前版本，例如 `v2`；不匹配时返回 `409 CONFLICT`，`error.details.resource` 为 `VERSION_CONFLICT` |
+| restore_version | str | 提供恢复内容的历史版本的 UUID `version_id` |
+| current_version | str | 调用方观察到的当前版本的 UUID `version_id`；不匹配时返回 `409 CONFLICT`，`error.details.resource` 为 `VERSION_CONFLICT` |
 
 先调用 `GET /api/v1/snapshot/versions?uri=<文件 URI>` 获取 `current_version` 和历史版本列表，再提交恢复请求：
 
-响应中的 `total` 表示当前保留的可查询版本总数，不受 `limit`、`before_version` 影响；`next_before_version` 用于继续加载更旧版本。
+每条版本记录包含 `version_id`（完整 UUID4 十六进制字符串）和正整数 `version_number`。客户端在恢复和分页时原样传递 ID，使用 `version_number` 展示 `v1`、`v2` 等编号。版本列表按从新到旧的顺序返回。编号在文件的一轮生命周期内递增，跨分页和历史清理保持不变。新版本索引从 1 开始编号；文件删除重建后版本 ID 不复用，旧恢复请求无法匹配重建文件。
+
+响应中的 `to` 是文件所属的 Compile 目标目录，可与版本记录的 `meta.operation_id` 一起用于查询操作详情。`total` 表示当前保留的可查询版本总数，不受 `limit`、`before_version` 影响，不等于最新版本编号。将 `next_before_version` 原样作为 `before_version` 传入可继续加载更旧版本。该游标和 `current_version` 都使用 UUID ID；不要根据 ID 或页面内位置排序或推算展示编号。
 
 ```bash
 curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
@@ -602,12 +604,14 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "viking://resources/wiki/entity/project.md",
-    "restore_version": "v1",
-    "current_version": "v2"
+    "restore_version": "0334d9abe4ac4f25a3e59d0b401bb01c",
+    "current_version": "54c71fb7bf134b71a9b7ed604c21f5b4"
   }'
 ```
 
-当 v1 与当前内容不同时，恢复会生成新版本 v3，内容取自 v1；v1、v2 的历史记录保留。响应中的 `version_id` 为 `v3`，`meta.restored_from` 为 `v1`。内容相同时返回 `result: "noop"`、`meta.restored_from: null`，不新增版本。
+例如，当前为第 2 版且第 1 版内容不同时，恢复第 1 版会生成第 3 版，并保留前两版的历史。响应包含新的 UUID `version_id`、`version_number: 3`，`meta.restored_from` 为第 1 版的 UUID。内容相同时返回当前 ID 和编号，以及 `result: "noop"`、`meta.restored_from: null`，不新增版本，也不递增编号。
+
+恢复先检查当前版本，再查找历史版本，并在写入锁内、修改内容前再次检查当前版本。`current_version` 过期时返回 `409 CONFLICT`，`error.details.resource` 为 `VERSION_CONFLICT`，包括删除重建后的旧请求；当前版本匹配但历史版本不存在时返回 `404`。
 
 仅指定文件被恢复；相关 Wiki 页面和索引正文保持原内容。目标存在运行中的 Compile 时，返回 `409 CONFLICT`，`error.details.resource` 为 `COMPILE_RUNNING`。此模式不提供 `dry_run` 预演；目录恢复的预演参数不适用于单文件恢复。
 

@@ -11,6 +11,8 @@ import { PROFILE_DEFAULTS } from '#/features/admin/gateway/lib/profile-schema'
 import { useGateway } from '#/features/admin/gateway/lib/use-gateway'
 
 type RecommendedProfileButtonProps = {
+  /** Shorter wording where space is tight; defaults to the full label. */
+  label?: string
   variant?: 'default' | 'outline'
   /** E.g. until the profile list has loaded, so a second click can't duplicate it. */
   disabled?: boolean
@@ -18,6 +20,7 @@ type RecommendedProfileButtonProps = {
 
 /** "Create with recommended settings": saves the default profile in one click. */
 export function RecommendedProfileButton({
+  label,
   variant = 'default',
   disabled = false,
 }: RecommendedProfileButtonProps) {
@@ -49,7 +52,7 @@ export function RecommendedProfileButton({
       ) : (
         <SparklesIcon />
       )}
-      {t('profiles.actions.createRecommended')}
+      {label ?? t('profiles.actions.createRecommended')}
     </Button>
   )
 }

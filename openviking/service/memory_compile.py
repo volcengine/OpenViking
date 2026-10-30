@@ -35,7 +35,7 @@ from openviking.session.memory.streaming_memory_updater import (
 from openviking.session.memory.utils.uri import render_template
 from openviking.telemetry import tracer
 from openviking.telemetry.span_models import create_root_span_attributes
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -176,7 +176,7 @@ class MemoryCompileRunner:
         ).rstrip("/")
         memory_type = _memory_type_from_target(uri)
         await self._fs.ensure_write_access(uri, ctx)
-        stat = await self._fs.stat(uri, ctx)
+        stat = await self._fs.stat(uri, ctx, skip_count=True)
         if not stat.get("isDir"):
             raise InvalidArgumentError("Memory-mode Compile target must be a directory")
         canonical = str(stat.get("uri") or uri).rstrip("/")
@@ -248,6 +248,26 @@ class MemoryCompileRunner:
                         task_id,
                         result["errors"],
                     )
+                await tracker.wait_for_task_work(
+                    task_id,
+                    exclude_work_id=running_work_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                queue_status = await tracker.build_queue_status(
+                    task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                )
+                if (queue_status.get("Embedding") or {}).get("error_count", 0):
+                    raise OpenVikingError(
+                        "Memory compile embedding failed", code="PROCESSING_ERROR"
+                    )
+                with bind_task_context(
+                    task_id,
+                    ctx.account_id,
+                    ctx.user.user_id,
+                    work_id=running_work_id,
+                ):
+                    await self._fs.finalize_compile_directories(target, ctx)
                 await tracker.complete(
                     task_id,
                     result,

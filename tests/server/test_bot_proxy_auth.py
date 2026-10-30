@@ -613,6 +613,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     submitted = []
     polls = 0
     rejected_id = None
+    rejected_submissions = []
 
     async def runtime_request(_client, method, url, headers, json):
         nonlocal polls
@@ -621,7 +622,11 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             assert json["payload"].get("args") == (args or None)
             task_id = headers["Idempotency-Key"]
             if task_id == rejected_id:
-                return FakeResponse({"detail": "invalid request"}, status_code=422)
+                rejected_submissions.append(task_id)
+                return FakeResponse(
+                    {"detail": {"code": "INVALID_ARGUMENT", "message": "invalid request"}},
+                    status_code=422,
+                )
             submitted.append(task_id)
             return FakeResponse({"session_id": task_id})
         task_id = json["session_id"]
@@ -734,7 +739,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         await tasks.cancel_recovered(first.task_id, "acct", "alice")
     if expected == TaskStatus.FAILED:
         assert "UNAVAILABLE" in (await state(first)).error
-        assert not cancel_entered.is_set()
+        assert cancel_entered.is_set()
     await queue.dequeue()
     assert (await state(waiting)).status == TaskStatus.COMPLETED
     assert submitted.count(first.task_id) == 1
@@ -744,7 +749,11 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     rejected = await create()
     rejected_id = rejected.task_id
     await queue.dequeue()
-    assert (await state(rejected)).status == TaskStatus.FAILED
+    failed = await state(rejected)
+    assert failed.status == TaskStatus.FAILED
+    assert failed.error.startswith("INVALID_ARGUMENT:")
+    assert "cleanup_error" not in failed.meta
+    assert rejected_submissions.count(rejected_id) == 1
     after_rejection = await create()
     await queue.dequeue()
     assert (await state(after_rejection)).status == TaskStatus.COMPLETED

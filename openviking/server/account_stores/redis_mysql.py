@@ -888,11 +888,14 @@ class RedisMySQLAccountStore(AccountStore):
     async def get_group_members(self, account_id: str, group_id: str) -> list[str]:
         return await self._mysql.get_group_members(account_id, group_id)
 
-    async def add_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+    async def add_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
+    ) -> bool:
+        user_ids = list(dict.fromkeys(user_ids))
         return await self._mutate_account(
             account_id,
-            lambda: self._mysql.add_group_member(account_id, group_id, user_id),
-            lambda: (self._group_ids_key(account_id, user_id),),
+            lambda: self._mysql.add_group_members(account_id, group_id, user_ids),
+            lambda: tuple(self._group_ids_key(account_id, user_id) for user_id in user_ids),
         )
 
     async def remove_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:

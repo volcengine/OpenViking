@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, Literal
 from uuid import uuid4
@@ -16,6 +17,7 @@ from agent_framework import (
     ChatContext,
     ChatMiddleware,
     ChatResponseUpdate,
+    Content,
     ContextProvider,
     Message,
     ResponseStream,
@@ -240,12 +242,9 @@ class OpenVikingContextProvider(ContextProvider):
 
 def _messages(messages: list[Message], recorded: set[str]) -> list[dict[str, Any]]:
     """Translate native messages without recording injected context or hidden reasoning."""
-    calls = {
-        content.call_id: content
-        for message in messages
-        for content in message.contents
-        if content.type == "function_call"
-    }
+    calls: dict[str | None, deque[Content]] = {}
+    completed: dict[tuple[str | None, str | None], Content] = {}
+    seen: set[str] = set()
     payloads = []
     for message in messages:
         if message.role not in ("user", "assistant", "tool"):
@@ -254,14 +253,53 @@ def _messages(messages: list[Message], recorded: set[str]) -> list[dict[str, Any
             continue
         message_id = message.message_id or uuid4().hex
         message.message_id = message_id
-        if message_id in recorded:
+        if message_id in seen:
             continue
+        seen.add(message_id)
+        already_recorded = message_id in recorded
         parts: list[dict[str, Any]] = []
         for content in message.contents:
+            call = None
+            if content.type == "function_call":
+                call = content
+                calls.setdefault(content.call_id, deque()).append(content)
+            elif content.type == "function_result":
+                pending = calls.get(content.call_id)
+                occurrence_id = content.id or None
+                key = (content.call_id, occurrence_id)
+                settled = completed.get(key)
+                if pending:
+                    # Prefer exact occurrences; legacy results settle in order.
+                    call = next(
+                        (
+                            item
+                            for item in pending
+                            if occurrence_id is None or item.id == occurrence_id
+                        ),
+                        None,
+                    )
+                    # Explicit completed occurrences identify duplicates. IDs
+                    # synthesized for legacy calls can be reused by a new call.
+                    if call is None and (settled is None or not settled.id):
+                        call = next((item for item in pending if not item.id), None)
+                    if call is not None:
+                        pending.remove(call)
+                        completed[(content.call_id, None)] = call
+                        if call.id:
+                            completed[(content.call_id, call.id)] = call
+                if call is None:
+                    call = settled
+                    if call is None and not pending:
+                        previous = completed.get((content.call_id, None))
+                        if previous is not None and not previous.id:
+                            call = previous
+                if call is not None and occurrence_id is not None:
+                    completed[key] = call
+            if already_recorded:
+                continue
             if content.type == "text" and content.text:
                 parts.append({"type": "text", "text": content.text})
             elif content.type in ("function_call", "function_result"):
-                call = content if content.type == "function_call" else calls.get(content.call_id)
                 arguments = call.arguments if call else None
                 if isinstance(arguments, str):
                     try:

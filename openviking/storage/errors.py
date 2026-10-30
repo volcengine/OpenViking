@@ -65,6 +65,18 @@ class LockAcquisitionError(LockError):
     """Raised when lock acquisition fails."""
 
 
+class HandoffRecoveryRequired(LockAcquisitionError):
+    """A durable consumer must acquire fresh logical coverage before resuming."""
+
+    def __init__(self, reason: str):
+        super().__init__(f"handoff recovery required: {reason}")
+        self.reason = reason
+
+
+class HandoffRecoveryBlocked(LockAcquisitionError):
+    """Fresh acquisition failed; keep the durable work pending for retry."""
+
+
 class InvalidPathLockRequestError(ValueError):
     """Raised when a native PathLock request or durable handoff is malformed."""
 

@@ -1076,7 +1076,10 @@ class MySQLAccountStore(AccountStore):
             ).all()
         return tuple(group_id for group_id in group_ids if group_id is not None)
 
-    async def add_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+    async def add_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
+    ) -> bool:
+        user_ids = list(dict.fromkeys(user_ids))
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
             self._require_active(account)
@@ -1091,27 +1094,49 @@ class MySQLAccountStore(AccountStore):
             )
             if group is None:
                 raise NotFoundError(group_id, "group")
-            user = await self._lock_user(session, account, user_id)
-            self._require_active(user)
-            if (
-                await session.scalar(
-                    select(GroupMember.group_pk).where(
-                        GroupMember.service_name == self._service_name,
-                        GroupMember.account_pk == account.account_pk,
-                        GroupMember.group_pk == group.group_pk,
-                        GroupMember.user_pk == user.user_pk,
+            users = {
+                user.user_id: user
+                for user in (
+                    await session.scalars(
+                        select(User)
+                        .where(
+                            User.service_name == self._service_name,
+                            User.account_pk == account.account_pk,
+                            User.user_id.in_(user_ids),
+                        )
+                        .with_for_update()
                     )
-                )
-                is None
-            ):
-                session.add(
+                ).all()
+            }
+            for user_id in user_ids:
+                user = users.get(user_id)
+                if user is None:
+                    raise NotFoundError(user_id, "user")
+                self._require_active(user)
+            existing = set(
+                (
+                    await session.scalars(
+                        select(GroupMember.user_pk).where(
+                            GroupMember.service_name == self._service_name,
+                            GroupMember.account_pk == account.account_pk,
+                            GroupMember.group_pk == group.group_pk,
+                            GroupMember.user_pk.in_([user.user_pk for user in users.values()]),
+                        )
+                    )
+                ).all()
+            )
+            session.add_all(
+                [
                     GroupMember(
                         service_name=self._service_name,
                         account_pk=account.account_pk,
                         group_pk=group.group_pk,
                         user_pk=user.user_pk,
                     )
-                )
+                    for user in users.values()
+                    if user.user_pk not in existing
+                ]
+            )
         return True
 
     async def remove_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:

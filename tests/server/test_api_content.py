@@ -120,7 +120,7 @@ async def test_batch_write_forwards_processing_mode_and_operation_metadata(monke
 
     assert seen["processing_mode"] == "vectors_only"
     assert seen["defer_processing"] is True
-    assert seen["edit_source"] == "agent"
+    assert seen["edit_source"] == "manual"
     operation = seen["operations"][0]
     assert operation["tags"] == ["team=search"]
     assert operation["tag_mode"] == "append"
@@ -144,7 +144,6 @@ async def test_write_forwards_processing_mode_to_service(monkeypatch):
             uri="viking://resources/demo.md",
             content="updated",
             processing_mode="vectors_only",
-            edit_source="manual",
         ),
         ctx,
     )
@@ -354,10 +353,47 @@ async def test_reindex_missing_uri(client):
     assert resp.status_code == 400
 
 
-async def test_reindex_endpoint_registered(client):
-    """Test the reindex endpoint is registered (GET returns 405, not 404)."""
-    resp = await client.get("/api/v1/content/reindex")
-    assert resp.status_code == 405  # Method Not Allowed, not 404
+async def test_directory_index_preserves_summaries_and_tags(client, service):
+    """Directory indexing preserves content; Compile tags belong only to the target root."""
+    from openviking.storage.expr import PathScope
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    uri = "viking://resources/compile"
+    await service.viking_fs.mkdir(f"{uri}/child", ctx=ctx)
+    seeded = await client.post(
+        "/api/v1/content/ensure_directory_index",
+        json={"uri": uri, "fallback_abstract": "Compile output"},
+    )
+    assert seeded.status_code == 200, seeded.text
+    assert seeded.json()["result"]["created_abstract"] is True
+    assert seeded.json()["result"]["indexed_levels"] == [0]
+    await service.fs.write(f"{uri}/child/note.md", "Content", ctx=ctx, wait=True)
+    await service.resources.wait_processed()
+    original = await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx)
+    await service.fs.set_tags(uri, ["team=search"], mode="append", recursive=False, ctx=ctx)
+    await service.fs.finalize_compile_directories(uri, ctx)
+    repeated = await client.post(
+        "/api/v1/content/ensure_directory_index",
+        json={"uri": uri, "fallback_abstract": "Do not replace stored summaries"},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["result"]["created_abstract"] is False
+    assert await service.viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx) == original
+    assert await service.fs.read(f"{uri}/child/note.md", ctx) == "Content"
+    records = await service.vikingdb_manager.filter(
+        filter=PathScope("uri", uri), output_fields=["uri", "level", "search_tags"], ctx=ctx
+    )
+    root_records = [record for record in records if record["uri"] == uri and record["level"] < 2]
+    assert any(record["level"] == 0 for record in root_records)
+    assert all(
+        {"compile_target=true", "team=search"} <= set(record["search_tags"])
+        for record in root_records
+    )
+    assert all(
+        "compile_target=true" not in (record.get("search_tags") or [])
+        for record in records
+        if record not in root_records
+    )
 
 
 async def test_reindex_request_validation(client):

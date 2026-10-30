@@ -118,10 +118,10 @@ class RestoreRequest(BaseModel):
     source_commit: Optional[str] = None
     path: Optional[str] = None
     restore_version: Optional[str] = Field(
-        None, description="Historical version supplying the restored content"
+        None, description="Historical version UUID supplying the restored content"
     )
     current_version: Optional[str] = Field(
-        None, description="Required current version; mismatch returns a conflict"
+        None, description="Required current version UUID; mismatch returns a conflict"
     )
     branch: str = "main"
     dry_run: bool = False

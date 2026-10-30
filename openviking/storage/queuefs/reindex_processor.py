@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_work_index import bind_task_context_from_message, extract_task_metadata
+from openviking.storage.pathlock_recovery import adopt_or_reacquire, prepare_handoff_retry
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
@@ -46,10 +47,15 @@ class ReindexProcessor(DequeueHandlerBase):
     async def _adopt_or_reacquire(self, msg: ReindexMsg, ctx: RequestContext) -> Dict[str, Any]:
         agfs = self._viking_fs._async_agfs
         if msg.lock_handoff is not None:
-            try:
-                return await agfs.pathlock_adopt(msg.lock_handoff)
-            except Exception:
-                pass
+
+            async def requests():
+                stat = await self._viking_fs.stat(msg.uri, ctx=ctx, skip_count=True)
+                kind = "tree" if stat.get("isDir", stat.get("is_dir")) else "exact"
+                return [{"path": self._viking_fs._uri_to_path(msg.uri, ctx=ctx), "kind": kind}]
+
+            return await adopt_or_reacquire(
+                agfs, msg.lock_handoff, ctx=ctx, fallback_requests=requests
+            )
         stat = await self._viking_fs.stat(msg.uri, ctx=ctx, skip_count=True)
         acquire = (
             agfs.pathlock_acquire_tree
@@ -59,13 +65,12 @@ class ReindexProcessor(DequeueHandlerBase):
         return await acquire(self._viking_fs._uri_to_path(msg.uri, ctx=ctx))
 
     async def _requeue_lock_handoff(self, msg: ReindexMsg, exc: Exception) -> bool:
-        if msg.lock_handoff_retry >= 2:
+        payload = await prepare_handoff_retry(msg, exc, queue="Reindex")
+        if payload is None:
             return False
 
         from openviking.storage.queuefs import get_queue_manager
 
-        payload = msg.to_dict()
-        payload["lock_handoff_retry"] = msg.lock_handoff_retry + 1
         queue_manager = get_queue_manager()
         await queue_manager.enqueue(queue_manager.REINDEX, payload)
         logger.warning(

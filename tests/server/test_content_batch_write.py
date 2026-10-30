@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -21,12 +20,14 @@ from openviking.storage.context_update_plan import (
 )
 from openviking.storage.queuefs.queue_middleware import EnqueueReceipt
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry.context import bind_telemetry
 from openviking.telemetry.operation import OperationTelemetry
 from openviking.utils.content_hash import content_md5
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
@@ -191,35 +192,41 @@ async def test_system_batch_write_is_file_only_without_queue_work(
 
 
 @pytest.mark.asyncio
-async def test_system_builtin_batch_write_accepts_binary_assets(
+@pytest.mark.parametrize(
+    "root",
+    [
+        "viking://system/compile/example-skills",
+        "viking://system/memory/memory_templates/builtin",
+    ],
+)
+async def test_system_builtin_batch_write_rejects_external_root_writes(
     _coordinator_queue_for_unit_tests,
+    root,
 ):
-    root = "viking://system/compile/example-skills"
     uri = f"{root}/demo/assets/icon.bin"
     content = b"\x89PNG\r\n\x1a\nasset"
     vfs = _VFS(root)
+    vfs._ensure_access = VikingFS(agfs=SimpleNamespace())._ensure_access
     coordinator = ContentWriteCoordinator(vfs)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
-    result = await coordinator.batch_write(
-        root_uri=root,
-        operations=[
-            {
-                "uri": uri,
-                "content_base64": base64.b64encode(content).decode("ascii"),
-                "mode": "replace",
-            }
-        ],
-        ctx=ctx,
-        wait=False,
-    )
+    with pytest.raises(PermissionDeniedError):
+        await coordinator.batch_write(
+            root_uri=root,
+            operations=[
+                {
+                    "uri": uri,
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                    "mode": "replace",
+                }
+            ],
+            ctx=ctx,
+            wait=False,
+        )
 
-    assert result["created"] == [uri]
-    assert vfs.files[uri] == content
-    assert result["semantic_status"] == "skipped"
-    assert result["vector_status"] == "skipped"
-    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
-    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_awaited_once()
+    assert vfs.files == {}
+    assert vfs._async_agfs.paths == []
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_not_awaited()
     _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
 
 
@@ -321,7 +328,8 @@ async def test_batch_coalesces_compile_target_updates(service, monkeypatch):
     root = "viking://resources/batch-metadata"
     store = service.compile.lifecycle.store
     await service.viking_fs.write_file(f"{root}/seed.md", "seed", ctx=ctx)
-    await store.register(ctx.account_id, root)
+    async with store.edit(ctx.account_id, root, create=True):
+        pass
     update_time = AsyncMock(wraps=store.mark_content_updated)
     monkeypatch.setattr(store, "mark_content_updated", update_time)
     ops = [{"uri": f"{root}/{i}.md", "content": "changed"} for i in range(100)]
@@ -900,7 +908,7 @@ async def test_batch_applies_operation_acl_and_forwards_file_options(
 
 
 @pytest.mark.asyncio
-async def test_batch_same_content_with_tags_is_not_skipped_as_a_conflict_noop(
+async def test_batch_same_content_applies_tags(
     monkeypatch,
     _coordinator_queue_for_unit_tests,
 ):
@@ -916,7 +924,6 @@ async def test_batch_same_content_with_tags_is_not_skipped_as_a_conflict_noop(
             {
                 "uri": uri,
                 "content": "same",
-                "expected_sha256": hashlib.sha256(b"same").hexdigest(),
                 "tags": ["team=search"],
             }
         ],

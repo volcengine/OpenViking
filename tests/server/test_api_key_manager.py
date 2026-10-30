@@ -729,7 +729,7 @@ async def test_get_accounts_pagination_and_ordering(manager: APIKeyManager):
 
 
 async def test_user_and_group_persistence_across_reload(manager_service):
-    """Reload preserves keys/groups, while user deletion removes membership."""
+    """Batch membership is atomic, idempotent, durable, and removed with the user."""
     mgr1 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr1.load()
 
@@ -739,9 +739,19 @@ async def test_user_and_group_persistence_across_reload(manager_service):
     created_group = await mgr1.create_group(acct, "engineering")
     assert created_group == {"group_id": "engineering", "member_count": 0}
     group_id = created_group["group_id"]
-    assert await mgr1.add_group_member(acct, group_id, "bob") is True
-    assert await mgr1.add_group_member(acct, group_id, "bob") is True
+    assert await mgr1.add_group_members(acct, group_id, ["bob"]) is True
+
+    await mgr1.create_account(_uid(), "outsider")
+    with pytest.raises(NotFoundError):
+        await mgr1.add_group_members(acct, group_id, ["alice", "outsider"])
     assert await mgr1.get_group_members(acct, group_id) == ["bob"]
+    assert await mgr1.get_user_group_ids(acct, "alice") == ()
+
+    members = ["alice", "bob", "bob"]
+    assert await mgr1.add_group_members(acct, group_id, members) is True
+    assert await mgr1.add_group_members(acct, group_id, members) is True
+    assert await mgr1.get_group_members(acct, group_id) == ["alice", "bob"]
+    assert await mgr1.get_groups(acct) == [{"group_id": group_id, "member_count": 2}]
 
     mgr2 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr2.load()
@@ -750,6 +760,8 @@ async def test_user_and_group_persistence_across_reload(manager_service):
     assert identity.account_id == acct
     assert identity.user_id == "alice"
     assert identity.role == Role.ADMIN
+    assert await mgr2.get_group_members(acct, group_id) == ["alice", "bob"]
+    assert await mgr2.get_user_group_ids(acct, "alice") == (group_id,)
     assert await mgr2.get_user_group_ids(acct, "bob") == (group_id,)
 
     await mgr2.begin_deletion(
@@ -759,6 +771,11 @@ async def test_user_and_group_persistence_across_reload(manager_service):
         owner_account_id=acct,
         owner_user_id="alice",
     )
+    assert await mgr2.remove_group_member(acct, group_id, "alice") is True
+    with pytest.raises(FailedPreconditionError):
+        await mgr2.add_group_members(acct, group_id, ["alice", "bob"])
+    assert await mgr2.get_group_members(acct, group_id) == ["bob"]
+    assert await mgr2.get_user_group_ids(acct, "alice") == ()
     await mgr2.finish_deletion(acct, "bob", "delete-bob")
 
     mgr3 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)

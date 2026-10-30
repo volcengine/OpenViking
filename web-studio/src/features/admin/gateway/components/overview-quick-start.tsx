@@ -152,33 +152,14 @@ export function OverviewQuickStart({
   ]
 
   return (
-    <section className="grid gap-3 rounded-lg border border-primary/30 bg-background/70 p-4">
-      <div className="grid gap-1">
-        <p className="flex items-center gap-2 font-medium">
-          <ZapIcon className="size-4 text-primary" />
-          {t('overview.quick.title')}
-        </p>
-        <p className="text-sm text-muted-foreground">
-          {t('overview.quick.description')}{' '}
-          <DocsLink section="quickMode" variant="text" />
-        </p>
-      </div>
-      <ul className="grid list-inside list-disc gap-0.5 text-sm text-muted-foreground">
-        {lines.map((line) => (
-          <li key={line}>{line}</li>
-        ))}
-      </ul>
-      {run.isError ? (
-        <Notice tone="danger">{issueProblem(t, run.error).message}</Notice>
-      ) : null}
-      {noUsable ? (
-        <>
-          <Notice tone="warning">{t('overview.quick.noUsable')}</Notice>
-          <ImportResultNotice result={noUsable} onDismiss={run.reset} />
-        </>
-      ) : null}
-      {plan.runnable ? (
-        <div className="flex justify-end">
+    // The one-click button stands in for the box's heading; the region keeps
+    // "Quick mode" as its accessible name.
+    <section
+      aria-label={t('overview.quick.title')}
+      className="grid gap-3 rounded-lg border border-primary/30 bg-background/70 p-4"
+    >
+      <div className="grid justify-items-start gap-2">
+        {plan.runnable ? (
           <Button
             type="button"
             size="sm"
@@ -198,8 +179,32 @@ export function OverviewQuickStart({
                   : 'overview.quick.action',
             )}
           </Button>
-        </div>
-      ) : (
+        ) : (
+          <p className="flex items-center gap-2 font-medium">
+            <ZapIcon className="size-4 text-primary" />
+            {t('overview.quick.title')}
+          </p>
+        )}
+        <p className="text-sm text-muted-foreground">
+          {t('overview.quick.description')}{' '}
+          <DocsLink section="quickMode" variant="text" />
+        </p>
+      </div>
+      <ul className="grid list-inside list-disc gap-0.5 text-sm text-muted-foreground">
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      {run.isError ? (
+        <Notice tone="danger">{issueProblem(t, run.error).message}</Notice>
+      ) : null}
+      {noUsable ? (
+        <>
+          <Notice tone="warning">{t('overview.quick.noUsable')}</Notice>
+          <ImportResultNotice result={noUsable} onDismiss={run.reset} />
+        </>
+      ) : null}
+      {plan.runnable ? null : (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-muted-foreground">
             {t('overview.quick.locked')}

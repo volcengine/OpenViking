@@ -8,7 +8,7 @@ import (
 	"net/http"
 )
 
-// Compile starts an asynchronous Compile task.
+// Compile returns a queued task, or saved settings when Args explicitly configure scheduling.
 func (c *Client) Compile(
 	ctx context.Context,
 	fromURIs []string,

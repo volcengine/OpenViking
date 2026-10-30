@@ -55,6 +55,7 @@ class SemanticMessageWork:
             self.scope = await SemanticLockScope.resolve(
                 self.msg.lock_handoff,
                 caller_lock=self.caller_lock,
+                ctx=ctx,
                 fallback_path_factory=lambda: get_viking_fs()._uri_to_path(self.msg.uri, ctx=ctx),
             )
 

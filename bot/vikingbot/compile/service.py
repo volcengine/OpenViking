@@ -45,7 +45,6 @@ from vikingbot.agent.tools.compile import (
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.spawn import WaitSubagentsTool
 from vikingbot.compile import file_ops
-from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
     COMPILE_STAGING_ROOT,
@@ -503,7 +502,7 @@ class BotCompileService:
         connection: Mapping[str, Any],
     ) -> SanitizedCompileRequest:
         args = request.args or {}
-        if args.keys() - {"last_compile_time", "wiki_links", "changes"}:
+        if args.keys() - {"last_compile_time", "changes"}:
             raise CompileFailure(
                 "INVALID_ARGUMENT",
                 "VikingBot Compile does not implement provider-specific args.",
@@ -549,11 +548,6 @@ class BotCompileService:
                     "Unavailable snapshots require full execution",
                     stage="queued",
                 )
-        wiki_links = args.get("wiki_links", False)
-        if not isinstance(wiki_links, bool):
-            raise CompileFailure(
-                "INVALID_ARGUMENT", "args.wiki_links must be a boolean", stage="queued"
-            )
         raw_sources = [str(value).strip() for value in request.from_]
         if not raw_sources or any(not value for value in raw_sources):
             raise CompileFailure(
@@ -594,15 +588,14 @@ class BotCompileService:
 
             raw_target = request.to.strip().rstrip("/")
             try:
-                target_attrs = await client.attrs(raw_target)
+                target_stat = await client.stat(raw_target)
             except OpenVikingError as exc:
                 if exc.code != "NOT_FOUND":
                     raise
                 self._validate_target_directory(raw_target, {"isDir": True})
-                await client.mkdir(raw_target)
-                target_attrs = await client.attrs(raw_target)
-            target = str(target_attrs.get("uri") or "").rstrip("/")
-            target_stat = await client.stat(target)
+                await client.mkdir(raw_target, description="compile target folder")
+                target_stat = await client.stat(raw_target)
+            target = str(target_stat.get("uri") or "").rstrip("/")
             self._validate_target_directory(target, target_stat)
         except CompileFailure:
             raise
@@ -623,7 +616,6 @@ class BotCompileService:
                 "skill": canonical_skill,
                 "last_compile_time": None if changes is not None else cutoff,
                 "changes": changes,
-                "wiki_links": wiki_links,
             }
         )
 
@@ -997,7 +989,6 @@ class BotCompileService:
                         root_uri=request.to,
                         operations=rendered.operations,
                         wait=False,
-                        defer_processing=True,
                         edit_source="compile",
                     )
                 except OpenVikingError as exc:
@@ -1029,7 +1020,6 @@ class BotCompileService:
                     "unchanged": unchanged,
                     "page_count": page_count,
                     "link_count": rendered.link_count,
-                    "link_report": rendered.link_report,
                     "warnings": warnings,
                 }
             )
@@ -1202,7 +1192,6 @@ class BotCompileService:
                     operations=rendered.operations,
                     wait=False,
                     skip_conflicts=True,
-                    defer_processing=True,
                     edit_source="compile",
                 )
             conflicts = result.get("conflicts", [])
@@ -1243,7 +1232,6 @@ class BotCompileService:
                 ),
                 page_count=len(set(published)),
                 link_count=rendered.link_count,
-                link_report=rendered.link_report,
                 warnings=pipeline.warnings,
             )
 
@@ -1356,10 +1344,10 @@ class BotCompileService:
         skill_dir: Path,
         stage: str = "loading_skill",
     ) -> None:
+        """Copy a Skill package and reject attachment paths outside skill_dir."""
         skill_dir.mkdir(parents=True, exist_ok=True)
         content = str(skill_result.get("content") or "")
-        encoded = content.encode("utf-8")
-        (skill_dir / "SKILL.md").write_bytes(encoded)
+        (skill_dir / "SKILL.md").write_bytes(content.encode("utf-8"))
 
         files = skill_result.get("files") or []
         for item in files:
@@ -1388,9 +1376,6 @@ class BotCompileService:
     ) -> dict[str, list[str]]:
         """Publish one validated package, retaining untouched existing attachments.
 
-        Pipeline operations contain target-relative file revisions. Recheck those
-        revisions against the materialized package before invoking the Skill API;
-        Skill updates replace the whole package and do not offer atomic file CAS.
         The returned URIs identify Skill roots, as required by Compile's Skill result.
         """
         result = {"created": [], "updated": [], "unchanged": []}
@@ -1440,12 +1425,7 @@ class BotCompileService:
                     relative_uri_path(target_uri, operation["uri"])
                 )
                 local = temp_root / relative
-                old = local.read_bytes() if local.is_file() else None
-                expected = operation.get("expected_sha256")
-                if (operation["mode"] == "create" and local.exists()) or (
-                    operation["mode"] == "replace"
-                    and (old is None or content_hash(old) != expected)
-                ):
+                if operation["mode"] == "create" and local.exists():
                     raise CompileFailure(
                         "WRITE_CONFLICT", f"Skill file changed: {operation['uri']}", stage="writing"
                     )
@@ -1466,7 +1446,10 @@ class BotCompileService:
                 )
             if exists:
                 published = await client.update_skill(
-                    skill_name, str(skill_dir), target_uri=target_uri, wait=True
+                    skill_name,
+                    str(skill_dir),
+                    target_uri=target_uri,
+                    wait=True,
                 )
             else:
                 published = await client.add_skill(str(skill_dir), target_uri=target_uri, wait=True)

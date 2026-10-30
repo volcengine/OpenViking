@@ -494,6 +494,89 @@ SQLite 仅支持同机共享同一个本地磁盘数据库文件，不支持 EFS
 
 重启恢复要求队列内容已持久化。QueueFS 默认使用 SQLite；使用 cache 后端时，持久性取决于所配置的 Provider。memory 后端不保留进程退出后的任务。
 
+### 单实例路径锁 Provider 切换：filesystem → Redis
+
+这里切换的是 **路径锁的存储与协调后端**：从 filesystem Provider 使用的
+`.ovlock` 锁文件，切换为 cache Provider 使用的 Redis 锁记录。
+业务文件仍保存在原有文件存储中，QueueFS 仍使用原有持久化队列后端
+（例如 SQLite）；业务数据和队列消息无需迁入 Redis。
+
+此流程仅支持 **单实例、停机切换**。按以下步骤操作：
+
+1. 暂停新请求和任务提交，禁用可能自动拉起旧实例的自动重启或调度策略，
+   保留原有文件存储和持久化队列。
+2. 停止旧服务及其所有队列消费进程。在进程管理器或部署平台中核对旧实例的
+   PID / 容器已全部退出，且没有残留子进程、独立 worker 或其他访问同一存储的
+   filesystem 路径锁写入者；确认旧实例的锁心跳续租任务也已停止。
+   **完成此检查前，不得启动使用 Redis 路径锁的新实例。**
+3. 将 `storage.agfs.pathlock.provider` 从 `filesystem` 改为 `cache`，
+   并将该 cache Provider 配置为使用 Redis。
+4. 启动一个新实例，检查积压任务从原队列恢复、在 Redis 中取得新路径锁并正常消费，
+   再恢复请求入口和任务提交。
+
+`handoff` 会保留旧进程内的 lease 并继续心跳续租，因此停止请求入口或关闭监听端口
+不足以证明旧写入者已停止；必须确认上述进程全部退出。进程退出后，其内存中的
+lease registry 和心跳任务随之终止，磁盘上仍可能残留 `.ovlock` token。
+无需排空队列、删除这些锁文件或等待旧租约过期。
+
+filesystem 与 Redis 是相互独立的锁协调域，Redis 的 acquire **不会检查或阻挡
+旧 filesystem token**。如果旧进程仍在运行，同一路径可能同时被两套后端授予
+不同 owner，两个进程也可能同时写业务文件；等待旧 token 过期不能替代退出检查。
+
+新 handoff 包含 `handle_mode`；旧消息缺少该字段时仍可恢复。
+消费者遇到 Provider 变化或旧 token 不可用时，按完整逻辑路径和 Exact/Tree
+类型重新加锁，获得新 owner 后才执行任务。优先使用 `covered_paths`；
+旧 `.path.ovlock` 可反解 Tree 路径，无法反解的 Exact 文件名使用任务自身的
+完整路径请求。不会只恢复混合批次中的部分路径。
+重新加锁遇到冲突或服务错误时保留任务重试；非法覆盖、失效引用和重复 adopt
+不会触发重新加锁。旧 `.ovlock` 文件无需扫描或复制到 Redis。
+
+恢复必须携带有效账号上下文；缺少上下文或覆盖路径不属于该账号时拒绝恢复。
+语义任务优先保留 `covered_paths` 中的 Exact/Tree 类型；历史消息缺少覆盖类型、
+无法确定原始粒度时，按任务路径保守获取 Tree 锁并记录 warning。
+这可能将原来的 Exact 锁扩大为 Tree 锁，降低恢复期间的并发度。
+
+### 恢复阻塞的重试与告警
+
+QueueFS 没有全局最大重试次数或死信队列。AddResource、Reindex、ContentWrite
+和 Semantic 消费者对 `HandoffRecoveryBlocked` 的每条投递链最多重试 8 次
+（首次尝试之外），通过替代消息中的 `lock_handoff_retry` 持久化计数。
+如果替代消息已入队、原消息尚未 ACK 时进程崩溃，恢复后两条消息可能形成
+不同的投递链，各自沿用消息中的计数，因此这不是同一 work 的全局重试上限。
+每次重试前等待
+`min(0.5 × 2^retry, 30)` 秒；退避期间仍占用当前消费者槽位。
+等待取消或重新入队失败时，不 ACK 原消息；达到上限时结束该 work 并记录失败，
+关联任务通过任务跟踪机制进入 FAILED，可查询失败原因。失败不会自动进入死信队列。
+
+每次阻塞记录 warning，达到上限记录 error，并导出
+`openviking_pathlock_recovery_blocked_total{queue, outcome}`，其中 `outcome`
+为 `retry` 或 `exhausted`。先启用 `server.observability.metrics.enabled`
+和 `server.observability.metrics.exporters.prometheus.enabled`，配置 Prometheus
+抓取 `/metrics`，再将以下示例加入 Prometheus 告警规则：
+
+```yaml
+groups:
+  - name: openviking-pathlock-recovery
+    rules:
+      - alert: OpenVikingPathlockRecoveryBlocked
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="retry"}[5m])) >= 8
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenViking 路径锁恢复反复阻塞"
+      - alert: OpenVikingPathlockRecoveryExhausted
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="exhausted"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenViking 路径锁恢复已达重试上限"
+```
+
+阈值应按业务流量调整。告警后结合日志中的 `task_id` 和失败原因检查竞争写入者或
+Redis 可用性，解决原因后重新提交失败任务。指标启用和规则配置见
+[指标体系](./12-metrics.md)及 [Grafana 与 Prometheus](../guides/11-grafana-prometheus.md)。
+
 ## 相关文档
 
 - [架构概述](./01-architecture.md) - 系统整体架构

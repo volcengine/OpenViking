@@ -2650,7 +2650,7 @@ class ResourceService:
         telemetry_cleanup_scheduled = False
 
         async def record_package(skill_uri: str, lease_ref: Any) -> None:
-            """Preserve standalone ordinary packages under their lease for Compile rollback."""
+            """Record an ordinary Skill package operation under its content lease."""
             if (
                 self.compile_versions is not None
                 and owner_lease_ref is None
@@ -2663,9 +2663,7 @@ class ResourceService:
                     ctx,
                     "agent_revise",
                     {},
-                    lambda: self.compile_versions.register_transfer(
-                        skill_uri, skill_uri, ctx, lease_ref=lease_ref
-                    ),
+                    lambda: self.compile_versions.register_transfer(ctx),
                 )
 
         try:

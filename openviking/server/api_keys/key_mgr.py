@@ -364,8 +364,8 @@ class APIKeyManager:
     async def get_group_members(self, account_id, group_id):
         return await self._store.get_group_members(account_id, group_id)
 
-    async def add_group_member(self, account_id, group_id, user_id):
-        return await self._store.add_group_member(account_id, group_id, user_id)
+    async def add_group_members(self, account_id, group_id, user_ids):
+        return await self._store.add_group_members(account_id, group_id, user_ids)
 
     async def remove_group_member(self, account_id, group_id, user_id):
         return await self._store.remove_group_member(account_id, group_id, user_id)

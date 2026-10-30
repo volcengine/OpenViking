@@ -4,7 +4,6 @@
 
 import asyncio
 import json
-import random
 from collections.abc import Collection
 from typing import Any, Protocol
 
@@ -12,19 +11,12 @@ from openviking.pyagfs import AGFSNotFoundError, AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.server.account_stores.models import AccountSummary
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.errors import ResourceBusyError
-from openviking.system_assets.sync import SystemAssetSynchronizer
+from openviking.system_assets.sync import (
+    SYSTEM_ASSET_MANIFEST_PATH,
+    SystemAssetSynchronizer,
+    system_asset_sync_lock,
+)
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils import get_logger
-
-logger = get_logger(__name__)
-
-_SYNC_MAX_RETRIES = 6
-_SYNC_RETRY_BASE_DELAY_SECONDS = 0.2
-_SYNC_RETRY_MAX_DELAY_SECONDS = 2.0
-
-_SYSTEM_ASSET_MANIFEST_PATH = "/local/_system/system_assets_manifest.json"
-_RECONCILE_LOCK_TIMEOUT_SECONDS = 300.0
 
 
 class AccountLister(Protocol):
@@ -63,20 +55,14 @@ class SystemAssetReconciler:
         if await self._read_manifest_digest() == digest:
             return 0
 
-        lease = await self._agfs.pathlock_acquire_exact(
-            _SYSTEM_ASSET_MANIFEST_PATH,
-            timeout_secs=_RECONCILE_LOCK_TIMEOUT_SECONDS,
-        )
-        try:
+        async with system_asset_sync_lock(self._agfs) as lease:
             if await self._read_manifest_digest() == digest:
                 return 0
-            synced_accounts = await self.sync_all()
+            synced_accounts = await self._sync_all()
             await self._write_manifest(manifest, lease)
             return synced_accounts
-        finally:
-            await self._agfs.pathlock_release(lease)
 
-    async def sync_all(self) -> int:
+    async def _sync_all(self) -> int:
         synced_accounts = 0
         page = 1
         while True:
@@ -118,10 +104,10 @@ class SystemAssetReconciler:
         return synced_accounts
 
     async def _read_manifest_digest(self) -> str | None:
-        fs_ctx = fs_ctx_from_agfs_path(_SYSTEM_ASSET_MANIFEST_PATH)
+        fs_ctx = fs_ctx_from_agfs_path(SYSTEM_ASSET_MANIFEST_PATH)
         fs_ctx["bypass_cache"] = "true"
         try:
-            result = await self._agfs.read(_SYSTEM_ASSET_MANIFEST_PATH, fs_ctx=fs_ctx)
+            result = await self._agfs.read(SYSTEM_ASSET_MANIFEST_PATH, fs_ctx=fs_ctx)
         except (AGFSNotFoundError, FileNotFoundError):
             return None
 
@@ -136,10 +122,10 @@ class SystemAssetReconciler:
         return digest if isinstance(digest, str) else None
 
     async def _write_manifest(self, manifest: bytes, lease: Any) -> None:
-        fs_ctx = _lease_fs_ctx(_SYSTEM_ASSET_MANIFEST_PATH, lease)
-        await self._agfs.ensure_parent_dirs(_SYSTEM_ASSET_MANIFEST_PATH, fs_ctx=fs_ctx)
+        fs_ctx = _lease_fs_ctx(SYSTEM_ASSET_MANIFEST_PATH, lease)
+        await self._agfs.ensure_parent_dirs(SYSTEM_ASSET_MANIFEST_PATH, fs_ctx=fs_ctx)
         await self._agfs.write(
-            _SYSTEM_ASSET_MANIFEST_PATH,
+            SYSTEM_ASSET_MANIFEST_PATH,
             manifest,
             fs_ctx=fs_ctx,
             auto_pathlock=False,
@@ -153,27 +139,9 @@ class SystemAssetReconciler:
             user=UserIdentifier(account_id, self._user_id),
             role=Role(Role.ROOT),
         )
-        for retry in range(_SYNC_MAX_RETRIES + 1):
-            try:
-                async with self._semaphore:
-                    return await self._synchronizer.sync(ctx)
-            except ResourceBusyError:
-                if retry == _SYNC_MAX_RETRIES:
-                    raise
-                delay = min(
-                    _SYNC_RETRY_BASE_DELAY_SECONDS * (2**retry),
-                    _SYNC_RETRY_MAX_DELAY_SECONDS,
-                ) * random.uniform(0.8, 1.2)
-                logger.warning(
-                    "System assets busy for account %s; retry %d/%d in %.2fs",
-                    account_id,
-                    retry + 1,
-                    _SYNC_MAX_RETRIES,
-                    delay,
-                )
-                await asyncio.sleep(delay)
+        async with self._semaphore:
+            return await self._synchronizer.sync_under_lock(ctx)
 
-        raise AssertionError("unreachable")
 
 def _lease_fs_ctx(path: str, lease: Any) -> dict[str, str]:
     fs_ctx = fs_ctx_from_agfs_path(path)

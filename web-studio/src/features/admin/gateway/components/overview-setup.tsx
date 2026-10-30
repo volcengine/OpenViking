@@ -1,12 +1,17 @@
+import * as React from 'react'
+import { useMutation } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   ArrowRightIcon,
   CheckIcon,
+  DownloadIcon,
+  KeyRoundIcon,
   ListChecksIcon,
+  LoaderCircleIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import * as React from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { cn } from '#/shared/lib/utils'
@@ -15,22 +20,24 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from '#/shared/ui/card'
+import { copyTextToClipboard } from '#/shared/lib/clipboard'
 
-import { ManagementUnlockButton } from '#/features/admin/gateway/components/access-notices'
-import { KeysIssueDialog } from '#/features/admin/gateway/components/keys-issue-dialog'
-import { KeysSecretDialog } from '#/features/admin/gateway/components/keys-secret-dialog'
-import { OverviewQuickStart } from '#/features/admin/gateway/components/overview-quick-start'
-import { RecommendedProfileButton } from '#/features/admin/gateway/components/recommended-profile-button'
+import { issueKey } from '#/features/admin/gateway/lib/api'
 import type {
   IssuedKey,
   KeyRequest,
   Upstream,
+  VlmImportResult,
 } from '#/features/admin/gateway/lib/api'
-import { quickPlan } from '#/features/admin/gateway/lib/quick-start'
+import { toastGatewayError } from '#/features/admin/gateway/lib/error-toast'
+import {
+  isQuickUsable,
+  quickPlan,
+  quickProfile,
+} from '#/features/admin/gateway/lib/quick-start'
 import { NEW_ID } from '#/features/admin/gateway/lib/search'
 import {
   useConnectionInfo,
@@ -39,6 +46,15 @@ import {
   useProfiles,
   useUpstreams,
 } from '#/features/admin/gateway/lib/use-gateway'
+import { ManagementUnlockButton } from '#/features/admin/gateway/components/access-notices'
+import { KeysIssueDialog } from '#/features/admin/gateway/components/keys-issue-dialog'
+import { KeysSecretDialog } from '#/features/admin/gateway/components/keys-secret-dialog'
+import { OverviewQuickStart } from '#/features/admin/gateway/components/overview-quick-start'
+import { RecommendedProfileButton } from '#/features/admin/gateway/components/recommended-profile-button'
+import {
+  ImportResultNotice,
+  useVlmImport,
+} from '#/features/admin/gateway/components/upstreams-page'
 
 type StepState = 'done' | 'current' | 'todo'
 
@@ -102,8 +118,29 @@ function SetupStep({
       <div className="text-sm leading-6 text-muted-foreground">
         {description}
       </div>
-      <div className="mt-auto flex flex-wrap gap-2">{children}</div>
+      <div className="mt-auto flex flex-col items-start gap-1">{children}</div>
     </li>
+  )
+}
+
+/** A step's way around its one-click action, e.g. the full form. */
+function StepLink(props: React.ComponentProps<typeof Button>) {
+  return (
+    <Button
+      size="sm"
+      variant="link"
+      className="h-auto px-0 text-muted-foreground hover:text-foreground"
+      {...props}
+    />
+  )
+}
+
+/** Whether an import saved something that still needs a look. */
+function needsReview(result: VlmImportResult) {
+  return (
+    result.needs_confirmation.length > 0 ||
+    result.skipped.length > 0 ||
+    result.imported.length === 0
   )
 }
 
@@ -115,18 +152,30 @@ type QuickIssued = {
 
 /**
  * Checklist from an empty gateway to the first request: add an upstream,
- * create a context profile (one click with recommended settings), issue a
- * key, connect a client. A step is done once its list is non-empty. Before
- * the first key, quick mode does the first three steps in one click.
+ * create a context profile, issue a key, connect a client. Each of the first
+ * three steps runs in place with one click (import OpenViking's model
+ * settings, create the recommended profile, issue a key for yourself), with a
+ * link to the full form beside it. A step is done once its list is non-empty.
+ * Before the first key, quick mode does the first three steps in one click.
  */
 export function OverviewSetup() {
   const { t } = useTranslation('gateway')
-  const { access, readOnly } = useGateway()
+  const { connection, access, readOnly, invalidate } = useGateway()
   const { isGatewayHost } = useAppConnection()
   const upstreams = useUpstreams()
   const profiles = useProfiles()
   const keys = useKeys()
   const connectionInfo = useConnectionInfo()
+  const vlmImport = useVlmImport({
+    onSuccess: (result) => {
+      if (!needsReview(result))
+        toast.success(
+          t('upstreams.import.summary', { count: result.imported.length }),
+        )
+    },
+    onError: (error) => toastGatewayError(t, error),
+  })
+  const importing = vlmImport.importer.isPending
   const plan = quickPlan({
     keys: keys.data,
     upstreams: upstreams.data,
@@ -146,6 +195,49 @@ export function OverviewSetup() {
     setIssued(next)
     setSecretOpen(true)
   }
+  const openIssueDialog = (defaults: KeyRequest) => {
+    setIssueSession((session) => session + 1)
+    setIssueDefaults(defaults)
+  }
+
+  const baseUrl = connectionInfo.data?.base_url
+  const copyAddress = async () => {
+    try {
+      await copyTextToClipboard(baseUrl ?? '')
+      toast.success(t('copy.done'))
+    } catch {
+      toast.error(t('copy.failed'))
+    }
+  }
+
+  // Step 3 issues the key quick mode would: the preferred profile and every
+  // upstream usable without further setup.
+  const keyProfile = quickProfile(profiles.data ?? [])
+  const usableUpstreams = (upstreams.data ?? []).filter(isQuickUsable)
+  const keyRequest: KeyRequest = {
+    name: t('overview.setup.key.name'),
+    policy_id: keyProfile?.id ?? '',
+    upstream_ids: usableUpstreams.map((upstream) => upstream.id),
+    models: [],
+  }
+  const issue = useMutation({
+    mutationFn: (request: KeyRequest) => issueKey(connection, request),
+    onSuccess: async (key) => {
+      showSecret({
+        issued: key,
+        profileName: keyProfile?.name,
+        upstreams: upstreams.data ?? [],
+      })
+      await invalidate('keys', 'overview', 'tools')
+    },
+    onError: (error) => toastGatewayError(t, error),
+  })
+  // Root picks the key's user, and without a usable upstream the form lets
+  // you pick one by hand; otherwise the key is issued right away.
+  const issueNow = () =>
+    plan.pickUser || !usableUpstreams.length
+      ? openIssueDialog(keyRequest)
+      : issue.mutate(keyRequest)
 
   const counts = [upstreams.data, profiles.data, keys.data].map(
     (list) => list?.length,
@@ -165,6 +257,7 @@ export function OverviewSetup() {
   const variantOf = (index: number) =>
     index === current && !plan.shown ? 'default' : 'outline'
   const [upstreamCount = 0, profileCount = 0, keyCount = 0] = counts
+  const keyReady = loaded && done[0] && done[1]
   // Upstreams imported from the server's VLM settings carry a `vlm-` id.
   const importedCount =
     upstreams.data?.filter((item) => item.id.startsWith('vlm-')).length ?? 0
@@ -198,7 +291,6 @@ export function OverviewSetup() {
           </span>
           {t('overview.setup.title')}
         </CardTitle>
-        <CardDescription>{t('overview.setup.description')}</CardDescription>
         {loaded ? (
           <CardAction>
             <span className="rounded-full border bg-background/70 px-2.5 py-1 text-xs text-muted-foreground tabular-nums">
@@ -218,10 +310,7 @@ export function OverviewSetup() {
               onIssued={(key, profileName, list) =>
                 showSecret({ issued: key, profileName, upstreams: list })
               }
-              onPickUser={(request) => {
-                setIssueSession((session) => session + 1)
-                setIssueDefaults(request)
-              }}
+              onPickUser={openIssueDialog}
             />
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <span className="h-px flex-1 bg-border" />
@@ -229,6 +318,12 @@ export function OverviewSetup() {
               <span className="h-px flex-1 bg-border" />
             </div>
           </>
+        ) : null}
+        {vlmImport.result && needsReview(vlmImport.result) ? (
+          <ImportResultNotice
+            result={vlmImport.result}
+            onDismiss={vlmImport.dismiss}
+          />
         ) : null}
         <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <SetupStep
@@ -283,19 +378,56 @@ export function OverviewSetup() {
             ) : readOnly ? (
               <ManagementUnlockButton />
             ) : (
-              <Button
-                size="sm"
-                variant={variantOf(0)}
-                nativeButton={false}
-                render={
-                  <Link
-                    to="/admin/gateway/upstreams/$upstreamId"
-                    params={{ upstreamId: NEW_ID }}
-                  />
-                }
-              >
-                {t('overview.setup.upstream.action')}
-              </Button>
+              <>
+                {access?.can_import_vlm ? (
+                  <>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={variantOf(0)}
+                      disabled={importing || !upstreams.data}
+                      title={t('upstreams.import.hint')}
+                      onClick={() => vlmImport.importer.mutate()}
+                    >
+                      {importing ? (
+                        <LoaderCircleIcon className="animate-spin" />
+                      ) : (
+                        <DownloadIcon />
+                      )}
+                      {t(
+                        importing
+                          ? 'upstreams.import.running'
+                          : 'upstreams.import.action',
+                      )}
+                    </Button>
+                    <StepLink
+                      nativeButton={false}
+                      render={
+                        <Link
+                          to="/admin/gateway/upstreams/$upstreamId"
+                          params={{ upstreamId: NEW_ID }}
+                        />
+                      }
+                    >
+                      {t('overview.setup.upstream.manual')}
+                    </StepLink>
+                  </>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant={variantOf(0)}
+                    nativeButton={false}
+                    render={
+                      <Link
+                        to="/admin/gateway/upstreams/$upstreamId"
+                        params={{ upstreamId: NEW_ID }}
+                      />
+                    }
+                  >
+                    {t('overview.setup.upstream.action')}
+                  </Button>
+                )}
+              </>
             )}
           </SetupStep>
           <SetupStep
@@ -324,12 +456,11 @@ export function OverviewSetup() {
             ) : (
               <>
                 <RecommendedProfileButton
+                  label={t('overview.setup.profile.action')}
                   variant={variantOf(1)}
                   disabled={!profiles.data}
                 />
-                <Button
-                  size="sm"
-                  variant="ghost"
+                <StepLink
                   nativeButton={false}
                   render={
                     <Link
@@ -339,7 +470,7 @@ export function OverviewSetup() {
                   }
                 >
                   {t('profiles.actions.customize')}
-                </Button>
+                </StepLink>
               </>
             )}
           </SetupStep>
@@ -347,36 +478,43 @@ export function OverviewSetup() {
             number={3}
             state={stateOf(2)}
             title={t('overview.setup.key.title')}
-            description={
-              done[2] ? (
-                t('overview.setup.key.done', { count: keyCount })
-              ) : (
-                <>
-                  <p>{t('overview.setup.key.description')}</p>
-                  {loaded && !(done[0] && done[1]) ? (
-                    <p className="mt-1 text-xs">
-                      {t(
-                        readOnly
-                          ? 'overview.setup.key.waiting'
-                          : 'overview.setup.key.blocked',
-                      )}
-                    </p>
-                  ) : null}
-                </>
-              )
-            }
+            description={t(
+              done[2]
+                ? 'overview.setup.key.done'
+                : !keyReady
+                  ? readOnly
+                    ? 'overview.setup.key.waiting'
+                    : 'overview.setup.key.blocked'
+                  : 'overview.setup.key.description',
+              { count: keyCount },
+            )}
           >
             {done[2] ? (
               viewButton('/admin/gateway/keys')
             ) : (
-              <Button
-                size="sm"
-                variant={variantOf(2)}
-                nativeButton={false}
-                render={<Link to="/admin/gateway/keys" />}
-              >
-                {t('overview.setup.key.action')}
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={variantOf(2)}
+                  disabled={!keyReady || issue.isPending}
+                  onClick={issueNow}
+                >
+                  {issue.isPending ? (
+                    <LoaderCircleIcon className="animate-spin" />
+                  ) : (
+                    <KeyRoundIcon />
+                  )}
+                  {t('overview.setup.key.action')}
+                </Button>
+                <StepLink
+                  type="button"
+                  disabled={!keyReady}
+                  onClick={() => openIssueDialog(keyRequest)}
+                >
+                  {t('profiles.actions.customize')}
+                </StepLink>
+              </>
             )}
           </SetupStep>
           <SetupStep
@@ -393,6 +531,13 @@ export function OverviewSetup() {
             >
               {t('overview.setup.connect.action')}
             </Button>
+            <StepLink
+              type="button"
+              disabled={!baseUrl}
+              onClick={() => void copyAddress()}
+            >
+              {t('address.copy')}
+            </StepLink>
           </SetupStep>
         </ol>
       </CardContent>
@@ -419,7 +564,7 @@ export function OverviewSetup() {
       <KeysSecretDialog
         open={secretOpen}
         issued={issued?.issued ?? null}
-        baseUrl={connectionInfo.data?.base_url ?? ''}
+        baseUrl={baseUrl ?? ''}
         profileName={issued?.profileName}
         upstreams={issued?.upstreams ?? []}
         onDone={() => setSecretOpen(false)}

@@ -843,7 +843,7 @@ enum Commands {
         /// Who made the edit, recorded in Compile output versions
         #[arg(
             long = "edit-source",
-            default_value = "agent",
+            default_value = "manual",
             value_parser = ["manual", "agent", "compile"],
             help_heading = "Advanced options"
         )]
@@ -1297,7 +1297,7 @@ enum Commands {
         /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]
         instruction: Option<String>,
-        /// Provider arguments as JSON; VikingBot wiki_links defaults to false
+        /// Provider arguments as JSON
         #[arg(long, value_name = "json")]
         args: Option<String>,
     },

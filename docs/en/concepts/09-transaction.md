@@ -489,6 +489,106 @@ Legacy compatibility form:
 
 Restart recovery requires persisted queue data. QueueFS uses SQLite by default. With the cache backend, durability depends on the configured Provider; the memory backend loses queued work when the process exits.
 
+### Single-instance path lock provider switch: filesystem → Redis
+
+This switches the **storage and coordination backend for path locks**: from
+`.ovlock` files managed by the filesystem provider to Redis lock records managed
+by the cache provider. Business files stay in their existing file storage, and
+QueueFS keeps its existing persistent queue backend, such as SQLite. Business
+data and queue messages do not need to move to Redis.
+
+This procedure supports only a **single instance with downtime**:
+
+1. Pause incoming requests and task submissions. Disable any automatic restart
+   or scheduling policy that could restart the old instance. Keep
+   the existing file storage and persistent queues.
+2. Stop the old service and all its queue consumer processes. Verify in the
+   process manager or deployment platform that every old instance PID / container
+   has exited, with no remaining child processes, standalone workers or other
+   writers using filesystem path locks against the same storage. Confirm that
+   the old instance's lock heartbeat renewal tasks have also stopped.
+   **Do not start the instance using Redis path locks until this check passes.**
+3. Change `storage.agfs.pathlock.provider` from `filesystem` to `cache` and
+   configure that cache provider to use Redis.
+4. Start one new instance. Verify that pending jobs recover from the existing
+   queue, acquire fresh path locks in Redis and resume consumption, then reopen
+   incoming requests and task submissions.
+
+`handoff` retains the lease in the old process and keeps its heartbeat running.
+Pausing requests or closing the listening port does not prove that the old
+writers have stopped; verify that all the processes above have exited. Process
+exit terminates their in-memory lease registries and heartbeat tasks, while
+`.ovlock` tokens may remain on disk. Draining the queue, deleting those lock
+files or waiting for old leases to expire is not required.
+
+Filesystem and Redis are independent lock coordination domains: Redis acquire
+**does not check or block old filesystem tokens**. If an old process remains
+alive, both backends can grant different owners the same path, allowing both
+processes to write business files. Waiting for old tokens to expire cannot
+replace the process exit check.
+
+New handoffs include `handle_mode`; historic payloads without it remain supported.
+On a provider change or an unavailable token, consumers acquire the complete
+logical coverage with its Exact/Tree kinds under a new owner before resuming.
+They prefer `covered_paths`, invert historic `.path.ovlock` Tree handles, and use
+the operation's complete requests for non-invertible Exact handles. Recovery
+never acquires only part of a mixed batch. Acquisition conflicts and service
+errors leave durable work pending for retry. Malformed coverage, invalidated
+references, and duplicate adoption do not trigger reacquisition. Old `.ovlock`
+files need no scanning or copying into Redis.
+
+Recovery requires a valid account context and rejects coverage outside that
+account. Semantic jobs preserve the Exact/Tree kind in `covered_paths`. When a
+historic message has no coverage kind and its original granularity cannot be
+determined, recovery conservatively acquires a Tree lock on the operation path
+and logs a warning. This can widen an original Exact lock to Tree and reduce
+concurrency during recovery.
+
+### Blocked recovery retries and alerts
+
+QueueFS has no global retry limit or dead-letter queue. AddResource, Reindex,
+ContentWrite and Semantic consumers allow up to eight retries per delivery chain
+after the initial attempt for `HandoffRecoveryBlocked`, persisting
+`lock_handoff_retry` in the replacement message. If the process crashes after
+the replacement is enqueued but before the original is ACKed, recovery can
+create separate delivery chains from both messages, each retaining its own
+counter. This is therefore not a global retry limit for the same work.
+Each retry waits `min(0.5 × 2^retry, 30)` seconds; backoff
+holds the current consumer slot. Cancellation during backoff or a failed
+enqueue leaves the original delivery unacknowledged. Exhaustion ends the work
+with a failure; task tracking transitions the associated task to FAILED with a
+queryable reason. Failures do not automatically enter a dead-letter queue.
+
+Each blocked recovery logs a warning; exhaustion logs an error. The counter
+`openviking_pathlock_recovery_blocked_total{queue, outcome}` distinguishes
+`retry` from `exhausted`. Enable `server.observability.metrics.enabled` and
+`server.observability.metrics.exporters.prometheus.enabled`, configure Prometheus
+to scrape `/metrics`, then add these example alert rules:
+
+```yaml
+groups:
+  - name: openviking-pathlock-recovery
+    rules:
+      - alert: OpenVikingPathlockRecoveryBlocked
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="retry"}[5m])) >= 8
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenViking pathlock recovery is repeatedly blocked"
+      - alert: OpenVikingPathlockRecoveryExhausted
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="exhausted"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenViking pathlock recovery retry limit reached"
+```
+
+Adjust thresholds for workload volume. Use the logged `task_id` and failure
+reason to investigate competing writers or Redis availability, then resubmit
+failed tasks after resolving the cause. See [Metrics](./12-metrics.md) and
+[Grafana and Prometheus](../guides/11-grafana-prometheus.md) for monitoring setup.
+
 ## Related Documentation
 
 - [Architecture](./01-architecture.md) - System architecture overview

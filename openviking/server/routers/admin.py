@@ -5,7 +5,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
 from fastapi import Response as HTTPResponse
@@ -89,6 +89,12 @@ class CreateGroupRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     group_id: str
+
+
+class AddGroupMembersRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    user_ids: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1, max_length=1000)
 
 
 class SetAgentEvolutionRequest(BaseModel):
@@ -1279,18 +1285,19 @@ async def list_group_members(
     return Response(status="ok", result={"group_id": group_id, "members": members})
 
 
-@router.put("/accounts/{account_id}/groups/{group_id}/members/{user_id}")
+@router.put("/accounts/{account_id}/groups/{group_id}/members")
 @require_auth_root_or_admin
-async def add_group_member(
+async def add_group_members(
+    body: AddGroupMembersRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     group_id: str = Path(..., description="Group ID"),
-    user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
+    """Add one or more users atomically; existing memberships are a no-op."""
     _check_account_access(ctx, account_id)
-    added = await _get_api_key_manager(request).add_group_member(
-        account_id, group_id, user_id
+    added = await _get_api_key_manager(request).add_group_members(
+        account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"added": added})
 

@@ -318,7 +318,7 @@ List background tasks visible to the current caller, supporting filtering by typ
 | task_type | str | No | None | Filter by task type, for example `session_commit` |
 | status | str | No | None | Filter by task status: `pending`, `running`, `cancelling`, `completed`, `failed`, `cancelled` |
 | resource_id | str | No | None | Filter by task resource ID, for example a session ID |
-| include_internal | bool | No | false | Include internal child tasks created by Connector imports |
+| include_internal | bool | No | false | Include internal tasks for Connector imports and Compile directory indexing |
 | limit | int | No | 50 | Maximum records per response, 1–200 |
 | pagination | str | No | None | HTTP-only; `cursor` returns a paginated result object |
 | cursor | str | No | None | HTTP-only; continuation token from `next_cursor`, used with `pagination=cursor` |
@@ -326,7 +326,7 @@ List background tasks visible to the current caller, supporting filtering by typ
 
 With `pagination=cursor`, `result` contains `items`, `has_more`, and `next_cursor` instead of an array. Pass `next_cursor` unchanged on the next request and keep the same filters and identity. Without cursor mode, `q` and `cursor` do not affect the result.
 
-By default, only user-visible tasks are returned. Pass `include_internal=true` when diagnosing a Connector import to include its internal `add_resource` child tasks.
+By default, only user-visible tasks are returned. Pass `include_internal=true` to inspect internal `add_resource` tasks for Connector imports and `ensure_directory_index` tasks for Compile directory indexing.
 
 #### 3. Usage Examples
 

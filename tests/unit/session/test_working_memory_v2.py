@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for Working Memory v2 merge guardrails."""
 
+from openviking.message import Message, TextPart
 from openviking.session import working_memory as wm
 
 
@@ -38,6 +39,67 @@ def _keep_all() -> dict:
         "Errors & Corrections": {"op": "KEEP"},
         "Open Issues": {"op": "KEEP"},
     }
+
+
+def _message(
+    message_id: str,
+    role: str,
+    text: str,
+    *,
+    created_at: str,
+    message_kind: str | None = None,
+) -> Message:
+    return Message(
+        id=message_id,
+        role=role,
+        parts=[TextPart(text)],
+        created_at=created_at,
+        message_kind=message_kind,
+    )
+
+
+def test_format_messages_for_wm_marks_each_turn_with_its_own_created_at():
+    messages = [
+        _message(
+            "u1",
+            "user",
+            "Yesterday I met Alice at the cafe.",
+            created_at="2026-09-12T08:00:00Z",
+            message_kind="user_query",
+        ),
+        _message(
+            "a1",
+            "assistant",
+            "Noted.",
+            created_at="2026-09-12T08:01:00Z",
+            message_kind="assistant_step",
+        ),
+        _message(
+            "u2",
+            "user",
+            "Yesterday, who did I meet?",
+            created_at="2026-09-13T09:00:00Z",
+            message_kind="user_query",
+        ),
+        _message(
+            "a2",
+            "assistant",
+            "You met Alice.",
+            created_at="2026-09-13T09:01:00Z",
+            message_kind="assistant_step",
+        ),
+    ]
+
+    formatted = wm.format_messages_for_wm(messages, [])
+
+    assert '<turn created_at="2026-09-12">' in formatted
+    assert '<turn created_at="2026-09-13">' in formatted
+    assert formatted.index('<turn created_at="2026-09-12">') < formatted.index(
+        "Yesterday I met Alice at the cafe."
+    )
+    assert formatted.index('<turn created_at="2026-09-13">') < formatted.index(
+        "Yesterday, who did I meet?"
+    )
 
 
 def test_dynamic_reminders_flag_large_key_facts_and_bulk_urls():

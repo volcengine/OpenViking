@@ -4,7 +4,6 @@ import json
 import pytest
 
 from openviking.server.identity import Role
-from openviking.storage.errors import ResourceBusyError
 from openviking.system_assets.reconcile import SystemAssetReconciler
 
 
@@ -45,16 +44,18 @@ class _FakeAccountLister:
 
 
 class _TrackingSynchronizer:
-    def __init__(self, failures=(), busy_once=()):
+    def __init__(self, agfs, failures=(), error_type=OSError):
+        self._agfs = agfs
         self._failures = set(failures)
-        self._busy_once = set(busy_once)
+        self._error_type = error_type
         self.manifest_digest = "d" * 64
         self.manifest = json.dumps({"schema_version": 1, "sha256": self.manifest_digest}).encode()
         self.accounts = []
         self.active = 0
         self.max_active = 0
 
-    async def sync(self, ctx):
+    async def sync_under_lock(self, ctx):
+        assert self._agfs.lock.locked()
         account_id = ctx.user.account_id
         assert ctx.role == Role.ROOT
         assert ctx.user.user_id == "system-user"
@@ -63,11 +64,8 @@ class _TrackingSynchronizer:
         self.max_active = max(self.max_active, self.active)
         try:
             await asyncio.sleep(0.01)
-            if account_id in self._busy_once:
-                self._busy_once.remove(account_id)
-                raise ResourceBusyError("busy")
             if account_id in self._failures:
-                raise OSError(f"failed {account_id}")
+                raise self._error_type(f"failed {account_id}")
             return 0
         finally:
             self.active -= 1
@@ -85,7 +83,7 @@ async def test_reconciler_pages_active_accounts_with_bounded_concurrency():
         ]
     )
     agfs = _FakeAGFS()
-    synchronizer = _TrackingSynchronizer(busy_once={"a"})
+    synchronizer = _TrackingSynchronizer(agfs)
     reconciler = SystemAssetReconciler(
         synchronizer,
         lister,
@@ -99,7 +97,7 @@ async def test_reconciler_pages_active_accounts_with_bounded_concurrency():
     assert lister.calls == [(2, 1), (2, 2), (2, 3)]
     assert set(synchronizer.accounts) == {"a", "c", "d", "e"}
     assert synchronizer.max_active == 2
-    assert synchronizer.accounts.count("a") == 2
+    assert synchronizer.accounts.count("a") == 1
     assert agfs.marker == synchronizer.manifest
     assert not agfs.lock.locked()
 
@@ -120,7 +118,7 @@ async def test_reconciler_skips_already_synced_account_without_ending_pagination
         ]
     )
     agfs = _FakeAGFS()
-    synchronizer = _TrackingSynchronizer()
+    synchronizer = _TrackingSynchronizer(agfs)
     reconciler = SystemAssetReconciler(
         synchronizer,
         lister,
@@ -147,7 +145,8 @@ async def test_reconciler_skips_already_synced_account_without_ending_pagination
 
 
 @pytest.mark.asyncio
-async def test_reconciler_reports_all_failures_in_page():
+@pytest.mark.parametrize("error_type", [OSError, asyncio.CancelledError])
+async def test_reconciler_reports_all_failures_in_page(error_type):
     lister = _FakeAccountLister(
         [
             {"account_id": "a", "status": "active"},
@@ -155,7 +154,7 @@ async def test_reconciler_reports_all_failures_in_page():
         ]
     )
     agfs = _FakeAGFS()
-    synchronizer = _TrackingSynchronizer(failures={"a", "b"})
+    synchronizer = _TrackingSynchronizer(agfs, failures={"a", "b"}, error_type=error_type)
     reconciler = SystemAssetReconciler(
         synchronizer,
         lister,
@@ -165,11 +164,13 @@ async def test_reconciler_reports_all_failures_in_page():
         max_concurrency=2,
     )
 
-    with pytest.raises(RuntimeError, match="failed for 2 account") as exc_info:
+    expected = RuntimeError if error_type is OSError else asyncio.CancelledError
+    with pytest.raises(expected) as exc_info:
         await reconciler.sync_if_changed()
 
-    assert "a: OSError: failed a" in str(exc_info.value)
-    assert "b: OSError: failed b" in str(exc_info.value)
+    if error_type is OSError:
+        assert "a: OSError: failed a" in str(exc_info.value)
+        assert "b: OSError: failed b" in str(exc_info.value)
 
     assert agfs.marker is None
     assert not agfs.lock.locked()

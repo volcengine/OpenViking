@@ -3,10 +3,16 @@
 """Construction of the optional embedded gateway, and the route class /mcp shares."""
 
 import os
+from pathlib import Path
 
 from starlette.routing import Match, Route
 
 from openviking.server.config import get_server_url_from_server_data
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
+
+LEGACY_STORAGE_PATH = "~/.openviking/gateway"
 
 
 class ScopedRoute(Route):
@@ -18,6 +24,21 @@ class ScopedRoute(Route):
         if match != Match.NONE:
             child_scope["route"] = self
         return match, child_scope
+
+
+def default_storage_path(workspace: str) -> str:
+    """Keep gateway state beside the server's data, unless only the legacy location has it."""
+    current = Path(workspace).expanduser() / "gateway"
+    legacy = Path(LEGACY_STORAGE_PATH).expanduser()
+    if not (current / "kernel.sqlite3").exists() and (legacy / "kernel.sqlite3").exists():
+        logger.warning(
+            "Using legacy gateway storage %s; the default is now %s. Copy the directory there "
+            "or set gateway.storage_path to keep this location.",
+            legacy,
+            current,
+        )
+        return str(legacy)
+    return str(current)
 
 
 def create_embedded_gateway(openviking_config, server_config, service_source):
@@ -47,6 +68,8 @@ def create_embedded_gateway(openviking_config, server_config, service_source):
         public := os.environ.get("OPENVIKING_PUBLIC_BASE_URL") or server_config.public_base_url
     ):
         update["public_url"] = normalize_url(public)
+    if "storage_path" not in config.model_fields_set:
+        update["storage_path"] = default_storage_path(openviking_config.storage.workspace)
     return create_app(
         config.model_copy(update=update),
         openviking_url=get_server_url_from_server_data(server_config),

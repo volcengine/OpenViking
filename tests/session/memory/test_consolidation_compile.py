@@ -199,7 +199,10 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
         ),
     )
     service = SimpleNamespace(
-        ensure_write_access=AsyncMock(), stat=fs.stat, _ensure_initialized=lambda: fs
+        ensure_write_access=AsyncMock(),
+        stat=fs.stat,
+        _ensure_initialized=lambda: fs,
+        finalize_compile_directories=AsyncMock(),
     )
     apply = AsyncMock(return_value=MemoryUpdateResult())
     monkeypatch.setattr("openviking.service.memory_compile.MemoryUpdater.apply_operations", apply)
@@ -210,6 +213,8 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
     accepted = await runner.create(target=target, instruction="整理全部已有记忆", ctx=_ctx())
     await asyncio.gather(*list(runner._running))
     final = await tracker.get(accepted.task_id, account_id="acc", user_id="u1")
+
+    service.finalize_compile_directories.assert_awaited_once_with(target, _ctx())
 
     vlm.get_completion_async.assert_awaited_once()
     fs.glob.assert_awaited_once()
@@ -762,7 +767,13 @@ async def test_compile_task_apply_outcomes(
         apply_result.add_error(f"{directory}/person/bob.md", RuntimeError("write failed"))
     apply = AsyncMock(return_value=apply_result)
     monkeypatch.setattr("openviking.service.memory_compile.MemoryUpdater.apply_operations", apply)
-    runner = MemoryCompileRunner(SimpleNamespace(_ensure_initialized=lambda: viking_fs))
+    finalize = AsyncMock()
+    runner = MemoryCompileRunner(
+        SimpleNamespace(
+            _ensure_initialized=lambda: viking_fs,
+            finalize_compile_directories=finalize,
+        )
+    )
 
     await runner._run(
         task_id=task.task_id,
@@ -792,8 +803,10 @@ async def test_compile_task_apply_outcomes(
     }
     if expected_status == TaskStatus.FAILED:
         assert final.error.startswith("MEMORY_CONSOLIDATION_FAILED:")
+        finalize.assert_not_awaited()
     else:
         assert final.error is None
+        finalize.assert_awaited_once_with(directory, ctx)
     assert not await tracker.has_work(
         task.task_id,
         account_id=ctx.account_id,

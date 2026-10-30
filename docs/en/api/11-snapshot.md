@@ -589,12 +589,14 @@ With `dry_run=true`, only the planned diff is returned and nothing is written. D
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | path | str | `viking://` URI of the Compile output file |
-| restore_version | str | Historical version supplying the restored content, such as `v1` |
-| current_version | str | Current version that must match before writing, such as `v2`; a mismatch returns `409 CONFLICT` with `error.details.resource: "VERSION_CONFLICT"` |
+| restore_version | str | UUID `version_id` of the historical version supplying the restored content |
+| current_version | str | UUID `version_id` of the current version observed by the caller; a mismatch returns `409 CONFLICT` with `error.details.resource: "VERSION_CONFLICT"` |
 
 Call `GET /api/v1/snapshot/versions?uri=<file URI>` to obtain `current_version` and the version history before submitting a restore:
 
-The response's `total` counts all retained, queryable versions before applying `limit` or `before_version`; use `next_before_version` to load older versions.
+Each version has a `version_id` (a full UUID4 hex string) and a positive integer `version_number`. Clients pass IDs unchanged for restore and pagination; use `version_number` to display labels such as `v1` and `v2`. Versions are returned newest first. Numbers increase within a file's lifecycle and remain unchanged across pages and history cleanup. A new version index starts numbering at 1; version IDs are not reused after deletion and recreation, so an old restore request cannot match the recreated file.
+
+The response's `to` identifies the file's owning Compile target directory; use it with a version's `meta.operation_id` to query operation details. `total` counts all retained, queryable versions before applying `limit` or `before_version`; it is not the latest version number. Pass `next_before_version` unchanged as `before_version` to load older versions. Both this cursor and `current_version` contain UUID IDs; do not sort or derive display numbers from IDs or page positions.
 
 ```bash
 curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
@@ -602,12 +604,14 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "viking://resources/wiki/entity/project.md",
-    "restore_version": "v1",
-    "current_version": "v2"
+    "restore_version": "0334d9abe4ac4f25a3e59d0b401bb01c",
+    "current_version": "54c71fb7bf134b71a9b7ed604c21f5b4"
   }'
 ```
 
-When v1 differs from the current content, restoring creates v3 with v1's content and preserves the history of v1 and v2. The response contains `version_id: "v3"` and `meta.restored_from: "v1"`. Identical content returns `result: "noop"` and `meta.restored_from: null` without creating a version.
+For example, when version 2 is current and version 1 has different content, restoring version 1 creates version 3 and preserves both earlier versions. The response contains a new UUID `version_id`, `version_number: 3`, and `meta.restored_from` equal to version 1's UUID. Identical content returns the current ID and number with `result: "noop"` and `meta.restored_from: null`, without creating a version or incrementing its number.
+
+The current version is checked before looking up the historical version and again under the write lock before changing content. A stale `current_version` returns `409 CONFLICT` with `error.details.resource: "VERSION_CONFLICT"`, including after deletion and recreation; a missing historical version returns `404` when the current version matches.
 
 Only the specified file is restored; related Wiki pages and index content retain their current content. A running Compile on the target returns `409 CONFLICT` with `error.details.resource: "COMPILE_RUNNING"`. This mode does not provide a `dry_run` preview; directory restore preview options do not apply to single-file restore.
 

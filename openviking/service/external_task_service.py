@@ -11,8 +11,10 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol
 from uuid import uuid4
 
+from openviking.pyagfs import GitConcurrentCommitError
+from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSNetworkError, AGFSTimeoutError
 from openviking.server.identity import RequestContext
-from openviking.service.task_domain import TaskPatch
+from openviking.service.task_domain import TaskPatch, sanitize_error
 from openviking.service.task_tracker import TaskRecord, TaskStatus, get_task_tracker
 from openviking.service.task_tracker_concurrency import (
     KeyedAsyncLockPool,
@@ -37,6 +39,10 @@ class ExternalTaskError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.transient = transient
+
+
+class _RetryExhaustedError(ExternalTaskError):
+    """Retries are exhausted; Runtime acceptance remains unknown."""
 
 
 @dataclass(frozen=True)
@@ -312,21 +318,48 @@ class ExternalTaskService:
                 )
 
     async def execute(self, task_id: str, account_id: str, user_id: str) -> bool:
-        """Return False when this delivery must rotate behind other target work."""
+        """Execute a delivery; return False when it needs requeueing."""
+        tracker = get_task_tracker()
+        try:
+            return await self._retry(
+                lambda: self._execute_once(task_id, account_id, user_id),
+                task_id=task_id,
+                operation_name="execute",
+                poll_interval=0.2,
+                max_attempts=3,
+            )
+        except asyncio.CancelledError:
+            if await tracker.is_cancellation_requested(
+                task_id, account_id=account_id, user_id=user_id
+            ):
+                await self.cancel_recovered(task_id, account_id, user_id)
+            raise
+        except Exception as exc:
+            await self.cancel_recovered(task_id, account_id, user_id, failure=exc)
+            return True
+
+    async def _execute_once(self, task_id: str, account_id: str, user_id: str) -> bool:
+        """Resume a delivery; return False while admission or finalization is pending."""
         tracker = get_task_tracker()
         claimed = False
         try:
             task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
-            if task is None or task.status in {
+            if task is None:
+                return True
+            if task.status in {
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
             }:
+                self._release(task)
                 return True
+            if task.status == TaskStatus.CANCELLING:
+                raise asyncio.CancelledError()
             # The outcome is persisted before QueueFS ACK removes the owned work.
             # After a crash in that window, let the recovered delivery ACK without
             # resubmitting credentials that have already been cleared.
             if task.result is not None or task.error is not None:
+                self._release(task)
                 return True
 
             provider = self._provider(task.task_type)
@@ -349,26 +382,34 @@ class ExternalTaskService:
                 self._owners.setdefault(key, set()).add(task_id)
             self._executing.add(task_id)
             claimed = True
+            auth = await self._task_auth(task_id, account_id, user_id)
+            if auth.get("external_cleanup_failure"):
+                await self.cancel_recovered(task_id, account_id, user_id)
+                return True
             on_start = getattr(provider, "on_start", None)
             if on_start is not None:
-                started = await on_start(task)
+                try:
+                    started = await on_start(task)
+                except (ResourceBusyError, GitConcurrentCommitError) as exc:
+                    if isinstance(exc, ResourceBusyError) and not exc.retryable:
+                        raise
+                    started = "busy"
                 if started == "busy":
                     self._release(task)
                     return False
                 if isinstance(started, ExternalTaskSnapshot):
-                    await self._apply_snapshot(
-                        started, task_id=task_id, account_id=account_id, user_id=user_id
+                    finished = await self._apply_snapshot(
+                        started,
+                        task_id=task_id,
+                        account_id=account_id,
+                        user_id=user_id,
+                        auth=auth,
                     )
-                    return True
+                    if not finished:
+                        await asyncio.sleep(provider.poll_interval_seconds)
+                    return finished
             await self._execute_task(task, provider, payload, account_id, user_id)
             return True
-        except asyncio.CancelledError:
-            if not await tracker.is_cancellation_requested(
-                task_id, account_id=account_id, user_id=user_id
-            ):
-                raise
-            await run_to_completion(lambda: self.cancel_recovered(task_id, account_id, user_id))
-            raise
         finally:
             # An interrupted delivery keeps ownership until recovery confirms
             # the Runtime has stopped; it must not admit another target writer.
@@ -389,28 +430,29 @@ class ExternalTaskService:
         connection = self._mapping(auth.get("openviking_connection"))
         private_payload = self._mapping(auth.get("external_request_private"))
         external_task_id = str(auth.get("external_task_id") or "").strip() or None
-        try:
-            await tracker.start(
+        await tracker.start(
+            task_id,
+            account_id=account_id,
+            user_id=user_id,
+            stage="polling" if external_task_id else "submitting",
+        )
+        if external_task_id is None:
+            external_task_id = await self._retry(
+                lambda: provider.submit(task_id, payload, private_payload, connection),
+                task_id=task_id,
+                operation_name="submit",
+                poll_interval=provider.poll_interval_seconds,
+                max_attempts=provider.poll_max_attempts,
+            )
+            await tracker.patch_task(
                 task_id,
+                TaskPatch(auth={"external_task_id": external_task_id}),
                 account_id=account_id,
                 user_id=user_id,
-                stage="polling" if external_task_id else "submitting",
             )
-            if external_task_id is None:
-                external_task_id = await self._retry(
-                    lambda: provider.submit(task_id, payload, private_payload, connection),
-                    task_id=task_id,
-                    operation_name="submit",
-                    poll_interval=provider.poll_interval_seconds,
-                    max_attempts=provider.poll_max_attempts,
-                )
-                await tracker.patch_task(
-                    task_id,
-                    TaskPatch(auth={"external_task_id": external_task_id}),
-                    account_id=account_id,
-                    user_id=user_id,
-                )
-            while True:
+        snapshot = None
+        while True:
+            if snapshot is None or snapshot.status in _ACTIVE_STATUSES:
                 snapshot = await self._retry(
                     lambda: provider.get(
                         external_task_id,
@@ -423,23 +465,96 @@ class ExternalTaskService:
                     poll_interval=provider.poll_interval_seconds,
                     max_attempts=provider.poll_max_attempts,
                 )
-                if await self._apply_snapshot(
-                    snapshot,
-                    task_id=task_id,
-                    account_id=account_id,
-                    user_id=user_id,
-                ):
-                    return
-                await asyncio.sleep(provider.poll_interval_seconds)
-        except ExternalTaskError as exc:
-            await self._apply_snapshot(
-                ExternalTaskSnapshot(status="failed", error_code=exc.code, error_message=str(exc)),
+            if await self._apply_snapshot(
+                snapshot,
                 task_id=task_id,
                 account_id=account_id,
                 user_id=user_id,
-            )
+                auth=auth,
+            ):
+                return
+            await asyncio.sleep(provider.poll_interval_seconds)
 
-    async def cancel_recovered(self, task_id: str, account_id: str, user_id: str) -> None:
+    async def cancel_recovered(
+        self, task_id: str, account_id: str, user_id: str, *, failure: Exception | None = None
+    ) -> None:
+        """Finish cleanup; persist failures for restart recovery."""
+        tracker = get_task_tracker()
+        try:
+            # Repeated cancellation must not interrupt cleanup of the open Work.
+            await tracker.unregister_running_task(task_id)
+            auth = await self._task_auth(task_id, account_id, user_id)
+            saved_failure = auth.get("external_cleanup_failure")
+            if saved_failure:
+                failure = ExternalTaskError(
+                    saved_failure["code"], saved_failure["message"], transient=False
+                )
+            elif failure is not None:
+                await run_to_completion(
+                    lambda: tracker.patch_task(
+                        task_id,
+                        TaskPatch(
+                            auth={
+                                "external_cleanup_failure": {
+                                    "code": getattr(failure, "code", None) or "INTERNAL",
+                                    "message": sanitize_error(
+                                        str(failure) or type(failure).__name__
+                                    ),
+                                }
+                            }
+                        ),
+                        account_id=account_id,
+                        user_id=user_id,
+                    )
+                )
+            while True:
+                try:
+                    await self._retry(
+                        lambda: self._cancel_recovered_once(task_id, account_id, user_id, failure),
+                        task_id=task_id,
+                        operation_name="cleanup",
+                        poll_interval=0.2,
+                        max_attempts=3,
+                    )
+                    return
+                except _RetryExhaustedError as exc:
+                    task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
+                    if task is None or task.task_type != "compile":
+                        raise
+                    # Keep exhausted cleanup retries on the unacknowledged Work.
+                    cleanup_error = sanitize_error(str(exc))
+                    if task.meta.get("cleanup_error") != cleanup_error:
+                        await tracker.patch_task(
+                            task_id,
+                            TaskPatch(meta={"cleanup_error": cleanup_error}),
+                            account_id=account_id,
+                            user_id=user_id,
+                        )
+                    await asyncio.sleep(
+                        max(self._provider(task.task_type).poll_interval_seconds, 0.2)
+                    )
+        except asyncio.CancelledError as exc:
+            if await tracker.is_cancellation_requested(
+                task_id, account_id=account_id, user_id=user_id
+            ):
+                # Preserve delivery when shutdown interrupts cancellation cleanup.
+                raise ExternalTaskError(
+                    "CLEANUP_INTERRUPTED", "Cancellation cleanup was interrupted", transient=True
+                ) from exc
+            raise
+        except Exception as exc:
+            await get_task_tracker().patch_task(
+                task_id,
+                TaskPatch(meta={"cleanup_error": sanitize_error(str(exc) or type(exc).__name__)}),
+                account_id=account_id,
+                user_id=user_id,
+            )
+            raise
+
+    async def _cancel_recovered_once(
+        self, task_id: str, account_id: str, user_id: str, failure: Exception | None = None
+    ) -> None:
+        """Resume cancellation without releasing a submitted task before Runtime stops."""
         tracker = get_task_tracker()
         task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
         if task is None:
@@ -459,13 +574,32 @@ class ExternalTaskService:
                 transient=False,
             )
         auth = await self._task_auth(task_id, account_id, user_id)
-        if task.stage in {None, "queued"} and not auth.get("external_task_id"):
-            await self._apply_snapshot(
-                ExternalTaskSnapshot(status="cancelled"),
+        outcome = (
+            ExternalTaskSnapshot(
+                status="failed",
+                error_code=getattr(failure, "code", None) or "INTERNAL",
+                error_message=str(failure) or type(failure).__name__,
+            )
+            if failure is not None
+            else ExternalTaskSnapshot(status="cancelled")
+        )
+        rejected = (
+            task.stage == "submitting"
+            and isinstance(failure, ExternalTaskError)
+            and not isinstance(failure, _RetryExhaustedError)
+            and not failure.transient
+            and failure.code
+            in {"INVALID_ARGUMENT", "NOT_FOUND", "PERMISSION_DENIED", "UNAUTHENTICATED"}
+        )
+        if not auth.get("external_task_id") and (task.stage in {None, "queued"} or rejected):
+            while not await self._apply_snapshot(
+                outcome,
                 task_id=task_id,
                 account_id=account_id,
                 user_id=user_id,
-            )
+                auth=auth,
+            ):
+                await asyncio.sleep(self._provider(task.task_type).poll_interval_seconds)
             return
         await self._cancel_external(
             self._provider(task.task_type),
@@ -476,6 +610,8 @@ class ExternalTaskService:
             external_task_id=str(auth.get("external_task_id") or "").strip() or None,
             account_id=account_id,
             user_id=user_id,
+            auth=auth,
+            failure=outcome if failure is not None else None,
         )
 
     @staticmethod
@@ -497,11 +633,22 @@ class ExternalTaskService:
         task_id: str,
         account_id: str,
         user_id: str,
+        auth: dict[str, Any],
     ) -> bool:
+        """Apply state; return False while execution or finalization is active.
+
+        ``auth`` is this delivery's private Task auth snapshot. Its cleanup
+        failure marker changes only after the matching patch is persisted.
+        """
         tracker = get_task_tracker()
         task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
         if snapshot.stage is not None or snapshot.meta:
-            stage = snapshot.stage or snapshot.status
+            # Runtime termination can still require local finalization before the Task ends.
+            stage = (
+                task.stage
+                if task is not None and snapshot.status in {"completed", "failed", "cancelled"}
+                else snapshot.stage or snapshot.status
+            )
             meta = snapshot.meta or {}
             if task is not None and (
                 task.stage != stage
@@ -526,16 +673,46 @@ class ExternalTaskService:
         if task is not None:
             on_finish = getattr(self._providers.get(task.task_type), "on_finish", None)
             if on_finish is not None:
-
-                async def finish():
-                    """Keep lock retries inside cancellation-protected provider finalization."""
-                    while True:
-                        try:
-                            return await on_finish(task, snapshot)
-                        except ResourceBusyError:
-                            await asyncio.sleep(self._providers[task.task_type].poll_interval_seconds)
-
-                snapshot = await run_to_completion(finish)
+                # Persist failure intent before a deferred rollback.
+                if snapshot.status == "failed":
+                    cleanup_failure = {
+                        "code": snapshot.error_code or "UNKNOWN",
+                        "message": sanitize_error(snapshot.error_message or "External task failed"),
+                    }
+                    if auth.get("external_cleanup_failure") != cleanup_failure:
+                        result = await run_to_completion(
+                            lambda: tracker.patch_task(
+                                task_id,
+                                TaskPatch(auth={"external_cleanup_failure": cleanup_failure}),
+                                account_id=account_id,
+                                user_id=user_id,
+                            )
+                        )
+                        if result.is_applied:
+                            auth["external_cleanup_failure"] = cleanup_failure
+                if task.task_type == "compile":
+                    # Protect finite commits while keeping L0 waits cancellable.
+                    snapshot = await on_finish(task, snapshot)
+                else:
+                    snapshot = await run_to_completion(
+                        lambda: self._retry(
+                            lambda: on_finish(task, snapshot),
+                            task_id=task_id,
+                            operation_name="finalize",
+                            poll_interval=0.2,
+                            max_attempts=3,
+                        )
+                    )
+                if snapshot.status in _ACTIVE_STATUSES:
+                    stage = snapshot.stage or snapshot.status
+                    if task.stage != stage:
+                        await tracker.patch_task(
+                            task_id,
+                            TaskPatch(stage=stage),
+                            account_id=account_id,
+                            user_id=user_id,
+                        )
+                    return False
 
         async def finalize() -> None:
             if snapshot.status == "failed":
@@ -578,63 +755,61 @@ class ExternalTaskService:
         external_task_id: str | None,
         account_id: str,
         user_id: str,
+        auth: dict[str, Any],
+        failure: ExternalTaskSnapshot | None = None,
     ) -> None:
+        """Cancel provider work and finalize it using this delivery's auth snapshot."""
         max_attempts = provider.poll_max_attempts
         # Returning allows QueueFS to ACK the work and finalize cancellation.
         # Keep ownership until the provider confirms a terminal state.
+        if external_task_id is None:
+            # Submission may have reached the provider before local cancellation
+            # interrupted its response. Recover it with the same idempotency key.
+            external_task_id = await self._retry(
+                lambda: provider.submit(ov_task_id, payload, private_payload, connection),
+                task_id=ov_task_id,
+                operation_name="recover before cancel",
+                poll_interval=provider.poll_interval_seconds,
+                max_attempts=max_attempts,
+            )
+            await get_task_tracker().patch_task(
+                ov_task_id,
+                TaskPatch(auth={"external_task_id": external_task_id}),
+                account_id=account_id,
+                user_id=user_id,
+            )
+        snapshot = await self._retry(
+            lambda task_id=external_task_id: provider.cancel(
+                task_id, connection, payload=payload, private_payload=private_payload
+            ),
+            task_id=ov_task_id,
+            operation_name="cancel",
+            poll_interval=provider.poll_interval_seconds,
+            max_attempts=max_attempts,
+        )
         while True:
-            try:
-                if external_task_id is None:
-                    # Submission may have reached the provider before local cancellation
-                    # interrupted its response. Recover it with the same idempotency key.
-                    external_task_id = await self._retry(
-                        lambda: provider.submit(ov_task_id, payload, private_payload, connection),
-                        task_id=ov_task_id,
-                        operation_name="recover before cancel",
-                        poll_interval=provider.poll_interval_seconds,
-                        max_attempts=max_attempts,
-                    )
-                    await get_task_tracker().patch_task(
-                        ov_task_id,
-                        TaskPatch(auth={"external_task_id": external_task_id}),
-                        account_id=account_id,
-                        user_id=user_id,
-                    )
-                snapshot = await self._retry(
-                    lambda task_id=external_task_id: provider.cancel(
-                        task_id, connection, payload=payload, private_payload=private_payload
-                    ),
-                    task_id=ov_task_id,
-                    operation_name="cancel",
-                    poll_interval=provider.poll_interval_seconds,
-                    max_attempts=max_attempts,
-                )
-                while True:
-                    if await self._apply_snapshot(
-                        snapshot,
-                        task_id=ov_task_id,
-                        account_id=account_id,
-                        user_id=user_id,
-                    ):
-                        return
-                    await asyncio.sleep(provider.poll_interval_seconds)
-                    snapshot = await self._retry(
-                        lambda task_id=external_task_id: provider.get(
-                            task_id, connection, payload=payload, private_payload=private_payload
-                        ),
-                        task_id=ov_task_id,
-                        operation_name="poll cancellation",
-                        poll_interval=provider.poll_interval_seconds,
-                        max_attempts=max_attempts,
-                    )
-            except ExternalTaskError as exc:
-                logger.warning(
-                    "External task cancellation will retry task=%s code=%s: %s",
-                    ov_task_id,
-                    exc.code,
-                    exc,
-                )
-                await asyncio.sleep(provider.poll_interval_seconds)
+            if failure is not None and snapshot.status in {"completed", "failed", "cancelled"}:
+                snapshot = failure
+            if await self._apply_snapshot(
+                snapshot,
+                task_id=ov_task_id,
+                account_id=account_id,
+                user_id=user_id,
+                auth=auth,
+            ):
+                return
+            await asyncio.sleep(provider.poll_interval_seconds)
+            if snapshot.status not in _ACTIVE_STATUSES:
+                continue
+            snapshot = await self._retry(
+                lambda task_id=external_task_id: provider.get(
+                    task_id, connection, payload=payload, private_payload=private_payload
+                ),
+                task_id=ov_task_id,
+                operation_name="poll cancellation",
+                poll_interval=provider.poll_interval_seconds,
+                max_attempts=max_attempts,
+            )
 
     @staticmethod
     async def _retry(
@@ -645,23 +820,38 @@ class ExternalTaskService:
         poll_interval: float,
         max_attempts: int,
     ) -> Any:
+        """Try recoverable failures up to three times; permanent errors and cancellation propagate."""
         delay = max(poll_interval, 0.2)
-        attempts = 0
-        while True:
+        max_attempts = max(1, min(max_attempts, 3))
+        for attempt in range(max_attempts):
             try:
                 return await action()
-            except ExternalTaskError as exc:
-                if not exc.transient:
+            except (
+                ExternalTaskError,
+                ConnectionError,
+                TimeoutError,
+                AGFSConnectionError,
+                AGFSNetworkError,
+                AGFSTimeoutError,
+                ResourceBusyError,
+                GitConcurrentCommitError,
+            ) as exc:
+                if isinstance(exc, ExternalTaskError) and not exc.transient:
                     raise
-                attempts += 1
-                if attempts >= max_attempts:
+                if isinstance(exc, ResourceBusyError) and not exc.retryable:
                     raise
+                if attempt + 1 == max_attempts:
+                    raise _RetryExhaustedError(
+                        getattr(exc, "code", None) or "UNAVAILABLE",
+                        sanitize_error(str(exc) or type(exc).__name__),
+                        transient=False,
+                    ) from exc
                 logger.warning(
                     "External task %s will retry task=%s code=%s: %s",
                     operation_name,
                     task_id,
-                    exc.code,
-                    exc,
+                    getattr(exc, "code", type(exc).__name__),
+                    sanitize_error(str(exc)),
                 )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 30.0)
