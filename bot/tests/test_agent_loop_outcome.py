@@ -109,6 +109,39 @@ def _image_call(call_id, label=None):
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["openai", "litellm"])
+@pytest.mark.parametrize("model", ["deepseek-flash", "gpt-4o"])
+async def test_local_conversation_replays_reasoning_only_for_deepseek(
+    make_loop, temp_dir, monkeypatch, backend, model
+):
+    provider = _RecordingProvider()
+    calls = []
+
+    async def chat(*, messages, **kwargs):
+        calls.append(copy.deepcopy(messages))
+        return LLMResponse(content="answer", reasoning_content="previous reasoning")
+
+    monkeypatch.setattr(provider, "chat", chat)
+    config = Config(
+        storage_workspace=str(temp_dir),
+        agents={"provider": backend, "model": model, "session_context_enabled": False},
+    )
+    loop = make_loop(config=config, provider=provider, model=model)
+    key = SessionKey(type="cli", channel_id="default", chat_id="reasoning-history")
+
+    assert await loop.process_direct("first question", session_key=key) == "answer"
+    loop.sessions = SessionManager(config.bot_data_path)
+    assert await loop.process_direct("second question", session_key=key) == "answer"
+
+    assert len(calls) == 2
+    assistant = next(message for message in calls[1] if message["role"] == "assistant")
+    if model.startswith("deepseek"):
+        assert assistant["reasoning_content"] == "previous reasoning"
+    else:
+        assert "reasoning_content" not in assistant
+
+
 class _MediaProvider(_FakeProvider):
     def __init__(self, rounds, *, supports_media=True):
         super().__init__()

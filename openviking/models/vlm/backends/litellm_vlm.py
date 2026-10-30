@@ -413,6 +413,7 @@ class LiteLLMVLMProvider(VLMBase):
 
             return VLMResponse(
                 content=message.content,
+                reasoning_content=getattr(message, "reasoning_content", None),
                 tool_calls=self._parse_tool_calls(message),
                 finish_reason=choice.finish_reason or "stop",
                 usage=usage,
