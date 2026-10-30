@@ -59,7 +59,7 @@ The local tools operate inside the current session's sandbox, whose paths may di
 
 - Use `list_dir` to inspect a directory and `read_file` to read a known file.
 - Use `edit_file` for a precise replacement. Read the file first and provide enough surrounding text for `old_text` to match exactly once.
-- Use `write_file` to create a file or intentionally replace its full contents. Do not overwrite an existing file when a targeted edit is safer.
+- Use `write_file` to create a file or intentionally replace its full contents. With the direct backend, existing supported text files keep their BOM and uniform line-ending style, and ambiguous legacy encodings are refused instead of converted. Do not overwrite an existing file when a targeted edit is safer.
 - Use `exec` for commands, search, builds, tests, and diagnostics. Use `pwd` when the sandbox working directory is unclear.
 - Prefer file tools for simple reads and edits; shell commands are appropriate for operations that genuinely benefit from the shell.
 - Keep changes scoped to the user's request and preserve unrelated existing work.
