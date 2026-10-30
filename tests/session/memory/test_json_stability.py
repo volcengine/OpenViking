@@ -453,3 +453,159 @@ Content"""
         assert result["tool_name"] == "test"
         assert result["value"] == 42
         assert result["content"] == "Content"
+
+
+class TestRequiredIdentityDefaults:
+    """Regression tests: a missing required field must not empty the whole list.
+
+    Models often get the memory content right while omitting a boilerplate
+    identity field (``user``, ``category``, ``page_id``).  Before the fix,
+    pydantic rejected such an item and the per-field tolerance fallback
+    returned an empty list together with ``error=None`` - extraction reported
+    success and stored nothing.
+    """
+
+    class _PreferenceItem(BaseModel):
+        page_id: int
+        user: str
+        topic: str
+        content: Optional[str] = None
+
+    class _EntityItem(BaseModel):
+        page_id: int
+        category: str
+        name: str
+        content: Optional[str] = None
+
+    class _Operations(BaseModel):
+        preferences: List["TestRequiredIdentityDefaults._PreferenceItem"] = Field(
+            default_factory=list
+        )
+        entities: List["TestRequiredIdentityDefaults._EntityItem"] = Field(default_factory=list)
+
+    def test_missing_user_field_does_not_drop_preference(self):
+        """A preference without `user` must survive instead of being dropped."""
+        content = json.dumps(
+            {"preferences": [{"page_id": 101, "topic": "editor", "content": "spaces"}]}
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        assert len(result.preferences) == 1, "item was silently dropped"
+        assert result.preferences[0].topic == "editor"
+        assert result.preferences[0].user == "default"
+
+    def test_missing_category_field_does_not_drop_entity(self):
+        """An entity without `category` must survive."""
+        content = json.dumps(
+            {"entities": [{"page_id": 102, "name": "widget", "content": "a widget"}]}
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        assert len(result.entities) == 1
+        assert result.entities[0].name == "widget"
+        assert result.entities[0].category == "general"
+
+    def test_missing_page_id_is_generated(self):
+        """Items without page_id get generated ids >= 100, unique per item."""
+        content = json.dumps(
+            {
+                "preferences": [
+                    {"user": "alice", "topic": "theme", "content": "dark"},
+                    {"user": "alice", "topic": "font", "content": "mono"},
+                ]
+            }
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        assert len(result.preferences) == 2
+        page_ids = [p.page_id for p in result.preferences]
+        assert all(pid >= 100 for pid in page_ids)
+        assert len(set(page_ids)) == 2, "generated page_ids must be unique"
+
+    def test_existing_values_are_never_overwritten(self):
+        """Supplied values must win over the conventional defaults."""
+        content = json.dumps(
+            {
+                "preferences": [{"page_id": 7, "user": "bob", "topic": "shell", "content": "fish"}],
+                "entities": [{"page_id": 8, "category": "hardware", "name": "printer"}],
+            }
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        assert result.preferences[0].user == "bob"
+        assert result.preferences[0].page_id == 7
+        assert result.entities[0].category == "hardware"
+        assert result.entities[0].page_id == 8
+
+    def test_fully_valid_payload_is_unchanged(self):
+        """A complete payload must pass through untouched (no regression)."""
+        content = json.dumps(
+            {"preferences": [{"page_id": 100, "user": "carol", "topic": "lang", "content": "go"}]}
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        assert len(result.preferences) == 1
+        assert result.preferences[0].user == "carol"
+        assert result.preferences[0].content == "go"
+
+    def test_generated_page_id_does_not_collide_with_supplied_one(self):
+        """A generated id must never reuse an id the model already supplied.
+
+        Collisions make link resolution order-dependent, because links address
+        pages by id alone and two pages sharing an id are indistinguishable.
+        """
+        content = json.dumps(
+            {
+                "preferences": [
+                    # Model supplied exactly the first id the allocator would pick.
+                    {"page_id": 100, "user": "dana", "topic": "editor", "content": "vim"},
+                    {"user": "dana", "topic": "shell", "content": "zsh"},
+                ]
+            }
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        assert len(result.preferences) == 2
+        page_ids = [p.page_id for p in result.preferences]
+        assert len(set(page_ids)) == 2, f"page_id collision: {page_ids}"
+        assert 100 in page_ids, "supplied id must be preserved"
+
+    def test_generated_ids_skip_all_supplied_ids_across_types(self):
+        """Allocation is global: ids taken in one memory type block another."""
+        content = json.dumps(
+            {
+                "preferences": [{"page_id": 101, "user": "e", "topic": "t", "content": "c"}],
+                "entities": [
+                    {"page_id": 100, "category": "hw", "name": "printer"},
+                    {"category": "hw", "name": "scanner"},
+                ],
+            }
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        all_ids = [p.page_id for p in result.preferences] + [e.page_id for e in result.entities]
+        assert len(set(all_ids)) == len(all_ids), f"collision across types: {all_ids}"
+        assert {100, 101} <= set(all_ids), "supplied ids must be preserved"
+
+    def test_string_page_ids_are_honoured_when_avoiding_collisions(self):
+        """A supplied id given as a string still blocks that number."""
+        content = json.dumps(
+            {
+                "preferences": [
+                    {"page_id": "100", "user": "f", "topic": "t", "content": "c"},
+                    {"user": "f", "topic": "u", "content": "d"},
+                ]
+            }
+        )
+        result, error = parse_json_with_stability(content, self._Operations)
+
+        assert error is None
+        page_ids = [int(p.page_id) for p in result.preferences]
+        assert len(set(page_ids)) == 2, f"string id not honoured: {page_ids}"
