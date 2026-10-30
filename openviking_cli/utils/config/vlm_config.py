@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, model_validator
 
+from openviking.models.openrouter import with_openrouter_attribution
 from openviking_cli.utils.config.runtime_field import RuntimeField
 
 
@@ -759,6 +760,15 @@ class VLMConfig(BaseModel):
         if credential.reasoning_effort:
             result["reasoning_effort"] = credential.reasoning_effort
 
+        return self._with_openrouter_attribution(result)
+
+    @staticmethod
+    def _with_openrouter_attribution(result: Dict[str, Any]) -> Dict[str, Any]:
+        headers = with_openrouter_attribution(
+            result.get("extra_headers"), result.get("api_base"), result.get("model")
+        )
+        if headers:
+            result["extra_headers"] = headers
         return result
 
     def _build_vlm_config_dict(self) -> Dict[str, Any]:
@@ -796,7 +806,7 @@ class VLMConfig(BaseModel):
             if config.get("reasoning_effort"):
                 result["reasoning_effort"] = config.get("reasoning_effort")
 
-        return result
+        return self._with_openrouter_attribution(result)
 
     def get_completion(
         self,

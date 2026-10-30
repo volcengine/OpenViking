@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from openviking.models.openrouter import OPENROUTER_ATTRIBUTION_HEADERS
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
 
@@ -77,6 +78,7 @@ class TestLiteLLMDenseEmbedder:
 
         call_kwargs = mock_litellm.embedding.call_args[1]
         assert call_kwargs["api_base"] == "https://openrouter.ai/api/v1"
+        assert call_kwargs["extra_headers"] == OPENROUTER_ATTRIBUTION_HEADERS
 
     @patch("openviking.models.embedder.litellm_embedders.litellm")
     def test_embed_non_symmetric_query(self, mock_litellm):

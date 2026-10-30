@@ -828,6 +828,25 @@ class TestVLMConfigExtraHeaders:
         result = config._build_vlm_config_dict()
         assert result.get("extra_headers") is None
 
+    @pytest.mark.parametrize(
+        ("provider", "model", "api_base"),
+        [
+            ("openai", "qwen/qwen3-vl", "https://openrouter.ai/api/v1"),
+            ("litellm", "openrouter/qwen/qwen3-vl", None),
+        ],
+    )
+    def test_vlm_config_adds_openrouter_attribution(self, provider, model, api_base):
+        """OpenRouter requests carry OpenViking attribution unless the user set their own."""
+        from openviking.models.openrouter import OPENROUTER_ATTRIBUTION_HEADERS
+
+        provider_config = {"api_key": "sk-test", "extra_headers": {"X-Custom": "value"}}
+        if api_base:
+            provider_config["api_base"] = api_base
+        config = VLMConfig(model=model, provider=provider, providers={provider: provider_config})
+
+        result = config._build_vlm_config_dict()
+        assert result["extra_headers"] == {**OPENROUTER_ATTRIBUTION_HEADERS, "X-Custom": "value"}
+
     def test_vlm_config_accepts_flat_extra_headers(self):
         """VLMConfig should accept extra_headers as flat config field (legacy style)."""
         from openviking_cli.utils.config.vlm_config import VLMConfig
