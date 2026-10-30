@@ -394,6 +394,63 @@ async def test_usage_only_measures_the_history_its_reply_belongs_to(
     assert (await prepare(kernel, "chat", messages, credential, policy)).context_tokens < 1000
 
 
+@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
+async def test_pending_recall_budget_triggers_compaction_before_injection(
+    setup_kernel, credential, policy, protocol
+):
+    kernel, _, viking, _ = setup_kernel
+    policy.update(
+        capture=False,
+        context_window=10_000,
+        gateway_tools=False,
+        profile=False,
+        profile_max_tokens=0,
+    )
+    viking.rendered = "recalled fact " * 500
+    messages = [
+        {"role": "user", "content": "word " * 7000},
+        {"role": "assistant", "content": "Acknowledged."},
+        {"role": "user", "content": "Continue with the verified plan."},
+    ]
+    field = FIELD[protocol]
+    before = estimate({"model": "model", field: messages})
+    assert 8500 < before < 9000
+    summarize = Summarizer(protocol)
+    prepared = await prepare(kernel, protocol, messages, credential, policy, summarize=summarize)
+    assert len(summarize.requests) == 1
+    assert prepared.metrics["context_tokens"] == before
+    assert prepared.metrics["compaction_tokens"]
+    assert prepared.context_tokens < 9000
+    assert estimate(prepared.body) < 9000
+    assert "recalled fact" in text_content(prepared.body[field][-1])
+
+
+@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
+async def test_usage_measurement_counts_replayed_context_after_the_reply(
+    setup_kernel, credential, policy, protocol
+):
+    kernel, _, viking, _ = setup_kernel
+    policy.update(
+        capture=False,
+        compaction=False,
+        gateway_tools=False,
+        profile=False,
+        profile_max_tokens=0,
+    )
+    viking.rendered = "recalled fact " * 300
+    messages = [{"role": "user", "content": "Start deployment"}]
+    first = await prepare(kernel, protocol, messages, credential, policy)
+    reply = {"role": "assistant", "content": "Ready."}
+    await answered(kernel, first, credential, reply, tokens=8000)
+    messages += [reply, {"role": "user", "content": "Continue deployment"}]
+    second = await prepare(kernel, protocol, messages, credential, policy)
+    retry = await prepare(kernel, protocol, messages, credential, policy)
+    assert len(viking.recalls) == 2
+    assert second.context_tokens < 8100
+    assert retry.context_tokens > second.context_tokens + 900
+    assert retry.body == second.body
+
+
 async def test_replies_without_usage_leave_the_estimate_to_the_whole_request(
     setup_kernel, credential, policy
 ):
