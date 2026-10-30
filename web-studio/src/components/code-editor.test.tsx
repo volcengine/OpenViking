@@ -9,11 +9,16 @@ import {
 } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { EditorView } from '@codemirror/view'
+import { highlightingFor, defaultHighlightStyle } from '@codemirror/language'
+import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark'
+import { tags } from '@lezer/highlight'
 import { gotoLine, openSearchPanel } from '@codemirror/search'
-import { undoDepth } from '@codemirror/commands'
+import { undo, undoDepth } from '@codemirror/commands'
 import i18n from '#/i18n'
 import { useTranslation } from 'react-i18next'
 import { CodeEditor } from './code-editor'
+import type { CodeEditorHandle } from './code-editor'
+import { createRef } from 'react'
 
 // jsdom has no layout engine; CodeMirror still schedules range measurements.
 beforeEach(() => {
@@ -123,4 +128,58 @@ it('localizes an open goto dialog while preserving the draft, selection and navi
   })
   expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(3)
   expect(screen.queryByRole('textbox', { name: 'Go to line:' })).toBeNull()
+})
+
+it('preserves unsaved content, selection and undo history when the theme changes', async () => {
+  const ref = createRef<CodeEditorHandle>()
+  const props = {
+    ref,
+    initialContent: 'original',
+    filename: 'sample.txt',
+    enableLanguageSupport: false,
+  }
+  const { container, rerender } = render(
+    <CodeEditor {...props} isDark={false} />,
+  )
+  await waitFor(() =>
+    expect(container.querySelector('.cm-editor')).not.toBeNull(),
+  )
+  const view = EditorView.findFromDOM(
+    container.querySelector<HTMLElement>('.cm-editor')!,
+  )!
+  act(() => {
+    view.dispatch({
+      changes: { from: 8, insert: ' draft' },
+      selection: { anchor: 14 },
+    })
+  })
+  const history = undoDepth(view.state)
+  expect(highlightingFor(view.state, [tags.keyword])).toBe(
+    defaultHighlightStyle.style([tags.keyword]),
+  )
+  rerender(<CodeEditor {...props} isDark />)
+  await waitFor(() =>
+    expect(container.querySelector('.cm-editor')).not.toBeNull(),
+  )
+  const current = EditorView.findFromDOM(
+    container.querySelector<HTMLElement>('.cm-editor')!,
+  )!
+  expect(current.state.doc.toString()).toBe('original draft')
+  expect(ref.current?.getContent()).toBe('original draft')
+  expect(current).toBe(view)
+  expect(highlightingFor(current.state, [tags.keyword])).toBe(
+    oneDarkHighlightStyle.style([tags.keyword]),
+  )
+  expect(current.state.selection.main.anchor).toBe(14)
+  expect(undoDepth(current.state)).toBe(history)
+  rerender(<CodeEditor {...props} isDark={false} />)
+  expect(highlightingFor(view.state, [tags.keyword])).toBe(
+    defaultHighlightStyle.style([tags.keyword]),
+  )
+  expect(view.state.doc.toString()).toBe('original draft')
+  expect(undoDepth(view.state)).toBe(history)
+  act(() => {
+    expect(undo(view)).toBe(true)
+  })
+  expect(view.state.doc.toString()).toBe('original')
 })
