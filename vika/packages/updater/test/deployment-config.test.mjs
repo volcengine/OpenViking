@@ -162,6 +162,19 @@ test('system environment overrides manifest daemon env while agent identity stay
   });
 });
 
+test('deployment manifest accepts the timer occurrence check delay env', () => {
+  const manifest = validManifest();
+  manifest.env.VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS = '120000';
+  withManifest(manifest, (manifestPath) => {
+    const deployment = loadDeploymentManifest({ VIKA_CONFIG: manifestPath });
+    assert.deepEqual(deployment.ignoredFields, []);
+    assert.equal(deployment.env.VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS, '120000');
+    const env = { VIKA_CONFIG: manifestPath };
+    applyDeploymentDaemonEnv(env, deployment);
+    assert.equal(env.VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS, '120000');
+  });
+});
+
 test('falls back to a secrets file for daemon-wide secrets missing from the environment', () => {
   withManifest(validManifest(), (manifestPath) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-secrets-'));

@@ -264,6 +264,10 @@ export function getConfig() {
       min: 0,
       max: 604_800_000,
     }),
+    timerOccurrenceCheckDelayMs: intEnv('VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS', 300_000, {
+      min: 1_000,
+      max: 86_400_000,
+    }),
     // Opt-in per instance (agents[].explicitSilence): the stay_silent tool, the
     // decisions ledger and the turn-end decision check. Off, the daemon offers
     // the same tools and assembles the same policy text as without them.

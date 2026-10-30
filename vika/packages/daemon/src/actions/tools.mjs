@@ -319,6 +319,16 @@ export const TOOLS = [
     }, ['timer_id']),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },
+  {
+    name: 'complete_timer_occurrence',
+    timer: true,
+    title: 'Complete a timer occurrence',
+    description: 'Mark one timer occurrence as completed after you have handled its reminder. Use the occurrence_id shown in the timer reminder. This stops the daemon from sending completion-check reminders for that occurrence.',
+    inputSchema: schema({
+      occurrence_id: { type: 'string', pattern: '^tm_[A-Za-z0-9_-]{1,64}:\\d{1,16}$' },
+    }, ['occurrence_id']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
 ];
 
 // A tool as this instance offers it. With explicit silence on, its

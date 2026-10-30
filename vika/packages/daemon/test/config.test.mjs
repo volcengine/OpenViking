@@ -74,6 +74,14 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('VIKA_BOT_REPLY_FUSE', '-1');
     assert.throws(() => getConfig(), /VIKA_BOT_REPLY_FUSE/);
   });
+  it('defaults timer occurrence checks to five minutes and allows an override', () => {
+    setEnv('VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS', undefined);
+    assert.equal(getConfig().timerOccurrenceCheckDelayMs, 300_000);
+    setEnv('VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS', '120000');
+    assert.equal(getConfig().timerOccurrenceCheckDelayMs, 120_000);
+    setEnv('VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS', '999');
+    assert.throws(() => getConfig(), /VIKA_TIMER_OCCURRENCE_CHECK_DELAY_MS/);
+  });
   it('keeps explicit silence off unless the instance opts in', () => {
     setEnv('VIKA_EXPLICIT_SILENCE', undefined);
     assert.equal(getConfig().explicitSilence, false);
