@@ -263,7 +263,11 @@ async def test_resume_queued_commit_preserves_live_state_when_statistics_are_una
     monkeypatch.setattr(
         "openviking.session.session.get_openviking_config",
         lambda: SimpleNamespace(
-            memory=SimpleNamespace(extraction_enabled=True, session_skill_extraction_enabled=False)
+            memory=SimpleNamespace(
+                extraction_enabled=True,
+                session_skill_extraction_enabled=False,
+                usage_feedback_enabled=False,
+            )
         ),
     )
     message = SessionCommitMsg(

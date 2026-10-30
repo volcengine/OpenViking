@@ -465,6 +465,7 @@ async def test_phase2_retry_does_not_repeat_completed_current_archive_steps(
         memory=SimpleNamespace(
             extraction_enabled=True,
             session_skill_extraction_enabled=False,
+            usage_feedback_enabled=False,
         )
     )
     monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)

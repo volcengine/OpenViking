@@ -92,6 +92,14 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
+    usage_feedback_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled (default), session commit scores each memory referenced by a "
+            "memory ContextPart in the archived messages (+1 helpful, 0 unused, -1 harmful) "
+            "and accumulates the result into the memory file's MEMORY_FIELDS.usage_feedback."
+        ),
+    )
     extraction_output_format: Literal["json", "python"] = Field(
         default="python",
         description=(

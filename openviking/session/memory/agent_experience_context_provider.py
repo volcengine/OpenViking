@@ -37,7 +37,7 @@ SOURCE_TRAJ_TOP_K = 3  # only attach source_trajectories for the top-3 candidate
 MAX_SOURCE_TRAJS = 3  # max trajectories to load per experience
 # Hide storage bookkeeping only in read-only grounding sent to the model.
 _SOURCE_TRAJECTORY_HIDDEN_FIELDS = frozenset(
-    {"backlinks", "source_archive_uri", "last_update_trace_id", "version"}
+    {"backlinks", "source_archive_uri", "last_update_trace_id", "usage_feedback", "version"}
 )
 
 

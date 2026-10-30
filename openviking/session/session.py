@@ -2051,6 +2051,75 @@ class Session:
         )
         return True
 
+    async def _score_memory_usage(
+        self,
+        messages: List[Message],
+        scope: "_MemoryExtractionScope",
+    ) -> Optional[list]:
+        """Judge the memories this archive used; ``None`` on any failure, never raises."""
+        from openviking.session.memory import usage_feedback
+
+        try:
+            uris = [
+                uri
+                for uri in usage_feedback.collect_candidate_uris(messages)
+                if usage_feedback.peer_allowed(
+                    uri,
+                    allow_self=scope.allow_self_memory,
+                    allowed_peer_ids=scope.allowed_peer_ids,
+                )
+            ]
+            if not uris or not self._viking_fs:
+                return []
+            memories = await usage_feedback.read_candidates(self._viking_fs, self.ctx, uris)
+            if not memories:
+                return []
+            get_current_telemetry().count("usage_feedback.candidates", len(memories))
+            vlm = await self._get_vlm_config()
+            return await usage_feedback.score_usage(vlm, messages, memories)
+        except Exception as exc:
+            get_current_telemetry().count("usage_feedback.errors", 1)
+            logger.warning("Memory usage scoring failed for %s: %s", self.session_id, exc)
+            return None
+
+    async def _persist_memory_usage(
+        self,
+        archive_uri: str,
+        messages: List[Message],
+        verdicts: Optional[list],
+        completed_memory_steps: Dict[str, set[str]],
+    ) -> None:
+        """Write verdicts into memory files and mark the step done; never raises."""
+        if not verdicts:
+            return
+        from openviking.session.memory import usage_feedback
+
+        try:
+            archive_id = archive_uri.rstrip("/").split("/")[-1]
+            written = await usage_feedback.write_back(
+                self._viking_fs,
+                self.ctx,
+                verdicts,
+                archive_key=f"{self.session_id}/{archive_id}",
+                now=datetime.now(timezone.utc),
+            )
+            get_current_telemetry().count("usage_feedback.scored", len(written))
+            completed_memory_steps.setdefault("usage_feedback", set()).update(
+                message.id for message in messages
+            )
+            await self._merge_archive_meta(
+                archive_uri,
+                {
+                    "usage_feedback": written,
+                    "completed_memory_steps": self._archives.serialize_completed_memory_steps(
+                        completed_memory_steps
+                    ),
+                },
+            )
+        except Exception as exc:
+            get_current_telemetry().count("usage_feedback.errors", 1)
+            logger.warning("Memory usage feedback write failed for %s: %s", archive_uri, exc)
+
     async def _run_usage_reporting(
         self,
         *,
@@ -2411,6 +2480,19 @@ class Session:
                         and (long_term_memory_types is None or bool(long_term_memory_types))
                         and bool(long_term_messages)
                     )
+                    # Scoring reads the memories before extraction can rewrite them and
+                    # runs alongside it; the verdicts are written only after it succeeds.
+                    usage_feedback_task: Optional[asyncio.Task] = None
+                    if (
+                        memory_extraction_enabled
+                        and (self_memory_enabled or allowed_peer_ids)
+                        and ov_config.memory.usage_feedback_enabled
+                        and not completed_memory_steps.get("usage_feedback")
+                    ):
+                        usage_feedback_task = asyncio.create_task(
+                            self._score_memory_usage(extraction_messages, extraction_scope)
+                        )
+
                     if enable_working_memory or (self._session_compressor and long_term_has_work):
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
@@ -2490,6 +2572,10 @@ class Session:
                                     extraction_error = result
 
                         if extraction_error is not None:
+                            # ponytail: cancelled only on this path; other Phase 2 failures
+                            # let the never-raising scoring task finish unawaited.
+                            if usage_feedback_task is not None:
+                                usage_feedback_task.cancel()
                             raise extraction_error
 
                         total_extracted = 0
@@ -2529,6 +2615,14 @@ class Session:
                                 "(disabled by config or memory_policy)"
                             )
                         await _run_archive_summary()
+
+                    if usage_feedback_task is not None:
+                        await self._persist_memory_usage(
+                            archive_uri,
+                            extraction_messages,
+                            await usage_feedback_task,
+                            completed_memory_steps,
+                        )
 
                     # A recovered Phase 2 run may have already completed the
                     # long-term step before a sibling step failed. Reuse its

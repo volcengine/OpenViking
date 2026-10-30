@@ -30,7 +30,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 # Durable per-step memory coverage recorded in archive metadata.
-_MEMORY_STEP_NAMES = ("long_term",)
+_MEMORY_STEP_NAMES = ("long_term", "usage_feedback")
 
 
 class _ArchiveMessagesCorruptError(ValueError):

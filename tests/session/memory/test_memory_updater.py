@@ -2182,6 +2182,35 @@ class TestApplyEditWithSearchReplacePatch:
         assert result.extra_fields["last_update_trace_id"] == "trace_1"
 
     @pytest.mark.asyncio
+    async def test_apply_upsert_keeps_usage_feedback_of_existing_file(self):
+        updater = self._make_updater_with_registry()
+        stats = {"value": -2, "helpful": 0, "harmful": 2, "unused": 1}
+        existing = MemoryFileUtils.write(
+            MemoryFile(content="Old line", extra_fields={"usage_feedback": stats})
+        )
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(return_value=existing)
+        written_content = None
+
+        async def mock_write_file(uri, content, **kwargs):
+            nonlocal written_content
+            written_content = content
+
+        mock_viking_fs.write_file = mock_write_file
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+
+        op = ResolvedOperation(
+            memory_fields={"content": "New line"},
+            memory_type="test",
+            uris=["viking://test/test.md"],
+        )
+        await updater._apply_upsert(op, MagicMock())
+
+        result = MemoryFileUtils.read(written_content)
+        assert "New line" in result.content
+        assert result.extra_fields["usage_feedback"] == stats
+
+    @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_instance(self):
         """Test _apply_edit with StrPatch instance."""
         updater = self._make_updater_with_registry()
