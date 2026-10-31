@@ -291,7 +291,7 @@ class LiteLLMVLMProvider(VLMBase):
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": sanitize_openai_messages(messages),
-            "temperature": self.temperature,
+            **({"temperature": self.temperature} if self.temperature is not None else {}),
             "timeout": self.timeout,
             "num_retries": 0,
         }

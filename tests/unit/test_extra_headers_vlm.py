@@ -1032,3 +1032,78 @@ class TestLiteLLMVLMModelResolution:
         )
 
         assert vlm._resolve_model("zai/custom-model") == "gemini/zai/custom-model"
+
+
+@pytest.mark.parametrize(
+    "backend,sync_client,async_client",
+    [(OpenAIVLM, OpenAI, AsyncOpenAI), (VolcEngineVLM, Ark, AsyncArk)],
+)
+@pytest.mark.parametrize("temperature", [None, 0.0, 0.6])
+@pytest.mark.asyncio
+async def test_temperature_defaults_on_the_wire(backend, sync_client, async_client, temperature):
+    bodies = []
+
+    def send(request):
+        assert request.headers["X-Test"] == "sampling"
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                ]
+            },
+        )
+
+    config = VLMConfig(
+        provider="openai" if backend is OpenAIVLM else "volcengine",
+        model="routed-model",
+        api_key="test-key",
+        api_base="https://example.invalid/v1",
+        temperature=temperature,
+        thinking=True,
+        extra_headers={"X-Test": "sampling"},
+        extra_request_body={"thinking": {"type": "enabled"}},
+    )
+    vlm = backend(config._build_vlm_config_dict())
+    options = {
+        "api_key": "test-key",
+        "base_url": config.api_base,
+        "max_retries": 0,
+    }
+    if backend is OpenAIVLM:
+        options["default_headers"] = {"X-Test": "sampling"}
+    with sync_client(
+        **options, http_client=httpx.Client(transport=httpx.MockTransport(send))
+    ) as sync:
+        async with async_client(
+            **options, http_client=httpx.AsyncClient(transport=httpx.MockTransport(send))
+        ) as asynchronous:
+            vlm.get_client = lambda: sync
+            vlm.get_async_client = lambda: asynchronous
+            assert vlm.get_completion("hello") == "ok"
+            assert await vlm.get_completion_async("hello") == "ok"
+            assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
+            assert (
+                await vlm.get_vision_completion_async("describe", images=[b"\x89PNG\r\n\x1a\n"])
+                == "ok"
+            )
+    assert len(bodies) == 4
+    for body in bodies:
+        assert body["thinking"] == {"type": "enabled"}
+        if temperature is None:
+            assert "temperature" not in body
+        else:
+            assert body["temperature"] == temperature
+
+
+@pytest.mark.parametrize("temperature", [None, 0.0, 0.6])
+def test_litellm_temperature_defaults(temperature):
+    vlm = LiteLLMVLMProvider(
+        {"model": "openai/routed-model", "provider": "litellm", "temperature": temperature}
+    )
+    kwargs = vlm._build_text_kwargs(prompt="hello")
+    if temperature is None:
+        assert "temperature" not in kwargs
+    else:
+        assert kwargs["temperature"] == temperature

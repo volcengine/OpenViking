@@ -41,7 +41,7 @@ class SubagentManager:
         bus: MessageBus,
         config: "Config",
         model: str | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = 0.7,
         sandbox_manager: "SandboxManager | None" = None,
     ):
         self.provider = provider

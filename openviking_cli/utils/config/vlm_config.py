@@ -62,7 +62,9 @@ def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
 class VLMCredential(BaseModel):
     """Single VLM credential configuration for multi-credential failover."""
 
-    id: Optional[str] = RuntimeField(default=None, description="Unique identifier for this credential")
+    id: Optional[str] = RuntimeField(
+        default=None, description="Unique identifier for this credential"
+    )
     provider: Optional[str] = RuntimeField(default=None, description="Provider type")
     model: Optional[str] = RuntimeField(
         default=None,
@@ -159,7 +161,9 @@ class VLMConfig(BaseModel):
         ),
     )
     api_base: Optional[str] = Field(default=None, description="API base URL")
-    temperature: float = Field(default=0.0, description="Generation temperature")
+    temperature: Optional[float] = Field(
+        default=0.0, description="Generation temperature; None uses the provider default"
+    )
     max_retries: int = Field(default=3, description="Maximum retry attempts")
     timeout: float = Field(
         default=600.0,
