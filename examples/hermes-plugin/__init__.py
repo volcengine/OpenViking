@@ -3280,6 +3280,13 @@ class OpenVikingMemoryProvider(MemoryProvider):
             return tool_error(str(e))
 
     def shutdown(self) -> None:
+        # Hermes' api_server closes its per-session memory managers (gateway stop, idle or
+        # LRU eviction) with flush_pending + shutdown_all only, never on_session_end, so
+        # commit here what this process wrote. Other platforms end sessions themselves.
+        if self._gateway_platform == "api_server" and not self._shutting_down:
+            with suppress(Exception):
+                if self._session_id in self._capture_commit_scope().pending:
+                    self.on_session_end([])
         # Stop finalizers issuing new commits, then join everything in flight — including
         # the autostart waiter (a daemon blocked on health probes would SIGABRT CPython at
         # Py_FinalizeEx); _shutting_down makes its wait loop bail so the join lands.
