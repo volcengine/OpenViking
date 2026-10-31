@@ -75,33 +75,61 @@ plugin. Tools require `plugin.magpie.mcpEnabled: true` specifically; a shared
 
 ## Automatic recall
 
-- Only host-classified `local` and `magpie-key` origins receive memory. Shared
-  gateway keys, forwarded/remote traffic and missing origins are skipped. A
-  client-supplied agent name, session or cwd is never used as authenticated identity.
-- Recall calls the server's context assembly API with the latest user query,
-  coding purpose and shared context settings. Defaults avoid session query
-  expansion and rewriting to keep latency bounded; explicitly configured
-  context options are resolved by the shared builder. Server-rendered context preserves source URIs.
-- Chat Completions, Responses, Anthropic Messages and Gemini requests each get
-  context in their own system/instructions field. Existing messages, images,
-  tools, model and streaming settings are preserved. Recall text is marked as
-  historical reference, and a request already containing this plugin's block
-  is not injected again.
-- Default scope is the configured user's cross-project context. For project
-  isolation set `recallPeerScope: "actor"` and an explicit `actor_peer_id` in
-  the connection file. Without that peer, actor recall is skipped; cwd is never
-  used to guess it. No OV session is created for automatic recall.
-- The default recall timeout is 700 ms, inside Magpie's default 1000 ms hook
-  budget. If increasing it, set Magpie's `gatewayTimeoutMs` plugin option above
-  the recall timeout (leave startup/file-loading margin). The client timeout
-  also caps the recall timeout. Cancellation propagates to the HTTP request.
-- Empty results, unavailable services, invalid configuration and failed
-  authentication leave the model request unchanged. Diagnostics use fixed
-  status codes and byte counts, without credentials or remembered text.
+- Only host-classified `local` and `magpie-key` origins with a nonempty Magpie
+  session ID receive memory. Shared gateway keys, forwarded traffic and missing
+  identities are skipped. The file's OV credentials remain the authority.
+- Only a new textual user message triggers retrieval. Tool continuations replay
+  known context without retrieving. Magpie skips its own internal title/classifier
+  calls; explicit auxiliary/compaction/title/subagent request kinds are also skipped.
+- Memory is appended to the corresponding **user message**, never to system
+  instructions. The plugin persists a decision for that message's full history
+  prefix before returning an enhanced request. Subsequent requests reconstruct
+  those same blocks in the same positions. Retries reuse the decision, including
+  empty or failed recalls. Identical text in a later turn has a different anchor.
+- Chat Completions, Anthropic Messages and Gemini retain original system fields,
+  text/image/tool blocks, model and streaming settings. Responses requires
+  `store: false` and full `input` history; `previous_response_id`, `conversation`,
+  `background` and `item_reference` requests are skipped.
+- A private local ledger is partitioned by the actual OV connection identity,
+  peer scope, config path, Magpie agent/session/workspace, protocol and model.
+  Credential rotation or another agent/session cannot reuse the previous scope.
+  Prefix hashes distinguish branches; unknown trimmed/compacted histories skip
+  enhancement rather than matching messages by text. A fresh history containing
+  one new user message can start a new prefix under the same session.
+- Existing OpenViking context markers skip enhancement, including those from
+  native OV plugins or OV Gateway. Disabling `autoRecall` prevents new searches
+  while replaying known history; disabling the plugin entirely disables both.
+- The shared context builder owns query settings, budgets and result relevance.
+  Default recall timeout is 700 ms inside Magpie's default 1000 ms hook budget.
+  Increasing it requires raising Magpie's `gatewayTimeoutMs` with I/O margin.
+  Cancellation reaches the HTTP request. Query filters use the shared parser.
+- Default peer scope is the configured user's cross-project context. Actor scope
+  requires an explicit `actor_peer_id`; a missing peer skips enhancement.
 
-Disable automatic recall in any Agent-native OV plugin when Magpie owns recall
-for that Agent. Native plugins may still own session capture; this plugin does
-not collect conversations or implement `onResponse` capture.
+### Local replay state
+
+The default directory is `~/.openviking/magpie/recall/`; set
+`plugin.magpie.dataDir` to change its parent directory. Files contain hashed
+message anchors and the exact recalled blocks, including any empty/error
+outcome, not raw credentials or a copy of the client transcript. They may contain
+sensitive recalled content. The directory is mode 0700 and JSON files are 0600.
+Writes use a per-session lock and atomic rename, shared by app and CLI hosts.
+A retired host's lock can be reclaimed after one minute.
+
+There is no automatic deletion of replay files in this version. Retain them for
+active chats; deleting them, corrupt state or unrecognized history changes cause
+existing conversations to skip enhancement. Start a new chat to establish a fresh
+history. Restoring signed reasoning depends on retaining the matching history
+and replay state; live-provider signature behavior has not been validated.
+Each session file is capped at 1 MiB; request replay supports up to 2 MiB of JSON
+and 2,000 messages. Unsupported shapes, storage failures and capacity limits
+leave the request unchanged. Diagnostics contain fixed codes and byte counts,
+not credentials or recalled text.
+
+The plugin directly calls the ordinary OV REST/MCP service. **OV Gateway need
+not be enabled.** It does not collect conversations or create OV sessions for
+automatic recall; Agent-native plugins may still own capture. Choose one owner
+for automatic recall when also using an Agent-native OV plugin.
 
 ## Optional tools
 

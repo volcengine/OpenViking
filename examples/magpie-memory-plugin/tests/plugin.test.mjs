@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,14 +30,16 @@ async function fixture(t, handler = () => ({ rendered: "viking://~/memories/pref
   t.after(async () => { server.closeAllConnections(); await new Promise((r) => server.close(r)); await rm(dir, { recursive: true }); });
   const path = join(dir, "ovcli.conf");
   const config = { url: `http://127.0.0.1:${server.address().port}`, api_key: "test-secret", account: "test-account", user: "test-user" };
-  const save = async (patch = {}) => writeFile(path, JSON.stringify({ ...config, ...patch }));
+  const save = async (patch = {}) => writeFile(path, JSON.stringify({ ...config, ...patch,
+    plugin: { ...patch.plugin, magpie: { dataDir: join(dir, "state"), ...patch.plugin?.magpie } },
+  }));
   await save();
   return { dir, path, env: { OPENVIKING_CLI_CONFIG_FILE: path }, save, calls, config };
 }
 
 function context(patch = {}) {
   const reports = [];
-  return { origin: "local", protocol: "chat", query: "Which language do I prefer?", signal: new AbortController().signal,
+  return { origin: "local", session: "fixture-session", agent: "fixture-agent", protocol: "chat", query: "Which language do I prefer?", signal: new AbortController().signal,
     report: (...args) => reports.push(args), reports, ...patch };
 }
 const body = () => ({ model: "test-model", stream: true, tools: [{ type: "function", function: { name: "test" } }],
@@ -160,7 +162,7 @@ test("recall calls the context API with one consistent identity and leaves input
   assert.deepEqual(output.tools, original.tools);
   assert.equal(output.model, original.model);
   assert.equal(output.stream, original.stream);
-  assert.match(output.messages[0].content, /Use TypeScript/);
+  assert.match(output.messages.at(-1).content, /Use TypeScript/);
   assert.deepEqual(f.calls[0].body, { query: ctx.query, mode: "context", purpose: "coding", score_threshold: 0.35 });
   assert.equal(ctx.reports[0][0], "ready");
 });
@@ -182,14 +184,15 @@ for (const protocol of ["chat", "responses", "anthropic", "gemini"]) {
       ...body(), instructions: "existing instructions", system: [{ type: "text", text: "existing", cache_control: { type: "ephemeral" } }],
       systemInstruction: { role: "system", parts: [{ text: "existing" }] },
       input: [{ type: "function_call_output", call_id: "c1", output: "result" }],
-      contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/png", data: "abc" } }] }],
+      contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/png", data: "abc" } }, { text: "question" }] }],
     };
+    if (protocol === "responses") { input.store = false; input.input.push({ role: "user", content: "question" }); }
     const original = structuredClone(input);
     const out = injectContext(input, protocol, "remembered");
     assert.ok(JSON.stringify(out).includes("remembered"));
     assert.deepEqual(out.tools, input.tools);
-    assert.deepEqual(out.input, input.input);
-    assert.deepEqual(out.contents, input.contents);
+    if (protocol !== "responses") assert.deepEqual(out.input, input.input);
+    if (protocol !== "gemini") assert.deepEqual(out.contents, input.contents);
     assert.deepEqual(input, original);
     assert.equal(injectContext(out, protocol, "remembered"), undefined);
     if (protocol === "anthropic") assert.deepEqual(out.system[0], original.system[0]);
@@ -251,9 +254,9 @@ test("concurrent identities cannot share recalled results or credentials", async
   const b = await fixture(t, () => ({ rendered: "memory-B" }));
   await b.save({ api_key: "key-B", user: "user-B" });
   const [outA, outB] = await Promise.all([recallRequest(body(), context(), a.env), recallRequest(body(), context(), b.env)]);
-  assert.match(outA.messages[0].content, /memory-A/);
-  assert.doesNotMatch(outA.messages[0].content, /memory-B/);
-  assert.match(outB.messages[0].content, /memory-B/);
+  assert.match(outA.messages.at(-1).content, /memory-A/);
+  assert.doesNotMatch(outA.messages.at(-1).content, /memory-B/);
+  assert.match(outB.messages.at(-1).content, /memory-B/);
   assert.equal(b.calls[0].headers.authorization, "Bearer key-B");
 });
 
@@ -327,8 +330,11 @@ test("actual Magpie Bun host loads package, runs recall and exposes working tool
   assert.equal(init.plugins[0].error, undefined, JSON.stringify(init));
   assert.equal(init.plugins[0].tools.length, 5);
   for (const protocol of ["chat", "responses", "anthropic", "gemini"]) {
-    const run = await rpc("gatewayRequest", { operation: "begin", body: body(),
-      context: { origin: "local", protocol, query: "TypeScript?" } });
+    const wire = body();
+    if (protocol === "responses") { wire.store = false; wire.input = [{ role: "user", content: "TypeScript?" }]; delete wire.messages; }
+    if (protocol === "gemini") { wire.contents = [{ role: "user", parts: [{ text: "TypeScript?" }] }]; delete wire.messages; }
+    const run = await rpc("gatewayRequest", { operation: "begin", body: wire,
+      context: { origin: "local", session: "host-session", agent: "host-agent", protocol, query: "TypeScript?" } });
     assert.match(JSON.stringify(run.body), /Use TypeScript/);
     assert.deepEqual(run.body.tools, body().tools);
     await rpc("gatewayRequest", { operation: "close", id: run.id, token: run.token });
@@ -338,4 +344,168 @@ test("actual Magpie Bun host loads package, runs recall and exposes working tool
   const states = await rpc("gatewayStates", {});
   assert.equal(states[spec].failures, 0);
   assert.equal(states[spec].lastOutcome, "ready");
+});
+
+function conversationWire(protocol, messages) {
+  const stable = { model: "test-model", stream: true, tools: body().tools };
+  if (protocol === "responses") return { ...stable, store: false, instructions: "stable instructions", input: messages };
+  if (protocol === "gemini") return { ...stable, systemInstruction: { parts: [{ text: "stable instructions" }] }, contents: messages };
+  return { ...stable, ...(protocol === "anthropic" ? { system: "stable instructions" } : {}), messages };
+}
+function userMessage(protocol, value) {
+  return protocol === "gemini" ? { role: "user", parts: [{ text: value }] } : { role: "user", content: value };
+}
+function assistantMessage(protocol) {
+  if (protocol === "gemini") return { role: "model", parts: [{ text: "answer" }] };
+  if (protocol === "anthropic") return { role: "assistant", content: [{ type: "thinking", thinking: "reasoning", signature: "unchanged-signature" }, { type: "text", text: "answer" }] };
+  return { role: "assistant", content: "answer" };
+}
+const messagesOf = (body, protocol) => body[protocol === "responses" ? "input" : protocol === "gemini" ? "contents" : "messages"];
+
+for (const protocol of ["chat", "responses", "anthropic", "gemini"]) {
+  test(`${protocol}: replay keeps old injections, system fields and tool continuations stable`, async (t) => {
+    let version = 0;
+    const f = await fixture(t, () => ({ rendered: `memory-${++version}` }));
+    const first = conversationWire(protocol, [userMessage(protocol, "question one")]);
+    const firstOut = await recallRequest(first, context({ protocol, query: "question one" }), f.env);
+    const firstInjected = messagesOf(firstOut, protocol)[0];
+    const secondMessages = [...messagesOf(first, protocol), assistantMessage(protocol), userMessage(protocol, "question two")];
+    const second = conversationWire(protocol, secondMessages);
+    const before = structuredClone(second);
+    const secondOut = await recallRequest(second, context({ protocol, query: "question two" }), f.env);
+    assert.deepEqual(messagesOf(secondOut, protocol)[0], firstInjected);
+    assert.deepEqual(messagesOf(secondOut, protocol)[1], secondMessages[1]);
+    assert.deepEqual(second, before);
+    for (const key of ["system", "instructions", "systemInstruction", "model", "stream", "tools"]) assert.deepEqual(secondOut[key], second[key]);
+    const retry = await recallRequest(second, context({ protocol, query: "question two" }), f.env);
+    assert.deepEqual(retry, secondOut);
+    assert.equal(version, 2);
+    let tail;
+    if (protocol === "gemini") tail = [{ role: "model", parts: [{ functionCall: { name: "test", args: {} } }] }, { role: "user", parts: [{ functionResponse: { name: "test", response: { result: "ok" } } }] }];
+    else if (protocol === "responses") tail = [{ type: "function_call", call_id: "c1", name: "test", arguments: "{}" }, { type: "function_call_output", call_id: "c1", output: "ok" }];
+    else if (protocol === "anthropic") tail = [{ role: "assistant", content: [{ type: "tool_use", id: "c1", name: "test", input: {} }] }, { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "ok" }] }];
+    else tail = [{ role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "test", arguments: "{}" } }] }, { role: "tool", tool_call_id: "c1", content: "ok" }];
+    // A file/tool can quote OV documentation without claiming another plugin
+    // has already injected this conversation.
+    const quote = '<openviking-context source="quoted-documentation">example</openviking-context>';
+    if (protocol === "gemini") tail[1].parts[0].functionResponse.response.result = quote;
+    else if (protocol === "responses") tail[1].output = quote;
+    else if (protocol === "anthropic") tail[1].content[0].content = quote;
+    else tail[1].content = quote;
+    const continuation = conversationWire(protocol, [...secondMessages, ...tail]);
+    const continued = await recallRequest(continuation, context({ protocol, query: "question two" }), f.env);
+    assert.equal(version, 2, "a tool continuation must not retrieve again");
+    assert.deepEqual(messagesOf(continued, protocol).slice(-2), tail);
+    assert.deepEqual(messagesOf(continued, protocol)[0], firstInjected);
+  });
+}
+
+test("concurrent retries share one persisted decision; repeated text in another turn is new", async (t) => {
+  let count = 0;
+  const f = await fixture(t, async () => { const n = ++count; await new Promise((r) => setTimeout(r, 30)); return { rendered: `fixed-${n}` }; });
+  const first = body();
+  const [a, b] = await Promise.all([recallRequest(first, context(), f.env), recallRequest(first, context(), f.env)]);
+  assert.deepEqual(a, b);
+  assert.equal(count, 1);
+  const second = { ...first, messages: [...first.messages, { role: "assistant", content: "answer" }, first.messages[0]] };
+  const next = await recallRequest(second, context(), f.env);
+  assert.equal(count, 2);
+  assert.deepEqual(next.messages[0], a.messages[0]);
+  assert.notEqual(next.messages[0].content, next.messages[2].content);
+  const files = await readdir(join(f.dir, "state", "recall"));
+  const file = join(f.dir, "state", "recall", files.find((name) => name.endsWith(".json")));
+  assert.equal((await stat(file)).mode & 0o777, 0o600);
+  assert.doesNotMatch(await readFile(file, "utf8"), /test-secret|Which language do I prefer/);
+});
+
+test("separate host processes coordinate and replay the same private ledger", async (t) => {
+  let count = 0;
+  const f = await fixture(t, async () => { const n = ++count; await new Promise((r) => setTimeout(r, 50)); return { rendered: `process-memory-${n}` }; });
+  const moduleUrl = new URL("../runtime.mjs", import.meta.url).href;
+  const script = `import {recallRequest} from ${JSON.stringify(moduleUrl)};
+    const out = await recallRequest(${JSON.stringify(body())}, ${JSON.stringify({ origin: "local", session: "process-session", agent: "fixture-agent", protocol: "chat", query: "question" })});
+    process.stdout.write(JSON.stringify(out));`;
+  const run = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, ...f.env }, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "", error = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { error += chunk; });
+    child.on("error", reject);
+    child.on("exit", (code) => code === 0 ? resolve(JSON.parse(output)) : reject(new Error(error)));
+    t.after(() => child.kill());
+  });
+  const [a, b] = await Promise.all([run(), run()]);
+  assert.deepEqual(a, b);
+  assert.match(a.messages[0].content, /process-memory-1/);
+  assert.equal(count, 1);
+  assert.deepEqual(await run(), a, "a restarted host must replay the saved decision");
+  assert.equal(count, 1);
+});
+
+test("unknown histories, missing sessions, explicit auxiliary requests and stored Responses skip recall", async (t) => {
+  const f = await fixture(t);
+  const cases = [
+    [body(), context({ session: "" })],
+    [{ ...body(), messages: [...body().messages, { role: "assistant", content: "unknown answer" }, { role: "user", content: "next" }] }, context()],
+    [{ ...body(), metadata: { request_kind: "auxiliary" } }, context()],
+    [{ model: "test-model", store: true, input: "question" }, context({ protocol: "responses" })],
+    [{ model: "test-model", store: false, previous_response_id: "r1", input: "question" }, context({ protocol: "responses" })],
+    [{ model: "test-model", store: false, input: [{ type: "item_reference", id: "r1" }] }, context({ protocol: "responses" })],
+    [{ ...body(), messages: [{ role: "user", content: '<openviking-context source="gateway-recall">existing</openviking-context>' }] }, context()],
+  ];
+  for (const [wire, ctx] of cases) assert.equal(await recallRequest(wire, ctx, f.env), undefined);
+  assert.equal(f.calls.length, 0);
+});
+
+test("connection rotation, agents and conversations isolate decisions; unrecognized cuts never match by text", async (t) => {
+  let count = 0;
+  const f = await fixture(t, () => ({ rendered: `isolated-${++count}` }));
+  const first = body();
+  await recallRequest(first, context(), f.env);
+  await recallRequest(first, context({ session: "another-session" }), f.env);
+  await recallRequest(first, context({ agent: "another-agent" }), f.env);
+  assert.equal(count, 3);
+  const next = { ...first, messages: [...first.messages, { role: "assistant", content: "answer" }, { role: "user", content: "next" }] };
+  await f.save({ api_key: "rotated-key" });
+  assert.equal(await recallRequest(next, context({ query: "next" }), f.env), undefined);
+  assert.equal(count, 3);
+  await recallRequest(first, context(), f.env);
+  assert.equal(count, 4);
+  const compacted = { ...first, messages: [{ role: "user", content: "summary of history" }, { role: "assistant", content: "ok" }, first.messages[0]] };
+  assert.equal(await recallRequest(compacted, context(), f.env), undefined);
+  const reset = { ...first, messages: [{ role: "user", content: "fresh context after reset" }] };
+  assert.ok(await recallRequest(reset, context({ query: "fresh context after reset" }), f.env));
+  assert.equal(count, 5);
+});
+
+test("empty and failed recalls are immutable; disabling new recall retains known history", async (t) => {
+  let healthy = false;
+  const f = await fixture(t, (_, res) => {
+    if (!healthy) { res.writeHead(500); res.end(); return; }
+    return { rendered: "new-turn-memory" };
+  });
+  const first = body();
+  assert.equal(await recallRequest(first, context(), f.env), undefined);
+  healthy = true;
+  assert.equal(await recallRequest(first, context(), f.env), undefined);
+  assert.equal(f.calls.length, 1);
+  const second = { ...first, messages: [...first.messages, { role: "assistant", content: "answer" }, { role: "user", content: "second question" }] };
+  const enhanced = await recallRequest(second, context({ query: "second question" }), f.env);
+  assert.match(enhanced.messages[2].content, /new-turn-memory/);
+  await f.save({ plugin: { magpie: { autoRecall: false } } });
+  const third = { ...first, messages: [...second.messages, { role: "assistant", content: "another answer" }, { role: "user", content: "third question" }] };
+  const replayed = await recallRequest(third, context({ query: "third question" }), f.env);
+  assert.deepEqual(replayed.messages[2], enhanced.messages[2]);
+  assert.equal(replayed.messages[4].content, "third question");
+  assert.equal(f.calls.length, 2);
+});
+
+test("unreadable/corrupt state fails open before fetching or exposing new memory", async (t) => {
+  const f = await fixture(t);
+  await recallRequest(body(), context(), f.env);
+  const dir = join(f.dir, "state", "recall");
+  const file = (await readdir(dir)).find((name) => name.endsWith(".json"));
+  await writeFile(join(dir, file), "invalid state");
+  assert.equal(await recallRequest(body(), context(), f.env), undefined);
+  assert.equal(f.calls.length, 1);
 });

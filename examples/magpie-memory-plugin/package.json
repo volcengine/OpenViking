@@ -1,14 +1,14 @@
 {
   "name": "@openviking/magpie-memory-plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "OpenViking memory recall and tools for the Magpie model gateway",
   "type": "module",
   "main": "index.mjs",
   "magpie": { "hooks": "./hooks.mjs" },
-  "files": ["index.mjs", "hooks.mjs", "runtime.mjs", "shared/", "README.md", "README_CN.md"],
+  "files": ["index.mjs", "hooks.mjs", "runtime.mjs", "conversation.mjs", "shared/", "README.md", "README_CN.md"],
   "scripts": {
     "prepack": "node ../memory-plugin-shared/sync.mjs",
-    "check": "node --check index.mjs && node --check hooks.mjs && node --check runtime.mjs",
+    "check": "node --check index.mjs && node --check hooks.mjs && node --check runtime.mjs && node --check conversation.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "engines": { "node": ">=22.19.0" },
