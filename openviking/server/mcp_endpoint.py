@@ -947,16 +947,33 @@ def _mcp_media_download_hint(uri: str) -> str:
 @_mcp_error_results(structured_output=False)
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
 async def read(
-    uris: str | list[str],
+    uri: Annotated[
+        str | list[str] | None,
+        Field(description="A viking:// file URI, or a list of them to read several files in one call"),
+    ] = None,
+    uris: Annotated[
+        str | list[str] | None,
+        Field(description="Deprecated alias of uri, kept for existing callers"),
+    ] = None,
     offset: int = 0,
     limit: int = -1,
 ) -> str | list[ContentBlock]:
-    """Read one or more viking:// file URIs. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+    """Read viking:// file URIs. Pass uri as one URI, or as a list to read several files in one call. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
+
+    # `uri` matches every other tool; `uris` is the original name of this one.
+    if uri is not None and uris is not None:
+        raise InvalidArgumentError("read takes uri or the legacy uris, not both")
+    requested = uri if uri is not None else uris
+    uri_list = requested if isinstance(requested, list) else [requested]
+    if not uri_list or any(not item for item in uri_list):
+        raise InvalidArgumentError(
+            'read takes uri: a viking:// URI or a list of them, '
+            'e.g. read(uri="viking://resources/notes.md")'
+        )
 
     service = get_service()
     ctx = _get_ctx()
-    uri_list = uris if isinstance(uris, list) else [uris]
     semaphore = asyncio.Semaphore(10)
 
     async def _preflight_one(
