@@ -24,12 +24,16 @@ export class OpenVikingClient {
     return response;
   }
 
-  async getSession(sessionId, actorPeerId) {
-    const response = await this.fetchJSON(
+  async getSessionResult(sessionId, actorPeerId) {
+    return this.fetchJSON(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       {},
       { timeoutMs: 5000, actorPeerId },
     );
+  }
+
+  async getSession(sessionId, actorPeerId) {
+    const response = await this.getSessionResult(sessionId, actorPeerId);
     return response.ok ? response.result : null;
   }
 

@@ -31,6 +31,29 @@ test("replayPending sends queued entries and removes them after success", async 
   });
 });
 
+test("replayPending defers a blocked session without delaying another session", async () => {
+  await withPendingDir(async () => {
+    const createdAt = Date.now();
+    await enqueue("addMessage", "queue-blocked", { content: "retry" }, { createdAt });
+    await enqueue("addMessage", "queue-ready", { content: "send" }, { createdAt: createdAt + 1 });
+    const calls = [];
+
+    const result = await replayPending(async path => {
+      calls.push(path);
+      return { ok: true };
+    }, () => {}, {
+      consumeRetries: false,
+      skipSessionIds: new Set(["queue-blocked"]),
+    });
+
+    assert.deepEqual(result, { replayed: 1, failed: 0, skipped: 0, deferred: 1 });
+    assert.deepEqual(calls, ["/api/v1/sessions/queue-ready/messages"]);
+    const pending = await listPending();
+    assert.deepEqual(pending.map(item => item.entry.sessionId), ["queue-blocked"]);
+    assert.equal(pending[0].entry.retries, 0);
+  });
+});
+
 test("enqueue deduplicates identical payloads", async () => {
   await withPendingDir(async () => {
     const payload = { role: "user", parts: [{ type: "text", text: "same" }] };

@@ -48,6 +48,9 @@ export class OpenVikingRuntime {
       ovSessionId: deriveDshSessionId(session.id),
       config: { ...this.config, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
       ready: false,
+      sessionReady: false,
+      sessionChecked: false,
+      hasCapturedData: false,
       profileBlock: "",
       profileDelivered: false,
       toolNames: new Map(),
@@ -67,8 +70,8 @@ export class OpenVikingRuntime {
   }
 
   async ensureState(state) {
-    if (state.ready) return state;
     if (state.initializing) return state.initializing;
+    if (state.ready) return state;
     state.initializing = this.initializeState(state).finally(() => {
       state.initializing = null;
     });
@@ -82,23 +85,6 @@ export class OpenVikingRuntime {
       state.initializationRetryable = isRetryableFailure(health);
       return state;
     }
-    const ensured = await this.client.ensureSessionResult(
-      state.ovSessionId,
-      state.config.peerId,
-    );
-    if (
-      !ensured.ok
-      && !(ensured.status === 409 && ensured.error?.code === "ALREADY_EXISTS")
-    ) {
-      state.initializationRetryable = isRetryableFailure(ensured);
-      return state;
-    }
-    // Replay is a write, so it stays behind the same toggle: a backlog queued
-    // while capture was on waits for a session that still writes.
-    if (isCaptureEnabled(state.config)) {
-      await this.replayPendingQueue();
-    }
-    await this.refreshPendingState(state);
     const profile = await buildProfileBlock(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config.profileTokenBudget,
@@ -113,7 +99,45 @@ export class OpenVikingRuntime {
         ].join("\n")
       : "";
     state.ready = true;
+    // A queued message needs a session before replay, while a queued final
+    // commit has already handled its capture and needs no shutdown duplicate.
+    if (isCaptureEnabled(state.config)) {
+      const pending = await this.refreshPendingState(state);
+      if (state.hasPendingWrites) {
+        if (pending.at(-1)?.entry?.type === "addMessage") {
+          state.hasCapturedData = true;
+        }
+        if (!(await this.ensureSession(state))) return state;
+      }
+      await this.replayPendingQueue();
+    }
+    await this.refreshPendingState(state);
     return state;
+  }
+
+  async ensureSession(state) {
+    if (state.sessionReady) return true;
+    if (state.sessionInitializing) return state.sessionInitializing;
+    state.sessionInitializing = (async () => {
+      const ensured = await this.client.ensureSessionResult(
+        state.ovSessionId,
+        state.config.peerId,
+      );
+      if (
+        !ensured.ok
+        && !(ensured.status === 409 && ensured.error?.code === "ALREADY_EXISTS")
+      ) {
+        state.initializationRetryable = isRetryableFailure(ensured);
+        return false;
+      }
+      state.sessionReady = true;
+      state.sessionChecked = true;
+      state.initializationRetryable = false;
+      return true;
+    })().finally(() => {
+      state.sessionInitializing = null;
+    });
+    return state.sessionInitializing;
   }
 
   async profileMessage(agent) {
@@ -132,6 +156,27 @@ export class OpenVikingRuntime {
     if (!state.ready || !isRecallEnabled(state.config)) return null;
     const query = promptText(messages);
     if (!query || query.length < state.config.minQueryLength) return null;
+    // Context search can auto-create a missing session when given its ID.
+    // Probe with GET first so a new agent can recall without an empty write.
+    if (state.ovSessionId && !state.sessionReady) {
+      if (state.sessionInitializing) await state.sessionInitializing;
+      if (!state.sessionReady && !state.sessionChecked) {
+        if (!state.sessionChecking) {
+          state.sessionChecking = this.client.getSessionResult(
+            state.ovSessionId,
+            state.config.peerId,
+          ).then(response => {
+            // Creation may win the race with this read; never undo it.
+            if (response.ok && response.result) state.sessionReady = true;
+            // A transient failure is not evidence that the session is absent.
+            if (response.ok || response.status === 404) state.sessionChecked = true;
+          }).finally(() => {
+            state.sessionChecking = null;
+          });
+        }
+        await state.sessionChecking;
+      }
+    }
     const block = await buildRecallBlock(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config,
@@ -139,7 +184,7 @@ export class OpenVikingRuntime {
       {
         actorPeerId: state.config.peerId,
         legacyPeerId: state.config.legacyPeerId,
-        sessionId: state.ovSessionId,
+        sessionId: state.sessionReady ? state.ovSessionId : undefined,
         excludeUris: state.config.recallExcludeUris,
         log: (stage, data) => this.log(stage, data),
       },
@@ -163,6 +208,12 @@ export class OpenVikingRuntime {
         }
         return;
       }
+      if (!state.sessionReady && !(await this.ensureSession(state))) {
+        if (state.initializationRetryable) {
+          await this.enqueuePendingMessage(state, payload);
+        }
+        return;
+      }
       if (state.hasPendingWrites) {
         await this.enqueuePendingMessage(state, payload);
         return;
@@ -172,7 +223,9 @@ export class OpenVikingRuntime {
         payload,
         state.config.peerId,
       );
-      if (isRetryableFailure(response)) {
+      if (response?.ok) {
+        state.hasCapturedData = true;
+      } else if (isRetryableFailure(response)) {
         await this.enqueuePendingMessage(state, payload);
       }
     });
@@ -188,6 +241,8 @@ export class OpenVikingRuntime {
     this.enqueueWrite(state, async () => {
       if (state.hasPendingWrites) return;
       if (!state.ready && !(await this.ensureState(state)).ready) return;
+      if (!state.hasCapturedData) return;
+      if (!state.sessionReady && !(await this.ensureSession(state))) return;
       if (!boundary) {
         const metadata = await this.client.getSession(
           state.ovSessionId,
@@ -219,11 +274,13 @@ export class OpenVikingRuntime {
       this.enqueueWrite(state, async () => {
         if (!isCaptureEnabled(state.config)) return;
         const commitPayload = { keep_recent_count: 0 };
+        if (!state.ready && !state.hasPendingWrites && !(await this.ensureState(state)).ready) return;
+        if (!state.hasCapturedData) return;
         if (state.hasPendingWrites) {
           await this.enqueueFinalCommit(state, commitPayload);
           return;
         }
-        if (!state.ready && !(await this.ensureState(state)).ready) return;
+        if (!state.sessionReady && !(await this.ensureSession(state))) return;
         const response = await this.client.commitSession(
           state.ovSessionId,
           state.config.peerId,
@@ -292,7 +349,10 @@ export class OpenVikingRuntime {
 
   async enqueuePendingMessage(state, payload) {
     const result = await this.enqueuePending(state, "addMessage", payload);
-    if (result.ok) await this.removePendingCommits(state);
+    if (result.ok) {
+      state.hasCapturedData = true;
+      await this.removePendingCommits(state);
+    }
     return result;
   }
 
@@ -323,6 +383,7 @@ export class OpenVikingRuntime {
     if (wasPending && !state.hasPendingWrites) {
       this.log("pending_cleared", { sessionId: state.ovSessionId });
     }
+    return pending;
   }
 
   /**
@@ -364,7 +425,23 @@ export class OpenVikingRuntime {
             this.log("drain_health_restored", {});
           }
           this.drainHealth = true;
-          await this.replayPendingQueue({ consumeRetries: false });
+          const latestPendingBySession = new Map(
+            pending.map(item => [item.entry?.sessionId, item.entry?.type]),
+          );
+          const blockedSessions = new Set();
+          for (const state of this.states.values()) {
+            if (!latestPendingBySession.has(state.ovSessionId) || state.sessionReady) continue;
+            if (latestPendingBySession.get(state.ovSessionId) === "addMessage") {
+              state.hasCapturedData = true;
+            }
+            if (!(await this.ensureSession(state))) {
+              blockedSessions.add(state.ovSessionId);
+            }
+          }
+          await this.replayPendingQueue({
+            consumeRetries: false,
+            skipSessionIds: blockedSessions,
+          });
         }
       }
       for (const state of this.states.values()) {
