@@ -12,12 +12,33 @@ from openviking.models.model_error import ModelErrorKind, model_error_kind
 from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.agent.tools.ov_file import VikingMultiReadTool
 from vikingbot.compile import file_ops
-from vikingbot.compile.models import has_directory_plan
+from vikingbot.compile.models import CompileFailure, has_directory_plan
 from vikingbot.compile.ops.common import payload
 from vikingbot.compile.pipeline_io import ModelCallError, ModelCallLimitError
 from vikingbot.compile.renderer import validate_relative_file_path
 from vikingbot.compile.results import FileResponse, Group
 from vikingbot.compile.sources import CompileSourceRange, read_source, split_source
+
+
+def _inventory_complete(pages):
+    """Return whether recorded diff pages form a complete inventory from offset zero."""
+    first = pages.get(0)
+    if first is None:
+        return False
+    total = first["total"]
+    offset = 0
+    count = 0
+    while True:
+        page = pages.get(offset)
+        if page is None or page["total"] != total or page["offset"] != offset:
+            return False
+        count += len(page["changes"])
+        if not page["has_more"]:
+            return count == total
+        next_offset = page["next_offset"]
+        if next_offset is None or next_offset <= offset:
+            return False
+        offset = next_offset
 
 
 class EntryResponse(FileResponse):
@@ -57,6 +78,7 @@ async def run(runtime, sources, context):
     data = {**context, "inputs": [await payload(runtime, r) for r in sources]}
     group = Group("direct", sources)
     readers = {}
+    inventories = {}
     discover = has_directory_plan(runtime.changes) and bool(runtime.changes.get("head"))
 
     async def batch(parts=()):
@@ -70,6 +92,8 @@ async def run(runtime, sources, context):
             result = await runtime.client.diff_paths(
                 paths, base=base, head=head, offset=offset, limit=limit
             )
+            key = (tuple(paths), base, head)
+            inventories.setdefault(key, {})[result["offset"]] = result
             deleted = [item for item in result["changes"] if item["change_type"] == "deleted"]
             sources.extend(await runtime.seed(batch(), notices=deleted))
             deleted_uris = {item["uri"] for item in deleted}
@@ -110,6 +134,32 @@ async def run(runtime, sources, context):
             "Before requesting needs_pipeline=true, query all pages and read the source ranges "
             "needed for collection processing; the pipeline receives only registered inputs."
         )
+
+    def require_complete_inventory():
+        if not discover:
+            return
+        planned = [
+            *((path, runtime.changes.get("base")) for path in runtime.changes["diff_dirs"]),
+            *((path, None) for path in runtime.changes["full_dirs"]),
+        ]
+        incomplete = [
+            path
+            for path, base in planned
+            if not any(
+                path in paths
+                and query_base == base
+                and query_head == runtime.changes["head"]
+                and _inventory_complete(pages)
+                for (paths, query_base, query_head), pages in inventories.items()
+            )
+        ]
+        if incomplete:
+            raise CompileFailure(
+                "COMPILE_SOURCE_UNDERCOLLECTED",
+                "Source inventory was not fully paginated before pipeline handoff: "
+                + ", ".join(incomplete),
+                stage="entry",
+            )
 
     if runtime.tool_context is not None:
         search = runtime.tools.get("openviking_search")
@@ -212,6 +262,7 @@ async def run(runtime, sources, context):
         if response.needs_pipeline:
             if response.files:
                 raise ValueError("A pipeline request must not submit files")
+            require_complete_inventory()
             return
         if (not response.files and not discover) or (
             runtime.skill_target and response.output_format != "files"
@@ -238,9 +289,11 @@ async def run(runtime, sources, context):
             ModelErrorKind.TRANSIENT_NETWORK_ERROR,
         }:
             raise
+        require_complete_inventory()
         return None
     except ValueError:
         runtime.direct_output_format = None
+        require_complete_inventory()
         return None
     if response.needs_pipeline:
         runtime.direct_output_format = None

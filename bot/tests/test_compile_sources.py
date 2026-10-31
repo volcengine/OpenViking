@@ -23,6 +23,7 @@ from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCom
 from vikingbot.compile.ops.common import pack, payload
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import ChildProvider, complete_tool_result
+from vikingbot.compile.pipeline_io import ModelCallLimitError
 from vikingbot.compile.results import CombineResponse, FileResponse, RecordResponse
 from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.skill_resources import EvidenceReader
@@ -161,6 +162,16 @@ async def test_discovered_images_use_existing_multi_read_wrapper(runtime):
     pipeline, png = runtime
     pipeline.files.get = AsyncMock(wraps=pipeline.files.get)
     pipeline.changes = {"diff_dirs": [], "full_dirs": ["viking://resources/cedar"], "head": "test"}
+    pipeline.client.diff_paths = AsyncMock(
+        return_value={
+            "changes": [{"uri": URI, "change_type": "added"}],
+            "offset": 0,
+            "limit": 100,
+            "total": 1,
+            "has_more": False,
+            "next_offset": None,
+        }
+    )
     pipeline.tools = {
         "openviking_multi_read": VikingMultiReadTool(),
         "openviking_diff_paths": SimpleNamespace(name="openviking_diff_paths"),
@@ -168,11 +179,17 @@ async def test_discovered_images_use_existing_multi_read_wrapper(runtime):
     pipeline.tool_context = ToolContext()
 
     async def ask(*args, readers, **kwargs):
+        inventory = await readers["openviking_diff_paths"].execute(
+            paths=["viking://resources/cedar"], base=None, head="test"
+        )
+        assert '"total": 1' in inventory
         result = await readers["openviking_multi_read"].execute(uris=[URI])
         assert isinstance(result, MultimodalToolResult) and URI in result.text
         assert _inline_media_bytes([{"content": result.content}]) == len(png)
         assert "base64," not in result.text
-        return SimpleNamespace(needs_pipeline=True)
+        response = SimpleNamespace(needs_pipeline=True, files=[])
+        await args[4](response)
+        return response
 
     pipeline.model.ask = AsyncMock(side_effect=ask)
     assert await entry.run(pipeline, [], {}) is None
@@ -180,6 +197,41 @@ async def test_discovered_images_use_existing_multi_read_wrapper(runtime):
     assert not any(
         call.args[0].startswith("sources/") for call in pipeline.files.get.await_args_list
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_via_limit", [False, True])
+async def test_discovered_pipeline_rejects_incomplete_source_inventory(runtime, exit_via_limit):
+    pipeline, _ = runtime
+    pipeline.changes = {"diff_dirs": [], "full_dirs": ["viking://resources/cedar"], "head": "test"}
+    pipeline.client.diff_paths = AsyncMock(
+        return_value={
+            "changes": [
+                {"uri": f"viking://resources/cedar/{i}.md", "change_type": "added"}
+                for i in range(100)
+            ],
+            "offset": 0,
+            "limit": 100,
+            "total": 15745,
+            "has_more": True,
+            "next_offset": 100,
+        }
+    )
+    pipeline.tools = {"openviking_diff_paths": SimpleNamespace(name="openviking_diff_paths")}
+    pipeline.tool_context = ToolContext()
+
+    async def ask(*args, readers, **kwargs):
+        await readers["openviking_diff_paths"].execute(
+            paths=["viking://resources/cedar"], base=None, head="test", offset=0, limit=100
+        )
+        if exit_via_limit:
+            raise ModelCallLimitError("compile: no progress")
+        await args[4](SimpleNamespace(needs_pipeline=True, files=[]))
+
+    pipeline.model.ask = AsyncMock(side_effect=ask)
+    with pytest.raises(CompileFailure, match="Source inventory was not fully paginated") as error:
+        await entry.run(pipeline, [], {})
+    assert error.value.code == "COMPILE_SOURCE_UNDERCOLLECTED"
 
 
 @pytest.mark.asyncio
