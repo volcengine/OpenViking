@@ -147,6 +147,11 @@ _CONFIG_SCHEMA = [
     _cfg_field("recall_scope", "Automatic recall: all peers (shared) or current sender (peer). Unset preserves existing behavior.",
                type="string", choices=["shared", "peer"], default=None),
     _cfg_field(
+        "recall_disabled_platforms",
+        "Comma-separated Hermes platform names where automatic recall is disabled",
+        default="",
+    ),
+    _cfg_field(
         "recall_compress",
         "Cloud recall compression: off, server or auto (no local compressor)",
         type="string",
@@ -223,6 +228,17 @@ def _gateway_peer_id(platform: str, sender: Any) -> str:
     safe = re.sub(r"@+", "-", safe).strip(".-") or "gateway-peer"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
     return f"{safe[:128 - len(digest) - 1].rstrip('.-') or 'gateway-peer'}-{digest}"
+
+
+def _platform_names(value: Any) -> Set[str]:
+    """Normalize a YAML list or comma-separated setting to Hermes platform names."""
+    if isinstance(value, str):
+        values = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        return set()
+    return {str(item).strip().lower() for item in values if str(item).strip()}
 
 
 @dataclass(frozen=True)
@@ -2105,6 +2121,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Session-start memory block (once per session) + query recall."""
+        if not self._automatic_recall_enabled():
+            return ""
         query_text = _derive_openviking_user_text(query).strip()
         if not self._ensure_client():
             return ""
@@ -2114,6 +2132,16 @@ class OpenVikingMemoryProvider(MemoryProvider):
             parts.append(self._search_prefetch_context(query_text, session_id=effective_session_id))
         parts = [p for p in parts if p]
         return "## OpenViking Context\n" + "\n\n".join(parts) if parts else ""
+
+    def _automatic_recall_enabled(self) -> bool:
+        """Whether this session's Hermes platform permits automatic context injection."""
+        cfg, env = self._profile_config_and_env()
+        key = "OPENVIKING_RECALL_DISABLED_PLATFORMS"
+        env_value = get_secret(key) if env is None else env.get(key)
+        value = env_value if env_value is not None and env_value.strip() else cfg.get(
+            "recall_disabled_platforms", ""
+        )
+        return self._gateway_platform not in _platform_names(value)
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         """OpenViking recall is current-query only; post-turn warming is unused."""
