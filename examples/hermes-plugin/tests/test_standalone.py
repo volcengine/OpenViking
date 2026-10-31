@@ -929,17 +929,34 @@ def test_session_switch_commits_below_live_threshold(external_provider, monkeypa
     assert provider._session_id == "new-sid"
 
 
-@pytest.mark.parametrize("agent_context", ["cron", "subagent", "flush"])
-def test_non_primary_contexts_skip_writes(external_provider, monkeypatch, agent_context):
-    """cron/subagent/flush contexts stay read-only: no turn uploads, commits, or mirroring."""
+@pytest.mark.parametrize(
+    "agent_context,environment",
+    [
+        ("cron", {}),
+        ("subagent", {}),
+        ("flush", {}),
+        ("primary", {"HERMES_KANBAN_TASK": "task-1"}),
+        ("primary", {"HERMES_SESSION_SOURCE": "kanban"}),
+    ],
+    ids=["cron", "subagent", "flush", "kanban-task", "kanban-source"],
+)
+def test_non_primary_contexts_and_kanban_workers_skip_writes(
+    external_provider, monkeypatch, agent_context, environment
+):
+    """Non-primary work stays read-only: no turn uploads, commits, or mirroring."""
     from unittest.mock import Mock
 
-    home, provider, module, _ = external_provider(f"non-primary-{agent_context}")
+    marker = next(iter(environment), "context").lower().replace("hermes_", "")
+    home, provider, module, _ = external_provider(f"non-primary-{agent_context}-{marker}")
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19531")
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_SOURCE", raising=False)
     monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
     provider.initialize("live-sid", hermes_home=str(home))
     assert (provider._agent_context, provider._writes_enabled) == ("primary", True)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
     provider.initialize("live-sid", hermes_home=str(home), agent_context=agent_context)
     assert (provider._agent_context, provider._writes_enabled) == (agent_context, False)
 
@@ -951,7 +968,7 @@ def test_non_primary_contexts_skip_writes(external_provider, monkeypatch, agent_
     _finish_turn(provider)
     provider.on_session_switch("new-sid")
     provider.on_session_end([])
-    provider.on_memory_write("add", "user", f"not mirrored ({agent_context})")
+    provider.on_memory_write("add", "user", f"not mirrored ({agent_context}, {environment})")
     assert provider._drain_finalizers(timeout=5)
 
     assert provider._client.method_calls == []
