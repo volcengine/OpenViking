@@ -2183,39 +2183,42 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def admin_create_group(self, account_id: str, group_id: str) -> Dict[str, Any]:
-        response = await self._http.post(
+        response = await self._request(
+            "POST",
             f"/api/v1/admin/accounts/{account_id}/groups",
             json={"group_id": group_id},
         )
         return self._handle_response(response)
 
     async def admin_list_groups(self, account_id: str) -> List[Any]:
-        response = await self._http.get(f"/api/v1/admin/accounts/{account_id}/groups")
+        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}/groups")
         return self._handle_response(response)
 
     async def admin_delete_group(self, account_id: str, group_id: str) -> Dict[str, Any]:
-        response = await self._http.delete(f"/api/v1/admin/accounts/{account_id}/groups/{group_id}")
+        response = await self._request(
+            "DELETE", f"/api/v1/admin/accounts/{account_id}/groups/{group_id}"
+        )
         return self._handle_response(response)
 
     async def admin_list_group_members(self, account_id: str, group_id: str) -> Dict[str, Any]:
-        response = await self._http.get(
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members"
+        response = await self._request(
+            "GET", f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members"
         )
         return self._handle_response(response)
 
     async def admin_add_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        response = await self._http.put(
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
+        response = await self._request(
+            "PUT", f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
         )
         return self._handle_response(response)
 
     async def admin_remove_group_member(
         self, account_id: str, group_id: str, user_id: str
     ) -> Dict[str, Any]:
-        response = await self._http.delete(
-            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
+        response = await self._request(
+            "DELETE", f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
         )
         return self._handle_response(response)
 
