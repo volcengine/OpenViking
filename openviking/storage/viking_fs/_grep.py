@@ -895,7 +895,7 @@ class _GrepMixin:
                 content = content_transform(content, entry_uri)
 
             matches: List[Dict[str, Any]] = []
-            lines = content.split("\n")
+            lines = content.splitlines()
             for line_index, line in enumerate(lines):
                 if compiled_pattern.search(line):
                     matches.append(

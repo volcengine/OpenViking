@@ -1001,6 +1001,45 @@ async def test_grep_in_files_generates_context_from_single_read(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_grep_engines_split_crlf_lines_identically(monkeypatch):
+    """The fs engine must split lines exactly like the vikingdb_then_fs engine.
+
+    ``_grep_single_file`` historically used ``split("\\n")``, which keeps the
+    trailing ``\\r`` of CRLF files: anchored patterns miss lines the remote
+    engine matches, and reported content carries the stray carriage return.
+    """
+    fs = VikingFS(agfs=_DummyAgfs())
+
+    async def fake_stat(uri, ctx=None, skip_count=False):
+        return {"isDir": True}
+
+    async def fake_ls(uri, ctx=None, **kwargs):
+        if uri == "viking://resources":
+            return [{"name": "note.md", "isDir": False}]
+        return []
+
+    monkeypatch.setattr(fs, "stat", fake_stat)
+    monkeypatch.setattr(fs, "ls", fake_ls)
+    monkeypatch.setattr(fs, "read", AsyncMock(return_value=b"intro\r\n## Situation\r\noutro\r\n"))
+
+    fs_result = await fs._grep_encrypted("viking://resources", pattern="Situation$", level_limit=1)
+    remote_result = await fs._grep_in_files(
+        ["viking://resources/note.md"],
+        "Situation$",
+        case_insensitive=False,
+        node_limit=None,
+        ctx=None,
+        before_context=0,
+        after_context=0,
+    )
+
+    assert fs_result["matches"] == [
+        {"line": 2, "uri": "viking://resources/note.md", "content": "## Situation"}
+    ]
+    assert remote_result["matches"] == fs_result["matches"]
+
+
+@pytest.mark.asyncio
 async def test_grep_parallel_limits_context_construction_per_file(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
     lines = ["hit"] * 400
