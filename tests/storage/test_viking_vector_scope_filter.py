@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,7 +11,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager, acl_allows, acl_filter
 from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.expr import And, Eq, In, Or, PathScope, Range, RawDSL
 from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
@@ -86,6 +86,126 @@ def _single_account_backend(async_adapter, account_id: str | None):
     backend._retired = False
     backend._async_adapter = async_adapter
     return backend
+
+
+@pytest.fixture
+def event_ttl(monkeypatch):
+    from openviking.ttl import wiring
+    from openviking.ttl.runtime import DirectoryTTL
+    from openviking_cli.utils.config.ttl_config import TTLConfig
+
+    engine = DirectoryTTL(resource_id="query-filter", writer=False)
+    engine.policies = AsyncMock(
+        return_value=(
+            TTLConfig(user_events=120, peer_events=30),
+            TTLConfig(user_events=30, peer_events=7),
+        )
+    )
+    engine.fs = SimpleNamespace(
+        read_file=AsyncMock(side_effect=AssertionError("policy cache miss"))
+    )
+    engine.client = AsyncMock(side_effect=AssertionError("retrieval must not query TTL Redis"))
+    engine._cache_user_policy(("acct", "alice"), TTLConfig(user_events=90))
+    engine._cache_user_policy(("acct", "bob"), TTLConfig(user_events=1))
+    monkeypatch.setattr(wiring, "_adapter", engine)
+    return engine
+
+
+@pytest.mark.asyncio
+async def test_event_ttl_prefilters_real_vectors_before_limit(
+    vector_backend_factory, tmp_path, event_ttl, monkeypatch
+):
+    from openviking.ttl import wiring
+    from openviking_cli.utils.config.ttl_config import TTLConfig
+
+    now = datetime(2026, 10, 30, 12, tzinfo=timezone.utc)
+    backend = vector_backend_factory(
+        config=VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path / "ttl_vectors")
+        )
+    )
+    records = []
+
+    def add(name, path, days, *, level=2, tags=None):
+        records.append(
+            {
+                "id": name,
+                "uri": f"viking://{path}/{name}.md",
+                "account_id": "acct",
+                "context_type": "memory" if "/memories/" in path else "resource",
+                "level": level,
+                "search_tags": tags if tags is not None else ["memory_type=events", "qa=keep"],
+                "created_at": (now - timedelta(days=days)).isoformat(),
+                "vector": [1.0, 0.0, 0.0, 0.0],
+            }
+        )
+
+    for level in (0, 1, 2):
+        add(f"expired-{level}", "user/alice/memories/events/2026/07/01", 100, level=level)
+        add(f"retained-{level}", "user/alice/memories/events/2026/08/31", 60, level=level)
+    add("boundary", "user/alice/memories/events/2026/08/01", 90)
+    add("peer-expired", "user/alice/peers/one/memories/events/2026/10/22", 8)
+    add("peer-retained", "user/alice/peers/two/memories/events/2026/10/29", 1)
+    add("facts", "user/alice/peers/one/memories/facts", 100, tags=["memory_type=facts", "qa=keep"])
+    add("resource", "resources/notes", 100)
+    add("legacy", "user/alice/memories/events/2026/01/01", 100, tags=["qa=keep"])
+    add("caller-excluded", "user/alice/memories/events/2026/10/29", 1, tags=["memory_type=events"])
+    add("bob-expired", "user/bob/memories/events/2026/10/29", 2)
+    add("bob-retained", "user/bob/memories/events/2026/10/29", 0.5)
+    expected = {
+        "retained-0",
+        "retained-1",
+        "retained-2",
+        "peer-retained",
+        "facts",
+        "resource",
+        "legacy",
+    }
+
+    def names(rows):
+        return {item["uri"].rsplit("/", 1)[-1][:-3] for item in rows}
+
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        await backend._upsert_many_raw(records, ctx=_ctx(role=Role.ROOT))
+        kwargs = {"ctx": _ctx(), "extra_filter": Eq("search_tags", "qa=keep"), "limit": 100}
+        # Freeze the query clock without changing the policy cache's clock.
+        original = event_ttl.event_filter
+
+        async def at_fixed_time(ctx, targets, _now=None):
+            return await original(ctx, targets, now)
+
+        event_ttl.event_filter = at_fixed_time
+        assert names(await backend.filter_in_tenant(**kwargs)) == expected
+        kwargs["limit"] = 2
+        found = await backend.search_in_tenant(query_vector=[1.0, 0.0, 0.0, 0.0], **kwargs)
+        assert len(found) == 2
+        assert names(found) <= expected
+        found = await backend.filter_in_tenant(
+            ctx=_ctx(role=Role.ROOT), target_directories=["viking://user/bob/memories/events"]
+        )
+        assert names(found) == {"bob-retained"}
+
+        # Disabled policies and an absent adapter both preserve ordinary retrieval.
+        kwargs["limit"] = 100
+        unfiltered = expected | {"expired-0", "expired-1", "expired-2", "boundary", "peer-expired"}
+        event_ttl._cache_user_policy(
+            ("acct", "alice"), TTLConfig(user_events="disabled", peer_events="disabled")
+        )
+        assert names(await backend.filter_in_tenant(**kwargs)) == unfiltered
+        event_ttl.policies.reset_mock()
+        monkeypatch.setattr(wiring, "_adapter", None)
+        assert names(await backend.filter_in_tenant(**kwargs)) == unfiltered
+        for targets in (["viking://resources"], ["viking://user/alice/sessions"], None):
+            assert await event_ttl.event_filter(_ctx(role=Role.ROOT), targets) is None
+        event_ttl.policies.assert_not_awaited()
+        event_ttl.fs.read_file.assert_not_awaited()
+        event_ttl.client.assert_not_awaited()
+        assert event_ttl._task is None and event_ttl._registration_task is None
+    finally:
+        await backend.close()
 
 
 @pytest.mark.asyncio
@@ -281,8 +401,18 @@ def test_mixed_visible_and_outside_targets_keep_original_tenant_filter():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("acl_enabled", [False, True])
-async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(acl_enabled):
+@pytest.mark.parametrize("context_type", ["resource", "memory"])
+async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(
+    acl_enabled, context_type, event_ttl
+):
     ctx = _ctx()
+    targets = [
+        "viking://resources/docs"
+        if context_type == "resource"
+        else "viking://user/alice/memories/events"
+    ]
+    ttl_filter = Range("created_at", gt="2026-10-01T00:00:00Z")
+    event_ttl.event_filter = AsyncMock(return_value=ttl_filter)
     backend = object.__new__(VikingVectorIndexBackend)
     backend.acl_manager = None
     backend._acl_enabled = AsyncMock(return_value=acl_enabled)
@@ -292,8 +422,8 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
     await backend.search_by_keywords_in_tenant(
         ctx=ctx,
         query="OAuth token",
-        context_type="resource",
-        target_directories=["viking://resources/docs"],
+        context_type=context_type,
+        target_directories=targets,
         extra_filter=Eq("status", "ready"),
         level=[2],
         limit=5,
@@ -303,13 +433,21 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
     assert kwargs["query"] == "OAuth token"
     assert kwargs["mode"] == "bm25"
     assert kwargs["fields"] == ["content"]
-    assert kwargs["filter"] == _build(
-        ctx,
-        ["viking://resources/docs"],
-        extra_filter=Eq("status", "ready"),
-        level=[2],
-        acl_enabled=acl_enabled,
+    assert kwargs["filter"] == backend._merge_filters(
+        _build(
+            ctx,
+            targets,
+            context_type=context_type,
+            extra_filter=Eq("status", "ready"),
+            level=[2],
+            acl_enabled=acl_enabled,
+        ),
+        ttl_filter if context_type == "memory" else None,
     )
+    if context_type == "memory":
+        event_ttl.event_filter.assert_awaited_once_with(ctx, targets, None)
+    else:
+        event_ttl.event_filter.assert_not_awaited()
     backend._acl_enabled.assert_awaited_once_with(ctx)
     backend._get_backend_for_context.assert_awaited_once_with(ctx)
 

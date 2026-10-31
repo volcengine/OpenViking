@@ -41,6 +41,7 @@ from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
+from openviking.ttl.wiring import get_ttl_adapter
 from openviking.utils.tags import (
     merge_search_tags,
     normalize_search_tags,
@@ -1970,13 +1971,14 @@ class VikingVectorIndexBackend:
         request_now: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
         acl_enabled = await self._acl_enabled(ctx)
-        scope_filter = self._build_scope_filter(
+        scope_filter = await self._build_retrieval_filter(
             ctx=ctx,
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
             level=level,
             acl_enabled=acl_enabled,
+            now=request_now,
         )
         if events_time_decay_protection is None:
             return await self.search(
@@ -2015,7 +2017,7 @@ class VikingVectorIndexBackend:
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
         acl_enabled = await self._acl_enabled(ctx)
-        scope_filter = self._build_scope_filter(
+        scope_filter = await self._build_retrieval_filter(
             ctx=ctx,
             context_type=context_type,
             target_directories=target_directories,
@@ -2053,7 +2055,7 @@ class VikingVectorIndexBackend:
         refactor away from silently losing them.
         """
         acl_enabled = await self._acl_enabled(ctx)
-        scope_filter = self._build_scope_filter(
+        scope_filter = await self._build_retrieval_filter(
             ctx=ctx,
             context_type=context_type,
             target_directories=target_directories,
@@ -3150,6 +3152,25 @@ class VikingVectorIndexBackend:
                 ) from transfer_error
             raise
         return result
+
+    async def _build_retrieval_filter(
+        self,
+        ctx: RequestContext,
+        context_type: Optional[str],
+        target_directories: Optional[List[str]],
+        extra_filter: Optional[FilterExpr | Dict[str, Any]],
+        level: Optional[List[int]] = None,
+        *,
+        acl_enabled: bool,
+        now: Optional[datetime] = None,
+    ) -> Optional[FilterExpr]:
+        scope = self._build_scope_filter(
+            ctx, context_type, target_directories, extra_filter, level, acl_enabled=acl_enabled
+        )
+        adapter = get_ttl_adapter()
+        if adapter is None or context_type not in (None, "memory"):
+            return scope
+        return self._merge_filters(scope, await adapter.event_filter(ctx, target_directories, now))
 
     def _build_scope_filter(
         self,
