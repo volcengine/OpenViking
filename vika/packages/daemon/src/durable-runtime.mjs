@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { agentCliCommands } from './agent-clis.mjs';
 import { sanitizeAgentChildEnv } from './process-utils.mjs';
 
 // The release's dependency is also the supported version of the durable host.
@@ -31,12 +32,12 @@ export function assertDurableVersion(reported) {
   }
 }
 
-export function sanitizeDurableEnv(environment, profile = '', actions = null) {
+export function sanitizeDurableEnv(environment, profile = '', actions = null, config = {}) {
   // Model providers (OpenAI, Anthropic, DeepSeek, …) read their key from this
   // child's environment, exactly as pi-ai documents, or from Pi's auth.json.
   // As for Pi, ARK_API_KEY survives the sanitizer: a Volcengine Ark provider in
   // ~/.pi/agent/models.json may name it as its key.
-  const safeEnv = sanitizeAgentChildEnv(environment, { profile, actions });
+  const safeEnv = sanitizeAgentChildEnv(environment, { profile, actions, cliBins: agentCliCommands(config).map(({ bin }) => bin) });
   if (typeof environment.ARK_API_KEY === 'string' && environment.ARK_API_KEY) {
     safeEnv.ARK_API_KEY = environment.ARK_API_KEY;
   }

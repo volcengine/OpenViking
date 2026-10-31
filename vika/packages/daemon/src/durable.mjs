@@ -199,6 +199,7 @@ export class DurableAgent {
         process.env,
         this.larkProfile(),
         agentToolEnv(this.config, this.authorityToken),
+        this.config,
       );
       let child;
       try {

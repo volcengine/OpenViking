@@ -645,4 +645,12 @@ describe('durable model configuration', () => {
     assert.equal(safe.LARK_APP_SECRET, undefined);
     assert.equal(safe.LARKSUITE_CLI_PROFILE, 'profile-a');
   });
+
+  it('puts the configured lark-cli and Slack CLI first on PATH, like the other runtimes', () => {
+    const safe = sanitizeDurableEnv({ PATH: '/usr/bin:/bin' }, 'profile-a', null, {
+      larkCliBin: '/custom-lark/lark-cli',
+      slackCliBin: '/custom-slack/slack',
+    });
+    assert.equal(safe.PATH, '/custom-lark:/custom-slack:/usr/bin:/bin');
+  });
 });
