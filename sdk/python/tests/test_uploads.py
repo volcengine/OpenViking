@@ -1,13 +1,86 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import errno
+import json
 import tempfile
 import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.uploads import zip_directory
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("method", ["add_skill", "update_skill"])
+@pytest.mark.parametrize("source_kind", ["inline", "file", "directory"])
+async def test_skill_inputs_preserve_inline_content_and_local_uploads(
+    tmp_path, sync, method, source_kind
+):
+    content = "---\nname: demo\ndescription: Inline skill\n---\n" + "Instructions.\n" * 100
+    source = content
+    if source_kind != "inline":
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text(content, encoding="utf-8")
+        source = str(skill_file if source_kind == "file" else tmp_path)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        result = (
+            {"temp_file_id": "upload_skill"}
+            if request.url.path.endswith("/temp_upload")
+            else {"name": "demo"}
+        )
+        return httpx.Response(200, json={"status": "ok", "result": result})
+
+    client = (SyncHTTPClient if sync else AsyncHTTPClient)(url="http://localhost:1933")
+    async_client = client._async_client if isinstance(client, SyncHTTPClient) else client
+    async with httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(respond)
+    ) as http:
+        async_client._http = http
+        args = ("demo", source) if method == "update_skill" else (source,)
+        result = getattr(client, method)(*args)
+        if not sync:
+            result = await result
+    assert result == {"name": "demo"}
+    assert requests[-1].method == ("PUT" if method == "update_skill" else "POST")
+    assert requests[-1].url.path == (
+        "/api/v1/skills/demo" if method == "update_skill" else "/api/v1/skills"
+    )
+    payload = json.loads(requests[-1].content)
+    if source_kind == "inline":
+        assert len(requests) == 1
+        assert payload == {"data": content, "wait": False}
+    else:
+        assert len(requests) == 2
+        assert requests[0].url.path == "/api/v1/resources/temp_upload"
+        assert payload == {"temp_file_id": "upload_skill", "wait": False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("method", ["add_skill", "update_skill"])
+async def test_skill_path_permission_errors_propagate(monkeypatch, sync, method):
+    client = (SyncHTTPClient if sync else AsyncHTTPClient)(url="http://localhost:1933")
+    error = PermissionError(errno.EACCES, "Permission denied")
+
+    def deny_access(_path):
+        raise error
+
+    monkeypatch.setattr(Path, "exists", deny_access)
+    args = (
+        ("demo", "/unreadable/SKILL.md") if method == "update_skill" else ("/unreadable/SKILL.md",)
+    )
+    with pytest.raises(PermissionError) as raised:
+        result = getattr(client, method)(*args)
+        if not sync:
+            await result
+    assert raised.value is error
 
 
 @pytest.fixture
