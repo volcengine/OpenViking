@@ -11,6 +11,7 @@ import pytest
 from openviking.models.vlm.backends import codex_auth
 from openviking.models.vlm.backends.codex_auth import resolve_codex_runtime_credentials
 from openviking.models.vlm.backends.codex_responses_adapter import (
+    CodexCompletionsAdapter,
     _convert_message_for_responses,
 )
 from openviking.models.vlm.backends.codex_vlm import CodexVLM
@@ -837,3 +838,105 @@ def test_codex_auth_invalid_exp_claim_is_treated_as_expiring():
         )
         is True
     )
+
+
+class _UnauthorizedError(Exception):
+    status_code = 401
+
+
+class _ClosableStream:
+    def __init__(self, events=(), error=None):
+        self.closed = False
+        self._events = list(events)
+        self._error = error
+
+    def __iter__(self):
+        yield from self._events
+        if self._error is not None:
+            raise self._error
+
+    def close(self):
+        self.closed = True
+
+
+class _ClosableClient:
+    def __init__(self, stream=None, error=None):
+        self.closed = False
+        self._stream = stream
+        self._error = error
+        self.responses = SimpleNamespace(create=self._create)
+
+    def _create(self, **_kwargs):
+        if self._error is not None:
+            raise self._error
+        return self._stream
+
+    def close(self):
+        self.closed = True
+
+
+def test_codex_adapter_closes_client_and_stream_after_a_completed_request():
+    stream = _ClosableStream()
+    client = _ClosableClient(stream=stream)
+    adapter = CodexCompletionsAdapter(lambda: client, "gpt-5.3-codex")
+
+    response = adapter.create(messages=[{"role": "user", "content": "hello"}])
+
+    assert response.model == "gpt-5.3-codex"
+    assert stream.closed is True
+    assert client.closed is True
+
+
+def test_codex_adapter_closes_client_when_request_creation_fails():
+    client = _ClosableClient(error=RuntimeError("request failed"))
+    adapter = CodexCompletionsAdapter(lambda: client, "gpt-5.3-codex")
+
+    with pytest.raises(RuntimeError, match="request failed"):
+        adapter.create(messages=[{"role": "user", "content": "hello"}])
+
+    assert client.closed is True
+
+
+def test_codex_adapter_closes_client_and_stream_when_stream_iteration_fails():
+    stream = _ClosableStream(error=RuntimeError("stream failed"))
+    client = _ClosableClient(stream=stream)
+    adapter = CodexCompletionsAdapter(lambda: client, "gpt-5.3-codex")
+
+    with pytest.raises(RuntimeError, match="stream failed"):
+        adapter.create(messages=[{"role": "user", "content": "hello"}])
+
+    assert stream.closed is True
+    assert client.closed is True
+
+
+def test_codex_adapter_closes_stale_and_refreshed_clients_after_a_401_retry():
+    stale_client = _ClosableClient(error=_UnauthorizedError())
+    refreshed_stream = _ClosableStream()
+    refreshed_client = _ClosableClient(stream=refreshed_stream)
+    adapter = CodexCompletionsAdapter(
+        lambda: stale_client,
+        "gpt-5.3-codex",
+        auth_retry_client_factory=lambda: refreshed_client,
+    )
+
+    adapter.create(messages=[{"role": "user", "content": "hello"}])
+
+    assert stale_client.closed is True
+    assert refreshed_stream.closed is True
+    assert refreshed_client.closed is True
+
+
+def test_codex_adapter_closes_stale_and_refreshed_clients_when_the_retry_fails():
+    stale_client = _ClosableClient(error=_UnauthorizedError())
+    refreshed_client = _ClosableClient(error=_UnauthorizedError())
+    adapter = CodexCompletionsAdapter(
+        lambda: stale_client,
+        "gpt-5.3-codex",
+        auth_retry_client_factory=lambda: refreshed_client,
+    )
+
+    with pytest.raises(_UnauthorizedError):
+        adapter.create(messages=[{"role": "user", "content": "hello"}])
+
+    assert stale_client.closed is True
+    assert refreshed_client.closed is True
