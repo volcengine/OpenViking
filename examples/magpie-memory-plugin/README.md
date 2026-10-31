@@ -188,7 +188,7 @@ halfway through a native-managed chat. Queued snapshots are discarded once
 native ownership is observed. A fresh chat is needed after removing the native
 integration. Explicit tools remain available if separately enabled.
 
-Native OpenViking memory-compression utility requests are excluded from both automatic recall and capture, even when they run without injection markers.
+Known native OpenViking memory-compression and Claude Code session-title utility requests are excluded from both automatic recall and capture, even when they run without injection markers. This is a fallback based on known prompt framing, not a complete classification of every auxiliary request. Configure `nativeAgents` for agents known to have a native OV plugin, including their unmarked internal requests.
 
 A remote gateway cannot inspect client installations, and a capture-only native
 plugin might inject no marker. Use `"nativeAgents": ["pi", "codex", "claude"]`

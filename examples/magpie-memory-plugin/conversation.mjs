@@ -19,6 +19,14 @@ const compressionProbe = buildRecallCompressionPrompt({ query: "\u0001", rendere
 const [compressionPrefix, afterQuery] = compressionProbe.split("\u0001");
 const [compressionSeparator, compressionSuffix] = afterQuery.split("\u0002");
 const compressionTail = compressionSuffix.split("\n\n").at(-1);
+// Claude Code's title utility wraps the source conversation and appends this
+// instruction. Match the whole framing, not ordinary requests about titles.
+const titleInstruction = "Write the title in the predominant language of the session — a stray word or code token in another language doesn't change it, and neither does the English of these instructions.";
+function isTitlePrompt(value) {
+  if (!value.startsWith("<session>")) return false;
+  const end = value.lastIndexOf("</session>");
+  return end >= "<session>".length && value.slice(end + "</session>".length).trim() === titleInstruction;
+}
 function textParts(value) {
   if (typeof value === "string") return [value];
   if (Array.isArray(value)) return value.flatMap((part) => typeof part?.text === "string" ? [part.text] : []);
@@ -34,8 +42,8 @@ export function isAuxiliaryRequest(body, ctx) {
     .flatMap(textParts);
   return candidates.some((text) => {
     const value = text.trim();
-    return value.startsWith(compressionPrefix) && value.includes(compressionSeparator, compressionPrefix.length)
-      && value.endsWith(compressionTail);
+    return isTitlePrompt(value) || (value.startsWith(compressionPrefix) && value.includes(compressionSeparator, compressionPrefix.length)
+      && value.endsWith(compressionTail));
   });
 }
 
