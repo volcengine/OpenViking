@@ -10,6 +10,7 @@ from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
 from openviking.models.vlm.base import VLMBase, VLMResponse
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 
 
 class TestVLMBaseResponseFormats:
@@ -143,15 +144,21 @@ async def test_openai_async_completion_from_str_with_tools(monkeypatch):
     assert response.finish_reason == "stop"
 
 
+@pytest.mark.parametrize(
+    "vlm_type,provider",
+    [(OpenAIVLM, "openai"), (VolcEngineVLM, "volcengine"), (LiteLLMVLMProvider, "litellm")],
+)
+@pytest.mark.parametrize("details", ["missing", "empty", "populated"])
 @pytest.mark.asyncio
-async def test_openai_async_completion_with_empty_tools_preserves_usage(monkeypatch):
-    usage = SimpleNamespace(
-        prompt_tokens=11,
-        completion_tokens=4,
-        total_tokens=15,
-        prompt_tokens_details=None,
-        completion_tokens_details=None,
-    )
+async def test_async_completion_with_empty_tools_preserves_usage(
+    monkeypatch, vlm_type, provider, details
+):
+    prompt_details = SimpleNamespace(cached_tokens=5) if details == "populated" else None
+    completion_details = SimpleNamespace(reasoning_tokens=2) if details == "populated" else None
+    usage = SimpleNamespace(prompt_tokens=11, completion_tokens=4, total_tokens=15)
+    if details != "missing":
+        usage.prompt_tokens_details = prompt_details
+        usage.completion_tokens_details = completion_details
     raw_response = SimpleNamespace(
         choices=[
             SimpleNamespace(
@@ -169,13 +176,18 @@ async def test_openai_async_completion_with_empty_tools_preserves_usage(monkeypa
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
     )
-    vlm = OpenAIVLM({"provider": "openai", "model": "gpt-5.6-terra"})
-    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+    vlm = vlm_type({"provider": provider, "model": "test-model"})
+    if provider == "litellm":
+        monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", create)
+    else:
+        monkeypatch.setattr(vlm, "get_async_client", lambda: client)
 
-    response = await vlm.get_completion_async(
-        messages=[{"role": "user", "content": "hello"}],
-        tools=[],
-    )
+    telemetry = OperationTelemetry("vlm-response", enabled=True)
+    with bind_telemetry(telemetry):
+        response = await vlm.get_completion_async(
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[],
+        )
 
     assert isinstance(response, VLMResponse)
     assert response.content == "plain response"
@@ -185,5 +197,11 @@ async def test_openai_async_completion_with_empty_tools_preserves_usage(monkeypa
         "prompt_tokens": 11,
         "completion_tokens": 4,
         "total_tokens": 15,
-        "prompt_tokens_details": None,
+        "prompt_tokens_details": prompt_details,
+        "completion_tokens_details": completion_details,
     }
+
+    tokens = telemetry.finish().summary["tokens"]["llm"]
+    assert tokens["input"] == 11 and tokens["output"] == 4 and tokens["total"] == 15
+    assert tokens.get("prompt_cached", 0) == (5 if details == "populated" else 0)
+    assert tokens.get("completion_reasoning", 0) == (2 if details == "populated" else 0)
