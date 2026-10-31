@@ -137,7 +137,7 @@ test("agent fetch and commit logging preserve response trace_id", async (t) => {
 });
 
 /**
- * Cursor / TRAE / ZCode / Kimi Code reach buildProfileBlock only through
+ * Cursor / TRAE / ZCode / Kimi Code / CodeBuddy reach buildProfileBlock only through
  * buildAgentProfile, so the hook entry's logger has to arrive here — without
  * it the read/ls failures the profile layer reports stay no-ops and a failed
  * session start still renders as a nearly empty profile with no why.
@@ -157,10 +157,10 @@ test("the agent-hook profile path reports read failures through its log", async 
   );
 
   assert.equal(block, null);
-  assert.equal(logged.length, 1);
-  assert.equal(logged[0][0], "profile_read_failed");
-  assert.equal(logged[0][1].status, 503);
-  assert.ok(logged[0][1].uri.includes("profile.md"));
+  assert.equal(logged.length, 2);
+  assert.ok(logged.every(([stage, data]) => stage === "profile_read_failed" && data.status === 503));
+  assert.ok(logged.some(([, data]) => !data.uri.includes("/peers/")));
+  assert.ok(logged.some(([, data]) => data.uri.includes("/peers/") && data.uri.endsWith("/profile.md")));
 });
 
 /**
