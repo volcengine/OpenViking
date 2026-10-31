@@ -1,5 +1,6 @@
 import { loadConfig } from "./config.mjs";
 import { buildContextSearchBody, isRecallEnabled, selectRecallContent } from "./shared/recall-core.mjs";
+import { estimateTokens } from "./shared/profile-inject.mjs";
 import { PluginError, request } from "./http.mjs";
 import { withRecallLedger } from "./recall-ledger.mjs";
 import { connectionScope, dataDirectory } from "./scope.mjs";
@@ -18,6 +19,19 @@ export function injectContext(body, protocol, memory) {
   return replayContext(body, protocol, conversation, {
     [conversation.anchors[conversation.latest]]: { block: memoryBlock(memory) },
   });
+}
+
+// Use the shared CJK-aware estimator for both profile and combined context.
+function withinTokens(value, budget) {
+  if (estimateTokens(value) <= budget) return value;
+  const chars = Array.from(value);
+  let low = 0, high = chars.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (estimateTokens(chars.slice(0, middle).join("")) <= budget) low = middle;
+    else high = middle - 1;
+  }
+  return chars.slice(0, low).join("");
 }
 
 const outcome = (error) => error.code === "unconfigured" ? "unbound"
@@ -52,7 +66,7 @@ export async function recallRequest(body, ctx, env = process.env, resolvedConfig
         if (isRecallEnabled(cfg) && (users.length === 1 || query.length >= cfg.minQueryLength)) {
           try {
             const shouldSearch = query.length >= cfg.minQueryLength;
-            const recallBody = buildContextSearchBody(cfg);
+            const recallBody = buildContextSearchBody(cfg, { excludeUris: cfg.recallExcludeUris });
             recallBody.query = query.slice(0, 16000);
             const timeoutMs = Math.min(cfg.recallContextTimeoutMs || cfg.timeoutMs, cfg.timeoutMs, 9000);
             // A profile holds stable facts that semantic search may not rank.
@@ -68,13 +82,17 @@ export async function recallRequest(body, ctx, env = process.env, resolvedConfig
             ]);
             ctx.signal?.throwIfAborted();
             const profileText = profile.status === "fulfilled" && typeof profile.value === "string" ? profile.value.trim() : "";
-            const maxChars = cfg.recallMaxTokens * 4;
-            const profileBlock = profileText
-              ? `<user-profile uri="viking://~/memories/profile.md">\n${profileText.slice(0, Math.floor(maxChars / 2))}\n</user-profile>` : "";
+            const profileOpen = '<user-profile uri="viking://~/memories/profile.md">\n';
+            const profileClose = "\n</user-profile>";
+            const profileBudget = Math.min(cfg.profileTokenBudget, Math.floor(cfg.recallMaxTokens / 2));
+            const profileContent = withinTokens(profileText, Math.max(0, profileBudget - estimateTokens(profileOpen + profileClose)));
+            const profileBlock = profileContent ? profileOpen + profileContent + profileClose : "";
             if (search.status === "rejected" && !profileBlock) throw search.reason;
             if (!shouldSearch && profile.status === "rejected") throw profile.reason;
             const recalled = search.status === "fulfilled" ? selectRecallContent(search.value) : "";
-            const memory = [profileBlock, recalled].filter(Boolean).join("\n\n").slice(0, maxChars);
+            const recallContent = withinTokens(recalled, Math.max(0,
+              cfg.recallMaxTokens - estimateTokens(profileBlock + (profileBlock ? "\n\n" : ""))));
+            const memory = [profileBlock, recallContent].filter(Boolean).join("\n\n");
             code = memory ? "ready" : "empty";
             if (memory) block = memoryBlock(memory);
           } catch (error) {

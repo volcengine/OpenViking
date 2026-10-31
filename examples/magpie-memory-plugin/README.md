@@ -98,8 +98,10 @@ options. Enabling tools or capture requires the literal boolean `true`.
   `viking://~/memories/profile.md`, so stable facts such as occupation and email
   do not depend on semantic search ranking. Profile and search run in parallel
   within the recall timeout; either can provide context if the other fails.
-  The profile uses at most half the character budget and is persisted with
-  that turn. Retries and later turns replay the original snapshot.
+  The profile respects `profileTokenBudget` and uses at most half of
+  `recallMaxTokens`, using the shared CJK-aware token estimate. Combined profile
+  and search context stays within `recallMaxTokens` and is persisted with that
+  turn. Retries and later turns replay the original snapshot.
 - Only host-classified `local` and `magpie-key` origins with a nonempty Magpie
   session ID receive memory. Shared gateway keys, forwarded traffic and missing
   identities are skipped. The file's OV credentials remain the authority.
@@ -204,8 +206,9 @@ injection cannot be reliably distinguished. For known native-managed agents,
 configure `nativeAgents` explicitly. Recognized envelopes yield both automatic
 recall and capture for that connection/session and discard queued snapshots.
 Pending raw snapshots are removed immediately on yielding, without waiting for
-a worker. Workers recheck ownership before appends/commits and do not delete a
-new retry snapshot when retiring an older one. Already in-flight HTTP operations
+a worker. Workers reload connection and capture settings and recheck ownership
+before appends/commits, and do not delete a new retry snapshot when retiring an
+older one. Already in-flight HTTP operations
 and previously delivered records cannot be undone by local cleanup.
 Ownership persists if markers disappear from later history. Existing ownership
 records are retained; start a fresh chat after removing a native plugin or

@@ -5,6 +5,7 @@ import { realpathSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { loadConfig } from "./config.mjs";
 import { request } from "./http.mjs";
+import { sendSessionMessages } from "./shared/batch-send.mjs";
 import { connectionScope } from "./scope.mjs";
 import { recallDigest } from "./recall-ledger.mjs";
 import { withCaptureDecisions } from "./capture-history.mjs";
@@ -84,7 +85,11 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
   if (connectionScope(cfg, context) !== scope) return "paused";
   const root = join(directory, "capture", scope);
   const stopped = async () => {
-    if (cfg.nativeAgents.includes(context.agent) || await exists(join(root, "native-owner"))) return "native";
+    // A worker may outlive file edits. Recheck identity and opt-in immediately
+    // before each non-idempotent operation, without changing its pinned identity.
+    const current = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: snapshot.configPath }, snapshot.options);
+    if (connectionScope(current, context) !== scope || !current.enabled || !current.autoCapture) return "paused";
+    if (current.nativeAgents.includes(context.agent) || await exists(join(root, "native-owner"))) return "native";
     return withCaptureDecisions(directory, scope, (state) => {
       if (!Array.isArray(snapshot.turnAnchors) && state.rejected.length) return "rejected";
       const invalidated = snapshot.turnAnchors?.some((key) => state.rejected.includes(key)
@@ -149,27 +154,47 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
     await update((s) => { s.blocked = "history_changed"; });
     return "paused";
   }
-  for (let offset = state.hashes.length; offset < incoming.length; offset += 100) {
-    const stop = await stopped();
-    if (stop) return stop;
-    const messages = snapshot.messages.slice(offset, offset + 100);
-    const through = incoming.slice(0, offset + messages.length);
-    const completedTurns = through.length === incoming.length
-      ? snapshot.messages.filter((m) => m.message_kind === "user_query").map((m) => m.source_message_ids[0].slice(7)) : [];
-    // Persist the write intent before issuing a non-idempotent request.
-    await update((s) => { s.intent = { ids: messages.map((m) => m.source_message_ids[0]), hashes: through, completedTurns }; });
-    const stopBeforeAppend = await stopped();
-    if (stopBeforeAppend) {
-      await update((s) => { s.intent = null; });
-      return stopBeforeAppend;
-    }
-    await call(cfg, `/api/v1/sessions/${sessionId}/messages/batch`, { body: { messages }, signal });
-    await update((s) => {
-      s.hashes = through;
-      s.completedTurns = [...new Set([...(s.completedTurns || []), ...completedTurns])];
-      s.needsCommit ||= completedTurns.length > 0;
-      s.intent = null;
-    });
+  let offset = state.hashes.length, stopReason = "";
+  try {
+    const sent = await sendSessionMessages(async (path, init) => {
+      stopReason = await stopped();
+      if (stopReason) throw new Error("capture_stopped");
+      const body = JSON.parse(init.body);
+      const messages = Array.isArray(body.messages) ? body.messages : [body];
+      const through = incoming.slice(0, offset + messages.length);
+      const completedTurns = through.length === incoming.length
+        ? snapshot.messages.filter((m) => m.message_kind === "user_query").map((m) => m.source_message_ids[0].slice(7)) : [];
+      // Persist one intent per actual HTTP operation, including serial fallback.
+      await update((s) => { s.intent = { ids: messages.map((m) => m.source_message_ids[0]), hashes: through, completedTurns }; });
+      stopReason = await stopped();
+      if (stopReason) {
+        await update((s) => { s.intent = null; });
+        throw new Error("capture_stopped");
+      }
+      try {
+        await call(cfg, path, { body, signal });
+      } catch (error) {
+        // Explicit client errors did not accept this append. In particular,
+        // unsupported batches can safely fall back; uncertain transport/server
+        // outcomes keep their intent for provenance reconciliation.
+        if (error.status >= 400 && error.status < 500 && error.status !== 408) {
+          await update((s) => { s.intent = null; });
+        }
+        return { ok: false, status: error.status, error };
+      }
+      await update((s) => {
+        s.hashes = through;
+        s.completedTurns = [...new Set([...(s.completedTurns || []), ...completedTurns])];
+        s.needsCommit ||= completedTurns.length > 0;
+        s.intent = null;
+      });
+      offset += messages.length;
+      return { ok: true };
+    }, sessionId, snapshot.messages.slice(offset));
+    if (sent.failed) return "uncertain";
+  } catch (error) {
+    if (stopReason) return stopReason;
+    throw error;
   }
   return commitCaptured(cfg, sessionId, update, call, signal, stopped);
 }

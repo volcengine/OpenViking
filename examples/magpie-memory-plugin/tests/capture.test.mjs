@@ -47,15 +47,16 @@ async function fixture(t) {
       commits.push(id);
       return { archive_uri: `${session.uri}/history/archive_001` };
     }
-    if (id && !path.endsWith("/messages/batch")) {
+    if (id && !/\/messages(?:\/batch)?$/.test(path)) {
       if (!sessions.has(id)) throw Object.assign(new Error("missing"), { status: 404 });
       const s = sessions.get(id);
       return { uri: s.uri, total_message_count: s.total, message_count: s.rows.length, commit_count: s.commits || 0 };
     }
-    if (path.endsWith("/messages/batch")) {
+    if (/\/messages(?:\/batch)?$/.test(path)) {
       const s = sessions.get(id);
-      s.rows.push(...init.body.messages); s.total += init.body.messages.length;
-      writes.push(init.body.messages);
+      const messages = path.endsWith("/batch") ? init.body.messages : [init.body];
+      s.rows.push(...messages); s.total += messages.length;
+      writes.push(messages);
       if (loseAck) { loseAck = false; throw Object.assign(new Error("lost acknowledgement"), { code: "timeout" }); }
       return {};
     }
@@ -473,3 +474,74 @@ test("an invalidated append intent that was never sent does not block a successf
     assert.match(JSON.stringify(f.writes), /Successful retry after rejection/);
   } finally { replacement.mock.restore(); syncBuiltinESMExports(); }
 });
+
+
+for (const status of [404, 405]) {
+  test(`unsupported batch HTTP ${status} falls back serially without duplicate delivery`, async (t) => {
+    const f = await fixture(t);
+    await f.queue();
+    const call = async (...args) => {
+      if (args[1].endsWith("/messages/batch")) throw Object.assign(new Error("unsupported"), { status });
+      return f.call(...args);
+    };
+    await runCaptureWorker(f.cfg.dataDir, { call, attempts: 1 });
+    await f.queue();
+    await runCaptureWorker(f.cfg.dataDir, { call, attempts: 1 });
+    assert.deepEqual(f.writes.map((rows) => rows.length), [1, 1]);
+    assert.equal(f.commits.length, 1);
+    assert.deepEqual(await readdir(join(captureDirectory(f.cfg, f.ctx), "pending")), []);
+  });
+}
+
+test("serial fallback reconciles a lost acknowledgement before sending the remaining prefix", async (t) => {
+  const f = await fixture(t);
+  await f.queue();
+  let lost = false;
+  const call = async (...args) => {
+    if (args[1].endsWith("/messages/batch")) throw Object.assign(new Error("unsupported"), { status: 405 });
+    const result = await f.call(...args);
+    if (args[1].endsWith("/messages") && !lost) {
+      lost = true;
+      throw Object.assign(new Error("lost acknowledgement"), { code: "timeout" });
+    }
+    return result;
+  };
+  await runCaptureWorker(f.cfg.dataDir, { call, attempts: 1 });
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.commits.length, 0);
+  await runCaptureWorker(f.cfg.dataDir, { call, attempts: 1 });
+  assert.deepEqual(f.writes.map((rows) => rows.length), [1, 1]);
+  assert.equal(f.commits.length, 1);
+});
+
+for (const change of ["native", "credentials", "disabled"]) {
+  for (const stage of ["append", "commit"]) {
+    test(`worker rechecks ${change} configuration before ${stage}`, async (t) => {
+      const f = await fixture(t);
+      await f.queue();
+      let changed = false;
+      const call = async (...args) => {
+        const result = await f.call(...args);
+        const target = stage === "append" ? /^\/api\/v1\/sessions\/[^/]+$/ : /\/messages\/batch$/;
+        if (!changed && target.test(args[1])) {
+          changed = true;
+          const file = structuredClone(f.file);
+          if (change === "native") file.plugin.magpie.nativeAgents = ["pi"];
+          if (change === "credentials") file.api_key = "rotated";
+          if (change === "disabled") file.plugin.magpie.autoCapture = false;
+          await writeFile(f.configPath, JSON.stringify(file));
+        }
+        return result;
+      };
+      await runCaptureWorker(f.cfg.dataDir, { call, attempts: 1 });
+      assert.equal(changed, true);
+      assert.equal(f.writes.length, stage === "append" ? 0 : 1);
+      assert.equal(f.commits.length, 0);
+      // No unsent intent may prevent recovery if capture is later re-enabled.
+      const scope = connectionScope(f.cfg, f.ctx);
+      const state = JSON.parse(await readFile(join(captureDirectory(f.cfg, f.ctx), "state", `${scope}.json`), "utf8"));
+      assert.equal(state.intent, null);
+      assert.equal(state.commitIntent, null);
+    });
+  }
+}
