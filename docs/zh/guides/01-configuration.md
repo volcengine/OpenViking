@@ -1851,6 +1851,7 @@ openviking-server --config /path/to/ov.conf
   - 既无显式 policy、也无部署级默认 policy 的新 Session 会带上下方内置 policy。
   - `idle_backend="local"` 时，`SessionAutoCommitScheduler` 启动后立即开始扫描；扫描过程以 `scan_rate_limit_files_per_second` 为上限串行读取 session `.meta.json`，每轮结束后至少等待 `check_interval_seconds`。
   - `idle_backend="redis"` 时，服务通过顶层 `expiry` 配置整体启用 expiry 上报、发布和 callback 消费。
+  - 此 Redis-backed expiry 流程也支持 Valkey 7.2–9.1，继续使用相同的 `expiry.redis` 配置和 `redis://` 或 `rediss://` endpoint。
 - token 和 message-count 自动触发在消息写入后内联执行，不依赖 scheduler，但同样以 session 是否带有 `auto_commit_policy` 为前提。
 
 #### 分布式 Expiry 配置
@@ -2057,6 +2058,8 @@ schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`�
 `redis_mysql` 需要安装 `redis-mysql` extra，并在参数中嵌套同一份 MySQL 配置。
 其 `cache` 配置沿用顶层 `cache` 的 `provider/params` 结构，目前 Python
 客户端支持 `standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
+Valkey 7.2–9.1 也受支持；使用相同的 `cache.provider="redis"` 配置以及
+`redis://` 或 `rediss://` endpoint。
 它默认以固定 60 秒 TTL 缓存 API Key 绑定、User、每个 User 的 Group ID 和删除记录。
 缓存重建与同一 Account 的修改共用 Redis 租约，正常缓存命中不获取该租约。修改会先
 提交 MySQL，再失效相关缓存。Redis 不可用时 MySQL 修改仍会成功，遗留缓存最多保持到

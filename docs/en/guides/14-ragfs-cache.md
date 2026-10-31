@@ -55,7 +55,9 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
 }
 ```
 
-Start Redis and OpenViking:
+Start Redis and OpenViking. Valkey 7.2–9.1 is also supported with the same
+`redis` provider and endpoint format; run `valkey-server` instead of
+`redis-server` when using Valkey:
 
 ```bash
 redis-server
@@ -77,7 +79,7 @@ Available Providers:
 
 | Provider | Best for | Notes |
 |----------|----------|-------|
-| `redis` | Default delivery on standard networks | Built into RAGFS; supports standalone, Cluster, and Sentinel |
+| `redis` | Default delivery on standard networks | Built into RAGFS; supports standalone, Cluster, and Sentinel, including Valkey 7.2–9.1 |
 | `dynamic` | YuanRong, Mooncake, or closed-source cache systems | Loaded from an external shared library through the versioned C ABI |
 
 `MemoryMockProvider` is only used by unit and smoke tests; it is not a production configuration option.
@@ -89,7 +91,8 @@ between OpenViking processes through the shared Redis CacheRuntime.
 OpenViking derives the PathLock Redis namespace from top-level `service_name`.
 Use distinct service names for independent deployments. Distributed path
 locking does not remove the single-writer requirement of CachedFileSystem.
-Cache-backed PathLock only supports the built-in Redis Provider.
+Cache-backed PathLock only supports the built-in Redis Provider; Valkey 7.2–9.1
+is compatible through the same provider.
 
 Redis HASH keys are partitioned by logical path scope:
 
