@@ -190,6 +190,16 @@ for (const sourceMode of ["dev", "archive"]) {
       const configPath = join(configDir, "opencode.jsonc");
       await writeFile(configPath, `{\n  // keep this user note\n  "theme": "system",\n  "plugin": ["${SPEC}"]\n}\n`);
 
+      // Upgrade from the old layout, without removing another plugin or the
+      // runtime's existing session state.
+      const legacyRoot = join(configDir, "plugins/openviking");
+      await mkdir(legacyRoot, { recursive: true });
+      await writeFile(join(legacyRoot, "index.mjs"), "throw new Error('stale plugin');\n");
+      await writeFile(join(configDir, "plugins/other.js"), "export default {};\n");
+      await mkdir(join(configDir, "openviking"));
+      const state = join(configDir, "openviking/openviking-session-state.json");
+      await writeFile(state, '{"existing":"session"}\n');
+
       // Copy only tracked paths from the working tree: no ignored generated
       // runtime or node_modules may hide a missing installation step.
       const source = join(dir, "source");
@@ -230,11 +240,15 @@ for (const sourceMode of ["dev", "archive"]) {
       assert.match(raw, /keep this user note/);
       assert.match(raw, /"theme": "system"/);
       assert.match(parse(raw).mcp.openviking.command[1], /servers\/mcp-proxy\.mjs$/);
-      const installedRoot = join(configDir, "plugins/openviking");
+      const installedRoot = join(configDir, "openviking-plugin");
       const env = { HOME: home, OPENVIKING_HOME: join(home, ".openviking") };
       assert.deepEqual(parse(raw).plugin, []);
+      assert.equal(existsSync(legacyRoot), false);
+      assert.equal(existsSync(join(configDir, "plugins/other.js")), true);
+      assert.equal(await readFile(state, "utf8"), '{"existing":"session"}\n');
       expectExit(await runHookScript(parse(raw).mcp.openviking.command[1], { cwd: home, env }));
       expectExit(await runHookScript(join(installedRoot, "index.mjs"), { cwd: home, env }));
+      expectExit(await runHookScript(join(configDir, "plugins/openviking.js"), { cwd: home, env }));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -60,7 +60,7 @@
 #   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json
 #   kimicode   ~/.kimi-code/plugins
 #   codebuddy  a local marketplace registered with codebuddy, installed from ~/.codebuddy/plugins
-#   opencode   ~/.config/opencode/plugins/openviking, openviking.js, opencode.json(c)
+#   opencode   ~/.config/opencode/openviking-plugin, plugins/openviking.js, opencode.json(c)
 #   pi         ~/.pi/agent/extensions/openviking
 #   dsh        dsh plugin add into the chosen profile
 #   dsh-desktop (macOS) dsh plugin add into Desktop's profile, with the dsh
@@ -3052,8 +3052,10 @@ install_opencode() {
   # Import resolves the complete dependency graph; node --check only parses.
   "$NODE_BIN" --input-type=module -e 'import { pathToFileURL } from "node:url"; await import(pathToFileURL(process.argv[2]));' \
     check-runtime "$plugin_dir/servers/mcp-proxy.mjs" || return 1
-  dest="$HOME/.config/opencode/plugins/openviking"
-  mkdir -p "$(dirname "$dest")"
+  # v1 discovers files; v2 also discovers directories. Keep the payload outside
+  # plugins/ so the wrapper is the only entrypoint on both hosts.
+  dest="$HOME/.config/opencode/openviking-plugin"
+  mkdir -p "$HOME/.config/opencode/plugins"
   if [ "$SOURCE_MODE" = "dev" ]; then
     rm -rf "$dest"
     ln -sfn "$plugin_dir" "$dest"
@@ -3063,12 +3065,9 @@ install_opencode() {
     (cd "$plugin_dir" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$dest.tmp" && tar -xf -)
     mv "$dest.tmp" "$dest"
   fi
-  if [ -f "$plugin_dir/wrappers/openviking.js" ]; then
-    cp "$plugin_dir/wrappers/openviking.js" "$HOME/.config/opencode/plugins/openviking.js"
-  else
-    printf '%s\n' 'export { OpenVikingPlugin, default } from "./openviking/index.mjs"' > "$HOME/.config/opencode/plugins/openviking.js"
-  fi
+  printf '%s\n' 'export { OpenVikingPlugin, default } from "../openviking-plugin/index.mjs"' > "$HOME/.config/opencode/plugins/openviking.js"
   opencode_write_config "$(opencode_config_file)" "$dest/servers/mcp-proxy.mjs"
+  rm -rf "$HOME/.config/opencode/plugins/openviking"
   info "$(t 'OpenCode file plugin installed:' 'OpenCode 文件插件已安装：') $dest"
 }
 
@@ -3295,7 +3294,8 @@ EOF
   if contains_harness opencode; then
     local ocfg="$HOME/.config/opencode/opencode.json"
     local ocfgc="$HOME/.config/opencode/opencode.jsonc"
-    if [ -f "$HOME/.config/opencode/plugins/openviking.js" ] && [ -f "$HOME/.config/opencode/plugins/openviking/index.mjs" ]; then
+    local opencode_root="$HOME/.config/opencode/openviking-plugin"
+    if [ -f "$HOME/.config/opencode/plugins/openviking.js" ] && [ -f "$opencode_root/index.mjs" ]; then
       info "opencode: $PLUGIN_NAME $(t 'appears installed' '看起来已安装')"
     else
       warn "opencode: $PLUGIN_NAME $(t 'not found in config/plugin dir' '未在配置或插件目录中找到')"
@@ -3304,11 +3304,11 @@ EOF
     if [ -f "$HOME/.config/opencode/plugins/openviking.js" ]; then
       node --check "$HOME/.config/opencode/plugins/openviking.js" || ok=0
     fi
-    if [ -f "$HOME/.config/opencode/plugins/openviking/index.mjs" ]; then
-      node --check "$HOME/.config/opencode/plugins/openviking/index.mjs" || ok=0
+    if [ -f "$opencode_root/index.mjs" ]; then
+      node --check "$opencode_root/index.mjs" || ok=0
     fi
-    if [ -f "$HOME/.config/opencode/plugins/openviking/servers/mcp-proxy.mjs" ]; then
-      node --check "$HOME/.config/opencode/plugins/openviking/servers/mcp-proxy.mjs" || ok=0
+    if [ -f "$opencode_root/servers/mcp-proxy.mjs" ]; then
+      node --check "$opencode_root/servers/mcp-proxy.mjs" || ok=0
     else
       warn "opencode: $(t 'OpenViking MCP proxy not found' '未找到 OpenViking MCP proxy')"
       ok=0
@@ -3602,7 +3602,7 @@ EOF
     plan_paths "CodeBuddy Code" "$HOME/.codebuddy/plugins" "$OV_HOME/agent-integrations/codebuddy"
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
-    plan_paths OpenCode "$HOME/.config/opencode/plugins/openviking" "$HOME/.config/opencode/plugins/openviking.js" "$(opencode_config_file)"
+    plan_paths OpenCode "$HOME/.config/opencode/openviking-plugin" "$HOME/.config/opencode/plugins/openviking.js" "$HOME/.config/opencode/plugins/openviking" "$(opencode_config_file)"
   fi
   if contains_harness pi && command -v pi >/dev/null 2>&1; then
     plan_paths pi "$HOME/.pi/agent/extensions/openviking"
@@ -3739,8 +3739,8 @@ EOF
     next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "" "$uninstall codebuddy"
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
-    next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" "" \
-      "$(t "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js, then remove mcp.openviking from $(short_path "$(opencode_config_file)")" "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js，再删除 $(short_path "$(opencode_config_file)") 中的 mcp.openviking")"
+    next_steps OpenCode "$(t 'restart OpenCode and its background service' '重启 OpenCode 及其后台服务')" "$rerun" "" \
+      "$(t "rm -rf ~/.config/opencode/openviking-plugin ~/.config/opencode/plugins/openviking.js, then remove mcp.openviking from $(short_path "$(opencode_config_file)")" "rm -rf ~/.config/opencode/openviking-plugin ~/.config/opencode/plugins/openviking.js，再删除 $(short_path "$(opencode_config_file)") 中的 mcp.openviking")"
   fi
   if contains_harness pi && command -v pi >/dev/null 2>&1; then
     next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" "" "rm -rf ~/.pi/agent/extensions/openviking"
