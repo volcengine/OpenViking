@@ -3,20 +3,21 @@
 为经过 Magpie 网关的模型请求自动召回 OpenViking 记忆，直接读取现有
 `ovcli.conf`，无需在 Magpie 中重复填写服务地址和凭据。
 
+市场展示名称为 **OpenViking**，npm 分发包名为 `@openviking/magpie-plugin`；两者独立配置。
+
 ## 安装
 
 首次 npm 发布完成后，在 Magpie 中安装 OpenViking：
 
 ```sh
-magpie plugin add @openviking/middleware-openviking
+magpie plugin add @openviking/magpie-plugin
 ```
 
-Magpie 将包名简化为 `openviking`；通过 npm 安装时，工具名为
-`openviking_status`、`openviking_find`、`openviking_read`、`openviking_ls` 和 `openviking_remember`。
+按 Magpie 当前的工具命名规则，通过 npm 安装时，工具名为
+`magpie-plugin_status`、`magpie-plugin_find`、`magpie-plugin_read`、`magpie-plugin_ls` 和 `magpie-plugin_remember`。
 本地目录安装的工具前缀使用目录名。
 
-从源码安装时，
-在 OpenViking 仓库根目录执行：
+从源码安装时，在 OpenViking 仓库根目录执行：
 
 ```sh
 node examples/memory-plugin-shared/sync.mjs
@@ -121,5 +122,15 @@ Magpie 的文件读取策略排除环境变量和 workspace 层。
 
 工具错误保留脱敏的 HTTP 状态、错误类别和追踪 ID，区分不存在、冲突、限流、超时和取消。
 自动召回仍在错误时放行原请求，诊断仅记录固定状态。
+
+## 市场信息
+
+[marketplace.json](marketplace.json) 提供待提交的 **OpenViking** 市场条目，包含官方图标和中英文描述。
+`kind: "middleware"` 沿用网关记忆插件的市场分类；插件实际运行入口仍是异步 `magpie.hooks`。
+`package.json` 的 `magpie.icon` 使用同一图标，供 npm 搜索结果和已安装列表展示。
+
+npm 发布不会自动加入推荐列表。发布后，需要将 `plugins` 中的条目提交到
+[Magpie 社区注册表](https://github.com/magpie-community/plugins/blob/main/registry.json)。
+条目不声明由 Magpie 社区维护。
 
 开发、测试与完整接口说明见 [English README](README.md)。

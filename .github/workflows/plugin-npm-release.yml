@@ -31,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - package: "@openviking/middleware-openviking"
+          - package: "@openviking/magpie-plugin"
             directory: examples/magpie-memory-plugin
             install: npm install --ignore-scripts
           - package: "@openviking/dsh-memory-plugin"

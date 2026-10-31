@@ -6,12 +6,12 @@ configuration; no second copy of your server address or credentials is needed.
 
 [中文](README_CN.md)
 
-The npm package is `@openviking/middleware-openviking`. Magpie shortens its name
-to `openviking`, including tool names such as `openviking_find`.
+The npm package is `@openviking/magpie-plugin`. Its marketplace display name is
+**OpenViking**; the npm package name is a separate distribution identifier.
 After the first npm publication, install it with:
 
 ```sh
-magpie plugin add @openviking/middleware-openviking
+magpie plugin add @openviking/magpie-plugin
 ```
 
 ## Install from this repository
@@ -154,8 +154,9 @@ in Magpie's combined `/mcp/magpie/tools` server. Tools are:
 | `ls` | List up to 100 entries under a `viking://` directory |
 | `remember` | On explicit user request, create a session, add the supplied text and submit memory extraction |
 
-With the npm installation, Magpie exposes tools as `openviking_status`,
-`openviking_find`, `openviking_read`, `openviking_ls` and `openviking_remember`.
+With the npm installation, Magpie's current tool naming rules produce
+`magpie-plugin_status`, `magpie-plugin_find`, `magpie-plugin_read`,
+`magpie-plugin_ls` and `magpie-plugin_remember`.
 Source-folder installations use the folder's name as the prefix instead.
 The tool callback has
 no authenticated caller identity: **enabling tools delegates this file's OV
@@ -175,6 +176,19 @@ text or credentials. Automatic recall still fails open with coarse diagnostic co
 that a memory has been created. Writes are not automatically retried. An
 interrupted write can leave a partially populated session; inspect OV before
 repeating an uncertain submission.
+
+## Marketplace metadata
+
+[marketplace.json](marketplace.json) contains the proposed **OpenViking** listing,
+with the official icon and English/Chinese descriptions. Its `kind: "middleware"`
+is the discovery category used for gateway memory integrations; the package
+runs through asynchronous `magpie.hooks`. The same icon is declared in
+`package.json` under `magpie.icon` for npm discovery and installed rows.
+
+Publishing the npm package does not automatically add the recommended listing.
+After publication, submit the entry in `plugins` to
+[Magpie's community registry](https://github.com/magpie-community/plugins/blob/main/registry.json).
+The entry does not claim the Magpie community-maintained badge.
 
 ## Development
 
