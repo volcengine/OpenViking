@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { loadConfig } from "./config.mjs";
+import { readProxyConfig } from "../servers/mcp-proxy.mjs";
 
 // The layers, the knobs and the peer are the shared loader's, and
 // memory-plugin-shared/plugin-config.test.mjs holds this harness to them. What
@@ -20,6 +21,7 @@ const OVERRIDES = [
   "OPENVIKING_RECALL_REWRITE",
   "OPENVIKING_RECALL_QUERY_FILTERS",
   "OPENVIKING_CAPTURE_FILTERS",
+  "CLAUDE_PROJECT_DIR",
 ];
 
 /**
@@ -49,6 +51,25 @@ function withConfigs({ ov, cli, env = {} }, fn) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test("workspace settings follow Claude's project root when the hook cwd moves", () => {
+  withConfigs({ ov: { server: {} } }, ({ ovPath }) => {
+    const root = dirname(ovPath);
+    const project = join(root, "系统管理");
+    const task = join(root, "desktop-task");
+    mkdirSync(join(project, ".openviking"), { recursive: true });
+    mkdirSync(task);
+    writeFileSync(join(project, ".openviking", "config.json"), JSON.stringify({
+      version: 1, peer: { id: "dev" }, recall: { peer_scope: "actor" },
+    }));
+    process.env.CLAUDE_PROJECT_DIR = project;
+
+    assert.equal(loadConfig(task).peerId, "dev");
+    assert.equal(readProxyConfig().peerId, "dev", "the MCP proxy uses the same project config");
+    assert.equal(loadConfig(task, { env: { ...process.env, OPENVIKING_PEER_ID: "override" } }).peerId, "override");
+    assert.equal(loadConfig(task, { env: { ...process.env, CLAUDE_PROJECT_DIR: " " } }).peerId, "");
+  });
+});
 
 test("an ovcli.conf api_key is reported as the credential source", () => {
   withConfigs({

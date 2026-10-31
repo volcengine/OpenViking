@@ -105,6 +105,8 @@ skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 
 
 ## 工作区 peer
 
+工作区配置从 [Claude Code 提供的稳定项目根目录](https://code.claude.com/docs/en/hooks#reference-scripts-by-path) `CLAUDE_PROJECT_DIR` 加载。因此，hook 的 `cwd` 切换到 worktree 或其他目录时，仍能读取显式配置的 `peer.id`。没有该变量时，hook 使用输入中的目录，MCP 使用进程目录。
+
 记忆按你所在仓库派生出的 peer 归档，因此同一个项目在不同 clone、worktree 和子目录下共用同一份记忆。默认的 `peer.source: "git"` 取仓库归一化后的 `origin` URL——`origin` 为 `git@github.com:volcengine/OpenViking.git` 时，peer 就是 `github.com-volcengine-openviking`——其次是仓库根路径；不在仓库中则完全不发送 peer，在那里记下的内容进入用户级空间 `viking://user/<you>/memories`。fork 的 `origin` 不同，因此默认是独立的 peer。
 
 可通过 `OPENVIKING_PEER_SOURCE`、`ovcli.conf` 中的 `plugin.peerSource`，或工作区 `.openviking/config.json`（`"version": 1` 的配置文件，可提交给团队共用）中的 `peer.source` 修改：`"cwd"` 恢复此前的行为——把工作目录路径中的非字母数字字符全部替换成 `-`；`"none"` 表示不发送 peer；也可以用 `"team-{dir}"` 这样的模板自定义。要[让一个不是仓库的目录拥有独立记忆](../configuration/02-client.md#让一个目录拥有独立记忆)，在该目录下创建 `.openviking/config.json`，内容为 `{"version": 1, "peer": {"id": "my-project"}}`。此前按工作目录派生的 peer 下写入的记忆仍能被召回，无需迁移。分层优先级和工作区配置文件的完整 schema 见[客户端配置 → 工作区配置](../configuration/02-client.md#工作区配置)。
