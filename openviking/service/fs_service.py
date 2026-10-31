@@ -47,6 +47,7 @@ from openviking.session.memory.account_templates import (
 )
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
+from openviking.session.memory.utils.line_numbers import slice_lines_keepends
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     body_for_preview,
@@ -1408,11 +1409,7 @@ class FSService:
                     jsonl=resolved_uri.endswith("/messages.jsonl"),
                 )
 
-        if offset == 0 and limit == -1:
-            return content
-        lines = content.splitlines(keepends=True)
-        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
-        return "".join(sliced)
+        return slice_lines_keepends(content, offset, limit)
 
     async def read_visible(
         self,
