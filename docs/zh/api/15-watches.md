@@ -38,6 +38,8 @@ Watch API 管理资源的周期检查、暂停、恢复和手动触发。
 | reason | string | 更新该监控任务的记录原因。 |
 | instruction | string | 更新语义处理指令。 |
 
+托管 Connector 的控制面还可独立提交 `credential_state` 通知，不能与上述字段组合。该对象包含引用归属字段 `account_id`、`resource_id`、`user_id`、`ov_user_id`、`ov_account_id`、`type`、`platform`，以及正整数存储版本 `version` 和布尔值 `authorized`。内核核对 watch 私有引用并忽略过期或重复通知；撤销时记录自动暂停，重新授权时仅恢复自动暂停的任务。手动暂停/恢复清除自动暂停标记，执行历史保留。通知水位和暂停标记只存储在私有 watch 数据中，不出现在查询响应；历史无标记的暂停任务保留原状态。
+
 未识别字段会被拒绝，并返回 HTTP `400` 和 `INVALID_ARGUMENT`（请求模型使用 `extra="forbid"`）。未传字段保留原值。
 
 #### 3. 使用示例

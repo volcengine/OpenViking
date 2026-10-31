@@ -4,9 +4,53 @@
 """Tests for watch management endpoints (RFC #2104)."""
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+import pytest_asyncio
+from pydantic import ValidationError
+
+from openviking.resource.watch_scheduler import WatchScheduler
+from openviking.server.routers.watches import UpdateWatchRequest
+from openviking.service.resource_service import ResourceService
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfig,
+    OpenVikingConfigSingleton,
+)
+
+
+@pytest.fixture(autouse=True)
+def watch_test_config(tmp_path, monkeypatch):
+    """Use isolated local storage without requiring a developer's ov.conf."""
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {
+                "workspace": str(tmp_path),
+                "agfs": {"backend": "local"},
+                "vectordb": {"backend": "local"},
+            },
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "model": "test-embedder",
+                    "api_key": "test-key",
+                    "dimension": 2048,
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", config)
+
+
+@pytest_asyncio.fixture
+async def service():
+    """Exercise real watch endpoints without initializing the vector backend."""
+    scheduler = WatchScheduler(resource_service=AsyncMock(spec=ResourceService))
+    await scheduler.start()
+    yield SimpleNamespace(watch_scheduler=scheduler)
+    await scheduler.stop()
 
 
 @pytest.fixture
@@ -44,6 +88,83 @@ async def test_list_empty(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"] == {"tasks": [], "total": 0}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"version": 0},
+        {"version": True},
+        {"authorized": "false"},
+        {"ov_account_id": ""},
+        {"unexpected": "value"},
+    ],
+)
+def test_credential_state_contract_rejects_invalid_fields(change):
+    state = {
+        "account_id": "account",
+        "resource_id": "ov-resource",
+        "user_id": "user",
+        "ov_user_id": "default",
+        "ov_account_id": "default",
+        "type": "oauth",
+        "platform": "dingtalk",
+        "version": 8,
+        "authorized": False,
+        **change,
+    }
+    with pytest.raises(ValidationError):
+        UpdateWatchRequest(credential_state=state)
+
+
+async def test_patch_credential_state(client: httpx.AsyncClient, watch_manager):
+    state = {
+        "account_id": "account",
+        "resource_id": "ov-resource",
+        "user_id": "user",
+        "ov_user_id": "default",
+        "ov_account_id": "default",
+        "type": "oauth",
+        "platform": "dingtalk",
+        "version": 8,
+        "authorized": False,
+    }
+    reference = {key: value for key, value in state.items() if key not in {"version", "authorized"}}
+    reference["binding_version"] = 3
+    task = await _seed(watch_manager, source_type="dingtalk", path="dingtalk://node")
+    await watch_manager.update_auth_state(
+        task.task_id,
+        {
+            "provider": "connector_plaintext",
+            "request": {
+                "api_key": "test-key",
+                "account_id": "default",
+                "add_type": "dingtalk",
+                "path": task.path,
+                "connector_args": {},
+                "connector_auth_config": {"openviking_credential_ref": reference},
+            },
+        },
+    )
+    response = await client.patch(
+        f"/api/v1/watches/{task.task_id}", json={"credential_state": state}
+    )
+    assert response.status_code == 200
+    assert response.json()["result"]["is_active"] is False
+    state.update(version=10, authorized=True)
+    response = await client.patch(
+        f"/api/v1/watches/{task.task_id}", json={"credential_state": state}
+    )
+    assert response.status_code == 200
+    assert response.json()["result"]["is_active"] is True
+    response = await client.patch(
+        f"/api/v1/watches/{task.task_id}",
+        json={
+            "credential_state": state,
+            "is_active": False,
+        },
+    )
+    assert response.status_code == 400
 
 
 async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, monkeypatch):
