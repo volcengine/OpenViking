@@ -15,7 +15,10 @@ import { registerApp } from '@larksuiteoapi/node-sdk';
 // drops unknown scope names silently, so the caller compares the granted
 // scopes with the request.
 
-export const EVENTS = Object.freeze(['im.message.receive_v1']);
+// Messages to the bot, and comments on documents that mention it or answer
+// it (drive.notice.comment_add_v1).
+export const EVENTS = Object.freeze(['im.message.receive_v1', 'drive.notice.comment_add_v1']);
+export const MESSAGE_EVENT = 'im.message.receive_v1';
 export const CALLBACKS = Object.freeze(['card.action.trigger']);
 
 export class LarkRegistrationError extends Error {
@@ -172,9 +175,9 @@ export function missingScopes(scopes, granted) {
   };
 }
 
-// What the app lacks of the request: scopes per token type, the message
-// event (null when the online version could not be read) and the card
-// callback, which counts only on the long connection.
+// What the app lacks of the request: scopes per token type, the events
+// (null when the online version could not be read) and the card callback,
+// which counts only on the long connection.
 export function missingConfig(scopes, inspected) {
   const { type, items } = inspected.callbacks;
   return {

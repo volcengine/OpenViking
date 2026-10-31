@@ -84,7 +84,11 @@ features; `idempotent: true` means the provider honours the idempotency key, so
 the Core may retry an `UNCERTAIN` attempt with the same key; `approval: true`
 means the action speaks for the owner (an email reply), so the Core never runs it
 for the agent: it shows the draft to the owner on the primary IM and runs it
-only when the owner confirms it there. `queries` lists the
+only when the owner confirms it there. `conversations` narrows an action for
+targets in one type of conversation: it maps the conversation type to the spec
+fields that differ there, or to `null` when the action does not reach it (the
+Lark Connector's `doc_comment` documents take a plain-text reply that is never
+retried, and no `message.send`). `queries` lists the
 read-only operations. The Core offers an agent tool only when some configured
 Connector declares the operation behind it, and checks every call against the
 target Connector's declaration.
@@ -356,7 +360,7 @@ Results report the delivered `message_id` and, where known, `chat_id`,
 | Operation | Lark | Weixin | Telegram | Slack | QQ | Email |
 | --- | --- | --- | --- | --- | --- | --- |
 | `message.send` | markdown, file, file key, card; mentions; idempotent; to a chat or the owner | markdown (plain text), file | markdown (plain text), file; verified owner only | markdown (as mrkdwn), file; mentions; to a channel the bot is in, or a DM | plain text, file; verified owner, proactive quota | — |
-| `message.reply` | as `message.send`, plus threads | markdown (plain text), file | as `message.send`, with quoted reply | as `message.send`, into the target's thread | plain text, file; passive quota, quote when indexed | markdown (plain text); owner approval on the primary IM |
+| `message.reply` | as `message.send`, plus threads; to a document comment: plain text, not retried | markdown (plain text), file | as `message.send`, with quoted reply | as `message.send`, into the target's thread | plain text, file; passive quota, quote when indexed | markdown (plain text); owner approval on the primary IM |
 | `message.react`, `message.retract` | yes | — | — | yes | — | — |
 | `message.media` (query) | download by image/file key | downloaded inbound media | lazy download by message ID | lazy download by message ID and file ID | lazy download by message ID | — |
 | `chat.list`, `chat.messages`, `thread.messages` (queries) | yes | — | — | bot identity, cursor pagination | — | — |

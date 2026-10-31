@@ -83,8 +83,9 @@ export function isoMinute(ms) {
 // Senders that are another bot or app: integrations, alerts, other agents.
 export const BOT_SENDERS = new Set(['bot', 'app']);
 
-// Lark names come from the chat roster; other connectors name the sender in
-// the event itself.
+// Lark names come from the chat roster, or from the event where there is no
+// roster (a document comment); other connectors name the sender in the event
+// itself.
 function fromLabel(chatId, senderId, resolveName = null, source = 'lark', senderName = null) {
   if (source !== 'lark') return sanitizeMemberName(senderName) ?? shortenId(senderId);
   if (resolveName) {
@@ -93,7 +94,7 @@ function fromLabel(chatId, senderId, resolveName = null, source = 'lark', sender
       if (resolved) return resolved;
     } catch { /* fall through to the shared resolver / stub */ }
   }
-  return lookupMemberName(chatId, senderId) ?? shortenId(senderId);
+  return lookupMemberName(chatId, senderId) ?? sanitizeMemberName(senderName) ?? shortenId(senderId);
 }
 
 // How a quoted message of the agent's own begins, as one tag value: no
