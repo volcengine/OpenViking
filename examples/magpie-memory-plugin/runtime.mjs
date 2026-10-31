@@ -3,7 +3,7 @@ import { buildContextSearchBody, isRecallEnabled, selectRecallContent } from "./
 import { estimateTokens } from "./shared/profile-inject.mjs";
 import { PluginError, request } from "./http.mjs";
 import { withRecallLedger } from "./recall-ledger.mjs";
-import { connectionScope, dataDirectory } from "./scope.mjs";
+import { bypassedSession, connectionScope, dataDirectory } from "./scope.mjs";
 import { nativeOwner } from "./capture.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 import { describeConversation, isAuxiliaryRequest, memoryBlock, replayContext } from "./conversation.mjs";
@@ -47,7 +47,7 @@ export async function recallRequest(body, ctx, env = process.env, resolvedConfig
   }
   try {
     const cfg = resolvedConfig || await loadConfig(env, ctx.options || {});
-    if (!cfg.enabled) { ctx.report?.("skipped", 0); return; }
+    if (!cfg.enabled || bypassedSession(cfg, ctx)) { ctx.report?.("skipped", 0); return; }
     if (await nativeOwner(cfg, ctx, body)) { ctx.report?.("skipped", 0); return; }
     if (cfg.recallPeerScope === "actor" && !cfg.peerId) { ctx.report?.("unbound", 0); return; }
     // No plaintext credentials/queries enter filenames or logs. Changing the

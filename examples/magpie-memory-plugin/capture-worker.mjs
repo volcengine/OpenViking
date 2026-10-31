@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { loadConfig } from "./config.mjs";
 import { request } from "./http.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
-import { connectionScope } from "./scope.mjs";
+import { bypassedSession, connectionScope } from "./scope.mjs";
 import { recallDigest } from "./recall-ledger.mjs";
 import { withCaptureDecisions } from "./capture-history.mjs";
 import { withPrivateState } from "./private-state.mjs";
@@ -88,7 +88,7 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
     // A worker may outlive file edits. Recheck identity and opt-in immediately
     // before each non-idempotent operation, without changing its pinned identity.
     const current = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: snapshot.configPath }, snapshot.options);
-    if (connectionScope(current, context) !== scope || !current.enabled || !current.autoCapture) return "paused";
+    if (connectionScope(current, context) !== scope || !current.enabled || !current.autoCapture || bypassedSession(current, context)) return "paused";
     if (current.nativeAgents.includes(context.agent) || await exists(join(root, "native-owner"))) return "native";
     return withCaptureDecisions(directory, scope, (state) => {
       if (!Array.isArray(snapshot.turnAnchors) && state.rejected.length) return "rejected";

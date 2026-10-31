@@ -2,7 +2,7 @@ import { access, chmod, mkdir, open, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { connectionScope, dataDirectory } from "./scope.mjs";
+import { bypassedSession, connectionScope, dataDirectory } from "./scope.mjs";
 import { describeConversation, hasNativeContext, isAuxiliaryRequest } from "./conversation.mjs";
 import { captureMessages, completedReply, rejectedReply } from "./capture-messages.mjs";
 import { withCaptureDecisions, rejectCaptureTurn, captureTurnAnchors, selectCaptureHistory } from "./capture-history.mjs";
@@ -45,6 +45,7 @@ export function launchCaptureWorker(cfg) {
 }
 
 export async function queueCapture(cfg, ctx, messages, { launch = true } = {}) {
+  if (bypassedSession(cfg, ctx)) return false;
   if (await nativeOwner(cfg, ctx, {})) return false;
   const scope = connectionScope(cfg, ctx);
   const selected = await withCaptureDecisions(dataDirectory(cfg), scope,
@@ -90,7 +91,7 @@ export async function queueCapture(cfg, ctx, messages, { launch = true } = {}) {
 }
 
 export async function prepareCapture(body, ctx, cfg, options) {
-  if (!cfg.enabled || !["local", "magpie-key"].includes(ctx.origin) || !ctx.session?.trim()) return;
+  if (!cfg.enabled || bypassedSession(cfg, ctx) || !["local", "magpie-key"].includes(ctx.origin) || !ctx.session?.trim()) return;
   if (isAuxiliaryRequest(body, ctx)) return;
   if (await nativeOwner(cfg, ctx, body)) { ctx.state && (ctx.state.nativeOwner = true); return; }
   if (!cfg.autoCapture) return;
@@ -129,7 +130,7 @@ export async function prepareCapture(body, ctx, cfg, options) {
 }
 
 export async function finishCapture(reply, ctx, cfg) {
-  if (!ctx.state?.capture || !cfg.enabled || !cfg.autoCapture || ctx.state.nativeOwner) return;
+  if (!ctx.state?.capture || !cfg.enabled || !cfg.autoCapture || bypassedSession(cfg, ctx) || ctx.state.nativeOwner) return;
   const body = ctx.state.capture.body;
   if (ctx.state.capture.scope !== connectionScope(cfg, ctx)) return;
   if (await nativeOwner(cfg, ctx, body)) return;

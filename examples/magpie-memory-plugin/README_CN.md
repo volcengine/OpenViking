@@ -72,6 +72,11 @@ Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`reca
 不会修改文件、合并环境变量中的凭据，或回退读取 `ov.conf`、Root Key、Gateway Token。
 配置缺失、损坏或服务不可用时，召回跳过，模型请求继续；不会沿用旧配置。
 
+在文件中设置 `plugin.magpie.bypassSession: true`，或通过 `bypassSessionPatterns`
+匹配 Magpie 会话 ID、工作目录，可跳过该会话的自动召回和采集。
+已有待同步快照会暂停投递，取消 bypass 后可继续恢复；worker 在追加和 commit 前重新检查，
+无法撤销已在途的操作。显式记忆工具仍由 `mcpEnabled` 单独控制。
+
 ## 自动召回
 
 - 首轮用户消息同时读取当前认证用户的 `viking://~/memories/profile.md`，避免职业、邮箱等稳定资料依赖语义检索排名。

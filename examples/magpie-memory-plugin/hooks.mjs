@@ -1,12 +1,14 @@
 import { recallRequest } from "./runtime.mjs";
 import { loadConfig } from "./config.mjs";
 import { prepareCapture, finishCapture } from "./capture.mjs";
+import { bypassedSession } from "./scope.mjs";
 import { isAuxiliaryRequest } from "./conversation.mjs";
 
 export async function onRequest(body, ctx) {
   if (isAuxiliaryRequest(body, ctx)) { ctx.report?.("skipped", 0); return; }
   try {
     const cfg = await loadConfig(process.env, ctx.options || {});
+    if (bypassedSession(cfg, ctx)) { ctx.report?.("skipped", 0); return; }
     ctx.state ||= {};
     try { await prepareCapture(body, ctx, cfg, ctx.options); }
     catch { delete ctx.state.capture; }

@@ -11,6 +11,7 @@ import { queueCapture, nativeOwner, captureDirectory, finishCapture, prepareCapt
 import { captureMessages, completedReply } from "../capture-messages.mjs";
 import { runCaptureWorker } from "../capture-worker.mjs";
 import { connectionScope } from "../scope.mjs";
+import { onRequest, onResponse } from "../hooks.mjs";
 import { recallRequest } from "../runtime.mjs";
 
 // These tests drain workers explicitly with fake HTTP. Do not leave detached
@@ -514,7 +515,7 @@ test("serial fallback reconciles a lost acknowledgement before sending the remai
   assert.equal(f.commits.length, 1);
 });
 
-for (const change of ["native", "credentials", "disabled"]) {
+for (const change of ["native", "credentials", "disabled", "bypass", "bypassPattern"]) {
   for (const stage of ["append", "commit"]) {
     test(`worker rechecks ${change} configuration before ${stage}`, async (t) => {
       const f = await fixture(t);
@@ -529,6 +530,8 @@ for (const change of ["native", "credentials", "disabled"]) {
           if (change === "native") file.plugin.magpie.nativeAgents = ["pi"];
           if (change === "credentials") file.api_key = "rotated";
           if (change === "disabled") file.plugin.magpie.autoCapture = false;
+          if (change === "bypass") file.plugin.magpie.bypassSession = true;
+          if (change === "bypassPattern") file.plugin.magpie.bypassSessionPatterns = ["convers*"];
           await writeFile(f.configPath, JSON.stringify(file));
         }
         return result;
@@ -545,3 +548,50 @@ for (const change of ["native", "credentials", "disabled"]) {
     });
   }
 }
+
+
+for (const bypass of [{ bypassSession: true }, { bypassSessionPatterns: ["convers*"] }, { bypassSessionPatterns: ["/fixt*"] }]) {
+  test(`bypass ${JSON.stringify(bypass)} skips hook recall and capture`, async (t) => {
+    const f = await fixture(t);
+    await writeFile(f.configPath, JSON.stringify({ ...f.file, plugin: { magpie: { ...f.file.plugin.magpie, ...bypass } } }));
+    const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+    process.env.OPENVIKING_CLI_CONFIG_FILE = f.configPath;
+    t.after(() => {
+      if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE;
+      else process.env.OPENVIKING_CLI_CONFIG_FILE = previous;
+    });
+    let reads = 0;
+    t.mock.method(globalThis, "fetch", async () => { reads++; return Response.json({ status: "ok", result: { rendered: "Private context" } }); });
+    const cfg = await loadConfig();
+    const ctx = { ...f.ctx, query: f.messages[0].content, success: true };
+    assert.equal(await onRequest({ messages: [f.messages[0]] }, ctx), undefined);
+    await onResponse({ choices: [{ finish_reason: "stop", message: f.messages[1] }] }, ctx);
+    assert.equal(reads, 0);
+    assert.equal(ctx.state.capture, undefined);
+    // Guard direct entrypoints too, including a callback prepared before bypass.
+    assert.equal(await recallRequest({ messages: [f.messages[0]] }, ctx, {}, cfg), undefined);
+    assert.equal(await queueCapture(cfg, ctx, f.messages, { launch: false }), false);
+    const active = { ...ctx, state: { capture: { body: { messages: [f.messages[0]] }, scope: connectionScope(cfg, ctx) } } };
+    await finishCapture({ choices: [{ finish_reason: "stop", message: f.messages[1] }] }, active, cfg);
+    assert.equal(reads, 0);
+    await assert.rejects(readdir(captureDirectory(cfg, ctx)), { code: "ENOENT" });
+  });
+}
+
+test("bypass pauses existing snapshots until removed, without affecting other sessions", async (t) => {
+  const f = await fixture(t);
+  await f.queue();
+  const other = { ...f.ctx, session: "another-conversation" };
+  await f.queue(f.messages, other);
+  await writeFile(f.configPath, JSON.stringify({ ...f.file, plugin: { magpie: { ...f.file.plugin.magpie, bypassSessionPatterns: ["convers*"] } } }));
+  await f.drain();
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.commits.length, 1);
+  assert.equal((await readdir(join(captureDirectory(f.cfg, f.ctx), "pending"))).length, 1);
+  assert.deepEqual(await readdir(join(captureDirectory(f.cfg, other), "pending")), []);
+  await writeFile(f.configPath, JSON.stringify(f.file));
+  await f.drain();
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.commits.length, 2);
+  assert.deepEqual(await readdir(join(captureDirectory(f.cfg, f.ctx), "pending")), []);
+});

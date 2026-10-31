@@ -92,6 +92,13 @@ the host's hook budget. The package supplies an example, not saved defaults;
 omitted keys retain the file/default behavior. Hooks and tools use the same
 options. Enabling tools or capture requires the literal boolean `true`.
 
+File settings `plugin.magpie.bypassSession: true` or `bypassSessionPatterns`
+matching the Magpie session ID or working directory skip automatic recall and
+capture. Existing queued snapshots pause while bypass applies and can resume
+once it is removed. Workers recheck bypass before appends and commits; already
+in-flight operations cannot be undone. Explicit memory tools remain separately
+controlled by `mcpEnabled`.
+
 ## Automatic recall
 
 - The first user turn also reads the authenticated user's
