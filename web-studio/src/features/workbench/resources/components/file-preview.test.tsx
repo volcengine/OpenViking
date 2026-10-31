@@ -34,6 +34,7 @@ const previewState = vi.hoisted(() => ({
 
 const previewMocks = vi.hoisted(() => ({
   download: vi.fn(),
+  invalidatePreview: vi.fn(),
   renderMermaid: vi.fn(async (_id: string, _source: string) => ({
     svg: '<svg viewBox="0 0 120 40"><text>Client to server</text></svg>',
   })),
@@ -103,7 +104,7 @@ vi.mock('#/shared/api/ov-client/index', () => ({
 vi.mock('#/features/workbench/resources/hooks/viking-fm', () => ({
   useInvalidateVikingFs: () => ({
     invalidateList: vi.fn(),
-    invalidatePreview: vi.fn(),
+    invalidatePreview: previewMocks.invalidatePreview,
     invalidateTree: vi.fn(),
   }),
   useVikingFilePreview: () => ({
@@ -1387,11 +1388,139 @@ describe('FilePreview complete-content editing', () => {
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
+    vi.mocked(saveFileContent).mockReset()
+    vi.mocked(getContentDownload).mockReset()
   })
   afterEach(() => {
     cleanup()
     previewState.override = null
   })
+  it.each(['resolve', 'reject'])(
+    'does not let an old save %s change a newer file editor',
+    async (outcome) => {
+      let resolve!: () => void
+      let reject!: (error: Error) => void
+      vi.mocked(saveFileContent).mockReturnValueOnce(
+        new Promise<void>((res, rej) => {
+          resolve = res
+          reject = rej
+        }),
+      )
+      const { rerender } = renderPreview(file, undefined)
+      fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+      await screen.findByTestId('editor-content')
+      fireEvent.click(screen.getByRole('button', { name: 'filePreview.save' }))
+      const nextFile = { ...file, uri: `${file.uri}.next`, name: 'next.md' }
+      rerender(<FilePreview file={nextFile} onClose={vi.fn()} />)
+      fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+      await screen.findByTestId('editor-content')
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'filePreview.save' }).disabled,
+      ).toBe(false)
+      await act(async () => {
+        if (outcome === 'resolve') resolve()
+        else reject(new Error('old file save failed'))
+      })
+      expect(screen.getByTestId('editor-content')).toBeDefined()
+      if (outcome === 'resolve') expect(toast.error).not.toHaveBeenCalled()
+      else expect(toast.error).toHaveBeenCalledWith('filePreview.saveFailed', {
+        description: 'Error: old file save failed',
+      })
+      expect(saveFileContent).toHaveBeenCalledWith(file.uri, '[Target](./target.md)')
+      if (outcome === 'resolve') {
+        expect(previewMocks.invalidatePreview).toHaveBeenCalledWith(file.uri)
+      } else {
+        expect(previewMocks.invalidatePreview).not.toHaveBeenCalled()
+      }
+    },
+  )
+
+  it('keeps a newer save pending when an older save completes', async () => {
+    let finishOld!: () => void
+    let finishNew!: () => void
+    vi.mocked(saveFileContent)
+      .mockReturnValueOnce(new Promise<void>((resolve) => {
+        finishOld = resolve
+      }))
+      .mockReturnValueOnce(new Promise<void>((resolve) => {
+        finishNew = resolve
+      }))
+    const { rerender } = renderPreview(file, undefined)
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+    await screen.findByTestId('editor-content')
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.save' }))
+    const nextFile = { ...file, uri: `${file.uri}.next`, name: 'next.md' }
+    rerender(<FilePreview file={nextFile} onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+    await screen.findByTestId('editor-content')
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.save' }))
+    await act(async () => {
+      finishOld()
+    })
+    expect(screen.getByTestId('editor-content')).toBeDefined()
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'filePreview.save' }).disabled,
+    ).toBe(true)
+    await act(async () => {
+      finishNew()
+    })
+    expect(screen.queryByTestId('editor-content')).toBeNull()
+    expect(previewMocks.invalidatePreview).toHaveBeenCalledWith(nextFile.uri)
+  })
+
+  it.each(['resolve', 'reject'])(
+    'handles a save %s after the editor unmounts',
+    async (outcome) => {
+      let resolve!: () => void
+      let reject!: (error: Error) => void
+      vi.mocked(saveFileContent).mockReturnValueOnce(
+        new Promise<void>((res, rej) => {
+          resolve = res
+          reject = rej
+        }),
+      )
+      const { unmount } = renderPreview(file, undefined)
+      fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+      await screen.findByTestId('editor-content')
+      fireEvent.click(screen.getByRole('button', { name: 'filePreview.save' }))
+      unmount()
+      await act(async () => {
+        if (outcome === 'resolve') resolve()
+        else reject(new Error('save after unmount failed'))
+      })
+      if (outcome === 'resolve') {
+        expect(toast.error).not.toHaveBeenCalled()
+        expect(previewMocks.invalidatePreview).toHaveBeenCalledWith(file.uri)
+      } else {
+        expect(toast.error).toHaveBeenCalledWith('filePreview.saveFailed', {
+          description: 'Error: save after unmount failed',
+        })
+      }
+    },
+  )
+
+  it('ignores an old complete-content read after navigating away and back', async () => {
+    let finish!: (value: unknown) => void
+    previewState.override = {
+      content: 'limited preview',
+      fileType: 'text',
+      truncated: true,
+    }
+    vi.mocked(getContentDownload).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      }) as never,
+    )
+    const { rerender } = renderPreview(file, undefined)
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+    rerender(<FilePreview file={null} onClose={vi.fn()} />)
+    rerender(<FilePreview file={file} onClose={vi.fn()} />)
+    await act(async () => {
+      finish({ data: 'old complete original' })
+    })
+    expect(screen.queryByTestId('editor-content')).toBeNull()
+  })
+
   it('loads the complete original before editing a limited hosted preview', async () => {
     previewState.override = {
       content: 'limited preview',
