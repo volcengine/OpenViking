@@ -151,7 +151,7 @@ test("the agent-hook profile path reports read failures through its log", async 
 
   const block = await buildAgentProfile(
     fetchJSON,
-    { profileTokenBudget: 2000 },
+    { profileTokenBudget: 2000, peerId: "test-peer" },
     process.cwd(),
     (stage, data) => logged.push([stage, data]),
   );
@@ -160,7 +160,7 @@ test("the agent-hook profile path reports read failures through its log", async 
   assert.equal(logged.length, 2);
   assert.ok(logged.every(([stage, data]) => stage === "profile_read_failed" && data.status === 503));
   assert.ok(logged.some(([, data]) => !data.uri.includes("/peers/")));
-  assert.ok(logged.some(([, data]) => data.uri.includes("/peers/") && data.uri.endsWith("/profile.md")));
+  assert.ok(logged.some(([, data]) => data.uri.includes("/peers/test-peer/") && data.uri.endsWith("/profile.md")));
 });
 
 /**
