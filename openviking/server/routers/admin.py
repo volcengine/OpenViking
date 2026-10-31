@@ -417,6 +417,40 @@ async def _rollback_account_creation(
         )
 
 
+async def _rollback_user_creation(
+    request: Request,
+    account_id: str,
+    user_id: str,
+    actor: RequestContext,
+) -> None:
+    """Compensate a partially registered user.
+
+    The identity and its API key are committed atomically by the AccountStore
+    (``register_user``). This covers the workspace and user-config steps that
+    follow, mirroring the account-creation rollback above: the deletion service
+    revokes the identity immediately and ensures the durable cleanup task
+    exists, so a failed registration cannot leave a half-initialized user
+    that neither works nor can be re-registered.
+    """
+    deletion_service = getattr(request.app.state, "deletion_service", None)
+    if deletion_service is None:
+        logger.error(
+            "No deletion service available to roll back failed registration of %s/%s",
+            account_id,
+            user_id,
+        )
+        return
+    try:
+        await deletion_service.delete(account_id, user_id, actor=actor)
+    except Exception:
+        logger.exception(
+            "User registration rollback for %s/%s failed; the partially "
+            "initialized user may require manual cleanup",
+            account_id,
+            user_id,
+        )
+
+
 async def _check_user_exists(
     request: Request, account_id: str, user_id: str, manager=None
 ) -> None:
@@ -994,8 +1028,15 @@ async def register_user(
         str(resolved_role),
         seed=body.seed,
     )
-    await service.initialize_user_directories(user_ctx)
-    await _write_initial_user_config(service, user_ctx, body.user_config)
+    try:
+        await service.initialize_user_directories(user_ctx)
+        await _write_initial_user_config(service, user_ctx, body.user_config)
+    except BaseException:
+        # Same compensation contract as create_account: the identity above is
+        # already committed, so a failure in the workspace/config steps must
+        # revoke it instead of leaving a half-initialized user behind.
+        await _rollback_user_creation(request, account_id, body.user_id, ctx)
+        raise
     result = {
         "account_id": account_id,
         "user_id": body.user_id,
