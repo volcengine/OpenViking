@@ -410,6 +410,9 @@ This setting limits independent asynchronous reindex requests. URI-overlapping r
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `8` | Number of SessionCommit jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+| `stalled_predecessor_timeout_seconds` | number | `1800` | Cancel a running commit after this many seconds without progress, even if no successor is queued; `0` disables the watchdog; requires a server restart after changes |
+
+Successful model responses and completed Phase 2 steps count as progress. A timed-out commit is cancelled through the task lifecycle so its worker slot can be released and the archive can be marked failed.
 
 ### `queue_workers.external_task`
 

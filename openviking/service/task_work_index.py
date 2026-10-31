@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -233,6 +234,7 @@ class TaskWorkIndex:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._active: Dict[tuple[str, str, str], set[asyncio.Task[Any]]] = {}
+        self._progress: Dict[tuple[str, str, str], float] = {}
 
     def has_other_active(
         self,
@@ -261,14 +263,16 @@ class TaskWorkIndex:
         user_id: Optional[str] = None,
     ) -> None:
         with self._lock:
-            for key in [
+            keys = {
                 key
-                for key in self._active
+                for key in (*self._active.keys(), *self._progress.keys())
                 if key[2] == task_id
                 and (account_id is None or key[0] == account_id)
                 and (user_id is None or key[1] == user_id)
-            ]:
+            }
+            for key in keys:
                 self._active.pop(key, None)
+                self._progress.pop(key, None)
 
     def register_active(
         self,
@@ -278,8 +282,23 @@ class TaskWorkIndex:
         account_id: str,
         user_id: str,
     ) -> None:
+        key = (account_id, user_id, task_id)
         with self._lock:
-            self._active.setdefault((account_id, user_id, task_id), set()).add(active_task)
+            self._active.setdefault(key, set()).add(active_task)
+            self._progress[key] = time.time()
+
+    def touch_progress(self, task_id: str, *, account_id: str, user_id: str) -> None:
+        """Record process-local forward progress for an active task."""
+        with self._lock:
+            key = (account_id, user_id, task_id)
+            if key in self._active:
+                self._progress[key] = time.time()
+
+    def last_progress(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> Optional[float]:
+        with self._lock:
+            return self._progress.get((account_id, user_id, task_id))
 
     def unregister_active(
         self,
@@ -296,6 +315,7 @@ class TaskWorkIndex:
                 entries.discard(active_task)
                 if not entries:
                     self._active.pop(key, None)
+                    self._progress.pop(key, None)
 
     def active_tasks_by_owner(self) -> Dict[tuple[str, str], set[str]]:
         with self._lock:

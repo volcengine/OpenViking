@@ -59,7 +59,7 @@ from openviking.service.task_store import (
     WorkRegistration,
 )
 from openviking.service.task_tracker_concurrency import run_to_completion
-from openviking.service.task_work_index import TaskWorkIndex
+from openviking.service.task_work_index import TaskWorkIndex, get_task_context
 from openviking_cli.exceptions import (
     DeadlineExceededError,
     FailedPreconditionError,
@@ -167,6 +167,21 @@ def set_task_tracker(tracker: Optional["TaskTracker"]) -> None:
     global _instance
     with _init_lock:
         _instance = tracker
+
+
+def report_task_progress() -> None:
+    """Record best-effort forward progress for the currently bound Task."""
+    context = get_task_context()
+    if context is None:
+        return
+    try:
+        get_task_tracker().report_progress(
+            context.task_id,
+            account_id=context.account_id,
+            user_id=context.user_id,
+        )
+    except Exception:
+        logger.debug("Failed to record task progress", exc_info=True)
 
 
 async def run_tracked_operation(
@@ -1420,6 +1435,14 @@ class TaskTracker:
             account_id=account_id,
             user_id=user_id,
         )
+
+    def report_progress(self, task_id: str, *, account_id: str, user_id: str) -> None:
+        """Record a process-local liveness signal without writing to the task store."""
+        self._work_index.touch_progress(task_id, account_id=account_id, user_id=user_id)
+
+    def last_progress_at(self, task_id: str, *, account_id: str, user_id: str) -> Optional[float]:
+        """Return the latest in-process progress signal for a running task."""
+        return self._work_index.last_progress(task_id, account_id=account_id, user_id=user_id)
 
     def has_active_producer(self, task_id: str) -> bool:
         state = self._running.get()
