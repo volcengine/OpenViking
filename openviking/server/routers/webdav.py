@@ -172,9 +172,8 @@ def _destination_path(destination: str) -> str:
 
 
 async def _write_text_resource(service, uri: str, content: str, ctx: RequestContext) -> None:
-    """Persist UTF-8 text content and refresh derived summaries before returning."""
-    await service.viking_fs.write_file(uri, content, ctx=ctx)
-    await service.resources.summarize([uri], ctx=ctx)
+    """Persist UTF-8 text and enqueue its semantic and vector refresh."""
+    await service.fs.write(uri, content, ctx=ctx, mode="replace", wait=False)
 
 
 async def _safe_stat(service, uri: str, ctx: RequestContext) -> Optional[dict[str, Any]]:
