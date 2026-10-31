@@ -186,7 +186,6 @@ class _SyncMixin:
                             )
                             changed = False
                     if changed:
-                        diff.updated_files.append(target_file)
                         try:
                             await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
                         except Exception as e:
@@ -204,11 +203,15 @@ class _SyncMixin:
                             logger.error(
                                 f"[SyncDiff] Failed to move updated file: {root_file} -> {target_file}, error={e}"
                             )
+                        else:
+                            # Record only applied changes, like the delete
+                            # paths do: a swallowed mv failure must not be
+                            # reported as an update.
+                            diff.updated_files.append(target_file)
                     continue
 
                 if root_file and not target_file:
                     target_file_uri = VikingURI(target_dir).join(name).uri
-                    diff.added_files.append(target_file_uri)
                     try:
                         await self.mv(
                             root_file,
@@ -220,6 +223,8 @@ class _SyncMixin:
                         logger.error(
                             f"[SyncDiff] Failed to move added file: {root_file} -> {target_file_uri}, error={e}"
                         )
+                    else:
+                        diff.added_files.append(target_file_uri)
 
             dir_names = set(root_dirs.keys()) | set(target_dirs.keys())
             for name in sorted(dir_names):
@@ -259,7 +264,6 @@ class _SyncMixin:
 
                 if root_subdir and not target_subdir:
                     target_subdir_uri = VikingURI(target_dir).join(name).uri
-                    diff.added_dirs.append(target_subdir_uri)
                     try:
                         await self.mv(
                             root_subdir,
@@ -271,6 +275,8 @@ class _SyncMixin:
                         logger.error(
                             f"[SyncDiff] Failed to move added directory: {root_subdir} -> {target_subdir_uri}, error={e}"
                         )
+                    else:
+                        diff.added_dirs.append(target_subdir_uri)
                     continue
 
                 if root_subdir and target_subdir:
