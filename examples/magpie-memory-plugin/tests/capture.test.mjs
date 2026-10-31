@@ -2,13 +2,21 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { mock } from "node:test";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { EventEmitter } from "node:events";
 import { loadConfig } from "../config.mjs";
 import { queueCapture, nativeOwner, captureDirectory, finishCapture, prepareCapture } from "../capture.mjs";
 import { captureMessages, completedReply } from "../capture-messages.mjs";
 import { runCaptureWorker } from "../capture-worker.mjs";
 import { connectionScope } from "../scope.mjs";
 import { recallRequest } from "../runtime.mjs";
+
+// These tests drain workers explicitly with fake HTTP. Do not leave detached
+// processes racing fixture cleanup or making real network requests.
+mock.method(childProcess, "spawn", () => Object.assign(new EventEmitter(), { unref() {} }));
+syncBuiltinESMExports();
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), "ov-magpie-capture-"));
@@ -275,4 +283,193 @@ test("capture never joins an unknown existing history after enabling or switchin
   await prepareCapture({ messages: [...f.messages, { role: "user", content: "Continue my old private conversation" }] }, f.ctx, f.cfg, {});
   assert.equal(f.ctx.state.capture, undefined);
   assert.equal(f.writes.length, 0);
+});
+
+const titleUtilityPrompt = "<session>Review code</session>\n\nWrite the title in the predominant language of the session — a stray word or code token in another language doesn't change it, and neither does the English of these instructions.";
+async function queuedSnapshots(f) {
+  const path = join(captureDirectory(f.cfg, f.ctx), "pending");
+  return Promise.all((await readdir(path).catch(() => [])).filter((n) => n.endsWith(".json"))
+    .map(async (name) => JSON.parse(await readFile(join(path, name), "utf8"))));
+}
+const finalChat = (text) => ({ choices: [{ finish_reason: "stop", message: { role: "assistant", content: text } }] });
+
+for (const protocol of ["chat", "anthropic", "responses", "gemini"]) {
+  test(`${protocol} cannot bind across pre-existing assistant text`, async (t) => {
+    const f = await fixture(t); f.ctx.protocol = protocol;
+    const messages = protocol === "gemini" ? [{ role: "model", parts: [{ text: "OLD_PRIVATE_TEXT" }] }, { role: "user", parts: [{ text: "New question" }] }]
+      : [{ role: "assistant", content: "OLD_PRIVATE_TEXT" }, { role: "user", content: "New question" }];
+    const body = protocol === "gemini" ? { contents: messages } : protocol === "responses" ? { store: false, input: messages } : { messages };
+    const ctx = { ...f.ctx, protocol, state: {} };
+    await prepareCapture(body, ctx, f.cfg, {});
+    assert.equal(ctx.state.capture, undefined);
+    assert.deepEqual(await queuedSnapshots(f), []);
+    assert.deepEqual(await readdir(captureDirectory(f.cfg, ctx)).catch(() => []), []);
+  });
+}
+
+test("historical title exchanges stay excluded from recovery, final snapshots and delivery", async (t) => {
+  const f = await fixture(t);
+  await prepareCapture({ messages: [f.messages[0]] }, f.ctx, f.cfg, {});
+  await finishCapture(finalChat(f.messages[1].content), { ...f.ctx, success: true }, f.cfg);
+  const titleCtx = { ...f.ctx, state: {} };
+  await prepareCapture({ messages: [...f.messages, { role: "user", content: titleUtilityPrompt }] }, titleCtx, f.cfg, {});
+  assert.equal(titleCtx.state.capture, undefined);
+  const next = { messages: [...f.messages, { role: "user", content: titleUtilityPrompt },
+    { role: "assistant", content: '{"title":"INTERNAL_TITLE_REPLY"}' }, { role: "user", content: "Next real question" }] };
+  const ctx = { ...f.ctx, state: {} };
+  await prepareCapture(next, ctx, f.cfg, {});
+  assert.doesNotMatch(JSON.stringify(await queuedSnapshots(f)), /Write the title|INTERNAL_TITLE_REPLY/);
+  await finishCapture(finalChat("Next real answer"), { ...ctx, success: true }, f.cfg);
+  assert.doesNotMatch(JSON.stringify(await queuedSnapshots(f)), /Write the title|INTERNAL_TITLE_REPLY/);
+  await f.drain();
+  assert.deepEqual(f.writes.map((batch) => batch.length), [2, 2]);
+  assert.doesNotMatch(JSON.stringify(f.writes), /Write the title|INTERNAL_TITLE_REPLY/);
+});
+
+for (const protocol of ["chat", "anthropic", "responses", "gemini"]) {
+  test(`${protocol} persists a known truncated turn across recovery and final snapshots`, async (t) => {
+    const f = await fixture(t); f.ctx.protocol = protocol;
+    const messages = protocol === "gemini" ? [{ role: "user", parts: [{ text: "First question" }] }]
+      : [{ role: "user", content: "First question" }];
+    const wire = (rows) => protocol === "gemini" ? { contents: rows } : protocol === "responses" ? { store: false, input: rows } : { messages: rows };
+    const failed = protocol === "gemini" ? { role: "model", parts: [{ text: "KNOWN_TRUNCATED_REPLY" }] }
+      : { role: "assistant", content: "KNOWN_TRUNCATED_REPLY" };
+    const partial = protocol === "chat" ? { choices: [{ finish_reason: "length", message: failed }] }
+      : protocol === "anthropic" ? { stop_reason: "max_tokens", content: [{ type: "text", text: failed.content }] }
+        : protocol === "responses" ? { status: "incomplete", output: [failed] }
+          : { candidates: [{ finishReason: "MAX_TOKENS", content: failed }] };
+    const ctx = { ...f.ctx, protocol, state: {} };
+    await prepareCapture(wire(messages), ctx, f.cfg, {});
+    await finishCapture(partial, { ...ctx, success: true }, f.cfg);
+    assert.deepEqual(await queuedSnapshots(f), []);
+    const question = protocol === "gemini" ? { role: "user", parts: [{ text: "A later question" }] } : { role: "user", content: "A later question" };
+    const nextCtx = { ...ctx, state: {} };
+    await prepareCapture(wire([...messages, failed, question]), nextCtx, f.cfg, {});
+    assert.deepEqual(await queuedSnapshots(f), []);
+    const final = protocol === "chat" ? finalChat("Later valid answer")
+      : protocol === "anthropic" ? { stop_reason: "end_turn", content: [{ type: "text", text: "Later valid answer" }] }
+        : protocol === "responses" ? { status: "completed", output: [{ role: "assistant", content: [{ type: "output_text", text: "Later valid answer" }] }] }
+          : { candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text: "Later valid answer" }] } }] };
+    await finishCapture(final, { ...nextCtx, success: true }, f.cfg);
+    const snapshots = await queuedSnapshots(f);
+    assert.equal(snapshots.length, 1);
+    assert.equal(snapshots[0].messages.length, 2);
+    assert.doesNotMatch(JSON.stringify(snapshots), /KNOWN_TRUNCATED_REPLY|First question/);
+  });
+}
+
+test("known failed callbacks stay rejected but a successful retry can explicitly resolve them", async (t) => {
+  const f = await fixture(t);
+  await prepareCapture({ messages: [f.messages[0]] }, f.ctx, f.cfg, {});
+  await finishCapture(finalChat("Unsuccessful result"), { ...f.ctx, success: false }, f.cfg);
+  const nextCtx = { ...f.ctx, state: {} };
+  await prepareCapture({ messages: [...f.messages, { role: "user", content: "Next question" }] }, nextCtx, f.cfg, {});
+  assert.deepEqual(await queuedSnapshots(f), []);
+  await finishCapture(finalChat("Successful retry"), { ...f.ctx, success: true }, f.cfg);
+  const snapshots = await queuedSnapshots(f);
+  assert.equal(snapshots.length, 1); assert.match(JSON.stringify(snapshots), /Successful retry/);
+});
+
+test("native ownership immediately removes pending raw text without a running worker", async (t) => {
+  const f = await fixture(t); await f.queue();
+  assert.equal((await queuedSnapshots(f)).length, 1);
+  await prepareCapture({ messages: [{ role: "system", content: "<openviking-context>\nNative memory\n</openviking-context>" }, f.messages[0]] }, f.ctx, f.cfg, {});
+  assert.equal(f.ctx.state.nativeOwner, true);
+  assert.deepEqual(await queuedSnapshots(f), []);
+  assert.equal(await f.queue(), false);
+  await f.drain(); assert.equal(f.writes.length, 0);
+});
+
+test("native cleanup coordinates with an already reading delivery worker", async (t) => {
+  const f = await fixture(t); await f.queue(); let surrendered = false;
+  await runCaptureWorker(f.cfg.dataDir, { attempts: 1, call: async (...args) => {
+    if (!surrendered) {
+      surrendered = true;
+      await nativeOwner({ ...f.cfg, nativeAgents: [f.ctx.agent] }, f.ctx, {});
+    }
+    return f.call(...args);
+  } });
+  assert.equal(surrendered, true);
+  assert.equal(f.writes.length, 0); assert.equal(f.commits.length, 0); assert.equal(f.creates.length, 0);
+  assert.deepEqual(await queuedSnapshots(f), []);
+});
+
+test("a queued snapshot is discarded when a later callback proves its exchange failed", async (t) => {
+  const f = await fixture(t);
+  await prepareCapture({ messages: [f.messages[0]] }, f.ctx, f.cfg, {});
+  await f.queue();
+  await finishCapture(finalChat("Unsuccessful callback"), { ...f.ctx, success: false }, f.cfg);
+  await f.drain();
+  assert.equal(f.writes.length, 0); assert.equal(f.commits.length, 0);
+  assert.deepEqual(await queuedSnapshots(f), []);
+});
+
+
+test("a genuinely lost completion callback can still recover a confirmed complete history", async (t) => {
+  const f = await fixture(t);
+  await prepareCapture({ messages: [f.messages[0]] }, f.ctx, f.cfg, {});
+  const ctx = { ...f.ctx, state: {} };
+  await prepareCapture({ messages: [...f.messages, { role: "user", content: "Next real question" }] }, ctx, f.cfg, {});
+  const snapshots = await queuedSnapshots(f);
+  assert.equal(snapshots.length, 1); assert.equal(snapshots[0].messages.length, 2);
+  await finishCapture(finalChat("Final answer"), { ...ctx, success: true }, f.cfg);
+  await f.drain(); assert.deepEqual(f.writes.map((batch) => batch.length), [2, 2]);
+});
+
+test("tool-call continuations are not persisted as failed user exchanges", async (t) => {
+  const f = await fixture(t);
+  await prepareCapture({ messages: [f.messages[0]] }, f.ctx, f.cfg, {});
+  const tool = { role: "assistant", content: null, tool_calls: [{ id: "tool", type: "function", function: { name: "lookup", arguments: "{}" } }] };
+  await finishCapture({ choices: [{ finish_reason: "tool_calls", message: tool }] }, { ...f.ctx, success: true }, f.cfg);
+  const ctx = { ...f.ctx, state: {} };
+  await prepareCapture({ messages: [f.messages[0], tool, { role: "tool", tool_call_id: "tool", content: "Found" }] }, ctx, f.cfg, {});
+  await finishCapture(finalChat("Complete answer"), { ...ctx, success: true }, f.cfg);
+  const snapshots = await queuedSnapshots(f);
+  assert.equal(snapshots.length, 1); assert.equal(snapshots[0].messages.length, 4);
+});
+
+test("a successful retry cannot authorize an older worker's invalidated snapshot", async (t) => {
+  const f = await fixture(t);
+  await prepareCapture({ messages: [f.messages[0]] }, f.ctx, f.cfg, {});
+  await f.queue(); let resolved = false;
+  await runCaptureWorker(f.cfg.dataDir, { attempts: 1, call: async (...args) => {
+    if (!resolved) {
+      resolved = true;
+      await finishCapture(finalChat("Bad result"), { ...f.ctx, success: false }, f.cfg);
+      await finishCapture(finalChat("Successful replacement"), { ...f.ctx, success: true }, f.cfg);
+    }
+    return f.call(...args);
+  } });
+  assert.equal(f.writes.length, 0);
+  // The stale worker must not unlink a replacement published at the same path.
+  assert.equal((await queuedSnapshots(f)).length, 1);
+  await f.drain();
+  assert.equal(f.writes.length, 1); assert.match(JSON.stringify(f.writes), /Successful replacement/);
+  assert.doesNotMatch(JSON.stringify(f.writes), /I understand your project preference/);
+});
+
+test("an invalidated append intent that was never sent does not block a successful retry", async (t) => {
+  const fs = await import("node:fs/promises");
+  const f = await fixture(t);
+  await prepareCapture({ messages: [f.messages[0]] }, f.ctx, f.cfg, {}); await f.queue();
+  const target = join(captureDirectory(f.cfg, f.ctx), "state", `${connectionScope(f.cfg, f.ctx)}.json`);
+  const original = fs.default.rename;
+  let interrupted = false;
+  const replacement = mock.method(fs.default, "rename", async (...args) => {
+    await original(...args);
+    if (args[1] === target && !interrupted && JSON.parse(await readFile(target, "utf8")).intent) {
+      interrupted = true;
+      await finishCapture(finalChat("Rejected before send"), { ...f.ctx, success: false }, f.cfg);
+      await finishCapture(finalChat("Successful retry after rejection"), { ...f.ctx, success: true }, f.cfg);
+    }
+  });
+  syncBuiltinESMExports();
+  try {
+    await f.drain();
+    assert.equal(interrupted, true); assert.equal(f.writes.length, 0);
+    assert.equal(JSON.parse(await readFile(target, "utf8")).intent, null);
+    await f.drain();
+    assert.equal(f.writes.length, 1);
+    assert.match(JSON.stringify(f.writes), /Successful retry after rejection/);
+  } finally { replacement.mock.restore(); syncBuiltinESMExports(); }
 });

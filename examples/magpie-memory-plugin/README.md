@@ -118,6 +118,8 @@ options. Enabling tools or capture requires the literal boolean `true`.
 - A private local ledger is partitioned by the actual OV connection identity,
   peer scope, config path, Magpie agent/session/workspace, protocol and model.
   Credential rotation or another agent/session cannot reuse the previous scope.
+  Anthropic cache annotations are excluded only from protocol content-block
+  identity; original wire fields and tool-input data remain unchanged.
   Prefix hashes distinguish branches; unknown trimmed/compacted histories skip
   enhancement rather than matching messages by text. A fresh history containing
   one new user message can start a new prefix under the same session.
@@ -157,6 +159,15 @@ not be enabled.** Automatic recall does not create OV sessions.
 
 ## Automatic capture and native-plugin ownership
 
+The first human turn cannot have capturable assistant/tool content before it.
+Known title/compression exchanges remain excluded from subsequent full-history
+recovery and final snapshots; recall anchors also skip these utility exchanges
+without changing the original messages sent to the model. Known failed or
+truncated turns are recorded as hashes, so later history cannot silently restore
+them. A successful completion callback for a retry can resolve the rejection;
+tool-call continuations and genuinely lost callbacks retain their recovery path.
+Revisions invalidate stale worker snapshots after a known rejection.
+
 Capture is **off by default**. Set `plugin.magpie.autoCapture: true` in
 `ovcli.conf`, or save `"autoCapture": true` in Magpie's plugin Options.
 Start a new chat after enabling it. The first request binds capture to that
@@ -192,6 +203,10 @@ native capture is active. An unquoted example formatted exactly like an actual
 injection cannot be reliably distinguished. For known native-managed agents,
 configure `nativeAgents` explicitly. Recognized envelopes yield both automatic
 recall and capture for that connection/session and discard queued snapshots.
+Pending raw snapshots are removed immediately on yielding, without waiting for
+a worker. Workers recheck ownership before appends/commits and do not delete a
+new retry snapshot when retiring an older one. Already in-flight HTTP operations
+and previously delivered records cannot be undone by local cleanup.
 Ownership persists if markers disappear from later history. Existing ownership
 records are retained; start a fresh chat after removing a native plugin or
 correcting an earlier false match. Explicit tools are unaffected.

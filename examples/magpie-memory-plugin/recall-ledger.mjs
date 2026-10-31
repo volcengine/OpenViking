@@ -13,11 +13,26 @@ export function canonicalRecallValue(value) {
   return value;
 }
 
+// Anthropic cache annotations describe transport caching, not conversation
+// identity. Normalize only protocol content blocks, never arbitrary tool input.
+function anthropicContent(value) {
+  if (typeof value === "string") return [{ type: "text", text: value }];
+  if (!Array.isArray(value)) return value;
+  return value.map((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) return block;
+    const { cache_control, ...semantic } = block;
+    if (semantic.type === "tool_result") semantic.content = anthropicContent(semantic.content);
+    return semantic;
+  });
+}
+
 /** Prefix anchors distinguish repeated text, branches and replaced histories. */
-export function recallAnchors(messages, prefix = {}) {
-  const hash = createHash("sha256").update(JSON.stringify(canonicalRecallValue(prefix)));
+export function recallAnchors(messages, prefix = {}, protocol) {
+  const identityPrefix = protocol === "anthropic" ? { ...prefix, system: anthropicContent(prefix.system) } : prefix;
+  const hash = createHash("sha256").update(JSON.stringify(canonicalRecallValue(identityPrefix)));
   return messages.map((message) => {
-    hash.update("\0").update(JSON.stringify(canonicalRecallValue(message)));
+    const identity = protocol === "anthropic" ? { ...message, content: anthropicContent(message.content) } : message;
+    hash.update("\0").update(JSON.stringify(canonicalRecallValue(identity)));
     return hash.copy().digest("hex");
   });
 }

@@ -7,6 +7,7 @@ import { loadConfig } from "./config.mjs";
 import { request } from "./http.mjs";
 import { connectionScope } from "./scope.mjs";
 import { recallDigest } from "./recall-ledger.mjs";
+import { withCaptureDecisions } from "./capture-history.mjs";
 import { withPrivateState } from "./private-state.mjs";
 
 const hash = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -48,8 +49,9 @@ async function receipts(cfg, uri, call, signal) {
   return ids;
 }
 
-async function commitCaptured(cfg, sessionId, update, call, signal, root) {
-  if (await exists(join(root, "native-owner"))) return "native";
+async function commitCaptured(cfg, sessionId, update, call, signal, stopped) {
+  const stop = await stopped();
+  if (stop) return stop;
   const state = await update((s) => structuredClone(s));
   if (!state.needsCommit && !state.commitIntent) return "delivered";
   const path = `/api/v1/sessions/${sessionId}`;
@@ -60,6 +62,12 @@ async function commitCaptured(cfg, sessionId, update, call, signal, root) {
   }
   if (state.commitIntent) return "uncertain";
   await update((s) => { s.commitIntent = { beforeCount: Number(meta.commit_count || 0) }; });
+  const stopBeforeCommit = await stopped();
+  if (stopBeforeCommit) {
+    // This intent is known not to have reached the server.
+    await update((s) => { s.commitIntent = null; });
+    return stopBeforeCommit;
+  }
   const result = await call(cfg, `${path}/commit`, { body: { keep_recent_count: 0 }, signal });
   await update((s) => {
     s.needsCommit = false; s.commitIntent = null;
@@ -75,15 +83,25 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
   const cfg = await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: snapshot.configPath }, snapshot.options);
   if (connectionScope(cfg, context) !== scope) return "paused";
   const root = join(directory, "capture", scope);
-  if (cfg.nativeAgents.includes(context.agent) || await exists(join(root, "native-owner"))) return "native";
+  const stopped = async () => {
+    if (cfg.nativeAgents.includes(context.agent) || await exists(join(root, "native-owner"))) return "native";
+    return withCaptureDecisions(directory, scope, (state) => {
+      if (!Array.isArray(snapshot.turnAnchors) && state.rejected.length) return "rejected";
+      const invalidated = snapshot.turnAnchors?.some((key) => state.rejected.includes(key)
+        || (snapshot.turnRevisions?.[key] || 0) !== (state.revisions[key] || 0));
+      return invalidated ? "rejected" : "";
+    });
+  };
+  const stop = await stopped();
+  if (stop) return stop;
   if (!cfg.enabled || !cfg.autoCapture) return "paused";
   const stateDir = join(root, "state");
   const update = (fn) => withPrivateState(stateDir, scope, signal, fn, stateOptions);
   let state = await update((s) => structuredClone(s));
   const sessionId = `magpie-${scope}`;
-  if (state.completedTurns?.includes(snapshot.turnKey)) return commitCaptured(cfg, sessionId, update, call, signal, root);
+  if (state.completedTurns?.includes(snapshot.turnKey)) return commitCaptured(cfg, sessionId, update, call, signal, stopped);
   if (state.commitIntent) {
-    const status = await commitCaptured(cfg, sessionId, update, call, signal, root);
+    const status = await commitCaptured(cfg, sessionId, update, call, signal, stopped);
     if (status !== "delivered") return status;
     state = await update((s) => structuredClone(s));
   }
@@ -92,6 +110,8 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
   try { meta = await call(cfg, `/api/v1/sessions/${sessionId}`, { signal }); }
   catch (error) {
     if (error.status !== 404) throw error;
+    const stop = await stopped();
+    if (stop) return stop;
     try {
       await call(cfg, "/api/v1/sessions", { signal, body: { session_id: sessionId,
         auto_commit_policy: null,
@@ -124,19 +144,25 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
     await update((s) => { s.hashes = incoming.slice(0, count); s.needsCommit ||= meta.message_count > 0; });
     state.hashes = incoming.slice(0, count);
   }
-  if (incoming.length <= state.hashes.length && incoming.every((id, i) => id === state.hashes[i])) return commitCaptured(cfg, sessionId, update, call, signal, root);
+  if (incoming.length <= state.hashes.length && incoming.every((id, i) => id === state.hashes[i])) return commitCaptured(cfg, sessionId, update, call, signal, stopped);
   if (!state.hashes.every((id, i) => id === incoming[i])) {
     await update((s) => { s.blocked = "history_changed"; });
     return "paused";
   }
   for (let offset = state.hashes.length; offset < incoming.length; offset += 100) {
-    if (await exists(join(root, "native-owner"))) return "native";
+    const stop = await stopped();
+    if (stop) return stop;
     const messages = snapshot.messages.slice(offset, offset + 100);
     const through = incoming.slice(0, offset + messages.length);
     const completedTurns = through.length === incoming.length
       ? snapshot.messages.filter((m) => m.message_kind === "user_query").map((m) => m.source_message_ids[0].slice(7)) : [];
     // Persist the write intent before issuing a non-idempotent request.
     await update((s) => { s.intent = { ids: messages.map((m) => m.source_message_ids[0]), hashes: through, completedTurns }; });
+    const stopBeforeAppend = await stopped();
+    if (stopBeforeAppend) {
+      await update((s) => { s.intent = null; });
+      return stopBeforeAppend;
+    }
     await call(cfg, `/api/v1/sessions/${sessionId}/messages/batch`, { body: { messages }, signal });
     await update((s) => {
       s.hashes = through;
@@ -145,7 +171,7 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
       s.intent = null;
     });
   }
-  return commitCaptured(cfg, sessionId, update, call, signal, root);
+  return commitCaptured(cfg, sessionId, update, call, signal, stopped);
 }
 
 export async function drainCapture(directory, { call = request, signal = AbortSignal.timeout(25000) } = {}) {
@@ -159,10 +185,11 @@ export async function drainCapture(directory, { call = request, signal = AbortSi
     const snapshots = [];
     for (const file of files) {
       const path = join(location, file);
-      if ((await stat(path)).size > 3 * 1024 * 1024) continue;
       try {
-        const value = JSON.parse(await readFile(path, "utf8"));
-        if (value.version === 1 && Array.isArray(value.messages)) snapshots.push({ path, value });
+        if ((await stat(path)).size > 3 * 1024 * 1024) continue;
+        const encoded = await readFile(path, "utf8");
+        const value = JSON.parse(encoded);
+        if (value.version === 1 && Array.isArray(value.messages)) snapshots.push({ path, value, encoded });
       } catch { /* Keep corrupt evidence for diagnosis. */ }
     }
     snapshots.sort((a, b) => a.value.messages.length - b.value.messages.length);
@@ -171,8 +198,19 @@ export async function drainCapture(directory, { call = request, signal = AbortSi
       try {
         if (snapshot.value.scope !== scope) throw new Error("capture_scope_invalid");
         const status = await deliverSnapshot(directory, snapshot.value, { call, signal });
-        if (["delivered", "native"].includes(status)) await rm(snapshot.path, { force: true });
-        else pending = true;
+        if (["delivered", "native", "rejected"].includes(status)) {
+          // Publication and rejection cleanup use the same lock. Never unlink
+          // a successful retry that replaced the file this worker originally read.
+          const replaced = await withCaptureDecisions(directory, scope, async () => {
+            let current;
+            try { current = await readFile(snapshot.path, "utf8"); }
+            catch (error) { if (error.code === "ENOENT") return false; throw error; }
+            if (current !== snapshot.encoded) return true;
+            await rm(snapshot.path, { force: true });
+            return false;
+          });
+          pending ||= replaced;
+        } else pending = true;
       } catch { pending = true; }
     }
   }

@@ -610,3 +610,49 @@ test("unreadable/corrupt state fails open before fetching or exposing new memory
   assert.equal(await recallRequest(body(), context(), f.env), undefined);
   assert.equal(f.calls.length, 1);
 });
+
+test("Pi Anthropic cache marker movement preserves recall anchors and original wire fields", async (t) => {
+  const f = await fixture(t);
+  const first = { model: "fixture", system: [{ type: "text", text: "Stable system", cache_control: { type: "ephemeral" } }], messages: [
+    { role: "user", content: [{ type: "text", text: "Which language?", cache_control: { type: "ephemeral" } }] },
+  ] };
+  const firstCopy = structuredClone(first);
+  const one = await recallRequest(first, context({ protocol: "anthropic", query: "Which language?" }), f.env);
+  const next = { ...first, system: "Stable system", messages: [
+    { role: "user", content: "Which language?" }, { role: "assistant", content: "Understood" },
+    { role: "user", content: [{ type: "text", text: "Which framework?", cache_control: { type: "ephemeral", ttl: "1h" } }] },
+  ] };
+  const nextCopy = structuredClone(next);
+  const ctx = context({ protocol: "anthropic", query: "Which framework?" });
+  const two = await recallRequest(next, ctx, f.env);
+  assert.equal(ctx.reports[0][0], "ready");
+  assert.match(two.messages[0].content, /Use TypeScript/);
+  assert.equal(one.messages[0].content.at(-1).text, two.messages[0].content.split("\n\n").at(-1));
+  assert.deepEqual(two.system, next.system);
+  assert.deepEqual(two.messages[2].content[0], next.messages[2].content[0]);
+  assert.deepEqual(first, firstCopy); assert.deepEqual(next, nextCopy);
+  assert.equal(f.calls.length, 2);
+});
+
+test("Anthropic normalization preserves semantic cache_control keys inside tool inputs", async () => {
+  const { recallAnchors } = await import("../recall-ledger.mjs");
+  const block = { type: "tool_use", id: "c", name: "configure", input: { cache_control: "business-value" } };
+  const a = [{ role: "assistant", content: [{ ...block, cache_control: { type: "ephemeral" } }] }];
+  const b = [{ role: "assistant", content: [block] }];
+  assert.deepEqual(recallAnchors(a, {}, "anthropic"), recallAnchors(b, {}, "anthropic"));
+  const changed = structuredClone(b); changed[0].content[0].input.cache_control = "changed-business-value";
+  assert.notDeepEqual(recallAnchors(a, {}, "anthropic"), recallAnchors(changed, {}, "anthropic"));
+});
+
+test("a title exchange in resubmitted history cannot break recall or receive replayed memory", async (t) => {
+  const f = await fixture(t);
+  const first = body(); const one = await recallRequest(first, context(), f.env);
+  const title = "<session>Review code\n<openviking-context>\nUtility-quoted context\n</openviking-context>\n</session>\n\nWrite the title in the predominant language of the session — a stray word or code token in another language doesn't change it, and neither does the English of these instructions.";
+  const next = { ...first, messages: [...first.messages, { role: "assistant", content: "Understood" },
+    { role: "user", content: title }, { role: "assistant", content: '{"title":"Review"}' }, { role: "user", content: "Which framework?" }] };
+  const two = await recallRequest(next, context({ query: "Which framework?" }), f.env);
+  assert.equal(two.messages[0].content, one.messages[0].content);
+  assert.equal(two.messages[2].content, title);
+  assert.match(two.messages[4].content, /Use TypeScript/);
+  assert.equal(f.calls.length, 2);
+});

@@ -80,3 +80,16 @@ export function completedReply(reply, protocol) {
   }
   return null;
 }
+
+/** Tool continuations are not failures. Persist only known unsuccessful ends. */
+export function rejectedReply(reply, ctx) {
+  if (ctx.success === false) return true;
+  if (ctx.protocol === "chat") return ["length", "content_filter"].includes(reply?.choices?.[0]?.finish_reason);
+  if (ctx.protocol === "anthropic") return ["max_tokens", "refusal", "model_context_window_exceeded"].includes(reply?.stop_reason);
+  if (ctx.protocol === "responses") return ["failed", "incomplete", "cancelled"].includes(reply?.status);
+  if (ctx.protocol === "gemini") {
+    const reason = reply?.candidates?.[0]?.finishReason;
+    return Boolean(reason && !["STOP", "FINISH_REASON_UNSPECIFIED"].includes(reason));
+  }
+  return false;
+}

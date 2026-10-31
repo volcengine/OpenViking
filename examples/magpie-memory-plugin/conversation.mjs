@@ -2,8 +2,8 @@ import { recallAnchors } from "./recall-ledger.mjs";
 import { buildRecallCompressionPrompt } from "./shared/recall-compress-core.mjs";
 
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
-const ordinaryUser = (message, protocol) => {
-  if (message.role !== "user") return false;
+export const ordinaryUser = (message, protocol) => {
+  if (!object(message) || message.role !== "user") return false;
   const content = protocol === "gemini" ? message.parts : message.content;
   if (typeof content === "string") return Boolean(content.trim());
   if (!Array.isArray(content)) return false;
@@ -47,6 +47,26 @@ export function isAuxiliaryRequest(body, ctx) {
   });
 }
 
+/** Known utility exchanges must stay excluded when clients resend history. */
+export function conversationExchanges(messages, protocol) {
+  const users = messages.flatMap((message, index) => ordinaryUser(message, protocol) ? [index] : []);
+  return users.map((start, i) => {
+    const end = users[i + 1] ?? messages.length;
+    const prefix = messages.slice(0, end);
+    const body = protocol === "gemini" ? { contents: prefix }
+      : protocol === "responses" ? { input: prefix } : { messages: prefix };
+    return { start, end, auxiliary: isAuxiliaryRequest(body, { protocol }) };
+  });
+}
+
+export function conversationAnchors(messages, prefix, protocol, exchanges = conversationExchanges(messages, protocol)) {
+  const excluded = new Set(exchanges.filter((exchange) => exchange.auxiliary)
+    .flatMap(({ start, end }) => Array.from({ length: end - start }, (_, i) => start + i)));
+  const indices = messages.flatMap((_, index) => excluded.has(index) ? [] : [index]);
+  const semantic = recallAnchors(indices.map((index) => messages[index]), prefix, protocol);
+  return Object.fromEntries(indices.map((index, i) => [index, semantic[i]]));
+}
+
 // Ignore Markdown quotations before checking complete envelopes. These are
 // payload heuristics, never evidence of an installed or functioning plugin.
 function unquotedLines(text) {
@@ -64,8 +84,11 @@ function unquotedLines(text) {
 
 export function hasNativeContext(body, protocol) {
   const messages = protocol === "gemini" ? body?.contents : protocol === "responses" ? body?.input : body?.messages;
+  const auxiliaryUsers = new Set(Array.isArray(messages)
+    ? conversationExchanges(messages, protocol).filter((exchange) => exchange.auxiliary).map((exchange) => exchange.start) : []);
   const injected = [body?.system, body?.instructions, body?.systemInstruction,
-    ...(Array.isArray(messages) ? messages.filter((m) => object(m) && (ordinaryUser(m, protocol) || ["system", "developer"].includes(m.role)))
+    ...(Array.isArray(messages) ? messages.filter((m, index) => object(m) && !auxiliaryUsers.has(index)
+      && (ordinaryUser(m, protocol) || ["system", "developer"].includes(m.role)))
       .map((m) => protocol === "gemini" ? m.parts : m.content) : [messages])];
   return injected.flatMap(textParts).some((text) => {
     const visible = unquotedLines(text);
@@ -100,12 +123,13 @@ export function describeConversation(body, protocol) {
   // Tool results and assistant quotations may contain docs describing these
   // markers. They are data, not evidence of an installed memory plugin.
   if (hasNativeContext(body, protocol)) return null;
-  const users = messages.flatMap((m, index) => ordinaryUser(m, protocol) ? [index] : []);
+  const exchanges = conversationExchanges(messages, protocol);
+  const users = exchanges.filter((exchange) => !exchange.auxiliary).map((exchange) => exchange.start);
   if (!users.length) return null;
   const latest = users.at(-1);
   const fresh = messages.slice(latest + 1).every((m) => ["system", "developer"].includes(m.role));
   const prefix = { system: body.system, instructions: body.instructions, systemInstruction: body.systemInstruction };
-  return { field, messages, users, latest, fresh, anchors: recallAnchors(messages, prefix) };
+  return { field, messages, users, latest, fresh, anchors: conversationAnchors(messages, prefix, protocol, exchanges) };
 }
 
 export function replayContext(body, protocol, conversation, decisions) {

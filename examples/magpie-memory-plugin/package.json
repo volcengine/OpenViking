@@ -29,6 +29,7 @@
     "scope.mjs",
     "capture.mjs",
     "capture-messages.mjs",
+    "capture-history.mjs",
     "capture-worker.mjs",
     "shared/",
     "marketplace.json",
@@ -37,7 +38,7 @@
   ],
   "scripts": {
     "prepack": "node ../memory-plugin-shared/sync.mjs",
-    "check": "node --check index.mjs && node --check hooks.mjs && node --check runtime.mjs && node --check config.mjs && node --check http.mjs && node --check conversation.mjs && node --check recall-ledger.mjs && node --check private-state.mjs && node --check scope.mjs && node --check capture.mjs && node --check capture-messages.mjs && node --check capture-worker.mjs",
+    "check": "node --check index.mjs && node --check hooks.mjs && node --check runtime.mjs && node --check config.mjs && node --check http.mjs && node --check conversation.mjs && node --check recall-ledger.mjs && node --check private-state.mjs && node --check scope.mjs && node --check capture.mjs && node --check capture-messages.mjs && node --check capture-history.mjs && node --check capture-worker.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "engines": {
