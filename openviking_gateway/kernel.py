@@ -24,6 +24,7 @@ from .compaction import (
     opening_block,
     replacement_text,
     summary_instruction,
+    user_quote_section,
     window_size,
 )
 from .models import Policy
@@ -850,7 +851,8 @@ class MemoryKernel:
             await CapturePipeline(self.store.capture).confirm_cut(request, anchor)
         hint = cut_hint(request, credential["user_id"], policy)
         opening = opening_block(request.records, request.chain)
-        text = replacement_text(summary, hint, opening, in_progress)
+        user_quotes = user_quote_section(request.messages[: cut + 1], request.context_window)
+        text = replacement_text(summary, hint, opening, in_progress, user_quotes)
         # A concurrent request may have written this cut first; its text wins.
         record = await self.store.replay.put(
             request.scope,
