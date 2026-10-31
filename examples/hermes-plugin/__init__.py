@@ -131,7 +131,7 @@ _RECALL_SUMMARY_KEYS = ("abstract", "overview", "text", "content")
 
 
 def _cfg_field(key: str, description: str, **extra) -> dict:
-    return {"key": key, "description": description, **extra, "env_var": f"OPENVIKING_{key.upper()}"}
+    return {"key": key, "description": description, "env_var": f"OPENVIKING_{key.upper()}", **extra}
 
 
 _NUM = {"type": "number", "minimum": 0.25, "maximum": 60.0, "step": 0.25}
@@ -146,6 +146,13 @@ _CONFIG_SCHEMA = [
     _cfg_field("agent", "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.", default=_DEFAULT_AGENT),
     _cfg_field("recall_scope", "Automatic recall: all peers (shared) or current sender (peer). Unset preserves existing behavior.",
                type="string", choices=["shared", "peer"], default=None),
+    _cfg_field(
+        "recall_events_time_decay_protection",
+        "Protect event memories from time decay for this duration; unset preserves existing ranking.",
+        type="string",
+        env_var="OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION",
+        default=None,
+    ),
     _cfg_field(
         "recall_compress",
         "Cloud recall compression: off, server or auto (no local compressor)",
@@ -2129,9 +2136,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
     @classmethod
     def _post_prefetch_search(cls, client: _VikingClient, query: str, session_id: str, *, limit: int,
                               context_type: str | List[str], deadline: float, request_timeout: float,
-                              target_uri: Optional[List[str]] = None) -> dict:
+                              target_uri: Optional[List[str]] = None,
+                              events_time_decay_protection: Optional[str] = None) -> dict:
         """Session-aware search first, falling back to search/find (budget errors propagate)."""
         base_payload = {"query": query, "limit": limit, "score_threshold": 0, "context_type": context_type}
+        if events_time_decay_protection is not None:
+            base_payload["events_time_decay_protection"] = events_time_decay_protection
         if target_uri:
             base_payload["target_uri"] = target_uri
         if session_id:
@@ -2201,6 +2211,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     "max_tokens": max(64, min(32000, cfg["max_injected_chars"] // 4)),
                     "context_type": ["memory", "resource"] if cfg["resources"] else "memory",
                 }
+                if cfg["events_time_decay_protection"] is not None:
+                    payload["events_time_decay_protection"] = cfg["events_time_decay_protection"]
                 if session_id:
                     payload["session_id"] = session_id
                 if scope in ("shared", "peer"):
@@ -2243,6 +2255,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     deadline=deadline,
                     request_timeout=cfg["request_timeout_seconds"],
                     target_uri=target_uri,
+                    events_time_decay_protection=cfg["events_time_decay_protection"],
                 )
             )
             if not isinstance(result, dict):
@@ -2268,15 +2281,21 @@ class OpenVikingMemoryProvider(MemoryProvider):
     # -- typed settings ------------------------------------------------------
 
     @staticmethod
-    def _parse_setting_value(value: Any, kind: str) -> Optional[bool | int | float | str]:
-        """Parse per schema ``kind`` (boolean / integer / number); None when invalid."""
+    def _parse_setting_value(
+        value: Any, kind: str, key: Optional[str] = None
+    ) -> Optional[bool | int | float | str]:
+        """Parse per-schema string, boolean, integer, or number; None when invalid."""
         if kind == "string":
-            normalized = str(value).strip().lower()
-            if normalized in {"1", "true", "yes"}:
-                return "auto"
-            if normalized in {"0", "false", "no"}:
-                return "off"
-            return normalized if normalized in {"off", "server", "auto"} else None
+            if not isinstance(value, str):
+                return None
+            normalized = value.strip().lower()
+            if key == "recall_compress":
+                if normalized in {"1", "true", "yes"}:
+                    return "auto"
+                if normalized in {"0", "false", "no"}:
+                    return "off"
+                return normalized if normalized in {"off", "server", "auto"} else None
+            return normalized or None
         if kind == "boolean":
             if isinstance(value, bool):
                 return value
@@ -2305,7 +2324,11 @@ class OpenVikingMemoryProvider(MemoryProvider):
             value, source = provider_config.get(key, default), f"memory.openviking.{key}"
         if value is None and default is None:
             return None  # No policy override on installations that predate the presets.
-        parsed = str(value).strip().lower() if "choices" in spec else cls._parse_setting_value(value, spec["type"])
+        parsed = (
+            str(value).strip().lower()
+            if "choices" in spec
+            else cls._parse_setting_value(value, spec["type"], key)
+        )
         if "choices" in spec and parsed not in spec["choices"]:
             parsed = None
         if parsed is None:
