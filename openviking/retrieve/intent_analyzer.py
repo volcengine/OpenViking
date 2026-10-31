@@ -47,6 +47,8 @@ class IntentAnalyzer:
 
     # Limit content length (about 10000 tokens)
     MAX_COMPRESSION_SUMMARY_CHARS = 30000
+    # Bound each historical message before adding it to the planner prompt.
+    MAX_RECENT_MESSAGE_CHARS = 2000
 
     def __init__(self, max_recent_messages: int = 5, *, query_planner: VLMHandle):
         """Initialize intent analyzer."""
@@ -153,7 +155,13 @@ class IntentAnalyzer:
         # Format recent messages
         recent = messages[-self.max_recent_messages :] if messages else []
         recent_messages = (
-            "\n".join(f"[{m.role}]: {m.content}" for m in recent if m.content) if recent else "None"
+            "\n".join(
+                f"[{m.role}]: {self._truncate_text(m.content, self.MAX_RECENT_MESSAGE_CHARS)}"
+                for m in recent
+                if m.content
+            )
+            if recent
+            else "None"
         )
 
         # Current message
