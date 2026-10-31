@@ -2092,7 +2092,7 @@ class VikingVectorIndexBackend:
             scope_filter,
             RawDSL({"op": "must_not", "field": "search_tags", "conds": ["memory_type=events"]}),
         )
-        # The adapter owns backend parameters and the engine owns amplification.
+        # Each adapter owns backend-specific fusion and candidate amplification.
         advance = {
             "time_decay": {
                 "protection": events_time_decay_protection,

@@ -425,7 +425,11 @@ def test_volcengine_query_preserves_time_filters_and_applies_decay(monkeypatch):
             return {
                 "result": {
                     "data": [
-                        {"id": "event", "score": 0.4, "origin_score": 0.8, "addition_score": 0.5}
+                        {
+                            "id": "event",
+                            "score": 0.8,
+                            "fields": {"updated_at": "2026-08-10T00:00:00Z"},
+                        }
                     ]
                 }
             }
@@ -457,7 +461,7 @@ def test_volcengine_query_preserves_time_filters_and_applies_decay(monkeypatch):
     result = adapter.query(
         query_vector=[1.0],
         limit=10,
-        offset=2,
+        offset=0,
         advance={"time_decay": {"protection": "0", "origin": "2026-08-17T00:00:00Z"}},
         filter={
             "op": "and",
@@ -479,31 +483,19 @@ def test_volcengine_query_preserves_time_filters_and_applies_decay(monkeypatch):
     )
 
     assert captured["path"] == "/api/vikingdb/data/search/vector"
-    assert result == [{"id": "event", "_score": 0.4, "_origin_score": 0.8, "_time_score": 0.5}]
+    assert result == [
+        {
+            "id": "event",
+            "updated_at": "2026-08-10T00:00:00Z",
+            "_score": 0.4,
+            "_origin_score": 0.8,
+            "_time_score": 0.5,
+        }
+    ]
     body = captured["req_body"]
-    assert (body["limit"], body["offset"]) == (10, 2)
-    assert body["return_detail_info"] is True
-    assert body["advance"] == {
-        "post_process_ops": [
-            {
-                "op": "score_fusion",
-                "fusion_by": "multiply",
-                "normalize_for_origin_score": {"enable": False},
-                "normalize_for_addition_score": {"enable": False},
-                "addition_score": [
-                    {
-                        "factor": 1,
-                        "base_value_from": "decay_func",
-                        "field": "updated_at",
-                        "func": "exp",
-                        "origin": "2026-08-17T00:00:00.000Z",
-                        "scale": "7d",
-                        "decay": 0.5,
-                    }
-                ],
-            }
-        ]
-    }
+    assert (body["limit"], body["offset"]) == (30, 0)
+    assert "return_detail_info" not in body
+    assert "advance" not in body
     assert captured["req_body"]["filter"] == {
         "op": "and",
         "conds": [

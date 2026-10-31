@@ -41,6 +41,8 @@ logger = get_logger(__name__)
 # multi-byte sequences are never split in the middle.
 VIKINGDB_STRING_FIELD_BYTE_LIMIT: int = 64 * 1024
 VIKINGDB_TEXT_FIELD_BYTE_LIMIT: int = 1024 * 1024
+# Match the bounded semantic window used by native event decay and remote search.
+_MAX_TIME_DECAY_CANDIDATES = 100_000
 
 
 def _truncate_text_field(text: str, byte_limit: int = VIKINGDB_TEXT_FIELD_BYTE_LIMIT) -> str:
@@ -487,17 +489,16 @@ class CollectionAdapter(ABC):
         advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
         decay_request = (advance or {}).get("time_decay")
+        remote_decay = None
+        search_limit, search_offset, search_fields = limit, offset, output_fields
         if decay_request is not None and self.mode != "opengauss":
-            from openviking.utils.time_decay import (
-                build_time_decay_fusion_spec,
-                build_time_decay_post_process_ops,
-            )
+            from openviking.utils.time_decay import build_time_decay_fusion_spec
             from openviking.utils.time_utils import parse_iso_datetime
 
             protection = decay_request["protection"]
             origin = parse_iso_datetime(decay_request["origin"])
+            spec = build_time_decay_fusion_spec(protection=protection, origin=origin)
             if self.mode in {"local", "cuvs", "http"}:
-                spec = build_time_decay_fusion_spec(protection=protection, origin=origin)
                 advance = {
                     "time_decay": {
                         "field": spec.field,
@@ -508,11 +509,21 @@ class CollectionAdapter(ABC):
                     }
                 }
             elif self.mode in {"vikingdb", "volcengine"}:
-                advance = {
-                    "post_process_ops": build_time_decay_post_process_ops(
-                        protection=protection, origin=origin
-                    )
-                }
+                # Remote date-decay operators may subtract float32 timestamps,
+                # losing minute-scale distances. Fuse raw candidates here using
+                # double precision, before pagination, within the same 3x budget.
+                advance = None
+                if query_vector or sparse_query_vector:
+                    if limit < 1 or offset < 0 or limit + offset > _MAX_TIME_DECAY_CANDIDATES:
+                        raise ValueError(
+                            "Remote time decay requires limit >= 1, offset >= 0, "
+                            "and limit + offset <= 100000"
+                        )
+                    remote_decay = spec
+                    search_limit = min(3 * (limit + offset), _MAX_TIME_DECAY_CANDIDATES)
+                    search_offset = 0
+                    if output_fields and spec.field not in output_fields:
+                        search_fields = [*output_fields, spec.field]
             else:
                 raise NotImplementedError(f"Time decay is not supported by {self.mode}")
         coll = self.get_collection()
@@ -523,12 +534,12 @@ class CollectionAdapter(ABC):
                 index_name=self._index_name,
                 dense_vector=query_vector,
                 sparse_vector=sparse_query_vector,
-                limit=limit,
-                offset=offset,
+                limit=search_limit,
+                offset=search_offset,
                 filters=vectordb_filter,
-                output_fields=output_fields,
+                output_fields=search_fields,
                 advance=advance,
-                return_detail_info=decay_request is not None,
+                return_detail_info=decay_request is not None and remote_decay is None,
             )
         elif order_by:
             result = coll.search_by_scalar(
@@ -570,12 +581,24 @@ class CollectionAdapter(ABC):
             record = dict(item.fields) if item.fields else {}
             record["id"] = item.id
             record["_score"] = _normalize_result_score(item.score)
-            if item.origin_score is not None:
-                record["_origin_score"] = _normalize_result_score(item.origin_score)
-            if item.addition_score is not None:
-                record["_time_score"] = _normalize_result_score(item.addition_score)
+            if remote_decay is not None:
+                record["_origin_score"] = record["_score"]
+                factor = remote_decay.time_score(record.get(remote_decay.field))
+                if factor is not None:
+                    record["_time_score"] = factor
+                    record["_score"] *= factor
+                if output_fields and remote_decay.field not in output_fields:
+                    record.pop(remote_decay.field, None)
+            else:
+                if item.origin_score is not None:
+                    record["_origin_score"] = _normalize_result_score(item.origin_score)
+                if item.addition_score is not None:
+                    record["_time_score"] = _normalize_result_score(item.addition_score)
             record = self._normalize_record_for_read(record)
             records.append(record)
+        if remote_decay is not None:
+            records.sort(key=lambda record: record["_score"], reverse=True)
+            return records[offset : offset + limit]
         return records
 
     def search_by_random(
