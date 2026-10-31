@@ -76,6 +76,11 @@ const pathPart = (value: string): string => encodeURIComponent(value);
 /** Normalize a short OpenViking URI to the canonical `viking://` form. */
 export const normalizeURI = (uri: string): string =>
   uri.startsWith("viking://") ? uri : `viking://${uri.replace(/^\/+/, "")}`;
+/** Keep 32-character hex vector record IDs accepted by `stat` and `read`. */
+const normalizeFileReference = (uriOrId: string): string => {
+  const cleaned = uriOrId.trim();
+  return /^[0-9a-f]{32}$/.test(cleaned) ? cleaned : normalizeURI(uriOrId);
+};
 
 /** HTTP client for an existing OpenViking server. */
 export class OpenVikingClient {
@@ -562,10 +567,10 @@ export class OpenVikingClient {
       hasMore: envelope.has_more ?? false,
     };
   }
-  /** Return URI metadata. */
+  /** Return metadata for a URI or vector record ID. */
   stat(uri: string): Promise<JsonObject> {
     return this.request("GET", "/api/v1/fs/stat", {
-      query: { uri: normalizeURI(uri) },
+      query: { uri: normalizeFileReference(uri) },
     });
   }
   /** Return URI logical attributes. */
@@ -633,10 +638,10 @@ export class OpenVikingClient {
       body: { from_uri: normalizeURI(fromUri), to_uri: normalizeURI(toUri) },
     });
   }
-  /** Read text content. */
+  /** Read text content by URI or vector record ID. */
   read(uri: string, offset = 0, limit = -1): Promise<string> {
     return this.request("GET", "/api/v1/content/read", {
-      query: { uri: normalizeURI(uri), offset, limit },
+      query: { uri: normalizeFileReference(uri), offset, limit },
     });
   }
   /** Download raw stored bytes. */
