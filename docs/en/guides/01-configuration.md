@@ -2186,6 +2186,37 @@ The manager polls the Cluster and cached Accounts every 30 seconds. Accounts unu
 
 The budgets guide output selection and preview allocation; preview metadata and the minimum preview size can prevent a strict cap. With `preserve_raw`, failed writes can also leave the turn above its budget.
 
+### Host envelope normalization {#host-envelope}
+
+Many agent hosts wrap the user's turn in their own scaffolding: a bridge's routing notes, `<system-reminder>`, quoted history. `server.host_envelope` strips those blocks before a turn is written to a session or used as a search query, keeping the user's own words. Off by default.
+
+```json
+{
+  "server": {
+    "host_envelope": {
+      "envelopes": ["botmux", "claude-code"],
+      "custom": [
+        {
+          "name": "botmux",
+          "detect_any": ["botmux_routing", "botmux_reminder"],
+          "strip": ["botmux_routing"],
+          "extract": "user_message"
+        }
+      ]
+    }
+  }
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `envelopes` | `[]` | Envelope names tried in order; the first that matches wins. Built-ins are `claude-code` and `workbuddy`; other names refer to `custom`. Empty means off. |
+| `custom` | `[]` | User-defined envelopes. One applies only when a `detect_any` tag opens. With `extract`, only that tag's body is kept, and `strip` blocks are skipped on the way to it; without `extract`, `strip` blocks are removed only at the start and end of the text, with each tag on a line of its own. |
+| `messages` | `true` | Apply to text parts of user messages. The normalized text goes to `text` and the host's original to `original_text`; memory extraction and embedding read `text`. |
+| `search` | `true` | Apply to `find`, `search` and `recall` queries. A query that is empty after stripping returns an empty result without searching. |
+
+Tags quoted mid-sentence, in inline code or in a fenced block are never removed, and a turn that does not match or has an unclosed tag is kept as it is. An unknown name fails server startup.
+
 ### Usage Reporter
 
 The optional Usage Reporter extracts memory usage events from committed session tool parts. The built-in file log sink writes each event as one flat JSON object to a dedicated hourly rotating file:

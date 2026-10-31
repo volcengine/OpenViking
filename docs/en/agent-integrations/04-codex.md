@@ -39,6 +39,8 @@ You can also open `/hooks`, review the OpenViking commands, and trust and enable
 
 MCP tools can work while hooks are disabled. Automatic recall requires `UserPromptSubmit`; capture requires `Stop`, with lifecycle commits handled by the other hooks listed below. If setup was skipped, return to `/hooks` to enable the relevant entries.
 
+> **Running behind a bridge, or does your host tag user messages?** For example, Claude Code or Codex inside a chat bridge such as botmux. Turn on [host envelope normalization](../guides/01-configuration.md#host-envelope) in the server's `ov.conf`; otherwise the bridge's notes are stored as the user's words and used as search queries.
+
 <details>
 <summary><b>Manual setup</b></summary>
 

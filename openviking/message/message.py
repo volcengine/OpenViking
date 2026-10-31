@@ -98,7 +98,10 @@ class Message:
 
     def _part_to_dict(self, part: Part) -> dict:
         if isinstance(part, TextPart):
-            return {"type": part.type, "text": part.text}
+            d = {"type": part.type, "text": part.text}
+            if part.original_text is not None:
+                d["original_text"] = part.original_text
+            return d
         elif isinstance(part, ContextPart):
             return {
                 "type": part.type,
