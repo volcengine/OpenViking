@@ -145,6 +145,8 @@ export const KNOBS = [
   // Default true: a memory plugin that only sees the user's half of the
   // conversation extracts noticeably worse.
   { name: "captureAssistantTurns", type: "bool", default: true, env: "OPENVIKING_CAPTURE_ASSISTANT_TURNS", capability: "capture" },
+  // Consumed by Codex's send boundary; other harnesses keep their own capture policy.
+  { name: "captureToolTraffic", type: "bool", default: true, env: "OPENVIKING_CAPTURE_TOOL_TRAFFIC", capability: "capture" },
   { name: "captureLastAssistantOnStop", type: "bool", default: true, env: "OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP", capability: "capture" },
   // dsh is the only reader. Its Experience usage records need the completed
   // tool results, so it captures them by default.
