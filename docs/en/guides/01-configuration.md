@@ -1261,6 +1261,23 @@ Session intent analysis in ordinary `search()` and query expansion in `mode="con
 
 Query expansion requires a `session_id` with content and intent analysis enabled; rewriting requires `rewrite`. Each model call has its own timeout. On failure, retrieval falls back to the original query or the unrevised result.
 
+`relation_expansion` follows explicit `related` links in file frontmatter during reranked `search()`; see [Relation Expansion](../concepts/07-retrieval.md#relation-expansion-opt-in). It is off by default and has no effect without a usable `rerank` configuration.
+
+```json
+{
+  "retrieval": {
+    "relation_expansion": {"enabled": true, "max_seeds": 3, "max_edges": 16, "max_added": 3}
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `relation_expansion.enabled` | bool | Evaluate resources linked from top-ranked hits as extra candidates | `false` |
+| `relation_expansion.max_seeds` | int (1-20) | Top-ranked file hits above the score threshold whose links are read | `3` |
+| `relation_expansion.max_edges` | int (1-200) | Link entries examined per query across all seeds | `16` |
+| `relation_expansion.max_added` | int (1-50) | Linked resources that may be added per query | `3` |
+
 ### grep
 
 Grep engine configuration for content pattern search. These settings are server-side only and cannot be overridden per-request.

@@ -205,6 +205,7 @@ class _SemanticMixin:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            **self._relation_expansion_options(real_ctx),
         )
 
         typed_query = TypedQuery(
@@ -254,6 +255,19 @@ class _SemanticMixin:
         )
         telemetry.set("vector.returned", find_result.total)
         return find_result
+
+    def _relation_expansion_options(self, ctx: RequestContext) -> Dict[str, Any]:
+        """Retriever options for opt-in link expansion, read with the caller's identity."""
+        config = (self.retrieval_config or RetrievalConfig()).relation_expansion
+        if not config.enabled:
+            return {}
+        from openviking.retrieve.relation_links import FRONTMATTER_READ_BYTES
+
+        async def read_head(uri: str) -> str:
+            data = await self.read(uri, size=FRONTMATTER_READ_BYTES, ctx=ctx)
+            return data.decode("utf-8", errors="replace")
+
+        return {"relation_expansion": config, "read_relation_source": read_head}
 
     async def _find_by_filter(
         self,
@@ -454,6 +468,7 @@ class _SemanticMixin:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            **self._relation_expansion_options(real_ctx),
         )
 
         async def _execute(tq: TypedQuery):

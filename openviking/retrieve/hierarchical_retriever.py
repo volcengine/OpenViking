@@ -6,7 +6,7 @@ Global vector retrieval with optional reranking of the recalled candidates.
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import default_target_directories
@@ -17,11 +17,12 @@ from openviking.models.embedder.base import (
     embedder_supports_multimodal,
 )
 from openviking.models.rerank import RerankClient
+from openviking.retrieve.relation_links import parse_related_links
 from openviking.retrieve.rerank_scoring import RerankScores, finite_score, rerank_scores
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
-from openviking.storage.expr import FilterExpr
+from openviking.storage.expr import And, FilterExpr, Or, PathScope, RawDSL
 from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.tags import normalize_search_tags
@@ -34,6 +35,7 @@ from openviking_cli.retrieve.types import (
     TypedQuery,
 )
 from openviking_cli.utils.config import RerankConfig
+from openviking_cli.utils.config.retrieval_config import RelationExpansionConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -72,6 +74,8 @@ class HierarchicalRetriever:
         storage: VikingDBManager,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
+        relation_expansion: Optional[RelationExpansionConfig] = None,
+        read_relation_source: Optional[Callable[[str], Awaitable[str]]] = None,
     ):
         """Initialize retriever with rerank_config.
 
@@ -79,7 +83,17 @@ class HierarchicalRetriever:
             storage: VikingVectorIndexBackend instance
             embedder: Embedder instance (supports dense/sparse/hybrid)
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
+            relation_expansion: Opt-in single-hop link expansion limits (disabled when None)
+            read_relation_source: Reads the head of an authorized seed file for its links
         """
+        self.relation_expansion = (
+            relation_expansion
+            if relation_expansion is not None
+            and relation_expansion.enabled
+            and read_relation_source is not None
+            else None
+        )
+        self._read_relation_source = read_relation_source
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
@@ -199,28 +213,33 @@ class HierarchicalRetriever:
         ):
             context_type = ContextType.RESOURCE.value
 
-        search_limit = limit * self.RERANK_CANDIDATE_MULTIPLIER if use_rerank else limit
-        with telemetry.measure("search.vector_retrieval"):
+        async def search(extra_filter: Any, search_limit: int) -> List[Dict[str, Any]]:
+            # The single eligibility checkpoint: tenant/ACL, requested scope,
+            # context type, caller filter and level are all applied by the
+            # vector store's scope filter for every candidate, linked or not.
             if search_type == "keywords":
-                vector_results = await vector_proxy.search_by_keywords_in_tenant(
+                return await vector_proxy.search_by_keywords_in_tenant(
                     query=query.query,
                     context_type=context_type,
                     target_directories=target_dirs,
-                    extra_filter=scope_dsl,
+                    extra_filter=extra_filter,
                     level=level,
                     limit=search_limit,
                 )
-            else:
-                vector_results = await vector_proxy.search_in_tenant(
-                    query_vector=query_vector,
-                    sparse_query_vector=sparse_query_vector,
-                    context_type=context_type,
-                    target_directories=target_dirs,
-                    extra_filter=scope_dsl,
-                    level=level,
-                    limit=search_limit,
-                    **decay_kwargs,
-                )
+            return await vector_proxy.search_in_tenant(
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                context_type=context_type,
+                target_directories=target_dirs,
+                extra_filter=extra_filter,
+                level=level,
+                limit=search_limit,
+                **decay_kwargs,
+            )
+
+        search_limit = limit * self.RERANK_CANDIDATE_MULTIPLIER if use_rerank else limit
+        with telemetry.measure("search.vector_retrieval"):
+            vector_results = await search(scope_dsl, search_limit)
         telemetry.count("vector.searches", 1)
         telemetry.count("vector.scored", len(vector_results))
         telemetry.count("vector.scanned", len(vector_results))
@@ -260,6 +279,20 @@ class HierarchicalRetriever:
             )
         ]
         telemetry.count("vector.passed", len(candidates))
+        # Linked candidates are judged by the reranker. In recall-only (QUICK) mode
+        # they would compete on the recall score that already ranked them out, so
+        # expansion could never change the result and is skipped.
+        if self.relation_expansion and use_rerank:
+            with telemetry.measure("search.relation_expansion"):
+                candidates += await self._expand_relations(
+                    query=query.query,
+                    seeds=candidates,
+                    known_uris=set(collected_by_uri),
+                    search=search,
+                    scope_dsl=scope_dsl,
+                    score_threshold=score_threshold,
+                    score_gte=score_gte,
+                )
         matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
         final = matched[:limit]
 
@@ -277,6 +310,99 @@ class HierarchicalRetriever:
             matched_contexts=final,
             searched_directories=root_uris,
         )
+
+    async def _expand_relations(
+        self,
+        *,
+        query: str,
+        seeds: List[Dict[str, Any]],
+        known_uris: set,
+        search: Callable[[Any, int], Awaitable[List[Dict[str, Any]]]],
+        scope_dsl: Optional[FilterExpr | Dict[str, Any]],
+        score_threshold: Optional[float],
+        score_gte: bool,
+    ) -> List[Dict[str, Any]]:
+        """Evaluate resources linked from the best hits as extra candidates.
+
+        Seeds are the top-ranked file hits that already passed the final score
+        threshold. Linked URIs are only hints: they are fetched back through the
+        same scoped vector search as ordinary retrieval, restricted to those exact
+        URIs, so a resource the caller could not have found never appears, and
+        nothing about it is reported. Survivors are scored and thresholded like
+        any other candidate (model rerank, then threshold) before they compete
+        for the final results.
+        """
+        config = self.relation_expansion
+        telemetry = get_current_telemetry()
+        related_from: Dict[str, str] = {}
+        edges = 0
+        file_seeds = sorted(
+            (seed for seed in seeds if seed.get("level", 2) == ContextLevel.DETAIL),
+            key=lambda seed: seed["_final_score"],
+            reverse=True,
+        )
+        for seed in file_seeds[: config.max_seeds]:
+            if edges >= config.max_edges:
+                break
+            seed_uri = seed["uri"]
+            try:
+                text = await self._read_relation_source(seed_uri)
+            except Exception as exc:
+                logger.debug("Relation source unreadable (%s)", type(exc).__name__)
+                continue
+            for target in parse_related_links(text)[: config.max_edges - edges]:
+                edges += 1
+                if target not in known_uris and target not in related_from:
+                    related_from[target] = seed_uri
+        telemetry.count("relation.seeds", min(len(file_seeds), config.max_seeds))
+        telemetry.count("relation.edges", edges)
+        if not related_from:
+            return []
+
+        best: Dict[str, Dict[str, Any]] = {}
+        linked_filter = self.linked_filter(scope_dsl, list(related_from))
+        for result in await search(linked_filter, len(related_from)):
+            uri = result.get("uri", "")
+            if uri not in related_from:
+                continue
+            score = self._finite_score(result.get("_score", 0.0))
+            if uri not in best or score > best[uri]["_score"]:
+                best[uri] = {**result, "_score": score, "_related_from": related_from[uri]}
+
+        linked = sorted(best.values(), key=lambda c: c["_score"], reverse=True)
+        rerank = await self._rerank_scores(
+            query, [str(c.get("abstract", "")) for c in linked], [c["_score"] for c in linked]
+        )
+        # Same threshold rule as ordinary candidates: the rerank threshold applies to
+        # model scores, an explicit score_threshold to any score.
+        added = sorted(
+            (
+                {**c, "_final_score": score}
+                for c, score, from_model in zip(linked, rerank.scores, rerank.reranked, strict=True)
+                if self._passes_threshold(
+                    score, self._resolve_threshold(score_threshold, from_model), score_gte
+                )
+            ),
+            key=lambda c: c["_final_score"],
+            reverse=True,
+        )[: config.max_added]
+        telemetry.count("relation.added", len(added))
+        return added
+
+    @staticmethod
+    def linked_filter(
+        scope_dsl: Optional[FilterExpr | Dict[str, Any]], uris: List[str]
+    ) -> FilterExpr:
+        """Caller filter narrowed to exact linked URIs.
+
+        It is passed as ``extra_filter`` to the same scoped search as ordinary
+        recall, so tenant/ACL, target scope, context type and level still apply.
+        """
+        exact: FilterExpr = Or([PathScope("uri", uri, depth=0) for uri in uris])
+        if not scope_dsl:
+            return exact
+        caller_filter = RawDSL(scope_dsl) if isinstance(scope_dsl, dict) else scope_dsl
+        return And([caller_filter, exact])
 
     def _resolve_threshold(self, threshold: Optional[float], reranked: bool = False) -> float:
         """An explicit threshold applies to any score; the rerank one only to model scores."""
@@ -346,6 +472,7 @@ class HierarchicalRetriever:
                     search_tags=normalize_search_tags(c.get("search_tags"), discard_invalid=True),
                     origin_score=c.get("_origin_score"),
                     time_score=c.get("_time_score"),
+                    related_from=c.get("_related_from"),
                 )
             )
 
