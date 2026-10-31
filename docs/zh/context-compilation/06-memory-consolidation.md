@@ -74,12 +74,13 @@ ov compile --to viking://user/<user_id>/memories --skill memory \
 | `adds` / `total_adds` | 新建的记忆文件（如拆分产生的新实体） |
 | `updates` / `total_updates` | 被修改的记忆文件（合并后的目标、原地精简的文件） |
 | `deletes` / `total_deletes` | 被删除/被合并掉的记忆文件 |
+| `skipped_operations` / `total_skipped` | 记忆更新器报告的跳过操作及数量，包含原因码；这些不是文件变更 |
 | `trace_id` | 本次整理的 trace，用于排查 |
 | `memory_types` | 本次选中的类型列表；`memory_type` 在类型目录请求中为该类型，在根目录请求中为 `null` |
 
 清单中只包含文件 URI，不含正文——一次整理可能触及很多文件，正文不随结果返回。
 
-若 `errors` 非空且没有任何文件变更成功，任务标记为 `failed`，并保留结果和 trace。部分成功仍为 `completed`，成功变更和失败详情分别保留在清单与 `errors` 中；调用方必须检查 `errors`，不能只看任务状态。无改动且无错误时正常标记为 `completed`。
+若 `errors` 非空且没有任何文件变更成功，任务标记为 `failed`，并保留结果和 trace。部分成功仍为 `completed`，成功变更和失败详情分别保留在清单与 `errors` 中。跳过操作不改变任务状态；调用方应同时检查 `errors` 和 `skipped_operations`，不能只看任务状态。
 
 一个典型的合并例子（把"阿珍"合并进"陈静娴"）：
 
@@ -93,6 +94,8 @@ ov compile --to viking://user/<user_id>/memories --skill memory \
   "total_adds": 0,
   "total_updates": 1,
   "total_deletes": 1,
+  "skipped_operations": [],
+  "total_skipped": 0,
   "errors": []
 }
 ```

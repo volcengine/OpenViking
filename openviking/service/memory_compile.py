@@ -319,6 +319,8 @@ class MemoryCompileRunner:
             "total_adds": 0,
             "total_updates": 0,
             "total_deletes": 0,
+            "skipped_operations": [],
+            "total_skipped": 0,
             "errors": [],
         }
         if not memory_types:
@@ -389,6 +391,10 @@ class MemoryCompileRunner:
             if uri not in updates:
                 updates.append(uri)
         deletes = list(apply_result.deleted_uris)
+        skipped = [
+            operation.model_dump(mode="json", exclude_none=True)
+            for operation in apply_result.skipped_operations
+        ]
         return {
             **result,
             "adds": adds,
@@ -397,6 +403,8 @@ class MemoryCompileRunner:
             "total_adds": len(adds),
             "total_updates": len(updates),
             "total_deletes": len(deletes),
+            "skipped_operations": skipped,
+            "total_skipped": len(skipped),
             "errors": [str(err) for _uri, err in apply_result.errors],
         }
 

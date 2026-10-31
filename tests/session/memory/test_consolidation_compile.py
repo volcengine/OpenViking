@@ -26,9 +26,12 @@ from openviking.session.memory.consolidation_context_provider import (
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
+    MemoryOperationSkipCode,
+    MemoryOperationSource,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
+    SkippedMemoryOperation,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry, get_default_registry
 from openviking.session.memory.memory_updater import (
@@ -729,7 +732,7 @@ async def test_provider_binds_isolation_before_prefetch(peer_id):
         "partial-edit",
         "partial-delete",
         "success",
-        "no-op",
+        "skipped-only",
         "no-operations",
     ],
 )
@@ -763,6 +766,16 @@ async def test_compile_task_apply_outcomes(
     apply_result = MemoryUpdateResult()
     if change:
         getattr(apply_result, f"add_{change}")(uri)
+    if has_operations:
+        apply_result.add_skipped(
+            SkippedMemoryOperation(
+                memory_type="entities",
+                page_id=8,
+                reason_code=MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
+                reason="page_id 8 belongs to profile, not entities",
+                source=MemoryOperationSource(session_id="internal-session"),
+            )
+        )
     if has_error:
         apply_result.add_error(f"{directory}/person/bob.md", RuntimeError("write failed"))
     apply = AsyncMock(return_value=apply_result)
@@ -799,6 +812,19 @@ async def test_compile_task_apply_outcomes(
         "total_adds": int(change == "written"),
         "total_updates": int(change == "edited"),
         "total_deletes": int(change == "deleted"),
+        "skipped_operations": (
+            [
+                {
+                    "memory_type": "entities",
+                    "page_id": 8,
+                    "reason_code": "page_id_type_mismatch",
+                    "reason": "page_id 8 belongs to profile, not entities",
+                }
+            ]
+            if has_operations
+            else []
+        ),
+        "total_skipped": int(has_operations),
         "errors": ["write failed"] if has_error else [],
     }
     if expected_status == TaskStatus.FAILED:
