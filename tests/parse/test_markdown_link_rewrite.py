@@ -227,6 +227,7 @@ class FakeVikingFS:
         self.dirs = []
         self.files = {}
         self._temp_counter = 0
+        self.indexed_md_uris = None
 
     async def mkdir(self, uri, exist_ok=False, **kw):
         if uri not in self.dirs:
@@ -256,6 +257,8 @@ class FakeVikingFS:
         return data.decode("utf-8") if isinstance(data, bytes) else data
 
     async def glob(self, pattern, uri="", **kw):
+        if self.indexed_md_uris is not None and not kw.get("force_fs"):
+            return {"matches": self.indexed_md_uris}
         # Mirror VikingFS.glob enough for _ingest_local_images, which only ever asks
         # for recursive Markdown files under a root: list files matching the suffix.
         suffix = pattern.rsplit("*", 1)[-1]
@@ -724,7 +727,8 @@ class TestRewriteImageUris:
         assert _decode(fake.files[f"{root}/index/index.md"]) == (f"![p]({root}/index/logo.png)")
         assert f"{root}/index/.image_mappings.json" not in fake.files
 
-    async def test_split_doc_mapping_keys_resolved(self):
+    @pytest.mark.parametrize("index_state", ["complete", "empty", "partial"])
+    async def test_split_doc_mapping_keys_resolved(self, index_state):
         # Keys produced for a split document are paths relative to the doc root
         # holding the mapping (possibly several levels deep).
         from openviking.parse.image_rewrite import rewrite_image_uris
@@ -733,19 +737,26 @@ class TestRewriteImageUris:
         fake = FakeVikingFS()
         fake.files = {
             f"{root}/big/标题/章一/部分_1.md": "![p](./assets/d.jpg)".encode(),
+            f"{root}/big/标题/章一/部分_2.md": "![p](./assets/d.jpg)".encode(),
             f"{root}/big/标题/章一/d.jpg": b"img",
             f"{root}/big/.image_mappings.json": (
-                '{"标题/章一/部分_1.md": {"./assets/d.jpg": "d.jpg"}}'.encode()
+                '{"标题/章一/部分_1.md": {"./assets/d.jpg": "d.jpg"},'
+                '"标题/章一/部分_2.md": {"./assets/d.jpg": "d.jpg"}}'.encode()
             ),
         }
+        if index_state != "complete":
+            fake.indexed_md_uris = (
+                [] if index_state == "empty" else [f"{root}/big/标题/章一/部分_1.md"]
+            )
 
         with self._patched(fake):
             stats = await rewrite_image_uris(root, lease_ref=None)
 
-        assert stats == {"files_processed": 1, "references_rewritten": 1}
-        assert _decode(fake.files[f"{root}/big/标题/章一/部分_1.md"]) == (
-            f"![p]({root}/big/标题/章一/d.jpg)"
-        )
+        assert stats == {"files_processed": 2, "references_rewritten": 2}
+        for section in ("部分_1.md", "部分_2.md"):
+            assert _decode(fake.files[f"{root}/big/标题/章一/{section}"]) == (
+                f"![p]({root}/big/标题/章一/d.jpg)"
+            )
         assert f"{root}/big/.image_mappings.json" not in fake.files
 
     async def test_root_mapping_still_works(self):
@@ -835,7 +846,8 @@ class TestRewriteImageUris:
         assert fake.files[f"{dest}/report/report.md"] == b"body"
         assert f"{dest}/report/.image_mappings.json" in fake.files
 
-    async def test_sync_path_carries_nested_mappings_to_target(self):
+    @pytest.mark.parametrize("index_state", ["complete", "empty", "partial"])
+    async def test_sync_path_carries_nested_mappings_to_target(self, index_state):
         # Re-ingest of an existing resource goes through SemanticProcessor's
         # temp->target sync, which MOVES the visible files into the target and
         # skips hidden ones: afterwards the temp tree holds ONLY the
@@ -856,6 +868,14 @@ class TestRewriteImageUris:
             f"{target}/index/index.md": "![p](./assets/logo.png)".encode(),
             f"{target}/index/logo.png": b"img",
         }
+        # A newly synced document may not have reached the index yet.
+        fake.files[f"{root}/guide/.image_mappings.json"] = (
+            b'{"guide.md": {"./assets/logo.png": "logo.png"}}'
+        )
+        fake.files[f"{target}/guide/guide.md"] = b"![p](./assets/logo.png)"
+        fake.files[f"{target}/guide/logo.png"] = b"img"
+        if index_state != "complete":
+            fake.indexed_md_uris = [] if index_state == "empty" else [f"{target}/index/index.md"]
 
         processor = SemanticProcessor.__new__(SemanticProcessor)
         with (
@@ -869,6 +889,11 @@ class TestRewriteImageUris:
             await processor._rewrite_target_image_uris(root, target)
 
         assert _decode(fake.files[f"{target}/index/index.md"]) == (f"![p]({target}/index/logo.png)")
+        assert _decode(fake.files[f"{target}/guide/guide.md"]) == (f"![p]({target}/guide/logo.png)")
+        assert not any(
+            uri.startswith(target + "/") and uri.endswith(".image_mappings.json")
+            for uri in fake.files
+        )
 
     @pytest.mark.parametrize("split_content", [True, False])
     async def test_directory_ingest_images_become_viking_uris(

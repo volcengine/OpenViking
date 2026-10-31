@@ -1244,7 +1244,10 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if root_prefix != target_prefix:
             try:
-                glob_result = await viking_fs.glob("**/*.md", uri=target_prefix, ctx=ctx)
+                # Discover sidecars from the synced files, including unindexed sections.
+                glob_result = await viking_fs.glob(
+                    "**/*.md", uri=target_prefix, ctx=ctx, force_fs=True
+                )
                 target_md_uris = glob_result.get("matches", [])
             except Exception:
                 target_md_uris = []
