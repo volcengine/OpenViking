@@ -6,7 +6,8 @@ import { eventMessage } from './protocol.mjs';
 import { createHash } from 'node:crypto';
 import { isMeetingEvent, normalizeMeetingEvent } from '../meeting/events.mjs';
 
-export function normalizeLarkEvent(input, instance = 'lark') {
+export function normalizeLarkEvent(input, instance = 'lark', { docComment = null } = {}) {
+  if (isDocCommentEvent(input)) return normalizeDocCommentEvent(input, instance, docComment);
   if (isMeetingEvent(input)) {
     const { raw, ...meeting } = normalizeMeetingEvent(input);
     const kind = {
@@ -223,4 +224,110 @@ export function normalizeLarkMessage(input, instance = 'lark') {
     reply_route: { action: 'message.reply', input: { message_id: messageId } },
     data: { supported: AGENT_VISIBLE_MESSAGE_TYPES.has(messageType) },
   }));
+}
+
+// Drive comment notices: `drive.notice.comment_add_v1` fires whenever Lark
+// would notify the app as a person: a new comment on a doc it owns, a reply in
+// a thread it has commented in, or a comment/reply that @-mentions it. The
+// notice carries ids only; the Connector reads the comment itself. Every notice
+// becomes an input with a `reason`, and the agent decides whether to answer
+// (as with unmentioned group messages); only the bot's own comments are dropped.
+export const DOC_COMMENT_EVENT = 'drive.notice.comment_add_v1';
+const DOC_FILE_TYPES = new Set(['doc', 'docx', 'sheet', 'bitable', 'slides', 'file']);
+const DOC_TOKEN = /^[A-Za-z0-9_-]{8,64}$/;
+const COMMENT_ID = /^[0-9A-Za-z_-]{4,64}$/;
+const DOC_COMMENT_MESSAGE = /^doccomment:([a-z]+):([A-Za-z0-9_-]{8,64}):([0-9A-Za-z_-]{4,64})$/;
+
+export function isDocCommentEvent(input) {
+  return (input?.header?.event_type ?? input?.type ?? input?.event_type) === DOC_COMMENT_EVENT;
+}
+
+// Why Lark notified the bot: mention | owned_doc (a new comment on a doc it
+// owns) | thread_participant (a reply in a thread it is in) | notice (an
+// unknown notice_type; is_mentioned still says whether it was @-mentioned).
+export function docCommentReason({ notice_type: type, mentioned }) {
+  if (mentioned) return 'mention';
+  if (type === 'add_comment') return 'owned_doc';
+  if (type === 'add_reply') return 'thread_participant';
+  return 'notice';
+}
+
+// The ids a notice names; throws when it is malformed.
+export function docCommentNotice(input) {
+  const event = input?.event ?? input ?? {};
+  const meta = event.notice_meta ?? {};
+  const notice = {
+    file_type: String(meta.file_type ?? ''), file_token: String(meta.file_token ?? ''),
+    comment_id: String(event.comment_id ?? ''), reply_id: valueOrNull(event.reply_id),
+    notice_type: valueOrNull(meta.notice_type), from: valueOrNull(meta.from_user_id?.open_id),
+    to: valueOrNull(meta.to_user_id?.open_id), mentioned: event.is_mentioned === true,
+  };
+  notice.reason = docCommentReason(notice);
+  if (!DOC_FILE_TYPES.has(notice.file_type) || !DOC_TOKEN.test(notice.file_token)
+    || !COMMENT_ID.test(notice.comment_id)) throw new Error('invalid doc comment notice');
+  if (notice.reply_id !== null && !COMMENT_ID.test(notice.reply_id)) throw new Error('invalid doc comment reply id');
+  return notice;
+}
+
+// A notice for a comment the bot wrote itself (its own reply in a thread).
+export function isOwnDocComment(notice) {
+  return Boolean(notice.from && notice.to && notice.from === notice.to);
+}
+
+// The msg= a doc comment carries: reply_message on it adds a reply to that
+// comment thread. It encodes the whole route, so the Connector needs no state.
+export function docCommentMessageId({ file_type: type, file_token: token, comment_id: commentId }) {
+  return `doccomment:${type}:${token}:${commentId}`;
+}
+
+export function parseDocCommentMessageId(value) {
+  const match = DOC_COMMENT_MESSAGE.exec(String(value ?? ''));
+  if (!match || !DOC_FILE_TYPES.has(match[1])) return null;
+  return { file_type: match[1], file_token: match[2], comment_id: match[3] };
+}
+
+// Plain text of comment reply elements (text_run / docs_link / person).
+export function commentElementsText(elements) {
+  if (!Array.isArray(elements)) return '';
+  return elements.map((element) => {
+    if (element?.type === 'text_run') return element.text_run?.text ?? '';
+    if (element?.type === 'docs_link') return element.docs_link?.url ?? '';
+    if (element?.type === 'person') return `@${element.person?.user_id ?? 'user'}`;
+    return '';
+  }).join('').trim();
+}
+
+// `comment` is the fetched comment ({ quote, replies: [{ reply_id, content:
+// { elements } }] }) or null when the read failed; the input still wakes the
+// agent with the ids so it can read the thread itself.
+export function normalizeDocCommentEvent(input, instance = 'lark', comment = null) {
+  const notice = docCommentNotice(input);
+  if (isOwnDocComment(notice)) return null;
+  const header = input.header ?? {};
+  const replies = Array.isArray(comment?.reply_list?.replies) ? comment.reply_list.replies
+    : Array.isArray(comment?.replies) ? comment.replies : [];
+  const reply = replies.find((item) => notice.reply_id && item?.reply_id === notice.reply_id) ?? replies.at(-1) ?? null;
+  const text = commentElementsText(reply?.content?.elements) || '[doc comment; read it with lark-cli drive +batch-query-comments]';
+  const quote = typeof comment?.quote === 'string' ? oneLineLabel(comment.quote, 500) : '';
+  const id = valueOrNull(header.event_id) ?? `doccomment:${notice.file_token}:${notice.comment_id}:${notice.reply_id ?? '-'}`;
+  const createTimeMs = Number.parseInt(String(header.create_time ?? Date.now()), 10);
+  return eventMessage('lark', {
+    instance, id, kind: 'doc.comment',
+    occurred_at: Number.isFinite(createTimeMs) ? createTimeMs : Date.now(),
+    // One subject per document: every comment on a doc shares its scope, so a
+    // burst on one doc is fenced and ordered together.
+    subject: { type: 'document', id: `${notice.file_type}:${notice.file_token}` },
+    actor: notice.from ? { type: 'user', id: notice.from } : null,
+    content: {
+      title: `[doc ${notice.file_type}:${notice.file_token} reason=${notice.reason} mentioned=${notice.mentioned ? 1 : 0} comment=${notice.comment_id}${notice.reply_id ? ` reply=${notice.reply_id}` : ''}${comment?.is_whole ? ' whole=1' : ''}${comment?.is_solved ? ' solved=1' : ''}]${quote ? ` quote: ${quote}` : ''}`,
+      text: oneLineLabel(text, 4_000),
+    },
+    message: { id: docCommentMessageId(notice), type: 'doc_comment' },
+    reply_route: { action: 'message.reply', input: { message_id: docCommentMessageId(notice) } },
+    data: { doc_comment: { ...notice, quote: quote || null } },
+  });
+}
+
+function oneLineLabel(value, max) {
+  return String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }

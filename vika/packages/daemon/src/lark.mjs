@@ -12,10 +12,12 @@ import { prepareLarkMediaDirectory } from './lark-media.mjs';
 import { MAX_CARD_IMAGE_BYTES, cardImageFormat, checkCardImageTemplate, replaceCardImages, validImageKey } from './card-images.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 import { LarkImageCache } from './lark-image-cache.mjs';
+import { DOC_COMMENT_EVENT, parseDocCommentMessageId } from './connectors/lark-events.mjs';
 
 export const SUBSCRIBED_EVENT_TYPES = Object.freeze([
   'im.message.receive_v1',
   'card.action.trigger',
+  DOC_COMMENT_EVENT,
   ...MEETING_EVENT_TYPES,
 ]);
 
@@ -257,8 +259,12 @@ export class LarkClient {
 
   // IM operations behind the Core action routes. The Core has already checked
   // authority, freshness, idempotency and content; these only speak lark-cli.
-  async im(args, label, { cwd = this.config.projectDir, timeoutMs = this.config.sendTimeoutMs } = {}) {
-    const result = await this.registry.run(this.config.larkCliBin, ['--profile', this.profile, 'im', ...args], {
+  async im(args, label, options = {}) {
+    return this.cli('im', args, label, options);
+  }
+
+  async cli(domain, args, label, { cwd = this.config.projectDir, timeoutMs = this.config.sendTimeoutMs } = {}) {
+    const result = await this.registry.run(this.config.larkCliBin, ['--profile', this.profile, domain, ...args], {
       cwd, timeoutMs,
     });
     if (result.timedOut) throw new Error(`lark-cli ${label} timed out after ${timeoutMs}ms`);
@@ -343,7 +349,36 @@ export class LarkClient {
     return this.deliver(['+messages-send', '--as', 'bot', ...target], content, idempotencyKey);
   }
 
+  // The comment a doc comment notice names, as Drive returns it (quote,
+  // is_whole, is_solved, reply_list.replies[].content.elements).
+  async getDocComment({ file_type: type, file_token: token, comment_id: commentId }) {
+    const data = await this.cli('drive', [
+      '+batch-query-comments', '--as', 'bot', '--token', token, '--type', type,
+      '--comment-ids', commentId, '--format', 'json',
+    ], 'read doc comment', { timeoutMs: 15_000 });
+    const items = Array.isArray(data?.items) ? data.items : [];
+    return items.find((item) => item?.comment_id === commentId) ?? items[0] ?? null;
+  }
+
+  // A reply in a doc comment thread. Drive takes plain text, @-users and
+  // links, and has no idempotency key.
+  async replyDocComment(target, content) {
+    if (content.type !== 'markdown') throw new Error('a doc comment reply takes markdown text only');
+    const elements = [
+      ...(content.mentions ?? []).map(({ id }) => ({ type: 'mention_user', text: id })),
+      { type: 'text', text: `${(content.mentions ?? []).length ? ' ' : ''}${content.text.trim()}` },
+    ];
+    const data = await this.cli('drive', [
+      '+add-reply', '--as', 'bot', '--token', target.file_token, '--type', target.file_type,
+      '--comment-id', target.comment_id, '--content', JSON.stringify(elements), '--format', 'json',
+    ], 'reply to doc comment');
+    const replyId = findField(data, 'reply_id');
+    return { message_id: replyId ? `${target.comment_id}:${replyId}` : target.comment_id, doc_comment: true };
+  }
+
   async replyMessage({ message_id: messageId, content, reply_in_thread: inThread = false, idempotency_key: idempotencyKey }) {
+    const docComment = parseDocCommentMessageId(messageId);
+    if (docComment) return this.replyDocComment(docComment, content);
     const delivered = await this.deliver([
       '+messages-reply', '--as', 'bot', '--message-id', messageId, ...(inThread ? ['--reply-in-thread'] : []),
     ], content, idempotencyKey);

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { parseDocCommentMessageId } from '../connectors/lark-events.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { conversationKeyFor, eventIdentity } from '../event.mjs';
 import { registerCard } from '../card-messages.mjs';
@@ -418,11 +419,21 @@ export class ActionService {
   // live, so routing rules (a source that may also reach a group, say) can be
   // added here later. Today a non-chat event may only reach the owner: a
   // notice, or a draft the owner approves.
-  authorize(fence, { toOwner = false } = {}) {
+  authorize(fence, { toOwner = false, replyTo = null } = {}) {
     if (!fence.conv_key && !toOwner) {
       if (this.isTimerReminder(fence)) return;
+      if (this.isDocCommentReply(fence, replyTo)) return;
       throw blocked('owner_only', `Delivery blocked: a non-chat event can only notify the owner; use notify_owner. ${NO_ACTION}`);
     }
+  }
+
+  // A doc comment notice (mention, owned doc, or thread reply) may be answered in a comment thread of
+  // that same document (its own, or another one fenced in the same doc scope).
+  isDocCommentReply(fence, replyTo) {
+    if (fence.kind !== 'doc.comment' || fence.subject_type !== 'document' || !replyTo) return false;
+    const target = parseDocCommentMessageId(replyTo.messageId);
+    return Boolean(target && replyTo.connector === fence.connector_instance
+      && `${target.file_type}:${target.file_token}` === fence.subject_id);
   }
 
   isTimerReminder(fence) {
@@ -684,7 +695,7 @@ export class ActionService {
     const chatId = target ? target.chat_id : fence.chat_id;
     const interim = this.interim(input, caller, fence, connector, target?.conv_key ?? null);
     if (this.manifest(connector).actions['message.reply'].approval) return this.proposeReply(input, caller, connector, fence);
-    this.authorize(fence);
+    this.authorize(fence, { replyTo: { connector, messageId: input.message_id } });
     const responseTo = this.attribution(caller, input.response_to_id, fence, { connector, messageId: input.message_id });
     const content = await this.content(input, connector, 'message.reply', { chatId, fence, caller });
     try {

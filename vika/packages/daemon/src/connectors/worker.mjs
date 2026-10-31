@@ -12,7 +12,7 @@ import { SlackClient } from '../slack/client.mjs';
 import { EmailClient } from '../email/client.mjs';
 import { MeetingNoteSync } from '../meeting/note-sync.mjs';
 import { getConnectorManifest } from './catalog.mjs';
-import { normalizeLarkEvent } from './lark-events.mjs';
+import { docCommentNotice, isDocCommentEvent, isOwnDocComment, normalizeLarkEvent } from './lark-events.mjs';
 import { invokeOperation } from './operations.mjs';
 import {
   parseProtocolLine,
@@ -84,6 +84,25 @@ let started = false;
 let stopping = false;
 let inputBuffer = '';
 
+// A doc comment notice carries ids only: read the comment, then emit. A failed
+// read still emits, so the agent can read the thread itself.
+async function emitDocComment(raw) {
+  try {
+    const notice = docCommentNotice(raw);
+    if (isOwnDocComment(notice)) return;
+    let comment = null;
+    try {
+      comment = await client.getDocComment(notice);
+    } catch (error) {
+      logger.warn('doc_comment_read_failed', { error: safeError(error) });
+    }
+    const event = normalizeLarkEvent(raw, 'lark', { docComment: comment });
+    if (event) write(event);
+  } catch (error) {
+    logger.warn('connector_event_rejected', { error: safeError(error) });
+  }
+}
+
 async function handleRequest(message) {
   try {
     let result;
@@ -99,6 +118,10 @@ async function handleRequest(message) {
       client.startSubscription((line) => {
         try {
           const raw = JSON.parse(line);
+          if (connectorId === 'lark' && isDocCommentEvent(raw)) {
+            void emitDocComment(raw);
+            return;
+          }
           write(connectorId === 'lark' ? normalizeLarkEvent(raw) : parseProtocolLine(line));
         } catch (error) {
           logger.warn('connector_event_rejected', { error: safeError(error) });

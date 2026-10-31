@@ -175,10 +175,11 @@ describe('Lark chat lookup', () => {
 });
 
 describe('Lark meeting transport', () => {
-  it('subscribes to IM, card callbacks, and the three VC push event types', () => {
+  it('subscribes to IM, card callbacks, doc comment notices, and the three VC push event types', () => {
     assert.deepEqual(SUBSCRIBED_EVENT_TYPES, [
       'im.message.receive_v1',
       'card.action.trigger',
+      'drive.notice.comment_add_v1',
       'vc.bot.meeting_invited_v1',
       'vc.bot.meeting_activity_v1',
       'vc.bot.meeting_ended_v1',
