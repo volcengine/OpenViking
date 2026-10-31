@@ -645,6 +645,14 @@ class AsyncHTTPClient:
                     f"HTTP {response.status_code}: {response.text or 'empty response'}",
                     code="INTERNAL",
                 )
+            if getattr(response, "text", "").strip():
+                # A successful status with a non-empty body that is not valid JSON means the
+                # response never reached OpenViking (e.g. an auth gateway login page), so the
+                # operation must not be reported as silently succeeded.
+                raise OpenVikingError(
+                    f"HTTP {response.status_code}: {response.text}",
+                    code="INTERNAL",
+                )
             return {}
         if data.get("status") == "error":
             self._raise_exception(data.get("error", {}))
