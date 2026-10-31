@@ -280,7 +280,12 @@ export function harnessKey(harness) {
 
 /** Both accepted spellings of every harness, for the `plugin` section. */
 export const HARNESS_CONFIG_KEYS = new Set(
-  Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
+  [
+    ...Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
+    // Gateway integration: recognizes the shared knob names but deliberately
+    // has its own file-only connection loader, without workspace/env layers.
+    "magpie",
+  ],
 );
 
 export function knobDefault(knob, harness = "") {

@@ -247,4 +247,5 @@ node_modules/
 # this repository keep their copies in git.
 examples/opencode-plugin/lib/shared/
 examples/dsh-memory-plugin/shared/
+examples/magpie-memory-plugin/shared/
 examples/pi-coding-agent-extension/shared/
