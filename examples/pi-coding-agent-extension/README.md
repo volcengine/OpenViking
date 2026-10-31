@@ -274,12 +274,22 @@ Arguments are checked against the server's original schema before pi's own valid
 
 | Pi Event               | Extension Action                                                                 |
 |------------------------|----------------------------------------------------------------------------------|
-| `session_start`        | Health check → derive OV session → build profile context → restore takeover state |
-| `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall              |
+| `session_start`        | Prefetch startup on native pi; defer it on hosts with an operation-scoped `ctx.signal` |
+| `before_agent_start`   | Await startup (also for `pi -c`) + queue the current prompt for recall           |
 | `context`              | Run current-prompt recall after UI rendering, then inject takeover and recall context |
 | `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
 | `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages |
 | `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
+
+Hosts that abort an event's `ctx.signal` when its handler returns are initialized inside the awaited `before_agent_start` handler. This keeps the first prompt's recall on a live context. On such hosts the first prompt may wait for the health check and profile fetch; native pi retains the `session_start` prefetch.
+
+Startup replays older pending writes in the background, without retaining the host's event context. The footer shows `replay …` while this runs. Turns completed during replay are written to the durable pending queue in branch order; takeover and commits wait until replay and the current session's queued writes are delivered. Distinct Pi entries with identical text keep separate queue records, while retrying one entry reuses its record. A failed replay shows `replay ✗` and `/viking` reports the error; commits remain blocked so an incomplete archive is not presented as complete.
+
+If the session shuts down before replay finishes, captured turns stay queued and the ordinary final commit is skipped. Because an in-flight replay may drop an older write after shutdown, the extension persists a conservative capture gap in Pi's session history. Continuing **the same Pi session** can replay pending writes and capture new turns, but automatic, manual, and shutdown commits stay blocked for that session even when those writes later succeed. The extension does not clear this gap automatically; start a new Pi session for future automatic commits and reconstruct the old session manually if its archive is needed. The already-started background replay may continue processing older disk entries after shutdown, including a previously queued commit, but it never uses the retired event context or starts a new commit for this turn. Takeover leaves compaction to Pi when delivery is unconfirmed.
+
+A permanent queue-write failure or server rejection also persists a capture gap in ordinary mode. The footer shows `capture ✗`, `/viking` reports `capture: incomplete`, and the commit block survives a restart of the same Pi session.
+
+Capture and takeover require a working `SessionManager.getBranch()`. An empty branch during startup is normal, so the extension checks after a completed turn. If the branch is still empty, the footer reports `capture ✗` (and `takeover ✗` when enabled), `/viking` reports the unavailable history, and takeover commits and compaction are skipped. Ordinary commits can still archive messages captured before the branch became unavailable when there is no capture gap. Recall remains available. A later nonempty branch clears the warning and resumes capture. Hosts such as PI-Desktop that expose a permanently empty branch can use recall but cannot supply the history needed for capture or takeover.
 
 ### Recall: Synchronous, Not Stale
 

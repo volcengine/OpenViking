@@ -79,14 +79,18 @@ function stableStringify(value) {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
 }
 
-function makeDedupKey(type, sessionId, payload) {
-  return createHash("sha256")
+function makeDedupKey(type, sessionId, payload, dedupSalt) {
+  const hash = createHash("sha256")
     .update(type)
     .update("\n")
     .update(sessionId)
     .update("\n")
-    .update(stableStringify(payload))
-    .digest("hex");
+    .update(stableStringify(payload));
+  // Callers with source entry IDs can preserve repeated, identical messages
+  // while still deduplicating a retry of the same source entry. Without a
+  // salt, keep the existing content-based key for the other integrations.
+  if (typeof dedupSalt === "string" && dedupSalt) hash.update("\nsource\n").update(dedupSalt);
+  return hash.digest("hex");
 }
 
 function pendingFilename(dedupKey, retries = 0) {
@@ -183,11 +187,12 @@ async function recoverStaleProcessing(dir) {
  * @param {object} payload - the data that failed to send
  * @param {object} options
  * @param {number} options.createdAt - optional queue timestamp override
+ * @param {string} options.dedupSalt - optional stable source entry identity
  */
 export async function enqueue(type, sessionId, payload, options = {}) {
   const dir = getPendingDir();
   const now = Number.isFinite(options.createdAt) ? options.createdAt : Date.now();
-  const dedupKey = makeDedupKey(type, sessionId, payload);
+  const dedupKey = makeDedupKey(type, sessionId, payload, options.dedupSalt);
   const filename = pendingFilename(dedupKey, 0);
   const entry = {
     type,

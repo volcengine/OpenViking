@@ -5,6 +5,7 @@ export function extractBranchCapturePayloads(
   syncedEntryId?: string,
 ): {
   payloads: any[];
+  payloadEntryIds: (string | null)[];
   nextEntryCount: number;
   nextEntryId: string;
   observedEntryCount: number;

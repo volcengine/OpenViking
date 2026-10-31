@@ -16,6 +16,17 @@ test("extractBranchCapturePayloads converts user text to message payload", () =>
   assert.equal(result.payloads[0].peer_id, "peer-a");
 });
 
+test("capture payload identities stay aligned after filtered branch entries", () => {
+  const branch = [
+    { id: "u-1", type: "message", message: { role: "user", content: "Remember the first decision." } },
+    { id: "filtered", type: "message", message: { role: "assistant", content: "Skip this assistant turn." } },
+    { id: "u-2", type: "message", message: { role: "user", content: "Remember the second decision." } },
+  ];
+  const result = extractBranchCapturePayloads(branch, 0, { captureAssistantTurns: false });
+  assert.deepEqual(result.payloadEntryIds, ["u-1", "u-2"]);
+  assert.equal(result.payloads.length, 2);
+});
+
 for (const role of ["toolResult", "tool_result", "tool"]) {
   for (const isError of [false, true]) {
     test(`extractBranchCapturePayloads preserves ${role} ${isError ? "error" : "completed"} results`, () => {

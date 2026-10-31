@@ -44,6 +44,21 @@ test("enqueue deduplicates identical payloads", async () => {
   });
 });
 
+test("enqueue can distinguish identical payloads by stable source identity", async () => {
+  await withPendingDir(async () => {
+    const payload = { role: "user", content: "continue" };
+    const first = await enqueue("addMessage", "queue-salted", payload, { dedupSalt: "pi-entry-1" });
+    const retry = await enqueue("addMessage", "queue-salted", payload, { dedupSalt: "pi-entry-1" });
+    const second = await enqueue("addMessage", "queue-salted", payload, { dedupSalt: "pi-entry-2" });
+
+    assert.equal(first.ok, true);
+    assert.equal(retry.deduped, true);
+    assert.equal(second.ok, true);
+    assert.equal(second.deduped, undefined);
+    assert.equal((await listPending()).length, 2);
+  });
+});
+
 test("replayPending honors the per-run replay limit", async () => {
   await withPendingDir(async () => {
     process.env.OPENVIKING_PENDING_REPLAY_LIMIT = "1";
