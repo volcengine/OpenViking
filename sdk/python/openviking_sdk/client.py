@@ -640,7 +640,7 @@ class AsyncHTTPClient:
         try:
             data = response.json()
         except Exception:
-            if hasattr(response, "is_success") and not response.is_success:
+            if hasattr(response, "is_success") and (not response.is_success or response.content):
                 raise OpenVikingError(
                     f"HTTP {response.status_code}: {response.text or 'empty response'}",
                     code="INTERNAL",
