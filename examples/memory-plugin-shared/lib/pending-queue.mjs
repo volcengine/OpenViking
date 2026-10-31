@@ -3,10 +3,12 @@
  *
  * When the OpenViking server is temporarily unreachable, write operations
  * (addMessage, commitSession) serialize their payloads to
- * `~/.openviking/pending/` as JSON files. The queue is replayed in small
- * batches, either at session-start (consuming retry budgets, with
+ * `~/.openviking/pending/` as JSON files. The queue is replayed in bounded
+ * runs, either at session-start (consuming retry budgets, with
  * maxRetries/TTL) or by a long-running drainer that passes
- * `consumeRetries: false` so transient failures stay retryable.
+ * `consumeRetries: false` so transient failures stay retryable. A session's
+ * queued messages go out through the batch endpoint, so a backlog built up
+ * during an outage drains in a few requests instead of one per message.
  *
  * Each file contains: { type, sessionId, payload, createdAt, retries, dedupKey }
  *
@@ -16,8 +18,8 @@
  *   OPENVIKING_PENDING_MAX_RETRIES max retry attempts per item (default: 3)
  *   OPENVIKING_PENDING_TTL_DAYS    max age in days before stale cleanup
  *                                  (default: 7)
- *   OPENVIKING_PENDING_REPLAY_LIMIT max items replayed per session-start
- *                                  (default: 50)
+ *   OPENVIKING_PENDING_REPLAY_LIMIT max items replayed per run
+ *                                  (default: 500)
  */
 
 import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod, utimes } from "node:fs/promises";
@@ -28,8 +30,12 @@ import { isRetryableFailure } from "./retryable.mjs";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_TTL_DAYS = 7;
-const DEFAULT_REPLAY_LIMIT = 50;
+const DEFAULT_REPLAY_LIMIT = 500;
 const PROCESSING_STALE_MS = 10 * 60 * 1000;
+const REPLAY_TYPES = new Set(["addMessage", "commitSession"]);
+
+// Messages per request on `/api/v1/sessions/{id}/messages/batch`.
+export const BATCH_LIMIT = 100;
 const DEFAULT_PENDING_DIR = () => join(homedir(), ".openviking", "pending");
 
 // Pending queue files may contain raw memory payload / transcript content.
@@ -365,9 +371,130 @@ export async function cleanStale() {
 }
 
 /**
- * Replay pending entries. Call this during session-start when the server is
- * healthy. Each run processes at most OPENVIKING_PENDING_REPLAY_LIMIT items so
- * a just-recovered server is not hit with an unbounded replay burst.
+ * Group the queue into replay runs. Sessions are independent on the server,
+ * so order only has to hold within one session: its addMessage entries form
+ * batches of up to BATCH_LIMIT, and a commitSession entry closes the batch
+ * queued before it so the commit sees those messages. Runs keep the order in
+ * which their first entry was queued.
+ */
+function planRuns(pending) {
+  const runs = [];
+  const open = new Map();
+  for (const item of pending) {
+    const { type, sessionId } = item.entry;
+    if (type !== "addMessage") {
+      open.delete(sessionId);
+      runs.push({ items: [item] });
+      continue;
+    }
+    let run = open.get(sessionId);
+    if (!run) {
+      run = { items: [] };
+      open.set(sessionId, run);
+      runs.push(run);
+    }
+    run.items.push(item);
+    if (run.items.length >= BATCH_LIMIT) open.delete(sessionId);
+  }
+  return runs;
+}
+
+async function post(fetchJSON, path, payload) {
+  try {
+    return await fetchJSON(path, { method: "POST", body: JSON.stringify(payload) });
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Park a run the server could not take right now. Only the head consumes a
+ * retry, as a single-entry replay did; the rest keep their budget and go out
+ * once the head is delivered or dropped, so one failure against a flapping
+ * server cannot burn a whole batch's retries.
+ */
+async function deferRun(run, consumeRetries, log, res) {
+  const [head, ...rest] = run;
+  if (consumeRetries) {
+    await incrementRetry(head.filename, head.entry);
+  } else {
+    const released = await releaseClaim(head.filename);
+    log("pending-queue", {
+      action: released ? "replay-deferred" : "release-failed",
+      sessionId: head.entry.sessionId,
+      type: head.entry.type,
+      status: res?.result?.status || res?.status,
+      retries: head.entry.retries || 0,
+    });
+  }
+  for (const { filename } of rest) {
+    await releaseClaim(filename);
+  }
+}
+
+/**
+ * Send one claimed run. Returns true when replay must stop because the server
+ * could not take messages right now, so later runs would fail the same way.
+ */
+async function replayRun(fetchJSON, log, run, counts, consumeRetries) {
+  const { type, sessionId } = run[0].entry;
+  const base = `/api/v1/sessions/${encodeURIComponent(sessionId)}`;
+
+  if (type === "addMessage" && run.length > 1) {
+    const res = await post(fetchJSON, `${base}/messages/batch`, {
+      messages: run.map(({ entry }) => entry.payload),
+    });
+    if (res?.ok) {
+      for (const { filename } of run) await dequeue(filename);
+      counts.replayed += run.length;
+      return false;
+    }
+    if (isRetryableReplayFailure(res)) {
+      await deferRun(run, consumeRetries, log, res);
+      counts.failed += run.length;
+      return true;
+    }
+    // A server without the batch endpoint (404/405), or one message the server
+    // rejects, fails the whole batch. One by one, only that message is dropped.
+  }
+
+  for (let i = 0; i < run.length; i++) {
+    const { filename, entry } = run[i];
+    const res = type === "commitSession"
+      ? await post(fetchJSON, `${base}/commit`, entry.payload || {})
+      : await post(fetchJSON, `${base}/messages`, entry.payload);
+
+    if (type === "commitSession") {
+      log("pending-queue", {
+        action: "commit-replay",
+        sessionId,
+        ok: Boolean(res?.ok),
+        status: res?.result?.status || res?.status,
+        trace_id: res?.traceId || res?.result?.trace_id,
+        error: res?.ok ? undefined : res?.error?.message || res?.error?.code,
+      });
+    }
+
+    if (res?.ok) {
+      await dequeue(filename);
+      counts.replayed++;
+    } else if (!isRetryableReplayFailure(res)) {
+      await dequeue(filename);
+      counts.skipped++;
+    } else {
+      const rest = run.slice(i);
+      await deferRun(rest, consumeRetries, log, res);
+      counts.failed += rest.length;
+      return type === "addMessage";
+    }
+  }
+  return false;
+}
+
+/**
+ * Replay pending entries. Call this when the server is healthy. Each run
+ * processes at most OPENVIKING_PENDING_REPLAY_LIMIT entries so a just-recovered
+ * server is not hit with an unbounded replay burst.
  *
  * @param {Function} fetchJSON - the configured fetchJSON from makeFetchJSON
  * @param {Function} log - logger function
@@ -388,103 +515,39 @@ export async function replayPending(fetchJSON, log, options = {}) {
   }
 
   const replayLimit = getReplayLimit();
+  const maxRetries = getMaxRetries();
   log("pending-queue", { count: pending.length, replayLimit, action: "replay-start" });
 
-  let replayed = 0;
-  let failed = 0;
-  let skipped = 0;
-  let deferred = 0;
+  const counts = { replayed: 0, failed: 0, skipped: 0, deferred: 0 };
   let processed = 0;
 
-  for (const { filename, entry } of pending) {
-    if (processed >= replayLimit) {
-      deferred++;
-      continue;
-    }
-
-    if ((entry.retries || 0) >= getMaxRetries()) {
-      await dequeue(filename);
-      skipped++;
-      continue;
-    }
-
-    const claimedFilename = await claimForReplay(filename);
-    if (!claimedFilename) {
-      skipped++;
-      continue;
-    }
-    processed++;
-
-    let res;
-    try {
-      const encodedSid = encodeURIComponent(entry.sessionId);
-      if (entry.type === "addMessage") {
-        res = await fetchJSON(`/api/v1/sessions/${encodedSid}/messages`, {
-          method: "POST",
-          body: JSON.stringify(entry.payload),
-        });
-      } else if (entry.type === "commitSession") {
-        res = await fetchJSON(`/api/v1/sessions/${encodedSid}/commit`, {
-          method: "POST",
-          body: JSON.stringify(entry.payload || {}),
-        });
-      } else {
-        await dequeue(claimedFilename);
-        skipped++;
+  for (const run of planRuns(pending)) {
+    const claimed = [];
+    for (const { filename, entry } of run.items) {
+      if (processed >= replayLimit) break;
+      if ((entry.retries || 0) >= maxRetries || !REPLAY_TYPES.has(entry.type)) {
+        await dequeue(filename);
+        counts.skipped++;
         continue;
       }
-    } catch {
-      res = { ok: false };
-    }
-
-    if (entry.type === "commitSession") {
-      log("pending-queue", {
-        action: "commit-replay",
-        sessionId: entry.sessionId,
-        ok: Boolean(res?.ok),
-        status: res?.result?.status || res?.status,
-        trace_id: res?.traceId || res?.result?.trace_id,
-        error: res?.ok ? undefined : res?.error?.message || res?.error?.code,
-      });
-    }
-
-    if (res?.ok) {
-      await dequeue(claimedFilename);
-      replayed++;
-    } else if (!isRetryableReplayFailure(res)) {
-      await dequeue(claimedFilename);
-      skipped++;
-    } else {
-      if (consumeRetries) {
-        await incrementRetry(claimedFilename, entry);
-      } else {
-        const released = await releaseClaim(claimedFilename);
-        log("pending-queue", {
-          action: released ? "replay-deferred" : "release-failed",
-          sessionId: entry.sessionId,
-          type: entry.type,
-          status: res?.result?.status || res?.status,
-          retries: entry.retries || 0,
-        });
+      const claimedFilename = await claimForReplay(filename);
+      if (!claimedFilename) {
+        counts.skipped++;
+        continue;
       }
-      failed++;
-      if (entry.type === "addMessage") {
-        deferred += Math.max(0, pending.length - processed);
-        break;
-      }
+      processed++;
+      claimed.push({ filename: claimedFilename, entry });
     }
+    if (claimed.length > 0 && (await replayRun(fetchJSON, log, claimed, counts, consumeRetries))) {
+      break;
+    }
+    if (processed >= replayLimit) break;
   }
+  counts.deferred = pending.length - counts.replayed - counts.failed - counts.skipped;
 
   const cleaned = await cleanStale();
 
-  log("pending-queue", {
-    action: "replay-done",
-    replayed,
-    failed,
-    skipped,
-    deferred,
-    cleaned,
-  });
+  log("pending-queue", { action: "replay-done", ...counts, cleaned });
 
-  return { replayed, failed, skipped, deferred };
+  return counts;
 }
