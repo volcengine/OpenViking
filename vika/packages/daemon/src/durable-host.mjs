@@ -7,7 +7,7 @@
 // host registers from <dataDir>/actions.sock, exactly like the MCP adapter, and
 // local work goes through pi-durable's coding tools (bash, read, write, edit).
 //
-// Protocol v1 is documented in docs/pi-durable-runtime.md.
+// The protocol (version 2) is documented in docs/pi-durable-runtime.md.
 
 import fs from 'node:fs';
 import path from 'node:path';

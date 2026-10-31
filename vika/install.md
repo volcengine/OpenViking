@@ -16,7 +16,7 @@ curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 
 ## 准备
 
-- 一个 coding agent：Codex、Claude Code 或 TraeX 先装好并登录；不装也行，Vika 自带 Pi，用的是你 `~/.pi/agent` 里的模型配置，没配过就运行 `vika pi` 后 `/login`。
+- 一个 coding agent：Codex、Claude Code 或 TraeX 先装好并登录；不装也行，Vika 自带 Pi 和 Durable，两者都用你 `~/.pi/agent` 里的模型配置，没配过就运行 `vika pi` 后 `/login`。
 - OpenViking（必需），用来保存跨会话上下文。`vika setup` 会列出已检测的连接、来源与检查结果，无论是否可用，都提供「手动填写／修改地址和凭据」「指定 OV 配置文件」「重新检测」和「退出」。可填写本机或远端 URL、自定义端口、API Key（隐藏输入）以及可选的 Account / User / Agent。验证失败留在配置界面重试，通过后才继续接入 IM。在终端里首次安装时，安装脚本装完直接进入 setup，OV 就在那里配置。
 - 接飞书的话，要一个手机号注册的飞书账号或公司的飞书账号，用它扫码建机器人。现在用手机号注册飞书会顺带建一个免费企业（名称随便填，你是管理员），个人用也是这样注册。**用豆包账号登录的飞书不行**：它能在开放平台建应用、也能发布，但平台不给应用发访问凭证（`tenant_access_token` 返回 `code=21001`），机器人收发不了消息。setup 碰到这种情况会说明原因并回到上一步，可以换账号重扫，或者先只接微信、Telegram 等其他渠道。
 
@@ -26,7 +26,7 @@ curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 
 修改已有实例的 OV 连接时，会保留其原有记忆身份和召回设置，创建新的配置副本；setup 选「保存」才更新 manifest，选「放弃」清理副本。
 
-Codex、TraeX、Claude、Pi 都要先完成各自 CLI 登录。完整配置字段看 [config.example.json](./config.example.json)。
+Codex、TraeX、Claude、Pi 都要先完成各自 CLI 登录；Durable 不用单独登录，Pi 能用的模型它都能用（见下文）。完整配置字段看 [config.example.json](./config.example.json)。
 
 TraeX 的命令可能叫 `traex`、`traecli` 或 `trae-cli`，装了哪个都行；Vika 用它的 `app-server` 协议，太旧、只有 `acp serve` 的版本不能用。setup 会依次检查 `traex`、`traecli`、`trae-cli`，解析软链接并去重，只有 stdio `initialize` 握手和 `login status` 都通过才提供该选项；探测不会创建会话或调用模型。显式设置 `TRAECLI_BIN`（兼容旧变量 `TRAEX_BIN`，优先级更高）时只检查指定文件，失败不会悄悄换另一个 CLI。setup 保存通过检查的实际路径，不修改用户的命令别名。
 
@@ -34,11 +34,13 @@ TraeX 的命令可能叫 `traex`、`traecli` 或 `trae-cli`，装了哪个都行
 
 Claude Code 需要 2.1.259 或以上，支持 `--permission-prompts none`；启动预检会检查该参数。daemon 是无人值守会话：Pi 扩展对话框、Codex/TraeX 的审批和用户输入请求会被明确取消或拒绝；Claude 使用官方无人值守设置，并拒绝意外的控制请求。需要向人提问时，模型应通过消息工具发文字或支持的选项卡，结束当前轮次，再等待用户消息或卡片答案。用户的扩展、provider 和其他会话配置不因此被关闭。
 
-Pi 1.2.0 在启动扩展完成后才开始读取 RPC 回复，因此扩展在 `session_start` 中要求人工输入时，daemon 会立即拒绝启动并提示关闭该启动交互；运行期间的对话框则正常返回取消。
+Pi 1.4.0 在启动扩展完成后才开始读取 RPC 回复，因此扩展在 `session_start` 中要求人工输入时，daemon 会立即拒绝启动并提示关闭该启动交互；运行期间的对话框则正常返回取消。
 
 Pi 的确切版本由 `packages/daemon/package.json` 和 lockfile 固定，随安装包发布。`vika pi` 打开这份 Pi，可用来 `/login`；已有 Pi 的模型登录信息直接复用，不会升级全局 `pi`。`PI_BIN` 留空时用安装包内的版本；显式指定其他路径时，该程序必须是本 release 验证的同一版本，否则启动会给出修复指引。
 
 daemon 启动 Pi 时只为该会话注册 `personal_agent` MCP server，使用 `direct` exposure，让模型直接看到各个工具和参数。它不会修改 `~/.pi/agent/mcp.json` 或工作区 `.pi/mcp.json`，也不会给用户其他 Pi 会话添加该 server。若这些文件已有同名 server、内置 MCP 被禁用，或工具没有成功加载，daemon 会拒绝启动 Pi；不回退到 Bash/CLI。普通用户的其他 MCP server 配置仍由 Pi 自己加载。
+
+Durable 是基于 [pi-durable](https://github.com/earendil-works/pi) 的内置运行时，和 Pi 一样随安装包发布，不用装 CLI。对话、模型轮次和工具调用先写进 `<dataDir>/durable/session.sqlite` 再显示，进程在一轮中途退出时，重启后从最后的检查点接着跑完。模型和 Pi 共用一份配置：pi-ai 内置的 provider，加上 `~/.pi/agent` 里的 `models.json`（自定义 provider，例如火山方舟的 OpenAI 兼容接口）、`auth.json`（`vika pi` 里 `/login` 存的 key）和 `settings.json` 里的默认模型。也可以只给内置 provider 配 API key：把 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`DEEPSEEK_API_KEY` 等写进 `~/.vika/secrets.env`，不要写进 `config.json`。没指定模型时用 Pi 的默认模型；运行中用 `/model`、`/effort` 切换，也可以在 `config.json` 的 `env` 里设 `VIKA_DURABLE_MODEL`、`VIKA_DURABLE_EFFORT`。Durable 和其他运行时一样经 Agent 工具发消息，另外带 pi-durable 的 `bash`、`read`、`write`、`edit`，在实例的工作目录里执行。协议和恢复机制见 [Durable runtime](docs/pi-durable-runtime.md)。
 
 ## 手动配飞书（不用 setup 时）
 
@@ -148,7 +150,7 @@ vika login slack [实例]
 
 帆船停在屏幕顶部，整个 setup 期间一直在动，问题在它下面滚动；扫码时它让出整屏，扫完再回来。窗口不到 30 行时先放一段完整动画，再换成顶部一条小帆船。`VIKA_NO_ANIMATION=1` 只画一帧。最先定界面语言，默认中文：locale 是中文就不问；否则（服务器上常见的 `en_US`、`C`，不代表用的人读什么）在终端里先问一次 Language / 语言，预选中文，答案存进 `~/.vika/language`，之后的 setup、login、status 等都用它，不再问；`vika --lang zh|en` 随时换。然后检查本机有哪些 agent。问答阶段随时可以按 ←（或 Esc）回到上一步，之前的答案作为默认值；按 → 沿用当前的值往下走（文本框里只在还没输入时生效）。退回去的步骤会从屏幕上消失，屏幕上只留当前这条路。修改实例时，进入某一项后按 ← 回到配置列表、这一项不变；在列表上按 ← 回到「要做什么」。二维码在等你扫的时候也可以按 ← 回到确认页（或配置列表），新实例的临时 OV 配置会在取消时清理；一旦有一次扫码确认了（飞书应用已建好、微信或 Telegram 已绑定），就不能再返回。一个都不能用时，可以当场打开内置 Pi 输入 `/login` 登录模型，`/quit` 回来接着走；也可以先退出去登录 Codex 或 Claude Code。
 
-1. 第一个实例直接叫 `primary`，第二个起才问实例名。先列出已知 OV 连接并提供手动配置入口，连接验证通过后，依次问机器人名字、工作目录、运行时（只列出已安装并登录的 Codex / Claude Code，以及内置 Pi）。随后生成选定连接的实例专属配置，再用该身份检查服务和凭据；配置写入或检查失败会立即退出，不进入 IM 选择。通过后才问接哪些 IM（飞书、微信、Telegram、Slack、QQ、邮箱多选；邮箱不能单独选；飞书一项旁边写着要手机号注册的或公司的飞书账号，豆包账号登录的不行），主渠道（选了多个聊天 IM 时让你选，只选一个时就是它；机器人主动找你的消息，比如新邮件提醒、待你确认的邮件回复，都发到主渠道）。选了飞书就问机器人从哪来：扫码新建一个（默认）、扫码选择已有的（列出你是所有者或管理员的企业自建应用），或者手动填 App ID 和 App Secret（不是所有者或管理员、在测试企业等扫不了码时用；当场向开放平台核对，不对可以重填）。用已有的应用时注意：Vika 只接用长连接接收消息的机器人，用 webhook 的先在开放平台「事件与回调」把事件和回调改成长连接（原来的服务随之收不到）再来接，Vika 不替你切；飞书长连接每条消息只随机推给其中一个连接，这个应用也不能同时被别的程序（OpenClaw、botmux、另一台机器上的 Vika）用来收消息。扫码选择已有应用时，飞书确认页列出要补的权限、事件和回调，确认后发布新版本；应用若有版本正在审核，确认页会先撤回它。OpenViking 不提供跳过选项。开始扫码、输入 Bot token 或邮箱凭据之前，还会复查实例的 OV 连接；取消或失败时清理尚未保存到 manifest 的新 OV 配置。选了邮箱就接着问邮箱地址和专用密码，当场登录 IMAP 和 SMTP 验证，可以连续接几个；Gmail、QQ、163/126/yeah.net 不用填服务器。
+1. 第一个实例直接叫 `primary`，第二个起才问实例名。先列出已知 OV 连接并提供手动配置入口，连接验证通过后，依次问机器人名字、工作目录、运行时（只列出已安装并登录的 Codex / Claude Code，以及内置 Pi 和 Durable）。随后生成选定连接的实例专属配置，再用该身份检查服务和凭据；配置写入或检查失败会立即退出，不进入 IM 选择。通过后才问接哪些 IM（飞书、微信、Telegram、Slack、QQ、邮箱多选；邮箱不能单独选；飞书一项旁边写着要手机号注册的或公司的飞书账号，豆包账号登录的不行），主渠道（选了多个聊天 IM 时让你选，只选一个时就是它；机器人主动找你的消息，比如新邮件提醒、待你确认的邮件回复，都发到主渠道）。选了飞书就问机器人从哪来：扫码新建一个（默认）、扫码选择已有的（列出你是所有者或管理员的企业自建应用），或者手动填 App ID 和 App Secret（不是所有者或管理员、在测试企业等扫不了码时用；当场向开放平台核对，不对可以重填）。用已有的应用时注意：Vika 只接用长连接接收消息的机器人，用 webhook 的先在开放平台「事件与回调」把事件和回调改成长连接（原来的服务随之收不到）再来接，Vika 不替你切；飞书长连接每条消息只随机推给其中一个连接，这个应用也不能同时被别的程序（OpenClaw、botmux、另一台机器上的 Vika）用来收消息。扫码选择已有应用时，飞书确认页列出要补的权限、事件和回调，确认后发布新版本；应用若有版本正在审核，确认页会先撤回它。OpenViking 不提供跳过选项。开始扫码、输入 Bot token 或邮箱凭据之前，还会复查实例的 OV 连接；取消或失败时清理尚未保存到 manifest 的新 OV 配置。选了邮箱就接着问邮箱地址和专用密码，当场登录 IMAP 和 SMTP 验证，可以连续接几个；Gmail、QQ、163/126/yeah.net 不用填服务器。
 2. 飞书扫两次码：第一次创建或选择机器人应用，按 `permission.json` 申请完整权限、订阅长连接事件和卡片回调，选的是已有应用时确认页只列出它缺的部分，平台自动发版（可能要等管理员审核）；第二次授权 owner 的用户身份，只申请应用已开通的用户权限。手动填 App ID 和 App Secret 时只扫第二次，Vika 不改应用的配置：它读出应用缺的权限、`im.message.receive_v1` 事件和长连接的 `card.action.trigger` 回调并列出来，事件走长连接还是 webhook 读不到，要自己在开放平台确认。卡片回调走 webhook 的应用直接拒绝（事件走哪种方式没有接口能读，回调走 webhook 说明它在用 webhook）：手动填的当场拒绝、可以换一个，扫码选择的在确认页之后拒绝、回到上一步。平台不给应用发访问凭证（`code=21001`，豆包账号登录的飞书就是这样）时同样不写任何配置：手动填的当场说明、可以换一个，扫码的回到确认页（修改实例时回到配置列表）并说明原因，已答的问题都保留；扫码新建的应用已经留在开放平台上，可以去删掉。应用已被本机另一个实例使用时先警告，确认后才继续。应用名和你填的机器人名字不同时问一次用哪个，默认用飞书里的名字（群里 @ 它用的就是这个），选否保留你填的；Vika 不会改飞书里的应用名。微信扫一次码；Telegram 输入 Bot token 后打开一次性链接点击 Start；Slack 按链接建 App、粘贴两个 token，再私聊机器人发口令；QQ 输入 AppID/AppSecret 后发送一次性私聊验证码。所有问题问完才开始接入聊天 IM；全部验证成功后才写入实例 manifest。扫码页先画二维码，码下面一行是备用链接，可以发到对应 IM 里打开；飞书第一次的链接带着全部权限、有一千多个字符，按 `l` 才显示。飞书第一次的码也大，终端放不下时提示所需尺寸，并给出二维码图片的路径（图片不受终端字体、行距和字符渲染影响，扫码结束后自动删除），拉大窗口或缩小字体后自动重绘。VS Code 终端里按 `i` 打开图片，有桌面的机器上按 `o` 用浏览器打开链接。有颜色的终端用黑白配色和完整留白，黑块用背景色画，终端字符之间的缝不会把黑块切开。
 3. 写入 `~/.vika/config.json`，启动这个实例、重启共享 Web、确保 updater 在跑，然后机器人在飞书私聊里打个招呼。在终端里时，接着请你在飞书里回它一句，等实例真的收到这条消息（最多 3 分钟，按 `s` 跳过），确认消息进得来；没等到就列出排查清单（长连接与消息事件、版本是否发布、应用是否被别的程序占用、`vika logs`）。最后问要不要开机自启，并列出接下来做什么（找机器人说话、控制台地址、常用命令）。
 
