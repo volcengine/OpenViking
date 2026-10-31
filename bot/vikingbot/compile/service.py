@@ -1076,7 +1076,6 @@ class BotCompileService:
         usage,
         agent_runner=None,
         tool_context=None,
-        resume=False,
     ) -> bool:
         """Run the shared collection pipeline and publish through the target namespace API.
 
@@ -1084,7 +1083,8 @@ class BotCompileService:
         the surrounding lifecycle. Acknowledged partial output completes with diagnostic errors.
         Return whether the workspace must remain available for audit and replay.
         The surrounding lifecycle also preserves shards on failure/cancellation.
-        Local recovery sets resume to use a stopped task's copied Reduce checkpoint.
+        Compile tasks are not resumable; a failed task keeps its workspace for audit
+        and must be re-run from the start.
         """
         pipeline = Pipeline(
             client=client,
@@ -1127,8 +1127,7 @@ class BotCompileService:
                 if source_files is not None
                 else await self._list_source_files(client, request.from_)
             )
-        if not resume:
-            await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
+        await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
 
         async def source_batches():
             """Retain at most one read batch of source bodies while seeding task shards."""
@@ -1159,12 +1158,7 @@ class BotCompileService:
 
         try:
             try:
-                if resume:
-                    from vikingbot.compile.resume import run as resume_pipeline
-
-                    rendered = await resume_pipeline(pipeline)
-                else:
-                    rendered = await pipeline.run(source_batches())
+                rendered = await pipeline.run(source_batches())
             except (CompileFailure, TimeoutError) as exc:
                 if not pipeline.artifacts or getattr(exc, "code", None) == "SKILL_REPAIR_FAILED":
                     raise
