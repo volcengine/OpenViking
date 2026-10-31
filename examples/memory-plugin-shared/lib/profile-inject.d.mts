@@ -2,7 +2,12 @@ export function buildProfileBlock(
   fetchJSON: (path: string, init?: any, options?: any) => Promise<{ ok: boolean; status?: number; result?: any; error?: any }>,
   totalBudgetTokens: number,
   actorPeerId?: string,
-  options?: { skillCatalog?: boolean; skillCatalogTokenBudget?: number; sessionStartMaxBytes?: number },
+  options?: {
+    skillCatalog?: boolean;
+    skillCatalogTokenBudget?: number;
+    sessionStartMaxBytes?: number;
+    log?: (stage: string, data: unknown) => void;
+  },
 ): Promise<null | {
   block: string;
   chars: number;
