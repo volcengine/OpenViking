@@ -11,15 +11,17 @@ import OpenVikingMemory from "../index.mjs";
 import { injectContext, loadConfig, recallRequest, request } from "../runtime.mjs";
 import { buildOvHeaders } from "../shared/ov-http.mjs";
 
-async function fixture(t, handler = () => ({ rendered: "viking://~/memories/preference.md\nUse TypeScript." })) {
+async function fixture(t, handler = () => ({ rendered: "viking://~/memories/preference.md\nUse TypeScript." }), profile = "") {
   const dir = await mkdtemp(join(tmpdir(), "ov-magpie-test-"));
   const calls = [];
+  const profileCalls = [];
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const call = { path: req.url, headers: req.headers, body: raw ? JSON.parse(raw) : null };
-    calls.push(call);
-    const result = await handler(call, res);
+    const profileRead = new URL(req.url, "http://fixture").searchParams.get("uri") === "viking://~/memories/profile.md";
+    (profileRead ? profileCalls : calls).push(call);
+    const result = profileRead ? (typeof profile === "function" ? await profile(call, res) : profile) : await handler(call, res);
     if (!res.writableEnded && !res.destroyed) {
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ status: "ok", result }));
@@ -33,7 +35,7 @@ async function fixture(t, handler = () => ({ rendered: "viking://~/memories/pref
     plugin: { ...patch.plugin, magpie: { dataDir: join(dir, "state"), ...patch.plugin?.magpie } },
   }));
   await save();
-  return { dir, path, env: { OPENVIKING_CLI_CONFIG_FILE: path }, save, calls, config };
+  return { dir, path, env: { OPENVIKING_CLI_CONFIG_FILE: path }, save, calls, profileCalls, config };
 }
 
 function context(patch = {}) {
@@ -114,6 +116,40 @@ test("changing a routing header cannot replay another tenant's recall", async (t
   assert.match(second.messages[0].content, /private memory for bob/);
   assert.doesNotMatch(second.messages[0].content, /private memory for alice/);
   assert.equal(f.calls.length, 2);
+});
+
+test("the first turn includes a stable profile even when search misses personal facts", async (t) => {
+  let profile = "Frontend developer; Git email: person@example.test";
+  const f = await fixture(t, () => ({ rendered: "Unrelated project context" }), (call) => {
+    assert.equal(call.headers.authorization, "Bearer test-secret");
+    assert.equal(call.headers["x-openviking-user"], "test-user");
+    return profile;
+  });
+  const first = await recallRequest(body(), context(), f.env);
+  assert.match(first.messages[0].content, /Frontend developer/);
+  assert.match(first.messages[0].content, /person@example.test/);
+  profile = "Changed profile must not rewrite model-visible history";
+  assert.deepEqual(await recallRequest(body(), context(), f.env), first);
+  const next = { ...body(), messages: [...body().messages, { role: "assistant", content: "Understood" }, { role: "user", content: "What is my email?" }] };
+  const second = await recallRequest(next, context({ query: "What is my email?" }), f.env);
+  assert.equal(second.messages[0].content, first.messages[0].content);
+  assert.equal(f.profileCalls.length, 1);
+  await f.save({ plugin: { magpie: { autoRecall: false } } });
+  await recallRequest(body(), context({ session: "disabled-profile" }), f.env);
+  assert.equal(f.profileCalls.length, 1);
+});
+
+test("profile and search failures degrade independently", async (t) => {
+  const failedProfile = await fixture(t, undefined, (_, res) => {
+    res.statusCode = 404;
+    res.end(JSON.stringify({ status: "error", error: { message: "profile not found" } }));
+  });
+  assert.match(JSON.stringify(await recallRequest(body(), context(), failedProfile.env)), /Use TypeScript/);
+  const failedSearch = await fixture(t, (_, res) => {
+    res.statusCode = 503;
+    res.end(JSON.stringify({ status: "error" }));
+  }, "Git email: person@example.test");
+  assert.match(JSON.stringify(await recallRequest(body(), context(), failedSearch.env)), /person@example.test/);
 });
 
 test("existing OIDC and LDAP client files authenticate both recall and tools", async (t) => {

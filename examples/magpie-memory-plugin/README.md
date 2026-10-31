@@ -84,6 +84,12 @@ plugin. Tools require `plugin.magpie.mcpEnabled: true` specifically; a shared
 
 ## Automatic recall
 
+- The first user turn also reads the authenticated user's
+  `viking://~/memories/profile.md`, so stable facts such as occupation and email
+  do not depend on semantic search ranking. Profile and search run in parallel
+  within the recall timeout; either can provide context if the other fails.
+  The profile uses at most half the character budget and is persisted with
+  that turn. Retries and later turns replay the original snapshot.
 - Only host-classified `local` and `magpie-key` origins with a nonempty Magpie
   session ID receive memory. Shared gateway keys, forwarded traffic and missing
   identities are skipped. The file's OV credentials remain the authority.

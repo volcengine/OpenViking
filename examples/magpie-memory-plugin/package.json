@@ -1,6 +1,6 @@
 {
   "name": "@openviking/magpie-plugin",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Bring OpenViking memory to agents using Magpie, with automatic context recall and optional tools to search, read and save memories. Reuses your existing OpenViking configuration.",
   "author": "OpenViking",
   "homepage": "https://github.com/volcengine/OpenViking/tree/main/examples/magpie-memory-plugin",

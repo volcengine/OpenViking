@@ -61,13 +61,26 @@ export async function recallRequest(body, ctx, env = process.env) {
           try {
             const recallBody = buildContextSearchBody(cfg);
             recallBody.query = query.slice(0, 16000);
-            const response = await request(cfg, "/api/v1/search/search", {
-              body: recallBody, signal: ctx.signal,
-              timeoutMs: Math.min(cfg.recallContextTimeoutMs || cfg.timeoutMs, cfg.timeoutMs, 9000),
-            });
-            const memory = selectRecallContent(response);
+            const timeoutMs = Math.min(cfg.recallContextTimeoutMs || cfg.timeoutMs, cfg.timeoutMs, 9000);
+            // A profile holds stable facts that semantic search may not rank.
+            // Read it only on the first user turn; later turns replay that
+            // exact snapshot. Both reads share the host's wall-clock budget.
+            const [search, profile] = await Promise.allSettled([
+              request(cfg, "/api/v1/search/search", { body: recallBody, signal: ctx.signal, timeoutMs }),
+              users.length === 1
+                ? request(cfg, `/api/v1/content/read?${new URLSearchParams({ uri: "viking://~/memories/profile.md" })}`, { signal: ctx.signal, timeoutMs })
+                : Promise.resolve(""),
+            ]);
+            ctx.signal?.throwIfAborted();
+            const profileText = profile.status === "fulfilled" && typeof profile.value === "string" ? profile.value.trim() : "";
+            const maxChars = cfg.recallMaxTokens * 4;
+            const profileBlock = profileText
+              ? `<user-profile uri="viking://~/memories/profile.md">\n${profileText.slice(0, Math.floor(maxChars / 2))}\n</user-profile>` : "";
+            if (search.status === "rejected" && !profileBlock) throw search.reason;
+            const recalled = search.status === "fulfilled" ? selectRecallContent(search.value) : "";
+            const memory = [profileBlock, recalled].filter(Boolean).join("\n\n").slice(0, maxChars);
             code = memory ? "ready" : "empty";
-            if (memory) block = memoryBlock(memory.slice(0, cfg.recallMaxTokens * 4));
+            if (memory) block = memoryBlock(memory);
           } catch (error) {
             ctx.signal?.throwIfAborted();
             code = outcome(error);
