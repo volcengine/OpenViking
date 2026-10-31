@@ -44,6 +44,7 @@ magpie plugin add ./examples/magpie-memory-plugin
   "magpie": {
     "enabled": true,
     "autoRecall": true,
+    "autoCapture": false,
     "recallContextTimeoutMs": 700,
     "recallMaxTokens": 1600,
     "recallPeerScope": "all",
@@ -61,7 +62,12 @@ magpie plugin add ./examples/magpie-memory-plugin
 OIDC 配置使用 `oidc_token`（或 `api_key`）作为 Bearer Token。两者由服务端解析身份，不断言账户或用户。
 配置类型、别名、范围和召回请求体复用已有共享模块；文件读取策略、宿主超时、工具默认关闭等适配放在 Magpie 自身目录，不改变其他插件。
 Magpie 的文件读取策略排除环境变量和 workspace 层。
-工具必须由 `plugin.magpie.mcpEnabled: true` 显式开启，共享的 `plugin.mcpEnabled` 不会开启此网关的工具。
+工具和采集分别需要 `plugin.magpie.mcpEnabled: true`、`plugin.magpie.autoCapture: true` 显式开启，共享设置不会直接开启这两项能力。
+
+Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`recallMaxTokens`、
+`recallContextTimeoutMs`、`nativeAgents`，优先于本插件的文件行为配置；Hook 和工具使用同一套设置。
+服务连接、凭据和身份仍只从文件读取。`gatewayTimeoutMs` 控制宿主 Hook 预算。
+包内示例不会自动保存；未填写的字段继续沿用文件设置或默认值。开启工具或采集必须填写布尔值 `true`。
 
 不会修改文件、合并环境变量中的凭据，或回退读取 `ov.conf`、Root Key、Gateway Token。
 配置缺失、损坏或服务不可用时，召回跳过，模型请求继续；不会沿用旧配置。
@@ -103,11 +109,46 @@ Magpie 的文件读取策略排除环境变量和 workspace 层。
 诊断只记录固定状态和字节数，不记录凭据或记忆正文。
 
 插件直接连接 OV 的普通 REST/MCP 服务，**不要求 OV 开启网关**。
-暂不自动采集会话，也不为自动召回创建 OV Session；原生插件仍可负责采集。
+自动召回本身不创建 OV Session。
+
+## 自动采集与原生插件去重
+
+采集默认关闭。在 `ovcli.conf` 中设置 `plugin.magpie.autoCapture: true`，或在 Magpie 的“选项”中保存
+`"autoCapture": true` 后启用。完整对话先写入本地队列，再由独立后台任务增量写入按连接、Agent、
+会话、workspace、协议隔离的 OV Session；不保存系统指令、注入记忆、宿主提醒和私有推理。
+启用后应新建会话：首轮会绑定当前连接和第一条用户消息。未知的已有历史，包括切换凭据后的旧对话，
+会跳过采集，避免把之前的私有内容复制到新身份。
+工具调用和结果成对保存；未完成的工具续轮、失败和截断的回复不作为完整轮次入库。
+若完成回调丢失，下一条用户请求携带的完整历史可以补齐此前已经结束的对话。
+
+完整轮次写入后，由后台任务调用普通 OV Session 的 `commit` 接口，`keep_recent_count` 为零。
+关闭该 Session 自身的自动提交，避免两个提交方竞争，也不依赖服务端空闲调度器或 OV 网关。
+重复回调不会再次 commit；返回结果代表归档并提交了提取任务，不代表已经生成新记忆。
+若 commit 响应丢失，先核对会话元数据，再继续追加；无法确认时暂停队列，不重复请求提取。
+
+在系统或用户消息中检测到原生 OV 注入标记后，Magpie 对该会话**同时跳过自动召回和采集**。
+支持 `<openviking-context>`、旧版 `<relevant-memories>` 和旧版方括号标记；助手或工具引用的文档不算。
+接管判定按连接和会话持久化，避免后续压缩掉标记后再次启用 Magpie；观察到原生接管后丢弃待同步快照。
+移除原生插件后应新建会话。显式工具不受自动能力让出的影响。
+
+远程网关看不到客户端安装列表；仅采集、不注入标记的原生插件也无法靠消息识别。
+这类 Agent 可在选项中设置 `"nativeAgents": ["pi", "codex", "claude"]`，或填写
+`plugin.magpie.nativeAgents`，明确让出两项自动能力。名称应与 Magpie 上报的 Agent ID 一致。
+不会根据无关机器上的文件名推断插件正在运行。
+
+采集状态在 `<dataDir>/capture/`，目录权限 0700、文件 0600。**待同步文件含对话和工具输出**，
+不含连接凭据。单会话最多 32 个快照、单快照 3 MiB、最多 2,000 条消息。
+同步成功后删除快照，保留进度摘要和归属判定。后台任务有重试预算，后续开启采集的请求也会触发恢复。
+关闭文件中的采集设置会暂停相应队列；更换身份不会将旧队列发送给新用户。
+
+通过稳定前缀 ID、持久化进度和进程锁防止重试或并发重复写入。OV 的 `source_message_ids` 不等于幂等键：
+写入响应丢失时核对当前消息和最多 32 份归档中的来源 ID；无法确认时保留队列，不盲目重发。
+已同步历史被改写时暂停该会话，避免把旧对话重复复制；可新建会话继续。
+这些保守处理可能延迟或跳过采集。宿主在完成回调前崩溃、且再无完整历史请求时，无法仅靠尽力通知恢复尾消息。
 
 ## 可选工具
 
-工具默认关闭。设置 `plugin.magpie.mcpEnabled: true`，然后在 Magpie Library/MCP 路由
+工具默认关闭。设置 `plugin.magpie.mcpEnabled: true`，或在 Magpie 选项中保存 `mcpEnabled: true`，然后在 Magpie Library/MCP 路由
 中为需要的 Agent 开启插件服务。也可通过 Magpie 的 `/mcp/magpie/tools` 访问。
 
 提供 `status`、`find`、`read`、`ls`、`remember`，实际名称由 Magpie 加插件前缀。

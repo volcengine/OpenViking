@@ -49,6 +49,7 @@ environment; editing the file applies to the next operation without restarting.
     "magpie": {
       "enabled": true,
       "autoRecall": true,
+      "autoCapture": false,
       "recallContextTimeoutMs": 700,
       "recallMaxTokens": 1600,
       "recallPeerScope": "all",
@@ -79,8 +80,17 @@ own adapter applies its file-only policy, hook timeout and opt-in tools without
 changing other plugins. Behavior keys use the
 existing shared plugin names. `plugin.magpie` overrides
 the corresponding `plugin` values; global `plugin.enabled: false` disables the
-plugin. Tools require `plugin.magpie.mcpEnabled: true` specifically; a shared
-`plugin.mcpEnabled` does not enable this gateway's tools.
+plugin. Tools and capture require explicit `plugin.magpie.mcpEnabled: true` and
+`plugin.magpie.autoCapture: true`, respectively; shared settings alone do not
+enable either gateway capability.
+
+Magpie's **Options** editor now accepts `autoRecall`, `autoCapture`, `mcpEnabled`,
+`recallMaxTokens`, `recallContextTimeoutMs` and `nativeAgents`. These behavior
+options override the corresponding file settings for this plugin; connection
+credentials and identity always remain file-owned. `gatewayTimeoutMs` controls
+the host's hook budget. The package supplies an example, not saved defaults;
+omitted keys retain the file/default behavior. Hooks and tools use the same
+options. Enabling tools or capture requires the literal boolean `true`.
 
 ## Automatic recall
 
@@ -142,13 +152,70 @@ leave the request unchanged. Diagnostics contain fixed codes and byte counts,
 not credentials or recalled text.
 
 The plugin directly calls the ordinary OV REST/MCP service. **OV Gateway need
-not be enabled.** It does not collect conversations or create OV sessions for
-automatic recall; Agent-native plugins may still own capture. Choose one owner
-for automatic recall when also using an Agent-native OV plugin.
+not be enabled.** Automatic recall does not create OV sessions.
+
+## Automatic capture and native-plugin ownership
+
+Capture is **off by default**. Set `plugin.magpie.autoCapture: true` in
+`ovcli.conf`, or save `"autoCapture": true` in Magpie's plugin Options.
+Start a new chat after enabling it. The first request binds capture to that
+connection and first user message; unknown existing history is skipped,
+including after credentials change, instead of copying earlier private text
+into a newly selected identity.
+Completed exchanges are queued locally, then a detached bounded worker appends
+only new messages to a connection/agent/session/workspace/protocol-scoped OV
+session. System instructions, injected memory, reminders and private reasoning
+are excluded. Complete tool call/result evidence is preserved; incomplete tool
+loops, failed and truncated replies are not saved as completed turns. The next
+human request can recover a previous completed exchange whose response callback
+was lost, provided full client history is still available.
+
+After a complete queued exchange is written, the worker calls the ordinary
+OV Session `commit` endpoint with `keep_recent_count: 0`. Session-side automatic
+commit is disabled so there is one submission owner and no dependency on an
+OV idle scheduler or OV Gateway. Replayed callbacks do not submit another
+commit. The response acknowledges archive creation and schedules extraction;
+it is not proof that new memories were produced. A lost commit acknowledgement
+is reconciled from session metadata before any further appends. An unresolved
+outcome pauses the queue rather than requesting extraction twice.
+
+Before either recall or capture, OpenViking context markers in system/user
+messages yield ownership to the native plugin. This includes
+`<openviking-context>`, legacy `<relevant-memories>` and the legacy bracket
+marker. Assistant/tool quotations do not count. The decision persists for the
+current connection and session, so later compaction cannot reactivate Magpie
+halfway through a native-managed chat. Queued snapshots are discarded once
+native ownership is observed. A fresh chat is needed after removing the native
+integration. Explicit tools remain available if separately enabled.
+
+A remote gateway cannot inspect client installations, and a capture-only native
+plugin might inject no marker. Use `"nativeAgents": ["pi", "codex", "claude"]`
+in Magpie Options (or `plugin.magpie.nativeAgents`) to skip both automatic
+capabilities for known native-managed agents. IDs must match Magpie's agent IDs.
+Installed-but-inactive plugins are not inferred from filenames.
+
+Capture snapshots live under `<dataDir>/capture/`, with private mode-0700
+directories and mode-0600 files. Unlike recall state, pending files contain
+conversation text and tool output. They contain no connection credentials.
+At most 32 pending snapshots per session, 3 MiB per snapshot and 2,000 messages
+are supported. Successful delivery removes the queued snapshot; acknowledgement
+hashes and ownership state remain. Old queues are retried during a bounded
+worker run and on subsequent capture-enabled requests. Disabling capture pauses
+file-configured queued work; identity changes cannot redirect it to another user.
+
+Retries and concurrent workers use stable prefix IDs and durable progress.
+`source_message_ids` are provenance, not OV idempotency keys. If an append's
+acknowledgement is lost, the worker checks source IDs in the active session and
+up to 32 archives. It never blindly resends an uncertain append: unresolved
+delivery stays pending for inspection. Changed delivered history pauses that
+session instead of copying it again; use a new chat for rewritten/compacted
+histories. These conservative cases may delay or skip capture. A host crash
+before a completion callback, without a subsequent full-history request, cannot
+be recovered from Magpie's best-effort callback alone.
 
 ## Optional tools
 
-Set `plugin.magpie.mcpEnabled: true`, then enable this plugin's server in
+Set `plugin.magpie.mcpEnabled: true` (or `mcpEnabled: true` in Magpie Options), then enable this plugin's server in
 Magpie's Library/MCP router for the intended agents. The plugin also participates
 in Magpie's combined `/mcp/magpie/tools` server. Tools are:
 

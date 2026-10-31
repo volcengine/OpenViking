@@ -12,6 +12,13 @@ const ordinaryUser = (message, protocol) => {
 
 export const MEMORY_MARKER = '<openviking-context source="magpie-recall">';
 
+export function hasNativeContext(body, protocol) {
+  const messages = protocol === "gemini" ? body?.contents : protocol === "responses" ? body?.input : body?.messages;
+  const injected = [body?.system, body?.instructions, body?.systemInstruction,
+    ...(Array.isArray(messages) ? messages.filter((m) => object(m) && (ordinaryUser(m, protocol) || ["system", "developer"].includes(m.role))) : [messages])];
+  return /<openviking-context\b|<relevant-memor(?:y|ies)\b|\[OpenViking memory context\]/i.test(JSON.stringify(injected));
+}
+
 export function memoryBlock(memory) {
   const safe = memory.replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker")
     .replace(/<\/?relevant-memor(?:y|ies)\b[^>]*>/gi, "legacy memory wrapper");
@@ -37,9 +44,7 @@ export function describeConversation(body, protocol) {
   if (!Array.isArray(messages) || !messages.length || messages.length > 2000 || !messages.every(object)) return null;
   // Tool results and assistant quotations may contain docs describing these
   // markers. They are data, not evidence of an installed memory plugin.
-  const injected = [body.system, body.instructions, body.systemInstruction,
-    ...messages.filter((m) => ordinaryUser(m, protocol) || ["system", "developer"].includes(m.role))];
-  if (/<openviking-context\b|\[OpenViking memory context\]/i.test(JSON.stringify(injected))) return null;
+  if (hasNativeContext(body, protocol)) return null;
   const users = messages.flatMap((m, index) => ordinaryUser(m, protocol) ? [index] : []);
   if (!users.length) return null;
   const latest = users.at(-1);

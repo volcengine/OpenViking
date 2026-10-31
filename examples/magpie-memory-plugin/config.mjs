@@ -59,15 +59,24 @@ function clientAuthorization(file) {
 }
 
 /** Magpie pins one client snapshot; host defaults do not alter other plugins. */
-export async function loadConfig(env = process.env) {
+export async function loadConfig(env = process.env, options = {}) {
   const files = loadClientCredentialFiles(env);
   const file = files.cliFile;
   const scoped = file.plugin?.magpie;
   if (scoped != null && !isSection(scoped)) {
     throw Object.assign(new Error("OpenViking: invalid"), { code: "invalid" });
   }
-  const { settings, configured, sources } = resolveSettings("magpie", { env: {}, cliFile: file });
+  const nativeAgents = options.nativeAgents ?? scoped?.nativeAgents ?? [];
+  if (!Array.isArray(nativeAgents) || nativeAgents.some((agent) => typeof agent !== "string" || !agent.trim())) {
+    throw Object.assign(new Error("OpenViking: invalid"), { code: "invalid" });
+  }
+  // Host options may tune behavior, never connection credentials or identity.
+  const allowed = ["autoRecall", "autoCapture", "mcpEnabled", "recallMaxTokens", "recallContextTimeoutMs"];
+  const overrides = Object.fromEntries(Object.entries(options || {}).filter(([key]) => allowed.includes(key)));
+  const settingsFile = { ...file, plugin: { ...file.plugin, magpie: { ...scoped, ...overrides } } };
+  const { settings, configured, sources } = resolveSettings("magpie", { env: {}, cliFile: settingsFile });
   if (!configured.has("mcpEnabled")) settings.mcpEnabled = false;
+  if (!configured.has("autoCapture")) settings.autoCapture = false;
   if (!configured.has("recallContextTimeoutMs")) settings.recallContextTimeoutMs = 700;
   const connection = resolveConnection("magpie", { env: { OPENVIKING_CREDENTIAL_SOURCE: "cli" }, files });
   const peerId = resolvePluginPeerId({ settings, configured, sources, credentials: connection, env: {} });
@@ -75,6 +84,7 @@ export async function loadConfig(env = process.env) {
   const version = readManifestVersion(new URL("./package.json", import.meta.url));
   const config = {
     ...settings,
+    autoCapture: settings.autoCapture && (options.autoCapture === true || (options.autoCapture === undefined && scoped?.autoCapture === true)),
     enabled: file.plugin?.enabled !== false && settings.enabled,
     baseUrl: connection.baseUrl, apiKey: connection.apiKey,
     account: connection.account, user: connection.user, peerId,
@@ -84,7 +94,8 @@ export async function loadConfig(env = process.env) {
     userAgent: buildUserAgent("magpie", version),
     recallRewrite: normalizeRewriteMode(settings.recallCompress),
     extraHeaders: file.extra_headers || {}, path: files.cliPath,
-    explicitMcpOptIn: scoped?.mcpEnabled === true,
+    explicitMcpOptIn: options.mcpEnabled === true || (options.mcpEnabled === undefined && scoped?.mcpEnabled === true),
+    nativeAgents,
   };
   for (const knob of KNOBS.filter((knob) => knob.sendOnlyWhenConfigured)) {
     config[`${knob.name}Configured`] = configured.has(knob.name);

@@ -1,10 +1,9 @@
 import { loadConfig } from "./config.mjs";
 import { buildContextSearchBody, isRecallEnabled, selectRecallContent } from "./shared/recall-core.mjs";
-import { connectionHeaders, PluginError, request } from "./http.mjs";
-
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { canonicalRecallValue, recallDigest, withRecallLedger } from "./recall-ledger.mjs";
+import { PluginError, request } from "./http.mjs";
+import { withRecallLedger } from "./recall-ledger.mjs";
+import { connectionScope, dataDirectory } from "./scope.mjs";
+import { nativeOwner } from "./capture.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 import { describeConversation, memoryBlock, replayContext } from "./conversation.mjs";
 
@@ -24,7 +23,7 @@ export function injectContext(body, protocol, memory) {
 const outcome = (error) => error.code === "unconfigured" ? "unbound"
   : ["unauthorized", "invalid"].includes(error.code) ? error.code : "unavailable";
 
-export async function recallRequest(body, ctx, env = process.env) {
+export async function recallRequest(body, ctx, env = process.env, resolvedConfig) {
   if (!["local", "magpie-key"].includes(ctx.origin) || !text(ctx.session)) {
     ctx.report?.("unbound", 0); return;
   }
@@ -34,20 +33,14 @@ export async function recallRequest(body, ctx, env = process.env) {
     ctx.report?.("skipped", 0); return;
   }
   try {
-    const cfg = await loadConfig(env);
+    const cfg = resolvedConfig || await loadConfig(env, ctx.options || {});
     if (!cfg.enabled) { ctx.report?.("skipped", 0); return; }
+    if (await nativeOwner(cfg, ctx, body)) { ctx.report?.("skipped", 0); return; }
     if (cfg.recallPeerScope === "actor" && !cfg.peerId) { ctx.report?.("unbound", 0); return; }
     // No plaintext credentials/queries enter filenames or logs. Changing the
     // connection identity, agent, workspace or model starts a different scope.
-    const headers = Object.fromEntries(Object.entries(connectionHeaders(cfg))
-      .filter(([name]) => name.toLowerCase() !== "user-agent"));
-    const scope = recallDigest(JSON.stringify(canonicalRecallValue({
-      url: cfg.baseUrl, headers,
-      peerScope: cfg.recallPeerScope, configPath: cfg.path,
-      agent: ctx.agent || "", session: ctx.session, cwd: ctx.cwd || "",
-      protocol: ctx.protocol, model: body.model || ctx.model || "",
-    })));
-    const result = await withRecallLedger(cfg.dataDir || join(homedir(), ".openviking", "magpie"), scope, ctx.signal, async (decisions) => {
+    const scope = connectionScope(cfg, ctx, body.model || ctx.model || "");
+    const result = await withRecallLedger(dataDirectory(cfg), scope, ctx.signal, async (decisions) => {
       const { users, latest, fresh, anchors } = conversation;
       // Missing earlier decisions means a restart with lost state, a rewritten
       // history or an unknown compaction. Never attach old memory by text alone.
@@ -107,8 +100,8 @@ export function requiredText(args, key, max = 16000) {
   return value;
 }
 
-export async function toolConfig(env) {
-  const cfg = await loadConfig(env);
+export async function toolConfig(env, options) {
+  const cfg = await loadConfig(env, options);
   if (!cfg.enabled || !cfg.mcpEnabled || !cfg.explicitMcpOptIn) throw new PluginError("disabled");
   return cfg;
 }
