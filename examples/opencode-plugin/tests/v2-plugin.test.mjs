@@ -202,6 +202,15 @@ test("prompt starts session context and recall together and keeps block order", 
   assert.deepEqual(event.metadata.openviking.context, ["<profile/>", "<recall/>"])
 })
 
+test("cleanup commits only sessions with new messages", async () => {
+  const flushes = []
+  const { runtime } = runtimeFixture()
+  runtime.sessionManager.flushAll = async (options) => { flushes.push(options) }
+  const { ctx } = contextFixture()
+  await (await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" }))()
+  assert.deepEqual(flushes, [{ commit: true, onlyIfUncommitted: true }])
+})
+
 test("prompt metadata is persisted and context injection is stable across model steps", async () => {
   let recallCalls = 0
   const event = {
