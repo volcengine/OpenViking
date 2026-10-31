@@ -4,6 +4,7 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
+import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { safeError as safe } from './logger.mjs';
 import { captureStartupStderr } from './runtime-diagnostics.mjs';
@@ -172,8 +173,8 @@ function tomlString(value) {
   return JSON.stringify(value);
 }
 
-export function sanitizeCodexEnv(environment, profile = '', actions = null) {
-  return sanitizeAgentChildEnv(environment, { profile, actions });
+export function sanitizeCodexEnv(environment, profile = '', actions = null, config = {}) {
+  return sanitizeAgentChildEnv(environment, { profile, actions, cliBins: agentCliCommands(config).map(({ bin }) => bin) });
 }
 
 // The daemon is a thin pipe: inbound lines are fed to one persistent native
@@ -906,7 +907,7 @@ export class CodexAgent {
       try {
         child = this._spawn(this.config[this.binConfigKey], args, {
           cwd: this.config.workspace,
-          env: this._sanitizeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken)),
+          env: this._sanitizeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
           detached: process.platform !== 'win32',
           stdio: ['pipe', 'pipe', 'pipe'],

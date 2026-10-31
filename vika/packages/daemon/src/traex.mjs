@@ -3,13 +3,14 @@
 
 import { CodexAgent } from './codex.mjs';
 import { sanitizeAgentChildEnv } from './process-utils.mjs';
+import { agentCliCommands } from './agent-clis.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 
 const TRAEX_RUNTIME = getRuntimeDefinition('traex');
 const TRAEX_APP_SERVER_CONFIG_ARGS = Object.freeze([]);
 
-export function sanitizeTraexEnv(environment, profile = '', actions = null) {
-  return sanitizeAgentChildEnv(environment, { profile, actions });
+export function sanitizeTraexEnv(environment, profile = '', actions = null, config = {}) {
+  return sanitizeAgentChildEnv(environment, { profile, actions, cliBins: agentCliCommands(config).map(({ bin }) => bin) });
 }
 
 // TraeX currently speaks the same app-server JSON-RPC shape that CodexAgent

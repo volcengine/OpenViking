@@ -282,6 +282,10 @@ daemon 和 slash commands 只通过 `AgentRuntime` 的 `start`、`submit`、`sna
 
 ### Runtime 工具接入
 
+随包 CLI 的发现由 `packages/daemon/src/agent-clis.mjs` 统一登记，目前包括 `lark-cli` 和官方 Slack CLI（命令名 `slack`）。Codex/TraeX/Claude/Pi 的子进程 PATH 优先加入这些 CLI 的目录，系统提示词同时列出实际命令路径；安装 release 或源码执行 `npm run setup` 后，无须全局安装或手工修改 PATH。`LARK_CLI_BIN` / `SLACK_CLI_BIN` 覆盖会同时用于 PATH 和提示词，改名及含空格的路径使用经过 shell 转义的实际命令；相对路径以 Vika 包根目录解析。消息投递、profile 和连接器凭证的边界不变，Slack bot token 仍由 Connector 管理。
+
+以后接入新的随包 CLI，在完成固定版本安装后向该清单添加命令名、二进制路径及版本检查参数，即可复用所有本地 runtime 的 PATH、发现提示词和 release 冒烟检查，无须用户额外设置。`node packages/daemon/scripts/check-agent-clis.mjs` 在临时 HOME、独立工作目录和干净 PATH 中检查 sh/bash 能否找到并执行所有登记的 CLI；release 构建会自动运行。
+
 Pi 作为精确版本的 npm 依赖随 release 安装和升级，默认不使用全局 `pi`。daemon 通过会话扩展注册 `personal_agent` MCP（`direct` exposure），不修改用户的 MCP 配置；工具未加载成功则启动失败。Codex/TraeX/Claude/Pi 共用 conversation policy，不再保留 Pi 的 Bash/CLI 工具教程。安装和模型登录见 [install.md](./install.md)。
 
 Agent 工具只有一份定义与实现，在 Core 的 `ActionService`。Codex/TraeX/Claude/Pi 均挂本机 stdio MCP 适配器（`actions/mcp.mjs`），统一转发到 `<dataDir>/actions.sock`，runtime 子进程经 `PERSONAL_AGENT_SOCKET` / `PERSONAL_AGENT_AUTHORITY` 拿到地址和运行权。Self-hosted Ark 使用 Worker 的 bash 调用固定 `lark-cli`，因为 Worker 不在 daemon 的进程树里。Ark 的调用发生在官方 Environment Worker 进程里；Worker 是唯一工具执行面，也只有这条路径能在同一个原生 turn 中多次调用 Environment 内的 CLI。daemon 只观察远端 `agent.tool_use`、`user.tool_result` 与最终状态。云沙箱的严格 JSON Tool Call bridge 已移除；理论上可把 CLI credential 同步到云沙箱重建类似链路，但这不是当前支持或建议的接入方式。Ark 的直接 CLI 路径使用稳定幂等键，但不经过 daemon 的 authority/freshness 与 outbox，因此其可靠性边界与其他 runtime 不同。

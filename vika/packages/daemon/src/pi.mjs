@@ -10,6 +10,7 @@ import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
+import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { assertPiVersion, piCommand, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
@@ -42,8 +43,8 @@ function appendBounded(current, chunk, label) {
   return next;
 }
 
-export function sanitizePiEnv(environment, profile = '', actions = null) {
-  const safeEnv = sanitizeAgentChildEnv(environment, { profile, actions });
+export function sanitizePiEnv(environment, profile = '', actions = null, config = {}) {
+  const safeEnv = sanitizeAgentChildEnv(environment, { profile, actions, cliBins: agentCliCommands(config).map(({ bin }) => bin) });
   // Pi may use the locally configured Volcengine Ark provider. Unlike the
   // other agent runtimes, its model client runs in this child process, so it
   // needs that provider credential to make inference requests.
@@ -228,7 +229,7 @@ export class PiAgent {
       try {
         child = this._spawnPi(args, {
           cwd: this.config.workspace,
-          env: sanitizePiEnv(process.env, this.larkProfile(), agentToolEnv(this.config, this.authorityToken)),
+          env: sanitizePiEnv(process.env, this.larkProfile(), agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
           detached: process.platform !== 'win32',
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -307,7 +308,7 @@ export class PiAgent {
       ];
       if (model) args.push('--model', model);
 
-      const env = sanitizePiEnv(process.env, this.larkProfile(), agentToolEnv(this.config, this.authorityToken));
+      const env = sanitizePiEnv(process.env, this.larkProfile(), agentToolEnv(this.config, this.authorityToken), this.config);
       env.PERSONAL_AGENT_MCP_CONFIG = JSON.stringify({
         ...agentToolServer(this.config, this.authorityToken),
         timeout: Math.max(10, Math.ceil(this.config.sendTimeoutMs / 1_000) + 5),

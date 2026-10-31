@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { agentCliCommands, cliCommandCode } from './agent-clis.mjs';
 
 // The conversation policy is the Core's markdown under agent/ (how inputs,
 // decisions and deliveries work, one section per connector the instance
@@ -40,7 +41,9 @@ export function substitutePromptPlaceholders(text, config = {}) {
   ).trim();
   return String(text ?? '')
     .replaceAll('{{AGENT_NAME}}', agentName(config))
-    .replaceAll('{{VIKA_UPGRADE_TARGET}}', upgradeTarget || '(configured target)');
+    .replaceAll('{{VIKA_UPGRADE_TARGET}}', upgradeTarget || '(configured target)')
+    .replaceAll('{{LARK_CLI}}', () => cliCommandCode(config.larkCliBin || 'lark-cli'))
+    .replaceAll('{{LARK_CLI_HELP}}', () => cliCommandCode(config.larkCliBin || 'lark-cli', ' --help'));
 }
 
 function renderPrompt(config, name) {
@@ -118,12 +121,23 @@ function deliveryRules(config) {
   return renderPrompt(config, path.join('delivery', config.stagedReplies ? 'staged.md' : 'single.md'));
 }
 
+function bundledCliSection(config) {
+  return [
+    '## Bundled command-line tools',
+    '',
+    'These CLIs are installed with Vika and available in your shell. Use the configured commands below, including when a login shell resets PATH. Follow the connector rules for their use; messages still go through the Core tools.',
+    'Use only the identities configured by the daemon; do not log in, configure accounts, or change profiles.',
+    ...agentCliCommands(config).map(({ name, bin }) => `- ${name}: ${cliCommandCode(bin)}`),
+  ].join('\n');
+}
+
 // Codex, TraeX, Claude and Pi: the whole policy, delivered through the Core tools.
 export function assembleConversationPolicy(config = {}) {
   return joinSections([
     renderPrompt(config, 'core.md').replace('{{DELIVERY_RULES}}', () => deliveryRules(config)),
     renderPrompt(config, 'events.md'),
     ...connectorSections(config),
+    bundledCliSection(config),
     renderPrompt(config, 'openviking.md'),
     config.meetingNotes ? renderPrompt(config, 'meeting-notes.md') : '',
     roleSection(config),

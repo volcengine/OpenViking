@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { CodexAgent } from '../src/codex.mjs';
 import {
@@ -15,7 +16,9 @@ import {
   assembleVolcSelfHostedConversationPolicy,
   resolveRolePromptPath,
   rolePrompt,
+  substitutePromptPlaceholders,
 } from '../src/conversation-policy.mjs';
+import { agentCliCommands, cliCommandCode } from '../src/agent-clis.mjs';
 
 const { ROLE_PRESETS } = createRequire(import.meta.url)('../../../deployment-config.cjs');
 
@@ -48,7 +51,7 @@ describe('conversation policy assemble', () => {
     }
     // Lark's own rules stay with Lark.
     const weixin = assembleConversationPolicy({ connectors: ['weixin'] });
-    assert.doesNotMatch(weixin, /lark-cli|ca_|om_|image_key/);
+    assert.doesNotMatch(weixin, /## Lark|ca_|om_|image_key/);
     assert.match(assembleConversationPolicy({ connectors: ['lark'] }), /never pass `--profile`/);
   });
 
@@ -63,7 +66,7 @@ describe('conversation policy assemble', () => {
       assert.ok(text.indexOf('## QQ') < text.indexOf('## Role'));
     }
     const single = assembleConversationPolicy({ connectors: ['qq', 'email'] });
-    assert.doesNotMatch(single, /lark-cli|voice transcript|^## (Slack|Telegram|Weixin)$/m);
+    assert.doesNotMatch(single, /voice transcript|^## (Lark|Slack|Telegram|Weixin)$/m);
     assert.doesNotMatch(assembleConversationPolicy({ connectors: ['lark'] }), /^## QQ$/m);
   });
 
@@ -104,7 +107,7 @@ describe('conversation policy assemble', () => {
     const on = assembleConversationPolicy({ connectors: ['lark'], meetingNotes: true });
     assert.ok(on.indexOf('## Meeting notes') > on.indexOf('## OpenViking memory'));
     assert.match(on, /`read_meeting_note`/);
-    assert.equal(on.replace(`\n\n${read('meeting-notes.md').trim()}`, ''), off);
+    assert.equal(on.replace(`\n\n${substitutePromptPlaceholders(read('meeting-notes.md')).trim()}`, ''), off);
   });
 
   it('adds the mail rules only when a mailbox is connected', () => {
@@ -122,6 +125,44 @@ describe('conversation policy assemble', () => {
       ...fs.readdirSync(path.join(DEFAULT_PROMPT_DIR, 'roles')).map((name) => path.join('roles', name))];
     for (const name of files) {
       assert.doesNotMatch(read(name), /oc_[0-9a-f]{8,}|OpenViking小助手/, name);
+    }
+  });
+
+  it('advertises every bundled CLI from the same catalog as the runtime PATH', () => {
+    const text = assembleConversationPolicy({ connectors: ['weixin'] });
+    assert.match(text, /## Bundled command-line tools/);
+    for (const { name, bin } of agentCliCommands()) assert.ok(text.includes(`- ${name}: ${cliCommandCode(bin)}`));
+    assert.match(text, /messages still go through the Core tools/);
+  });
+
+  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vika-cli-prompt-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const workspace = path.join(root, 'workspace');
+    fs.mkdirSync(workspace);
+    // Include shell expansion, quote, Markdown delimiter and PATH delimiter characters.
+    const larkCliBin = path.join(root, "custom tools:'$HOME`", "renamed-lark-$&");
+    const slackCliBin = path.join(root, 'custom slack', 'renamed-slack');
+    for (const bin of [larkCliBin, slackCliBin]) {
+      fs.mkdirSync(path.dirname(bin), { recursive: true });
+      fs.writeFileSync(bin, '#!/bin/sh\nprintf "%s:%s\\n" "$1" "$LARKSUITE_CLI_PROFILE"\n', { mode: 0o755 });
+    }
+    const text = assembleConversationPolicy({ larkCliBin, slackCliBin, meetingNotes: true });
+    assert.doesNotMatch(text, /\{\{LARK_CLI/);
+    assert.match(text, /never pass `--profile`/);
+    assert.match(text, /auth, login, config, or profile commands/);
+    assert.ok(text.includes(`read the live document with ${cliCommandCode(larkCliBin)}`));
+    for (const bin of [larkCliBin, slackCliBin]) {
+      assert.ok(text.includes(cliCommandCode(bin)));
+      const code = cliCommandCode(bin, ' --help');
+      const fence = code.match(/^`+/)[0];
+      const command = code.slice(fence.length, -fence.length);
+      const result = spawnSync('/bin/sh', ['-c', command], {
+        env: { HOME: root, PATH: '/usr/bin:/bin', LARKSUITE_CLI_PROFILE: 'fixed' }, cwd: workspace, encoding: 'utf8',
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, '--help:fixed\n');
     }
   });
 });
