@@ -781,6 +781,54 @@ test("concurrent saves never race the shared state file (#3877)", async (t) => {
   })
 })
 
+test("concurrent managers use distinct temporary state files (#6775)", async (t) => {
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const origWriteFile = fs.promises.writeFile
+  const origRename = fs.promises.rename
+  const tempPaths = []
+  let activeWrites = 0
+  let maxActiveWrites = 0
+  let raceDetected = false
+
+  t.mock.method(fs.promises, "writeFile", async (file, ...args) => {
+    const isStateWrite = String(file).includes("openviking-session-state.json")
+    if (isStateWrite) {
+      tempPaths.push(String(file))
+      activeWrites += 1
+      maxActiveWrites = Math.max(maxActiveWrites, activeWrites)
+      await delay(20)
+    }
+    try {
+      return await origWriteFile.call(fs.promises, file, ...args)
+    } finally {
+      if (isStateWrite) activeWrites -= 1
+    }
+  })
+  t.mock.method(fs.promises, "rename", async (from, to) => {
+    await delay(5)
+    try {
+      return await origRename.call(fs.promises, from, to)
+    } catch (error) {
+      if (error?.code === "ENOENT") raceDetected = true
+      throw error
+    }
+  })
+
+  await withTempDir("ov-oc-multi-manager-", async (dir) => {
+    const config = { ...baseConfig("http://127.0.0.1:1"), autoCapture: false }
+    const first = createMemorySessionManager({ config, pluginRoot: dir })
+    const second = createMemorySessionManager({ config, pluginRoot: dir })
+
+    await first.handleEvent({ type: "session.created", properties: { info: { id: "first" } } })
+    await second.handleEvent({ type: "session.created", properties: { info: { id: "second" } } })
+    await Promise.all([first.flushAll(), second.flushAll()])
+
+    assert.equal(raceDetected, false)
+    assert.equal(maxActiveWrites, 1)
+    assert.equal(new Set(tempPaths).size, tempPaths.length)
+  })
+})
+
 test("explicit commit writes the response trace_id to the plugin log", async () => {
   const requests = []
   const server = createServer(async (req, res) => {
