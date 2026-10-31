@@ -3,6 +3,7 @@
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -554,6 +555,213 @@ async def test_semantic_executor_skip_vectorization_does_not_schedule_tasks(monk
     )
     assert processor.vectorized_dirs == []
     assert processor.vectorized_files == []
+
+
+@pytest.mark.asyncio
+async def test_memory_reindex_tree_gets_a_turn_during_resource_backlog(monkeypatch):
+    bulk_root = "viking://resources/bulk"
+    memory_root = "viking://user/user1/memories/preferences"
+    tree = {
+        bulk_root: [{"name": f"bulk-{idx}.txt", "isDir": False} for idx in range(8)],
+        memory_root: [{"name": "memory.txt", "isDir": False}],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    _patch_semantic_config(monkeypatch)
+    started, release, memory_submitted = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    order = []
+
+    class BlockingProcessor(_FakeProcessor):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.max_active = 0
+
+        async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                order.append(file_path)
+                bulk_started = sum(path.startswith(bulk_root) for path in order)
+                if file_path.startswith(bulk_root) and bulk_started <= 2:
+                    if bulk_started == 2:
+                        started.set()
+                    await release.wait()
+                return await super()._generate_single_file_summary(
+                    file_path, llm_sem=llm_sem, ctx=ctx
+                )
+            finally:
+                self.active -= 1
+
+    scheduler = SemanticTreeScheduler(max_workers=2)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_semantic_tree_scheduler",
+        lambda _max_workers: scheduler,
+    )
+    processor: Any = BlockingProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role(Role.USER))
+    bulk = SemanticTreeExecutor(processor, "resource", max_concurrent_llm=2, ctx=ctx)
+    memory = SemanticTreeExecutor(processor, "memory", max_concurrent_llm=2, ctx=ctx)
+    original_submit = scheduler.submit
+
+    def submit(executor, work):
+        original_submit(executor, work)
+        if executor is memory:
+            memory_submitted.set()
+
+    monkeypatch.setattr(scheduler, "submit", submit)
+    tasks = []
+    try:
+        tasks.append(asyncio.create_task(bulk.run(bulk_root)))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        tasks.append(asyncio.create_task(memory.run(memory_root)))
+        await asyncio.wait_for(memory_submitted.wait(), timeout=2)
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+        await asyncio.wait_for(scheduler._queue.join(), timeout=1)
+    finally:
+        release.set()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    bulk_order = [path for path in order if path.startswith(bulk_root)]
+    assert bulk_order == [f"{bulk_root}/bulk-{idx}.txt" for idx in range(8)]
+    assert order.index(f"{memory_root}/memory.txt") < len(bulk_order)
+    assert processor.max_active == 2
+    assert bulk.get_stats().done_nodes == 9
+    assert memory.get_stats().done_nodes == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unknown_boundary", [False, True])
+async def test_semantic_scheduler_preserves_scope_fifo_and_unknown_boundaries(unknown_boundary):
+    scheduler = SemanticTreeScheduler(max_workers=1)
+    started, release = asyncio.Event(), asyncio.Event()
+    order = []
+
+    class RecordingExecutor:
+        def __init__(self, root):
+            self._root_uri = root
+            self.closed = False
+            self.failure = None
+
+        def _start_scheduled_work(self):
+            pass
+
+        def _finish_scheduled_work(self):
+            pass
+
+        async def _run_work(self, work):
+            order.append(work.dir_uri)
+            if work.dir_uri == "first":
+                started.set()
+                await release.wait()
+
+        def fail(self, error):
+            self.failure = error
+
+    bulk = RecordingExecutor("viking://resources/shared")
+    other_bulk = RecordingExecutor("viking://resources/shared")
+    memory = RecordingExecutor("viking://user/alice/memories/preferences")
+    unknown = RecordingExecutor("viking://user/alice")
+
+    def submit(executor, name):
+        scheduler.submit(executor, SemanticTreeWork(kind="file", dir_uri=name))
+
+    try:
+        submit(bulk, "first")
+        await asyncio.wait_for(started.wait(), timeout=1)
+        submit(bulk, "old-1")
+        submit(bulk, "old-2")
+        if unknown_boundary:
+            submit(unknown, "boundary")
+        submit(other_bulk, "later-same-scope")
+        submit(memory, "memory-1")
+        submit(memory, "memory-2")
+        release.set()
+        await asyncio.wait_for(scheduler._queue.join(), timeout=1)
+        await asyncio.sleep(scheduler._idle_timeout * 2)
+    finally:
+        release.set()
+        for worker in tuple(scheduler._workers):
+            worker.cancel()
+        await asyncio.gather(*scheduler._workers, return_exceptions=True)
+
+    assert order.index("old-1") < order.index("old-2") < order.index("later-same-scope")
+    assert order.index("memory-1") < order.index("memory-2")
+    if unknown_boundary:
+        assert order.index("old-2") < order.index("boundary") < order.index("memory-1")
+    else:
+        assert order.index("memory-1") < order.index("old-2") < order.index("memory-2")
+    assert scheduler._queue.empty()
+    assert all(executor.failure is None for executor in (bulk, other_bulk, memory, unknown))
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiting_memory_tree_does_not_block_resource_work(monkeypatch):
+    memory_root = "viking://user/user1/memories/preferences"
+    fake_fs = _FakeVikingFS({memory_root: [{"name": "memory.txt", "isDir": False}]})
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    _patch_semantic_config(monkeypatch)
+    scheduler = SemanticTreeScheduler(max_workers=1)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_semantic_tree_scheduler",
+        lambda _max_workers: scheduler,
+    )
+    started, release, memory_submitted, other_ran = (asyncio.Event() for _ in range(4))
+
+    async def hold_resource():
+        started.set()
+        await release.wait()
+
+    async def run_other():
+        other_ran.set()
+
+    bulk: Any = _ScheduledExecutor(hold_resource)
+    bulk._root_uri = "viking://resources/bulk"
+    other: Any = _ScheduledExecutor(run_other)
+    other._root_uri = "viking://resources/other"
+    processor: Any = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role(Role.USER))
+    memory = SemanticTreeExecutor(processor, "memory", max_concurrent_llm=1, ctx=ctx)
+    original_submit = scheduler.submit
+
+    def submit(executor, work):
+        original_submit(executor, work)
+        if executor is memory:
+            memory_submitted.set()
+
+    monkeypatch.setattr(scheduler, "submit", submit)
+    memory_task = None
+    try:
+        scheduler.submit(bulk, SemanticTreeWork(kind="file", dir_uri="first"))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        memory_task = asyncio.create_task(memory.run(memory_root))
+        await asyncio.wait_for(memory_submitted.wait(), timeout=1)
+        scheduler.submit(other, SemanticTreeWork(kind="file", dir_uri="other"))
+        memory_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await memory_task
+        release.set()
+        await asyncio.wait_for(other_ran.wait(), timeout=1)
+        await asyncio.wait_for(scheduler._queue.join(), timeout=1)
+    finally:
+        release.set()
+        if memory_task is not None and not memory_task.done():
+            memory_task.cancel()
+            await asyncio.gather(memory_task, return_exceptions=True)
+        for worker in tuple(scheduler._workers):
+            worker.cancel()
+        await asyncio.gather(*scheduler._workers, return_exceptions=True)
+
+    assert not processor.summarized_files
+    assert scheduler._queue.empty()
 
 
 if __name__ == "__main__":
