@@ -1,390 +1,353 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+"""Account authentication contracts against configured Redis and MySQL."""
 
 import asyncio
+import base64
 import json
+import os
 import threading
+from types import SimpleNamespace
+from typing import Any
+from uuid import uuid4
 
 import pytest
+from sqlalchemy import create_engine, delete
+from sqlalchemy.engine import URL
 
-from openviking.server.account_stores.redis_client import RedisClientHandle
+from openviking.server.account_stores import redis_mysql
+from openviking.server.account_stores.base import AccountStore
+from openviking.server.account_stores.mysql import MySQLAccountStore
+from openviking.server.account_stores.mysql_schema import Account, Base
 from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
-from openviking.server.account_stores.redis_runtime import RedisRuntime
-
-
-class _FakeMySQLStore:
-    _service_name = "test"
-    _engine_options = {"pool_size": 2}
-
-    def __init__(self) -> None:
-        self.loaded = False
-        self.closed = False
-        self.get_user_calls = 0
-
-    async def load(self) -> None:
-        self.loaded = True
-
-    async def close(self) -> None:
-        self.closed = True
-
-    async def get_user(self, account_id: str, user_id: str):
-        del account_id, user_id
-        self.get_user_calls += 1
-        return None
-
-
-class _LoopBoundRedis:
-    def __init__(self) -> None:
-        self.owner_loop = None
-        self.calls: list[tuple[str, asyncio.AbstractEventLoop, str]] = []
-        self.closed = False
-
-    def _record(self, method: str) -> None:
-        loop = asyncio.get_running_loop()
-        if self.owner_loop is None:
-            self.owner_loop = loop
-        assert loop is self.owner_loop
-        self.calls.append((method, loop, threading.current_thread().name))
-
-    async def ping(self) -> bool:
-        self._record("ping")
-        return True
-
-    async def get(self, key: str) -> str:
-        del key
-        self._record("get")
-        return json.dumps(
-            {
-                "found": True,
-                "value": {"user_id": "alice", "role": "admin"},
-            }
-        )
-
-    async def aclose(self) -> None:
-        self._record("aclose")
-        self.closed = True
-
-
-class _BlockingRedis(_LoopBoundRedis):
-    def __init__(self, *, block_ping: bool = False, block_close: bool = False) -> None:
-        super().__init__()
-        self.ping_started = threading.Event()
-        self.close_started = threading.Event()
-        self.continue_ping = asyncio.Event()
-        self.continue_close = asyncio.Event()
-        if not block_ping:
-            self.continue_ping.set()
-        if not block_close:
-            self.continue_close.set()
-
-    async def ping(self) -> bool:
-        self._record("ping")
-        self.ping_started.set()
-        await self.continue_ping.wait()
-        return True
-
-    async def aclose(self) -> None:
-        self._record("aclose")
-        self.close_started.set()
-        await self.continue_close.wait()
-        self.closed = True
-
-    def unblock(self) -> None:
-        if self.owner_loop is not None and not self.owner_loop.is_closed():
-            self.owner_loop.call_soon_threadsafe(self.continue_ping.set)
-            self.owner_loop.call_soon_threadsafe(self.continue_close.set)
 
 
 @pytest.fixture
-async def lifecycle_stores(monkeypatch):
-    runtime = RedisRuntime()
-    pending_clients = []
-    created_clients = []
-    stores = []
-
-    def create_client(params):
-        del params
-        redis = pending_clients.pop(0)
-        created_clients.append(redis)
-        return RedisClientHandle(redis)
-
-    monkeypatch.setattr(
-        "openviking.server.account_stores.redis_mysql.create_redis_client", create_client
+async def backend():
+    raw_mysql = os.environ.get("OV_TEST_MYSQL")
+    endpoint = os.environ.get("OV_TEST_REDIS")
+    if not raw_mysql or not endpoint:
+        pytest.skip("Set OV_TEST_MYSQL (JSON) and OV_TEST_REDIS for account-store contracts")
+    redis = pytest.importorskip("redis")
+    params = json.loads(raw_mysql)
+    prefix = f"ov:test:{uuid4().hex}"
+    service = f"test-{uuid4().hex}"
+    engine = create_engine(
+        URL.create(
+            "mysql+pymysql",
+            username=params["user"],
+            **{key: params[key] for key in ("host", "port", "password", "database")},
+        )
     )
-    monkeypatch.setattr(
-        "openviking.server.account_stores.redis_mysql.get_shared_redis_runtime", lambda: runtime
-    )
+    Base.metadata.create_all(engine)
+    inspection = redis.Redis.from_url(endpoint, decode_responses=True)
+    stores: list[AccountStore] = []
+    services = {service}
 
-    def make_store(redis):
-        mysql = _FakeMySQLStore()
-        store = RedisMySQLAccountStore(service_name="test", params=_params(), mysql_store=mysql)
-        pending_clients.append(redis)
-        stores.append((store, redis))
+    async def make_mysql(mode="hash", service_name=service):
+        services.add(service_name)
+        mysql = MySQLAccountStore(
+            service_name=service_name,
+            params={
+                **params,
+                "credential_storage": mode,
+                "credential_encryption_key": base64.urlsafe_b64encode(bytes(range(32))).decode(),
+            },
+        )
+        stores.append(mysql)
+        await mysql.load()
+        return mysql
+
+    async def make_store():
+        mysql = await make_mysql()
+        store = RedisMySQLAccountStore(
+            service_name=service,
+            mysql_store=mysql,
+            params={
+                "cache": {
+                    "provider": "redis",
+                    "params": {
+                        "mode": "standalone",
+                        "endpoints": [endpoint],
+                        "key_prefix": prefix,
+                    },
+                }
+            },
+        )
+        stores.append(store)
+        await store.load()
         return store, mysql
 
-    yield make_store, runtime, created_clients
-
-    for _, redis in stores:
-        redis.unblock()
-    await asyncio.gather(*(store.close() for store, _ in stores), return_exceptions=True)
-    # Also retire leaked leases when running these regressions against the old code.
-    while runtime._leases:
-        await runtime.release()
-    with runtime._state_lock:
-        stopped = runtime._stopped
-    if stopped is not None:
-        assert await asyncio.to_thread(stopped.wait, 2)
-
-
-async def _wait_started(event: threading.Event) -> None:
-    assert await asyncio.to_thread(event.wait, 2)
-
-
-async def _on_other_loop(operation) -> None:
-    await asyncio.to_thread(asyncio.run, operation())
-
-
-def _params() -> dict[str, object]:
-    return {
-        "cache": {
-            "provider": "redis",
-            "params": {
-                "mode": "standalone",
-                "endpoints": ["redis://127.0.0.1:6379"],
-            },
-        }
-    }
-
-
-async def test_owned_redis_client_lifecycle_uses_private_loop(monkeypatch) -> None:
-    caller_loop = asyncio.get_running_loop()
-    mysql = _FakeMySQLStore()
-    redis = _LoopBoundRedis()
-    factory_calls: list[tuple[asyncio.AbstractEventLoop, str]] = []
-
-    def create_client(params):
-        del params
-        factory_calls.append((asyncio.get_running_loop(), threading.current_thread().name))
-        return RedisClientHandle(redis)
-
-    monkeypatch.setattr(
-        "openviking.server.account_stores.redis_mysql.create_redis_client",
-        create_client,
-    )
-    store = RedisMySQLAccountStore(
-        service_name="test",
-        params=_params(),
-        mysql_store=mysql,
-    )
-
-    await store.load()
     try:
-        assert await store.get_user("account", "alice") == {
-            "user_id": "alice",
-            "role": "admin",
-        }
-        assert mysql.get_user_calls == 0
+        reader, mysql = await make_store()
+        writer, authority = await make_store()
+        # Seed through MySQL so the first Redis authentication is genuinely cold.
+        await authority.create_account_with_api_key("acme", "admin", "admin-key")
+        await authority.create_user_with_api_key("acme", "alice", "user", "old-key")
+        yield SimpleNamespace(reader=reader, writer=writer, mysql=mysql, make_mysql=make_mysql)
     finally:
-        await store.close()
+        for store in reversed(stores):
+            await store.close()
+        keys = list(inspection.scan_iter(match=f"{prefix}:*"))
+        if keys:
+            inspection.delete(*keys)
+        inspection.close()
+        with engine.begin() as connection:
+            connection.execute(delete(Account).where(Account.service_name.in_(services)))
+        engine.dispose()
 
-    assert mysql.loaded
-    assert mysql.closed
-    assert redis.closed
-    assert redis.owner_loop is not caller_loop
-    assert factory_calls == [(redis.owner_loop, "openviking-redis")]
-    assert [method for method, _, _ in redis.calls] == ["ping", "get", "aclose"]
-    assert {thread_name for _, _, thread_name in redis.calls} == {"openviking-redis"}
+
+async def snapshot(store, key="old-key"):
+    return await store.get_auth_snapshot(key, account_id_hint="acme", user_id_hint="alice")
 
 
-async def test_injected_redis_client_is_not_closed() -> None:
-    mysql = _FakeMySQLStore()
-    redis = _LoopBoundRedis()
-    store = RedisMySQLAccountStore(
-        service_name="test",
-        params=_params(),
-        mysql_store=mysql,
-        redis_client=redis,
+async def wait(event):
+    assert await asyncio.to_thread(event.wait, 5), "operation did not reach its gate"
+
+
+@pytest.fixture
+def paused_snapshot(backend, monkeypatch):
+    from redis.asyncio import Redis
+
+    gate = SimpleNamespace(
+        started=threading.Event(),
+        release=threading.Event(),
+        joined=threading.Event(),
+        cancelled=threading.Event(),
+        settled=threading.Event(),
+        cleanup=threading.Event(),
+        calls=0,
     )
+    gate.cleanup.set()
+    original = backend.mysql.get_auth_snapshot
+    eval_command: Any = Redis.eval
+    reads = 0
 
-    await store.load()
-    await store.close()
+    async def observed_eval(client, *args, **kwargs):
+        nonlocal reads
+        result = await eval_command(client, *args, **kwargs)
+        reads += 1
+        if reads == 2:
+            gate.joined.set()
+        return result
 
-    assert [method for method, _, _ in redis.calls] == ["ping"]
-    assert not redis.closed
+    async def paused(*args, **kwargs):
+        gate.calls += 1
+        value = await original(*args, **kwargs)
+        if gate.calls == 1:
+            gate.started.set()
+            try:
+                await wait(gate.release)
+            except asyncio.CancelledError:
+                gate.cancelled.set()
+                await wait(gate.cleanup)
+                raise
+            finally:
+                gate.settled.set()
+        return value
+
+    monkeypatch.setattr(Redis, "eval", observed_eval)
+    monkeypatch.setattr(backend.mysql, "get_auth_snapshot", paused)
+    yield gate
+    gate.release.set()
+    gate.cleanup.set()
 
 
-async def test_loaded_stores_share_runtime_until_last_store_closes() -> None:
-    first_redis = _LoopBoundRedis()
-    second_redis = _LoopBoundRedis()
-    first = RedisMySQLAccountStore(
-        service_name="test",
-        params=_params(),
-        mysql_store=_FakeMySQLStore(),
-        redis_client=first_redis,
-    )
-    second = RedisMySQLAccountStore(
-        service_name="test",
-        params=_params(),
-        mysql_store=_FakeMySQLStore(),
-        redis_client=second_redis,
-    )
+@pytest.mark.parametrize("mode", ["hash", "encrypted"])
+async def test_mysql_snapshot_verifies_credentials_and_scopes_identity(backend, mode):
+    mysql = await backend.make_mysql(mode)
+    assert await snapshot(mysql) == {
+        "account_id": "acme",
+        "user_id": "alice",
+        "role": "user",
+        "group_ids": (),
+    }
+    await mysql.create_user_with_api_key("acme", "bob", "admin", "bob-key")
+    await mysql.create_group("acme", "team")
+    await mysql.add_group_member("acme", "team", "bob")
+    assert (await mysql.get_auth_snapshot("bob-key"))["group_ids"] == ("team",)
+    assert await mysql.get_auth_snapshot("bob-key", user_id_hint="alice") is None
+    assert await mysql.get_auth_snapshot("bob-key", account_id_hint="other") is None
+    assert await mysql.get_auth_snapshot("invalid-key") is None
+    isolated = await backend.make_mysql(mode, f"test-{uuid4().hex}")
+    assert await isolated.get_auth_snapshot("bob-key") is None
+    await mysql.replace_active_user_api_key("acme", "bob", "new-key")
+    assert await mysql.get_auth_snapshot("bob-key") is None
+    assert (await mysql.get_auth_snapshot("new-key"))["user_id"] == "bob"
 
-    await first.load()
-    await second.load()
-    assert first_redis.owner_loop is second_redis.owner_loop
 
-    await first.close()
-    assert await second.get_user("account", "alice") == {
+@pytest.mark.parametrize("user_id", ["alice", None], ids=["user", "account"])
+async def test_cached_snapshot_observes_role_groups_and_deletion(backend, user_id):
+    reader, writer = backend.reader, backend.writer
+    await snapshot(reader)
+    await snapshot(reader)
+    await writer.set_role("acme", "alice", "admin")
+    await writer.create_group("acme", "team")
+    await writer.add_group_member("acme", "team", "alice")
+    assert await snapshot(reader) == {
+        "account_id": "acme",
         "user_id": "alice",
         "role": "admin",
+        "group_ids": ("team",),
     }
-    await second.close()
+    await writer.delete_group("acme", "team")
+    assert (await snapshot(reader))["group_ids"] == ()
+    await writer.begin_deletion(
+        "acme", user_id, task_id="delete", owner_account_id="system", owner_user_id="system"
+    )
+    assert await snapshot(reader) is None
 
 
-async def test_cancel_after_redis_lease_acquisition_releases_store(lifecycle_stores, monkeypatch):
-    make_store, runtime, created_clients = lifecycle_stores
-    redis = _BlockingRedis(block_ping=True)
-    store, mysql = make_store(redis)
-    caller_loop = asyncio.get_running_loop()
-    acquire = runtime._acquire_on_loop
+@pytest.mark.parametrize("cold", [True, False], ids=["cold", "warm"])
+@pytest.mark.parametrize("user_id", ["alice", None], ids=["user", "account"])
+async def test_revoke_does_not_join_or_publish_an_earlier_snapshot(
+    backend, monkeypatch, cold, user_id
+):
+    if not cold:
+        await snapshot(backend.reader)
+    started, release = threading.Event(), threading.Event()
+    original = backend.mysql.get_auth_snapshot
+    first = True
 
-    async def acquire_then_cancel():
-        await acquire()
-        caller_loop.call_soon_threadsafe(loading.cancel)
+    async def paused(*args, **kwargs):
+        nonlocal first
+        value = await original(*args, **kwargs)
+        if first:
+            first = False
+            started.set()
+            await wait(release)
+        return value
 
-    monkeypatch.setattr(runtime, "_acquire_on_loop", acquire_then_cancel)
-    loading = asyncio.create_task(store.load())
-
-    with pytest.raises(asyncio.CancelledError):
-        await loading
-
-    assert runtime._leases == 0
-    assert not store._redis_lease
-    assert mysql.closed
-    assert created_clients == [redis]
-    assert redis.closed
-
-
-async def test_repeated_load_cancellation_waits_for_client_cleanup(lifecycle_stores):
-    make_store, runtime, _ = lifecycle_stores
-    redis = _BlockingRedis(block_ping=True, block_close=True)
-    store, mysql = make_store(redis)
-    loading = asyncio.create_task(store.load())
+    monkeypatch.setattr(backend.mysql, "get_auth_snapshot", paused)
+    old_read = asyncio.create_task(snapshot(backend.reader))
     try:
-        await _wait_started(redis.ping_started)
-        loading.cancel()
-        await _wait_started(redis.close_started)
-        loading.cancel()
-        await asyncio.sleep(0)
-        assert not loading.done()
-        assert not mysql.closed
+        await wait(started)
+        await backend.writer.revoke_active_api_keys("acme", user_id)
+        assert await asyncio.wait_for(snapshot(backend.reader), 5) is None
+        release.set()
+        assert (await old_read)["user_id"] == "alice"
+        assert await snapshot(backend.reader) is None
+    finally:
+        release.set()
+        await asyncio.gather(old_read, return_exceptions=True)
 
-        redis.unblock()
+
+async def test_cancelling_one_waiter_preserves_the_shared_read(backend, paused_snapshot):
+    gate = paused_snapshot
+    first = asyncio.create_task(snapshot(backend.reader))
+    second = None
+    try:
+        await wait(gate.started)
+        second = asyncio.create_task(snapshot(backend.reader))
+        await wait(gate.joined)
+        first.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await loading
-
-        assert redis.closed
-        assert mysql.closed
-        assert runtime._leases == 0
-        assert not store._redis_lease
+            await first
+        gate.release.set()
+        assert (await second)["user_id"] == "alice"
+        assert gate.calls == 1
+        assert not gate.cancelled.is_set()
     finally:
-        redis.unblock()
-        await asyncio.gather(loading, return_exceptions=True)
+        gate.release.set()
+        await asyncio.gather(first, *([second] if second else []), return_exceptions=True)
 
 
-@pytest.mark.parametrize("other_loops", [False, True])
-async def test_concurrent_loads_acquire_one_redis_lease(lifecycle_stores, other_loops):
-    make_store, runtime, created_clients = lifecycle_stores
-    redis = _BlockingRedis(block_ping=True)
-    store, _ = make_store(redis)
-    loads = asyncio.gather(
-        *(_on_other_loop(store.load) if other_loops else store.load() for _ in range(2))
+async def test_close_waits_for_orphan_read_cleanup(backend, paused_snapshot):
+    gate = paused_snapshot
+    read = asyncio.create_task(snapshot(backend.reader))
+    closing = None
+    try:
+        await wait(gate.started)
+        read.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await read
+        gate.cleanup.clear()
+        closing = asyncio.create_task(backend.reader.close())
+        await wait(gate.cancelled)
+        assert not closing.done()
+        gate.cleanup.set()
+        await closing
+        assert gate.settled.is_set()
+        assert (await snapshot(backend.writer))["user_id"] == "alice"
+    finally:
+        gate.release.set()
+        gate.cleanup.set()
+        await asyncio.gather(read, *([closing] if closing else []), return_exceptions=True)
+
+
+async def test_redis_failure_reads_authority_and_preserves_database_errors(backend, monkeypatch):
+    from redis.asyncio import Redis
+
+    await snapshot(backend.reader)
+    await snapshot(backend.reader)
+    await backend.mysql.set_role("acme", "alice", "admin")
+
+    async def offline(*args, **kwargs):
+        raise OSError("offline")
+
+    monkeypatch.setattr(Redis, "eval", offline)
+    assert (await snapshot(backend.reader))["role"] == "admin"
+    with monkeypatch.context() as patch:
+        patch.setattr(backend.mysql, "get_auth_snapshot", offline)
+        with pytest.raises(OSError, match="offline"):
+            await snapshot(backend.reader)
+    assert (await snapshot(backend.reader))["role"] == "admin"
+
+
+async def test_concurrent_lifecycle_keeps_other_stores_usable_and_stops_runtime(
+    backend, monkeypatch
+):
+    await backend.reader.close()
+    threads = []
+    factory = redis_mysql.create_redis_client
+
+    def create_client(params):
+        threads.append(threading.current_thread())
+        return factory(params)
+
+    monkeypatch.setattr(redis_mysql, "create_redis_client", create_client)
+    await asyncio.gather(
+        backend.reader.load(), asyncio.to_thread(lambda: asyncio.run(backend.reader.load()))
     )
-    try:
-        await _wait_started(redis.ping_started)
-        redis.unblock()
-        await loads
-
-        assert runtime._leases == 1
-        assert store._redis_lease
-        assert created_clients == [redis]
-        await store.close()
-        assert runtime._leases == 0
-        assert [method for method, _, _ in redis.calls].count("aclose") == 1
-    finally:
-        redis.unblock()
-        await asyncio.gather(loads, return_exceptions=True)
-
-
-@pytest.mark.parametrize("other_loops", [False, True])
-async def test_concurrent_closes_preserve_another_stores_lease(lifecycle_stores, other_loops):
-    make_store, runtime, _ = lifecycle_stores
-    redis = _BlockingRedis(block_close=True)
-    first, _ = make_store(redis)
-    second, second_mysql = make_store(_BlockingRedis())
-    await first.load()
-    await second.load()
-    closes = asyncio.gather(
-        *(_on_other_loop(first.close) if other_loops else first.close() for _ in range(2)),
-        return_exceptions=True,
+    assert len(threads) == 1
+    assert threads[0] is not threading.current_thread()
+    assert (await snapshot(backend.reader))["user_id"] == "alice"
+    await asyncio.gather(
+        backend.reader.close(), asyncio.to_thread(lambda: asyncio.run(backend.reader.close()))
     )
-    try:
-        await _wait_started(redis.close_started)
-        redis.unblock()
-        assert await closes == [None, None]
-
-        assert runtime._leases == 1
-        assert second._redis_lease
-        assert await second.get_user("account", "alice") == {
-            "user_id": "alice",
-            "role": "admin",
-        }
-        assert second_mysql.get_user_calls == 0
-        assert [method for method, _, _ in redis.calls].count("aclose") == 1
-        await second.close()
-        assert runtime._leases == 0
-    finally:
-        redis.unblock()
-        await asyncio.gather(closes, return_exceptions=True)
+    assert (await snapshot(backend.writer))["user_id"] == "alice"
+    await backend.writer.close()
+    await asyncio.to_thread(threads[0].join, 5)
+    assert not threads[0].is_alive()
 
 
-async def test_load_waits_for_in_progress_close(lifecycle_stores, monkeypatch):
-    make_store, runtime, _ = lifecycle_stores
-    first_redis = _BlockingRedis(block_close=True)
-    store, _ = make_store(first_redis)
-    await store.load()
-    closing = asyncio.create_task(store.close())
-    reloading = None
-    try:
-        await _wait_started(first_redis.close_started)
-        second_redis = _BlockingRedis()
-        monkeypatch.setattr(
-            "openviking.server.account_stores.redis_mysql.create_redis_client",
-            lambda params: RedisClientHandle(second_redis),
-        )
-        reloading = asyncio.create_task(store.load())
-        await asyncio.sleep(0)
+async def test_cancelled_startup_releases_the_runtime(backend, monkeypatch):
+    from redis.asyncio import Redis
 
-        async def barrier():
-            pass
+    await backend.reader.close()
+    await backend.writer.close()
+    started = threading.Event()
+    threads = []
+    ping = Redis.ping
 
-        # Admit the reload while close is still blocked on the client.
-        await runtime.run(barrier)
-        first_redis.unblock()
-        await asyncio.gather(closing, reloading)
+    async def blocked_ping(client, *args, **kwargs):
+        await ping(client, *args, **kwargs)
+        threads.append(threading.current_thread())
+        started.set()
+        await asyncio.Future()
 
-        assert first_redis.closed
-        assert runtime._leases == 1
-        assert store._redis_lease
-        assert store._redis is second_redis
-        assert await store.get_user("account", "alice") == {
-            "user_id": "alice",
-            "role": "admin",
-        }
-        await store.close()
-        assert second_redis.closed
-        assert runtime._leases == 0
-    finally:
-        first_redis.unblock()
-        tasks = [closing] if reloading is None else [closing, reloading]
-        await asyncio.gather(*tasks, return_exceptions=True)
+    with monkeypatch.context() as patch:
+        patch.setattr(Redis, "ping", blocked_ping)
+        loading = asyncio.create_task(backend.reader.load())
+        try:
+            await wait(started)
+            loading.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await loading
+            await asyncio.to_thread(threads[0].join, 5)
+            assert not threads[0].is_alive()
+        finally:
+            loading.cancel()
+            await asyncio.gather(loading, return_exceptions=True)
+    await backend.reader.load()
+    assert (await snapshot(backend.reader))["user_id"] == "alice"

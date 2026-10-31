@@ -81,9 +81,9 @@ class ResolvedIdentity:
     role: Role
     account_id: Optional[str] = None
     user_id: Optional[str] = None
-    # Trusted auth plugins may attach a request-scoped group snapshot. Empty
-    # means callers should fall back to the server-managed group registry.
-    group_ids: tuple[str, ...] = ()
+    # API-key snapshots provide resolved groups (including empty). Trusted
+    # plugins may supply asserted groups; absent groups use the local registry.
+    group_ids: tuple[str, ...] | None = None
     # True when this identity was minted from an OAuth-issued bearer token;
     # downstream checks (e.g. ROOT-requires-explicit-tenant headers) can skip
     # rules that target raw API-key auth, since OAuth claims already pin
