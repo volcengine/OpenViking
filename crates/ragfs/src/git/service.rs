@@ -951,6 +951,8 @@ impl GitService {
             .await?,
         );
         let filtered_paths = req.paths.as_deref();
+        // Tree OIDs are immutable; reuse decoded ancestors between comparisons.
+        let mut tree_cache = crate::git::tree_builder::TreeLookupCache::new();
         let mut next_meta: Option<CommitMeta> = None;
         let mut scanned = 0usize;
         let mut out = Vec::new();
@@ -975,12 +977,14 @@ impl GitService {
                 None => true,
                 Some(paths) => {
                     scanned += 1;
+                    tree_cache.begin_batch();
                     commit_touches_any_path(
                         self.object_store.as_ref(),
                         &req.account,
                         meta.tree,
                         parent_meta.as_ref().map(|parent| parent.tree),
                         paths,
+                        &mut tree_cache,
                     )
                     .await?
                 }
@@ -1561,29 +1565,16 @@ async fn commit_touches_any_path(
     current_tree: ObjectId,
     parent_tree: Option<ObjectId>,
     paths: &[String],
+    tree_cache: &mut crate::git::tree_builder::TreeLookupCache,
 ) -> Result<bool, GitError> {
-    let mut current_cache = crate::git::tree_builder::TreeLookupCache::new();
-    let mut parent_cache = crate::git::tree_builder::TreeLookupCache::new();
-
     for path in paths {
-        let current = crate::git::tree_builder::lookup_cached(
-            store,
-            account,
-            current_tree,
-            path,
-            &mut current_cache,
-        )
-        .await?;
+        let current =
+            crate::git::tree_builder::lookup_cached(store, account, current_tree, path, tree_cache)
+                .await?;
         let parent = match parent_tree {
             Some(tree) => {
-                crate::git::tree_builder::lookup_cached(
-                    store,
-                    account,
-                    tree,
-                    path,
-                    &mut parent_cache,
-                )
-                .await?
+                crate::git::tree_builder::lookup_cached(store, account, tree, path, tree_cache)
+                    .await?
             }
             None => None,
         };
@@ -5617,7 +5608,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_filtered_log_reads_each_commit_object_at_most_once() {
+    async fn test_filtered_log_reads_each_history_object_at_most_once() {
         let dir = tempfile::tempdir().unwrap();
         let object_store = Arc::new(GetSpyObjectStore {
             inner: LocalObjectStore::new(dir.path()),
@@ -5631,6 +5622,7 @@ mod tests {
             ref_store as Arc<dyn RefStore>,
         );
 
+        vfs.put("resources/stable/target.md", b"unchanged");
         let mut commits = Vec::new();
         for version in 1..=4 {
             let content = format!("v{version}");
@@ -5647,7 +5639,7 @@ mod tests {
                     account: "acct_log_reads".into(),
                     branch: "main".into(),
                     limit: 1,
-                    paths: Some(vec!["resources/never-created.md".into()]),
+                    paths: Some(vec!["resources/stable/never-created.md".into()]),
                 },
                 3,
             )
@@ -5660,8 +5652,47 @@ mod tests {
 
         let commit_gets: usize = commits.iter().map(|oid| object_store.count_gets(oid)).sum();
         assert_eq!(commit_gets, 4, "three candidates plus one parent lookahead");
-        for oid in commits {
-            assert_eq!(object_store.count_gets(&oid), 1, "commit {oid} was re-read");
+        for oid in &commits {
+            assert_eq!(object_store.count_gets(oid), 1, "commit {oid} was re-read");
+        }
+        let gets = object_store.gets.lock().unwrap().clone();
+        let unique_gets: HashSet<_> = gets.iter().collect();
+        assert_eq!(
+            gets.len(),
+            unique_gets.len(),
+            "history objects were re-read"
+        );
+
+        for (paths, expected) in [
+            (vec!["resources/stable/never-created.md"], vec![]),
+            (
+                vec![
+                    "resources/stable/never-created.md",
+                    "resources/stable/target.md",
+                    "resources/stable",
+                ],
+                vec![commits[0]],
+            ),
+        ] {
+            object_store.reset();
+            let log = svc
+                .log(LogRequest {
+                    account: "acct_log_reads".into(),
+                    branch: "main".into(),
+                    limit: 10,
+                    paths: Some(paths.into_iter().map(str::to_owned).collect()),
+                })
+                .await
+                .unwrap();
+            let oids: Vec<_> = log.into_iter().map(|entry| entry.oid).collect();
+            assert_eq!(oids, expected);
+            let gets = object_store.gets.lock().unwrap().clone();
+            let unique_gets: HashSet<_> = gets.iter().collect();
+            assert_eq!(
+                gets.len(),
+                unique_gets.len(),
+                "history objects were re-read"
+            );
         }
     }
 
