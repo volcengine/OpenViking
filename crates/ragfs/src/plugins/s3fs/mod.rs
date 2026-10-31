@@ -32,6 +32,7 @@ use crate::core::context::FsContextView;
 use crate::core::filesystem::{relative_depth, relative_match_file, sort_directory_entries};
 use crate::core::glob::PreparedGlob;
 use crate::core::grep::GrepLineCollector;
+use crate::core::internal_names::is_hidden_runtime_lock_name;
 use crate::core::types::GrepContextLine;
 use crate::core::{
     ConfigParameter, Error, FileInfo, FileSystem, GlobEntry, GlobPage, GrepMatch, GrepOptions,
@@ -582,8 +583,12 @@ impl FileSystem for S3FileSystem {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
 
-        // Check if it's a directory
-        if key.ends_with('/') || self.client.directory_exists(&normalized).await? {
+        // Runtime lock names are reserved for exact objects. A missing token
+        // needs only GET; probing a directory marker and prefix adds two remote
+        // requests to every uncontended lock check. Keep normal file/directory
+        // disambiguation for all other paths and use the same GET error mapping.
+        let is_lock = is_hidden_runtime_lock_name(normalized.rsplit('/').next().unwrap_or(""));
+        if !is_lock && (key.ends_with('/') || self.client.directory_exists(&normalized).await?) {
             // Try to read as file first
             if self.client.head_object(&key).await?.is_none() {
                 return Err(Error::IsADirectory(normalized));
@@ -1435,6 +1440,9 @@ plugins:
         &self.config_params
     }
 }
+
+#[cfg(test)]
+mod read_tests;
 
 #[cfg(test)]
 mod tests {

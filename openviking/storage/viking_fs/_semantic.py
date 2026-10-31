@@ -17,6 +17,7 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.acl import AclAction
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.viking_fs._base import (
     _ensure_filter_present,
     _ensure_non_empty_search_query,
@@ -509,10 +510,11 @@ class _SemanticMixin:
         *,
         lease_ref: Any = None,
     ) -> None:
-        """Write context to AGFS (L0/L1/L2)."""
+        """Write context to AGFS (L0/L1/L2), sharing a lease for multiple files."""
 
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
+        lock_guard = PathLockGuard(self._async_agfs)
 
         try:
             await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
@@ -523,6 +525,24 @@ class _SemanticMixin:
             except Exception as e:
                 if "exist" not in str(e).lower():
                     raise
+
+            target_uris = [
+                f"{uri}/{filename}"
+                for filename, value in (
+                    (content_filename, content),
+                    (".abstract.md", abstract),
+                    (".overview.md", overview),
+                )
+                if value
+            ]
+            if lease_ref is None and len(target_uris) > 1:
+                # Retain per-file Exact protection without acquiring/releasing
+                # separately for L0 and L1. write_file still applies permissions,
+                # sanitization, encryption, and the post-write hook.
+                target_paths = [self._uri_to_path(target, ctx=ctx) for target in target_uris]
+                lease_ref = await lock_guard.acquire(
+                    lambda: self._async_agfs.pathlock_acquire_exact_batch(target_paths)
+                )
 
             if content:
                 content_uri = f"{uri}/{content_filename}"
@@ -569,3 +589,8 @@ class _SemanticMixin:
         except Exception as e:
             logger.error(f"[VikingFS] Failed to write {uri}: {e}")
             raise IOError(f"Failed to write {uri}: {e}")
+        finally:
+            # The guard owns only a lease acquired here; outer leases stay owned
+            # by their caller. Release also settles when a write is cancelled.
+            if lock_guard.lease is not None:
+                await lock_guard.close()

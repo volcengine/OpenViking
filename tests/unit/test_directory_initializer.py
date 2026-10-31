@@ -120,6 +120,61 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_metadata_reads_overlap_and_finish_before_write():
+    class OverlappingFS(_FakeVikingFS):
+        def __init__(self):
+            super().__init__()
+            self.started = set()
+            self.finished = set()
+            self.both_started = asyncio.Event()
+
+        async def read_file(self, uri, ctx):
+            self.started.add(uri)
+            if len(self.started) == 2:
+                self.both_started.set()
+            await self.both_started.wait()
+            self.finished.add(uri)
+            return await super().read_file(uri, ctx)
+
+        async def write_context(self, *args, **kwargs):
+            assert self.finished == self.started
+            return await super().write_context(*args, **kwargs)
+
+    fs = OverlappingFS()
+    initializer = DirectoryInitializer(_FakeVikingDB(), viking_fs=fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
+    roots, _ = initializer._account_directory_targets(ctx)
+    result = await asyncio.wait_for(initializer._ensure_agfs_directory(roots[0]), timeout=1)
+    assert result is not None
+    assert len(fs.finished) == 2
+
+
+@pytest.mark.asyncio
+async def test_metadata_error_drains_sibling_read_and_prevents_write():
+    error = PermissionError("denied")
+    finished = asyncio.Event()
+    fs = _FakeVikingFS()
+
+    async def read(uri, ctx):
+        if uri.endswith(".abstract.md"):
+            raise error
+        await asyncio.sleep(0)
+        finished.set()
+        raise FileNotFoundError(uri)
+
+    fs.read_file = read
+    fs.write_context = AsyncMock()
+    initializer = DirectoryInitializer(_FakeVikingDB(), viking_fs=fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
+    roots, _ = initializer._account_directory_targets(ctx)
+    with pytest.raises(PermissionError) as exc_info:
+        await initializer._ensure_agfs_directory(roots[0])
+    assert exc_info.value is error
+    assert finished.is_set()
+    fs.write_context.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_structure():
     vikingdb = _FakeVikingDB()
     viking_fs = _FakeVikingFS()

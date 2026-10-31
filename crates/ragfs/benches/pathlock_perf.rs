@@ -44,7 +44,7 @@ impl Options {
                 "--help" | "-h" => {
                     println!(
                         "cargo bench --locked -p ragfs --bench pathlock_perf -- \
-                        --mode all|tree|concurrency --iterations 20 \
+                        --mode all|tree|concurrency|batch --iterations 20 \
                         --worker-iterations 100 --workers 1,4,16 --output /tmp/pathlock.csv"
                     );
                     std::process::exit(0);
@@ -78,10 +78,13 @@ impl Options {
         if options.iterations == 0
             || options.worker_iterations == 0
             || options.workers.iter().any(|n| *n == 0)
-            || !matches!(options.mode.as_str(), "all" | "tree" | "concurrency")
+            || !matches!(
+                options.mode.as_str(),
+                "all" | "tree" | "concurrency" | "batch"
+            )
         {
             return Err(
-                "iterations/workers must be positive and mode must be all, tree, or concurrency"
+                "iterations/workers must be positive and mode must be all, tree, concurrency, or batch"
                     .into(),
             );
         }
@@ -141,13 +144,23 @@ struct Record {
     elapsed: Duration,
     samples: Samples,
     directory_reads: Option<u64>,
+    io: Option<[u64; 6]>,
 }
 
-// Count only directory listings. Delegate native CAS operations explicitly so
+// Count filesystem calls. Delegate native CAS operations explicitly so
 // instrumentation cannot change the real filesystem locking protocol.
 struct CountingFS {
     inner: LocalFileSystem,
     directory_reads: AtomicU64,
+    io: [AtomicU64; 6],
+}
+
+impl CountingFS {
+    fn snapshot(&self) -> [u64; 6] {
+        self.io
+            .each_ref()
+            .map(|value| value.load(Ordering::Relaxed))
+    }
 }
 
 #[async_trait]
@@ -156,6 +169,7 @@ impl FileSystem for CountingFS {
         self.inner.create(path).await
     }
     async fn mkdir(&self, path: &str, mode: u32) -> FsResult<()> {
+        self.io[5].fetch_add(1, Ordering::Relaxed);
         self.inner.mkdir(path, mode).await
     }
     async fn remove(&self, path: &str) -> FsResult<()> {
@@ -165,15 +179,19 @@ impl FileSystem for CountingFS {
         self.inner.remove_all(path).await
     }
     async fn read(&self, path: &str, offset: u64, size: u64) -> FsResult<Vec<u8>> {
+        self.io[0].fetch_add(1, Ordering::Relaxed);
         self.inner.read(path, offset, size).await
     }
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> FsResult<u64> {
+        self.io[2].fetch_add(1, Ordering::Relaxed);
         self.inner.write(path, data, offset, flags).await
     }
     async fn compare_and_write(&self, path: &str, expected: &[u8], data: &[u8]) -> FsResult<bool> {
+        self.io[3].fetch_add(1, Ordering::Relaxed);
         self.inner.compare_and_write(path, expected, data).await
     }
     async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> FsResult<bool> {
+        self.io[4].fetch_add(1, Ordering::Relaxed);
         self.inner.compare_and_remove(path, expected).await
     }
     async fn read_dir(
@@ -194,6 +212,7 @@ impl FileSystem for CountingFS {
         self.inner.read_internal_dir(path).await
     }
     async fn stat(&self, path: &str) -> FsResult<FileInfo> {
+        self.io[1].fetch_add(1, Ordering::Relaxed);
         self.inner.stat(path).await
     }
     async fn rename(&self, from: &str, to: &str) -> FsResult<()> {
@@ -219,7 +238,7 @@ impl Output {
         let mut output = Self {
             csv: path.map(File::create).transpose()?,
         };
-        output.line("case,provider,workers,files,directories,latency_scope,successes,failures,elapsed_s,successful_ops_s,p50_ms,p95_ms,p99_ms,directory_reads,acquire_failures,release_failures,timeouts,busy_errors")?;
+        output.line("case,provider,workers,files,directories,latency_scope,successes,failures,elapsed_s,successful_ops_s,p50_ms,p95_ms,p99_ms,directory_reads,acquire_failures,release_failures,timeouts,busy_errors,read_calls,stat_calls,write_calls,compare_write_calls,compare_remove_calls,mkdir_calls")?;
         Ok(output)
     }
 
@@ -246,7 +265,7 @@ impl Output {
             )
         };
         self.line(&format!(
-            "{},{},{},{},{},{},{},{},{:.6},{:.3},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{:.6},{:.3},{},{},{},{},{},{},{},{},{}",
             record.case,
             record.provider,
             record.concurrency,
@@ -268,6 +287,10 @@ impl Output {
             record.samples.release_failures,
             record.samples.timeouts,
             record.samples.busy_errors,
+            record
+                .io
+                .map(|values| values.map(|value| value.to_string()).join(","))
+                .unwrap_or_else(|| ",,,,,".into()),
         ))
     }
 }
@@ -276,6 +299,7 @@ fn make_fs(root: &Path) -> Result<Arc<CountingFS>> {
     Ok(Arc::new(CountingFS {
         inner: LocalFileSystem::new(root.to_str().ok_or("non-UTF8 root")?)?,
         directory_reads: AtomicU64::new(0),
+        io: std::array::from_fn(|_| AtomicU64::new(0)),
     }))
 }
 
@@ -366,6 +390,7 @@ async fn tree(options: &Options, output: &mut Output) -> Result<()> {
                 elapsed,
                 samples,
                 directory_reads: Some(after - before),
+                io: None,
             })?;
         }
     }
@@ -446,6 +471,7 @@ async fn threads(options: &Options, name: &str, workers: usize, shared: bool) ->
         elapsed,
         samples,
         directory_reads: Some(after - before),
+        io: None,
     })
 }
 
@@ -560,7 +586,92 @@ fn processes(options: &Options, name: &str, workers: usize) -> Result<Record> {
         elapsed,
         samples,
         directory_reads: None,
+        io: None,
     })
+}
+
+async fn batch(options: &Options, output: &mut Output) -> Result<()> {
+    for paths_count in [1, 5, 13] {
+        for shared in [true, false] {
+            let temp = TempDir::new()?;
+            let root = temp.path().join("data");
+            let paths: Vec<String> = (0..paths_count)
+                .map(|id| {
+                    let parent = if shared {
+                        "shared".into()
+                    } else {
+                        format!("p{id}")
+                    };
+                    format!("/accounts/bench/user/{parent}/f{id}")
+                })
+                .collect();
+            for path in &paths {
+                fs::create_dir_all(root.join(path.trim_start_matches('/')).parent().unwrap())?;
+            }
+            let tracked = make_fs(&root)?;
+            let provider = make_provider(
+                "filesystem",
+                tracked.clone(),
+                &temp.path().join("unused.db"),
+            )?;
+            let manager =
+                PathLockManager::new(tracked.clone(), provider, PathLockConfig::default());
+            for _ in 0..3 {
+                let lease = manager
+                    .acquire_exact_batch(&paths, Duration::ZERO, None)
+                    .await?;
+                manager.release(&lease).await?;
+            }
+            let mut acquire = Samples::default();
+            let mut release = Samples::default();
+            let mut acquire_io = [0; 6];
+            let mut release_io = [0; 6];
+            let mut acquire_elapsed = Duration::ZERO;
+            let mut release_elapsed = Duration::ZERO;
+            for _ in 0..options.iterations {
+                let before = tracked.snapshot();
+                let start = Instant::now();
+                let lease = manager
+                    .acquire_exact_batch(&paths, Duration::ZERO, None)
+                    .await?;
+                let elapsed = start.elapsed();
+                acquire_elapsed += elapsed;
+                acquire.latency_ns.push(elapsed.as_nanos() as u64);
+                let middle = tracked.snapshot();
+                let start = Instant::now();
+                manager.release(&lease).await?;
+                let elapsed = start.elapsed();
+                release_elapsed += elapsed;
+                release.latency_ns.push(elapsed.as_nanos() as u64);
+                let after = tracked.snapshot();
+                for id in 0..6 {
+                    acquire_io[id] += middle[id] - before[id];
+                    release_io[id] += after[id] - middle[id];
+                }
+            }
+            for (scope, samples, elapsed, io) in [
+                ("acquire", acquire, acquire_elapsed, acquire_io),
+                ("release", release, release_elapsed, release_io),
+            ] {
+                output.record(Record {
+                    case: format!(
+                        "batch_{paths_count}_{}",
+                        if shared { "shared" } else { "distinct" }
+                    ),
+                    provider: "filesystem".into(),
+                    concurrency: 1,
+                    files: paths_count,
+                    directories: if shared { 1 } else { paths_count },
+                    scope,
+                    elapsed,
+                    samples,
+                    directory_reads: Some(0),
+                    io: Some(io),
+                })?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -575,6 +686,9 @@ async fn main() -> Result<()> {
     let mut output = Output::new(options.args.get("--output"))?;
     if matches!(options.mode.as_str(), "all" | "tree") {
         tree(&options, &mut output).await?;
+    }
+    if matches!(options.mode.as_str(), "all" | "batch") {
+        batch(&options, &mut output).await?;
     }
     if matches!(options.mode.as_str(), "all" | "concurrency") {
         for &workers in &options.workers {

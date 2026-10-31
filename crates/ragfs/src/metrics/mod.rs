@@ -132,6 +132,22 @@ pub(crate) fn cache_metrics(stats: crate::cache::CacheMetricsSnapshot) -> Vec<Ra
 /// Convert the single lock manager's snapshot into bounded metric records.
 pub(crate) fn lock_metrics(stats: LockMetrics) -> Vec<RagfsMetric> {
     let mut metrics = Vec::new();
+    for point in stats.phases.snapshot() {
+        metrics.push(RagfsMetric {
+            name: "lock_phase_duration_seconds".into(),
+            labels: point
+                .attributes()
+                .map(|attribute| (attribute.key.to_string(), attribute.value.to_string()))
+                .collect(),
+            value: RagfsMetricValue::Histogram {
+                bucket_bounds: point.bounds().map(|bound| bound as u64).collect(),
+                bucket_counts: point.bucket_counts().collect(),
+                count: point.count(),
+                sum: point.sum(),
+                scale: 1e-9,
+            },
+        });
+    }
     let scan = stats.descendant_scan.snapshot().into_iter().next();
     if let Some(acquire) = &stats.redis_acquire {
         metrics.push(RagfsMetric::counter(

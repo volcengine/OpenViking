@@ -366,16 +366,26 @@ class DirectoryInitializer:
         viking_fs = self._get_viking_fs()
         contents = {}
         missing = {}
+        defaults = (
+            ("abstract", target.definition.abstract),
+            ("overview", target.definition.overview),
+        )
+        # Independent reads share the caller's context. Drain both before
+        # interpreting results in the original order or starting any write.
+        results = await asyncio.gather(
+            *(
+                viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
+                for name, _ in defaults
+            ),
+            return_exceptions=True,
+        )
         try:
-            for name, default in (
-                ("abstract", target.definition.abstract),
-                ("overview", target.definition.overview),
-            ):
-                try:
-                    raw = await viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
-                except (FileNotFoundError, NotFoundError):
+            for (name, default), raw in zip(defaults, results, strict=True):
+                if isinstance(raw, (FileNotFoundError, NotFoundError)):
                     contents[name] = default
                     missing[name] = contents[name]
+                elif isinstance(raw, BaseException):
+                    raise raw
                 else:
                     contents[name] = body_for_preview(raw)
         except AbstractOverviewFormatError as exc:
