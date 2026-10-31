@@ -949,27 +949,29 @@ def _mcp_media_download_hint(uri: str) -> str:
 async def read(
     uri: Annotated[
         str | list[str] | None,
-        Field(description="A viking:// file URI, or a list of them to read several files in one call"),
+        Field(description="One viking:// file URI"),
     ] = None,
     uris: Annotated[
         str | list[str] | None,
-        Field(description="Deprecated alias of uri, kept for existing callers"),
+        Field(description="Several viking:// file URIs, read in one call"),
     ] = None,
     offset: int = 0,
     limit: int = -1,
 ) -> str | list[ContentBlock]:
-    """Read viking:// file URIs. Pass uri as one URI, or as a list to read several files in one call. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+    """Read viking:// files. Pass uri for one file, or uris with a list to read several files in one call. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
 
-    # `uri` matches every other tool; `uris` is the original name of this one.
+    # `uri` matches every other tool. Both names accept a string or a list, so a
+    # mismatched shape still reads instead of failing.
     if uri is not None and uris is not None:
-        raise InvalidArgumentError("read takes uri or the legacy uris, not both")
+        raise InvalidArgumentError("read takes uri or uris, not both")
     requested = uri if uri is not None else uris
     uri_list = requested if isinstance(requested, list) else [requested]
     if not uri_list or any(not item for item in uri_list):
         raise InvalidArgumentError(
-            'read takes uri: a viking:// URI or a list of them, '
-            'e.g. read(uri="viking://resources/notes.md")'
+            'read takes uri for one file or uris for several, e.g. '
+            'read(uri="viking://resources/a.md") or '
+            'read(uris=["viking://resources/a.md", "viking://resources/b.md"])'
         )
 
     service = get_service()

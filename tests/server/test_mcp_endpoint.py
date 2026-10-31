@@ -1172,7 +1172,7 @@ async def test_read_passes_offset_limit_to_visible_read(monkeypatch):
         {"uris": ["viking://resources/a.md", "viking://resources/b.md"]},
     ],
 )
-async def test_read_accepts_uri_and_legacy_uris(monkeypatch, arguments):
+async def test_read_accepts_uri_and_uris(monkeypatch, arguments):
     read_visible = AsyncMock(return_value="body")
     monkeypatch.setattr(
         mcp_endpoint,
@@ -1192,9 +1192,9 @@ async def test_read_accepts_uri_and_legacy_uris(monkeypatch, arguments):
     ("arguments", "message"),
     [
         ({"uri": "viking://resources/a.md", "uris": "viking://resources/b.md"}, "not both"),
-        ({}, "read takes uri"),
-        ({"uri": []}, "read takes uri"),
-        ({"uri": ""}, "read takes uri"),
+        ({}, "read takes uri for one file"),
+        ({"uris": []}, "read takes uri for one file"),
+        ({"uri": ""}, "read takes uri for one file"),
     ],
 )
 async def test_read_rejects_ambiguous_or_missing_uri(arguments, message):
@@ -1202,7 +1202,7 @@ async def test_read_rejects_ambiguous_or_missing_uri(arguments, message):
         await read(**arguments)
 
 
-def test_read_schema_leads_with_uri():
+def test_read_schema_offers_uri_and_uris():
     schema = mcp_endpoint.mcp._tool_manager.get_tool("read").parameters
     assert "uri" in schema["properties"]
     assert "uris" in schema["properties"]
