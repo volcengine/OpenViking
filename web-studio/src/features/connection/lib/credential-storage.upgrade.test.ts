@@ -57,10 +57,17 @@ describe.each(['insecure HTTP', 'IndexedDB unavailable', 'IndexedDB denied'])(
       )
     })
 
-    it.each(['legacy connection', 'saved profiles'])(
-      'restores %s without a workspace session marker',
-      async (source) => {
-        localStorage.setItem('ov_studio_setup', 'pending')
+    it.each(
+      ['legacy connection', 'saved profiles'].flatMap((source) =>
+        [null, 'pending', 'complete'].map((setupMarker) => [
+          source,
+          setupMarker,
+        ]),
+      ),
+    )(
+      'reuses pre-6812 %s with setup=%s and no workspace session marker',
+      async (source, setupMarker) => {
+        if (setupMarker) localStorage.setItem('ov_studio_setup', setupMarker)
         const slot =
           source === 'legacy connection'
             ? 'ov_console_connection'
@@ -75,6 +82,13 @@ describe.each(['insecure HTTP', 'IndexedDB unavailable', 'IndexedDB denied'])(
           connection,
         )
         expect(localStorage.getItem(slot)).toBe(raw)
+        if (source === 'legacy connection') {
+          const { readStoredConnection } = await import('./connection-runtime')
+          expect(readStoredConnection()).toMatchObject(connection)
+        } else {
+          const { readConnectionProfiles } = await import('./profiles')
+          expect(readConnectionProfiles(connection)).toEqual(profiles)
+        }
         sessionStorage.clear()
         vi.resetModules()
         const reloaded = await start()
