@@ -237,7 +237,7 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
     for path in files.keys() - owners.keys() - decision.excluded.keys():
         revisions[path] = None
         outputs[path] = {"source_refs": decision.sources[path]}
-    rendered = RenderedBundle()
+    rendered = RenderedBundle(review_exclusions=decision.excluded)
     for path, payload in files.items():
         if path in decision.excluded:
             continue
