@@ -1,9 +1,7 @@
 const studio = {
   credentialStorage: {
-    plaintext:
-      'Encrypted credential storage is unavailable. Connections are saved unencrypted in this browser so they remain available after reload. Use HTTPS and allow browser storage for automatic encryption.',
     sessionOnly:
-      'Secure credential storage is unavailable. Connections last only for this page; reconfigure after refreshing or closing it. Existing records are preserved. Use HTTPS for automatic encrypted storage.',
+      'Connection changes cannot be saved in this environment and will be lost after refreshing or closing this page. Existing local records are preserved.',
     startError:
       'Cannot read encrypted local credentials. Use HTTPS or localhost, allow browser storage for this site, and reload. Existing credentials have not been cleared.',
     saveError:
