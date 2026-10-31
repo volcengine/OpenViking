@@ -122,6 +122,52 @@ def test_store_retains_explicit_missing_record_behavior(
         assert result is None
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("operation", ["search", "list_namespaces"])
+@pytest.mark.parametrize("failed_pattern", ["*.json", "**/*.json"])
+@pytest.mark.parametrize(
+    "error",
+    [UnavailableError("test listing"), PermissionDeniedError("test listing"), TimeoutError()],
+)
+def test_store_propagates_listing_errors(
+    monkeypatch, operation, error, failed_pattern, asynchronous
+):
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    store.put(("memory",), "note", {"version": 1})
+    original_records = dict(client.records)
+    original_glob = client.glob
+
+    def glob(pattern, uri):
+        if pattern == failed_pattern:
+            raise error
+        return original_glob(pattern, uri)
+
+    monkeypatch.setattr(client, "glob", glob)
+    method = getattr(store, ("a" if asynchronous else "") + operation)
+    args = (("memory",),) if operation == "search" else ()
+    with pytest.raises(type(error)) as caught:
+        result = method(*args)
+        if asynchronous:
+            asyncio.run(result)
+    assert caught.value.args == error.args
+    assert client.records == original_records
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("operation", ["search", "list_namespaces"])
+@pytest.mark.parametrize(
+    "error", [FileNotFoundError("missing root"), NotFoundError("missing root")]
+)
+def test_store_returns_empty_for_missing_listing_root(monkeypatch, operation, error, asynchronous):
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+    monkeypatch.setattr(client, "glob", Mock(side_effect=error))
+    method = getattr(store, ("a" if asynchronous else "") + operation)
+    result = method(("memory",)) if operation == "search" else method()
+    assert (asyncio.run(result) if asynchronous else result) == []
+
+
 NAMESPACES = (
     ("users", "ada", "prefs"),
     ("users", "grace", "prefs"),

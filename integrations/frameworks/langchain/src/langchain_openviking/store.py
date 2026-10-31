@@ -315,7 +315,9 @@ class OpenVikingStore(BaseStore):
         for pattern in ("*.json", "**/*.json"):
             try:
                 result = call_openviking(self._client(), "glob", pattern=pattern, uri=base_uri)
-            except Exception:
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
                 continue
             for uri in _extract_uris(result):
                 if uri not in seen:
