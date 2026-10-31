@@ -1129,6 +1129,26 @@ OpenAI-compatible APIs, LiteLLM, and Jev.
 }
 ```
 
+**Multimodal reranking (opt-in):**
+
+For a visual reranker served through a compatible endpoint (for example Qwen3-VL-Reranker on vLLM), add `"input": "multimodal"` to the `openai` rerank configuration:
+
+```json
+{
+  "rerank": {
+    "provider": "openai",
+    "api_base": "http://127.0.0.1:8000/rerank",
+    "api_key": "your-endpoint-key",
+    "model": "Qwen/Qwen3-VL-Reranker-2B",
+    "input": "multimodal"
+  }
+}
+```
+
+In flat `search()`, this enables image queries and reranks L2 image candidates using their visual content instead of potentially inaccurate abstracts. The flat protocol sends `{"content": [...]}` objects, preserving mixed text/image and multi-image queries. DashScope native endpoints use single `{"image": ...}` objects; mixed or multi-image queries unsupported by that protocol fall back to vector scores without dropping query parts. Configure its native rerank URL, not the DashScope OpenAI-compatible text endpoint.
+
+`input` defaults to `text`, preserving existing behavior. `find()`/QUICK and context-mode reranking retain their existing behavior. Candidate image reads enforce the current request's permissions and a 20 MiB per-file limit; oversized dimensions use the existing image preview helper. Unreadable images and failed provider calls keep vector scores. `max_input_tokens` bounds raw text only; it neither truncates image payloads nor estimates visual tokens. A multimodal embedding model and compatible indexed vectors are still required for image recall; changing the reranker does not rebuild vectors or expand the default L2 scope.
+
 **Jev (TypeSafe System One) provider:**
 
 ```json

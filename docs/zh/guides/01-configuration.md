@@ -1121,6 +1121,26 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 }
 ```
 
+**多模态重排（显式启用）：**
+
+对支持视觉输入的兼容端点（例如 vLLM 上的 Qwen3-VL-Reranker），在 `openai` 重排配置中加入 `"input": "multimodal"`：
+
+```json
+{
+  "rerank": {
+    "provider": "openai",
+    "api_base": "http://127.0.0.1:8000/rerank",
+    "api_key": "your-endpoint-key",
+    "model": "Qwen/Qwen3-VL-Reranker-2B",
+    "input": "multimodal"
+  }
+}
+```
+
+普通 flat `search()` 会将图片查询和 L2 图片候选的视觉内容送入重排模型，不再依赖可能失真的摘要。扁平协议使用 `{"content": [...]}` 对象，保留图文混合及多图片查询。DashScope 原生端点使用单个 `{"image": ...}` 对象；该协议不支持的图文混合或多图片查询会回退到向量分数，不会丢弃查询的一部分。使用 DashScope 时应配置原生 rerank URL，而不是 OpenAI-compatible 文本端点。
+
+`input` 默认为 `text`，保留现有行为；`find()`/QUICK 和 context 模式的重排行为不变。候选图片读取遵循当前请求权限，单文件上限为 20 MiB，并复用已有图片预览缩放逻辑。图片无法读取或提供方调用失败时保留向量分数。`max_input_tokens` 只限制原始文本，不截断图片数据，也不估算视觉 token。图片召回仍需要多模态 Embedding 和兼容的已索引向量；更换 Reranker 不会重建向量或扩大默认 L2 范围。
+
 **Jev (TypeSafe System One) 提供方:**
 
 ```json

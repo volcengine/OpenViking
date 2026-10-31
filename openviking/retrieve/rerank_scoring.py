@@ -8,10 +8,8 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from openviking.models.rerank import RerankBase
-from openviking.utils.token_estimation import (
-    estimate_text_tokens,
-    truncate_text_to_token_budget,
-)
+from openviking.models.rerank.input import RerankInput, has_content, text_content, truncate_input
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -59,8 +57,8 @@ def finite_score(value: Any, default: float = 0.0) -> float:
 
 async def rerank_scores(
     client: Optional[RerankBase],
-    query: str,
-    documents: List[str],
+    query: RerankInput,
+    documents: List[RerankInput],
     fallback_scores: List[float],
     max_input_tokens: int = 0,
 ) -> RerankScores:
@@ -71,18 +69,18 @@ async def rerank_scores(
 
     rerank_query = query
     rerank_documents = [
-        (index, document) for index, document in enumerate(documents) if document.strip()
+        (index, document) for index, document in enumerate(documents) if has_content(document)
     ]
     if not rerank_documents:
         return fallback
 
     if max_input_tokens > 0:
         max_query_tokens = max_input_tokens * 3 // 4
-        if estimate_text_tokens(query) > max_query_tokens:
-            rerank_query = truncate_text_to_token_budget(query, max_query_tokens)
-        document_tokens = max_input_tokens - estimate_text_tokens(rerank_query)
+        if estimate_text_tokens(text_content(query)) > max_query_tokens:
+            rerank_query = truncate_input(query, max_query_tokens)
+        document_tokens = max_input_tokens - estimate_text_tokens(text_content(rerank_query))
         rerank_documents = [
-            (index, truncate_text_to_token_budget(document, document_tokens))
+            (index, truncate_input(document, document_tokens))
             for index, document in rerank_documents
         ]
 
