@@ -914,6 +914,18 @@ describe("OpenVikingClient", () => {
     expect(JSON.parse(String(fetcher.mock.calls[4]![1]?.body))).toEqual({
       auto_commit_policy: null,
     });
+
+    // JavaScript callers can forward an explicitly undefined optional value.
+    const undefinedPolicy = Object.fromEntries([
+      ["autoCommitPolicy", undefined],
+    ]);
+    await client.createSession(undefinedPolicy);
+    await client.updateSessionConfig("tagged", undefinedPolicy);
+    expect(
+      fetcher.mock.calls
+        .slice(5, 7)
+        .map(([, init]) => JSON.parse(String(init?.body))),
+    ).toEqual([{}, {}]);
   });
 
   it("maps typed watch options to the server contract", async () => {
