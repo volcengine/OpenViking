@@ -27,7 +27,7 @@ export function resolveSettings(
 export function buildPluginConfig(
   harness: string,
   options?: {
-    cwd?: string;
+    cwd?: string | null;
     env?: Record<string, string | undefined>;
     legacy?: Record<string, any> | null;
     manifestUrl?: string | URL;
@@ -43,7 +43,13 @@ export function buildPluginConfig(
     logFile?: string;
     rootKeyFallback?: boolean;
     deriveEffectivePeer?: boolean;
+    files?: import("./credentials.mjs").CredentialFiles | null;
   },
+): Record<string, any>;
+
+export function buildClientPluginConfig(
+  harness: string,
+  options?: { env?: Record<string, string | undefined>; manifestUrl?: string | URL },
 ): Record<string, any>;
 
 export function resolveWorkspaceSettings(

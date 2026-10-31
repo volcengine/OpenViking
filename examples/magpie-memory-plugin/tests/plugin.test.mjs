@@ -10,6 +10,7 @@ import test from "node:test";
 import OpenVikingMemory from "../index.mjs";
 import { injectContext, loadConfig, recallRequest, request } from "../runtime.mjs";
 import { unknownPluginKeys } from "../../memory-plugin-shared/lib/doctor-core.mjs";
+import { buildOvHeaders } from "../shared/ov-http.mjs";
 
 async function fixture(t, handler = () => ({ rendered: "viking://~/memories/preference.md\nUse TypeScript." })) {
   const dir = await mkdtemp(join(tmpdir(), "ov-magpie-test-"));
@@ -51,12 +52,12 @@ test("configuration is read-only, file-pinned and reloaded after credential rota
   const f = await fixture(t);
   const before = await readFile(f.path, "utf8");
   const cfg = await loadConfig({ ...f.env, OPENVIKING_API_KEY: "wrong-key", OPENVIKING_URL: "https://wrong.example", OPENVIKING_AUTH_MODE: "api_key" });
-  assert.equal(cfg.headers.get("authorization"), "Bearer test-secret");
-  assert.equal(cfg.headers.get("x-openviking-user"), "test-user");
+  assert.equal(buildOvHeaders(cfg).Authorization, "Bearer test-secret");
+  assert.equal(buildOvHeaders(cfg)["X-OpenViking-User"], "test-user");
   assert.equal(cfg.baseUrl, f.config.url);
   assert.equal(await readFile(f.path, "utf8"), before);
   await f.save({ api_key: "rotated", user: "other-user" });
-  assert.equal((await loadConfig(f.env)).headers.get("authorization"), "Bearer rotated");
+  assert.equal(buildOvHeaders(await loadConfig(f.env)).Authorization, "Bearer rotated");
   await writeFile(f.path, "broken");
   await assert.rejects(loadConfig(f.env), /invalid/);
 });
@@ -69,7 +70,7 @@ test("missing/invalid configurations never use localhost or root credentials", a
     await assert.rejects(loadConfig(f.env), /invalid/);
   }
   await f.save({ api_key: null, root_api_key: "never-use", gateway_token: "never-use" });
-  assert.equal((await loadConfig(f.env)).headers.get("authorization"), null);
+  assert.equal(buildOvHeaders(await loadConfig(f.env)).Authorization, undefined);
   assert.equal(f.calls.length, 0);
   await f.save({ api_key: "secret\ninvalid" });
   await assert.rejects(loadConfig(f.env), { message: "OpenViking: invalid" });
@@ -77,12 +78,78 @@ test("missing/invalid configurations never use localhost or root credentials", a
 
 test("extra headers support gateways but cannot replace authentication or identity", async (t) => {
   const f = await fixture(t);
-  await f.save({ extra_headers: { "X-Vault": "tenant", authorization: "wrong", "X-OpenViking-User": "wrong" } });
+  await f.save({ extra_headers: { "X-Vault": "tenant", authorization: "wrong", "X-API-Key": "wrong-key", "X-OpenViking-User": "wrong" } });
   const cfg = await loadConfig(f.env);
   await request(cfg, "/test");
   assert.equal(f.calls[0].headers["x-vault"], "tenant");
   assert.equal(f.calls[0].headers.authorization, "Bearer test-secret");
+  assert.equal(f.calls[0].headers["x-api-key"], undefined);
   assert.equal(f.calls[0].headers["x-openviking-user"], "test-user");
+});
+
+test("existing OIDC and LDAP client files authenticate both recall and tools", async (t) => {
+  const f = await fixture(t);
+  const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+  process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
+  t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+  const { tool } = await OpenVikingMemory();
+  for (const [fields, authorization] of [
+    [{ auth_mode: "oidc", api_key: null, oidc_token: "fixture-jwt" }, "Bearer fixture-jwt"],
+    [{ auth_mode: "ldap", api_key: null, ldap_username: "alice", ldap_password: "p:a:ss" }, `Basic ${Buffer.from("alice:p:a:ss").toString("base64")}`],
+  ]) {
+    await f.save({ ...fields, extra_headers: { "X-API-Key": "wrong", Authorization: "wrong" }, plugin: { magpie: { mcpEnabled: true } } });
+    assert.ok(await recallRequest(body(), context(), f.env));
+    await tool.find.execute({ query: "preference" }, { abort: new AbortController().signal });
+    for (const call of f.calls.slice(-2)) {
+      assert.equal(call.headers.authorization, authorization);
+      assert.equal(call.headers["x-api-key"], undefined);
+      assert.equal(call.headers["x-openviking-user"], undefined);
+    }
+  }
+});
+
+test("tool errors retain safe status/category and trace IDs while hooks fail open", async (t) => {
+  let status = 404;
+  const f = await fixture(t, (_, res) => {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "error", error: { message: "private credential fixture-secret", trace_id: "trace-fixture" } }));
+  });
+  const cfg = await loadConfig(f.env);
+  for (const [httpStatus, category] of [[404, "not_found"], [409, "conflict"], [429, "rate_limited"], [500, "unavailable"]]) {
+    status = httpStatus;
+    await assert.rejects(request(cfg, "/test"), (error) => {
+      assert.equal(error.code, category);
+      assert.equal(error.status, httpStatus);
+      assert.equal(error.traceId, "trace-fixture");
+      assert.doesNotMatch(error.message, /fixture-secret/);
+      assert.match(error.message, new RegExp(`HTTP ${httpStatus}`));
+      return true;
+    });
+    const ctx = context();
+    assert.equal(await recallRequest(body(), ctx, f.env), undefined);
+    assert.deepEqual(ctx.reports, [["unavailable", 0]]);
+  }
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(request(cfg, "/test", { signal: controller.signal }), { code: "cancelled" });
+  const slow = await fixture(t, () => new Promise((r) => setTimeout(() => r({}), 250)));
+  await assert.rejects(request(await loadConfig(slow.env), "/test", { timeoutMs: 100 }), { code: "timeout" });
+});
+
+test("remember places the configured project peer in message data, not just headers", async (t) => {
+  const f = await fixture(t, (call) => {
+    if (call.path.endsWith("/messages")) {
+      // The real Session API deliberately ignores actor-view headers.
+      assert.equal(call.body.peer_id, "project-A");
+    }
+    return { task_id: "task-1" };
+  });
+  await f.save({ actor_peer_id: "project-A", plugin: { magpie: { mcpEnabled: true } } });
+  const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+  process.env.OPENVIKING_CLI_CONFIG_FILE = f.path;
+  t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+  const { tool } = await OpenVikingMemory();
+  await tool.remember.execute({ text: "project setting" }, { abort: new AbortController().signal });
+  assert.equal(f.calls[1].body.peer_id, "project-A");
 });
 
 test("recall calls the context API with one consistent identity and leaves input untouched", async (t) => {
@@ -94,8 +161,7 @@ test("recall calls the context API with one consistent identity and leaves input
   assert.equal(output.model, original.model);
   assert.equal(output.stream, original.stream);
   assert.match(output.messages[0].content, /Use TypeScript/);
-  assert.deepEqual(f.calls[0].body, { query: ctx.query, mode: "context", purpose: "coding", max_tokens: 1600,
-    peer_scope: "all", query_expansion: "off", rewrite: false });
+  assert.deepEqual(f.calls[0].body, { query: ctx.query, mode: "context", purpose: "coding", score_threshold: 0.35 });
   assert.equal(ctx.reports[0][0], "ready");
 });
 

@@ -60,7 +60,7 @@ export const KNOBS = [
     aliases: ["requestTimeoutMs"],
     capability: "connection",
   },
-  { name: "mcpEnabled", type: "bool", default: true, capability: "connection" },
+  { name: "mcpEnabled", type: "bool", default: true, harness: { magpie: false }, capability: "connection" },
   { name: "mcpToolCallTimeoutMs", type: "int", default: 60000, min: 1000, max: 600000, capability: "connection" },
   { name: "dataDir", type: "string", default: "", capability: "connection" },
 
@@ -92,7 +92,7 @@ export const KNOBS = [
   { name: "recallQueryExpansion", type: "enum", values: ["auto", "off"], default: "auto", env: "OPENVIKING_RECALL_QUERY_EXPANSION", sendOnlyWhenConfigured: true, capability: "recall" },
   { name: "recallTimeoutMs", type: "int", default: 120000, min: 1000, max: 600000, env: "OPENVIKING_RECALL_TIMEOUT_MS", capability: "recall" },
   // 0 keeps the built-in default, which outlasts the server's rewrite fuse.
-  { name: "recallContextTimeoutMs", type: "int", default: 0, min: 0, max: 600000, env: "OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS", capability: "recall" },
+  { name: "recallContextTimeoutMs", type: "int", default: 0, harness: { magpie: 700 }, min: 0, max: 600000, env: "OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS", capability: "recall" },
   { name: "logRankingDetails", type: "bool", default: false, env: "OPENVIKING_LOG_RANKING_DETAILS", capability: "recall" },
   { name: "recallLedger", type: "bool", default: true, env: "OPENVIKING_RECALL_LEDGER", capability: "recall" },
   { name: "recallQueryFilters", type: "list", default: [], env: "OPENVIKING_RECALL_QUERY_FILTERS", capability: "recall" },
@@ -273,6 +273,7 @@ export const HARNESS_KEYS = {
   dsh: "dsh",
   pi: "pi",
   openclaw: "openclaw",
+  magpie: "magpie",
 };
 
 export function harnessKey(harness) {
@@ -281,12 +282,7 @@ export function harnessKey(harness) {
 
 /** Both accepted spellings of every harness, for the `plugin` section. */
 export const HARNESS_CONFIG_KEYS = new Set(
-  [
-    ...Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
-    // Gateway integration: recognizes the shared knob names but deliberately
-    // has its own file-only connection loader, without workspace/env layers.
-    "magpie",
-  ],
+  Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
 );
 
 export function knobDefault(knob, harness = "") {

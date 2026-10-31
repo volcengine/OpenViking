@@ -32,6 +32,8 @@ import { join } from "node:path";
 import { HARNESS_KEYS, KNOBS, harnessKey, knobDefault, resolveKnobs } from "./config-schema.mjs";
 import {
   buildUserAgent,
+  clientAuthorization,
+  loadClientCredentialFiles,
   loadCredentialFiles,
   readManifestVersion,
   resolveConnection,
@@ -197,11 +199,12 @@ export function buildPluginConfig(harness, {
   logFile = "",
   rootKeyFallback = false,
   deriveEffectivePeer = false,
+  files: suppliedFiles = null,
 } = {}) {
   const name = String(harness || "");
   const key = harnessKey(name);
-  const workspaceCwd = str(cwd) || process.cwd();
-  const files = loadCredentialFiles(env);
+  const workspaceCwd = cwd === null ? "" : str(cwd) || process.cwd();
+  const files = suppliedFiles || loadCredentialFiles(env);
   // The version answers two questions: what the User-Agent reports, and whether
   // a workspace file asking for a newer client gets to say so.
   const clientVersion = str(version) || (manifestUrl ? readManifestVersion(manifestUrl) : "");
@@ -282,6 +285,33 @@ export function buildPluginConfig(harness, {
     const effectivePeer = resolveEffectivePeerId({ cfg: config, cwd: workspaceCwd, env });
     config.effectivePeer = effectivePeer;
     config.legacyPeerId = effectivePeer.legacyPeerId;
+  }
+  return config;
+}
+
+/** File-only client policy: one strict snapshot, no environment/workspace credentials. */
+export function buildClientPluginConfig(harness, { env = process.env, manifestUrl = "" } = {}) {
+  const files = loadClientCredentialFiles(env);
+  const file = files.cliFile;
+  const scoped = file.plugin?.[harnessKey(harness)];
+  if (scoped != null && (typeof scoped !== "object" || Array.isArray(scoped))) {
+    throw Object.assign(new Error("OpenViking: invalid"), { code: "invalid" });
+  }
+  const config = buildPluginConfig(harness, {
+    env: { OPENVIKING_CREDENTIAL_SOURCE: "cli" }, cwd: null, files, manifestUrl,
+  });
+  config.enabled = file.plugin?.enabled !== false && config.enabled;
+  config.authorization = clientAuthorization(file);
+  if (config.authorization) {
+    config.authMode = file.auth_mode;
+    config.sendIdentityHeaders = false;
+  }
+  config.extraHeaders = file.extra_headers || {};
+  config.path = files.cliPath;
+  config.explicitMcpOptIn = scoped?.mcpEnabled === true;
+  // CLI timeout is in seconds; shared behavior settings remain schema-owned.
+  if (typeof file.timeout === "number" && Number.isFinite(file.timeout) && file.timeout > 0) {
+    config.timeoutMs = Math.max(100, Math.min(50000, Math.floor(file.timeout * 1000)));
   }
   return config;
 }

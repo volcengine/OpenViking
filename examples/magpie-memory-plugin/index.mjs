@@ -23,9 +23,9 @@ export default async function OpenVikingMemory() {
       status: tool("Check OpenViking configuration and authenticated connectivity; never returns credentials.", {}, [], async (_, ctx) => {
         try {
           const cfg = await loadConfig();
-          if (!cfg.enabled || !cfg.toolsEnabled) return { status: "disabled" };
+          if (!cfg.enabled || !cfg.mcpEnabled || !cfg.explicitMcpOptIn) return { status: "disabled" };
           await request(cfg, "/api/v1/system/status", { signal: ctx.abort });
-          return { status: "connected", recallEnabled: cfg.recallEnabled };
+          return { status: "connected", recallEnabled: cfg.autoRecall };
         } catch (error) { return { status: error.code || "unavailable" }; }
       }),
       find: tool("Search OpenViking memories, resources and skills accessible to the configured user.", { query: string }, ["query"], async (args, ctx) => {
@@ -50,7 +50,7 @@ export default async function OpenVikingMemory() {
         const path = `/api/v1/sessions/${sessionId}`;
         const signal = ctx.abort;
         await request(cfg, "/api/v1/sessions", { body: { session_id: sessionId, auto_commit_policy: null }, signal });
-        await request(cfg, `${path}/messages`, { body: { role: "user", content: requiredText(args, "text") }, signal });
+        await request(cfg, `${path}/messages`, { body: { role: "user", content: requiredText(args, "text"), ...(cfg.peerId ? { peer_id: cfg.peerId } : {}) }, signal });
         return request(cfg, `${path}/commit`, { body: {}, signal });
       }),
     },

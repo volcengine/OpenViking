@@ -44,7 +44,10 @@ magpie plugin add ./examples/magpie-memory-plugin
 全局 `plugin.enabled: false` 始终关闭本插件。连接读取顶层的 `url`、`api_key`、
 `account`、`user`、`actor_peer_id`、`timeout`（秒）、`extra_headers`，支持身份字段的已有别名。
 账户、用户请求头沿用共享客户端的身份处理方式，需要与服务端认证模式匹配。
-自定义请求头不能覆盖鉴权、身份或传输请求头。
+自定义请求头不能覆盖鉴权、身份或传输请求头，包括 `X-API-Key`。
+已有 LDAP 配置按 `auth_mode`、`ldap_username`（或 `user`）、`ldap_password` 构造 Basic 鉴权；
+OIDC 配置使用 `oidc_token`（或 `api_key`）作为 Bearer Token。两者由服务端解析身份，不断言账户或用户。
+配置类型、别名、默认值、范围和召回请求体使用共享模块，Magpie 的文件读取策略排除环境变量和 workspace 层。
 工具必须由 `plugin.magpie.mcpEnabled: true` 显式开启，共享的 `plugin.mcpEnabled` 不会开启此网关的工具。
 
 不会修改文件、合并环境变量中的凭据，或回退读取 `ov.conf`、Root Key、Gateway Token。
@@ -59,7 +62,7 @@ magpie plugin add ./examples/magpie-memory-plugin
 - 默认召回当前配置用户跨项目的上下文。需要项目隔离时设置
   `recallPeerScope: "actor"`，并在连接配置顶层明确填写 `actor_peer_id`；缺失时跳过，
   不从 `cwd` 猜测身份。
-- 默认 700ms 召回预算，关闭查询扩展和重写。提高超时需要同时调整 Magpie 插件选项
+- 默认 700ms 召回预算，不创建 Session，不启用查询扩展和重写；显式上下文配置由共享解析器处理。提高超时需要同时调整 Magpie 插件选项
   `gatewayTimeoutMs`，为文件读取和宿主启动留出余量。客户端 `timeout` 也会限制召回时长。
 - 取消请求会中止检索；错误、无结果、鉴权失败均保留原请求，诊断仅记录固定状态和字节数。
 - 同一个请求不重复注入本插件的上下文。已有 Agent 原生 OV 插件时，应关闭其中一方的自动召回。
@@ -80,7 +83,11 @@ magpie plugin add ./examples/magpie-memory-plugin
 `status` 返回 `disabled`。
 
 `remember` 仅在用户明确要求记住内容时提交文本，创建 Session 并触发异步提取。
+配置了 `actor_peer_id` 时，也将其写入消息的 `peer_id`，保留项目记忆的归属。
 返回任务 ID 不代表记忆已生成。写入不自动重试；中断可能留下未完成的 Session，
 结果不明确时应先检查 OV 再决定是否重试。
+
+工具错误保留脱敏的 HTTP 状态、错误类别和追踪 ID，区分不存在、冲突、限流、超时和取消。
+自动召回仍在错误时放行原请求，诊断仅记录固定状态。
 
 开发、测试与完整接口说明见 [English README](README.md)。

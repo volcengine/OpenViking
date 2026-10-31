@@ -2,7 +2,15 @@
 
 For contributor guidance on adding and maintaining hook + MCP integrations, see the [Agent plugin development and maintenance standard](../../docs/en/agent-integrations/18-plugin-development.md) ([中文](../../docs/zh/agent-integrations/18-plugin-development.md)). When using a coding agent, have it read and follow this standard before making changes.
 
-This directory contains shared JavaScript modules. `sync.mjs` vendors each module into the plugins whose code imports it — Claude Code, Codex, OpenCode, dsh, pi, openclaw and the bundled `agent-plugins` servers — together with the matching `lib/*.d.mts` declaration for the targets written in TypeScript. cursor, trae, trae-cn and zcode vendor nothing: the installer copies the modules `lib/MANIFEST` names — the same sync writes it — to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`, and they import it from there.
+This directory contains shared JavaScript modules. `sync.mjs` vendors each module into the plugins whose code imports it — Claude Code, Codex, OpenCode, dsh, pi, openclaw, Magpie and the bundled `agent-plugins` servers — together with the matching `lib/*.d.mts` declaration for the targets written in TypeScript. cursor, trae, trae-cn and zcode vendor nothing: the installer copies the modules `lib/MANIFEST` names — the same sync writes it — to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`, and they import it from there.
+
+Magpie uses `buildClientPluginConfig()` for its file-only gateway policy: one strict
+`ovcli.conf` snapshot, shared knob resolution and credentials, no workspace or
+environment credential fallback. LDAP/OIDC authorization is resolved in
+`credentials.mjs`; `buildOvHeaders()` owns every outgoing header.
+`requestOvResult()` uses the shared HTTP transport and preserves sanitized error
+categories, HTTP status and trace IDs for model-visible tools. Shared header maps
+cannot override connection credentials or identity, including through `X-API-Key`.
 
 `lib/install/` is the exception: it holds the installer's own JavaScript — the JSONC editor OpenCode's config needs and the hooks/mcp merge cursor, trae, trae-cn and zcode install through — which runs from `install.sh` and never from a hook. No shared module imports it, so it stays out of every closure and out of `lib/MANIFEST`.
 

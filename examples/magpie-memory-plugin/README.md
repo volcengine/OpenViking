@@ -52,7 +52,11 @@ environment; editing the file applies to the next operation without restarting.
 
 Connection fields are the top-level `url`, `api_key`, `account`/`account_id`,
 `user`/`user_id`, `actor_peer_id`/`peer_id`, `timeout` (seconds), and
-`extra_headers` (string values). Identity headers follow the shared client's
+`extra_headers` (string values). Existing `auth_mode: "ldap"` configurations use
+`ldap_username` (or `user`) and `ldap_password` for Basic authentication;
+`auth_mode: "oidc"` uses `oidc_token` (or `api_key`) as the bearer token.
+LDAP/OIDC identities are resolved by the server, without asserted account/user
+headers. API-key identity headers follow the shared client's
 trusted-identity behavior when account/user are configured. Use the credentials
 and identity appropriate to your server's authentication mode.
 
@@ -60,9 +64,11 @@ The file is read-only. Credentials from other environment variables, `ov.conf`,
 `root_api_key` and `gateway_token` are not used. Missing or malformed files do
 not fall back to a local server or retain an earlier connection. Redirects are
 refused. Custom headers cannot replace authorization, identity or transport
-headers. CLI output and echo options have no effect on this plugin.
+headers (including `X-API-Key`). CLI output and echo options have no effect on this plugin.
 
-Behavior keys use the existing shared plugin names. `plugin.magpie` overrides
+Behavior keys resolve through the shared schema and config builder; Magpie's
+file-only policy excludes environment/workspace layers. Behavior keys use the
+existing shared plugin names. `plugin.magpie` overrides
 the corresponding `plugin` values; global `plugin.enabled: false` disables the
 plugin. Tools require `plugin.magpie.mcpEnabled: true` specifically; a shared
 `plugin.mcpEnabled` does not enable this gateway's tools.
@@ -73,8 +79,9 @@ plugin. Tools require `plugin.magpie.mcpEnabled: true` specifically; a shared
   gateway keys, forwarded/remote traffic and missing origins are skipped. A
   client-supplied agent name, session or cwd is never used as authenticated identity.
 - Recall calls the server's context assembly API with the latest user query,
-  coding purpose and token budget. Query expansion and rewriting are off to
-  keep latency bounded. Server-rendered context preserves source URIs.
+  coding purpose and shared context settings. Defaults avoid session query
+  expansion and rewriting to keep latency bounded; explicitly configured
+  context options are resolved by the shared builder. Server-rendered context preserves source URIs.
 - Chat Completions, Responses, Anthropic Messages and Gemini requests each get
   context in their own system/instructions field. Existing messages, images,
   tools, model and streaming settings are preserved. Recall text is marked as
@@ -115,8 +122,14 @@ no authenticated caller identity: **enabling tools delegates this file's OV
 identity to callers allowed to use the Magpie MCP server**. Keep tools disabled
 on a shared gateway unless every permitted tool caller should have that access.
 Server ACLs still apply, and tool arguments cannot override credentials or identity.
-Tools remain registered when disabled, but calls are refused (`status` reports
+Configured `actor_peer_id` is also sent as each saved message's `peer_id`,
+so project memory extraction receives the intended ownership. Tools remain registered when disabled, but calls are refused (`status` reports
 `disabled`), so file changes take effect without reloading the tool list.
+
+Tool failures preserve sanitized HTTP status, error category (such as
+`not_found`, `conflict`, `rate_limited`, `timeout`, or `cancelled`) and trace ID
+on the error object; Magpie displays the safe message without upstream error
+text or credentials. Automatic recall still fails open with coarse diagnostic codes.
 
 `remember` submits asynchronous extraction; the returned task ID is not proof
 that a memory has been created. Writes are not automatically retried. An
