@@ -156,6 +156,7 @@ _CONFIG_SCHEMA = [
                type="integer", minimum=1000, maximum=1000000, default=20000),
     _cfg_field("recall_limit", "Maximum memories injected by automatic recall", type="integer", minimum=1, maximum=100, default=6),
     _cfg_field("recall_score_threshold", "Minimum relevance score for automatic recall", type="number", minimum=0.0, maximum=1.0, step=0.01, default=0.15),
+    _cfg_field("recall_dedup_turns", "Session turns that suppress recently served context memories (0 disables)", type="integer", minimum=0, maximum=100, default=5),
     _cfg_field("recall_max_injected_chars", "Maximum total characters injected by recall", type="integer", minimum=100, maximum=50000, default=4000),
     _cfg_field("profile_token_budget", "Maximum session-start memory tokens injected", type="integer", minimum=500, maximum=50000, default=6000),
     _cfg_field("recall_timeout_seconds", "Total timeout for recall (seconds)", **_NUM, default=4.0),
@@ -2198,6 +2199,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     "purpose": "coding",
                     "rewrite": True if cfg["compress"] == "server" else "auto",
                     "score_threshold": cfg["score_threshold"],
+                    "dedup_turns": cfg["dedup_turns"],
                     "max_tokens": max(64, min(32000, cfg["max_injected_chars"] // 4)),
                     "context_type": ["memory", "resource"] if cfg["resources"] else "memory",
                 }
