@@ -1,4 +1,4 @@
-import { recallAnchors } from "./shared/recall-ledger.mjs";
+import { recallAnchors } from "./recall-ledger.mjs";
 
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
 const ordinaryUser = (message, protocol) => {

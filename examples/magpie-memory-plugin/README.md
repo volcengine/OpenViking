@@ -52,7 +52,7 @@ environment; editing the file applies to the next operation without restarting.
 
 Connection fields are the top-level `url`, `api_key`, `account`/`account_id`,
 `user`/`user_id`, `actor_peer_id`/`peer_id`, `timeout` (seconds), and
-`extra_headers` (string values). Existing `auth_mode: "ldap"` configurations use
+`extra_headers` (or the CLI alias `extra_header`, string values). Existing `auth_mode: "ldap"` configurations use
 `ldap_username` (or `user`) and `ldap_password` for Basic authentication;
 `auth_mode: "oidc"` uses `oidc_token` (or `api_key`) as the bearer token.
 LDAP/OIDC identities are resolved by the server, without asserted account/user
@@ -66,8 +66,9 @@ not fall back to a local server or retain an earlier connection. Redirects are
 refused. Custom headers cannot replace authorization, identity or transport
 headers (including `X-API-Key`). CLI output and echo options have no effect on this plugin.
 
-Behavior keys resolve through the shared schema and config builder; Magpie's
-file-only policy excludes environment/workspace layers. Behavior keys use the
+Behavior keys reuse the existing shared schema and settings resolver; Magpie's
+own adapter applies its file-only policy, hook timeout and opt-in tools without
+changing other plugins. Behavior keys use the
 existing shared plugin names. `plugin.magpie` overrides
 the corresponding `plugin` values; global `plugin.enabled: false` disables the
 plugin. Tools require `plugin.magpie.mcpEnabled: true` specifically; a shared

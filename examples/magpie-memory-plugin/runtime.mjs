@@ -1,22 +1,16 @@
-import { buildClientPluginConfig } from "./shared/plugin-config.mjs";
+import { loadConfig } from "./config.mjs";
 import { buildContextSearchBody, isRecallEnabled, selectRecallContent } from "./shared/recall-core.mjs";
-import { buildOvHeaders, OvRequestError, requestOvResult } from "./shared/ov-http.mjs";
+import { connectionHeaders, PluginError, request } from "./http.mjs";
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { canonicalRecallValue, recallDigest, withRecallLedger } from "./shared/recall-ledger.mjs";
+import { canonicalRecallValue, recallDigest, withRecallLedger } from "./recall-ledger.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 import { describeConversation, memoryBlock, replayContext } from "./conversation.mjs";
 
 const text = (value) => typeof value === "string" ? value.trim() : "";
 
-export const PluginError = OvRequestError;
-export const request = requestOvResult;
-
-// This host reads only the user's client file; its launch cwd is not a workspace.
-export async function loadConfig(env = process.env) {
-  return buildClientPluginConfig("magpie", { env, manifestUrl: new URL("./package.json", import.meta.url) });
-}
+export { loadConfig, PluginError, request };
 
 // Pure protocol adapter; production requests use the persisted ledger below.
 export function injectContext(body, protocol, memory) {
@@ -45,7 +39,7 @@ export async function recallRequest(body, ctx, env = process.env) {
     if (cfg.recallPeerScope === "actor" && !cfg.peerId) { ctx.report?.("unbound", 0); return; }
     // No plaintext credentials/queries enter filenames or logs. Changing the
     // connection identity, agent, workspace or model starts a different scope.
-    const headers = Object.fromEntries(Object.entries(buildOvHeaders(cfg, { actorPeerId: cfg.peerId }))
+    const headers = Object.fromEntries(Object.entries(connectionHeaders(cfg))
       .filter(([name]) => name.toLowerCase() !== "user-agent"));
     const scope = recallDigest(JSON.stringify(canonicalRecallValue({
       url: cfg.baseUrl, headers,

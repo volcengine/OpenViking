@@ -16,7 +16,7 @@
 // that asks for less than a second gets a second.
 const MIN_TIMEOUT_MS = 1000;
 
-import { isConnectionHeader, parseExtraHeaders } from "./mcp-proxy-config.mjs";
+import { parseExtraHeaders } from "./mcp-proxy-config.mjs";
 
 /**
  * The headers every harness puts on every OpenViking request.
@@ -27,15 +27,12 @@ import { isConnectionHeader, parseExtraHeaders } from "./mcp-proxy-config.mjs";
 export function buildOvHeaders(cfg = {}, { actorPeerId = "", identityHeaders, extraHeaders } = {}) {
   const identity = identityHeaders === undefined ? Boolean(cfg.sendIdentityHeaders) : Boolean(identityHeaders);
   const headers = { "Content-Type": "application/json" };
-  if (cfg.authorization || cfg.apiKey) headers["Authorization"] = cfg.authorization || `Bearer ${cfg.apiKey}`;
+  if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
   if (identity && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
   if (identity && cfg.user) headers["X-OpenViking-User"] = cfg.user;
   if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
   if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
-  // Explicit callers can negotiate Accept/SSE; none can replace credentials,
-  // identity or transport headers through an extra-header map.
-  const extras = Object.fromEntries(Object.entries(extraHeaders || {}).filter(([name]) => !isConnectionHeader(name)));
-  return { ...extras, ...headers };
+  return { ...headers, ...extraHeaders };
 }
 
 function responseTraceId(body) {
@@ -60,8 +57,6 @@ export function createOvHttp(cfg = {}, {
   identityHeaders,
   extraHeaders,
   requireJsonBody = false,
-  requireResultEnvelope = false,
-  minTimeoutMs = MIN_TIMEOUT_MS,
 } = {}) {
   // dsh and pi name this field `endpoint`; every other harness names it `baseUrl`.
   const baseUrl = cfg.baseUrl || cfg.endpoint || "";
@@ -70,19 +65,15 @@ export function createOvHttp(cfg = {}, {
   // authenticating gateway (Cloudflare Access, oauth2-proxy, mTLS-terminating proxy)
   // needs the same headers on the turn hooks as on the MCP path, and wiring each
   // harness by hand is how the header blocks drifted in the first place.
-  const resolvedExtraHeaders = extraHeaders ?? cfg.extraHeaders ?? parseExtraHeaders(process.env.OPENVIKING_EXTRA_HEADERS);
+  const resolvedExtraHeaders = extraHeaders ?? parseExtraHeaders(process.env.OPENVIKING_EXTRA_HEADERS);
   return async function fetchJSON(path, init = {}, options = {}) {
-    const timeoutMs = Math.max(minTimeoutMs, Number(options.timeoutMs) || Number(defaultTimeoutMs) || 0);
+    const timeoutMs = Math.max(MIN_TIMEOUT_MS, Number(options.timeoutMs) || Number(defaultTimeoutMs) || 0);
     const controller = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
     }, timeoutMs);
-    const callerSignal = options.signal || init.signal;
-    const cancel = () => controller.abort();
-    if (callerSignal?.aborted) cancel();
-    else callerSignal?.addEventListener("abort", cancel, { once: true });
     try {
       const headers = {
         ...buildOvHeaders(cfg, {
@@ -128,55 +119,17 @@ export function createOvHttp(cfg = {}, {
           traceId,
         };
       }
-      if (requireResultEnvelope && (!body || typeof body !== "object" || body.status !== "ok" || !("result" in body))) {
-        return { ok: false, status: response.status, result: null, error: { code: "INVALID_RESPONSE" }, traceId };
-      }
       return { ok: true, status: response.status, result: body?.result ?? body ?? {}, traceId };
     } catch (error) {
       const message = error?.message || String(error);
       // This module owns the controller, so it says a timeout was a timeout
       // rather than leaving callers to guess it from whatever fetch threw.
-      const failure = callerSignal?.aborted
-        ? { name: "AbortError", aborted: true, cancelled: true, message }
-        : timedOut
+      const failure = timedOut
         ? { name: "AbortError", aborted: true, message }
         : { message };
       return { ok: false, status: 0, result: null, error: failure };
     } finally {
       clearTimeout(timer);
-      callerSignal?.removeEventListener("abort", cancel);
     }
   };
-}
-
-/** Safe model-visible errors retain status/categories without echoing upstream text. */
-export class OvRequestError extends Error {
-  constructor(code, status = 0, traceId) {
-    super(`OpenViking: ${code}${status ? ` (HTTP ${status})` : ""}`);
-    this.code = code;
-    this.status = status;
-    this.traceId = traceId;
-  }
-}
-
-export function requireOvResult(response) {
-  if (response.ok) return response.result;
-  const { status = 0, error, traceId } = response;
-  const code = error?.cancelled ? "cancelled" : error?.aborted ? "timeout"
-    : ({ 400: "invalid", 401: "unauthorized", 403: "unauthorized", 404: "not_found",
-      408: "timeout", 409: "conflict", 422: "invalid", 429: "rate_limited" })[status]
-      || (status >= 500 || !status ? "unavailable" : status >= 200 && status < 300 ? "invalid" : "http_error");
-  throw new OvRequestError(code, status, traceId);
-}
-
-/** Strict, cancellable REST operations for adapters with model-visible tools. */
-export function requestOvResult(cfg, path, { body, signal, timeoutMs = cfg.timeoutMs } = {}) {
-  const fetchJSON = createOvHttp(cfg, {
-    defaultTimeoutMs: timeoutMs, minTimeoutMs: 100, requireJsonBody: true, requireResultEnvelope: true,
-    resolveActorPeerId: () => cfg.peerId || "", extraHeaders: cfg.extraHeaders || {},
-  });
-  return fetchJSON(path, {
-    method: body === undefined ? "GET" : "POST",
-    body: body === undefined ? undefined : JSON.stringify(body), signal, redirect: "error",
-  }).then(requireOvResult);
 }

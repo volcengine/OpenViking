@@ -59,9 +59,9 @@ const LOADERS = {
   codebuddy: { harness: "codebuddy", load: (cwd) => loadAgentHookConfig("codebuddy", cwd), options: { logFile: "codebuddy-hooks.log" }, owns: [] },
 };
 
-// OpenClaw owns its TypeScript settings. Magpie uses the shared file-only
-// builder: its deliberate rejection of env/workspace layers has separate tests.
-const WITHOUT_DEFAULT_LAYER_STACK = new Set(["openclaw", "magpie"]);
+// openclaw declares its own settings in TypeScript and still resolves them
+// itself; it joins this table when it moves onto the shared loader.
+const WITHOUT_A_SHARED_LOADER = new Set(["openclaw"]);
 
 const SEND_ONLY_WHEN_CONFIGURED = KNOBS.filter((knob) => knob.sendOnlyWhenConfigured);
 
@@ -143,7 +143,7 @@ const FIXTURES = [
 test("the table covers every harness that has a shared loader", () => {
   const covered = new Set(Object.keys(LOADERS));
   for (const key of Object.values(HARNESS_KEYS)) {
-    if (WITHOUT_DEFAULT_LAYER_STACK.has(key)) continue;
+    if (WITHOUT_A_SHARED_LOADER.has(key)) continue;
     assert.ok(covered.delete(key), `${key} has no entry in this file`);
   }
   assert.deepEqual([...covered], [], "an entry names a harness the schema does not");

@@ -144,26 +144,12 @@ function uniq(values) {
  * session negotiation or expose the wrong credential.
  */
 const RESERVED_HEADER_NAMES = new Set([
+  "content-type",
   "accept",
   "mcp-protocol-version",
   "mcp-session-id",
-]);
-const CONNECTION_HEADER_NAMES = new Set([
-  "content-type",
   "authorization",
-  "x-api-key",
-  "x-openviking-account",
-  "x-openviking-user",
-  "x-openviking-actor-peer",
-  "host",
-  "content-length",
-  "connection",
-  "transfer-encoding",
 ]);
-
-export function isConnectionHeader(name) {
-  return CONNECTION_HEADER_NAMES.has(String(name).toLowerCase());
-}
 
 export function parseExtraHeaders(raw, { onWarn = null } = {}) {
   const source = String(raw || "").trim();
@@ -187,7 +173,7 @@ export function parseExtraHeaders(raw, { onWarn = null } = {}) {
   for (const [key, value] of Object.entries(parsed)) {
     const name = String(key || "").trim();
     if (!name) continue;
-    if (RESERVED_HEADER_NAMES.has(name.toLowerCase()) || isConnectionHeader(name)) {
+    if (RESERVED_HEADER_NAMES.has(name.toLowerCase())) {
       warn(`OPENVIKING_EXTRA_HEADERS: ignoring reserved header "${name}"`);
       continue;
     }

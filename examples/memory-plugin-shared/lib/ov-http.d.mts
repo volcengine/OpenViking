@@ -6,15 +6,12 @@ export interface OvHttpConfig {
   user?: string;
   sendIdentityHeaders?: boolean;
   userAgent?: string;
-  authorization?: string;
-  extraHeaders?: Record<string, string>;
   [key: string]: unknown;
 }
 
 export interface OvHttpRequestOptions {
   timeoutMs?: number;
   actorPeerId?: string;
-  signal?: AbortSignal;
 }
 
 export interface OvHttpEnvelope {
@@ -42,21 +39,9 @@ export function createOvHttp(
     identityHeaders?: boolean;
     extraHeaders?: Record<string, string>;
     requireJsonBody?: boolean;
-    requireResultEnvelope?: boolean;
-    minTimeoutMs?: number;
   },
 ): (
   path: string,
   init?: RequestInit,
   options?: OvHttpRequestOptions,
 ) => Promise<OvHttpEnvelope>;
-
-export class OvRequestError extends Error {
-  code: string;
-  status: number;
-  traceId?: string;
-  constructor(code: string, status?: number, traceId?: string);
-}
-export function requireOvResult(response: OvHttpEnvelope): any;
-export function requestOvResult(cfg: OvHttpConfig & { timeoutMs?: number }, path: string,
-  options?: { body?: any; signal?: AbortSignal; timeoutMs?: number }): Promise<any>;

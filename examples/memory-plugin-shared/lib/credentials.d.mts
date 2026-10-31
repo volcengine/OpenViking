@@ -15,8 +15,6 @@ export interface CredentialFiles {
 }
 
 export function loadCredentialFiles(env?: Record<string, string | undefined>): CredentialFiles;
-export function loadClientCredentialFiles(env?: Record<string, string | undefined>): CredentialFiles;
-export function clientAuthorization(file: Record<string, any>): string;
 
 export interface ConnectionHostInput {
   apiKey?: string;

@@ -9,7 +9,6 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 import OpenVikingMemory from "../index.mjs";
 import { injectContext, loadConfig, recallRequest, request } from "../runtime.mjs";
-import { unknownPluginKeys } from "../../memory-plugin-shared/lib/doctor-core.mjs";
 import { buildOvHeaders } from "../shared/ov-http.mjs";
 
 async function fixture(t, handler = () => ({ rendered: "viking://~/memories/preference.md\nUse TypeScript." })) {
@@ -45,9 +44,16 @@ function context(patch = {}) {
 const body = () => ({ model: "test-model", stream: true, tools: [{ type: "function", function: { name: "test" } }],
   messages: [{ role: "user", content: "Which language do I prefer?" }] });
 
-test("the shared doctor recognizes Magpie's documented behavior configuration", () => {
-  assert.deepEqual(unknownPluginKeys({ magpie: { enabled: true, autoRecall: true,
-    recallContextTimeoutMs: 700, recallMaxTokens: 1600, recallPeerScope: "actor", mcpEnabled: false } }), []);
+test("Magpie applies its defaults without changing shared plugin defaults", async (t) => {
+  const f = await fixture(t);
+  const cfg = await loadConfig(f.env);
+  assert.equal(cfg.mcpEnabled, false);
+  assert.equal(cfg.recallContextTimeoutMs, 700);
+  await f.save({ plugin: { recallMaxTokens: 900, magpie: { recallMaxTokens: 1200, recallContextTimeoutMs: 350 } } });
+  const custom = await loadConfig(f.env);
+  assert.equal(custom.recallMaxTokens, 1200);
+  assert.equal(custom.recallContextTimeoutMs, 350);
+  assert.equal(custom.recallMaxTokensConfigured, true);
 });
 
 test("configuration is read-only, file-pinned and reloaded after credential rotation", async (t) => {
@@ -87,6 +93,27 @@ test("extra headers support gateways but cannot replace authentication or identi
   assert.equal(f.calls[0].headers.authorization, "Bearer test-secret");
   assert.equal(f.calls[0].headers["x-api-key"], undefined);
   assert.equal(f.calls[0].headers["x-openviking-user"], "test-user");
+});
+
+test("the CLI extra_header alias reaches the actual connection", async (t) => {
+  const f = await fixture(t);
+  await f.save({ extra_header: { "X-Tenant": "tenant-a" } });
+  await request(await loadConfig(f.env), "/test");
+  assert.equal(f.calls[0].headers["x-tenant"], "tenant-a");
+  await f.save({ extra_header: { "X-Tenant": "a" }, extra_headers: { "X-Tenant": "b" } });
+  await assert.rejects(loadConfig(f.env), /invalid/);
+});
+
+test("changing a routing header cannot replay another tenant's recall", async (t) => {
+  const f = await fixture(t, (call) => ({ rendered: `private memory for ${call.headers["x-tenant"]}` }));
+  await f.save({ extra_headers: { "X-Tenant": "alice" } });
+  const first = await recallRequest(body(), context(), f.env);
+  assert.match(first.messages[0].content, /private memory for alice/);
+  await f.save({ extra_headers: { "X-Tenant": "bob" } });
+  const second = await recallRequest(body(), context(), f.env);
+  assert.match(second.messages[0].content, /private memory for bob/);
+  assert.doesNotMatch(second.messages[0].content, /private memory for alice/);
+  assert.equal(f.calls.length, 2);
 });
 
 test("existing OIDC and LDAP client files authenticate both recall and tools", async (t) => {
