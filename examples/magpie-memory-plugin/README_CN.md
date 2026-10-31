@@ -1,10 +1,21 @@
-# OpenViking Memory for Magpie
+# OpenViking for Magpie
 
 为经过 Magpie 网关的模型请求自动召回 OpenViking 记忆，直接读取现有
 `ovcli.conf`，无需在 Magpie 中重复填写服务地址和凭据。
 
 ## 安装
 
+首次 npm 发布完成后，在 Magpie 中安装 OpenViking：
+
+```sh
+magpie plugin add @openviking/middleware-openviking
+```
+
+Magpie 将包名简化为 `openviking`；通过 npm 安装时，工具名为
+`openviking_status`、`openviking_find`、`openviking_read`、`openviking_ls` 和 `openviking_remember`。
+本地目录安装的工具前缀使用目录名。
+
+从源码安装时，
 在 OpenViking 仓库根目录执行：
 
 ```sh

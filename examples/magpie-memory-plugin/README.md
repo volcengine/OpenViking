@@ -1,10 +1,18 @@
-# OpenViking Memory for Magpie
+# OpenViking for Magpie
 
 Adds automatic OpenViking context recall to model requests passing through
 [Magpie](https://github.com/yetone/magpie). Reads the existing OpenViking client
 configuration; no second copy of your server address or credentials is needed.
 
 [中文](README_CN.md)
+
+The npm package is `@openviking/middleware-openviking`. Magpie shortens its name
+to `openviking`, including tool names such as `openviking_find`.
+After the first npm publication, install it with:
+
+```sh
+magpie plugin add @openviking/middleware-openviking
+```
 
 ## Install from this repository
 
@@ -146,7 +154,10 @@ in Magpie's combined `/mcp/magpie/tools` server. Tools are:
 | `ls` | List up to 100 entries under a `viking://` directory |
 | `remember` | On explicit user request, create a session, add the supplied text and submit memory extraction |
 
-Magpie prefixes tool names with the plugin's short name. The tool callback has
+With the npm installation, Magpie exposes tools as `openviking_status`,
+`openviking_find`, `openviking_read`, `openviking_ls` and `openviking_remember`.
+Source-folder installations use the folder's name as the prefix instead.
+The tool callback has
 no authenticated caller identity: **enabling tools delegates this file's OV
 identity to callers allowed to use the Magpie MCP server**. Keep tools disabled
 on a shared gateway unless every permitted tool caller should have that access.

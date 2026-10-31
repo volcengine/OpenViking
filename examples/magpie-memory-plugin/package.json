@@ -1,5 +1,5 @@
 {
-  "name": "@openviking/magpie-memory-plugin",
+  "name": "@openviking/middleware-openviking",
   "version": "0.1.3",
   "description": "OpenViking memory recall and tools for the Magpie model gateway",
   "type": "module",
