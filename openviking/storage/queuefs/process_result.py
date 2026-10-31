@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional, Tuple
 
+from openviking.observability.errors import extract_metric_error_code, normalize_metric_error_code
+
 
 class ProcessOutcome(str, Enum):
     SUCCESS = "success"
@@ -26,6 +28,7 @@ class ProcessResult:
     value: Any = None
     error: Optional[str] = None
     errors: Optional[Tuple[str, ...]] = None
+    error_code: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.outcome, ProcessOutcome):
@@ -37,7 +40,7 @@ class ProcessResult:
                 not self.errors or any(not isinstance(value, str) for value in self.errors)
             ):
                 raise ValueError("failed result errors must be a non-empty tuple of strings")
-        elif self.error is not None or self.errors is not None:
+        elif self.error is not None or self.errors is not None or self.error_code is not None:
             raise ValueError("only failed results may contain errors")
 
     @classmethod
@@ -47,11 +50,21 @@ class ProcessResult:
     @classmethod
     def failed(
         cls,
-        error: str,
+        error: str | BaseException,
         *,
         errors: Optional[Tuple[str, ...]] = None,
+        error_code: Optional[str] = None,
     ) -> "ProcessResult":
-        return cls(ProcessOutcome.FAILED, error=error, errors=errors)
+        return cls(
+            ProcessOutcome.FAILED,
+            error=str(error),
+            errors=errors,
+            error_code=(
+                extract_metric_error_code(error)
+                if isinstance(error, BaseException)
+                else normalize_metric_error_code(error_code) or "unknown"
+            ),
+        )
 
     @classmethod
     def requeued(cls) -> "ProcessResult":

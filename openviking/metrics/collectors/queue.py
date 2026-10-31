@@ -9,6 +9,7 @@ from typing import ClassVar
 
 from openviking.metrics.core.base import MetricCollector
 from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
+from openviking.observability.errors import normalize_metric_error_code
 
 from .base import CollectorConfig, EventMetricCollector, StateMetricCollector
 
@@ -43,12 +44,20 @@ class QueueDurationCollector(EventMetricCollector):
         if not math.isfinite(process_duration) or process_duration < 0:
             return
 
-        labels = {"queue": queue, "outcome": outcome}
+        labels = {
+            "queue": queue,
+            "outcome": outcome,
+            "error_code": (
+                normalize_metric_error_code(payload.get("error_code")) or "unknown"
+                if outcome in {"failed", "exception"}
+                else "OK"
+            ),
+        }
         registry.observe_histogram(
             self.PROCESS_DURATION_SECONDS,
             process_duration,
             labels=labels,
-            label_names=("queue", "outcome"),
+            label_names=("queue", "outcome", "error_code"),
         )
 
         raw_end_to_end = payload.get("end_to_end_duration_seconds")
@@ -64,7 +73,7 @@ class QueueDurationCollector(EventMetricCollector):
             self.END_TO_END_DURATION_SECONDS,
             end_to_end_duration,
             labels=labels,
-            label_names=("queue", "outcome"),
+            label_names=("queue", "outcome", "error_code"),
         )
 
 

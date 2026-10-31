@@ -28,6 +28,7 @@ from openviking.connector.auth import (
     validate_feishu_auth_args,
 )
 from openviking.core.namespace import is_content_root_uri
+from openviking.observability.errors import extract_metric_error_code
 from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
@@ -2744,10 +2745,12 @@ class ResourceService:
                 outcome_recorded = True
             except BaseException as exc:
                 failure_message = str(exc) or "Skill processing cancelled"
+                failure_code = extract_metric_error_code(exc)
                 await run_to_completion(
                     lambda: task_tracker.fail(
                         task.task_id,
                         failure_message,
+                        error_code=failure_code,
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
                     )
@@ -2794,10 +2797,12 @@ class ResourceService:
         except BaseException as exc:
             if task is not None and not outcome_recorded:
                 failure_message = str(exc) or "Skill processing cancelled"
+                failure_code = extract_metric_error_code(exc)
                 await run_to_completion(
                     lambda: task_tracker.fail(
                         task.task_id,
                         failure_message,
+                        error_code=failure_code,
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
                     )

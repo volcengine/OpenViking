@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from openviking.observability.events import try_publish_event
 from openviking.service.task_domain import (
     ACTIVE_TASK_STATUSES,
     TERMINAL_TASK_STATUSES,
@@ -42,7 +43,11 @@ from openviking.service.task_domain import (
     sanitize_error,
     summarize_works,
 )
-from openviking.service.task_events import TaskEventHistory, append_task_event
+from openviking.service.task_events import (
+    TaskEventHistory,
+    append_task_event,
+    publish_task_finished,
+)
 from openviking.service.task_store import (
     DeleteTasksResult,
     StoreOperationCode,
@@ -503,6 +508,10 @@ class MySQLTaskWorkStore(TaskWorkStore):
         async with self._session_factory() as session:
             async with session.begin():
                 yield session
+            for task in session.info.pop("finished_tasks", ()):
+                publish_task_finished(task)
+            for payload in session.info.pop("task_error_events", ()):
+                try_publish_event("task.error", payload)
 
     async def create(
         self, task: TaskRecord, *, reject_if_active: bool = False
@@ -1004,6 +1013,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         await self._append_event_history(
             session, task_id, task.execution_events, previous.execution_events
         )
+        session.info.setdefault("finished_tasks", []).append(task)
         return task
 
     async def start_task(
@@ -1186,6 +1196,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         self,
         task_id: str,
         *,
+        error_code: Optional[str] = None,
         result: Optional[Dict[str, Any]],
         error: Optional[str],
         resource_id: Optional[str],
@@ -1240,6 +1251,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if error and next_error is None:
                 next_error = sanitize_error(error)
                 values["error"] = next_error
+                session.info.setdefault("task_error_events", []).append(
+                    {"task_type": row.task_type, "error_code": error_code}
+                )
 
             next_status = TaskStatus.CANCELLING if cancelled else TaskStatus(row.status)
             events = None

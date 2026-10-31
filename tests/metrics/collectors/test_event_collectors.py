@@ -76,14 +76,14 @@ def test_queue_duration_collector_records_processing_and_end_to_end_histograms(
 
     text = render_prometheus(registry)
     schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
-    labels = f'bucket_schema="{schema}",outcome="success",queue="Semantic"'
+    labels = f'bucket_schema="{schema}",error_code="OK",outcome="success",queue="Semantic"'
     assert f"openviking_queue_process_duration_seconds_count{{{labels}}} 1" in text
     assert f"openviking_queue_process_duration_seconds_sum{{{labels}}} 60.0" in text
     assert f"openviking_queue_end_to_end_duration_seconds_count{{{labels}}} 1" in text
     assert f"openviking_queue_end_to_end_duration_seconds_sum{{{labels}}} 404261.58497" in text
     assert (
         f'openviking_queue_end_to_end_duration_seconds_bucket{{bucket_schema="{schema}",'
-        'le="500000.0",outcome="success",queue="Semantic"} 1' in text
+        'error_code="OK",le="500000.0",outcome="success",queue="Semantic"} 1' in text
     )
 
 
@@ -123,7 +123,7 @@ def test_queue_duration_collector_allows_processing_only_and_ignores_bad_payload
     text = render_prometheus(registry)
     assert re.search(
         r'openviking_queue_process_duration_seconds_count\{bucket_schema="[0-9a-f]{16}",'
-        r'outcome="requeued",queue="Embedding"\} 1',
+        r'error_code="OK",outcome="requeued",queue="Embedding"\} 1',
         text,
     )
     assert "openviking_queue_end_to_end_duration_seconds" not in text

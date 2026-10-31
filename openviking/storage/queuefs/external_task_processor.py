@@ -47,7 +47,7 @@ class ExternalTaskProcessor(DequeueHandlerBase):
         try:
             task_id, account_id, user_id = self._parse(data)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
         processed = await self._service.execute(task_id, account_id, user_id)
         if not processed:
             # Register a new delivery before the old one is ACKed. Keeping the
@@ -81,7 +81,7 @@ class ExternalTaskProcessor(DequeueHandlerBase):
         try:
             task_id, account_id, user_id = self._parse(data)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
         await self._service.cancel_recovered(task_id, account_id, user_id)
         return ProcessResult.cancelled()
 

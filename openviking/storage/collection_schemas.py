@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
 from openviking.models.model_error import ModelErrorKind, model_error_kind
+from openviking.observability.errors import extract_metric_error_code
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
@@ -764,7 +765,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         request_failed_message = self._embedding_error_msg(
                             embedding_msg, "Circuit breaker open and no queue manager"
                         )
-                        return ProcessResult.failed(request_failed_message)
+                        return ProcessResult.failed(
+                            request_failed_message, error_code=extract_metric_error_code(embed_err)
+                        )
                     except Exception as embed_err:
                         error_msg = self._embedding_error_msg(
                             embedding_msg,
@@ -786,7 +789,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             self._log_embedding_error(logging.ERROR, error_msg, embedding_msg)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
-                            return ProcessResult.failed(error_msg)
+                            return ProcessResult.failed(
+                                error_msg, error_code=extract_metric_error_code(embed_err)
+                            )
 
                         if kind in {
                             ModelErrorKind.MODEL_NOT_FOUND,
@@ -798,7 +803,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             self._log_embedding_error(logging.CRITICAL, error_msg, embedding_msg)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
-                            return ProcessResult.failed(error_msg)
+                            return ProcessResult.failed(
+                                error_msg, error_code=extract_metric_error_code(embed_err)
+                            )
 
                         if kind in {
                             ModelErrorKind.AUTHENTICATION_ERROR,
@@ -814,13 +821,17 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             self._log_embedding_error(logging.ERROR, error_msg, embedding_msg)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
-                            return ProcessResult.failed(error_msg)
+                            return ProcessResult.failed(
+                                error_msg, error_code=extract_metric_error_code(embed_err)
+                            )
 
                         self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                         execute_status = "error"
                         self._log_embedding_error(logging.ERROR, error_msg, embedding_msg)
                         request_failed_message = error_msg
-                        return ProcessResult.failed(error_msg)
+                        return ProcessResult.failed(
+                            error_msg, error_code=extract_metric_error_code(embed_err)
+                        )
 
                     # Add dense vector
                     if result.dense_vector:
@@ -950,7 +961,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                     execute_status = "error"
                     request_failed_message = error_msg
-                    return ProcessResult.failed(error_msg)
+                    return ProcessResult.failed(
+                        error_msg, error_code=extract_metric_error_code(db_err)
+                    )
                 except Exception as db_err:
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
@@ -964,7 +977,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                     execute_status = "error"
                     request_failed_message = error_msg
-                    return ProcessResult.failed(error_msg)
+                    return ProcessResult.failed(
+                        error_msg, error_code=extract_metric_error_code(db_err)
+                    )
 
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                 return ProcessResult.success({"vector_written": bool(record_id)})
@@ -984,7 +999,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                 execute_status = "error"
                 request_failed_message = error_msg
-            return ProcessResult.failed(error_msg)
+            return ProcessResult.failed(error_msg, error_code=extract_metric_error_code(e))
         finally:
             if embedding_msg is not None and execute_started_at is not None:
                 from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
@@ -1011,7 +1026,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     payload = json.loads(payload)
                 EmbeddingMsg.from_dict(payload)
         except (KeyError, TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
 
         return ProcessResult.cancelled()
 

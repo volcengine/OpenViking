@@ -528,7 +528,7 @@ class _DeletionProcessor(DequeueHandlerBase):
         try:
             message = self._parse_message(data)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
 
         error = await self._dispatcher.run(lambda: self._deletion_service._process(message))
         return ProcessResult.success() if error is None else ProcessResult.failed(error)

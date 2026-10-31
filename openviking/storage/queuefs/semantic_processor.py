@@ -381,7 +381,7 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
             self._merge_request_stats(msg.telemetry_id, error_count=1)
             await self._cleanup_local_artifact(msg)
-            return ProcessResult.failed(str(error))
+            return ProcessResult.failed(error)
         return ProcessResult.requeued()
 
     async def _enqueue_parent_refresh(
@@ -495,7 +495,7 @@ class SemanticProcessor(DequeueHandlerBase):
             msg = SemanticMsg.from_dict(data)
         except Exception as exc:
             logger.error("Invalid semantic message: %s", exc, exc_info=True)
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
 
         if msg.context_type != "skill" or get_task_context() is not None:
             return await self._process_message(msg, lock)
@@ -825,7 +825,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     if result.error is not None:
                         execute_status = "error"
                     return result
-                return ProcessResult.failed(str(e))
+                return ProcessResult.failed(e)
 
             kind = model_error_kind(e)
             if kind is ModelErrorKind.INPUT_TOO_LARGE:
@@ -838,7 +838,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
                 if msg is not None:
                     await self._cleanup_local_artifact(msg)
-                return ProcessResult.failed(str(e))
+                return ProcessResult.failed(e)
             elif _is_permanent_storage_error(e) or kind in {
                 ModelErrorKind.MODEL_NOT_FOUND,
                 ModelErrorKind.UNSUPPORTED,
@@ -856,7 +856,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
                 if msg is not None:
                     await self._cleanup_local_artifact(msg)
-                return ProcessResult.failed(str(e))
+                return ProcessResult.failed(e)
             else:
                 execute_status = "error"
                 if breaker is not None and kind is not None:
@@ -868,7 +868,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
                     await self._cleanup_local_artifact(msg)
-                return ProcessResult.failed(str(e))
+                return ProcessResult.failed(e)
         finally:
             if msg is not None and execute_started_at is not None:
                 from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
@@ -898,7 +898,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 payload = json.loads(payload)
             msg = SemanticMsg.from_dict(payload)
         except (TypeError, ValueError) as exc:
-            return ProcessResult.failed(str(exc))
+            return ProcessResult.failed(exc)
 
         await self._message_work(msg).cancel_queued()
         await self._cleanup_local_artifact(msg)

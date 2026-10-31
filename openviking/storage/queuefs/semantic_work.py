@@ -191,6 +191,7 @@ class SkillSemanticMessageWork(SemanticMessageWork):
         return ProcessResult.failed(
             "\n".join(stats.failures),
             errors=tuple(stats.failures),
+            error_code=stats.error_code,
         )
 
     async def reenqueue(self) -> None:

@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import ClassVar
 
 from openviking.metrics.core.base import MetricCollector
 from openviking.metrics.datasources.task import TaskStateDataSource
+from openviking.observability.errors import normalize_metric_error_code
 
-from .base import CollectorConfig, StateMetricCollector
+from .base import CollectorConfig, EventMetricCollector, StateMetricCollector
 
 
 @dataclass
@@ -96,3 +98,53 @@ class TaskTrackerCollector(StateMetricCollector):
                 labels=labels,
                 label_names=("task_type",),
             )
+
+
+@dataclass
+class TaskEventCollector(EventMetricCollector):
+    """Export terminal task latency and accepted runtime error reports."""
+
+    END_TO_END_DURATION_SECONDS: ClassVar[str] = MetricCollector.metric_name(
+        "task", "end_to_end_duration", unit="seconds"
+    )
+    ERROR_EVENTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        "task", "error_events", unit="total"
+    )
+    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"task.finished", "task.error"})
+
+    def collect(self, registry=None) -> None:
+        return None
+
+    def receive_hook(self, event_name: str, payload: dict, registry) -> None:
+        task_type = str(payload.get("task_type") or "")
+        if not task_type:
+            return
+        if event_name == "task.error":
+            registry.inc_counter(
+                self.ERROR_EVENTS_TOTAL,
+                labels={
+                    "task_type": task_type,
+                    "error_code": normalize_metric_error_code(payload.get("error_code"))
+                    or "unknown",
+                },
+                label_names=("task_type", "error_code"),
+            )
+            return
+        status = str(payload.get("status") or "")
+        if status not in {"completed", "failed", "cancelled"}:
+            return
+        try:
+            duration = float(payload["end_to_end_duration_seconds"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if not math.isfinite(duration) or duration < 0:
+            return
+        registry.observe_histogram(
+            self.END_TO_END_DURATION_SECONDS,
+            duration,
+            labels={
+                "task_type": task_type,
+                "status": status,
+            },
+            label_names=("task_type", "status"),
+        )

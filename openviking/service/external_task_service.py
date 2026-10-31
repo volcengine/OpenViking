@@ -722,6 +722,7 @@ class ExternalTaskService:
                         snapshot.error_code or "UNKNOWN",
                         snapshot.error_message or "External task failed",
                     ),
+                    error_code=snapshot.error_code,
                     account_id=account_id,
                     user_id=user_id,
                 )

@@ -203,6 +203,7 @@ async def test_process_dequeued_exception_publishes_exception_outcome(transport,
     assert events[0][1] == {
         "queue": "AddResource",
         "outcome": "exception",
+        "error_code": "unknown",
         "process_duration_seconds": 1.0,
     }
 

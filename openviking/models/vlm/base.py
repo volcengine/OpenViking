@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
 
 from openviking.models.model_error import model_error_kind
+from openviking.observability.errors import extract_metric_error_code
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     PrimaryBackupSwitcher,
-    extract_metric_error_code,
 )
 from openviking_cli.utils import get_logger
 
