@@ -154,7 +154,7 @@ async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
     assert result.matched_contexts[0].time_score == 0.1
     assert fake_client.calls == [("hello", ["root abstract", "dir overview", "file C", "file D"])]
     assert len(storage.search_calls) == 1
-    assert storage.search_calls[0]["limit"] == 4
+    assert storage.search_calls[0]["limit"] == 8
     assert storage.search_calls[0]["level"] is None
     assert storage.search_calls[0]["target_directories"] == ["viking://resources"]
     assert storage.search_calls[0]["extra_filter"] == scope
@@ -285,7 +285,7 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_fails(monkeypatc
     assert result.matched_contexts[1].origin_score == 0.8
     assert result.matched_contexts[1].time_score == 0.25
     assert len(storage.search_calls) == 1
-    assert storage.search_calls[0]["limit"] == 4
+    assert storage.search_calls[0]["limit"] == 8
     assert fake_client.calls == [("hello", ["deep B", "deep A", "deep C"])]
 
 
@@ -412,6 +412,32 @@ async def test_rerank_scores_runs_blocking_client_off_event_loop():
 
 
 @pytest.mark.asyncio
+async def test_rerank_pool_counts_distinct_uris_when_directory_levels_share_one(monkeypatch):
+    fake_client = FakeRerankClient([0.9, 0.8, 0.7, 0.6])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+    storage = DummyStorage(
+        [
+            _result("viking://resources/guide", 0.95, level=0, abstract="guide abstract"),
+            _result("viking://resources/guide", 0.94, level=1, abstract="guide overview"),
+            _result("viking://resources/api", 0.93, level=0, abstract="api abstract"),
+            _result("viking://resources/api", 0.92, level=1, abstract="api overview"),
+            _result("viking://resources/auth.md", 0.9, abstract="auth"),
+            _result("viking://resources/setup.md", 0.89, abstract="setup"),
+            _result("viking://resources/notes.md", 0.88, abstract="notes"),
+        ]
+    )
+    retriever = HierarchicalRetriever(storage, DummyEmbedder(), rerank_config=_config())
+
+    result = await retriever.retrieve(_query(), ctx=_ctx(), limit=2)
+
+    assert fake_client.calls == [("hello", ["guide abstract", "api abstract", "auth", "setup"])]
+    assert len(result.matched_contexts) == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "rerank_config, mode",
     [(None, RetrieverMode.THINKING), (RerankConfig(), None), (_config(), RetrieverMode.QUICK)],
@@ -443,7 +469,7 @@ async def test_retrieve_without_rerank_does_not_expand_candidates(monkeypatch, r
     assert [ctx.level for ctx in result.matched_contexts] == [0, 2, 1]
     assert [ctx.score for ctx in result.matched_contexts] == [0.95, 0.9, 0.85]
     assert len(storage.search_calls) == 1
-    assert storage.search_calls[0]["limit"] == 3
+    assert storage.search_calls[0]["limit"] == 6
     assert storage.search_calls[0]["level"] is None
 
 

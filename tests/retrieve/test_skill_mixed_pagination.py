@@ -34,3 +34,25 @@ async def test_general_search_preserves_multiple_hits_from_one_skill(route):
         matches = result.matched_contexts
     assert [item.uri for item in matches] == [f"{SKILLS}/a/0.md", f"{SKILLS}/a/1.md"]
     assert all(call.get("offset", 0) == 0 for call in store.calls)
+
+
+@pytest.mark.parametrize("route", ["quick", "filter"])
+async def test_general_search_fills_limit_when_directory_levels_share_a_uri(route):
+    directories = [f"viking://resources/{name}" for name in ("guide", "api", "faq")]
+    records = []
+    for i, uri in enumerate(directories):
+        records.append(row(uri, 0.99 - i / 10, level=0, kind="resource"))
+        records.append(row(uri, 0.98 - i / 10, level=1, kind="resource"))
+    store = PagedStore(records)
+    if route == "filter":
+        fs = SimpleNamespace(_get_vector_store=lambda: store, _ensure_retrieval_scope=AsyncMock())
+        result = await _SemanticMixin._find_by_filter(
+            fs, {"op": "must", "field": "search_tags", "conds": ["team=x"]}, ctx(), [], 3
+        )
+        matches = result.resources
+    else:
+        result = await HierarchicalRetriever(store, None).retrieve(
+            TypedQuery("hello", None, ""), ctx(), limit=3, mode=RetrieverMode.QUICK
+        )
+        matches = result.matched_contexts
+    assert [item.uri.removesuffix("/.abstract.md") for item in matches] == directories

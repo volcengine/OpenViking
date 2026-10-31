@@ -20,7 +20,7 @@ consistent.
 
 import hashlib
 import re
-from typing import Any, Optional, Tuple
+from typing import Any, Iterable, Optional
 
 _VECTOR_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -47,6 +47,18 @@ def seed_uri_for_vector_id(uri: str, level: Any) -> str:
     if level_int == 1:
         return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
     return uri
+
+
+def records_per_uri(level: Optional[Iterable[Any]] = None) -> int:
+    """Return how many vector records can share one URI at the requested levels.
+
+    A directory's L0 and L1 records both carry the directory URI; every other
+    record has a URI of its own. Searches that return one result per URI fetch
+    this many records per result.
+    """
+    if not level:
+        return 2
+    return 2 if {0, 1} <= {int(item) for item in level} else 1
 
 
 def vector_record_id(account_id: str, uri: str, level: Any = 2) -> str:
