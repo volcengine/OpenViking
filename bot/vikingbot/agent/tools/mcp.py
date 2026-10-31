@@ -13,8 +13,15 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from vikingbot import __version__ as _vikingbot_version
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.registry import ToolRegistry
+
+# Stable OpenViking-owned MCP client identity. Mirrors the contract used by the
+# OpenViking Pi extension (`examples/pi-coding-agent-extension/lib/mcp-bridge.mjs`,
+# `name: "openviking-pi"`) so MCP servers can correlate the embedded SDK session
+# with a specific OpenViking release.
+_MCP_CLIENT_INFO_NAME = "openviking-vikingbot"
 
 
 def _extract_nullable_branch(options: Any) -> tuple[dict[str, Any], bool] | None:
@@ -150,6 +157,7 @@ async def connect_mcp_servers(
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
+    from mcp.types import Implementation as MCPImplementation
 
     for name, cfg in mcp_servers.items():
         try:
@@ -212,7 +220,15 @@ async def connect_mcp_servers(
                 logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
                 continue
 
-            session = await stack.enter_async_context(ClientSession(read, write))
+            session = await stack.enter_async_context(
+                ClientSession(
+                    read,
+                    write,
+                    client_info=MCPImplementation(
+                        name=_MCP_CLIENT_INFO_NAME, version=_vikingbot_version
+                    ),
+                )
+            )
             await session.initialize()
 
             tools = await session.list_tools()
