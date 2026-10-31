@@ -17,6 +17,7 @@ curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 ## 准备
 
 - 一个 coding agent：Codex、Claude Code 或 TraeX 先装好并登录；不装也行，Vika 自带 Pi，用的是你 `~/.pi/agent` 里的模型配置，没配过就运行 `vika pi` 后 `/login`。
+- 也可以用 OpenCode（`opencode` 命令，1.15.7+ 的 1.x）：装好后运行 `opencode auth login` 配置模型；Vika 通过 ACP 协议驱动它。OpenCode 2.x 的服务端契约不兼容，本 release 暂不支持。
 - OpenViking（必需），用来保存跨会话上下文。`vika setup` 会列出已检测的连接、来源与检查结果，无论是否可用，都提供「手动填写／修改地址和凭据」「指定 OV 配置文件」「重新检测」和「退出」。可填写本机或远端 URL、自定义端口、API Key（隐藏输入）以及可选的 Account / User / Agent。验证失败留在配置界面重试，通过后才继续接入 IM。在终端里首次安装时，安装脚本装完直接进入 setup，OV 就在那里配置。
 - 接飞书的话，要一个手机号注册的飞书账号或公司的飞书账号，用它扫码建机器人。现在用手机号注册飞书会顺带建一个免费企业（名称随便填，你是管理员），个人用也是这样注册。**用豆包账号登录的飞书不行**：它能在开放平台建应用、也能发布，但平台不给应用发访问凭证（`tenant_access_token` 返回 `code=21001`），机器人收发不了消息。setup 碰到这种情况会说明原因并回到上一步，可以换账号重扫，或者先只接微信、Telegram 等其他渠道。
 
@@ -26,7 +27,9 @@ curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/vika/install.sh | sh
 
 修改已有实例的 OV 连接时，会保留其原有记忆身份和召回设置，创建新的配置副本；setup 选「保存」才更新 manifest，选「放弃」清理副本。
 
-Codex、TraeX、Claude、Pi 都要先完成各自 CLI 登录。完整配置字段看 [config.example.json](./config.example.json)。
+Codex、TraeX、Claude、Pi、OpenCode 都要先完成各自 CLI 登录。完整配置字段看 [config.example.json](./config.example.json)。
+
+OpenCode 支持 1.15.7+ 的 1.x；命令名是 `opencode`，setup 通过 `--version` 和 ACP `initialize` 握手检查（不创建会话、不调用模型），并提示先 `opencode auth login`。可用 `OPENCODE_BIN` 指定可执行文件，可用 `VIKA_OPENCODE_MODEL` 或 `/model` 指定 `provider/model`。daemon 用守护进程自有的临时 `OPENCODE_CONFIG` 注入会话策略文件和 `personal_agent` MCP server，不修改用户的 `~/.config/opencode/opencode.json`；OpenCode 串行处理一个会话上的 prompt，轮次进行中到达的消息会在下一轮处理。
 
 TraeX 的命令可能叫 `traex`、`traecli` 或 `trae-cli`，装了哪个都行；Vika 用它的 `app-server` 协议，太旧、只有 `acp serve` 的版本不能用。setup 会依次检查 `traex`、`traecli`、`trae-cli`，解析软链接并去重，只有 stdio `initialize` 握手和 `login status` 都通过才提供该选项；探测不会创建会话或调用模型。显式设置 `TRAECLI_BIN`（兼容旧变量 `TRAEX_BIN`，优先级更高）时只检查指定文件，失败不会悄悄换另一个 CLI。setup 保存通过检查的实际路径，不修改用户的命令别名。
 

@@ -6,6 +6,7 @@ import { TraexAgent } from './traex.mjs';
 import { ClaudeAgent } from './claude.mjs';
 import { VolcAgent } from './volc.mjs';
 import { PiAgent } from './pi.mjs';
+import { OpencodeAgent } from './opencode.mjs';
 import { RUNTIME_IDS, getRuntimeDefinition } from './runtime-catalog.mjs';
 
 // Composition root for transport implementations. The coordinator depends on
@@ -18,6 +19,7 @@ export function createRuntimeFactories(config, store, logger, overrides = {}) {
     claude: ClaudeAgent,
     volc: VolcAgent,
     pi: PiAgent,
+    opencode: OpencodeAgent,
   };
   return Object.fromEntries(definitions.map((definition) => {
     const override = overrides[`${definition.id}Factory`];

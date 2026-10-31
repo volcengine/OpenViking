@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bundledLarkCli } from './lark-cli-bin.mjs';
 import { managedPiBin } from './pi-runtime.mjs';
+import { resolveOpencodeBin } from './opencode-runtime.mjs';
 import { resolveRolePromptPath } from './conversation-policy.mjs';
 
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
@@ -221,6 +222,7 @@ export function getConfig() {
     traexBin: process.env.TRAEX_BIN || process.env.TRAECLI_BIN || traexCommand(),
     claudeBin: process.env.CLAUDE_BIN || 'claude',
     piBin: process.env.PI_BIN || managedPiBin(),
+    opencodeBin: resolveOpencodeBin(process.env),
     initialModel: process.env.VIKA_MODEL || '',
     codexEffort: enumEnv('VIKA_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
     traexEffort: enumEnv('VIKA_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
@@ -232,6 +234,7 @@ export function getConfig() {
       'medium',
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),
+    opencodeModel: process.env.VIKA_OPENCODE_MODEL || '',
     volcApiKey: process.env.ARK_API_KEY || '',
     volcSessionId: process.env.VIKA_VOLC_SESSION_ID
       || process.env.ARK_SESSION_ID

@@ -6,8 +6,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
+import { assertSupportedOpencodeVersion, resolveOpencodeBin } from '../../daemon/src/opencode-runtime.mjs';
 import { t } from './i18n.mjs';
-import { probeAppServer } from './runtime-probe.mjs';
+import { probeAcp, probeAppServer } from './runtime-probe.mjs';
 
 // Setup only checks the agent runtimes; installing and logging in to them is
 // the user's business. Pi ships with Vika and reuses the user's ~/.pi/agent.
@@ -35,7 +36,14 @@ async function run(execFileImpl, command, args, env) {
 }
 
 // [{ id, label, model, bin, binEnv, available, note }], in the order setup offers them.
-export async function detectRuntimes({ env = process.env, execFileImpl = execFile, piBin = managedPiBin(), probe = probeAppServer } = {}) {
+// [{ id, label, model, bin, binEnv, available, note }], in the order setup offers them.
+export async function detectRuntimes({
+  env = process.env,
+  execFileImpl = execFile,
+  piBin = managedPiBin(),
+  probe = probeAppServer,
+  acpProbe = probeAcp,
+} = {}) {
   const runtimes = [];
 
   const codex = which('codex', env);
@@ -68,6 +76,8 @@ export async function detectRuntimes({ env = process.env, execFileImpl = execFil
 
   const traex = await detectTraex({ env, execFileImpl, probe });
   if (traex) runtimes.push(traex);
+  const opencode = await detectOpencode({ env, execFileImpl, probe: acpProbe });
+  if (opencode) runtimes.push(opencode);
   return runtimes;
 }
 
@@ -89,7 +99,12 @@ async function detectTraex({ env, execFileImpl, probe }) {
       if (located) {
         fs.accessSync(located, fs.constants.X_OK);
         installed = fs.statSync(located).isFile();
-        if (installed) bin = fs.realpathSync(located);
+        // Keep the resolved candidate path as the pinned binary; only follow a
+        // symlink so aliases that point at the same real file deduplicate.
+        // /var -> /private/var on macOS must not rewrite a plain file path.
+        if (installed && fs.lstatSync(located).isSymbolicLink()) {
+          bin = fs.realpathSync(located);
+        }
       }
     } catch {}
     if (seen.has(bin)) continue;
@@ -118,4 +133,49 @@ async function detectTraex({ env, execFileImpl, probe }) {
     if (!best || result.protocolCompatible) best = result;
   }
   return best;
+}
+
+// OpenCode runs over ACP; an explicit OPENCODE_BIN is authoritative. ACP alone
+// does not prove the user has a model credential, so an initialize handshake
+// plus a supported version is what setup verifies (no session, no model call).
+async function detectOpencode({ env, execFileImpl, probe }) {
+  const explicit = env.OPENCODE_BIN?.trim();
+  const located = explicit ? path.resolve(explicit) : which('opencode', env);
+  const bin = located || resolveOpencodeBin(env);
+  if (!located) {
+    return {
+      id: 'opencode', label: 'OpenCode', model: 'opencode', bin: null, binEnv: 'OPENCODE_BIN',
+      installed: false, available: false, note: t('未安装', 'not installed'),
+    };
+  }
+  const result = {
+    id: 'opencode', label: 'OpenCode', model: 'opencode', bin, binEnv: 'OPENCODE_BIN',
+    installed: true, available: false,
+    note: '',
+  };
+  let output;
+  try {
+    output = await run(execFileImpl, bin, ['--version'], env);
+  } catch {
+    result.note = t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
+    return result;
+  }
+  if (!output.ok) {
+    result.note = t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
+    return result;
+  }
+  try {
+    assertSupportedOpencodeVersion(output.stdout);
+  } catch (error) {
+    result.note = error.message;
+    return result;
+  }
+  const handshake = await probe(bin, { env });
+  if (!handshake.compatible) {
+    result.note = t(`ACP 握手失败：${handshake.reason}`, `ACP handshake failed: ${handshake.reason}`);
+    return result;
+  }
+  result.available = true;
+  result.note = t('协议兼容；先运行 opencode auth login 配置模型', 'ACP compatible; run opencode auth login to configure a model');
+  return result;
 }

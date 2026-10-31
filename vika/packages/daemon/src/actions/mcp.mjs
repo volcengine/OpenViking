@@ -8,8 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { actionEndpoint, callTool, listTools } from './client.mjs';
 import { parseUniqueJson } from '../unique-json.mjs';
 
-// Stdio MCP adapter for local runtimes (Codex, TraeX, Claude, Pi). It relays
-// tools/list and tools/call to the Core and renders results; nothing else.
+// Stdio MCP adapter for local runtimes (Codex, TraeX, Claude, Pi, OpenCode).
+// It relays tools/list and tools/call to the Core and renders results; nothing
+// else.
 const MAX_INLINE_IMAGE_BYTES = 10_000_000;
 const MAX_REQUEST_BYTES = 1_000_000;
 

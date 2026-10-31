@@ -7,6 +7,7 @@
     "TRAEX_BIN": "",
     "CLAUDE_BIN": "claude",
     "PI_BIN": "",
+    "OPENCODE_BIN": "",
     "VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS": "35000",
     "VIKA_LOG_LEVEL": "info",
     "VIKA_DRY_RUN": "false",
@@ -24,6 +25,7 @@
     "VIKA_CLAUDE_MODEL": "",
     "VIKA_PI_EFFORT": "medium",
     "VIKA_PI_MODEL": "",
+    "VIKA_OPENCODE_MODEL": "",
     "FALLBACK_MODEL": "gpt-5.6-sol",
     "VIKA_HISTORY_LIMIT": "30"
   },
