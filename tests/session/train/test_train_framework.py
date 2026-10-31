@@ -1163,22 +1163,28 @@ async def test_streaming_policy_trainer_mixes_categories_in_chunks():
 
 
 @pytest.mark.asyncio
-async def test_get_streaming_policy_trainer_returns_process_global_instance():
+@pytest.mark.parametrize("lazy", [False, True])
+async def test_get_streaming_policy_trainer_returns_process_global_instance(lazy):
     from openviking.session.train import (
         StreamingPolicyTrainerConfig,
         get_streaming_policy_trainer,
         make_streaming_policy_trainer_key,
     )
 
-    policy_set = _policy_set()
+    fs = DummyVikingFS()
+    policy_set = _policy_set(viking_fs=fs)
+    policy_set.request_context = fake_request_context(user_id=f"trainer-{lazy}")
     key = make_streaming_policy_trainer_key(
         policy_root_uri=policy_set.root_uri,
         request_context=policy_set.request_context,
     )
 
+    async def load_policy_set():
+        return await policy_set.reload()
+
     first = await get_streaming_policy_trainer(
         key=key,
-        policy_set=policy_set,
+        policy_set=load_policy_set if lazy else policy_set,
         rollout_analyzer=DummyAnalyzer(),
         gradient_estimator=DummyEstimator(),
         policy_optimizer=DummyOptimizer(),
@@ -1186,9 +1192,11 @@ async def test_get_streaming_policy_trainer_returns_process_global_instance():
         context=PipelineContext(),
         config=StreamingPolicyTrainerConfig(max_gradients_per_update=3),
     )
+    assert first.policy_set.policies[0].version == 1
+    fs.version = 2
     second = await get_streaming_policy_trainer(
         key=key,
-        policy_set=policy_set,
+        policy_set=load_policy_set if lazy else policy_set,
         rollout_analyzer=DummyAnalyzer(),
         gradient_estimator=DummyEstimator(),
         policy_optimizer=DummyOptimizer(),
@@ -1199,6 +1207,46 @@ async def test_get_streaming_policy_trainer_returns_process_global_instance():
 
     assert second is first
     assert first.config.max_gradients_per_update == 3
+    assert first.policy_set.policies[0].version == 1
+    assert fs.reloads == (1 if lazy else 0)
+
+
+@pytest.mark.asyncio
+async def test_streaming_trainer_registration_rechecks_after_snapshot_load():
+    from openviking.session.train import (
+        ExperienceGradientEstimator,
+        PatchMergePolicyOptimizer,
+        get_streaming_policy_trainer,
+    )
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    key = object()
+
+    async def load_policy_set():
+        started.set()
+        await release.wait()
+        return _policy_set()
+
+    async def get_trainer(policy_set):
+        return await get_streaming_policy_trainer(
+            key=key,
+            policy_set=policy_set,
+            rollout_analyzer=DummyAnalyzer(),
+            gradient_estimator=ExperienceGradientEstimator(),
+            policy_optimizer=PatchMergePolicyOptimizer(),
+            policy_updater=DummyUpdater(),
+        )
+
+    pending = asyncio.create_task(get_trainer(load_policy_set))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        winner = await get_trainer(_policy_set(version=2))
+    finally:
+        release.set()
+        first = await pending
+    assert first is winner
+    assert winner.policy_set.policies[0].version == 2
 
 
 class FakeSessionCommitClient:
