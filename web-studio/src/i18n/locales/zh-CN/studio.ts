@@ -1,5 +1,7 @@
 const studio = {
   credentialStorage: {
+    plaintext:
+      '当前环境无法加密保存凭据。连接将以明文保存在此浏览器中，刷新后仍可使用。使用 HTTPS 并允许浏览器存储可启用自动加密。',
     sessionOnly:
       '当前环境无法安全保存凭据，连接仅在本页有效，刷新或关闭后需重新配置。已有本地记录保留；使用 HTTPS 可自动加密保存。',
     startError:

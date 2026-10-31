@@ -198,7 +198,7 @@ export class CredentialStorage {
 }
 
 class SessionCredentialStorage {
-  private values = new Map<Slot, string>()
+  constructor(protected readonly values = new Map<Slot, string>()) {}
   async initialize() {}
   read(slot: Slot): string | null {
     return this.values.get(slot) ?? null
@@ -209,8 +209,64 @@ class SessionCredentialStorage {
   async flush() {}
 }
 
+/** Preserve pre-encryption persistence on HTTP origins, with an explicit notice. */
+class PlaintextCredentialStorage extends SessionCredentialStorage {
+  private failures = new Map<Slot, unknown>()
+
+  constructor(
+    private readonly disk: Storage,
+    private readonly persisted: Map<Slot, string | null>,
+    values: Map<Slot, string>,
+  ) {
+    super(values)
+  }
+
+  override write(slot: Slot, value: string) {
+    try {
+      // A tab using encrypted storage or newer credentials must win.
+      if (this.disk.getItem(slot) !== this.persisted.get(slot))
+        throw new Error('Credentials changed in another tab')
+      this.disk.setItem(slot, value)
+      this.persisted.set(slot, value)
+      super.write(slot, value)
+      this.failures.delete(slot)
+    } catch (error) {
+      this.failures.set(slot, error)
+      window.dispatchEvent(new Event('ov-credential-storage-error'))
+      throw error
+    }
+  }
+
+  override async flush() {
+    if (this.failures.size) throw this.failures.values().next().value
+  }
+}
+
+function unencryptedStorage(): SessionCredentialStorage {
+  try {
+    const disk = window.localStorage
+    const entries = CREDENTIAL_SLOTS.map(
+      (slot) => [slot, disk.getItem(slot)] as const,
+    )
+    const values = new Map<Slot, string>()
+    for (const [slot, raw] of entries)
+      if (raw && !isEncrypted(raw)) values.set(slot, raw)
+    // Without the key, never overwrite ciphertext in either slot. Readable
+    // legacy records can still restore the current workspace in page memory.
+    if (entries.some(([, raw]) => raw && isEncrypted(raw)))
+      return new SessionCredentialStorage(values)
+    return new PlaintextCredentialStorage(disk, new Map(entries), values)
+  } catch {
+    return new SessionCredentialStorage()
+  }
+}
+
 let storage: CredentialStorage | SessionCredentialStorage | undefined
-export function credentialStorageMode(): 'persistent' | 'session' {
+export function credentialStorageMode():
+  | 'persistent'
+  | 'plaintext'
+  | 'session' {
+  if (storage instanceof PlaintextCredentialStorage) return 'plaintext'
   return storage instanceof SessionCredentialStorage ? 'session' : 'persistent'
 }
 export async function initializeCredentialStorage(): Promise<void> {
@@ -218,7 +274,7 @@ export async function initializeCredentialStorage(): Promise<void> {
     typeof crypto === 'undefined' ||
     typeof crypto.subtle === 'undefined' ||
     typeof indexedDB === 'undefined'
-      ? new SessionCredentialStorage()
+      ? unencryptedStorage()
       : new CredentialStorage(window.localStorage, browserKey, () => {
           window.dispatchEvent(new Event('ov-credential-storage-error'))
         })
@@ -226,7 +282,7 @@ export async function initializeCredentialStorage(): Promise<void> {
     await storage.initialize()
   } catch (error) {
     if (!(error instanceof CredentialStorageUnavailable)) throw error
-    storage = new SessionCredentialStorage()
+    storage = unencryptedStorage()
     await storage.initialize()
   }
   // The runtime SDK does not persist its key; remove the obsolete plaintext mirror.
