@@ -849,7 +849,7 @@ For OpenAI-compatible providers (e.g., OpenRouter), you can add custom HTTP head
 ```
 
 Common use cases:
-- **OpenRouter**: Optional `HTTP-Referer` and `X-OpenRouter-Title` headers provide [app attribution](https://openrouter.ai/docs/app-attribution), not API authentication; `X-Title` remains supported for compatibility
+- **OpenRouter**: Optional `HTTP-Referer` and `X-OpenRouter-Title` headers provide [app attribution](https://openrouter.ai/docs/app-attribution), not API authentication; `X-Title` remains supported for compatibility. VLM and embedding requests to OpenRouter send `HTTP-Referer: https://openviking.ai` and `X-OpenRouter-Title: OpenViking` by default; setting any of these headers yourself replaces the defaults
 - **Kimi Coding**: Override or extend the default subscription headers when you need a custom user agent
 - **OpenCode Go** (`https://opencode.ai/zen/go/v1`): Requests without `x-opencode-session` fail with HTTP 400 `MissingSessionID`. Set a fixed id, e.g. `"extra_headers": {"x-opencode-session": "openviking-<your-host>"}`. A fixed id works; OpenCode Go only uses it for routing and prompt-cache hints
 - **Custom proxies**: Add authentication or tracing headers
