@@ -462,6 +462,17 @@ impl SQLiteQueueBackend {
             "ALTER TABLE queue_messages ADD COLUMN processing_started_at INTEGER",
             "CREATE INDEX IF NOT EXISTS idx_queue_status ON queue_messages(queue_name, status, id)",
             "CREATE INDEX IF NOT EXISTS idx_queue_message_id ON queue_messages(queue_name, message_id)",
+            // idx_queue_status is (queue_name, status, id). list_unacked matches two
+            // status values ("pending", "processing"), so SQLite cannot use that index
+            // to satisfy ORDER BY id and adds a sorter; once the queue is large enough
+            // the sorter spills to a temporary file and list_unacked fails with
+            // "unable to open database file" when no temp dir is writable, which aborts
+            // startup because task recovery snapshots every queue first. An index whose
+            // leading columns are (queue_name, id) serves that query in id order without a
+            // sort, while the single-status queries keep using idx_queue_status. It needs
+            // its own name: CREATE INDEX IF NOT EXISTS cannot redefine an index that
+            // already exists under the old column order on an older database.
+            "CREATE INDEX IF NOT EXISTS idx_queue_unacked ON queue_messages(queue_name, id)",
         ] {
             if let Err(err) = conn.execute(stmt, []) {
                 let text = err.to_string();
@@ -1242,7 +1253,7 @@ mod tests {
             .prepare(
                 "SELECT name FROM sqlite_master
                  WHERE type = 'index'
-                   AND name IN ('idx_queue_message_id', 'idx_queue_status')
+                   AND name IN ('idx_queue_message_id', 'idx_queue_status', 'idx_queue_unacked')
                  ORDER BY name",
             )
             .unwrap()
@@ -1254,7 +1265,8 @@ mod tests {
             migrated_indexes,
             vec![
                 "idx_queue_message_id".to_string(),
-                "idx_queue_status".to_string()
+                "idx_queue_status".to_string(),
+                "idx_queue_unacked".to_string()
             ]
         );
     }
