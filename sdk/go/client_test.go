@@ -2336,3 +2336,51 @@ func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
 		}
 	}
 }
+
+func TestReadAndStatPreserveVectorRecordIDs(t *testing.T) {
+	const recordID = "0123456789abcdef0123456789abcdef"
+	const fileURI = "viking://resources/docs/api.md"
+	for _, tc := range []struct {
+		name, input, reference string
+	}{
+		{"record_id", recordID, recordID},
+		{"padded_record_id", "  " + recordID + "\n", recordID},
+		{"short_uri", "resources/docs/api.md", fileURI},
+		{"full_uri", fileURI, fileURI},
+		{"non_hex", "0123456789abcdef0123456789abcdeg", "viking://0123456789abcdef0123456789abcdeg"},
+		{"uppercase", strings.ToUpper(recordID), "viking://" + strings.ToUpper(recordID)},
+	} {
+		for _, endpoint := range []string{"read", "stat"} {
+			t.Run(tc.name+"/"+endpoint, func(t *testing.T) {
+				client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Query().Get("uri") != tc.reference {
+						writeAPIError(t, w, http.StatusBadRequest, "INVALID_URI", map[string]any{
+							"uri": r.URL.Query().Get("uri"),
+						})
+						return
+					}
+					switch r.URL.Path {
+					case "/api/v1/content/read":
+						writeOK(t, w, "stored content")
+					case "/api/v1/fs/stat":
+						writeOK(t, w, map[string]any{"id": recordID, "uri": fileURI})
+					default:
+						http.NotFound(w, r)
+					}
+				}))
+				defer closeServer()
+				if endpoint == "read" {
+					content, err := client.Read(context.Background(), tc.input, 0, -1)
+					if err != nil || content != "stored content" {
+						t.Fatalf("Read(%q) = %q, %v", tc.input, content, err)
+					}
+				} else {
+					info, err := client.Stat(context.Background(), tc.input)
+					if err != nil || info["id"] != recordID || info["uri"] != fileURI {
+						t.Fatalf("Stat(%q) = %#v, %v", tc.input, info, err)
+					}
+				}
+			})
+		}
+	}
+}

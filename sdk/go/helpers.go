@@ -118,6 +118,20 @@ func queryInt(values url.Values, key string, value int) {
 	values.Set(key, strconv.Itoa(value))
 }
 
+// normalizeFileReference preserves vector record IDs accepted by Read and Stat.
+func normalizeFileReference(uri string) string {
+	reference := strings.TrimSpace(uri)
+	if len(reference) == 32 {
+		for _, char := range reference {
+			if !strings.ContainsRune("0123456789abcdef", char) {
+				return NormalizeURI(uri)
+			}
+		}
+		return reference
+	}
+	return NormalizeURI(uri)
+}
+
 func normalizeTarget(target any) any {
 	switch v := target.(type) {
 	case nil:
