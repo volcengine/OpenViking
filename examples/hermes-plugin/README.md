@@ -16,6 +16,22 @@ hermes
 Accept the dependency prompt during installation. In setup, choose how you
 use Hermes, then choose a connection.
 
+Version 2.2 uses OpenViking's MCP tools. Custom and hosted servers need
+OpenViking 0.4.23 or newer and `/mcp` access. Hermes v0.22.5 includes the
+required read-only approval support. MCP launch-time profile binding is also
+required; see [the host change](https://github.com/NousResearch/hermes-agent/issues/138512).
+The 2.2 release waits for this support in a released upstream Hermes version.
+A host without binding cannot start the adapter.
+
+Setup saves a portable MCP entry. Restart Hermes after setup or a plugin update.
+The adapter rejects old saved-path launch commands. An adapter process started
+before the update must be replaced with `/reload-mcp` or a restart.
+
+Upgrading to 2.2 replaces the six `viking_*` tools. It requires OpenViking
+>=0.4.23 with `/mcp` enabled. Upgrade a separately managed server before
+upgrading this plugin. Setup checks the server version and MCP access and
+reports an error if either requirement is unmet. There is no native-tool fallback.
+
 ### Personal or Shared
 
 Hermes uses conversation history to follow the current chat. OpenViking saves
@@ -61,6 +77,11 @@ switching sessions.
 
 The plugin sends conversation turns, tool results and edits to `MEMORY.md`
 and `USER.md` to your OpenViking server. Memory extraction can use a remote model.
+
+Explicit tools use the server's schemas and results. New connections request
+approval for tools that can change data. Read-only tools run without approval.
+Automatic recall, capture and commits use the memory provider lifecycle.
+See [MCP configuration](CONFIGURATION.md#mcp-tools) for filters and trust policy.
 
 ## Quick Local
 

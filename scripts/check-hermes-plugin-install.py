@@ -99,6 +99,7 @@ def check(host, repository, root, timeout, *, install_only=False):
             "local_server.py",
             "local_packages.py",
             "cli.py",
+            "mcp_tools.py",
             "native_memory_mirror.py",
             "plugin.yaml",
             "pyproject.toml",
@@ -108,12 +109,26 @@ def check(host, repository, root, timeout, *, install_only=False):
                 repository / "examples/hermes-plugin" / name
             ).read_text(encoding="utf-8"):
                 raise RuntimeError("Installed plugin differs from the checked-out source: " + name)
+        unbound_env = dict(env)
+        unbound_env.pop("HERMES_HOME")
+        refused = subprocess.run(
+            [sys.executable, str(installed / "mcp_tools.py"), "--profile-bound"],
+            cwd=host, env=unbound_env, capture_output=True, text=True, timeout=timeout,
+        )
+        (root / "unbound-launch.log").write_text(refused.stderr, encoding="utf-8")
+        if (
+            refused.returncode != 1
+            or refused.stdout
+            or "Hermes did not supply the MCP profile home" not in refused.stderr
+        ):
+            raise RuntimeError("Unbound MCP launch was not refused clearly")
         if install_only:
             evidence = {
                 "installed": True,
                 "enabled": False,
                 "home": str(home),
                 "source_ref": ref,
+                "unbound_mcp_launch_refused": True,
             }
             (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
             print(json.dumps(evidence))
@@ -151,6 +166,7 @@ from pathlib import Path
 import psutil
 from ruamel.yaml import YAML
 from hermes_constants import get_hermes_home
+from hermes_cli.config import save_config
 from plugins.memory import find_provider_dir, load_memory_provider
 from pm.environments import project_python
 home = get_hermes_home()
@@ -161,6 +177,10 @@ assert find_provider_dir("openviking") == home / "plugins/openviking"
 provider = load_memory_provider("openviking", register_skills=False)
 assert type(provider).__module__.startswith("_hermes_user_memory."), type(provider)
 provider.shutdown()
+# Provider CLI commands are exposed only for the selected memory provider,
+# as after `hermes memory setup openviking`.
+config.setdefault("memory", {})["provider"] = "openviking"
+save_config(config)
 print(json.dumps({"installed": True, "enabled": True, "external_module": type(provider).__module__,
                   "psutil": psutil.__version__, "home": str(home),
                   "python": str(project_python(Path.cwd()))}))
@@ -168,8 +188,19 @@ print(json.dumps({"installed": True, "enabled": True, "external_module": type(pr
         result = subprocess.check_output(
             [python, "-c", probe], cwd=host, env=env, text=True, timeout=timeout
         )
+        with (root / "validate.log").open("a") as log:
+            subprocess.run(
+                command + ["openviking", "mcp", "--help"],
+                cwd=host,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+                check=True,
+            )
         evidence = json.loads(result.strip().splitlines()[-1])
         evidence["source_ref"] = ref
+        evidence["unbound_mcp_launch_refused"] = True
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print(json.dumps(evidence))
     finally:

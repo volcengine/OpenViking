@@ -15,8 +15,38 @@ Preserve the existing copyright and permission notice.
 
 The distribution name is `hermes-plugin-openviking`. The provider, plugin, and
 Hermes catalog key remain `openviking`. Existing `memory.openviking`
-settings, environment variables, linked `ovcli.conf` files, data paths, and
-`viking_*` tools keep their current behavior.
+settings, environment variables, linked `ovcli.conf` files and data paths are
+retained. Version 2.2 replaces the six native `viking_*` tools with the server's
+MCP tools. The memory provider continues to own recall, capture, commit and
+native memory mirroring.
+
+`mcp_tools.py` is a stdio-to-HTTP adapter. Hermes owns discovery, filtering and
+approval. The adapter owns profile connection resolution and forwards the
+server's schemas and results. It does not own server lifecycle or retry tool
+calls. New entries use a guarded command and omit saved `HERMES_HOME`; the
+host must bind that home at spawn. Legacy commands and missing home binding
+fail before profile reads or HTTP. Existing old-code processes require a
+reload or restart after upgrade.
+
+Acceptance must cover real installation, read-only and write approval, cloned
+and imported profiles, routed profiles, missing host binding, cold startup,
+retained-provider recovery and concurrent local embeddings. Preserve the
+Windows installation check and reviewed native package pins.
+
+Release gate: do not merge or publish 2.2 until MCP launch-time profile binding
+is available in a released upstream Hermes version. If the host release slips,
+this plugin release slips too. The fork host in CI is temporary development
+evidence. Replace it with the reviewed upstream commit and update the Hermes
+minimum to the release that includes binding. Repeat installation, configured
+stdio launch, missing-home refusal and approval checks on that release.
+
+MCP capture is opt-in by tool name. Only reviewed `remember`, `write`, `edit`
+and `forget` acknowledgements enter the capture batch. Review both the inputs
+and results before adding a tool to this set. A read-only annotation controls
+approval and does not authorize memory capture. Unknown tools and all privacy
+tools remain excluded even when the server adds them without a plugin release.
+The adapter process test removes `HERMES_HOME` and asserts the stderr message
+and exit status before provider imports or network requests.
 
 The active-session commit lifecycle was ported from
 [KoNit-K's Hermes PR #112533](https://github.com/NousResearch/hermes-agent/pull/112533),
@@ -167,7 +197,7 @@ mutations. Do not substitute a guessed match in tests or production.
 From that checkout, run its canonical test runner against this directory:
 
 ```bash
-PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" HERMES_TEST_FILE_RETRIES=0 \
+HERMES_TEST_FILE_RETRIES=0 \
   scripts/run_tests.sh /path/to/OpenViking/examples/hermes-plugin/tests \
   --confcutdir=/path/to/OpenViking/examples/hermes-plugin/tests -q
 ```

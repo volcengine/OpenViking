@@ -39,7 +39,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | [DSH](#dsh) | In-process Cordis plugin plus an MCP proxy | Server MCP tools, named `mcp__openviking__<tool>` |
 | [pi](#pi) | Native extension with a built-in MCP client | Server MCP tools, registered as `openviking_<tool>` after the MCP handshake succeeds |
 | [OpenClaw](#openclaw) | Context-engine plugin | 15 native tools, 14 enabled by default |
-| [Hermes](#hermes) | Hermes memory provider | 6 native `viking_*` tools |
+| [Hermes](#hermes) | Hermes memory provider + MCP adapter | Server MCP tools (plugin 2.2); 6 native tools in older releases |
 | [MCP clients, Agent Plugins](#other-integrations) | MCP only | Server MCP tools |
 | [ov CLI](#ov-cli) | Command-line client | Every operation as an explicit command; no agent involved |
 
@@ -716,8 +716,14 @@ The two are separate code bases. Where their behavior differs:
 | Commits during a session | Only at session boundaries | A background commit at 20,000 pending tokens (`commit_token_threshold`) |
 | Recall digests | Not supported | Optional server digest (`recall_compress`) |
 | Mirroring Hermes's built-in memory | Additions only | Additions, replacements, and removals, tracked in a URI registry |
-| `viking_forget` | User memory files with an explicit user ID | Also accepts `viking://~/`, rejects user-ID-less layouts, and checks ownership before deleting |
+| Explicit tools | Six native `viking_*` tools | Server MCP schemas and results; Hermes owns filters and approval |
 | Cron, subagent, and flush contexts | Not documented at that commit | Recall works. Automatic writes and mirroring are skipped |
+
+Plugin 2.2 uses `mcp__openviking__<tool>` and requires OpenViking 0.4.23 or newer.
+New connections use untrusted policy. Read-only tools run without approval;
+other tools require approval. The adapter uses launch-time profile binding and
+requires the corresponding Hermes host support. Restart after upgrading.
+See the [plugin configuration](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/CONFIGURATION.md#mcp-tools).
 
 Behavior of the pinned bundled provider:
 

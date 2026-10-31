@@ -36,8 +36,8 @@ jobs:
       - name: Check out the reviewed Hermes test host
         uses: actions/checkout@v6
         with:
-          repository: NousResearch/hermes-agent
-          ref: db44c46208f1b421b4ecb7e56bf9d68b0423906f
+          repository: ehz0ah/hermes-agent
+          ref: 837617717c045f70c0a68121d11295534b9f9a33
           path: .ci/hermes-agent
           persist-credentials: false
 
@@ -56,6 +56,8 @@ jobs:
       - name: Build the reviewed host test environment
         working-directory: .ci/hermes-agent
         run: |
+          python scripts/write_install_stamp.py --output install-stamp.json \
+            --base-version 0.22.5 --source ci --update-mechanism self
           python -m pm.build_env --source . --out .venv --group dev --group test
 
       - name: Run the external memory provider tests
@@ -93,8 +95,9 @@ jobs:
         include:
           - os: ubuntu-24.04
             host: release
-            python: '3.13'
-            hermes_ref: v2026.9.24
+            python: '3.14'
+            hermes_repo: NousResearch/hermes-agent
+            hermes_ref: v0.22.5
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
@@ -107,8 +110,8 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v6
         with:
-          repository: NousResearch/hermes-agent
-          ref: ${{ matrix.hermes_ref || 'db44c46208f1b421b4ecb7e56bf9d68b0423906f' }}
+          repository: ${{ matrix.hermes_repo || 'ehz0ah/hermes-agent' }}
+          ref: ${{ matrix.hermes_ref || '837617717c045f70c0a68121d11295534b9f9a33' }}
           path: .ci/hermes-agent
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -124,12 +127,9 @@ jobs:
             examples/hermes-plugin/local_packages.py
       - name: Install the reviewed host and test dependencies
         run: |
-          if [ '${{ matrix.host }}' = release ]; then
-            uv sync --python '${{ matrix.python }}' --frozen --extra dev --no-install-project
-            uv pip install --python .venv/bin/python PyYAML==6.0.3
-          else
-            python -m pm.build_env --source . --out .venv --group dev --group test
-          fi
+          python scripts/write_install_stamp.py --output install-stamp.json \
+            --base-version 0.22.5 --source ci --update-mechanism self
+          python -m pm.build_env --source . --out .venv --group dev --group test
           if [ -x .venv/Scripts/python.exe ]; then
             PYTHON="$PWD/.venv/Scripts/python.exe"
           else
@@ -146,6 +146,7 @@ jobs:
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local.py" \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_routes.py" \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_preflight.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_mcp_profile_binding.py" \
             --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
       - name: Run the complete provider suite on the release host
         if: matrix.host == 'release'
@@ -164,10 +165,8 @@ jobs:
             --install-only
       - name: Install and run real Quick Local services
         run: |
-          ARGS=()
-          if [ '${{ matrix.host }}' = release ]; then ARGS+=(--legacy-uv); fi
           "$HERMES_PYTHON" "$GITHUB_WORKSPACE/scripts/check-hermes-quick-local.py" \
-            --hermes-root "$PWD" --output-dir "$RUNNER_TEMP/quick-local" "${ARGS[@]}"
+            --hermes-root "$PWD" --output-dir "$RUNNER_TEMP/quick-local"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -55,6 +55,13 @@ def _run(args):
 
 def register_cli(subparser):
     commands = subparser.add_subparsers(dest="openviking_command", required=True)
+    from .mcp_tools import run as run_mcp
+
+    mcp = commands.add_parser("mcp", help="Serve this profile's OpenViking MCP tools over stdio")
+    mcp.add_argument(
+        "--profile-bound", action="store_true", help="Require the MCP host to supply HERMES_HOME"
+    )
+    mcp.set_defaults(func=run_mcp)
     local = commands.add_parser("local", help="Control this profile's Quick Local server")
     actions = local.add_subparsers(dest="local_action", required=True)
     for name in ("status", "start", "stop", "restart"):

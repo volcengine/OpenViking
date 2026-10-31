@@ -48,7 +48,10 @@ def _drain(provider):
 def _edit(old_text, content):
     from tools.memory_tool import MEMORY_SCHEMA
 
-    actions = MEMORY_SCHEMA["parameters"]["properties"]["action"]["enum"]
+    properties = MEMORY_SCHEMA["parameters"]["properties"]
+    if "action" not in properties:
+        properties = properties["operations"]["items"]["properties"]
+    actions = properties["action"]["enum"]
     return {
         "action": "patch" if "patch" in actions else "replace",
         "old_text": old_text,

@@ -89,10 +89,12 @@ process. For the launch profile, process-level `OPENVIKING_*` values fill missin
 at activation. A messaging gateway without that snapshot does not read them.
 Routed profiles never inherit the launch profile's process values.
 
-OpenViking 0.2.14 or newer is required. Older servers with a status-only health
-response do not provide the user identity needed by this plugin. The `viking://~`
-home address requires OpenViking 0.4.16 or newer for user and admin keys, or
-0.4.17 or newer for root keys and local development.
+OpenViking 0.4.23 or newer with its `/mcp` endpoint is required for MCP tools.
+This version adds the read-only annotations used by Hermes's approval policy.
+For an enabled MCP connection, setup checks the server version and `/mcp`
+access before saving it.
+An older server or an unavailable MCP endpoint produces a requirement error.
+Upgrade your server or enable `/mcp` before upgrading the plugin to 2.2.
 
 | Environment variable | Default | Description |
 |---------|---------|-------------|
@@ -251,41 +253,85 @@ provider uses scoped list recall. Enabled resource recall includes common
 resources and, in `peer` mode, the sender's resources.
 
 These recall settings do not change data access rights. They do not hide
-shared conversation history or change explicit `viking_*` tools, native memory
+shared conversation history or change explicit MCP tools, native memory
 mirroring or credentials. Setting `recall_scope` alone does not change gateway
 sessions. Shared Agent changes those settings only after confirmation.
 Explicit tools keep the configured assistant view. Use separate OpenViking
 users and keys when participants need separate access.
 
+## MCP tools
+
+Setup saves `mcp_servers.openviking` in the active Hermes profile. Restart
+Hermes to load the server tools as `mcp__openviking__<tool>`. Tool names,
+arguments and results come from the server. All tools are exposed by default.
+
+A new connection uses `trust: untrusted`. Hermes v0.22.5 includes the read-only
+annotation support needed by this policy. Read-only tools such
+as `find`, `read` and `grep` do not ask for approval. `search`, `remember`,
+`write` and `forget` require approval. Unattended runs such as `-q` and cron
+cannot approve them. Automatic recall, capture and commits are separate and
+continue without this gate.
+
+Existing trust policies, including Hermes's implicit `full` policy when an
+existing entry has no `trust` field, are preserved. Setup also keeps tool
+filters, timeouts, TLS settings and `enabled: false`. With `trust: full`, tools
+can modify data and recursively delete directories without approval.
+OpenViking still enforces the connected user's access permissions.
+
+To change your policy, edit the profile's `config.yaml` and reload MCP or restart
+Hermes:
+
+```yaml
+mcp_servers:
+  openviking:
+    trust: untrusted
+```
+
+The adapter uses the same profile credentials as automatic memory and follows
+linked `ovcli.conf` changes and Quick Local port recovery. It passes configured
+CA and proxy settings to the connection. It does not manage the server process
+or retry tool calls.
+
+The saved command is `hermes openviking mcp --profile-bound`. It does not save
+an absolute `env.HERMES_HOME`. Hermes must supply the owning profile home when
+it starts the child, including for routed gateway and desktop profiles. This
+requires the [launch-time host binding change](https://github.com/NousResearch/hermes-agent/issues/138512).
+A host without this change fails before the adapter reads profile credentials
+or sends a request.
+
+Provider initialization migrates known legacy adapter entries while preserving
+trust, filters and other settings. The updated adapter refuses the legacy
+command. After an update, use `/reload-mcp` or restart Hermes to replace any
+process that still runs the previous plugin code. Repairing saved configuration
+cannot change an existing process.
+
+Discovery waits up to `connect_timeout` (60 seconds by default) for the server.
+Tools may be unavailable on the first turn while discovery runs. After a longer
+outage, run `/reload-mcp` in the Hermes CLI once OpenViking is ready, or restart
+the gateway. Hermes can defer tools until `tool_search` and temporarily pause
+them after repeated errors.
+
+For local files or directories, follow the upload instructions returned by
+`add_resource` or `add_skill`. The adapter does not upload or zip files itself.
+Use the OpenViking CLI if the agent cannot complete the upload.
+
+MCP tools are separate from Hermes's `memory` toolset. Disabling that toolset
+does not disable MCP. Use `hermes tools`, disable the OpenViking MCP entry or
+configure its tool filter to control explicit tools.
+
+Conversation capture includes MCP calls and results only for the reviewed
+OpenViking `remember`, `write`, `edit` and `forget` acknowledgements. All other
+MCP calls and results are excluded, including privacy tools, download URLs,
+retrieval tools, other servers and newly added tools. Changing tool approval
+or enabling a tool does not opt its result into memory extraction.
+Deferred `tool_call` wrapper calls and results are also excluded; they can
+contain private results from an underlying MCP tool.
+
 ## Memory writes and deletes
 
-`viking_remember` creates a separate `hermes-remember-<random>` OpenViking
-session, adds the fact as one message and commits all its messages. The session
-remains available in OpenViking for audit. OpenViking then
-classifies the source and can add, merge, or skip a memory through its normal
-extraction pipeline. The tool returns the separate session ID and the
-extraction task ID when the server provides one. Extraction continues
-asynchronously after the tool returns.
-
-The tool returns `status: submitted` because extraction can add a memory, merge
-the fact into an existing memory, or produce no memory operation. It does not
-promise that OpenViking created a distinct memory file. The fact is submitted
-as an unchanged `user` message so OpenViking owns the final classification.
-The legacy `category` argument is still accepted from existing callers but is
-not advertised or used. This session is separate from the live Hermes
-conversation, so an explicit remember does not commit or rotate the active
-conversation session.
-
-If the message request or commit fails, the error includes the exact
-session URI, the failed stage, the observed message status, and an `ov session
-commit <session-id>` recovery command. Inspect the session first. An archive
-means the commit completed. A non-empty live `messages.jsonl` with no archive
-means the message was accepted but still needs a commit. An empty live file
-without an archive is ambiguous and must not trigger an automatic resubmission.
-Use the same OpenViking profile and credentials as Hermes for manual recovery.
-OpenViking server auto-commit is disabled by default, so an accepted message
-whose explicit commit fails normally remains live without extracted memories
-until it is manually committed.
+The MCP `remember` tool accepts messages for OpenViking to extract memories.
+Use the server's discovered tool schema. It does not use the old
+`viking_remember(content)` arguments.
 
 Successful changes through Hermes's built-in `memory` tool are copied to
 OpenViking in order. The active profile records each copied entry's exact URI in
@@ -304,7 +350,7 @@ Older Hermes releases expose `replace` directly. Both paths update the same
 mapped OpenViking URI.
 
 Replacing a mapped entry recreates its file if it was deleted directly in
-OpenViking, for example with `viking_forget`.
+OpenViking, for example with the MCP `forget` tool.
 
 The registry stores the current entry text and a hash that identifies the
 connection. It does not store the raw API key. Endpoint, credentials, user,
@@ -319,8 +365,8 @@ the plugin skips those mirror operations with a warning. Local memory still
 changes. It does not guess which remote entry to change.
 
 Only entries created by this mirror have mappings. Session-extracted memories,
-explicit `viking_remember` results, and copies created before this registry are
-outside its scope. Use `viking_forget` with an exact URI to remove those copies.
+explicit MCP `remember` results, and copies created before this registry are
+outside its scope. Use the MCP `forget` tool with an exact URI to remove those copies.
 
 The mirror is asynchronous. Hermes saves its local memory first. Rejected remote
 writes leave the registry unchanged and produce a warning. Additions do not wait
@@ -339,19 +385,6 @@ registry blocks all mirror writes. Stop Hermes before restoring a valid backup.
 For an unsupported version, use a plugin version that supports it. Renaming a
 damaged registry starts a new registry but leaves earlier remote copies without
 mappings. Those copies need manual cleanup by exact URI.
-
-`viking_forget` is intentionally narrow. It only accepts concrete user memory
-file URIs, such as
-`viking://user/default/peers/hermes/memories/preferences/mem_abc123.md`, or the
-`viking://~/...` self alias. Under `viking://user/...` the user id is required
-and must match the calling identity. The `viking://user/memories/...`
-and `viking://user/peers/...` paths without a user ID are rejected. Files
-directly under `memories/`, such as `viking://user/default/memories/profile.md`,
-are also allowed because OpenViking supports them. The tool rejects directories,
-resources, skills, sessions, generated summary files, and URIs with query
-strings or fragments. Use OpenViking's MCP, CLI, or admin APIs for broader
-resource and directory cleanup.
-
 
 ### Cloud recall compression
 
@@ -401,7 +434,7 @@ or `flush`, recall and profile reads keep working. Automatic turn uploads,
 session-end/switch commits, and native memory mirroring are skipped for that
 context. Startup recovery also skips commits in these contexts. Pending messages
 remain available for recovery when the next primary context starts.
-Explicit `viking_*` tools keep their normal behavior, including writes and deletes.
+Explicit MCP tools remain subject to the configured Hermes trust policy.
 Interactive sessions (and hosts that predate `agent_context`) keep the previous
 automatic write behavior.
 
@@ -430,6 +463,11 @@ hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
 
 Connection settings and server data are retained. Restart Hermes or the gateway
 after updating.
+
+Version 2.2 requires OpenViking >=0.4.23 with `/mcp` enabled and a released
+Hermes version that supplies launch-time MCP profile binding. The six native
+`viking_*` tools are removed. The plugin release waits for that Hermes release;
+it does not provide a native-tool fallback.
 
 ## Recovery lock files
 

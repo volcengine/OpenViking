@@ -1,7 +1,10 @@
 name: openviking
-version: 2.1.3
+version: 2.2.0
+requires_hermes: ">=0.22.5"
 description: "Long-term memory for Hermes with automatic capture, recall and tools to search and manage knowledge."
 pip_dependencies:
   - httpx
+  - mcp
+  - httpx2
 requires_env: []
 hooks: []
