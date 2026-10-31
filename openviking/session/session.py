@@ -111,6 +111,10 @@ _MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
 _MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
 _AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"experiences"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
+# Bound how many failed predecessor archives one Phase-2 run rolls forward.
+# Older failures are drained first so a long failure backlog cannot create an
+# unbounded generation prompt; later commits pick up the remaining ones.
+_PHASE2_MAX_COVERED_FAILED_ARCHIVES = 20
 
 
 def _load_render_prompt() -> Callable[..., str]:
@@ -3022,19 +3026,91 @@ class Session:
         archive_uri: str,
         current_messages: List[Message],
     ) -> tuple[List[Message], str, str, List[str], Dict[str, set[str]]]:
-        """Prepare only the current archive, preserving its retry progress."""
+        """Prepare the current archive plus failed predecessors it can cover.
+
+        A failed ``memory_extraction`` archive keeps its raw messages but is
+        never retried (``resume_queued_commit`` acknowledges it). Roll those
+        messages into the next successful Phase-2 run and record them in
+        ``covered_failed_archives`` so later context assembly can skip them.
+
+        Only failed archives that are not already covered by a completed
+        archive, that precede the current archive, and whose failure stage is
+        ``memory_extraction`` are eligible. Pending archives keep their live
+        owner and cancelled/overview failures are left untouched. The number
+        rolled into one run is bounded, so a large backlog drains over several
+        commits instead of producing an unbounded prompt.
+        """
         current_archive_id = archive_uri.rstrip("/").split("/")[-1]
+        current_index = self._archives.archive_index_from_uri(archive_uri)
         completed_memory_steps: Dict[str, set[str]] = {}
+
+        states = await self._archives.scan_states()
+        already_covered = self._archives.covered_archive_ids(states)
+        failed_predecessors = [
+            state
+            for state in states
+            if state.index < current_index
+            and state.state == "failed"
+            and state.archive_id not in already_covered
+            and state.failed.get("stage") == "memory_extraction"
+        ]
+        # Oldest first keeps the combined transcript in commit order.
+        failed_predecessors.sort(key=lambda state: state.index)
+
+        messages: List[Message] = []
+        covered_failed_archives: List[str] = []
+        for state in failed_predecessors:
+            if len(covered_failed_archives) >= _PHASE2_MAX_COVERED_FAILED_ARCHIVES:
+                logger.info(
+                    "Rolled forward %d failed archives for %s; remaining failures will be "
+                    "covered by a later commit",
+                    len(covered_failed_archives),
+                    self.session_id,
+                )
+                break
+            try:
+                failed_messages = await self._archives.read_messages(state.archive_uri)
+            except _ArchiveMessagesCorruptError as exc:
+                logger.warning("Skipping corrupt failed archive %s: %s", state.archive_uri, exc)
+                continue
+            except Exception as exc:
+                if _is_storage_not_found(exc):
+                    logger.warning(
+                        "Skipping failed archive %s because messages.jsonl is missing",
+                        state.archive_uri,
+                    )
+                else:
+                    logger.warning(
+                        "Skipping unreadable failed archive %s: %s",
+                        state.archive_uri,
+                        exc,
+                        exc_info=True,
+                    )
+                continue
+            if not failed_messages:
+                continue
+
+            failed_meta = await self._archives.read_meta(state.archive_uri)
+            self._archives.merge_completed_memory_steps(
+                completed_memory_steps,
+                failed_meta.get("completed_memory_steps"),
+            )
+            messages.extend(failed_messages)
+            covered_failed_archives.append(state.archive_id)
+
+        messages.extend(current_messages)
+        messages = self._archives.stable_deduplicate_messages(messages)
+
         current_meta = await self._archives.read_meta(archive_uri)
         self._archives.merge_completed_memory_steps(
             completed_memory_steps,
             current_meta.get("completed_memory_steps"),
         )
         return (
-            current_messages,
+            messages,
             current_archive_id,
             current_archive_id,
-            [],
+            covered_failed_archives,
             completed_memory_steps,
         )
 

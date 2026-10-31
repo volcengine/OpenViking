@@ -444,3 +444,135 @@ def test_session_commit_message_ignores_unknown_fields():
     assert message.auto_commit_policy == {}
     assert "actor_peer_id" not in message.to_dict()
     assert "usage_uris" not in message.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_prepare_phase2_rolls_forward_failed_memory_extraction_archives():
+    session_uri = "viking://user/default/sessions/session-1"
+    failed_uri = f"{session_uri}/history/archive_001"
+    current_uri = f"{session_uri}/history/archive_002"
+    failed_message = Message(id="failed-1", role="user", parts=[TextPart("failed")])
+    current_message = Message(id="current-1", role="assistant", parts=[TextPart("current")])
+    files = {
+        f"{failed_uri}/messages.jsonl": f"{failed_message.to_jsonl()}\n",
+        f"{failed_uri}/.failed.json": json.dumps(
+            {"stage": "memory_extraction", "error": "provider timeout"}
+        ),
+        f"{failed_uri}/.meta.json": json.dumps(
+            {"completed_memory_steps": {"long_term": ["failed-1"]}}
+        ),
+        f"{current_uri}/messages.jsonl": f"{current_message.to_jsonl()}\n",
+        f"{current_uri}/.meta.json": json.dumps(
+            {"completed_memory_steps": {"long_term": ["current-1"]}}
+        ),
+    }
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+
+    messages, start, end, covered, steps = await session._prepare_phase2_archive_messages(
+        current_uri, [current_message]
+    )
+
+    assert [message.id for message in messages] == ["failed-1", "current-1"]
+    assert (start, end) == ("archive_002", "archive_002")
+    assert covered == ["archive_001"]
+    assert steps == {"long_term": {"failed-1", "current-1"}}
+
+
+@pytest.mark.asyncio
+async def test_prepare_phase2_skips_cancelled_pending_and_covered_failures():
+    session_uri = "viking://user/default/sessions/session-1"
+    cancelled_uri = f"{session_uri}/history/archive_001"
+    pending_uri = f"{session_uri}/history/archive_002"
+    covered_uri = f"{session_uri}/history/archive_003"
+    completed_uri = f"{session_uri}/history/archive_004"
+    current_uri = f"{session_uri}/history/archive_005"
+    current_message = Message(id="current-1", role="user", parts=[TextPart("current")])
+    files = {
+        f"{cancelled_uri}/messages.jsonl": f"{current_message.to_jsonl()}\n",
+        f"{cancelled_uri}/.failed.json": json.dumps({"stage": "cancelled"}),
+        f"{pending_uri}/messages.jsonl": f"{current_message.to_jsonl()}\n",
+        f"{covered_uri}/messages.jsonl": f"{current_message.to_jsonl()}\n",
+        f"{covered_uri}/.failed.json": json.dumps({"stage": "memory_extraction"}),
+        f"{completed_uri}/.done": json.dumps(
+            {
+                "coverage_start_archive": "archive_003",
+                "coverage_end_archive": "archive_004",
+            }
+        ),
+        f"{current_uri}/messages.jsonl": f"{current_message.to_jsonl()}\n",
+    }
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+
+    messages, _, _, covered, _ = await session._prepare_phase2_archive_messages(
+        current_uri, [current_message]
+    )
+
+    assert [message.id for message in messages] == ["current-1"]
+    assert covered == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_phase2_deduplicates_messages_shared_with_failed_archive():
+    session_uri = "viking://user/default/sessions/session-1"
+    failed_uri = f"{session_uri}/history/archive_001"
+    current_uri = f"{session_uri}/history/archive_002"
+    shared = Message(id="shared", role="user", parts=[TextPart("shared")])
+    failed_only = Message(id="failed-only", role="assistant", parts=[TextPart("failed")])
+    current_only = Message(id="current-only", role="assistant", parts=[TextPart("current")])
+    files = {
+        f"{failed_uri}/messages.jsonl": f"{shared.to_jsonl()}\n{failed_only.to_jsonl()}\n",
+        f"{failed_uri}/.failed.json": json.dumps({"stage": "memory_extraction"}),
+        f"{current_uri}/messages.jsonl": f"{shared.to_jsonl()}\n{current_only.to_jsonl()}\n",
+    }
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+
+    messages, _, _, covered, _ = await session._prepare_phase2_archive_messages(
+        current_uri, [shared, current_only]
+    )
+
+    assert [message.id for message in messages] == ["shared", "failed-only", "current-only"]
+    assert covered == ["archive_001"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_phase2_bounds_the_failed_archive_backlog():
+    from openviking.session import session as session_module
+
+    session_uri = "viking://user/default/sessions/session-1"
+    files = {}
+    limit = session_module._PHASE2_MAX_COVERED_FAILED_ARCHIVES
+    for index in range(1, limit + 2):
+        archive_uri = f"{session_uri}/history/archive_{index:03d}"
+        message = Message(id=f"message-{index}", role="user", parts=[TextPart(str(index))])
+        files[f"{archive_uri}/messages.jsonl"] = f"{message.to_jsonl()}\n"
+        files[f"{archive_uri}/.failed.json"] = json.dumps({"stage": "memory_extraction"})
+    current_index = limit + 2
+    current_uri = f"{session_uri}/history/archive_{current_index:03d}"
+    current_message = Message(id="current", role="user", parts=[TextPart("current")])
+    files[f"{current_uri}/messages.jsonl"] = f"{current_message.to_jsonl()}\n"
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+
+    messages, _, _, covered, _ = await session._prepare_phase2_archive_messages(
+        current_uri, [current_message]
+    )
+
+    assert len(covered) == limit
+    assert covered == [f"archive_{index:03d}" for index in range(1, limit + 1)]
+    assert [message.id for message in messages][-1] == "current"
+    assert len(messages) == limit + 1
