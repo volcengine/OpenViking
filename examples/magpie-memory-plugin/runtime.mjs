@@ -49,8 +49,9 @@ export async function recallRequest(body, ctx, env = process.env, resolvedConfig
       if (fresh && !Object.hasOwn(decisions, anchor)) {
         let block = "", code = "skipped";
         const query = applyInputFilters(text(ctx.query), compileInputFilters(cfg.recallQueryFilters).rules, { role: "user" }).text;
-        if (isRecallEnabled(cfg) && query.length >= cfg.minQueryLength) {
+        if (isRecallEnabled(cfg) && (users.length === 1 || query.length >= cfg.minQueryLength)) {
           try {
+            const shouldSearch = query.length >= cfg.minQueryLength;
             const recallBody = buildContextSearchBody(cfg);
             recallBody.query = query.slice(0, 16000);
             const timeoutMs = Math.min(cfg.recallContextTimeoutMs || cfg.timeoutMs, cfg.timeoutMs, 9000);
@@ -58,7 +59,9 @@ export async function recallRequest(body, ctx, env = process.env, resolvedConfig
             // Read it only on the first user turn; later turns replay that
             // exact snapshot. Both reads share the host's wall-clock budget.
             const [search, profile] = await Promise.allSettled([
-              request(cfg, "/api/v1/search/search", { body: recallBody, signal: ctx.signal, timeoutMs }),
+              shouldSearch
+                ? request(cfg, "/api/v1/search/search", { body: recallBody, signal: ctx.signal, timeoutMs })
+                : Promise.resolve(""),
               users.length === 1
                 ? request(cfg, `/api/v1/content/read?${new URLSearchParams({ uri: "viking://~/memories/profile.md" })}`, { signal: ctx.signal, timeoutMs })
                 : Promise.resolve(""),
@@ -69,6 +72,7 @@ export async function recallRequest(body, ctx, env = process.env, resolvedConfig
             const profileBlock = profileText
               ? `<user-profile uri="viking://~/memories/profile.md">\n${profileText.slice(0, Math.floor(maxChars / 2))}\n</user-profile>` : "";
             if (search.status === "rejected" && !profileBlock) throw search.reason;
+            if (!shouldSearch && profile.status === "rejected") throw profile.reason;
             const recalled = search.status === "fulfilled" ? selectRecallContent(search.value) : "";
             const memory = [profileBlock, recalled].filter(Boolean).join("\n\n").slice(0, maxChars);
             code = memory ? "ready" : "empty";

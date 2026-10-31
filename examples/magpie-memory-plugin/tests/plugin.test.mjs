@@ -139,6 +139,44 @@ test("the first turn includes a stable profile even when search misses personal 
   assert.equal(f.profileCalls.length, 1);
 });
 
+for (const greeting of ["你好", "hi"]) {
+  test(`a short first turn (${greeting}) reads and replays the profile without semantic search`, async (t) => {
+    let profile = "Frontend developer; Git email: person@example.test";
+    const f = await fixture(t, undefined, () => profile);
+    const firstBody = { ...body(), messages: [{ role: "user", content: greeting }] };
+    const ctx = context({ query: greeting });
+    const first = await recallRequest(firstBody, ctx, f.env);
+    assert.match(first.messages[0].content, /person@example.test/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.profileCalls.length, 1);
+    profile = "Changed profile must not replace the first snapshot";
+    assert.deepEqual(await recallRequest(firstBody, context({ query: greeting }), f.env), first);
+    const next = { ...firstBody, messages: [...firstBody.messages,
+      { role: "assistant", content: "Hello" }, { role: "user", content: "What is my email?" }] };
+    const second = await recallRequest(next, context({ query: "What is my email?" }), f.env);
+    assert.equal(second.messages[0].content, first.messages[0].content);
+    assert.equal(f.profileCalls.length, 1);
+    assert.equal(f.calls.length, 1);
+    await f.save({ plugin: { magpie: { autoRecall: false } } });
+    assert.equal(await recallRequest(firstBody, context({ query: greeting, session: "disabled" }), f.env), undefined);
+    assert.equal(f.profileCalls.length, 1);
+  });
+}
+
+test("a failed short-first-turn profile read fails open and is not retried on replay", async (t) => {
+  const f = await fixture(t, undefined, (_, res) => {
+    res.statusCode = 503;
+    res.end(JSON.stringify({ status: "error" }));
+  });
+  const greeting = { ...body(), messages: [{ role: "user", content: "hi" }] };
+  const ctx = context({ query: "hi" });
+  assert.equal(await recallRequest(greeting, ctx, f.env), undefined);
+  assert.equal(ctx.reports[0][0], "unavailable");
+  assert.equal(await recallRequest(greeting, context({ query: "hi" }), f.env), undefined);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.profileCalls.length, 1);
+});
+
 test("profile and search failures degrade independently", async (t) => {
   const failedProfile = await fixture(t, undefined, (_, res) => {
     res.statusCode = 404;
