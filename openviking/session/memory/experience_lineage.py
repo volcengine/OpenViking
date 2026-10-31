@@ -134,21 +134,15 @@ def collect_read_experience_uris(
             candidates = list(_iter_named_uris(tool_input))
             if not candidates:
                 candidates.extend(_iter_named_uris(output))
-            statuses = _read_result_statuses(output) if operation == "multi_read" else {}
+            statuses = _read_result_statuses(output, ctx) if operation == "multi_read" else {}
             texts = list(_iter_text_fields(output))
             for raw_uri in candidates:
-                uri = str(raw_uri or "").strip()
-                if "?" in uri or "#" in uri:
-                    continue
-                try:
-                    canonical_uri = canonical_experience_uri(resolve_request_uri(uri, ctx), ctx)
-                except ValueError:
-                    continue
+                canonical_uri = _resolve_read_uri(raw_uri, ctx)
                 if (
                     not canonical_uri
                     or canonical_uri in seen
-                    or statuses.get(uri) is False
-                    or _read_failed_in_text(uri, texts)
+                    or statuses.get(canonical_uri) is False
+                    or _read_failed_in_text(canonical_uri, texts, ctx)
                 ):
                     continue
                 seen.add(canonical_uri)
@@ -191,19 +185,31 @@ def _iter_named_uris(value: Any) -> Iterable[str]:
             yield from _iter_named_uris(child)
 
 
-def _read_result_statuses(value: Any) -> dict[str, bool]:
+def _resolve_read_uri(uri: str, ctx: RequestContext) -> str | None:
+    uri = uri.strip()
+    if "?" in uri or "#" in uri:
+        return None
+    try:
+        return canonical_experience_uri(resolve_request_uri(uri, ctx), ctx)
+    except ValueError:
+        return None
+
+
+def _read_result_statuses(value: Any, ctx: RequestContext) -> dict[str, bool]:
     statuses: dict[str, bool] = {}
     if isinstance(value, dict):
         uri = value.get("uri")
         success = value.get("success")
         if isinstance(uri, str) and isinstance(success, bool):
-            statuses[uri.strip()] = success
+            canonical_uri = _resolve_read_uri(uri, ctx)
+            if canonical_uri:
+                statuses[canonical_uri] = success
         for child in value.values():
             if isinstance(child, (dict, list)):
-                statuses.update(_read_result_statuses(child))
+                statuses.update(_read_result_statuses(child, ctx))
     elif isinstance(value, list):
         for child in value:
-            statuses.update(_read_result_statuses(child))
+            statuses.update(_read_result_statuses(child, ctx))
     return statuses
 
 
@@ -221,14 +227,16 @@ def _iter_text_fields(value: Any) -> Iterable[str]:
             yield from _iter_text_fields(child)
 
 
-def _read_failed_in_text(uri: str, texts: Iterable[str]) -> bool:
-    missing_marker = f"(nothing found at {uri})"
+def _read_failed_in_text(uri: str, texts: Iterable[str], ctx: RequestContext) -> bool:
+    relative = uri.removeprefix(f"viking://user/{ctx.user.user_id}/")
+    aliases = (uri, f"viking://~/{relative}")
     for text in texts:
-        if missing_marker in text:
-            return True
-        section_marker = f"--- START OF {uri} ---"
-        if section_marker in text:
-            section = text.split(section_marker, 1)[1].split(f"--- END OF {uri} ---", 1)[0]
-            if section.lstrip().startswith("ERROR:"):
+        for alias in aliases:
+            if f"(nothing found at {alias})" in text:
                 return True
+            section_marker = f"--- START OF {alias} ---"
+            if section_marker in text:
+                section = text.split(section_marker, 1)[1].split(f"--- END OF {alias} ---", 1)[0]
+                if section.lstrip().startswith("ERROR:"):
+                    return True
     return False
