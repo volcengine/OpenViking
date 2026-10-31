@@ -3432,13 +3432,23 @@ class OpenVikingMemoryProvider(MemoryProvider):
         try:
             client.post(f"/api/v1/sessions/{session_id}/messages", {"role": "user", "parts": [{"type": "text", "text": content}]})
         except Exception as e:
-            logger.error("OpenViking remember message failed for %s: %s", session_id, e)
-            return failure(f"Memory message submission failed for session {session_id}: {e}", stage="message", message_status="unknown")
+            detail = str(e) or type(e).__name__
+            logger.error("OpenViking remember message failed for %s: %s", session_id, detail)
+            return failure(
+                f"Memory message submission failed for session {session_id}: {detail}",
+                stage="message",
+                message_status="unknown",
+            )
         try:
             commit = self._unwrap_result(client.post(f"/api/v1/sessions/{session_id}/commit", {"keep_recent_count": 0}))
         except Exception as e:
-            logger.error("OpenViking remember commit failed for %s: %s", session_id, e)
-            return failure(f"Memory message was accepted, but commit failed for session {session_id}: {e}", stage="commit", message_status="accepted")
+            detail = str(e) or type(e).__name__
+            logger.error("OpenViking remember commit failed for %s: %s", session_id, detail)
+            return failure(
+                f"Memory message was accepted, but commit failed for session {session_id}: {detail}",
+                stage="commit",
+                message_status="accepted",
+            )
         commit = commit if isinstance(commit, dict) else {}
         return json.dumps({
             "status": "submitted", "session_id": session_id, "session_uri": session_uri, "message_status": "accepted",
