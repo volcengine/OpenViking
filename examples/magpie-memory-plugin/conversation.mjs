@@ -47,11 +47,31 @@ export function isAuxiliaryRequest(body, ctx) {
   });
 }
 
+// Ignore Markdown quotations before checking complete envelopes. These are
+// payload heuristics, never evidence of an installed or functioning plugin.
+function unquotedLines(text) {
+  let fence = null;
+  return text.split(/\r?\n/).map((line) => {
+    const match = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (match && match[1][0] === fence[0] && match[1].length >= fence.length && !match[2].trim()) fence = null;
+      return "";
+    }
+    if (match) { fence = match[1]; return ""; }
+    return /^(?: {0,3}>| {4}|\t)/.test(line) ? "" : line;
+  }).join("\n");
+}
+
 export function hasNativeContext(body, protocol) {
   const messages = protocol === "gemini" ? body?.contents : protocol === "responses" ? body?.input : body?.messages;
   const injected = [body?.system, body?.instructions, body?.systemInstruction,
-    ...(Array.isArray(messages) ? messages.filter((m) => object(m) && (ordinaryUser(m, protocol) || ["system", "developer"].includes(m.role))) : [messages])];
-  return /<openviking-context\b|<relevant-memor(?:y|ies)\b|\[OpenViking memory context\]/i.test(JSON.stringify(injected));
+    ...(Array.isArray(messages) ? messages.filter((m) => object(m) && (ordinaryUser(m, protocol) || ["system", "developer"].includes(m.role)))
+      .map((m) => protocol === "gemini" ? m.parts : m.content) : [messages])];
+  return injected.flatMap(textParts).some((text) => {
+    const visible = unquotedLines(text);
+    const envelopes = visible.matchAll(/(?:^|\n)[ \t]*<(openviking-context|relevant-memor(?:y|ies))(?=[ \t>])[^>\n]*>([\s\S]*?)<\/\1>[ \t]*(?=\n|$)/gi);
+    return [...envelopes].some((match) => match[2].trim());
+  });
 }
 
 export function memoryBlock(memory) {

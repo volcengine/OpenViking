@@ -121,9 +121,10 @@ options. Enabling tools or capture requires the literal boolean `true`.
   Prefix hashes distinguish branches; unknown trimmed/compacted histories skip
   enhancement rather than matching messages by text. A fresh history containing
   one new user message can start a new prefix under the same session.
-- Existing OpenViking context markers skip enhancement, including those from
-  native OV plugins or OV Gateway. Disabling `autoRecall` prevents new searches
-  while replaying known history; disabling the plugin entirely disables both.
+- Recognized OpenViking context envelopes or explicit `nativeAgents` settings
+  yield automatic enhancement. This is not installation detection or a guarantee
+  against every duplicate. Disabling `autoRecall` prevents new searches while
+  replaying known history; disabling the plugin entirely disables both.
 - The shared context builder owns query settings, budgets and result relevance.
   Default recall timeout is 700 ms inside Magpie's default 1000 ms hook budget.
   Increasing it requires raising Magpie's `gatewayTimeoutMs` with I/O margin.
@@ -179,14 +180,21 @@ it is not proof that new memories were produced. A lost commit acknowledgement
 is reconciled from session metadata before any further appends. An unresolved
 outcome pauses the queue rather than requesting extraction twice.
 
-Before either recall or capture, OpenViking context markers in system/user
-messages yield ownership to the native plugin. This includes
-`<openviking-context>`, legacy `<relevant-memories>` and the legacy bracket
-marker. Assistant/tool quotations do not count. The decision persists for the
-current connection and session, so later compaction cannot reactivate Magpie
-halfway through a native-managed chat. Queued snapshots are discarded once
-native ownership is observed. A fresh chat is needed after removing the native
-integration. Explicit tools remain available if separately enabled.
+Before either recall or capture, Magpie checks for complete, nonempty
+`<openviking-context>`, `<relevant-memory>` or `<relevant-memories>` envelopes
+on their own lines in system/user text. Markdown code fences, blockquotes,
+indented code, inline mentions and incomplete tags do not establish ownership;
+assistant/tool payloads and non-text fields are ignored. The legacy
+`[OpenViking memory context]` header alone no longer triggers automatic yielding.
+
+This is a payload heuristic, not detection of an installed plugin or proof that
+native capture is active. An unquoted example formatted exactly like an actual
+injection cannot be reliably distinguished. For known native-managed agents,
+configure `nativeAgents` explicitly. Recognized envelopes yield both automatic
+recall and capture for that connection/session and discard queued snapshots.
+Ownership persists if markers disappear from later history. Existing ownership
+records are retained; start a fresh chat after removing a native plugin or
+correcting an earlier false match. Explicit tools are unaffected.
 
 Known native OpenViking memory-compression and Claude Code session-title utility requests are excluded from both automatic recall and capture, even when they run without injection markers. This is a fallback based on known prompt framing, not a complete classification of every auxiliary request. Configure `nativeAgents` for agents known to have a native OV plugin, including their unmarked internal requests.
 
