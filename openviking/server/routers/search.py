@@ -21,6 +21,7 @@ from openviking.retrieve.context_assembler import (
     MAX_EXCLUDE_URIS,
     REPORTED_CATEGORY_KEYS,
     AssembleParams,
+    AssembleResult,
     DetailRequest,
     assemble_context,
 )
@@ -33,10 +34,12 @@ from openviking.retrieve.context_assembler.recall_preset import (
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
+from openviking.server.host_envelope import declared_host_envelopes
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.host_envelope import normalize
 from openviking.utils.image_search import is_viking_uri
 from openviking.utils.search_filters import (
     SearchContextTypeInput,
@@ -47,7 +50,7 @@ from openviking.utils.search_filters import (
 from openviking.utils.tags import build_search_tags_filter
 from openviking.utils.time_decay import validate_event_time_decay_request
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
-from openviking_cli.retrieve import ContextType
+from openviking_cli.retrieve import ContextType, FindResult
 
 
 def _sanitize_floats(obj: Any) -> Any:
@@ -370,6 +373,39 @@ class GlobRequest(BaseModel):
     include_tags: bool = False
 
 
+# Stats marker for a query that was nothing but host scaffolding.
+_HOST_ENVELOPE_ONLY = "host_envelope_only"
+
+
+def _strip_query_envelope(
+    http_request: Request, query: str, image_url: Optional[str]
+) -> Optional[str]:
+    """Return ``query`` without host scaffolding, or ``None`` if nothing is left to search.
+
+    Only a query that matched an envelope and came out empty is skipped; a short query
+    without one is searched as usual.
+    """
+    envelopes = declared_host_envelopes(http_request)
+    if envelopes is None:
+        envelopes = getattr(http_request.app.state, "search_host_envelopes", ())
+    if not envelopes or not query:
+        return query
+    result = normalize(query, envelopes)
+    if result.matched and not result.text.strip() and not image_url:
+        return None
+    return result.text
+
+
+def _empty_find_response() -> Dict[str, Any]:
+    result = FindResult(memories=[], resources=[], skills=[]).to_dict()
+    return Response(status="ok", result=result).model_dump(exclude_none=True)
+
+
+def _empty_context_response() -> Dict[str, Any]:
+    result = AssembleResult(stats={"skipped": _HOST_ENVELOPE_ONLY}).to_dict()
+    return Response(status="ok", result=result).model_dump(exclude_none=True)
+
+
 @router.post("/find")
 async def find(
     request: FindRequest,
@@ -378,6 +414,10 @@ async def find(
 ):
     """Semantic search without session context."""
     service = get_service()
+    query = _strip_query_envelope(http_request, request.query, request.image_url)
+    if query is None:
+        return _empty_find_response()
+    request.query = query
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
@@ -486,6 +526,10 @@ async def search(
 ):
     """Semantic search with optional session context."""
     service = get_service()
+    query = _strip_query_envelope(http_request, request.query, request.image_url)
+    if query is None:
+        return _empty_context_response() if request.mode == "context" else _empty_find_response()
+    request.query = query
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
@@ -553,11 +597,16 @@ async def search(
 async def recall(
     request: RecallRequest,
     response: FastAPIResponse,
+    http_request: Request,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Deprecated preset over context assembly; use /search with mode="context"."""
     service = get_service()
     params, aliases = fold_recall_request(request.model_dump(), request.model_fields_set)
+    query = _strip_query_envelope(http_request, params.query, params.image_url)
+    if query is None:
+        return _empty_context_response()
+    params.query = query
     params.image_url = _resolve_image_url(params.image_url, _ctx)
     params.exclude_uris = _resolve_uri_list(params.exclude_uris, _ctx)
     execution = await run_operation(

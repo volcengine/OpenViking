@@ -4,7 +4,7 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
@@ -13,6 +13,7 @@ from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_session_request_context
 from openviking.server.dependencies import get_service
+from openviking.server.host_envelope import declared_host_envelopes
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.responses import error_response
@@ -711,6 +712,7 @@ async def commit_session(
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,
+    http_request: Request,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_session_request_context),
 ):
@@ -730,6 +732,9 @@ async def add_message(
     Missing sessions are auto-created on first add.
     """
     service = get_service()
+    # Only a declaring client changes the call, so session doubles keep working.
+    envelopes = declared_host_envelopes(http_request)
+    add_kwargs = {} if envelopes is None else {"host_envelopes": envelopes}
 
     async def _add() -> dict[str, Any]:
         session = await service.sessions.open(session_id, _ctx, auto_create=True)
@@ -748,7 +753,7 @@ async def add_message(
         ]
         add_many_async = getattr(session, "add_messages_async", None)
         if callable(add_many_async):
-            await add_many_async(specs)
+            await add_many_async(specs, **add_kwargs)
         else:
             session.add_messages(specs)
         await service.sessions.maybe_schedule_auto_commit(
@@ -776,6 +781,7 @@ async def add_message(
 @router.post("/{session_id}/messages/batch")
 async def batch_add_messages(
     request: BatchAddMessageRequest,
+    http_request: Request,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_session_request_context),
 ):
@@ -785,6 +791,9 @@ async def batch_add_messages(
     Missing sessions are auto-created on first add.
     """
     service = get_service()
+    # Only a declaring client changes the call, so session doubles keep working.
+    envelopes = declared_host_envelopes(http_request)
+    add_kwargs = {} if envelopes is None else {"host_envelopes": envelopes}
 
     async def _batch_add() -> dict[str, Any]:
         session = await service.sessions.open(session_id, _ctx, auto_create=True)
@@ -804,7 +813,7 @@ async def batch_add_messages(
             )
         add_many_async = getattr(session, "add_messages_async", None)
         if callable(add_many_async):
-            msgs = await add_many_async(specs)
+            msgs = await add_many_async(specs, **add_kwargs)
         else:
             msgs = session.add_messages(specs)
         await service.sessions.maybe_schedule_auto_commit(

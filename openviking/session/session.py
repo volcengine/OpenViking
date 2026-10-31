@@ -23,6 +23,7 @@ from typing import (
     List,
     Optional,
     Protocol,
+    Sequence,
 )
 from uuid import uuid4
 
@@ -81,6 +82,7 @@ from openviking.session.working_memory import (
 )
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
+from openviking.utils.host_envelope import HostEnvelope, normalize
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -468,8 +470,10 @@ class Session:
         expiry_reporter: Optional[SessionExpiryReporter] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
+        host_envelopes: Sequence[HostEnvelope] = (),
     ):
         self._viking_fs = viking_fs
+        self._host_envelopes = tuple(host_envelopes)
         self._privacy_config_service = privacy_config_service
         self._privacy_sanitizer = privacy_sanitizer
         self._vikingdb_manager = vikingdb_manager
@@ -990,8 +994,13 @@ class Session:
     async def add_messages_async(
         self,
         messages_spec: List[dict],
+        host_envelopes: Optional[Sequence[HostEnvelope]] = None,
     ) -> List[Message]:
-        """Asynchronously add multiple messages without blocking the caller loop."""
+        """Asynchronously add multiple messages without blocking the caller loop.
+
+        ``host_envelopes`` replaces the session's configured envelopes for this call,
+        e.g. with the ones a client declared.
+        """
         if self._privacy_config_service is not None:
             messages_spec = await extract_and_store_session_privacy(
                 self.session_id,
@@ -1000,6 +1009,7 @@ class Session:
                 self._privacy_config_service,
                 self._privacy_sanitizer,
             )
+        self._normalize_host_envelopes(messages_spec, host_envelopes)
         message_groups = self._build_message_groups(messages_spec)
         messages = []
         for group in message_groups:
@@ -1009,6 +1019,30 @@ class Session:
             messages.extend(group)
         await self._append_messages_authoritatively(messages)
         return messages
+
+    def _normalize_host_envelopes(
+        self,
+        messages_spec: List[dict],
+        host_envelopes: Optional[Sequence[HostEnvelope]] = None,
+    ) -> None:
+        """Strip host scaffolding from user text parts, keeping what the host sent.
+
+        Runs after privacy extraction, so ``original_text`` holds the same sanitized
+        text that would otherwise have been stored. The normalized ``text`` is what
+        extraction, embedding and query expansion read.
+        """
+        envelopes = self._host_envelopes if host_envelopes is None else tuple(host_envelopes)
+        if not envelopes:
+            return
+        for spec in messages_spec:
+            if spec.get("role") != "user":
+                continue
+            for part in spec.get("parts") or []:
+                if not isinstance(part, TextPart) or part.original_text is not None:
+                    continue
+                result = normalize(part.text, envelopes)
+                if result.matched:
+                    part.original_text, part.text = part.text, result.text
 
     def add_message(
         self,

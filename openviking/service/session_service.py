@@ -9,7 +9,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.privacy.sanitizer import PrivacySanitizer
@@ -36,6 +36,7 @@ from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
+from openviking.utils.host_envelope import HostEnvelope
 from openviking.utils.tags import normalize_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import (
@@ -78,6 +79,7 @@ class SessionService:
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
         self._tool_output_externalization_config = ToolOutputExternalizationConfig()
+        self._host_envelopes: tuple[HostEnvelope, ...] = ()
         self._agent_evolution_default_enabled = AgentEvolutionConfig().enabled
         self._runtime_config_manager: Optional[Any] = None
         self._vlm_resolver: Optional["VLMResolver"] = None
@@ -135,6 +137,10 @@ class SessionService:
     ) -> None:
         """Set tool output externalization controls for newly created sessions."""
         self._tool_output_externalization_config = config.model_copy(deep=True)
+
+    def set_host_envelopes(self, envelopes: Sequence[HostEnvelope]) -> None:
+        """Set the host envelopes stripped from user turns in newly opened sessions."""
+        self._host_envelopes = tuple(envelopes)
 
     def set_default_user_memory_policy(self, memory_policy: Optional[Dict[str, Any]]) -> None:
         """Set the server fallback used when a User has no persisted policy."""
@@ -258,6 +264,7 @@ class SessionService:
             expiry_reporter=self._session_expiry_adapter,
             privacy_config_service=self._privacy_config_service,
             privacy_sanitizer=self._privacy_sanitizer,
+            host_envelopes=self._host_envelopes,
         )
 
     async def _get_user_memory_policy(self, ctx: RequestContext) -> Optional[Dict[str, Any]]:

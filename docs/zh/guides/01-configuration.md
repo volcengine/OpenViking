@@ -2152,6 +2152,39 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
 
 这些预算用于选择外置输出和分配预览。预览元数据和最小预览大小可能使结果超出预算；`preserve_raw` 在写入失败时也可能使该轮超出预算。
 
+### 宿主外壳归一化 {#host-envelope}
+
+很多 Agent 宿主会把用户这一轮包在自己的外壳里：桥接层的路由说明、`<system-reminder>`、引用的历史等。`server.host_envelope` 在写入会话和检索之前剥掉这些块，只保留用户原话。默认关闭。
+
+```json
+{
+  "server": {
+    "host_envelope": {
+      "envelopes": ["botmux", "claude-code"],
+      "custom": [
+        {
+          "name": "botmux",
+          "detect_any": ["botmux_routing", "botmux_reminder"],
+          "strip": ["botmux_routing"],
+          "extract": "user_message"
+        }
+      ]
+    }
+  }
+}
+```
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `envelopes` | `[]` | 依次尝试的外壳名，第一个命中的生效。可以是内置名（`claude-code`、`workbuddy`），也可以是 `custom` 中的名字。为空即关闭。 |
+| `custom` | `[]` | 自定义外壳：`detect_any` 中任一标签出现才生效；有 `extract` 时只保留该标签的正文，到达正文之前跳过 `strip` 中的块；没有 `extract` 时只删除文本首尾、开闭标签各占一行的 `strip` 块。 |
+| `messages` | `true` | 作用于 user 消息的文本 part。归一化后的文本写入 `text`，宿主原文保存在 `original_text`，记忆提取和向量化读取 `text`。 |
+| `search` | `true` | 作用于 `find`、`search` 和 `recall` 的 query。剥离后为空的 query 直接返回空结果，不发起检索。 |
+
+句中、行内代码或代码块里引用的标签不会被删除；未命中或标签未闭合时原样保留。名字写错时服务启动失败。
+
+客户端知道哪些块是自己注入的，可以用请求头声明，服务端照声明处理，不再自己判断：`X-OpenViking-Host-Envelope: botmux,claude-code` 表示按顺序只尝试这几个外壳（内置名或 `custom` 中的名字，不要求出现在 `envelopes` 里），`none` 表示本次请求不做归一化。请求头作用于消息写入（`/sessions/{id}/messages`、`/messages/batch`）和 `find`、`search`、`recall`；声明了未知的名字时返回 400。没有该请求头时按上面的配置处理。
+
 ### Usage Reporter
 
 可选的 Usage Reporter 从已 commit session 的 tool parts 中抽取记忆使用事件。内置文件日志 Sink 将每个事件写成一行扁平 JSON，并按小时滚动专用日志文件：
