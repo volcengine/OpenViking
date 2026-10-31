@@ -144,15 +144,15 @@ class TestSchemaModelGenerator:
 
         assert "First test field" in model.model_fields["field1"].description
 
-    def test_events_ranges_description_requires_user_source(self, real_registry):
+    def test_events_ranges_description_uses_participant_source(self, real_registry):
         events = real_registry.get("events")
         model = SchemaModelGenerator([events]).create_flat_data_model(events)
 
         description = model.model_fields["ranges"].description
 
-        assert "MUST include at least one user-role message" in description
-        assert "include both the originating user message and the assistant message" in description
-        assert "Never output assistant-only ranges for events" in description
+        assert "statements from human participants, regardless of their protocol role" in description
+        assert "AI-generated text alone does not establish" in description
+        assert "retain necessary questions or clarifications" in description
 
     def test_render_description_template_conditional_branch(self):
         memory_type = MemoryTypeSchema(
