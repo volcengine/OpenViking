@@ -124,13 +124,17 @@ def test_status_shows_selected_model_config_without_exposing_secrets(
         assert hidden not in result.output
 
 
-def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path, monkeypatch):
+@pytest.mark.parametrize("temperature", [None, 0.0, 0.6])
+def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(
+    tmp_path, monkeypatch, temperature
+):
     config = _write_config(
         tmp_path,
         monkeypatch,
         {
             "vlm": {
                 "model": "root-primary",
+                "temperature": temperature,
                 "credentials": _credential_chain("root"),
             }
         },
@@ -147,6 +151,9 @@ def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path
         "root-primary",
         "root-backup",
     ]
+
+    assert config.agents.temperature == temperature
+    assert [vlm.temperature for vlm in provider._vlm._vlm_instances] == [temperature, temperature]
 
 
 @pytest.mark.parametrize("bot_override", [False, True], ids=["inherited-model", "bot-model"])

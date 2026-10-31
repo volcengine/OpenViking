@@ -357,7 +357,7 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = 0.7,
         max_iterations: int = 50,
         memory_window: int = 50,
         brave_api_key: str | None = None,

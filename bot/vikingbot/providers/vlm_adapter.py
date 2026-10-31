@@ -257,7 +257,7 @@ class VLMProviderAdapter(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = 0.7,
         session_id: str | None = None,
         thinking: bool | None = None,
         reasoning_effort: str | None = None,
@@ -329,7 +329,7 @@ class VLMProviderAdapter(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = 0.7,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
         if not self._supports_native_stream(self._vlm):
@@ -432,7 +432,7 @@ class VLMProviderAdapter(LLMProvider):
         tools: list[dict[str, Any]] | None,
         model: str | None,
         max_tokens: int | None,
-        temperature: float,
+        temperature: float | None,
     ) -> AsyncIterator[LLMStreamEvent]:
         """Retry before the first event; never replay emitted output."""
 
@@ -472,7 +472,7 @@ class VLMProviderAdapter(LLMProvider):
         tools: list[dict[str, Any]] | None,
         model: str | None,
         max_tokens: int | None,
-        temperature: float,
+        temperature: float | None,
     ) -> AsyncIterator[LLMStreamEvent]:
         """Release the HTTP response after normal or failed SDK iteration."""
         kwargs = self._build_stream_kwargs(
@@ -491,7 +491,12 @@ class VLMProviderAdapter(LLMProvider):
         start_time = time.perf_counter()
 
         client = vlm.get_async_client()
-        response = await client.chat.completions.create(**kwargs)
+        response = (
+            await vlm._create_chat_completion(client, **kwargs)
+            if getattr(vlm, "provider", None) == "volcengine"
+            and getattr(vlm, "temperature", temperature) is None
+            else await client.chat.completions.create(**kwargs)
+        )
         async with response as stream:
             async for chunk in stream:
                 chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
@@ -549,7 +554,7 @@ class VLMProviderAdapter(LLMProvider):
         tools: list[dict[str, Any]] | None,
         model: str | None,
         max_tokens: int | None,
-        temperature: float,
+        temperature: float | None,
     ) -> dict[str, Any]:
         provider = getattr(vlm, "provider", None)
         configured_max_tokens = getattr(vlm, "max_tokens", None)
@@ -566,11 +571,13 @@ class VLMProviderAdapter(LLMProvider):
             kwargs: dict[str, Any] = {
                 "model": effective_model,
                 "messages": messages,
-                "temperature": getattr(vlm, "temperature", temperature),
                 "thinking": {"type": "enabled" if getattr(vlm, "thinking", False) else "disabled"},
                 "stream": True,
                 "stream_options": {"include_usage": True},
             }
+            effective_temperature = getattr(vlm, "temperature", temperature)
+            if effective_temperature is not None:
+                kwargs["temperature"] = effective_temperature
             if effective_max_tokens is not None:
                 kwargs["max_tokens"] = effective_max_tokens
             reasoning_effort = getattr(vlm, "reasoning_effort", None)
