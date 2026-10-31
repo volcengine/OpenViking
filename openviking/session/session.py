@@ -1139,8 +1139,15 @@ class Session:
                 parsed = json.loads(content)
                 if isinstance(parsed, dict):
                     meta = parsed
-            except Exception:
-                pass
+            except Exception as exc:
+                # A missing or corrupt meta file self-heals into an empty base.
+                # Any other read failure (timeout, transient storage error) must
+                # NOT be treated the same: proceeding with an empty base would
+                # overwrite the archive's accumulated metadata (phase1 marker,
+                # retention plan, checkpoints, extraction progress) with only
+                # the new keys instead of merging into it.
+                if not _is_storage_not_found(exc) and not isinstance(exc, json.JSONDecodeError):
+                    raise
             meta.update(updates)
             await self._viking_fs.write_file(
                 uri=f"{archive_uri}/.meta.json",

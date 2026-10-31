@@ -8,6 +8,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from openviking.message import TextPart
 from openviking.scheduling.expiry import (
     CallbackRequest,
@@ -807,3 +809,90 @@ class TestCommit:
         session.add_message("user", [TextPart("Second round message")])
         second = await session.commit_async()
         assert second["status"] == "accepted"
+
+
+class _MetaRecordingFS:
+    """Minimal VikingFS double for archive meta merge tests."""
+
+    def __init__(self, *, read_error: Exception | None = None, existing: str | None = None):
+        self.read_error = read_error
+        self.existing = existing
+        self.written: dict[str, bytes] = {}
+
+    async def read_file(self, uri, ctx=None):
+        if self.read_error is not None:
+            raise self.read_error
+        return self.existing
+
+    async def write_file(self, uri, content, ctx=None, lease_ref=None):
+        self.written[uri] = content
+
+
+def _session_for_meta_merge(fs) -> Session:
+    session = object.__new__(Session)
+    session._viking_fs = fs
+    session._archive_meta_merge_lock = asyncio.Lock()
+    session.ctx = None
+    return session
+
+
+async def test_merge_archive_meta_transient_read_error_does_not_wipe_existing_meta():
+    """A transient read failure must not rebase the merge onto an empty dict.
+
+    The read failure has to propagate so the commit step retries with the
+    storage intact; proceeding would overwrite the archive's accumulated
+    metadata (phase1 marker, retention plan, checkpoints, extraction progress)
+    with only the new keys.
+    """
+    fs = _MetaRecordingFS(read_error=RuntimeError("transient storage error"))
+    session = _session_for_meta_merge(fs)
+
+    with pytest.raises(RuntimeError, match="transient storage error"):
+        await session._merge_archive_meta(
+            "viking://user/alice/sessions/s1/archive_001",
+            {"retention_plan": {"mode": "turn_budget"}},
+        )
+
+    assert fs.written == {}
+
+
+async def test_merge_archive_meta_missing_file_self_heals_into_empty_base():
+    fs = _MetaRecordingFS(read_error=FileNotFoundError("viking://user/alice/.meta.json"))
+    session = _session_for_meta_merge(fs)
+
+    await session._merge_archive_meta(
+        "viking://user/alice/sessions/s1/archive_001",
+        {"phase1": {"status": "prepared"}},
+    )
+
+    (content,) = fs.written.values()
+    assert json.loads(content) == {"phase1": {"status": "prepared"}}
+
+
+async def test_merge_archive_meta_corrupt_file_self_heals_and_merges_on_top():
+    fs = _MetaRecordingFS(existing="{not valid json")
+    session = _session_for_meta_merge(fs)
+
+    await session._merge_archive_meta(
+        "viking://user/alice/sessions/s1/archive_001",
+        {"phase1": {"status": "prepared"}},
+    )
+
+    (content,) = fs.written.values()
+    assert json.loads(content) == {"phase1": {"status": "prepared"}}
+
+
+async def test_merge_archive_meta_merges_updates_into_existing_meta():
+    fs = _MetaRecordingFS(existing=json.dumps({"phase1": {"status": "prepared"}}))
+    session = _session_for_meta_merge(fs)
+
+    await session._merge_archive_meta(
+        "viking://user/alice/sessions/s1/archive_001",
+        {"retention_plan": {"mode": "turn_budget"}},
+    )
+
+    (content,) = fs.written.values()
+    assert json.loads(content) == {
+        "phase1": {"status": "prepared"},
+        "retention_plan": {"mode": "turn_budget"},
+    }
