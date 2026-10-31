@@ -48,6 +48,16 @@ _CJK_ENCODINGS = _CHINESE_ENCODINGS | _JAPANESE_ENCODINGS | _KOREAN_ENCODINGS
 # code pages. Require a few script-specific characters before overriding the
 # detector's rank with Korean script evidence.
 _MIN_STRONG_SCRIPT_CHARS = 4
+# Private-use code points exist so a font can map glyphs Unicode does not name.
+# Real text does not contain them, so a decode that lands in these ranges is a
+# codec reading bytes it was not meant for. This check only ever runs on bytes
+# that already failed UTF-8 decoding, where there is no legitimate source for
+# such characters.
+_PRIVATE_USE_RANGES = (
+    (0xE000, 0xF8FF),  # Private Use Area
+    (0xF0000, 0xFFFFD),  # Supplementary Private Use Area-A
+    (0x100000, 0x10FFFD),  # Supplementary Private Use Area-B
+)
 
 
 @dataclass(frozen=True)
@@ -174,6 +184,9 @@ def _is_valid_text(decoded: str) -> bool:
     if "\ufffd" in sample:
         return False
 
+    if any(_is_private_use(char) for char in sample):
+        return False
+
     disallowed_controls = sum(1 for char in sample if _is_disallowed_control(char))
     return disallowed_controls / len(sample) <= 0.05
 
@@ -181,6 +194,11 @@ def _is_valid_text(decoded: str) -> bool:
 def _is_disallowed_control(char: str) -> bool:
     codepoint = ord(char)
     return (codepoint < 32 and char not in "\t\n\r") or 0x7F <= codepoint <= 0x9F
+
+
+def _is_private_use(char: str) -> bool:
+    codepoint = ord(char)
+    return any(low <= codepoint <= high for low, high in _PRIVATE_USE_RANGES)
 
 
 def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_EncodingCandidate]:
