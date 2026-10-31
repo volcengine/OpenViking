@@ -188,6 +188,8 @@ halfway through a native-managed chat. Queued snapshots are discarded once
 native ownership is observed. A fresh chat is needed after removing the native
 integration. Explicit tools remain available if separately enabled.
 
+Native OpenViking memory-compression utility requests are excluded from both automatic recall and capture, even when they run without injection markers.
+
 A remote gateway cannot inspect client installations, and a capture-only native
 plugin might inject no marker. Use `"nativeAgents": ["pi", "codex", "claude"]`
 in Magpie Options (or `plugin.magpie.nativeAgents`) to skip both automatic

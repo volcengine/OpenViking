@@ -1,4 +1,5 @@
 import { recallAnchors } from "./recall-ledger.mjs";
+import { buildRecallCompressionPrompt } from "./shared/recall-compress-core.mjs";
 
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
 const ordinaryUser = (message, protocol) => {
@@ -11,6 +12,32 @@ const ordinaryUser = (message, protocol) => {
 };
 
 export const MEMORY_MARKER = '<openviking-context source="magpie-recall">';
+
+// Derive the utility's framing from its owning implementation. It deliberately
+// runs without native hooks, so an injection marker cannot identify this call.
+const compressionProbe = buildRecallCompressionPrompt({ query: "\u0001", rendered: "\u0002" });
+const [compressionPrefix, afterQuery] = compressionProbe.split("\u0001");
+const [compressionSeparator, compressionSuffix] = afterQuery.split("\u0002");
+const compressionTail = compressionSuffix.split("\n\n").at(-1);
+function textParts(value) {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap((part) => typeof part?.text === "string" ? [part.text] : []);
+  return value?.parts ? textParts(value.parts) : [];
+}
+
+export function isAuxiliaryRequest(body, ctx) {
+  if (["auxiliary", "compaction", "title", "subagent"].includes(ctx.kind || body?.metadata?.request_kind)) return true;
+  const messages = ctx.protocol === "gemini" ? body?.contents : ctx.protocol === "responses" ? body?.input : body?.messages;
+  const latest = Array.isArray(messages) ? messages.findLast((m) => object(m) && ordinaryUser(m, ctx.protocol)) : null;
+  const candidates = [body?.system, body?.instructions, body?.systemInstruction,
+    latest ? (ctx.protocol === "gemini" ? latest.parts : latest.content) : typeof messages === "string" ? messages : ""]
+    .flatMap(textParts);
+  return candidates.some((text) => {
+    const value = text.trim();
+    return value.startsWith(compressionPrefix) && value.includes(compressionSeparator, compressionPrefix.length)
+      && value.endsWith(compressionTail);
+  });
+}
 
 export function hasNativeContext(body, protocol) {
   const messages = protocol === "gemini" ? body?.contents : protocol === "responses" ? body?.input : body?.messages;

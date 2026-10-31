@@ -131,6 +131,8 @@ Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`reca
 接管判定按连接和会话持久化，避免后续压缩掉标记后再次启用 Magpie；观察到原生接管后丢弃待同步快照。
 移除原生插件后应新建会话。显式工具不受自动能力让出的影响。
 
+原生 OpenViking 插件的记忆压缩内部请求，即使没有注入标记，也会跳过自动召回和采集。
+
 远程网关看不到客户端安装列表；仅采集、不注入标记的原生插件也无法靠消息识别。
 这类 Agent 可在选项中设置 `"nativeAgents": ["pi", "codex", "claude"]`，或填写
 `plugin.magpie.nativeAgents`，明确让出两项自动能力。名称应与 Magpie 上报的 Agent ID 一致。

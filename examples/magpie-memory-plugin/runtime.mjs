@@ -5,7 +5,7 @@ import { withRecallLedger } from "./recall-ledger.mjs";
 import { connectionScope, dataDirectory } from "./scope.mjs";
 import { nativeOwner } from "./capture.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
-import { describeConversation, memoryBlock, replayContext } from "./conversation.mjs";
+import { describeConversation, isAuxiliaryRequest, memoryBlock, replayContext } from "./conversation.mjs";
 
 const text = (value) => typeof value === "string" ? value.trim() : "";
 
@@ -28,8 +28,7 @@ export async function recallRequest(body, ctx, env = process.env, resolvedConfig
     ctx.report?.("unbound", 0); return;
   }
   const conversation = describeConversation(body, ctx.protocol);
-  const kind = ctx.kind || body?.metadata?.request_kind;
-  if (!conversation || ["auxiliary", "compaction", "title", "subagent"].includes(kind)) {
+  if (!conversation || isAuxiliaryRequest(body, ctx)) {
     ctx.report?.("skipped", 0); return;
   }
   try {

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { connectionScope, dataDirectory } from "./scope.mjs";
-import { describeConversation, hasNativeContext } from "./conversation.mjs";
+import { describeConversation, hasNativeContext, isAuxiliaryRequest } from "./conversation.mjs";
 import { captureMessages, completedReply } from "./capture-messages.mjs";
 import { recallDigest } from "./recall-ledger.mjs";
 
@@ -75,10 +75,11 @@ export async function queueCapture(cfg, ctx, messages, { launch = true } = {}) {
 
 export async function prepareCapture(body, ctx, cfg, options) {
   if (!cfg.enabled || !["local", "magpie-key"].includes(ctx.origin) || !ctx.session?.trim()) return;
+  if (isAuxiliaryRequest(body, ctx)) return;
   if (await nativeOwner(cfg, ctx, body)) { ctx.state && (ctx.state.nativeOwner = true); return; }
   if (!cfg.autoCapture) return;
   const conversation = describeConversation(body, ctx.protocol);
-  if (!conversation || ["auxiliary", "compaction", "title", "subagent"].includes(ctx.kind || body?.metadata?.request_kind)) return;
+  if (!conversation) return;
   const directory = captureDirectory(cfg, ctx);
   const binding = join(directory, "start");
   const first = captureMessages([conversation.messages[conversation.users[0]]], ctx.protocol, cfg)?.[0]?.source_message_ids[0];
