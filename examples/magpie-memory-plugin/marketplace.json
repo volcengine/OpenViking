@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "package": "@openviking/magpie-plugin",
+      "name": "OpenViking",
+      "kind": "middleware",
+      "icon": "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/ov-logo-icon.png",
+      "summary": {
+        "zh": "为 Magpie 中的 Agent 接入 OpenViking 长期记忆，自动召回相关上下文，按需保存对话并提取记忆，提供搜索、读取和保存工具。沿用现有 OpenViking 配置，无需重复填写服务地址和凭据。",
+        "en": "Bring OpenViking memory to agents using Magpie, with automatic context recall, optional conversation capture and memory tools. Reuses your existing OpenViking configuration."
+      }
+    }
+  ]
+}
