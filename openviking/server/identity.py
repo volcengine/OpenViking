@@ -86,6 +86,9 @@ class ResolvedIdentity:
     # rules that target raw API-key auth, since OAuth claims already pin
     # account/user.
     from_oauth: bool = False
+    # None means groups/deletion must be resolved by the context builder. A
+    # tuple (including empty) comes from a complete server API-key auth read.
+    group_ids: tuple[str, ...] | None = None
 
 
 @dataclass

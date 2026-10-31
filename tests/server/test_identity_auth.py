@@ -74,33 +74,41 @@ async def make_request(
     return request
 
 
-async def test_key_identity_and_groups_are_resolved_independently(runtime):
+@pytest.mark.parametrize("groups", [(), ("team",)])
+async def test_key_identity_supplies_groups_to_both_contexts(runtime, groups, monkeypatch):
     key = await runtime.register_user("acme", "bob")
-    await runtime.create_group("acme", "team")
-    await runtime.add_group_member("acme", "team", "bob")
+    for group in groups:
+        await runtime.create_group("acme", group)
+        await runtime.add_group_member("acme", group, "bob")
     request = await make_request(runtime, headers=[(b"x-openviking-user", b"spoof")])
     plugin = request.app.state.auth_plugin
     identity = await plugin.resolve_identity(
         request, api_key=key, x_openviking_user="spoof", x_openviking_account="spoof"
     )
+
+    async def redundant_read(*args):
+        pytest.fail("resolved API-key identity must supply its own groups and deletion proof")
+
+    monkeypatch.setattr(runtime, "get_user_group_ids", redundant_read)
+    monkeypatch.setattr(runtime, "get_deletion", redundant_read)
     ctx = await get_request_context(request, identity, "peer", key, None)
-    assert (ctx.user.user_id, ctx.role, ctx.group_ids) == ("bob", Role.USER, ("team",))
+    assert (ctx.user.user_id, ctx.role, ctx.group_ids) == ("bob", Role.USER, groups)
     assert ctx.actor_peer_id == "peer"
     assert ctx.api_key == key
     assert "x-openviking-user" not in request.headers
     session = await get_session_request_context(request, identity, key, None)
+    assert session.group_ids == groups
     assert session.actor_peer_id is None
 
 
 async def test_key_store_error_and_unknown_identity_fail_closed():
     store = AsyncMock(spec=AccountStore)
-    store.verify_api_key.return_value = ("acme", "missing")
-    store.get_user.return_value = None
+    store.get_auth_snapshot.return_value = None
     manager = APIKeyManager("root", store)
     request = await make_request(manager)
-    with pytest.raises(UnauthenticatedError, match="Unknown"):
+    with pytest.raises(UnauthenticatedError, match="Invalid"):
         await request.app.state.auth_plugin.resolve_identity(request, api_key="verified-key")
-    store.get_user.side_effect = OSError("database offline")
+    store.get_auth_snapshot.side_effect = OSError("database offline")
     with pytest.raises(OSError, match="database offline"):
         await request.app.state.auth_plugin.resolve_identity(request, api_key="verified-key")
 

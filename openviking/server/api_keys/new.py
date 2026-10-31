@@ -111,28 +111,28 @@ class APIKeyManager:
     async def resolve_identity(self, api_key: str) -> ResolvedIdentity:
         if self._root_api_key and hmac.compare_digest(api_key, self._root_api_key):
             return ResolvedIdentity(role=Role.ROOT)
-        account_id, user_id = await self._verify_key(api_key)
-        user = await self._require_authenticatable_user(account_id, user_id)
+        account_id, user_id = self._key_hints(api_key)
+        snapshot = await self._store.get_auth_snapshot(
+            api_key, account_id_hint=account_id, user_id_hint=user_id
+        )
+        if snapshot is None:
+            raise UnauthenticatedError("Invalid API key")
         return ResolvedIdentity(
-            role=Role(user["role"]),
-            account_id=account_id,
-            user_id=user_id,
+            role=Role(snapshot["role"]),
+            account_id=snapshot["account_id"],
+            user_id=snapshot["user_id"],
+            group_ids=tuple(snapshot["group_ids"]),
         )
 
-    async def _verify_key(self, key: str):
-        account_id = None
-        user_id = None
+    @staticmethod
+    def _key_hints(key: str) -> tuple[str | None, str | None]:
         if is_new_format_key(key):
             try:
                 account_id, user_id, _ = parse_api_key(key)
             except (ValueError, UnicodeError):
                 raise UnauthenticatedError("Invalid API key") from None
-        binding = await self._store.verify_api_key(
-            key, account_id_hint=account_id, user_id_hint=user_id
-        )
-        if binding is not None:
-            return binding
-        raise UnauthenticatedError("Invalid API key")
+            return account_id, user_id
+        return None, None
 
     async def create_account(
         self,
@@ -242,9 +242,7 @@ class APIKeyManager:
             )
             if name in filters
         }
-        page = await self._store.list_users_page(
-            account_id, **store_filters
-        )
+        page = await self._store.list_users_page(account_id, **store_filters)
         if not expose_key or not self._issue_user_keys:
             page["key_count"] = 0
             for user in page["users"]:

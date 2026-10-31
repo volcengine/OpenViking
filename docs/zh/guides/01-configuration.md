@@ -2023,18 +2023,48 @@ schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`�
 `redis_mysql` 需要安装 `redis-mysql` extra，并在参数中嵌套同一份 MySQL 配置。
 其 `cache` 配置沿用顶层 `cache` 的 `provider/params` 结构，目前 Python
 客户端支持 `standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
-它默认以固定 60 秒 TTL 缓存 API Key 绑定、User、每个 User 的 Group ID 和删除记录。
-缓存重建与同一 Account 的修改共用 Redis 租约，正常缓存命中不获取该租约。修改会先
-提交 MySQL，再失效相关缓存。Redis 不可用时 MySQL 修改仍会成功，遗留缓存最多保持到
-固定 TTL 到期。缓存回填同时维护 Account
-级、按过期时间排序的 key 索引；每次写入已索引缓存时会清理过期成员，因此删除或重建
-Account 时只会清理该 Account 当前的 User、Group、删除记录和凭据缓存。API Key 绑定会
-校验 Account 和 User 的凭据 fence，所以正常的换 Key、吊销和删 User 会使旧绑定失效。
-索引的最后一个有序集合成员被移除后，Redis 会自动删除空索引；清理结束时不再单独删除
-索引，避免失去租约的旧请求误删新回填的索引。创建身份或换 Key 会同时清除携带和未携带
-User 提示的负缓存。
+MySQL 和 Redis/MySQL 支持聚合 API Key 鉴权快照，包含已验证的 Account、User、
+Role 和 Group ID。MySQL 读取通过一条 SQL 完成凭据验证、账号和用户删除状态检查、
+角色及组成员关系读取。非 OAuth 的 API Key 请求通过正常身份解析将快照中的 Group ID 放在
+`ResolvedIdentity` 上，组装 `RequestContext` 时直接复用，不再重复读取组和删除记录。
+其他 Provider 使用默认快照方法，组合凭据验证、用户、删除状态和组读取。
+组信息仍未知（`None`）的 trusted、OAuth、signed 身份沿用原来的组和删除状态检查。
+
+Redis/MySQL 默认以固定 60 秒 TTL 缓存携带 Account/User 提示的聚合鉴权快照，
+以及独立的 User、每个 User 的 Group ID 和删除记录。
+Redis 操作运行在独立 event loop。
+v2 命名空间使用不设 TTL 的随机 Account/User generation；数据 key 将 generation
+放在稳定的 Account hash tag 外。Lua 原子初始化缺失的 generation 并读取当前缓存；
+回填必须校验 generation 未变化，缺失时也拒绝旧回填。
+同 key、同 generation 的 miss 在进程内共享查询，不同 key 可以并行查询，
+并由 MySQL 连接池控制并发。缓存 miss 直接查询 MySQL，不再二次读取 Redis；
+回填仍校验第一次读取时获取的 generation。较早发出的 MISS 若在之前共享查询
+结束后才被处理，允许再次查询 MySQL。不再获取分布式回填锁；单个等待者取消
+不会取消共享查询。
+正常缓存 miss 和 Redis 异常后的降级读取共用 MySQL 连接池，不额外设置应用层
+准入上限或固定 8 个查询槽位。MySQL provider 的连接池大小、零 overflow 和
+连接池等待超时负责背压；Redis 异常本身不表示 MySQL 过载。数据库读取错误正常
+向上返回，缓存 provider 不引入自动 MySQL 重试或熔断。
+
+MySQL 修改后更新 User 或 Account generation。账号级操作失效整个账号命名空间，
+用户级操作只失效该用户的数据。旧数据按固定 TTL 到期，命中不续期。
+Redis generation 更新失败时缓存可能保持陈旧直到 TTL 到期；TTL 从回填时开始，
+不提供强一致或从 mutation 时刻计算的陈旧时间保证。generation key 不自动过期，
+需要规划容量。缺失时用新随机值初始化，旧回填不能重建之前的 generation。
+
+共享缓存的所有 writer 都必须使用 generation 协议。v1 缓存会被忽略，
+混用 v1/v2 writer 无法互相失效缓存，启用 v2 前需要协调 writer 升级。
+旧的 `lock_ttl_seconds`、`lock_wait_seconds` 配置兼容接受但不再使用。
+缺少 Account 或 User 提示的 API Key 直接通过 MySQL 验证。
+未知凭据提示只有在 MySQL 验证成功后才建立永久 generation。聚合鉴权快照的
+metadata 缺失时，共享查询仍保留已经存在的 Account/User generation，确保版本
+更新成功后的新请求不会加入更新前的查询。首次有效请求只查询一次 MySQL 并初始化新 generation，不缓存
+该快照，因为验证发生在获取 generation 之前。后续请求可查询一次 MySQL，并基于
+已获取的 generation 做条件回填，因此完整预热快照缓存需要两波请求。
+独立 `verify_api_key` 调用始终直接查询 MySQL，即使携带 Account/User 提示也不建立绑定缓存。
 Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
 `cache.params.command_timeout_ms` 配置，未配置时均为 5000 毫秒；这不是整个请求的总超时。
+`cache.params.pool_size` 应按 Redis 命令并发配置，客户端默认 32；耗尽连接池会触发连接错误和 MySQL 降级。下面示例使用 100 个连接。
 
 ```json
 {
@@ -2062,9 +2092,8 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
             "password_env": "OPENVIKING_REDIS_PASSWORD",
             "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
             "key_prefix": "ov:account-auth",
-            "ttl_seconds": 60,
-            "lock_ttl_seconds": 60,
-            "lock_wait_seconds": 30
+            "pool_size": 100,
+            "ttl_seconds": 60
           }
         }
       }
