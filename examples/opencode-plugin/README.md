@@ -22,7 +22,7 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 - On OpenCode v2, reads the structured session context at execution boundaries so tool calls and results are captured too.
 - Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
-- Ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills, which tell the agent when to use which OpenViking tool. They are added to OpenCode's skill paths together with the MCP server, and left out in hook-only mode.
+- Ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills, which tell the agent when to use which OpenViking tool. They are added to OpenCode's skill paths on v1, or registered through the public skill editor on v2, together with the MCP server. They are left out in hook-only mode.
 - Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`. Shell commands that carry a `viking://` URI still run, with a notice appended to their output.
 
 ## Files

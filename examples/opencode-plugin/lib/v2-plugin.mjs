@@ -1,3 +1,5 @@
+import { readFile, readdir } from "node:fs/promises"
+import { join } from "node:path"
 import { isRecallEnabled } from "./shared/recall-core.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
@@ -46,8 +48,20 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     })
     log("INFO", "mcp", "Registered OpenViking MCP server for OpenCode v2")
     if (registered && ctx?.skill?.transform) {
-      await ctx.skill.transform((draft) => {
-        draft.source({ type: "directory", path: openVikingSkillsDir(pluginRoot) })
+      const { parse: parseYaml } = await import("yaml")
+      const directory = openVikingSkillsDir(pluginRoot)
+      const skills = await Promise.all((await readdir(directory, { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          const path = join(directory, entry.name, "SKILL.md")
+          const text = await readFile(path, "utf8")
+          const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)
+          if (!frontmatter) throw new Error(`Missing skill metadata: ${path}`)
+          const { name, description } = parseYaml(frontmatter[1])
+          return { id: path, name, description, path, content: text.slice(frontmatter[0].length).trimStart() }
+        }))
+      await ctx.skill.transform((editor) => {
+        for (const skill of skills) editor.add(skill)
       })
     }
   } else if (!config.mcp.enabled) {
