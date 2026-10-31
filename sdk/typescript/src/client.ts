@@ -169,7 +169,10 @@ export class OpenVikingClient {
           : undefined,
       telemetry: options.telemetry,
     });
-    const local = await nodePathToBlob(source);
+    const isRemote = ["http://", "https://", "git@", "ssh://", "git://"].some(
+      (prefix) => source.startsWith(prefix),
+    );
+    const local = isRemote ? undefined : await nodePathToBlob(source);
     if (local) {
       body.temp_file_id = await this.upload(local.blob, local.filename);
       body.source_name = local.sourceName;
