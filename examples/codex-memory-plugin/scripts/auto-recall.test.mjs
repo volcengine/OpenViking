@@ -6,7 +6,7 @@ import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { readRequestBody, runHookScript, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { resolveCodexLaunch, trySpawnCodex } from "./codex-launch.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -43,30 +43,10 @@ function writeStatusJson(res, status, value) {
   res.end(JSON.stringify(value));
 }
 
-function runAutoRecall(input, env) {
-  return new Promise((resolve, reject) => {
-    const cleanEnv = { ...process.env };
-    for (const key of Object.keys(cleanEnv)) {
-      if (key.startsWith("OPENVIKING_")) delete cleanEnv[key];
-    }
-    const child = spawn(process.execPath, [join(SCRIPT_DIR, "auto-recall.mjs")], {
-      env: { ...cleanEnv, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`auto-recall exited ${code}: ${stderr}`));
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-    child.stdin.end(JSON.stringify(input));
-  });
+async function runAutoRecall(input, env) {
+  const result = await runHookScript(join(SCRIPT_DIR, "auto-recall.mjs"), { input, env });
+  if (result.code !== 0) throw new Error(`auto-recall exited ${result.code}: ${result.stderr}`);
+  return result;
 }
 
 async function withFakeCodex(output, fn, { exitCode = 0 } = {}) {

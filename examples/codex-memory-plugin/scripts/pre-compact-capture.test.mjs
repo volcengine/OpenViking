@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { readRequestBody, runHookScript, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -27,30 +26,10 @@ function writeEndedMarker(dir, id, ts) {
   return writeFile(join(dir, `${id}.ended.${ts}`), String(ts));
 }
 
-function runPreCompact(input, env) {
-  return new Promise((resolve, reject) => {
-    const cleanEnv = { ...process.env };
-    for (const key of Object.keys(cleanEnv)) {
-      if (key.startsWith("OPENVIKING_")) delete cleanEnv[key];
-    }
-    const child = spawn(process.execPath, [join(SCRIPT_DIR, "pre-compact-capture.mjs")], {
-      env: { ...cleanEnv, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`pre-compact-capture exited ${code}: ${stderr}`));
-        return;
-      }
-      resolve({ output: JSON.parse(stdout.trim()), stderr });
-    });
-    child.stdin.end(JSON.stringify(input));
-  });
+async function runPreCompact(input, env) {
+  const result = await runHookScript(join(SCRIPT_DIR, "pre-compact-capture.mjs"), { input, env });
+  if (result.code !== 0) throw new Error(`pre-compact-capture exited ${result.code}: ${result.stderr}`);
+  return { output: JSON.parse(result.stdout.trim()), stderr: result.stderr };
 }
 
 function baseEnv(baseUrl, stateDir, extra = {}) {

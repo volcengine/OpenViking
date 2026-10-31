@@ -1,41 +1,20 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { readRequestBody, withMockOpenViking, withPendingDir, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { readRequestBody, runHookScript, withMockOpenViking, withPendingDir, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { extractCaptureTurns } from "./cc-transcript.mjs";
 import { enqueue, listPending } from "./lib/pending-queue.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
-function runHook(script, input, env) {
-  return new Promise((resolve, reject) => {
-    const cleanEnv = { ...process.env };
-    for (const key of Object.keys(cleanEnv)) {
-      if (key.startsWith("OPENVIKING_")) delete cleanEnv[key];
-    }
-    const child = spawn(process.execPath, [join(SCRIPT_DIR, script)], {
-      env: { ...cleanEnv, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`${script} exited ${code}: ${stderr}`));
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-    child.stdin.end(JSON.stringify(input));
-  });
+async function runHook(script, input, env) {
+  const result = await runHookScript(join(SCRIPT_DIR, script), { input, env });
+  if (result.code !== 0) throw new Error(`${script} exited ${result.code}: ${result.stderr}`);
+  return result;
 }
 
 function runAutoCapture(input, env) {
