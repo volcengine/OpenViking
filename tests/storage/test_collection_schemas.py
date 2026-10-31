@@ -13,7 +13,7 @@ import pytest
 import requests
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
-from openviking.models.model_error import ModelError, ModelErrorKind
+from openviking.models.model_error import ModelError, ModelErrorKind, brief_for
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import (
@@ -934,6 +934,15 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
     )
     assert vikingdb.enqueued == []  # terminal: not re-enqueued
     (await handler.breaker()).check()  # breaker not tripped (would raise if open)
+
+    # The failing resource carries a structured per-resource error: exact uri
+    # plus the actionable, kind-specific brief.
+    assert len(result.errors) == 1
+    detail = result.errors[0]
+    assert isinstance(detail, dict)
+    assert detail["uri"] == "viking://resources/sample"
+    assert detail["err_brief"] == brief_for(ModelErrorKind.AUTHENTICATION_ERROR.value)
+    assert detail["message"] == result.error
 
 
 @pytest.mark.asyncio

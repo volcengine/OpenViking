@@ -44,6 +44,7 @@ from openviking.service.task_domain import (
     WorkRecoveryMode,
     WorkState,
     WorkSummary,
+    project_work_error,
     sanitize_error,
     sanitize_task_result,
 )
@@ -1112,7 +1113,7 @@ class TaskTracker:
         work_id: str,
         error: Optional[str] = None,
         *,
-        errors: Optional[Collection[str]] = None,
+        errors: Optional[Collection[Any]] = None,
         account_id: str,
         user_id: str,
     ) -> None:
@@ -1151,7 +1152,7 @@ class TaskTracker:
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
@@ -1321,7 +1322,7 @@ class TaskTracker:
                 "requeue_count": queue.requeue_count,
                 "error_count": queue.error_count,
                 "errors": [
-                    {"message": sanitize_error(str(error))}
+                    project_work_error(error)
                     for error in queue.errors[:MAX_QUEUE_ERROR_DETAILS]
                 ],
             }

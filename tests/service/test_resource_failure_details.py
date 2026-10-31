@@ -41,7 +41,7 @@ async def test_failed_resource_preserves_details_through_wait_and_http(monkeypat
     )
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     service = ResourceService(
-        viking_fs=SimpleNamespace(),
+        viking_fs=SimpleNamespace(_async_agfs=SimpleNamespace()),
         resource_processor=SimpleNamespace(),
         skill_processor=object(),
     )
@@ -83,3 +83,48 @@ async def test_failed_resource_preserves_details_through_wait_and_http(monkeypat
         "message": "upstream forbidden",
         "details": details,
     }
+
+
+@pytest.mark.asyncio
+async def test_failed_resource_wait_exposes_queue_work_errors(monkeypatch):
+    """Embedding/semantic queue errors keep uri/brief in the wait=true envelope."""
+    monkeypatch.setattr("openviking.service.resource_service.is_git_repo_url", lambda _: False)
+    monkeypatch.setattr("openviking.connector.routing.is_git_repo_url", lambda _: False)
+
+    work_error = {
+        "message": "Failed to generate embedding: image dimensions are too small",
+        "uri": "viking://resources/matrix/pixel.png",
+        "err_brief": "The content could not be processed; it may be corrupted or unsupported.",
+    }
+    task = TaskRecord(task_id="queue-error-test", task_type="add_resource")
+    task.status = TaskStatus.FAILED
+    task.error = work_error["message"]
+    task.result = {
+        "queue_status": {"Embedding": {"error_count": 1, "errors": [work_error]}}
+    }
+
+    tracker = SimpleNamespace(wait=AsyncMock(return_value=task))
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+
+    service = ResourceService(
+        viking_fs=SimpleNamespace(),
+        resource_processor=SimpleNamespace(),
+        skill_processor=object(),
+    )
+    service._prepare_standard_source_plan = AsyncMock(return_value=object())
+    service._enqueue_source_plan = AsyncMock(return_value={"task_id": task.task_id})
+
+    result = await service.add_resource(
+        path="https://example.com/pixel.png",
+        to="viking://resources/matrix",
+        wait=True,
+        ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert result["status"] == "error"
+    assert result["details"]["errors"] == [work_error]
+
+    response = response_from_result(result)
+    body = json.loads(response.body)
+    assert body["error"]["code"] == "PROCESSING_ERROR"
+    assert body["error"]["details"]["errors"] == [work_error]

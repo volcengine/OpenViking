@@ -67,7 +67,7 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
-from openviking.service.task_domain import TaskPatch
+from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
 from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import QueueManager, get_queue_manager
@@ -2259,6 +2259,9 @@ class ResourceService:
             details = task.result.get("details")
             if isinstance(details, dict):
                 failure["details"] = details
+            work_errors = collect_queue_work_errors(task.result)
+            if work_errors:
+                failure.setdefault("details", {})["errors"] = work_errors
         return failure
 
     async def _execute_resource_ingestion(

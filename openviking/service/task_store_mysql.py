@@ -40,6 +40,7 @@ from openviking.service.task_domain import (
     finalize_task,
     processing_seconds,
     sanitize_error,
+    serialize_work_errors,
     summarize_works,
 )
 from openviking.service.task_events import TaskEventHistory, append_task_event
@@ -1586,7 +1587,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
@@ -1623,7 +1624,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if error:
                 values["error"] = sanitize_error(error)
             if state == WorkState.FAILED:
-                details = [sanitize_error(str(value)) for value in errors or () if str(value)]
+                details = serialize_work_errors(errors)
                 values["errors"] = details or (
                     [values.get("error", work.error)] if values.get("error", work.error) else []
                 )
