@@ -292,6 +292,7 @@ class Pipeline:
                         revisions,
                         REVIEW_PROMPT + self.output_instructions,
                         planning_context,
+                        completed_ops={n.op for n in nodes[:position]},
                     )
                     if accepted:
                         decision, suffix = accepted

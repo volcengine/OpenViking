@@ -14,8 +14,8 @@ from vikingbot.compile.results import RecordDraft
 PLANNING_RULES = """## Available Operators
 
 Operators are the processing steps supported by the runtime. Select and combine
-those needed for the task. You may use an operator more than once; the four operators
-below are not a required sequence.
+those needed for the task. Each operator may appear at most once across the whole
+plan, including completed stages. The four operators below are not a required sequence.
 
 ### Map
 
@@ -37,7 +37,7 @@ Each group is a collection of records that Reduce will process together.
 ### Reduce
 
 Processes all records in a group together, combining their information.
-It can produce final files or new records for further processing.
+It must produce final files and be followed immediately by Finalize.
 One group may produce multiple output files.
 
 ### Finalize
@@ -121,7 +121,8 @@ class Transform(PlanModel):
     )
     output: Literal["records", "files"] = Field(
         default="records",
-        description="records carries evidence to later steps; files produces output files.",
+        description="records carries evidence to later steps; files produces output files. "
+        "Reduce requires files.",
     )
     execution: Literal["direct", "agent"] = Field(
         description="Use direct for straightforward tasks with small results. "
@@ -302,15 +303,16 @@ def parse_plan(
     input_handle: str = "sources",
     input_type: str = "sources",
     completed_names: set[str] | None = None,
-    input_against_target: bool = False,
+    completed_ops: set[str] | None = None,
 ) -> list[Node]:
     """Compile a small AST whitelist into typed nodes; no Python objects are evaluated.
 
     Plan text is limited to 8,000 characters before parsing. Plans have a single terminal
     finalize, no unused datasets, rebinding, implicit fan-out or literals.
     input_handle/type bind the sole available collection; completed_names cannot be
-    rebound. input_against_target retains historical comparison requirements for a
-    groups input. Each Shuffle record belongs to one work set. Invalid plans raise ValueError.
+    rebound. completed_ops prevents reuse of executed operators. Reduce produces files
+    consumed by Finalize. Each Shuffle record belongs to one work set. Invalid plans
+    raise ValueError.
     """
     if len(program) > 8000:
         raise ValueError("Plan exceeds 8000 characters")
@@ -323,8 +325,8 @@ def parse_plan(
     if input_type not in {"sources", "records", "groups", "files"}:
         raise ValueError(f"Invalid input type: {input_type}")
     handles = {input_handle: input_type}
-    historical = {input_handle} if input_against_target else set()
     used: set[str] = set()
+    used_ops = set(completed_ops or ())
     nodes = []
 
     def reference(value: ast.AST, owner: str, allowed: set[str], field: str) -> str:
@@ -362,6 +364,9 @@ def parse_plan(
         if not isinstance(call, ast.Call):
             raise ValueError("Expected pipeline call")
         op = reference(call.func, "p", {"map", "shuffle", "reduce", "finalize"}, "operator")
+        if op in used_ops:
+            raise ValueError(f"Operator may appear at most once: {op}")
+        used_ops.add(op)
         if len(call.args) != 1 or not isinstance(call.args[0], ast.Name):
             raise ValueError("An operator takes one dataset handle")
         source = call.args[0].id
@@ -387,8 +392,8 @@ def parse_plan(
                 raise ValueError(f"Missing transform: {task}")
             if op == "reduce":
                 valid = handles[source] == "groups"
-                if source in historical and transform.output != "files":
-                    raise ValueError("against=target requires a Reduce with output=files")
+                if transform.output != "files":
+                    raise ValueError("Reduce requires output=files")
             else:
                 valid = handles[source] in {"sources", "records"}
             output_type = transform.output
@@ -415,8 +420,6 @@ def parse_plan(
             raise ValueError(f"Invalid dataset type for {op}: {handles[source]}")
         used.add(source)
         handles[name] = output_type
-        if against:
-            historical.add(name)
         nodes.append(Node(name, op, source, task, against))
     if nodes[-1].op != "finalize" or set(handles) - used != {nodes[-1].name}:
         raise ValueError("Every dataset must reach finalize")
