@@ -24,6 +24,7 @@ from openviking.utils.path_safety import (
     sanitize_relative_viking_path,
     validate_safe_viking_uri_path,
 )
+from openviking.utils.tags import normalize_search_tags
 from openviking_cli.utils import VikingURI
 from vikingbot.compile.models import (
     COMPILE_STAGING_ROOT,
@@ -73,6 +74,25 @@ def _split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
 def strip_okf_frontmatter(content: str) -> str:
     """Return the editable Wiki body from a materialized OKF Markdown file."""
     return _split_frontmatter(content)[1].lstrip("\r\n")
+
+
+def resource_tag_metadata(uri: str, content: str | bytes) -> dict[str, Any]:
+    """Carry explicit resource frontmatter tags into publication without clearing existing tags."""
+    if context_type_for_uri(uri) != "resource" or not uri.casefold().endswith(".md"):
+        return {}
+    try:
+        metadata, _ = _split_frontmatter(
+            content.decode("utf-8") if isinstance(content, bytes) else content
+        )
+    except (UnicodeError, ValueError, yaml.YAMLError):
+        return {}
+    declared = metadata.get("tags")
+    if not isinstance(declared, list):
+        return {}
+    tags = normalize_search_tags(
+        [tag for tag in declared if isinstance(tag, str) and "=" in tag], discard_invalid=True
+    )
+    return {"tags": tags, "tag_mode": "append"} if tags else {}
 
 
 def has_unclosed_frontmatter(content: bytes) -> bool:
@@ -589,7 +609,7 @@ class WikiRenderer:
             else:
                 candidate = visible
 
-            if candidate == old_raw:
+            if candidate == old_raw and not resource_tag_metadata(uri, candidate):
                 result.unchanged.append(uri)
                 continue
             if is_update:
@@ -642,7 +662,7 @@ class WikiRenderer:
 
             is_update = file.update_uri is not None
             old = existing_bytes.get(uri)
-            if old is not None and candidate == old:
+            if old is not None and candidate == old and not resource_tag_metadata(uri, candidate):
                 result.unchanged.append(uri)
                 continue
             if is_update:
@@ -651,6 +671,16 @@ class WikiRenderer:
             else:
                 result.created.append(uri)
             result.operations.append({"uri": uri, **operation_content, "mode": "upsert"})
+        for operation in result.operations:
+            content = operation.get("content")
+            if content is not None:
+                operation.update(resource_tag_metadata(operation["uri"], content))
+            elif operation.get("content_base64") is not None:
+                operation.update(
+                    resource_tag_metadata(
+                        operation["uri"], base64.b64decode(operation["content_base64"])
+                    )
+                )
         return result
 
 
