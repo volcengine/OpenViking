@@ -409,3 +409,31 @@ test("extractCaptureTurns honours the role scope of a capture rule", () => {
   const turns = extractCaptureTurns(entries, cfg)
   assert.deepEqual(turns.map((turn) => turn.role), ["user"])
 })
+
+for (const example of [
+  'Explain this literal example: <openviking-context>user-authored example</openviking-context>.',
+  '`<openviking-context>user-authored example</openviking-context>`',
+  '> <openviking-context>user-authored example</openviking-context>',
+  '```xml\n<openviking-context>\nOpenViking memory digest:\n- user-authored example\n</openviking-context>\n```',
+  '````xml\n```\n<openviking-context>user-authored example</openviking-context>\n````',
+  '```xml\n<openviking-context>user-authored example</openviking-context>',
+  '```xml\r\n<openviking-context>user-authored example</openviking-context>\r\n```',
+  '~~~~xml\n<relevant-memories>user-authored example</relevant-memories>\n```\n~~~~',
+]) {
+  test(`capture preserves literal memory markup: ${JSON.stringify(example)}`, () => {
+    const payload = { role: 'user', content: example }
+    assert.equal(sanitizeCapturedText(example), example)
+    assert.equal(shapeCapturePayload(payload, 'user').text, example)
+  })
+}
+
+test('capture removes standalone injected memory around a fenced literal example', () => {
+  const literal = '```xml\n<openviking-context>user-authored example</openviking-context>\n```'
+  const injected = '<openviking-context>\nOpenViking memory digest:\n- recalled fact\n```js\nconst example = true;\n```\n</openviking-context>'
+  const text = `${injected}\nExplain this example:\n${literal}\n<relevant-memory>other recalled fact</relevant-memory>`
+  assert.equal(sanitizeCapturedText(text), `Explain this example:\n${literal}`)
+})
+
+test('capture still removes injected memory preceded by a null character', () => {
+  assert.equal(sanitizeCapturedText('\u0000<openviking-context>recalled fact</openviking-context>Remember this correction.'), 'Remember this correction.')
+})
