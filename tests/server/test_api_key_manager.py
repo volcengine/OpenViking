@@ -5,6 +5,7 @@
 
 import asyncio
 import hashlib
+import threading
 import uuid
 from types import SimpleNamespace
 
@@ -68,10 +69,10 @@ async def test_resolve_root_key(manager: APIKeyManager):
     assert identity.user_id is None
 
 
-@pytest.mark.parametrize("key", ["wrong-key", ""])
+@pytest.mark.parametrize("key", ["wrong-key", "", "YWNtZQ.dXNlcg.A"])
 async def test_resolve_invalid_key_raises(manager: APIKeyManager, key):
-    """Invalid key should raise UnauthenticatedError."""
-    with pytest.raises(UnauthenticatedError):
+    """Malformed keys should fail authentication with a format error."""
+    with pytest.raises(UnauthenticatedError, match="^Invalid API key format$"):
         await manager.resolve_identity(key)
 
 
@@ -101,6 +102,61 @@ async def test_create_duplicate_account_raises(manager: APIKeyManager):
     await manager.create_account(acct, "alice")
     with pytest.raises(AlreadyExistsError):
         await manager.create_account(acct, "bob")
+
+
+async def test_account_reads_and_mutations_cross_loops_after_waiter_cancellation(
+    manager: APIKeyManager, manager_service, monkeypatch
+):
+    acct = _uid()
+    await manager.create_account(acct, "admin")
+    agfs = manager_service.viking_fs.agfs
+    entered, release, readers_waiting = threading.Event(), threading.Event(), threading.Event()
+    write = agfs.write
+
+    def delayed_write(path, *args, **kwargs):
+        if path == f"/local/{acct}/_system/users.json" and not entered.is_set():
+            entered.set()
+            if not release.wait(timeout=10):
+                raise TimeoutError("account write was not released")
+        return write(path, *args, **kwargs)
+
+    async def worker_operations():
+        tasks = [
+            asyncio.create_task(manager.get_account(acct)),
+            asyncio.create_task(manager.get_user_membership(acct, "alice")),
+            asyncio.create_task(manager.register_user(acct, "bob")),
+        ]
+        await asyncio.sleep(0)
+        readers_waiting.set()
+        return await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+
+    monkeypatch.setattr(agfs, "write", delayed_write)
+    writer = asyncio.create_task(manager.register_user(acct, "alice"))
+    worker = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        worker = asyncio.create_task(asyncio.to_thread(lambda: asyncio.run(worker_operations())))
+        assert await asyncio.to_thread(readers_waiting.wait, 5)
+        cancelled = asyncio.create_task(manager.get_account(acct))
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+    finally:
+        release.set()
+        results = await asyncio.gather(
+            writer, *([worker] if worker is not None else []), return_exceptions=True
+        )
+    assert not any(isinstance(result, BaseException) for result in results)
+    account, membership, bob_key = results[1]
+    assert account["status"] == "active"
+    assert membership == {"user_id": "alice", "role": Role.USER}
+    assert (await manager.resolve_identity(bob_key)).user_id == "bob"
+    assert {item["user_id"] for item in await _list_users(manager, acct)} == {
+        "admin",
+        "alice",
+        "bob",
+    }
 
 
 async def test_ensure_trusted_identities_creates_missing_users_once(
@@ -454,6 +510,49 @@ async def test_regenerate_key(manager: APIKeyManager):
     assert identity.account_id == acct
 
 
+@pytest.mark.parametrize("hashing", [False, True])
+@pytest.mark.parametrize("mutation", ["reset", "revoke"])
+async def test_conditional_rotation_checks_persisted_key(manager_service, hashing, mutation):
+    from openviking.server.api_keys import generate_api_key
+
+    managers = [
+        build_api_key_manager(
+            root_key=ROOT_KEY,
+            viking_fs=manager_service.viking_fs,
+            api_key_hashing_enabled=hashing,
+        )
+        for _ in range(2)
+    ]
+    writer, stale = managers
+    try:
+        await writer.load()
+        account = _uid()
+        await writer.create_account(account, "owner")
+        initial_key = await writer.register_user(account, "alice")
+        old_key = await writer.regenerate_key(account, "alice", expected_api_key=initial_key)
+        await stale.load()
+        if mutation == "reset":
+            reset_key = await writer.regenerate_key(account, "alice")
+        else:
+            await writer._store.revoke_active_api_keys(account, "alice")
+        rejected_key = generate_api_key(account, "alice")
+        # This store still has the old credential in memory. Its conditional
+        # write must validate the persisted registry under the shared lease.
+        with pytest.raises(UnauthenticatedError):
+            await stale._store.replace_active_user_api_key(
+                account, "alice", rejected_key, expected_api_key=old_key
+            )
+        await stale.load()
+        for key in (old_key, rejected_key):
+            with pytest.raises(UnauthenticatedError):
+                await stale.resolve_identity(key)
+        if mutation == "reset":
+            assert (await stale.resolve_identity(reset_key)).user_id == "alice"
+    finally:
+        for manager in managers:
+            await manager.close()
+
+
 async def test_get_user_key_fingerprint_changes_on_rotation(manager: APIKeyManager):
     """fp must change when the key is regenerated and disappear when user is removed."""
     acct = _uid()
@@ -630,7 +729,7 @@ async def test_get_accounts_pagination_and_ordering(manager: APIKeyManager):
 
 
 async def test_user_and_group_persistence_across_reload(manager_service):
-    """Reload preserves keys/groups, while user deletion removes membership."""
+    """Batch membership is atomic, idempotent, durable, and removed with the user."""
     mgr1 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr1.load()
 
@@ -640,9 +739,19 @@ async def test_user_and_group_persistence_across_reload(manager_service):
     created_group = await mgr1.create_group(acct, "engineering")
     assert created_group == {"group_id": "engineering", "member_count": 0}
     group_id = created_group["group_id"]
-    assert await mgr1.add_group_member(acct, group_id, "bob") is True
-    assert await mgr1.add_group_member(acct, group_id, "bob") is True
+    assert await mgr1.add_group_members(acct, group_id, ["bob"]) is True
+
+    await mgr1.create_account(_uid(), "outsider")
+    with pytest.raises(NotFoundError):
+        await mgr1.add_group_members(acct, group_id, ["alice", "outsider"])
     assert await mgr1.get_group_members(acct, group_id) == ["bob"]
+    assert await mgr1.get_user_group_ids(acct, "alice") == ()
+
+    members = ["alice", "bob", "bob"]
+    assert await mgr1.add_group_members(acct, group_id, members) is True
+    assert await mgr1.add_group_members(acct, group_id, members) is True
+    assert await mgr1.get_group_members(acct, group_id) == ["alice", "bob"]
+    assert await mgr1.get_groups(acct) == [{"group_id": group_id, "member_count": 2}]
 
     mgr2 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr2.load()
@@ -651,6 +760,8 @@ async def test_user_and_group_persistence_across_reload(manager_service):
     assert identity.account_id == acct
     assert identity.user_id == "alice"
     assert identity.role == Role.ADMIN
+    assert await mgr2.get_group_members(acct, group_id) == ["alice", "bob"]
+    assert await mgr2.get_user_group_ids(acct, "alice") == (group_id,)
     assert await mgr2.get_user_group_ids(acct, "bob") == (group_id,)
 
     await mgr2.begin_deletion(
@@ -660,6 +771,11 @@ async def test_user_and_group_persistence_across_reload(manager_service):
         owner_account_id=acct,
         owner_user_id="alice",
     )
+    assert await mgr2.remove_group_member(acct, group_id, "alice") is True
+    with pytest.raises(FailedPreconditionError):
+        await mgr2.add_group_members(acct, group_id, ["alice", "bob"])
+    assert await mgr2.get_group_members(acct, group_id) == ["bob"]
+    assert await mgr2.get_user_group_ids(acct, "alice") == ()
     await mgr2.finish_deletion(acct, "bob", "delete-bob")
 
     mgr3 = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
@@ -668,10 +784,10 @@ async def test_user_and_group_persistence_across_reload(manager_service):
     assert await mgr3.get_group_members(acct, group_id) == []
 
 
-# ---- New format API Key tests ----
+# ---- API Key format tests ----
 
 
-async def test_seeded_new_format_keys_are_predictable(manager: APIKeyManager):
+async def test_seeded_api_keys_are_predictable(manager: APIKeyManager):
     from openviking.server.api_keys import parse_api_key
 
     seed = "client-known-seed"
@@ -716,27 +832,76 @@ async def test_seed_must_not_be_empty(manager: APIKeyManager):
         await manager.create_account(acct, "alice", seed="")
 
 
-async def test_is_new_format_key_validation():
-    """Test is_new_format_key correctly identifies key format."""
-    from openviking.server.api_keys import generate_api_key, is_new_format_key
+async def test_is_valid_format_key_validation():
+    """Test is_valid_format_key correctly identifies key format."""
+    from openviking.server.api_keys import generate_api_key, is_valid_format_key, parse_api_key
 
-    # Valid new format
+    # Valid API key format
     valid_key = generate_api_key("account", "user")
-    assert is_new_format_key(valid_key)
+    assert is_valid_format_key(valid_key)
 
-    # Legacy format (64 hex chars)
-    assert not is_new_format_key("a" * 64)
+    # Bare single-segment keys are not accepted
+    assert not is_valid_format_key("a" * 64)
 
     # Empty string
-    assert not is_new_format_key("")
+    assert not is_valid_format_key("")
 
     # Wrong number of segments
-    assert not is_new_format_key("onepart")
-    assert not is_new_format_key("two.parts")
-    assert not is_new_format_key("too.many.parts.here")
+    assert not is_valid_format_key("onepart")
+    assert not is_valid_format_key("two.parts")
+    assert not is_valid_format_key("too.many.parts.here")
+    with pytest.raises(ValueError, match="^Invalid API key format$"):
+        parse_api_key("two.parts")
 
 
 # ---- Registered user role ----
+
+
+@pytest.mark.parametrize("delete_account", [False, True])
+async def test_registered_identity_remains_readable_but_unusable_during_deletion(
+    manager: APIKeyManager, delete_account: bool
+):
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    key = await manager.register_user(acct, "bob", Role.USER)
+    assert (await manager.resolve_oauth_identity(acct, "bob", Role.USER)).role == Role.USER
+
+    await manager.begin_deletion(
+        acct,
+        None if delete_account else "bob",
+        task_id="delete-identity",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+
+    assert await manager.get_registered_user_role(acct, "bob") == Role.USER
+    with pytest.raises(
+        UnauthenticatedError, match="Account identity does not exist or is being deleted"
+    ):
+        await manager.resolve_oauth_identity(acct, "bob", Role.USER)
+    with pytest.raises(UnauthenticatedError, match="Invalid API key"):
+        await manager.resolve_identity(key)
+    target = "Account" if delete_account else "User"
+    with pytest.raises(FailedPreconditionError, match=f"{target} deletion is in progress") as exc:
+        await manager.regenerate_key(acct, "bob")
+    assert exc.value.details == {"task_id": "delete-identity"}
+
+
+@pytest.mark.parametrize("missing_account", [False, True])
+async def test_missing_identity_fails_authentication_and_management_separately(
+    manager: APIKeyManager, missing_account: bool
+):
+    acct = _uid()
+    if not missing_account:
+        await manager.create_account(acct, "alice")
+
+    assert await manager.get_registered_user_role(acct, "nobody") is None
+    with pytest.raises(
+        UnauthenticatedError, match="Account identity does not exist or is being deleted"
+    ):
+        await manager.resolve_oauth_identity(acct, "nobody", Role.USER)
+    with pytest.raises(NotFoundError):
+        await manager.regenerate_key(acct, "nobody")
 
 
 async def test_get_registered_user_role_returns_none_when_user_missing(manager: APIKeyManager):

@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
@@ -10,6 +11,7 @@ from openviking.core.namespace import (
     may_include_hidden_actor_peers,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -29,6 +31,7 @@ class _FakeVikingDB:
 class _FakeVikingFS:
     def __init__(self):
         self.contexts = {}
+        self.write_leases = []
 
     async def read_file(self, uri, ctx):
         directory, filename = uri.rsplit("/", 1)
@@ -37,7 +40,9 @@ class _FakeVikingFS:
             raise FileNotFoundError(uri)
         return self.contexts[directory][name]
 
-    async def write_context(self, uri, abstract="", overview="", is_leaf=False, ctx=None):
+    async def write_context(
+        self, uri, abstract="", overview="", is_leaf=False, ctx=None, *, lease_ref=None
+    ):
         if ctx.actor_peer_id and may_include_hidden_actor_peers(uri, ctx):
             raise PermissionError(f"actor peer cannot mutate {uri}")
         context = self.contexts.setdefault(uri, {})
@@ -46,6 +51,7 @@ class _FakeVikingFS:
         if overview:
             context["overview"] = overview
         context["is_leaf"] = is_leaf
+        self.write_leases.append(lease_ref)
 
 
 @pytest.mark.asyncio
@@ -138,21 +144,46 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
 @pytest.mark.asyncio
 async def test_system_assets_sync_only_for_account_initialization():
     synchronizer = SimpleNamespace(sync=AsyncMock())
+    viking_fs = _FakeVikingFS()
+    lease = {"lease_ref": "account-init"}
+    agfs = SimpleNamespace(
+        pathlock_acquire_tree=AsyncMock(return_value=lease),
+        pathlock_release=AsyncMock(),
+    )
+    viking_fs._async_agfs = agfs
+    viking_fs._uri_to_path = lambda uri, ctx: f"/local/{ctx.account_id}"
     initializer = DirectoryInitializer(
         _FakeVikingDB(),
-        viking_fs=_FakeVikingFS(),
+        viking_fs=viking_fs,
         system_asset_synchronizer=synchronizer,
     )
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._initialized = True
+    service._viking_fs = viking_fs
+    service._directory_initializer = initializer
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
 
     await initializer.initialize_account_workspace(ctx, sync_system_assets=False)
     synchronizer.sync.assert_not_awaited()
+    agfs.pathlock_acquire_tree.assert_not_awaited()
+    assert all(value is None for value in viking_fs.write_leases)
 
-    await initializer.initialize_account_workspace(ctx)
+    viking_fs.contexts.clear()
+    viking_fs.write_leases.clear()
+    assert await service.initialize_account_workspace(ctx) == (6, 7)
+    agfs.pathlock_acquire_tree.assert_awaited_once_with("/local/acme")
+    agfs.pathlock_release.assert_awaited_once_with(lease)
+    assert viking_fs.write_leases == [lease] * 13
     await initializer.initialize_account_directories(ctx)
     await initializer.initialize_user_directories(ctx)
 
-    assert synchronizer.sync.await_args_list == [call(ctx), call(ctx)]
+    assert synchronizer.sync.await_args_list == [call(ctx, lease_ref=lease), call(ctx)]
+
+    for error in (OSError("asset write failed"), asyncio.CancelledError()):
+        synchronizer.sync.side_effect = error
+        with pytest.raises(type(error)):
+            await service.initialize_account_workspace(ctx)
+    assert agfs.pathlock_release.await_args_list == [call(lease)] * 3
 
 
 def test_preset_directory_uris_cover_seeded_directories_only():

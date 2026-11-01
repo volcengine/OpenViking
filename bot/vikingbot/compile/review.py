@@ -98,7 +98,8 @@ class StageOutputReader(Tool):
         if payload is None:
             raise ValueError(f"Missing stage payload: {record.record_id}")
         self.evidence.allowed.update(record.source_refs)
-        value = {"id": record.record_id, "payload": payload.get("fields", payload)}
+        visible = {key: item for key, item in payload.items() if key != "image"}
+        value = {"id": record.record_id, "payload": visible.get("fields", visible)}
         if record.ready_ref:
             ready = await self.runtime.files.get(record.ready_ref)
             if ready is None:

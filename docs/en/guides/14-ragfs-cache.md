@@ -165,7 +165,7 @@ The top-level `cache` section is a sibling of `storage`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `provider` | str | `"filesystem"` | `filesystem`, `memory`, or `cache` |
+| `provider` | str | `"filesystem"` | `filesystem`, `memory`, `sqlite`, or `cache`; see [SQLite setup](../configuration/01-server.md#storage) |
 | `lock_expire_secs` | float | `30.0` | Lock stale timeout; must be at least `1.0` |
 
 Redis configuration:

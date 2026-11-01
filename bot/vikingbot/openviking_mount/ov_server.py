@@ -534,6 +534,14 @@ class VikingClient:
         )
         return result
 
+    async def rule_search(
+        self,
+        task_context: str,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Search compiled Rules applicable to the current task context."""
+        return await self.client.rule_search(task_context, options=options)
+
     async def compile_embeddings(
         self, texts: List[str], *, target_uri: str, expected_model: str | None = None
     ) -> Dict[str, Any]:
@@ -609,8 +617,9 @@ class VikingClient:
     async def attrs(self, uri: str) -> Dict[str, Any]:
         return await self.client.attrs(uri)
 
-    async def mkdir(self, uri: str) -> None:
-        await self.client.mkdir(uri)
+    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
+        """Create a directory; description initializes its L0 when provided."""
+        await self.client.mkdir(uri, description=description)
 
     async def tree(
         self, uri: str, *, node_limit: int = 1000, offset: int = 0
@@ -702,6 +711,7 @@ class VikingClient:
         target_uri: str,
         wait: bool = True,
     ) -> Dict[str, Any]:
+        """Replace the named Skill package with files from path."""
         return await self.client.update_skill(
             skill_name,
             path,
@@ -717,7 +727,7 @@ class VikingClient:
         wait: bool = True,
         skip_conflicts: bool = False,
         defer_processing: bool = False,
-        edit_source: Literal["manual", "agent", "compile"] = "agent",
+        edit_source: Literal["manual", "agent", "compile"] = "manual",
     ) -> Dict[str, Any]:
         """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
         return await self.client.batch_write(

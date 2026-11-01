@@ -22,7 +22,6 @@ from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     AbstractOverviewWriteResult,
     body_for_preview,
-    deterministic_sample,
     freshness_metadata,
     read_abstract_overview_pending_snapshot,
     write_abstract_overview,
@@ -35,7 +34,6 @@ from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -583,17 +581,12 @@ class SemanticTreeExecutor:
                 self._schedule_overview(dir_uri)
                 return False
 
-            sample_limit = getattr(
-                get_openviking_config().semantic,
-                "overview_sample_limit",
-                32,
-            )
             direct_entries = sorted(
                 [("directory", uri) for uri in children_dirs]
                 + [("file", uri) for uri in file_paths],
                 key=lambda item: item[1].rsplit("/", 1)[-1],
             )
-            sampled_entries = deterministic_sample(direct_entries, sample_limit)
+            sampled_entries = direct_entries
             sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
             pending_snapshot = 0
@@ -791,13 +784,12 @@ class SemanticTreeExecutor:
         children_dirs: List[str],
         file_paths: List[str],
     ) -> DirNode:
-        """Sample the target directory first, then read only existing summaries."""
+        """Read existing summaries for all direct children of the target directory."""
         candidates = sorted(
             [("file", uri) for uri in file_paths] + [("directory", uri) for uri in children_dirs],
             key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]),
         )
-        sample_limit = getattr(get_openviking_config().semantic, "overview_sample_limit", 32)
-        primary = deterministic_sample(candidates, sample_limit)
+        primary = candidates
         loaded = await self._load_transfer_candidates(primary)
         selected = [candidate for candidate in primary if candidate in loaded]
 

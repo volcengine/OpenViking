@@ -42,15 +42,17 @@ from openviking.service.task_domain import (
     sanitize_error,
     summarize_works,
 )
-from openviking.service.task_events import append_task_event
+from openviking.service.task_events import TaskEventHistory, append_task_event
 from openviking.service.task_store import (
     DeleteTasksResult,
     StoreOperationCode,
     StoreOperationResult,
     TaskAlreadyActive,
+    TaskCreationResult,
     TaskDeletionBlocker,
     TaskStatsSnapshot,
     TaskWorkStore,
+    _can_withdraw_task,
     _deep_merge,
 )
 from openviking.service.task_store_mysql_schema import (
@@ -65,11 +67,10 @@ from openviking.storage.mysql_runtime import (
     wait_mysql_cleanup,
 )
 from openviking.storage.mysql_session import MySQLAsyncSession
+from openviking_cli.utils.config.config_utils import DEFAULT_SERVICE_NAME, normalize_service_name
 
 
-def _business_key(
-    account_id: str, user_id: str, task_type: str, resource_id: Optional[str]
-) -> bytes:
+def _business_key(account_id: str, user_id: str, task_type: str, resource_id: Optional[str]) -> str:
     """Hash the guarded business key into a fixed-width unique-index value."""
     required = (account_id, user_id, task_type)
     encoded = [len(value.encode()).to_bytes(2, "big") + value.encode() for value in required]
@@ -78,7 +79,11 @@ def _business_key(
     else:
         value = resource_id.encode()
         encoded.append(b"\x01" + len(value).to_bytes(2, "big") + value)
-    return hashlib.sha256(b"".join(encoded)).digest()
+    return hashlib.sha256(b"".join(encoded)).hexdigest()
+
+
+def _resource_id_hash(resource_id: Optional[str]) -> str | None:
+    return hashlib.sha256(resource_id.encode()).hexdigest() if resource_id is not None else None
 
 
 def _json_copy(value: Any) -> Any:
@@ -113,9 +118,13 @@ class MySQLTaskWorkStore(TaskWorkStore):
         self,
         *,
         params: dict[str, object] | None = None,
+        service_name: str | None = None,
         runtime: MySQLRuntime | None = None,
     ) -> None:
         values = dict(params or {})
+        param_service_name = values.pop("service_name", DEFAULT_SERVICE_NAME)
+        raw_service_name = service_name if service_name is not None else param_service_name
+        self._service_name = normalize_service_name(raw_service_name)
         table_prefix = validate_table_prefix(values.pop("table", "ov_tasks"))
         self._models: TaskStoreModels = make_task_store_models(table_prefix)
         self._resource_id = os.environ.get("OV_RESOURCE_ID", "").strip()
@@ -254,29 +263,29 @@ class MySQLTaskWorkStore(TaskWorkStore):
             raise ValueError("MySQLTaskWorkStore requires account_id and user_id")
         return account_id, user_id
 
-    @staticmethod
     def _task_query(
+        self,
         Task: Any,
         task_id: str,
         account_id: Optional[str],
         user_id: Optional[str],
     ):
-        predicates = [Task.task_id == task_id]
+        predicates = [Task.service_name == self._service_name, Task.task_id == task_id]
         if account_id is not None:
             predicates.append(Task.account_id == account_id)
         if user_id is not None:
             predicates.append(Task.user_id == user_id)
         return predicates
 
-    @staticmethod
     def _work_query(
+        self,
         Work: Any,
         task_id: str,
         work_id: Optional[str],
         account_id: Optional[str],
         user_id: Optional[str],
     ):
-        predicates = [Work.task_id == task_id]
+        predicates = [Work.service_name == self._service_name, Work.task_id == task_id]
         if work_id is not None:
             predicates.append(Work.work_id == work_id)
         if account_id is not None:
@@ -285,11 +294,14 @@ class MySQLTaskWorkStore(TaskWorkStore):
             predicates.append(Work.user_id == user_id)
         return predicates
 
+    def _event_query(self, Event: Any, task_id: str):
+        return Event.service_name == self._service_name, Event.task_id == task_id
+
     @staticmethod
     def _task_from_row(
         row: Any,
         works: Iterable[WorkRecord] = (),
-        execution_events: Optional[dict] = None,
+        execution_events: Optional[TaskEventHistory] = None,
     ) -> TaskRecord:
         task = TaskRecord(
             task_id=row.task_id,
@@ -382,10 +394,8 @@ class MySQLTaskWorkStore(TaskWorkStore):
             await session.scalar(
                 select(
                     exists().where(
-                        Work.task_id == task_id,
-                        Work.state.not_in(
-                            [WorkState.DONE.value, WorkState.FAILED.value]
-                        ),
+                        *self._work_query(Work, task_id, None, None, None),
+                        Work.state.not_in([WorkState.DONE.value, WorkState.FAILED.value]),
                     )
                 )
             )
@@ -401,9 +411,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         user_id: Optional[str] = None,
     ) -> list[WorkRecord]:
         Work = self._models.Work
-        statement = select(Work).where(
-            *self._work_query(Work, task_id, None, account_id, user_id)
-        )
+        statement = select(Work).where(*self._work_query(Work, task_id, None, account_id, user_id))
         if work_ids is not None:
             ids = set(work_ids)
             if not ids:
@@ -412,11 +420,13 @@ class MySQLTaskWorkStore(TaskWorkStore):
         rows = (await session.scalars(statement)).all()
         return [self._work_from_row(row) for row in rows]
 
-    async def _event_history(self, session: AsyncSession, task_id: str) -> Optional[dict]:
+    async def _event_history(
+        self, session: AsyncSession, task_id: str
+    ) -> Optional[TaskEventHistory]:
         Event = self._models.Event
         rows = (
             await session.scalars(
-                select(Event).where(Event.task_id == task_id).order_by(Event.seq)
+                select(Event).where(*self._event_query(Event, task_id)).order_by(Event.seq)
             )
         ).all()
         if not rows:
@@ -439,36 +449,31 @@ class MySQLTaskWorkStore(TaskWorkStore):
             "started_mid_task": bool(latest.started_mid_task),
         }
 
-    async def _store_event_history(
+    async def _append_event_history(
         self,
         session: AsyncSession,
         task_id: str,
-        history: Optional[dict],
+        history: Optional[TaskEventHistory],
+        previous: Optional[TaskEventHistory] = None,
     ) -> None:
+        """Insert new events under the Task lock; retained rows remain immutable."""
         if history is None:
             return
         Event = self._models.Event
         items = history["items"]
         if not items:
             return
-        seqs = [int(item["seq"]) for item in items]
-        existing = set(
-            await session.scalars(
-                select(Event.seq).where(Event.task_id == task_id, Event.seq.in_(seqs))
-            )
-        )
+        previous_seq = previous["items"][-1]["seq"] if previous and previous["items"] else 0
         metadata = {
             "dropped_count": int(history["dropped_count"]),
             "started_mid_task": bool(history["started_mid_task"]),
         }
-        await session.execute(
-            update(Event).where(Event.task_id == task_id).values(**metadata)
-        )
         for item in items:
-            if int(item["seq"]) in existing:
+            if item["seq"] <= previous_seq:
                 continue
             session.add(
                 Event(
+                    service_name=self._service_name,
                     task_id=task_id,
                     seq=int(item["seq"]),
                     recorded_at=item["recorded_at"],
@@ -480,14 +485,17 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     **metadata,
                 )
             )
-        await session.execute(
-            delete(Event).where(Event.task_id == task_id, Event.seq < min(seqs))
-        )
+        if history["dropped_count"] > (previous["dropped_count"] if previous else 0):
+            await session.execute(
+                delete(Event).where(*self._event_query(Event, task_id), Event.seq < items[0]["seq"])
+            )
 
     async def _lock_work(self, session: AsyncSession, task_id: str, work_id: str) -> Any:
         Work = self._models.Work
         return await session.scalar(
-            select(Work).where(Work.task_id == task_id, Work.work_id == work_id).with_for_update()
+            select(Work)
+            .where(*self._work_query(Work, task_id, work_id, None, None))
+            .with_for_update()
         )
 
     @asynccontextmanager
@@ -496,7 +504,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
             async with session.begin():
                 yield session
 
-    async def create(self, task: TaskRecord, *, reject_if_active: bool = False) -> TaskRecord:
+    async def create(
+        self, task: TaskRecord, *, reject_if_active: bool = False
+    ) -> TaskCreationResult:
         account_id, user_id = self._require_owner(task.account_id, task.user_id)
         Task = self._models.Task
         now = time.time()
@@ -510,12 +520,14 @@ class MySQLTaskWorkStore(TaskWorkStore):
         stored._extra_fields = {}
         append_task_events(stored, None)
         row = Task(
+            service_name=self._service_name,
             task_id=stored.task_id,
             task_type=stored.task_type,
             status=stored.status.value,
             created_at=stored.created_at,
             updated_at=stored.updated_at,
             resource_id=stored.resource_id,
+            resource_id_hash=_resource_id_hash(stored.resource_id),
             account_id=account_id,
             user_id=user_id,
             meta=_json_copy(stored.meta),
@@ -546,12 +558,15 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         raise ValueError(
                             f"Task id already belongs to another owner: {stored.task_id}"
                         )
-                    return self._task_from_row(
-                        existing,
-                        execution_events=await self._event_history(session, stored.task_id),
+                    return TaskCreationResult(
+                        self._task_from_row(
+                            existing,
+                            execution_events=await self._event_history(session, stored.task_id),
+                        ),
+                        created=False,
                     )
                 session.add(row)
-                await self._store_event_history(session, stored.task_id, stored.execution_events)
+                await self._append_event_history(session, stored.task_id, stored.execution_events)
         except IntegrityError as exc:
             if not self._is_duplicate_error(exc):
                 raise
@@ -567,14 +582,17 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         raise ValueError(
                             f"Task id already belongs to another owner: {stored.task_id}"
                         )
-                    return self._task_from_row(
-                        existing,
-                        execution_events=await self._event_history(session, stored.task_id),
+                    return TaskCreationResult(
+                        self._task_from_row(
+                            existing,
+                            execution_events=await self._event_history(session, stored.task_id),
+                        ),
+                        created=False,
                     )
                 if reject_if_active:
                     raise TaskAlreadyActive(stored.task_type, stored.resource_id) from exc
             raise
-        return stored
+        return TaskCreationResult(stored, created=True)
 
     @staticmethod
     def _is_duplicate_error(exc: IntegrityError) -> bool:
@@ -594,6 +612,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             intervals: dict[str, list[WorkRecord]] = {task.task_id: [] for task in batch}
             rows = await session.execute(
                 select(Work.task_id, Work.started_at, Work.finished_at).where(
+                    Work.service_name == self._service_name,
                     Work.task_id.in_(intervals),
                     Work.started_at.is_not(None),
                 )
@@ -674,7 +693,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         Task = self._models.Task
 
         def statement_for(cursor: tuple[float, str] | None, batch_limit: int):
-            predicates = []
+            predicates = [Task.service_name == self._service_name]
             if account_id is not None:
                 predicates.append(Task.account_id == account_id)
             if user_id is not None:
@@ -684,6 +703,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if status is not None:
                 predicates.append(Task.status == status)
             if resource_id is not None:
+                predicates.append(Task.resource_id_hash == _resource_id_hash(resource_id))
                 predicates.append(Task.resource_id == resource_id)
             if not include_internal:
                 predicates.append(Task.is_internal.is_(False))
@@ -748,6 +768,46 @@ class MySQLTaskWorkStore(TaskWorkStore):
         """Return no stale process-local snapshot; callers use durable list APIs."""
         return {}
 
+    async def _delete_task_records(self, session: AsyncSession, task_ids: Collection[str]) -> None:
+        """Delete locked Tasks and their dependent records in the current transaction."""
+        if not task_ids:
+            return
+        for model in (self._models.Work, self._models.Event, self._models.Task):
+            await session.execute(
+                delete(model).where(
+                    model.service_name == self._service_name,
+                    model.task_id.in_(task_ids),
+                )
+            )
+
+    async def withdraw_unaccepted(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> StoreOperationResult:
+        self._require_owner(account_id, user_id)
+        Work = self._models.Work
+        async with self._transaction() as session:
+            row = await self._load_task(
+                session, task_id, account_id=account_id, user_id=user_id, lock=True
+            )
+            if row is None:
+                return StoreOperationResult.noop(StoreOperationCode.NOT_FOUND)
+            has_work = bool(
+                await session.scalar(
+                    select(
+                        exists().where(
+                            Work.service_name == self._service_name,
+                            Work.task_id == task_id,
+                        )
+                    )
+                )
+            )
+            if not _can_withdraw_task(self._task_from_row(row), has_work=has_work):
+                return StoreOperationResult.rejected(
+                    StoreOperationCode.INVALID_STATE, "Task has already been used"
+                )
+            await self._delete_task_records(session, [task_id])
+            return StoreOperationResult.applied()
+
     async def delete_tasks(
         self,
         task_id: Optional[str] = None,
@@ -762,7 +822,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             raise ValueError("Deleting one Task requires user_id")
         Task = self._models.Task
         async with self._transaction() as session:
-            predicates = [Task.account_id == account_id]
+            predicates = [Task.service_name == self._service_name, Task.account_id == account_id]
             if task_id is not None:
                 predicates.append(Task.task_id == task_id)
             if user_id is not None:
@@ -781,10 +841,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     await session.scalars(
                         select(Work.task_id)
                         .where(
+                            Work.service_name == self._service_name,
                             Work.task_id.in_(task_ids),
-                            Work.state.not_in(
-                                [WorkState.DONE.value, WorkState.FAILED.value]
-                            ),
+                            Work.state.not_in([WorkState.DONE.value, WorkState.FAILED.value]),
                         )
                         .distinct()
                     )
@@ -807,9 +866,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     )
                 )
             if blockers:
-                active = [
-                    item for item in blockers if item.code is StoreOperationCode.ACTIVE_TASK
-                ]
+                active = [item for item in blockers if item.code is StoreOperationCode.ACTIVE_TASK]
                 if active:
                     code = StoreOperationCode.ACTIVE_TASK
                     message = "Cannot delete active task records: " + ", ".join(
@@ -834,8 +891,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 DeletedTask(row.task_id, row.account_id, row.user_id)
                 for row in sorted(rows, key=lambda row: (row.account_id, row.user_id, row.task_id))
             )
-            if task_ids:
-                await session.execute(delete(Task).where(Task.task_id.in_(task_ids)))
+            await self._delete_task_records(session, task_ids)
             return DeleteTasksResult(deleted)
 
     async def delete_expired(
@@ -849,6 +905,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         statement = (
             select(Task)
             .where(
+                Task.service_name == self._service_name,
                 or_(
                     and_(
                         Task.status.in_([TaskStatus.COMPLETED.value, TaskStatus.CANCELLED.value]),
@@ -858,7 +915,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                         Task.status == TaskStatus.FAILED.value,
                         Task.updated_at < failed_cutoff,
                     ),
-                )
+                ),
             )
             .order_by(Task.updated_at, Task.task_id)
             .limit(limit)
@@ -874,10 +931,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     await session.scalars(
                         select(Work.task_id)
                         .where(
+                            Work.service_name == self._service_name,
                             Work.task_id.in_(task_ids),
-                            Work.state.not_in(
-                                [WorkState.DONE.value, WorkState.FAILED.value]
-                            ),
+                            Work.state.not_in([WorkState.DONE.value, WorkState.FAILED.value]),
                         )
                         .distinct()
                     )
@@ -885,8 +941,8 @@ class MySQLTaskWorkStore(TaskWorkStore):
             for row in rows:
                 if row.task_id in open_task_ids:
                     continue
-                await session.delete(row)
                 deleted.append(DeletedTask(row.task_id, row.account_id, row.user_id))
+            await self._delete_task_records(session, [task.task_id for task in deleted])
             return DeleteExpiredResult(
                 tuple(deleted),
                 scanned=len(rows),
@@ -933,7 +989,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
         Task = self._models.Task
         await session.execute(
             update(Task)
-            .where(Task.task_id == task_id)
+            .where(*self._task_query(Task, task_id, account_id, user_id))
             .values(
                 status=task.status.value,
                 updated_at=task.updated_at,
@@ -945,7 +1001,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 active_business_key=None,
             )
         )
-        await self._store_event_history(session, task_id, task.execution_events)
+        await self._append_event_history(
+            session, task_id, task.execution_events, previous.execution_events
+        )
         return task
 
     async def start_task(
@@ -990,7 +1048,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=TaskRecord.next_updated_at(row.updated_at),
                 )
             )
-            await self._store_event_history(session, task_id, task.execution_events)
+            await self._append_event_history(
+                session, task_id, task.execution_events, previous.execution_events
+            )
             return StoreOperationResult.applied()
 
     async def patch_task(
@@ -1008,9 +1068,8 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 selected.append(Task.stage)
             if "meta" not in patch.clear_fields and patch.meta is not None:
                 selected.append(Task.meta)
-            if (
-                "auth" not in patch.clear_fields
-                and (patch.auth is not None or patch.add_enqueue_complete_work_ids)
+            if "auth" not in patch.clear_fields and (
+                patch.auth is not None or patch.add_enqueue_complete_work_ids
             ):
                 selected.append(Task.auth)
             result = await session.execute(
@@ -1047,7 +1106,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     task = deepcopy(previous)
                     task.stage = stage
                     append_task_events(task, previous)
-                    await self._store_event_history(session, task_id, task.execution_events)
+                    await self._append_event_history(
+                        session, task_id, task.execution_events, previous.execution_events
+                    )
             if "meta" in patch.clear_fields or patch.meta is not None:
                 meta = {}
                 if "meta" not in patch.clear_fields:
@@ -1103,8 +1164,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     StoreOperationCode.ALREADY_TERMINAL,
                     f"Task is already {row.status}",
                 )
+            previous = await self._event_history(session, task_id)
             events = append_task_event(
-                await self._event_history(session, task_id),
+                deepcopy(previous),
                 kind=kind,
                 status=row.status,
                 stage=sanitize_error(row.stage) if row.stage else None,
@@ -1117,7 +1179,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=TaskRecord.next_updated_at(row.updated_at),
                 )
             )
-            await self._store_event_history(session, task_id, events)
+            await self._append_event_history(session, task_id, events, previous)
             return StoreOperationResult.applied()
 
     async def record_outcome(
@@ -1163,6 +1225,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 values["result"] = deepcopy(result)
             if resource_id is not None:
                 values["resource_id"] = resource_id
+                values["resource_id_hash"] = _resource_id_hash(resource_id)
                 values["active_business_key"] = (
                     _business_key(
                         row.account_id,
@@ -1180,6 +1243,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
 
             next_status = TaskStatus.CANCELLING if cancelled else TaskStatus(row.status)
             events = None
+            previous_events = None
             if cancelled or (error and row.error is None):
                 previous = TaskRecord(
                     task_id=task_id,
@@ -1189,6 +1253,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     error=row.error,
                     execution_events=await self._event_history(session, task_id),
                 )
+                previous_events = previous.execution_events
                 task = deepcopy(previous)
                 task.status = next_status
                 task.error = next_error
@@ -1212,7 +1277,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=TaskRecord.next_updated_at(row.updated_at),
                 )
             )
-            await self._store_event_history(session, task_id, events)
+            await self._append_event_history(session, task_id, events, previous_events)
             finalized = await self._finalize_if_closed(
                 session,
                 task_id,
@@ -1297,7 +1362,9 @@ class MySQLTaskWorkStore(TaskWorkStore):
                     updated_at=TaskRecord.next_updated_at(row.updated_at),
                 )
             )
-            await self._store_event_history(session, task_id, task.execution_events)
+            await self._append_event_history(
+                session, task_id, task.execution_events, previous.execution_events
+            )
             finalized = await self._finalize_if_closed(
                 session,
                 task_id,
@@ -1323,9 +1390,10 @@ class MySQLTaskWorkStore(TaskWorkStore):
             row = result.one_or_none()
             if row is None:
                 return _not_found_result()
-            if row.status in {
-                item.value for item in TERMINAL_TASK_STATUSES
-            } or row.status == TaskStatus.CANCELLING.value:
+            if (
+                row.status in {item.value for item in TERMINAL_TASK_STATUSES}
+                or row.status == TaskStatus.CANCELLING.value
+            ):
                 return StoreOperationResult.rejected(
                     StoreOperationCode.ALREADY_TERMINAL
                     if row.status in {item.value for item in TERMINAL_TASK_STATUSES}
@@ -1337,6 +1405,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 return StoreOperationResult.noop(StoreOperationCode.DUPLICATE)
             session.add(
                 Work(
+                    service_name=self._service_name,
                     task_id=work.task_id,
                     work_id=work.work_id,
                     account_id=account_id,
@@ -1377,6 +1446,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             if existing is None:
                 session.add(
                     self._models.Work(
+                        service_name=self._service_name,
                         task_id=work.task_id,
                         work_id=work.work_id,
                         account_id=account_id,
@@ -1400,8 +1470,13 @@ class MySQLTaskWorkStore(TaskWorkStore):
                 await session.execute(
                     update(self._models.Work)
                     .where(
-                        self._models.Work.task_id == work.task_id,
-                        self._models.Work.work_id == work.work_id,
+                        *self._work_query(
+                            self._models.Work,
+                            work.task_id,
+                            work.work_id,
+                            None,
+                            None,
+                        )
                     )
                     .values(queue_name=work.queue_name)
                 )
@@ -1695,12 +1770,8 @@ class MySQLTaskWorkStore(TaskWorkStore):
     ) -> bool:
         Work = self._models.Work
         async with self._session_factory() as session:
-            predicates = list(
-                self._work_query(Work, task_id, None, account_id, user_id)
-            )
-            predicates.append(
-                Work.state.not_in([WorkState.DONE.value, WorkState.FAILED.value])
-            )
+            predicates = list(self._work_query(Work, task_id, None, account_id, user_id))
+            predicates.append(Work.state.not_in([WorkState.DONE.value, WorkState.FAILED.value]))
             if exclude_work_id is not None:
                 predicates.append(Work.work_id != exclude_work_id)
             return bool(await session.scalar(select(exists().where(*predicates))))
@@ -1739,6 +1810,7 @@ class MySQLTaskWorkStore(TaskWorkStore):
             rows = (
                 await session.scalars(
                     select(Task.task_id).where(
+                        Task.service_name == self._service_name,
                         Task.task_id.in_(ids),
                         Task.account_id == account_id,
                         Task.user_id == user_id,

@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import threading
+from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,9 +13,16 @@ import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from openviking.server.account_stores.mysql_schema import Account, Base, Credential, GroupMember
-from openviking.server.api_keys import APIKeyManager
-from openviking.server.api_keys.legacy import FileStore
+from openviking.server.account_stores.file import FileStore
+from openviking.server.account_stores.mysql import MySQLAccountStore
+from openviking.server.account_stores.mysql_schema import (
+    Account,
+    Base,
+    Credential,
+    GroupMember,
+    User,
+)
+from openviking.server.api_keys import APIKeyManager, generate_api_key
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
@@ -29,6 +37,48 @@ def _file_store() -> FileStore:
     return FileStore(SimpleNamespace(agfs=InMemoryAGFS()))
 
 
+def test_mysql_account_schema_defines_management_list_indexes():
+    indexes = {
+        str(index.name): tuple(column.name for column in index.columns)
+        for table_name in (Account.__tablename__, User.__tablename__)
+        for index in Base.metadata.tables[table_name].indexes
+    }
+
+    assert indexes["ix_ov_accounts_account_created"] == (
+        "service_name",
+        "created_at",
+        "account_id",
+    )
+    assert indexes["ix_ov_accounts_user_active_created"] == (
+        "service_name",
+        "account_pk",
+        "deletion_task_id",
+        "created_at",
+        "user_pk",
+    )
+    assert indexes["ix_ov_accounts_user_role_active_created"] == (
+        "service_name",
+        "account_pk",
+        "role",
+        "deletion_task_id",
+        "created_at",
+        "user_pk",
+    )
+
+
+def test_mysql_account_summary_formats_naive_datetimes_as_utc():
+    summary = MySQLAccountStore._account_summary(
+        SimpleNamespace(
+            account_id="default",
+            created_at=datetime(2026, 10, 24, 1, 2, 3, 456789),
+            deletion_task_id=None,
+        ),
+        0,
+    )
+
+    assert summary["created_at"] == "2026-10-24T01:02:03.456789+00:00"
+
+
 @pytest.mark.parametrize(
     "account_id,user_id",
     [
@@ -37,15 +87,16 @@ def _file_store() -> FileStore:
         pytest.param("acme", "u" * 1024, id="long-existing-user"),
     ],
 )
-async def test_legacy_user_without_role_defaults_to_user_during_authentication(account_id, user_id):
+async def test_user_without_role_defaults_to_user_during_authentication(account_id, user_id):
     agfs = InMemoryAGFS()
     agfs.write(
         "/local/_system/accounts.json",
-        json.dumps({"accounts": {account_id: {"created_at": "legacy"}}}).encode(),
+        json.dumps({"accounts": {account_id: {"created_at": "existing"}}}).encode(),
     )
+    api_key = generate_api_key(account_id, user_id)
     agfs.write(
         f"/local/{account_id}/_system/users.json",
-        json.dumps({"users": {user_id: {"key": "legacy-key"}}}).encode(),
+        json.dumps({"users": {user_id: {"key": api_key}}}).encode(),
     )
     manager = build_api_key_manager("root", SimpleNamespace(agfs=agfs))
     await manager.load()
@@ -54,12 +105,31 @@ async def test_legacy_user_without_role_defaults_to_user_during_authentication(a
             "created_accounts": 0,
             "created_users": 0,
         }
-        identity = await manager.resolve_identity("legacy-key")
+        identity = await manager.resolve_identity(api_key)
         assert (identity.account_id, identity.user_id, identity.role) == (
             account_id,
             user_id,
             Role.USER,
         )
+    finally:
+        await manager.close()
+
+
+async def test_legacy_key_format_is_rejected_during_authentication():
+    agfs = InMemoryAGFS()
+    agfs.write(
+        "/local/_system/accounts.json",
+        json.dumps({"accounts": {"acme": {"created_at": "existing"}}}).encode(),
+    )
+    agfs.write(
+        "/local/acme/_system/users.json",
+        json.dumps({"users": {"alice": {"key": "legacy-key", "role": "user"}}}).encode(),
+    )
+    manager = build_api_key_manager("root", SimpleNamespace(agfs=agfs))
+    await manager.load()
+    try:
+        with pytest.raises(UnauthenticatedError):
+            await manager.resolve_identity("legacy-key")
     finally:
         await manager.close()
 
@@ -239,6 +309,53 @@ async def test_regenerate_key_preserves_management_not_found_errors():
         await manager.regenerate_key("acme", "missing")
 
 
+async def test_mysql_load_creates_default_account():
+    raw_mysql = os.environ.get("OV_TEST_MYSQL")
+    if not raw_mysql:
+        pytest.skip("Set OV_TEST_MYSQL to exercise MySQL account-store startup")
+
+    service_name = f"test-{uuid4().hex}"
+    manager = build_api_key_manager(
+        "root",
+        None,
+        service_name=service_name,
+        account_store_provider="mysql",
+        account_store_params=json.loads(raw_mysql),
+    )
+    mysql = manager._store
+    assert isinstance(mysql, MySQLAccountStore)
+    engine = create_async_engine(mysql._url, **mysql._engine_options)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        await manager.load()
+
+        accounts = await manager.list_accounts()
+        assert [account["account_id"] for account in accounts] == ["default"]
+        assert accounts[0]["user_count"] == 0
+        await manager.close()
+        await manager.load()
+
+        async with engine.connect() as connection:
+            assert (
+                await connection.scalar(
+                    select(func.count())
+                    .select_from(Account)
+                    .where(
+                        Account.service_name == service_name,
+                        Account.account_id == "default",
+                    )
+                )
+                == 1
+            )
+    finally:
+        await manager.close()
+        async with engine.begin() as connection:
+            await connection.execute(delete(Account).where(Account.service_name == service_name))
+        await engine.dispose()
+
+
 async def test_distributed_authentication_state_is_shared_and_service_scoped():
     """Key rotation and group deletion refresh caches within the owning service."""
     raw_mysql = os.environ.get("OV_TEST_MYSQL")
@@ -304,14 +421,22 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
             active_key = await writer.regenerate_key("acme", "alice")
         with pytest.raises(UnauthenticatedError):
             await reader.resolve_identity(old_key)
+        await writer.register_user("acme", "bob")
         await writer.create_group("acme", "engineering")
-        await writer.add_group_member("acme", "engineering", "alice")
+        assert await reader.get_user_group_ids("acme", "alice") == ()
+        assert await reader.get_user_group_ids("acme", "bob") == ()
+        with pytest.raises(NotFoundError):
+            await writer.add_group_members("acme", "engineering", ["alice", "missing", "bob"])
+        assert await writer.get_group_members("acme", "engineering") == []
+        await writer.add_group_members("acme", "engineering", ["alice", "bob", "bob"])
         assert await reader.get_user_group_ids("acme", "alice") == ("engineering",)
+        assert await reader.get_user_group_ids("acme", "bob") == ("engineering",)
 
         await writer.delete_group("acme", "engineering")
 
         assert await reader.get_groups("acme") == []
         assert await reader.get_user_group_ids("acme", "alice") == ()
+        assert await reader.get_user_group_ids("acme", "bob") == ()
         assert (await reader.resolve_identity(active_key)).user_id == "alice"
         assert (await isolated.resolve_identity(isolated_key)).role == Role.ADMIN
         async with engine.connect() as connection:
@@ -329,7 +454,7 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
                     .select_from(Credential)
                     .where(Credential.service_name == service_name)
                 )
-                == 11
+                == 12
             )
             assert (
                 await connection.scalar(
@@ -337,7 +462,7 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
                     .select_from(Credential)
                     .where(Credential.service_name == service_name, Credential.revoked.is_(False))
                 )
-                == 1
+                == 2
             )
     finally:
         try:
@@ -435,9 +560,8 @@ async def test_group_deletion_preserves_users_and_persists_membership_removal():
         bob_key = await manager.register_user("acme", "bob")
         await manager.create_group("acme", "engineering")
         await manager.create_group("acme", "reviewers")
-        await manager.add_group_member("acme", "engineering", "alice")
-        await manager.add_group_member("acme", "engineering", "bob")
-        await manager.add_group_member("acme", "reviewers", "bob")
+        await manager.add_group_members("acme", "engineering", ["alice", "bob"])
+        await manager.add_group_members("acme", "reviewers", ["bob"])
         assert await manager.get_user_group_ids("acme", "bob") == (
             "engineering",
             "reviewers",

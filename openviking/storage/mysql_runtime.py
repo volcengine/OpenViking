@@ -247,7 +247,7 @@ def mysql_runtime_store(cls: type[T]) -> type[T]:
             runtime: MySQLRuntime = self._mysql_runtime
 
             async def invoke():
-                if _name in ("load", "close"):
+                if _name in ("load", "initialize", "close"):
                     loop = asyncio.get_running_loop()
                     lifecycle = getattr(self, "_mysql_lifecycle_lock", None)
                     if lifecycle is None or lifecycle[0] is not loop:

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::path::normalize_logical_path;
+
 /// Lock kind: exact (single path) or tree (path + descendants).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PathLockKind {
@@ -77,6 +79,9 @@ pub struct PathLockHandoffRef {
     /// Optional only for backward compatibility with historic queue payloads.
     #[serde(default)]
     pub lease_ref: Option<String>,
+    /// Provider handle representation; absent in historic queue payloads.
+    #[serde(default)]
+    pub handle_mode: Option<super::provider::PathLockHandleMode>,
     /// Owner identity (preserved across handoff).
     pub owner_id: String,
     /// Lock-file paths held.
@@ -106,31 +111,25 @@ impl PathLockLease {
 
 /// Return true when a held request covers another requested operation.
 fn request_is_covered_by(held: &PathLockRequest, request: &PathLockRequest) -> bool {
+    let (Ok(held_path), Ok(request_path)) = (
+        normalize_logical_path(&held.path),
+        normalize_logical_path(&request.path),
+    ) else {
+        return false;
+    };
     match (held.kind, request.kind) {
-        (PathLockKind::Exact, PathLockKind::Exact) => normalize_path(&held.path) == normalize_path(&request.path),
-        (PathLockKind::Tree, _) => path_is_self_or_descendant(&request.path, &held.path),
+        (PathLockKind::Exact, PathLockKind::Exact) => held_path == request_path,
+        (PathLockKind::Tree, _) => path_is_self_or_descendant(request_path, held_path),
         (PathLockKind::Exact, PathLockKind::Tree) => false,
     }
 }
 
-/// Normalize a path for simple lock coverage checks.
-fn normalize_path(path: &str) -> String {
-    let trimmed = path.trim_end_matches('/');
-    if trimmed.is_empty() {
-        "/".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Return true when `path` is equal to or under `ancestor`.
+/// Return true when a normalized `path` is equal to or under `ancestor`.
 fn path_is_self_or_descendant(path: &str, ancestor: &str) -> bool {
-    let path = normalize_path(path);
-    let ancestor = normalize_path(ancestor);
     path == ancestor
         || ancestor == "/"
         || path
-            .strip_prefix(&ancestor)
+            .strip_prefix(ancestor)
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
@@ -156,6 +155,20 @@ pub struct PathLockConflict {
     pub conflicting_owner: String,
     /// Kind of the conflicting lock.
     pub conflicting_kind: PathLockKind,
+}
+
+/// PathLock-specific error type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum HandoffRecoveryReason {
+    /// The destination uses a different handle representation.
+    #[error("provider_changed")]
+    ProviderChanged,
+    /// Historic logical handles do not describe their lock kinds.
+    #[error("coverage_missing")]
+    CoverageMissing,
+    /// The original token no longer grants ownership.
+    #[error("token_unavailable")]
+    TokenUnavailable,
 }
 
 /// PathLock-specific error type.
@@ -210,6 +223,13 @@ pub enum PathLockError {
     /// Handoff/adopt failure.
     #[error("handoff/adopt failed: {0}")]
     HandoffFailed(String),
+
+    /// Durable work must acquire fresh coverage before continuing.
+    #[error("handoff recovery required: {reason}")]
+    HandoffRecoveryRequired {
+        /// Structured reason; unrelated failures must not trigger recovery.
+        reason: HandoffRecoveryReason,
+    },
 
     /// Internal error.
     #[error("lock internal error: {0}")]

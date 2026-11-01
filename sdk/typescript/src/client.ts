@@ -612,7 +612,12 @@ export class OpenVikingClient {
   /** Remove a resource or directory. */
   remove(
     uri: string,
-    options: { recursive?: boolean; wait?: boolean } = {},
+    options: {
+      recursive?: boolean;
+      wait?: boolean;
+      /** @deprecated Accepted for compatibility and ignored. */
+      timeout?: number;
+    } = {},
   ): Promise<void> {
     return this.request("DELETE", "/api/v1/fs", {
       query: {
@@ -712,6 +717,21 @@ export class OpenVikingClient {
     });
     return this.request("POST", "/api/v1/content/batch-write", {
       body: mergeExtra(body, options.extra),
+    });
+  }
+  /** Index uri; use fallbackAbstract only when both summaries are absent. */
+  ensureDirectoryIndex(
+    uri: string,
+    fallbackAbstract: string,
+    options: WaitOptions = {},
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/content/ensure_directory_index", {
+      body: compact({
+        uri: normalizeURI(uri),
+        fallback_abstract: fallbackAbstract,
+        wait: options.wait ?? true,
+        telemetry: options.telemetry,
+      }),
     });
   }
   /** Set retrieval tags. */
@@ -1079,8 +1099,11 @@ export class OpenVikingClient {
       },
     });
   }
-  /** Wait for queued processing to finish. */
-  waitProcessed(): Promise<JsonObject> {
+  /**
+   * Wait for queued processing to finish.
+   * @param timeout - Deprecated. Accepted for compatibility and ignored.
+   */
+  waitProcessed(timeout?: number): Promise<JsonObject> {
     return this.request("POST", "/api/v1/system/wait", {
       body: {},
     });
@@ -1334,12 +1357,6 @@ export class OpenVikingClient {
       `/api/v1/admin/accounts/${pathPart(accountId)}/users/${pathPart(userId)}/key`,
       { body: seed === undefined ? undefined : { seed } },
     );
-  }
-  /** Start legacy-data migration or cleanup. */
-  adminMigrate(cleanup = false): Promise<JsonObject> {
-    return this.request("POST", "/api/v1/admin/migrate", {
-      body: { action: cleanup ? "cleanup" : "migrate" },
-    });
   }
   /** Return the effective Agent Evolution switch for the caller's account. */
   adminGetAgentEvolution(): Promise<JsonObject> {

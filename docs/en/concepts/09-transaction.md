@@ -224,6 +224,14 @@ The lock mechanism uses two lock types to handle different conflict patterns:
 
 Exact and Tree describe an operation's scope; file, directory, and missing describe the target's current state. These are independent. Locks protect path names, including names that do not currently exist.
 
+Lock paths must be absolute. The Manager rejects empty or relative paths, repeated
+`/`, `.` or `..` components, and NUL with `InvalidRequest` before acquiring locks
+or checking lease coverage. A single trailing `/` is stripped, except at `/`.
+Redis and SQLite token operations require this normalized form; Redis Lua batch
+acquisition also validates every request before mutating tokens. Use
+`/local/account-a/file`, rather than aliases such as `/local/account-a/./file`
+or `/local/account-a//file`.
+
 The following conflicts apply to different owners within the same provider scope:
 
 | Held lock | New request | Conflict |
@@ -242,17 +250,17 @@ Locks coordinate participating operations. The low-level `PathLockWrappedFS` use
 
 ### Filesystem Provider Lock Protocol
 
-The caller chooses the lock type; the resolver chooses the token location from the target's state:
+The caller chooses the lock type. The filesystem provider uses a parent sidecar for every target:
 
 | Target state | Exact token | Tree token |
 | --- | --- | --- |
 | Existing file `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
-| Existing directory `/docs/a` | `/docs/a/.path.ovlock`, containing E | Same file inside the directory, containing T |
-| Missing `/docs/a` | Parent sidecar, containing E | Create the target directory, then write `.path.ovlock` inside it, containing T |
+| Existing directory `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
+| Missing `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
 
-A sidecar sits beside its target but represents only that target, not its parent directory. `<hash>` is a SHA-1 prefix of the full backend path, not the business file's contents.
+A sidecar sits beside its target but represents only that target, not its parent directory. Recursively deleting the target does not delete the token in its parent, so mutual exclusion remains active until the lease is formally released. `<hash>` is a SHA-1 prefix of the full backend path, not the business file's contents.
 
-`.exact.ovlock.*` can contain a Tree token, and `.path.ovlock` can contain an Exact token. Filenames are part of the storage protocol, but do not alone identify the logical lock type. Token contents are:
+`.exact.ovlock.*` stores E or T according to the logical lock type. For compatibility with tokens left by older versions, conflict checks still read `.path.ovlock` inside the target, but new locks are no longer written there. Filenames are part of the storage protocol, but do not alone identify the logical lock type. Token contents are:
 
 ```text
 {owner_id}:{time_ns}:{lock_type}
@@ -261,6 +269,17 @@ A sidecar sits beside its target but represents only that target, not its parent
 `lock_type` is `E` or `T`. This ownership token supports conflict checks, refresh, and conditional release; it does not imply storage-side fencing of every business write.
 
 A lease records logical scope in `covered_paths` separately from token locations in `lock_paths`. An owned lease controls refresh, release, and handoff. A borrowed lease proves coverage by an existing lock without permission to release the outer lock.
+
+#### Protocol Migration and Deployment
+
+The new version reads both the new sidecar and the legacy `.path.ovlock`, but writes new tokens only to the sidecar. Existing leases are not migrated in place: refresh, release, and handoff continue to use the legacy `lock_paths` recorded by the lease until those tokens are released or expire.
+
+Old versions do not inspect new ancestor sidecars, so filesystem-provider instances of different protocol versions must not process writes against the same backend concurrently. The current version requires a coordinated cutover:
+
+1. Stop new writes, wait for active leases and pending handoffs to drain, then stop every old instance.
+2. Start all new instances, confirm legacy tokens were released or can be reclaimed by expiry, then resume writes.
+
+A zero-downtime rolling deployment requires two independently deployable protocol stages: first deploy a compatibility version that reads both formats but still writes legacy tokens; after every instance is upgraded, switch all instances to reading both formats and writing only new sidecars. There must be no interval where an old instance can encounter a new sidecar.
 
 ### Cache Provider Lock Protocol
 
@@ -282,8 +301,11 @@ HASH keys are isolated by path scope:
 
 All keys use `{service_name}` as the Redis Cluster hash tag. Exact acquisition
 reads the target and ancestors with `HMGET`; Tree acquisition scans only its
-scope HASH with `HGETALL`. Global `/` and `/local` locks do not scan account
-or `_system` HASHes. Cross-scope batches are rejected.
+scope HASH with `HGETALL`. Tree locks at `/` and `/local` are rejected with
+`InvalidRequest`, because their subtrees span account and `_system` HASHes.
+Use `/local/<account>` or `/local/_system` (or a descendant) as the Tree root.
+Exact locks at `/` and `/local` remain supported and protect only those paths.
+Cross-scope batches are rejected.
 
 ### Filesystem Lock Acquisition (EXACT mode)
 
@@ -321,8 +343,8 @@ loop until timeout (poll interval: 200ms):
        - Missing target directory? -> treat as no descendant locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    4. Ensure the resolved token parent exists; this creates a missing target as a directory
-    5. Write the TREE (T) token (sidecar for an existing file, internal .path.ovlock otherwise)
+    4. Ensure the resolved sidecar parent exists; do not create the missing target itself
+    5. Write the TREE (T) token to the parent sidecar
     6. TOCTOU double-check: re-scan descendants and ancestors
        - Conflict found: compare (timestamp, handle_id)
        - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
@@ -335,17 +357,17 @@ Timeout (default 0 = no-wait) raises LockAcquisitionError
 
 ### Missing Directory Creation
 
-The lock system may create directories so it can place lock files, but it checks
-for conflicts first:
+The lock system may create a missing parent chain so it can place a sidecar,
+but it does not create the locked target itself. It checks for conflicts first:
 
 ```
-1. Ancestor TreeLock / same-path lock / descendant lock conflict -> do not create the directory
-2. No current conflict -> create the directory and write the lock
+1. Ancestor TreeLock / same-path lock / descendant lock conflict -> do not create directories
+2. No current conflict -> create the sidecar parent and write the lock
 3. A post-write double-check finds a new conflict -> remove our own lock and fail or retry
 4. Step 3 does not roll back the empty directory
 ```
 
-Acquisition rollback and normal release clean up tokens without guaranteeing removal of directories created to store them. An Exact sidecar can also create a missing parent chain. Snapshots use a separate policy for missing targets; see [snapshot scope and concurrency](../guides/15-snapshot.md#commit-scope-and-concurrency).
+Acquisition rollback and normal release clean up tokens without guaranteeing removal of a parent chain created to store the sidecar. Snapshots use a separate policy for missing targets; see [snapshot scope and concurrency](../guides/15-snapshot.md#commit-scope-and-concurrency).
 
 ### Lock Expiry Cleanup
 
@@ -353,7 +375,15 @@ Acquisition rollback and normal release clean up tokens without guaranteeing rem
 
 **Stale lock detection**: PathLockEngine checks the ownership token timestamp. Locks older than `lock_expire` (default 30s) are considered stale and are removed automatically during acquisition.
 
-**In-process cleanup**: During refresh, Rust PathLockManager checks leases that have not refreshed successfully for `2 × lock_expire` and attempts cleanup with ownership validation.
+**Lost lease authorization**: Explicit and background refresh use the same rules. A missing token or owner mismatch immediately invalidates every local lease under that owner sharing the actual token path (`lock_paths`). Losing any required token invalidates the entire lease, including a pending handoff. A Tree ancestor and an Exact descendant have different tokens and do not invalidate each other.
+
+A transport error preserves authorization only until `0.8 × lock_expire` since that token's last successful confirmation (24 seconds by default). Each token has its own monotonic deadline; partial refresh, reentry, and local handoff/adoption do not extend failed tokens. Authorization checks enforce the deadline even before the next heartbeat. Invalidated leases cannot authorize subsequent protected writes, refresh, owner reuse, or handoff/adoption, and cannot become valid again.
+
+**In-process cleanup**: Invalidated leases retain their release capability and local references while ownership-checked cleanup is retried. A missing or foreign-owned token completes cleanup without deleting a new owner's token. Tokens shared with another valid local lease remain protected. After six heartbeat intervals from the first invalidation (`2 × lock_expire`, 60 seconds by default), the manager logs remaining paths and forgets the local entry even if the provider is unavailable; remaining provider tokens rely on expiry. Cleanup retries never extend this window.
+
+**Invalidation diagnostics**: The manager retains the first invalidation time and reason through cleanup. The `pathlock lease invalidated` log includes `reason`, `lease_ref`, `owner_id`, and `affected_paths`. `TokenLost` means a required token is missing or ownership no longer matches; inspect token expiry, removal, and takeover. `ConfirmationDeadlineExceeded` means ownership could not be confirmed before the safety deadline; inspect provider health, network latency, and renewal scheduling. Its token log includes `since_last_confirmation_ms` and `failures`. `ReleaseFailed` means a release or downgrade error revoked authorization while cleanup is retried; the release log includes the error. Later results and cleanup failures do not replace the first reason or reset its time; the cleanup-window exhaustion log retains that reason.
+
+These checks revoke authorization for future operations after loss is detected or the deadline passes. They do not cancel writes that already passed authorization or provide storage-side fencing.
 
 **Orphan locks**: Provider tokens left behind after a process crash are automatically removed via stale lock detection when a later acquisition checks the same path or scope.
 
@@ -429,8 +459,14 @@ Redis-backed configuration:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, or `cache` | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache` | `filesystem` |
+| `sqlite_path` | str / null | Optional absolute local database path for `sqlite`; see [SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale | `30.0` |
+
+For replicas sharing EFS across containers or hosts, use `provider="cache"` with
+shared Redis. SQLite is limited to one shared database file on the same machine's
+local disk; EFS/NFS/SMB and independent container-local databases are unsupported.
+See [deployment limits and provider selection](../configuration/01-server.md#storage).
 
 Legacy compatibility form:
 
@@ -452,6 +488,106 @@ Legacy compatibility form:
 ### QueueFS Persistence
 
 Restart recovery requires persisted queue data. QueueFS uses SQLite by default. With the cache backend, durability depends on the configured Provider; the memory backend loses queued work when the process exits.
+
+### Single-instance path lock provider switch: filesystem → Redis
+
+This switches the **storage and coordination backend for path locks**: from
+`.ovlock` files managed by the filesystem provider to Redis lock records managed
+by the cache provider. Business files stay in their existing file storage, and
+QueueFS keeps its existing persistent queue backend, such as SQLite. Business
+data and queue messages do not need to move to Redis.
+
+This procedure supports only a **single instance with downtime**:
+
+1. Pause incoming requests and task submissions. Disable any automatic restart
+   or scheduling policy that could restart the old instance. Keep
+   the existing file storage and persistent queues.
+2. Stop the old service and all its queue consumer processes. Verify in the
+   process manager or deployment platform that every old instance PID / container
+   has exited, with no remaining child processes, standalone workers or other
+   writers using filesystem path locks against the same storage. Confirm that
+   the old instance's lock heartbeat renewal tasks have also stopped.
+   **Do not start the instance using Redis path locks until this check passes.**
+3. Change `storage.agfs.pathlock.provider` from `filesystem` to `cache` and
+   configure that cache provider to use Redis.
+4. Start one new instance. Verify that pending jobs recover from the existing
+   queue, acquire fresh path locks in Redis and resume consumption, then reopen
+   incoming requests and task submissions.
+
+`handoff` retains the lease in the old process and keeps its heartbeat running.
+Pausing requests or closing the listening port does not prove that the old
+writers have stopped; verify that all the processes above have exited. Process
+exit terminates their in-memory lease registries and heartbeat tasks, while
+`.ovlock` tokens may remain on disk. Draining the queue, deleting those lock
+files or waiting for old leases to expire is not required.
+
+Filesystem and Redis are independent lock coordination domains: Redis acquire
+**does not check or block old filesystem tokens**. If an old process remains
+alive, both backends can grant different owners the same path, allowing both
+processes to write business files. Waiting for old tokens to expire cannot
+replace the process exit check.
+
+New handoffs include `handle_mode`; historic payloads without it remain supported.
+On a provider change or an unavailable token, consumers acquire the complete
+logical coverage with its Exact/Tree kinds under a new owner before resuming.
+They prefer `covered_paths`, invert historic `.path.ovlock` Tree handles, and use
+the operation's complete requests for non-invertible Exact handles. Recovery
+never acquires only part of a mixed batch. Acquisition conflicts and service
+errors leave durable work pending for retry. Malformed coverage, invalidated
+references, and duplicate adoption do not trigger reacquisition. Old `.ovlock`
+files need no scanning or copying into Redis.
+
+Recovery requires a valid account context and rejects coverage outside that
+account. Semantic jobs preserve the Exact/Tree kind in `covered_paths`. When a
+historic message has no coverage kind and its original granularity cannot be
+determined, recovery conservatively acquires a Tree lock on the operation path
+and logs a warning. This can widen an original Exact lock to Tree and reduce
+concurrency during recovery.
+
+### Blocked recovery retries and alerts
+
+QueueFS has no global retry limit or dead-letter queue. AddResource, Reindex,
+ContentWrite and Semantic consumers allow up to eight retries per delivery chain
+after the initial attempt for `HandoffRecoveryBlocked`, persisting
+`lock_handoff_retry` in the replacement message. If the process crashes after
+the replacement is enqueued but before the original is ACKed, recovery can
+create separate delivery chains from both messages, each retaining its own
+counter. This is therefore not a global retry limit for the same work.
+Each retry waits `min(0.5 × 2^retry, 30)` seconds; backoff
+holds the current consumer slot. Cancellation during backoff or a failed
+enqueue leaves the original delivery unacknowledged. Exhaustion ends the work
+with a failure; task tracking transitions the associated task to FAILED with a
+queryable reason. Failures do not automatically enter a dead-letter queue.
+
+Each blocked recovery logs a warning; exhaustion logs an error. The counter
+`openviking_pathlock_recovery_blocked_total{queue, outcome}` distinguishes
+`retry` from `exhausted`. Enable `server.observability.metrics.enabled` and
+`server.observability.metrics.exporters.prometheus.enabled`, configure Prometheus
+to scrape `/metrics`, then add these example alert rules:
+
+```yaml
+groups:
+  - name: openviking-pathlock-recovery
+    rules:
+      - alert: OpenVikingPathlockRecoveryBlocked
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="retry"}[5m])) >= 8
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenViking pathlock recovery is repeatedly blocked"
+      - alert: OpenVikingPathlockRecoveryExhausted
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="exhausted"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenViking pathlock recovery retry limit reached"
+```
+
+Adjust thresholds for workload volume. Use the logged `task_id` and failure
+reason to investigate competing writers or Redis availability, then resubmit
+failed tasks after resolving the cause. See [Metrics](./12-metrics.md) and
+[Grafana and Prometheus](../guides/11-grafana-prometheus.md) for monitoring setup.
 
 ## Related Documentation
 

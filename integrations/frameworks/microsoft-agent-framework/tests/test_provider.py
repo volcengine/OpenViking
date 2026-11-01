@@ -18,6 +18,7 @@ from agent_framework import (
     FunctionInvocationLayer,
     Message,
     ResponseStream,
+    SelectiveToolCallCompactionStrategy,
 )
 from openviking_sdk import AsyncHTTPClient
 
@@ -140,39 +141,207 @@ async def test_recall_capture_and_explicit_commit():
 
 @pytest.mark.parametrize("commit_policy", ["never", "always", "pending_tokens"])
 @pytest.mark.parametrize("stream", [False, True])
-async def test_tools_keep_calls_and_results_paired(commit_policy, stream):
-    def lookup_label():
+@pytest.mark.parametrize("reuse_id", [False, True])
+@pytest.mark.parametrize("parallel", [False, True])
+@pytest.mark.parametrize("compact", [False, True])
+async def test_tools_keep_calls_and_results_paired(
+    commit_policy, stream, reuse_id, parallel, compact
+):
+    def lookup_label(label: str = "LABEL"):
         """Return the current label."""
-        return "LABEL"
+        return label
 
-    client, _, _, agent, session = setup(
-        [
-            Message(
-                "assistant",
-                [Content("function_call", call_id="call-1", name="lookup_label", arguments={})],
-            ),
-            Message("assistant", ["LABEL"]),
-        ],
+    arguments = [{}, {"label": "SECOND"}]
+    calls = [
+        Content(
+            "function_call",
+            call_id="call-1" if reuse_id else f"call-{i + 1}",
+            name="lookup_label",
+            arguments=value,
+        )
+        for i, value in enumerate(arguments)
+    ]
+    responses = (
+        [Message("assistant", calls)]
+        if parallel
+        else [Message("assistant", [call]) for call in calls]
+    )
+    client, _, model, agent, session = setup(
+        [*responses, Message("assistant", ["LABEL and SECOND"])],
         commit_policy=commit_policy,
         commit_token_threshold=1,
     )
+    options = {"tools": [lookup_label], "session": session}
+    if compact:
+        options["compaction_strategy"] = SelectiveToolCallCompactionStrategy(
+            keep_last_tool_call_groups=0
+        )
     if stream:
-        async with agent.run(
-            "Read the label", tools=[lookup_label], session=session, stream=True
-        ) as result:
+        async with agent.run("Read both labels", stream=True, **options) as result:
             async for _ in result:
                 assert not client.commits
     else:
-        await agent.run("Read the label", tools=[lookup_label], session=session)
+        await agent.run("Read both labels", **options)
     parts = [part for row in client.rows for part in row["parts"] if part["type"] == "tool"]
-    assert len(parts) == 2
-    assert [part["tool_status"] for part in parts] == ["pending", "completed"]
-    assert {part["tool_id"] for part in parts} == {"call-1"}
+    pending = [part for part in parts if part["tool_status"] == "pending"]
+    completed = [part for part in parts if part["tool_status"] == "completed"]
+    assert len(parts) == 4
+    assert [part["tool_input"] for part in pending] == arguments
+    assert [part["tool_input"] for part in completed] == arguments
+    assert [part["tool_output"] for part in completed] == ["LABEL", "SECOND"]
+    assert {part["tool_id"] for part in parts} == ({"call-1"} if reuse_id else {"call-1", "call-2"})
     assert {part["tool_name"] for part in parts} == {"lookup_label"}
-    assert parts[1]["tool_output"] == "LABEL"
+    model_tool_parts = [
+        content
+        for message in model.inputs[-1]
+        for content in message.contents
+        if content.type in ("function_call", "function_result")
+    ]
+    assert bool(model_tool_parts) is not compact
     assert len(client.commits) == (0 if commit_policy == "never" else 1)
     if client.commits:
         assert client.commit_sizes == [len(client.rows)]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("restore", [False, True])
+@pytest.mark.parametrize(
+    "history",
+    [
+        pytest.param(
+            [("call", None, "A"), ("result", "a", "A"), ("result", "a", "A")],
+            id="generated-result-id",
+        ),
+        pytest.param(
+            [
+                ("call", None, "A"),
+                ("result", "a", "A"),
+                ("call", None, "B"),
+                ("result", "a", "B"),
+                ("result", "a", "B"),
+            ],
+            id="generated-result-id-reused-by-new-call",
+        ),
+        pytest.param(
+            [("call", "", "A"), ("result", "a", "A"), ("call", "b", "B"), ("result", "", "B")],
+            id="empty-occurrence-is-unidentified",
+        ),
+        pytest.param(
+            [("call", None, "A"), ("result", None, "A"), ("result", None, "A")],
+            id="legacy-duplicate",
+        ),
+        pytest.param(
+            [("call", "a", "A"), ("result", None, "A"), ("result", "a", "A")],
+            id="result-without-occurrence",
+        ),
+        pytest.param(
+            [("call", "a", "A"), ("result", "b", None), ("result", "a", "A")],
+            id="conflicting-occurrence",
+        ),
+        pytest.param(
+            [("call", "a", "A"), ("call", None, "B"), ("result", "b", "B"), ("result", "a", "A")],
+            id="fallback-only-to-unidentified-call",
+        ),
+        pytest.param(
+            [("call", None, "A"), ("call", "b", "B"), ("result", "b", "B"), ("result", "a", "A")],
+            id="exact-before-fallback",
+        ),
+        pytest.param(
+            [
+                ("call", "a", "A"),
+                ("result", "a", "A"),
+                ("call", None, "B"),
+                ("result", "a", "A"),
+                ("result", "b", "B"),
+            ],
+            id="duplicate-does-not-consume-pending-call",
+        ),
+        pytest.param(
+            [
+                ("call", "a", "A"),
+                ("result", "a", "A"),
+                ("call", "b", "B"),
+                ("result", "b", "B"),
+                ("result", "a", "A"),
+                ("result", None, "B"),
+            ],
+            id="duplicate-preserves-latest-completed-call",
+        ),
+        pytest.param(
+            [
+                ("call", "a", "A"),
+                ("result", "a", "A"),
+                ("call", "a", "B"),
+                ("result", "a", "B"),
+                ("result", "a", "B"),
+            ],
+            id="new-pending-call-before-completed-metadata",
+        ),
+        pytest.param(
+            [
+                ("call", None, "A"),
+                ("result", None, "A"),
+                ("result", "a", "A"),
+                ("call", None, "B"),
+                ("result", None, "B"),
+                ("result", "a", "A"),
+            ],
+            id="legacy-duplicate-gains-occurrence",
+        ),
+        pytest.param(
+            [("result", "a", None), ("call", None, "A"), ("result", "a", "A")],
+            id="orphan-does-not-borrow-future-call",
+        ),
+        pytest.param(
+            [
+                ("call", None, "A"),
+                ("result", None, "A"),
+                ("call", None, "A"),
+                ("result", None, "A"),
+            ],
+            id="identical-polling-calls",
+        ),
+    ],
+)
+async def test_tool_history_preserves_pairing_metadata(history, stream, restore):
+    client, provider, _, agent, session = setup()
+    messages = [Message("user", ["Question"], message_id="question")]
+    for i, (kind, occurrence, label) in enumerate(history):
+        content = Content(
+            "function_call" if kind == "call" else "function_result",
+            call_id="call-1",
+            id=occurrence,
+            **(
+                {"name": f"lookup_{label}", "arguments": {"label": label}}
+                if kind == "call"
+                else {"result": f"output-{i}"}
+            ),
+        )
+        messages.append(
+            Message("assistant" if kind == "call" else "tool", [content], message_id=f"history-{i}")
+        )
+    if restore:
+        # Rebuild pairing metadata from acknowledged history in a fresh provider.
+        await agent.run(messages[:-1], session=session)
+        session = AgentSession.from_dict(json.loads(json.dumps(session.to_dict())))
+        provider = OpenVikingContextProvider(client)
+        agent = Agent(ChatClient(), context_providers=[provider])
+    if stream:
+        async with agent.run(messages, session=session, stream=True) as response:
+            async for _ in response:
+                pass
+    else:
+        await agent.run(messages, session=session)
+    completed = [
+        p for row in client.rows for p in row["parts"] if p.get("tool_status") == "completed"
+    ]
+    expected = [(i, label) for i, (kind, _, label) in enumerate(history) if kind == "result"]
+    assert [(p["tool_name"], p["tool_input"], p["tool_output"]) for p in completed] == [
+        (f"lookup_{label}" if label else "", {"label": label} if label else None, f"output-{i}")
+        for i, label in expected
+    ]
+    ids = [row["source_message_ids"][0] for row in client.rows]
+    assert len(ids) == len(set(ids))
 
 
 @pytest.mark.parametrize("complete", [False, True])
@@ -192,19 +361,64 @@ async def test_stream_capture_requires_complete_consumption(complete, commit_pol
     assert len(client.commits) == (1 if complete and commit_policy != "never" else 0)
 
 
-async def test_restoration_preserves_session_and_acknowledged_message_ids():
-    client, provider, _, agent, session = setup()
+@pytest.mark.parametrize("stream", [False, True])
+async def test_restoration_preserves_session_and_acknowledged_message_ids(stream):
+    def lookup_label(label: str):
+        """Return the current label."""
+        return label
+
+    def tool_call(label):
+        return Message(
+            "assistant",
+            [
+                Content(
+                    "function_call",
+                    call_id="call-1",
+                    name="lookup_label",
+                    arguments={"label": label},
+                )
+            ],
+        )
+
+    client, provider, _, agent, session = setup([tool_call("OLD"), Message("assistant", ["OLD"])])
     question = Message("user", ["Same text"], message_id="original")
-    response = await agent.run(question, session=session)
+    if stream:
+        async with agent.run(
+            question, session=session, tools=[lookup_label], stream=True
+        ) as result:
+            async for _ in result:
+                pass
+        response = await result.get_final_response()
+    else:
+        response = await agent.run(question, session=session, tools=[lookup_label])
     restored = AgentSession.from_dict(json.loads(json.dumps(session.to_dict())))
-    await agent.run(
-        [question, *response.messages, Message("user", ["Same text"], message_id="new")],
-        session=restored,
+    provider = OpenVikingContextProvider(client)
+    agent = Agent(
+        ChatClient([tool_call("NEW"), Message("assistant", ["NEW"])]), context_providers=[provider]
     )
-    assert len(client.rows) == 4
+    # Overlapping replay must not queue the same acknowledged call twice.
+    messages = [
+        question,
+        response.messages[0],
+        *response.messages,
+        Message("user", ["Same text"], message_id="new"),
+    ]
+    if stream:
+        async with agent.run(
+            messages, session=restored, tools=[lookup_label], stream=True
+        ) as result:
+            async for _ in result:
+                pass
+    else:
+        await agent.run(messages, session=restored, tools=[lookup_label])
+    assert len(client.rows) == 8
     ids = [row["source_message_ids"][0] for row in client.rows]
     assert len(ids) == len(set(ids))
     assert {"original", "new"}.issubset(ids)
+    completed = [
+        p for row in client.rows for p in row["parts"] if p.get("tool_status") == "completed"
+    ]
+    assert [p["tool_input"] for p in completed] == [{"label": "OLD"}, {"label": "NEW"}]
     assert len(set(client.sessions)) == 1
     assert (
         restored.state[provider.source_id]["session_id"]
@@ -213,21 +427,32 @@ async def test_restoration_preserves_session_and_acknowledged_message_ids():
 
 
 @pytest.mark.parametrize("commit_policy", ["never", "always", "pending_tokens"])
-async def test_partial_write_keeps_only_unacknowledged_messages_for_flush(commit_policy):
+@pytest.mark.parametrize("stream", [False, True])
+async def test_partial_write_keeps_only_unacknowledged_messages_for_flush(commit_policy, stream):
     client, provider, _, agent, session = setup(
         commit_policy=commit_policy, commit_token_threshold=1
     )
     client.fail_batch = 2
     messages = [Message("user", [f"Item {i}"], message_id=str(i)) for i in range(101)]
     with pytest.raises(Exception, match="request not sent"):
-        await agent.run(messages, session=session)
+        if stream:
+            async with agent.run(messages, session=session, stream=True) as result:
+                async for _ in result:
+                    pass
+        else:
+            await agent.run(messages, session=session)
     assert len(client.rows) == 100
     assert len(session.state[provider.source_id]["pending_messages"]) == 2
     assert not client.commit_attempts
     client.fail_batch = None
+    session = AgentSession.from_dict(json.loads(json.dumps(session.to_dict())))
+    provider = OpenVikingContextProvider(
+        client, commit_policy=commit_policy, commit_token_threshold=1
+    )
     await provider.flush(session)
     assert len(client.rows) == 102
     assert not session.state[provider.source_id]["pending_messages"]
+    assert len({row["source_message_ids"][0] for row in client.rows}) == 102
     assert len(client.commits) == (0 if commit_policy == "never" else 1)
     await provider.flush(session)
     assert len(client.commits) == (0 if commit_policy == "never" else 1)
@@ -610,7 +835,7 @@ async def test_real_sdk_writes_tool_evidence_before_threshold_commit(monkeypatch
             writes.append("capture")
             result = {"added": len(messages), "pending_tokens": pending}
         elif path.endswith("/commit"):
-            assert len(rows) == 4
+            assert len(rows) == 6
             assert json.loads(request.content)["keep_recent_count"] == 0
             writes.append("commit")
             pending = 0
@@ -630,9 +855,9 @@ async def test_real_sdk_writes_tool_evidence_before_threshold_commit(monkeypatch
     await client.initialize()
     try:
 
-        def lookup_label():
+        def lookup_label(label: str = "LABEL"):
             """Return the current label."""
-            return "LABEL"
+            return label
 
         model = ChatClient(
             [
@@ -640,7 +865,18 @@ async def test_real_sdk_writes_tool_evidence_before_threshold_commit(monkeypatch
                     "assistant",
                     [Content("function_call", call_id="call-1", name="lookup_label", arguments={})],
                 ),
-                Message("assistant", ["LABEL"]),
+                Message(
+                    "assistant",
+                    [
+                        Content(
+                            "function_call",
+                            call_id="call-1",
+                            name="lookup_label",
+                            arguments={"label": "SECOND"},
+                        )
+                    ],
+                ),
+                Message("assistant", ["LABEL and SECOND"]),
             ]
         )
         provider = OpenVikingContextProvider(
@@ -658,9 +894,18 @@ async def test_real_sdk_writes_tool_evidence_before_threshold_commit(monkeypatch
             await agent.run("Question", tools=[lookup_label], session=session)
         assert writes == ["capture", "commit"]
         parts = [p for row in rows for p in row["parts"] if p["type"] == "tool"]
-        assert [p["tool_status"] for p in parts] == ["pending", "completed"]
+        assert [p["tool_status"] for p in parts] == ["pending", "completed"] * 2
         assert {p["tool_id"] for p in parts} == {"call-1"}
-        assert parts[1]["tool_output"] == "LABEL"
+        assert [p["tool_input"] for p in parts] == [
+            {},
+            {},
+            {"label": "SECOND"},
+            {"label": "SECOND"},
+        ]
+        assert [p["tool_output"] for p in parts if p["tool_status"] == "completed"] == [
+            "LABEL",
+            "SECOND",
+        ]
         assert "Preferred format" not in json.dumps(rows)
     finally:
         await client.close()

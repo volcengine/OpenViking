@@ -49,7 +49,20 @@ class TestVikingFSBindingLocal:
     async def test_native_metrics_and_legacy_stats(self, viking_fs_binding_instance):
         """Use the binding fixture to check flat metrics and legacy stats; return None."""
         client = viking_fs_binding_instance._async_agfs
-        metrics = await client.run("metrics")
+        lease = await client.pathlock_acquire_tree(
+            f"/local/default/temp/metrics_scan_{uuid.uuid4().hex}"
+        )
+        try:
+            metrics = await client.run("metrics")
+        finally:
+            await client.pathlock_release(lease)
+        scan = next(m for m in metrics if m["name"] == "lock_descendant_scan_duration_seconds")
+        legacy_count = next(m for m in metrics if m["name"] == "lock_descendant_scans_total")
+        legacy_sum = next(
+            m for m in metrics if m["name"] == "lock_descendant_scan_duration_seconds_total"
+        )
+        assert scan["count"] == legacy_count["value"] > 0
+        assert scan["sum"] == legacy_sum["value"]
         shapes = {
             "counter": {"value", "scale"},
             "gauge": {"value"},
@@ -70,7 +83,9 @@ class TestVikingFSBindingLocal:
                 "route",
             }
             if metric["type"] == "histogram":
-                assert len(metric["bucket_counts"]) == len(metric["bucket_bounds"]) + 1 == 12
+                assert metric["count"] > 0
+                assert len(metric["bucket_counts"]) == len(metric["bucket_bounds"]) + 1
+                assert metric["bucket_bounds"][-1] > 404261.58497 * 1e9
                 assert sum(metric["bucket_counts"]) == metric["count"]
                 assert metric["scale"] == 1e-9 and type(metric["sum"]) is int
             else:

@@ -21,6 +21,7 @@ from openviking.service.task_work_index import (
 )
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase, NamedQueue
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
+from openviking.storage.queuefs.queue_middleware import ProcessContext
 from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking.utils.log_correlation import log_correlation
 from tests.test_task_tracker import _FakeAgfs
@@ -166,6 +167,39 @@ async def test_enqueue_failure_records_failed_work(tracked_queue):
     assert task.error == "write failed"
 
 
+@pytest.mark.parametrize("state", [WorkState.PENDING, WorkState.RUNNING])
+@pytest.mark.parametrize("failure", [OSError("write failed"), asyncio.CancelledError()])
+async def test_failed_replacement_enqueue_preserves_existing_work(tracked_queue, state, failure):
+    queue, tracker, transport = tracked_queue
+    message = await enqueue_task(queue, tracker, transport)
+    metadata = extract_task_metadata(message)
+    if state is WorkState.RUNNING:
+        await tracker.start_work("task-1", metadata.work_id, **OWNER)
+    transport.write.side_effect = failure
+    enqueued_work = []
+
+    with (
+        bind_task_context("task-1", "account", "user", enqueued_work=enqueued_work),
+        pytest.raises(type(failure)),
+    ):
+        await queue.enqueue(json.loads(message["data"]))
+
+    assert await tracker.get_work_state("task-1", metadata.work_id, **OWNER) is state
+    assert (await tracker.get("task-1", **OWNER)).status is TaskStatus.RUNNING
+    assert enqueued_work == []
+
+    class Handler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            await tracker.complete("task-1", {"recovered": True}, **OWNER)
+            return ProcessResult.success({"recovered": True})
+
+    queue.set_dequeue_handler(Handler())
+    result = await queue.process_dequeued(message)
+    assert result.value == {"recovered": True}
+    assert await tracker.get_work_state("task-1", metadata.work_id, **OWNER) is WorkState.DONE
+    assert (await tracker.get("task-1", **OWNER)).status is TaskStatus.COMPLETED
+
+
 async def test_cancelled_enqueue_discards_uncommitted_work(tracked_queue):
     queue, tracker, transport = tracked_queue
     await create_task(tracker)
@@ -241,6 +275,69 @@ async def test_requeue_keeps_work_open_for_redelivery(tracked_queue):
         "error_count": 2,
         "errors": [{"message": "first"}, {"message": "second"}],
     }
+
+
+async def test_terminal_task_settles_running_redelivery_without_handler(monkeypatch):
+    calls = []
+    settled = []
+    message = {
+        "id": "message-1",
+        "data": json.dumps(
+            {
+                "task_id": "task-1",
+                "_task_work_id": "work-1",
+                "_task_account_id": "account",
+                "_task_user_id": "user",
+            }
+        ),
+    }
+
+    class FakeTracker:
+        async def get_work_state(self, task_id, work_id, *, account_id, user_id):
+            assert (task_id, work_id, account_id, user_id) == (
+                "task-1",
+                "work-1",
+                "account",
+                "user",
+            )
+            return WorkState.RUNNING
+
+        async def get_task_status(self, task_id, *, account_id, user_id):
+            assert (task_id, account_id, user_id) == ("task-1", "account", "user")
+            return TaskStatus.COMPLETED
+
+        async def settle_work(self, task_id, work_id, *, account_id, user_id):
+            settled.append((task_id, work_id, account_id, user_id))
+
+        async def reconcile_delivery(self, *args, **kwargs):
+            pytest.fail("terminal task delivery must not be reconciled")
+
+        async def start_work(self, *args, **kwargs):
+            pytest.fail("terminal task delivery must not be restarted")
+
+        async def register_running_task(self, *args, **kwargs):
+            pytest.fail("terminal task delivery must not register running work")
+
+    monkeypatch.setattr(
+        TaskWorkQueueMiddleware,
+        "_tracker",
+        property(lambda _self: FakeTracker()),
+    )
+
+    middleware = TaskWorkQueueMiddleware()
+
+    async def call_next(ctx):
+        calls.append(ctx.message)
+        return ProcessResult.success()
+
+    result = await middleware.process(
+        ProcessContext("Embedding", message, cancel=AsyncMock()),
+        call_next,
+    )
+
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert calls == []
+    assert settled == [("task-1", "work-1", "account", "user")]
 
 
 async def test_clear_settles_committed_work(tracked_queue):

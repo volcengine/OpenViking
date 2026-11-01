@@ -47,11 +47,11 @@ OpenViking 网关是一个模型 API 代理：客户端只要能修改 Base URL�
 
 ## 一张图看懂架构 {#architecture-at-a-glance}
 
-![OpenViking 网关的两种运行形态。嵌入：客户端访问 OpenViking Server 的端口，Server 把 /gateway 下的所有路径（模型 API、上传和网关管理）交给同一进程里的网关，网关通过本机回环 HTTP、用用户本人的 OpenViking 密钥检索和保存记忆。独立：openviking-gateway 用自己的端口提供同样的 /gateway 路径和只含网关页面的 Studio，通过 HTTP(S) 调用已有的 OpenViking 服务。两种形态下，网关都用同一种 API 把请求转发给上游模型服务商；会话和记忆的正本在 OpenViking，网关本机只有两个 SQLite 文件（开启 OpenViking 加密时加密存储）](../../images/gateway/architecture.zh.svg)
+![OpenViking 网关的两种运行形态。嵌入：客户端访问 OpenViking Server 的端口，Server 把 /gateway 下的所有路径（模型 API、上传和网关管理）交给同一进程里的网关，网关通过本机回环 HTTP、用用户本人的 OpenViking 密钥检索和保存记忆。独立：openviking-gateway 用自己的端口提供同样的 /gateway 路径和只含网关页面的 Studio，通过 HTTP(S) 调用已有的 OpenViking 服务。两种形态下，网关都用同一种 API 把请求转发给上游模型服务商；会话和记忆的正本在 OpenViking，网关自身的数据默认存在本机两个 SQLite 文件中，也可以存在共享的 Redis 中，开启 OpenViking 加密时加密存储](../../images/gateway/architecture.zh.svg)
 
 - **运行在哪**：开启后嵌入 OpenViking Server，和 Server 共用端口；也可以用 `openviking-gateway` 独立运行，连接已有的 OpenViking 服务（开源版或商业版）。两种方式下网关的所有 URL 都在 `/gateway` 下（例如 `/gateway/v1`），客户端路径相同，见[选择部署方式](22-gateway-operations.md#deployment-options)。
 - **和 OpenViking 的关系**：网关只调用 OpenViking 的公开接口，向量化和记忆提取都在 OpenViking 中完成。
-- **数据在哪**：会话和记忆的正本在 OpenViking。网关本机只有两个 SQLite 文件（开启 OpenViking 加密时加密存储），一个存上游、密钥和配置，一个存对话状态，见[安全与数据](../gateway/11-security-and-data.md)。
+- **数据在哪**：会话和记忆的正本在 OpenViking。网关默认使用两个 SQLite 文件，多副本部署可以改用共享 Redis。开启 OpenViking 加密后，两种后端中存储的值都会加密。见[安全与数据](../gateway/11-security-and-data.md)。
 - **出故障时**：OpenViking 不可用时，对话照常进行，只是不带记忆，保存会自动重试。网关停止服务时，经过它的模型调用全部失败。
 
 ## 能得到什么，代价是什么 {#what-you-get-and-what-it-costs}

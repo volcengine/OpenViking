@@ -301,14 +301,12 @@ async def test_managed_template_batch_is_preflighted_before_any_lock(ctx):
                 "uri": f"{root}/profile.yaml",
                 "content": "memory_type: profile\ndescription: Partial\n",
                 "mode": "replace",
-                "expected_sha256": None,
                 "ingest_options": IngestOptions(),
             },
             {
                 "uri": f"{root}/customer-defined.yaml",
                 "content": "arbitrary",
                 "mode": "replace",
-                "expected_sha256": None,
                 "ingest_options": IngestOptions(),
             },
         ]

@@ -5,33 +5,18 @@
 from dataclasses import dataclass
 from enum import Enum
 
+from openviking.core import namespace_constants as _namespace_constants
 from openviking.core.namespace import uri_parts
 
-SYSTEM_ROOT_URI = "viking://system"
-SYSTEM_COMPILE_ROOT = f"{SYSTEM_ROOT_URI}/compile"
-SYSTEM_EXAMPLE_SKILLS_ROOT = f"{SYSTEM_COMPILE_ROOT}/example-skills"
-SYSTEM_MEMORY_ROOT = f"{SYSTEM_ROOT_URI}/memory"
-SYSTEM_MEMORY_TEMPLATES_ROOT = f"{SYSTEM_MEMORY_ROOT}/memory_templates"
-SYSTEM_MEMORY_BUILTIN_ROOT = f"{SYSTEM_MEMORY_TEMPLATES_ROOT}/builtin"
-SYSTEM_MEMORY_CUSTOM_ROOT = f"{SYSTEM_MEMORY_TEMPLATES_ROOT}/custom"
-
-SYSTEM_FIXED_DIRECTORIES = frozenset(
-    {
-        SYSTEM_ROOT_URI,
-        SYSTEM_COMPILE_ROOT,
-        SYSTEM_EXAMPLE_SKILLS_ROOT,
-        SYSTEM_MEMORY_ROOT,
-        SYSTEM_MEMORY_TEMPLATES_ROOT,
-        SYSTEM_MEMORY_BUILTIN_ROOT,
-        SYSTEM_MEMORY_CUSTOM_ROOT,
-    }
-)
-SYSTEM_OFFICIAL_ASSET_ROOTS = frozenset(
-    {
-        SYSTEM_EXAMPLE_SKILLS_ROOT,
-        SYSTEM_MEMORY_BUILTIN_ROOT,
-    }
-)
+SYSTEM_ROOT_URI = _namespace_constants.SYSTEM_ROOT_URI
+SYSTEM_COMPILE_ROOT = _namespace_constants.SYSTEM_COMPILE_ROOT
+SYSTEM_EXAMPLE_SKILLS_ROOT = _namespace_constants.SYSTEM_EXAMPLE_SKILLS_ROOT
+SYSTEM_MEMORY_ROOT = _namespace_constants.SYSTEM_MEMORY_ROOT
+SYSTEM_MEMORY_TEMPLATES_ROOT = _namespace_constants.SYSTEM_MEMORY_TEMPLATES_ROOT
+SYSTEM_MEMORY_BUILTIN_ROOT = _namespace_constants.SYSTEM_MEMORY_BUILTIN_ROOT
+SYSTEM_MEMORY_CUSTOM_ROOT = _namespace_constants.SYSTEM_MEMORY_CUSTOM_ROOT
+SYSTEM_FIXED_DIRECTORIES = _namespace_constants.SYSTEM_FIXED_DIRECTORIES
+SYSTEM_OFFICIAL_ASSET_ROOTS = _namespace_constants.SYSTEM_OFFICIAL_ASSET_ROOTS
 
 
 class NamespaceProcessingMode(str, Enum):

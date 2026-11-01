@@ -37,6 +37,9 @@ class ChildProvider(LLMProvider):
     def get_default_model(self):
         return self.model.model
 
+    def supports_tool_result_media(self, model=None):
+        return self.model.provider.supports_tool_result_media(model or self.model.model)
+
     async def chat(self, messages, tools=None, **kwargs):
         """Retry truncated output without executing incomplete tool calls."""
         while True:
@@ -52,7 +55,7 @@ class ChildProvider(LLMProvider):
             messages = [*messages, {"role": "user", "content": error}]
 
 
-async def complete_tool_result(result, session_key):
+async def complete_tool_result(result, session_key, *, preserve_complete: bool = False):
     """Keep scoped tool evidence complete for subsequent model requests.
 
     Child file tools cannot read shared preview spill files, so head/tail previews

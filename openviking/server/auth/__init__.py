@@ -218,22 +218,28 @@ async def _context_from_signed_token(
 ) -> RequestContext:
     """Rebuild the request context bound to a consumed upload/download token.
 
-    In API-key mode the issuing role is retained only while the account user exists and has
-    not been downgraded. Other auth modes retain their USER token context.
+    In API-key mode the saved authorization role must remain compatible with the
+    registered account role. Other auth modes retain their USER token context.
     """
     if _auth_mode(request) == AuthMode.API_KEY:
         manager = get_api_key_manager_or_raise(request)
-        current_role = await manager.get_registered_user_role(consumed.account_id, consumed.user_id)
-        if current_role is None:
+        registered_account_role = await manager.get_registered_user_role(
+            consumed.account_id, consumed.user_id
+        )
+        if registered_account_role is None:
             raise UnauthenticatedError("Signed token's user no longer exists")
-        if Role(consumed.role).rank > current_role.rank:
+        try:
+            authorized_account_role = Role.parse(consumed.role)
+        except ValueError:
+            raise UnauthenticatedError("Invalid signed-token authorization role") from None
+        if not registered_account_role.allows_token_role(authorized_account_role):
             raise UnauthenticatedError(
                 "Signed token's role exceeds the user's current role; request a new token"
             )
         return await _build_request_context(
             request,
             ResolvedIdentity(
-                role=consumed.role,
+                role=authorized_account_role,
                 account_id=consumed.account_id,
                 user_id=consumed.user_id,
                 from_oauth=consumed.from_oauth,
@@ -357,7 +363,7 @@ _DEV_MODE_ADMIN_API_MESSAGE = (
 )
 
 
-def require_auth_role(*allowed_roles: Role):
+def require_auth_role(*allowed_roles: str):
     """Decorator for Admin API routes with mode-aware errors.
 
     Usage:
@@ -442,3 +448,13 @@ def should_expose_user_key(request: Request) -> bool:
     if not isinstance(config, ServerConfig):
         return True
     return config.get_effective_auth_mode() != "trusted"
+
+
+def is_personal_api_key_auth(request: Request | None, ctx: RequestContext) -> bool:
+    """Self-service credentials require a personal key, not a delegated token."""
+    return (
+        request is not None
+        and _auth_mode(request) == "api_key"
+        and not ctx.from_oauth
+        and bool(ctx.api_key)
+    )

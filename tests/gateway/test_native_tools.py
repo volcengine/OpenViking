@@ -679,6 +679,27 @@ async def test_responses_custom_tool_mixed_handoff(running_gateway, streaming):
     assert "openviking_search" not in response.text
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_responses_relays_null_tools(running_gateway, streaming):
+    app, client, admin, key, _, _ = running_gateway
+    await enable_tools(client, admin)
+
+    async def backend(request):
+        if request.path != "/v1/responses":
+            return None
+        value = {**native_response("responses", 1), "tools": None}
+        return await wire_response(request, "responses", value, streaming)
+
+    app.state.test_backend["handler"] = backend
+    response = await client.post(
+        "/v1/responses",
+        headers={"Authorization": "Bearer " + key["key"]},
+        json=request_body("responses", streaming),
+    )
+    assert response.status_code == 200, response.text
+    assert visible_response("responses", response, streaming)["tools"] is None
+
+
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
 async def test_native_incompatible_mode_keeps_only_visible_history(
     setup_kernel, credential, policy, protocol

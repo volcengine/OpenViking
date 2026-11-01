@@ -3,8 +3,9 @@
 """Admin endpoints for OpenViking multi-tenant HTTP Server."""
 
 import asyncio
+import json
 from collections.abc import Mapping
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
 from fastapi import Response as HTTPResponse
@@ -16,6 +17,8 @@ from openviking.server.api_keys.models import validate_account_user_role
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
     get_request_context,
+    is_personal_api_key_auth,
+    require_auth_role,
     require_auth_root,
     require_auth_root_or_admin,
     should_expose_user_key,
@@ -29,15 +32,6 @@ from openviking.server.user_config import (
     validate_add_targets,
     validate_user_memory_policy,
     write_user_config,
-    write_user_memory_policy,
-)
-from openviking.service.legacy_migration import LegacyDataMigration
-from openviking.service.task_store import (
-    SYSTEM_TASK_ACCOUNT_ID,
-    SYSTEM_TASK_USER_ID,
-)
-from openviking.service.task_tracker import (
-    get_task_tracker,
 )
 from openviking.session.memory.account_templates import (
     EDITABLE_MEMORY_TEMPLATE_FIELDS,
@@ -53,6 +47,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
+    UnimplementedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
@@ -61,6 +56,8 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+
+_TTL_UNSUPPORTED_MESSAGE = "Redis-backed TTL is not enabled in this deployment."
 
 
 class CreateAccountRequest(BaseModel):
@@ -94,8 +91,10 @@ class CreateGroupRequest(BaseModel):
     group_id: str
 
 
-class MigrateLegacyDataRequest(BaseModel):
-    action: str = "migrate"
+class AddGroupMembersRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    user_ids: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1, max_length=1000)
 
 
 class SetAgentEvolutionRequest(BaseModel):
@@ -142,6 +141,28 @@ class ConfigPatchRequest(BaseModel):
     content: str | None = None
 
 
+def _reject_unsupported_ttl_config(
+    settings: Mapping[str, object] | None = None,
+    content: str | None = None,
+) -> None:
+    """Reject explicit TTL settings unless the built-in Redis runtime is enabled."""
+
+    from openviking.ttl.wiring import ttl_config_supported
+
+    if ttl_config_supported():
+        return
+    if settings is not None and "ttl" in settings:
+        raise UnimplementedError(_TTL_UNSUPPORTED_MESSAGE)
+    if content is None:
+        return
+    try:
+        parsed = json.loads(content.lstrip("\ufeff"))
+    except (TypeError, ValueError):
+        return
+    if isinstance(parsed, dict) and "ttl" in parsed:
+        raise UnimplementedError(_TTL_UNSUPPORTED_MESSAGE)
+
+
 _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
 
 
@@ -171,7 +192,8 @@ def _visible_account_config(
 
 
 class UserSettingsPatch(BaseModel):
-    memory_policy: Optional[dict]
+    memory_policy: Optional[dict] = None
+    ttl: Optional[dict] = None
 
     model_config = {"extra": "forbid"}
 
@@ -240,9 +262,9 @@ def _get_runtime_config_manager():
 
 
 def _check_account_access(ctx: RequestContext, account_id: str) -> None:
-    """ADMIN can only operate on their own account."""
-    if ctx.role == Role.ADMIN and ctx.account_id != account_id:
-        raise PermissionDeniedError(f"ADMIN can only manage account: {ctx.account_id}")
+    """Non-ROOT callers can only operate on their own account."""
+    if ctx.role != Role.ROOT and ctx.account_id != account_id:
+        raise PermissionDeniedError(f"{ctx.role} can only access account: {ctx.account_id}")
 
 
 async def _check_account_exists(request: Request, account_id: str):
@@ -297,7 +319,10 @@ def _has_add_targets(user_config: UserConfig | None) -> bool:
 
 
 def _has_initial_user_config(user_config: UserConfig | None) -> bool:
-    return bool(_has_add_targets(user_config) or (user_config and user_config.memory_policy))
+    return bool(
+        _has_add_targets(user_config)
+        or (user_config and (user_config.memory_policy or user_config.ttl is not None))
+    )
 
 
 async def _validate_initial_user_config(
@@ -316,6 +341,8 @@ async def _validate_initial_user_config(
             viking_fs=service.viking_fs,
         )
     if user_config is not None:
+        if user_config.ttl is not None:
+            _reject_unsupported_ttl_config({"ttl": {}})
         validate_user_memory_policy(user_config.memory_policy)
 
 
@@ -419,29 +446,10 @@ def _user_settings_result(
         "account_id": account_id,
         "user_id": user_id,
         "memory_policy": memory_policy,
+        "ttl": user_config.ttl.model_dump(by_alias=True, exclude_none=True)
+        if user_config.ttl is not None
+        else None,
     }
-
-
-async def _run_legacy_migration_task(
-    task_id: str,
-    migration: LegacyDataMigration,
-    *,
-    action: str,
-    account_id: str,
-    user_id: str,
-) -> None:
-    tracker = get_task_tracker()
-    await tracker.start(task_id, account_id=account_id, user_id=user_id, stage="running")
-    try:
-        if action == "cleanup":
-            result = await migration.cleanup()
-        else:
-            result = await migration.run()
-    except Exception as exc:
-        await tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
-        logger.exception("Legacy %s task %s failed", action, task_id)
-        return
-    await tracker.complete(task_id, result, account_id=account_id, user_id=user_id)
 
 
 # ---- Account endpoints ----
@@ -455,6 +463,7 @@ async def create_account(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Create a new account (workspace) with its first admin user."""
+    _reject_unsupported_ttl_config(body.settings)
     service = get_service()
     account_ctx = RequestContext(
         user=UserIdentifier(body.account_id, body.admin_user_id),
@@ -535,54 +544,14 @@ async def get_account(
     return Response(status="ok", result=account)
 
 
-@router.post("/migrate")
+@router.post("/migrate", status_code=400)
 @require_auth_root
-async def migrate_legacy_data(
+async def migrate_data(
     request: Request,
-    body: MigrateLegacyDataRequest | None = None,
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Preflight and enqueue legacy session data migration or cleanup."""
-    manager = _get_api_key_manager(request)
-    service = get_service()
-    if service.viking_fs is None:
-        raise FailedPreconditionError("OpenViking service is not initialized.")
-    action = (body.action if body else "migrate").strip().lower()
-    if action not in {"migrate", "cleanup"}:
-        raise InvalidArgumentError("Migration action must be 'migrate' or 'cleanup'.")
-
-    migration = LegacyDataMigration(
-        viking_fs=service.viking_fs,
-        api_key_manager=manager,
-        service=service,
-    )
-    if action == "migrate":
-        plan = await migration.preflight()
-        if plan.errors:
-            raise FailedPreconditionError(
-                "Legacy migration preflight failed.",
-                details=plan.to_preflight_result(),
-            )
-
-    tracker = get_task_tracker()
-    task_type = "legacy_cleanup" if action == "cleanup" else "legacy_migration"
-    resource_id = "legacy-data-cleanup" if action == "cleanup" else "legacy-data"
-    task = await tracker.create(
-        task_type,
-        resource_id=resource_id,
-        account_id=SYSTEM_TASK_ACCOUNT_ID,
-        user_id=SYSTEM_TASK_USER_ID,
-    )
-    asyncio.create_task(
-        _run_legacy_migration_task(
-            task.task_id,
-            migration,
-            action=action,
-            account_id=SYSTEM_TASK_ACCOUNT_ID,
-            user_id=SYSTEM_TASK_USER_ID,
-        )
-    )
-    return Response(status="ok", result={"task_id": task.task_id})
+    """Reserve the ROOT migration endpoint without running a migration."""
+    raise InvalidArgumentError("Data migration is not currently supported.")
 
 
 @router.delete("/accounts/{account_id}", status_code=202)
@@ -660,20 +629,41 @@ async def patch_account_settings(
 async def get_account_configuration(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
+    path: Optional[str] = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Return this account layer's explicit runtime configuration."""
     _check_account_access(ctx, account_id)
-    await _check_account_exists(request, account_id)
-    settings = await _get_runtime_config_manager().get_settings(
-        ConfigScope.account(account_id)
-    )
+    manager = await _check_account_exists(request, account_id)
+    settings = await _get_runtime_config_manager().get_settings(ConfigScope.account(account_id))
+    result = {
+        "account_id": account_id,
+        "settings": _visible_account_config(ctx, settings),
+    }
+    if path is not None:
+        from openviking.config.ttl import resolve_effective_ttl, validate_ttl_root
+        from openviking.core.namespace import uri_parts
+
+        try:
+            validate_ttl_root(path, allow_peer_scope=True)
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+        user_id = uri_parts(path)[1]
+        await _check_user_exists(request, account_id, user_id, manager)
+        user_ctx = RequestContext(user=UserIdentifier(account_id, user_id), role=Role.USER)
+        config = await read_user_config(get_service().viking_fs, user_ctx)
+        policy = await _get_runtime_config_manager().resolve_account(
+            account_id,
+            lambda v: resolve_effective_ttl(v.cluster.ttl, v.account.ttl, path, config.ttl),
+        )
+        result["user_ttl"] = (
+            config.ttl.model_dump(by_alias=True, exclude_none=True) if config.ttl else None
+        )
+        result["path"] = path
+        result["effective_policy"] = policy.days if policy.enabled else "disabled"
     return Response(
         status="ok",
-        result={
-            "account_id": account_id,
-            "settings": _visible_account_config(ctx, settings),
-        },
+        result=result,
     )
 
 
@@ -796,13 +786,17 @@ async def patch_account_configuration(
     _check_account_access(ctx, account_id)
     await _check_account_exists(request, account_id)
     _authorize_account_config_patch(ctx, body.settings)
+    _reject_unsupported_ttl_config(body.settings)
     try:
-        await _get_runtime_config_manager().patch_account(account_id, body.settings)
+        if "ttl" in body.settings:
+            from openviking.ttl.wiring import get_ttl_adapter
+
+            await get_ttl_adapter().patch_configuration(body.settings, account_id)
+        else:
+            await _get_runtime_config_manager().patch_account(account_id, body.settings)
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
-    settings = await _get_runtime_config_manager().get_settings(
-        ConfigScope.account(account_id)
-    )
+    settings = await _get_runtime_config_manager().get_settings(ConfigScope.account(account_id))
     return Response(
         status="ok",
         result={
@@ -928,6 +922,7 @@ async def patch_cluster_configuration(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Apply a three-state PATCH to the cluster configuration layer."""
+    _reject_unsupported_ttl_config(body.settings, body.content)
     if dry_run and (source != "file" or body.content is None):
         raise InvalidArgumentError("dry_run requires source=file and full file content")
     if source == "file":
@@ -960,7 +955,12 @@ async def patch_cluster_configuration(
         raise InvalidArgumentError("Full file content requires source=file")
     runtime_config = _get_runtime_config_manager()
     try:
-        await runtime_config.patch_cluster(body.settings)
+        if "ttl" in body.settings:
+            from openviking.ttl.wiring import get_ttl_adapter
+
+            await get_ttl_adapter().patch_configuration(body.settings)
+        else:
+            await runtime_config.patch_cluster(body.settings)
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
     settings = await runtime_config.get_settings(ConfigScope.cluster())
@@ -1006,14 +1006,18 @@ async def register_user(
 
 
 @router.get("/accounts/{account_id}/users")
-@require_auth_root_or_admin
+@require_auth_role(Role.ROOT, Role.ADMIN, Role.USER)
 async def list_users(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
     include_credentials: bool = Query(
         True,
-        description="Include credentials when permitted; false returns only credential availability",
+        description=(
+            "Include credentials: ROOT receives all plaintext keys; ADMIN receives its own "
+            "key and masked prefixes for others; USER receives only its own key; "
+            "false returns only availability"
+        ),
     ),
     name: str | None = None,
     role: str | None = None,
@@ -1027,12 +1031,19 @@ async def list_users(
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
+    expose_key = should_expose_user_key(request) or not include_credentials
+    if ctx.role == Role.USER:
+        expose_key = expose_key and is_personal_api_key_auth(request, ctx)
     users = await manager.list_users_page(
         account_id,
         limit=limit,
         name_filter=name,
         role_filter=role,
-        expose_key=should_expose_user_key(request) or not include_credentials,
+        expose_key=expose_key,
+        mask_keys=include_credentials and ctx.role != Role.ROOT,
+        hide_other_keys=ctx.role == Role.USER,
+        viewer_account_id=ctx.account_id,
+        viewer_user_id=ctx.user.user_id,
         page=page,
         query_filter=query,
     )
@@ -1043,10 +1054,16 @@ async def list_users(
                 "role": user["role"],
                 # A key prefix identifies a hash-only credential, which cannot
                 # be supplied to server-side Gateway or Bot Studio bindings.
-                "api_key_available": bool(user.get("api_key")),
+                **(
+                    {"api_key_available": bool(user.get("api_key"))}
+                    if ctx.role != Role.USER or user["user_id"] == ctx.user.user_id
+                    else {}
+                ),
             }
             for user in users["users"]
         ]
+    if ctx.role == Role.USER:
+        users.pop("key_count", None)
     return Response(status="ok", result=users if include_summary else users["users"])
 
 
@@ -1110,7 +1127,7 @@ async def patch_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Update or clear the allowlisted User memory policy without restarting."""
+    """Patch the allowlisted User memory and TTL policies without restarting."""
     _check_account_access(ctx, account_id)
     manager = await _check_account_exists(request, account_id)
     await _check_user_exists(request, account_id, user_id, manager)
@@ -1121,8 +1138,11 @@ async def patch_user_settings(
         user=UserIdentifier(account_id, user_id),
         role=Role.USER,
     )
-    await write_user_memory_policy(service.viking_fs, user_ctx, body.memory_policy)
-    user_config = await read_user_config(service.viking_fs, user_ctx)
+    from openviking.server.user_config import patch_user_config
+
+    patch = body.model_dump(exclude_unset=True)
+    _reject_unsupported_ttl_config(patch)
+    user_config = await patch_user_config(service.viking_fs, user_ctx, patch)
     return Response(
         status="ok",
         result=_user_settings_result(
@@ -1160,23 +1180,29 @@ async def set_user_role(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Promote an account user to ADMIN."""
+    """Change an account user's role for identity management operations only.
+
+    ROOT may manage any account; ADMIN may manage only its own account.
+    Supports USER <-> ADMIN changes, including promotion and demotion.
+    Role input is case-insensitive; stored and returned roles are lowercase.
+    """
     _check_account_access(ctx, account_id)
-    if body.role != Role.ADMIN:
-        raise InvalidArgumentError("set_user_role only supports promotion to admin.")
-    await _get_api_key_manager(request).set_role(account_id, user_id, Role.ADMIN)
+    role = body.role.lower()
+    if role not in (Role.USER, Role.ADMIN):
+        raise InvalidArgumentError("set_user_role only supports user and admin roles.")
+    await _get_api_key_manager(request).set_role(account_id, user_id, role)
     return Response(
         status="ok",
         result={
             "account_id": account_id,
             "user_id": user_id,
-            "role": Role.ADMIN,
+            "role": role,
         },
     )
 
 
 @router.post("/accounts/{account_id}/users/{user_id}/key")
-@require_auth_root_or_admin
+@require_auth_role(Role.ROOT, Role.ADMIN, Role.USER)
 async def regenerate_key(
     request: Request,
     body: RegenerateKeyRequest | None = Body(default=None),
@@ -1186,11 +1212,17 @@ async def regenerate_key(
 ):
     """Regenerate a user's API key. Old key is immediately invalidated."""
     _check_account_access(ctx, account_id)
+    if ctx.role == Role.USER:
+        if user_id != ctx.user.user_id:
+            raise PermissionDeniedError("USER can only regenerate their own API key")
+        if not is_personal_api_key_auth(request, ctx):
+            raise PermissionDeniedError("Self-service key rotation requires a personal API key")
     manager = _get_api_key_manager(request)
     new_key = await manager.regenerate_key(
         account_id,
         user_id,
         seed=body.seed if body is not None else None,
+        expected_api_key=ctx.api_key if ctx.role == Role.USER else None,
     )
     return Response(status="ok", result={"user_key": new_key})
 
@@ -1253,18 +1285,19 @@ async def list_group_members(
     return Response(status="ok", result={"group_id": group_id, "members": members})
 
 
-@router.put("/accounts/{account_id}/groups/{group_id}/members/{user_id}")
+@router.put("/accounts/{account_id}/groups/{group_id}/members")
 @require_auth_root_or_admin
-async def add_group_member(
+async def add_group_members(
+    body: AddGroupMembersRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     group_id: str = Path(..., description="Group ID"),
-    user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
+    """Add one or more users atomically; existing memberships are a no-op."""
     _check_account_access(ctx, account_id)
-    added = await _get_api_key_manager(request).add_group_member(
-        account_id, group_id, user_id
+    added = await _get_api_key_manager(request).add_group_members(
+        account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"added": added})
 

@@ -12,6 +12,7 @@ import pytest_asyncio
 from openviking.pyagfs import get_binding_client
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.storage.acl import AclAction, AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.vector_ids import vector_record_id
@@ -614,37 +615,27 @@ async def test_transfer_normalizes_uri_for_files_and_vectors(indexed_fs, operati
 
 
 @pytest.mark.asyncio
-async def test_acl_failure_restores_only_moved_vectors_after_directory_merge(
-    indexed_fs, monkeypatch
-):
+async def test_watch_failure_restores_moved_content_and_source_acl(indexed_fs):
     fs, backend = indexed_fs
-    ctx = root_ctx()
+    ctx = RequestContext(user=root_ctx().user, role=Role.ADMIN)
     source, target = "viking://resources/source", "viking://resources/target"
     await fs.write_file_bytes(f"{source}/file.txt", b"new", ctx=ctx)
-    await fs.write_file_bytes(f"{target}/only.txt", b"keep", ctx=ctx)
     await seed_vector(backend, f"{source}/file.txt", "new")
-    await seed_vector(backend, f"{target}/only.txt", "keep")
-    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
-    async def acl_enabled(_account_id):
-        return True
-
-    monkeypatch.setattr(
-        fs,
-        "acl_manager",
-        SimpleNamespace(
-            is_enabled=acl_enabled,
-            refresh_context_subtree=AsyncMock(side_effect=RuntimeError("injected ACL failure")),
-        ),
+    acl = AclManager(backend, _EnabledAclConfig())
+    fs.acl_manager = backend.acl_manager = acl
+    await acl.set_acl(f"{source}/file.txt", [{"principal": "user:alice", "level": "manage"}], ctx)
+    before = await acl.resolve(f"{source}/file.txt", ctx)
+    manager = SimpleNamespace(
+        validate_target_prefix_rewrite_internal=AsyncMock(),
+        rewrite_target_prefix_internal=AsyncMock(side_effect=RuntimeError("watch commit failed")),
     )
+    service = FSService(viking_fs=fs, watch_scheduler=SimpleNamespace(watch_manager=manager))
 
-    # Trailing slashes must not corrupt the reverse transfer manifest.
-    with pytest.raises(RuntimeError, match="injected ACL failure"):
-        await fs.mv(source + "/", target, ctx=ctx)
+    with pytest.raises(RuntimeError, match="watch commit failed"):
+        await service._mv_and_refresh(source, target, ctx=ctx)
 
     assert await fs.read_file_bytes(f"{source}/file.txt", ctx=ctx) == b"new"
-    assert await backend.get_context_by_uri(f"{source}/file.txt", ctx=ctx)
-    assert not await backend.get_context_by_uri(f"{source}/only.txt", ctx=ctx)
-    assert await backend.get_context_by_uri(f"{target}/only.txt", ctx=ctx)
+    assert await acl.resolve(f"{source}/file.txt", ctx) == before
     assert not await fs.exists(target, ctx=ctx)
 
 

@@ -281,7 +281,7 @@ class TestResolveOperations:
         assert operation.resolution_skip is None
 
     @pytest.mark.asyncio
-    async def test_non_event_add_only_resolution_is_unchanged(self):
+    async def test_add_only_resolution_never_reuses_existing_page(self):
         schema = MemoryTypeSchema(
             memory_type="trajectories",
             directory="viking://user/{{ user_space }}/memories/trajectories",
@@ -290,9 +290,14 @@ class TestResolveOperations:
             fields=[],
         )
         trajectory_uri = "viking://user/alice/memories/trajectories/demo.md"
+        old_uri = "viking://user/alice/memories/trajectories/old.md"
+        page_id_map = PageIdMap()
+        old_page_id = page_id_map.get_page_id(old_uri)
         context_provider = Mock()
         context_provider.get_memory_schemas.return_value = [schema]
-        context_provider.read_file_contents = {}
+        context_provider.read_file_contents = {
+            old_uri: MemoryFile(uri=old_uri, memory_type="trajectories", content="old trajectory")
+        }
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
         isolation_handler.fill_identity_fields.side_effect = lambda item, **kwargs: item
@@ -304,15 +309,17 @@ class TestResolveOperations:
             context_provider=context_provider,
             isolation_handler=isolation_handler,
         )
-        loop._extract_context = SimpleNamespace(page_id_map=PageIdMap())
+        loop._extract_context = SimpleNamespace(page_id_map=page_id_map)
 
         operations, _ = await loop.resolve_operations(
-            AttrDict(trajectories=[{"trajectory_name": "demo", "page_id": 105}])
+            AttrDict(trajectories=[{"trajectory_name": "demo", "page_id": old_page_id}])
         )
 
         operation = operations.upsert_operations[0]
-        assert operation.page_id == 105
+        assert operation.page_id == 100
         assert operation.uris == [trajectory_uri]
+        assert operation.old_memory_file_content is None
+        assert page_id_map.resolve(old_page_id) == old_uri
 
     @pytest.mark.asyncio
     async def test_new_page_ids_are_unique_across_memory_types(self):
@@ -574,11 +581,7 @@ class TestResolveOperations:
         )
 
         operations, _ = await loop.resolve_operations(
-            AttrDict(
-                entities=[
-                    {"name": "Ignored", "owner": "Bob", "count": 3, "page_id": 7}
-                ]
-            )
+            AttrDict(entities=[{"name": "Ignored", "owner": "Bob", "count": 3, "page_id": 7}])
         )
 
         operation = operations.upsert_operations[0]
@@ -1127,9 +1130,7 @@ class TestResolutionRepair:
         context_provider.get_memory_schemas.return_value = [event_schema, profile_schema]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
-        context_provider.get_extract_context.return_value = SimpleNamespace(
-            page_id_map=PageIdMap()
-        )
+        context_provider.get_extract_context.return_value = SimpleNamespace(page_id_map=PageIdMap())
         context_provider.prefetch = AsyncMock(return_value=[])
         context_provider.read_file_contents = {}
         context_provider.instruction.return_value = "base instruction"
@@ -1351,7 +1352,7 @@ class TestFinalOperationsHydration:
         )
 
         context_provider = Mock()
-        schema = SimpleNamespace(memory_type="experiences", fields=[])
+        schema = MemoryTypeSchema(memory_type="experiences", fields=[])
         context_provider.get_memory_schemas.return_value = [schema]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []

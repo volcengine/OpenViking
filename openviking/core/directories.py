@@ -9,7 +9,7 @@ This module defines the preset directory structure that is created on initializa
 
 import asyncio
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
@@ -214,14 +214,17 @@ class DirectoryInitializer:
         ctx: RequestContext,
         *,
         sync_system_assets: bool = True,
+        lease_ref: Any = None,
     ) -> tuple[int, int]:
         """Initialize account and first-user preset directories as one batch."""
         if sync_system_assets and self._system_asset_synchronizer is not None:
-            await self._system_asset_synchronizer.sync(ctx)
+            await self._system_asset_synchronizer.sync(ctx, lease_ref=lease_ref)
         account_roots, account_children = self._account_directory_targets(ctx)
         user_root, user_children = self._user_directory_targets(ctx)
         created = await self._initialize_directory_trees(
-            (*account_roots, user_root), (*account_children, *user_children)
+            (*account_roots, user_root),
+            (*account_children, *user_children),
+            lease_ref=lease_ref,
         )
         user_count = sum(target.scope == "user" for target in created)
         return len(created) - user_count, user_count
@@ -251,17 +254,21 @@ class DirectoryInitializer:
         return len(await self._initialize_directory_trees((user_root,), user_children))
 
     async def _initialize_directory_trees(
-        self, roots: Sequence[_DirectoryTarget], children: Sequence[_DirectoryTarget]
+        self,
+        roots: Sequence[_DirectoryTarget],
+        children: Sequence[_DirectoryTarget],
+        *,
+        lease_ref: Any = None,
     ) -> list[_DirectoryTarget]:
         """Initialize roots before children and index successful writes as one batch."""
         results = await asyncio.gather(
-            *(self._ensure_agfs_directory(target) for target in roots),
+            *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in roots),
             return_exceptions=True,
         )
         created, error = self._partition_directory_results(results)
         if error is None:
             results = await asyncio.gather(
-                *(self._ensure_agfs_directory(target) for target in children),
+                *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in children),
                 return_exceptions=True,
             )
             created_children, error = self._partition_directory_results(results)
@@ -349,7 +356,9 @@ class DirectoryInitializer:
                 created_targets.append(result)
         return created_targets, first_error
 
-    async def _ensure_agfs_directory(self, target: _DirectoryTarget) -> _DirectoryTarget | None:
+    async def _ensure_agfs_directory(
+        self, target: _DirectoryTarget, *, lease_ref: Any = None
+    ) -> _DirectoryTarget | None:
         """Fill missing L0/L1 files, preserving stored text for vector initialization."""
         from openviking_cli.utils.logger import get_logger
 
@@ -387,6 +396,7 @@ class DirectoryInitializer:
             **missing,
             is_leaf=False,
             ctx=target.ctx,
+            lease_ref=lease_ref,
         )
         return replace(target, definition=replace(target.definition, **contents))
 

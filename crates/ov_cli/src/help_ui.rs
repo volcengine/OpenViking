@@ -1362,14 +1362,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov admin regenerate-key <account> <user> --seed <seed>",
                 description: "Regenerate a predictable API key from a seed.",
             },
-            HelpItem {
-                label: "ov admin migrate --sudo",
-                description: "Start legacy agent/session migration.",
-            },
-            HelpItem {
-                label: "ov admin migrate --cleanup --sudo",
-                description: "Remove legacy agent/session directories after verifying migration.",
-            },
         ],
         next_steps: &[
             HelpItem {

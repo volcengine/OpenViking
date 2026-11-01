@@ -63,16 +63,15 @@ class OpenVikingCompactHook(Hook):
         openviking_connection: dict[str, Any] | None = None,
         config: Any = None,
     ) -> tuple[VikingClient, bool]:
-        if openviking_connection:
-            return (
-                await VikingClient.create(
-                    workspace_id,
-                    connection=openviking_connection,
-                    config=config,
-                ),
-                True,
-            )
-        return await get_global_client(workspace_id, config=config), False
+        # The execute() finally block owns this client, including local mode.
+        return (
+            await VikingClient.create(
+                workspace_id,
+                connection=openviking_connection,
+                config=config,
+            ),
+            True,
+        )
 
     async def _execute_session_context_commit(
         self,
@@ -294,7 +293,9 @@ class OpenVikingPostCallHook(Hook):
     is_sync = False
 
     async def _get_client(self, workspace_id: str, config: Any = None) -> VikingClient:
-        return await get_global_client(workspace_id, config=config)
+        if config is None:
+            return await VikingClient.create(workspace_id)
+        return await VikingClient.create(workspace_id, config=config)
 
     async def _search_skill_experiences(
         self,
@@ -325,8 +326,10 @@ class OpenVikingPostCallHook(Hook):
                 should_close = True
             elif config is None:
                 ov_client = await self._get_client(workspace_id)
+                should_close = True
             else:
                 ov_client = await self._get_client(workspace_id, config=config)
+                should_close = True
             logger.debug(
                 "[SKILL_EXP]: start workspace_id={} query_len={} query={!r}",
                 workspace_id,

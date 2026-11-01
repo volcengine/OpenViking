@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from copy import deepcopy
 from types import MappingProxyType
 from typing import Any
@@ -2255,7 +2256,9 @@ def test_pending_token_commit_uses_persisted_value_without_session_lookup():
     assert client.get_session_calls == 0
 
 
-def test_langgraph_middleware_injects_recall_and_captures_messages():
+@pytest.mark.parametrize("shape", ["human", "chat", "chat_chunk", "dict"])
+@pytest.mark.parametrize("structured", [False, True])
+def test_langgraph_middleware_injects_recall_and_captures_messages(shape, structured):
     client = InMemoryOpenVikingClient(
         {"viking://~/memories/profile.md": "The user prefers azure deployments."}
     )
@@ -2267,13 +2270,40 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
     )
 
     captured_request = {}
+    content = "What deployment color?"
+    if structured:
+        content = [
+            {"type": "text", "text": content},
+            {"type": "image_url", "image_url": {"url": "https://example.com/deployment.png"}},
+        ]
+    values = {
+        "id": "middleware-user-1",
+        "name": "customer",
+        "content": content,
+        "additional_kwargs": {"host_field": {"keep": True}},
+    }
+    if shape == "dict":
+        user = {"role": "user", **values}
+    elif shape == "human":
+        user = HumanMessage(**values)
+    else:
+        message_type = ChatMessage if shape == "chat" else ChatMessageChunk
+        user = message_type(role="user", **values)
+    original = deepcopy(user)
+    system = SystemMessage(
+        id="policy",
+        content=[{"type": "text", "text": "Stable agent policy."}],
+        additional_kwargs={"host_field": {"keep": True}},
+    )
 
     class Request:
-        messages = [HumanMessage(content="What deployment color?")]
-        system_message = None
+        def __init__(self, state=None):
+            self.state = state or {}
+            self.messages = [user]
+            self.system_message = system
 
         def override(self, **overrides):
-            new_request = Request()
+            new_request = Request(self.state)
             new_request.messages = overrides.get("messages", self.messages)
             new_request.system_message = overrides.get("system_message", self.system_message)
             return new_request
@@ -2283,15 +2313,50 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
         return AIMessage(content="ok")
 
     middleware.wrap_model_call(Request(), handler)
-    assert "OpenViking context" in captured_request["request"].system_message.content
-    assert "azure deployments" in captured_request["request"].system_message.content
+    first_request = captured_request["request"]
+    recall_update = middleware.after_model({}, runtime=None)
+    assert recall_update is not None
+    assert first_request.system_message is system
+    injected = first_request.messages[0]
+    injected_values = injected if isinstance(injected, dict) else injected.model_dump()
+    original_values = original if isinstance(original, dict) else original.model_dump()
+    assert "azure deployments" in str(injected_values["content"])
+    assert {k: v for k, v in injected_values.items() if k != "content"} == {
+        k: v for k, v in original_values.items() if k != "content"
+    }
+    if structured:
+        assert injected_values["content"][1:] == content
+    assert user == original
+
+    # A later model call for the same user turn replays the recorded block,
+    # without another search or dropping context parts needed by capture.
+    middleware.wrap_model_call(Request(recall_update), handler)
+    replayed_request = captured_request["request"]
+    assert replayed_request.messages == first_request.messages
+    assert len(client.search_calls) == 1
+
+    # Editing the same message ID requires fresh recall rather than a stale replay.
+    client.records["viking://~/memories/profile.md"] = "Azure deployments must use Singapore."
+    edited_request = Request(recall_update)
+    edited_request.messages = [
+        {**user, "content": "Which azure region?"}
+        if isinstance(user, dict)
+        else user.model_copy(update={"content": "Which azure region?"})
+    ]
+    middleware.wrap_model_call(edited_request, handler)
+    assert len(client.search_calls) == 2
+    edited = captured_request["request"].messages[0]
+    edited_content = edited["content"] if isinstance(edited, dict) else edited.content
+    assert "Singapore" in edited_content
+    assert user == original
 
     middleware.after_agent(
         {
+            **recall_update,
             "messages": [
                 HumanMessage(content="Remember this."),
                 AIMessage(content="I will."),
-            ]
+            ],
         },
         runtime=None,
     )
@@ -2301,6 +2366,227 @@ def test_langgraph_middleware_injects_recall_and_captures_messages():
     assert len(archived_messages) == 2
     assistant_parts = archived_messages[1]["parts"]
     assert any(part["type"] == "context" for part in assistant_parts)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("capture", [False, True])
+@pytest.mark.parametrize("interrupt_tools", [False, True])
+@pytest.mark.asyncio
+async def test_langgraph_middleware_replays_exact_recall_prefix_after_restart(
+    asynchronous, streaming, capture, interrupt_tools
+):
+    from langchain.agents import create_agent
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+    from langgraph.checkpoint.memory import InMemorySaver
+    from pydantic import Field
+
+    class RecordingModel(BaseChatModel):
+        requests: list[list[Any]] = Field(default_factory=list)
+        response_count: int = 0
+
+        @property
+        def _llm_type(self):
+            return "recording"
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def _reply(self, messages):
+            self.requests.append(list(messages))
+            self.response_count += 1
+            if messages[-1].type == "tool":
+                return AIMessage(content=f"answer-{self.response_count}")
+            user = next(message for message in reversed(messages) if message.type == "human")
+            return AIMessage(
+                content="Checking the deployment.",
+                tool_calls=[{"id": f"lookup-{user.id}", "name": "lookup_deployment", "args": {}}],
+            )
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            return ChatResult(generations=[ChatGeneration(message=self._reply(messages))])
+
+        def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+            response = self._reply(messages)
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(content=response.content, tool_calls=response.tool_calls)
+            )
+
+        async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+            for chunk in self._stream(messages, stop, run_manager, **kwargs):
+                yield chunk
+
+    def lookup_deployment() -> str:
+        """Check the current deployment status."""
+        return "The deployment is ready."
+
+    def request_bytes(messages):
+        wire = convert_to_openai_messages(messages, text_format="block")
+        return json.dumps(wire, ensure_ascii=False, separators=(",", ":")).encode()
+
+    client = InMemoryOpenVikingClient(
+        {"viking://~/memories/profile.md": "The user prefers azure deployments."}
+    )
+    checkpointer = InMemorySaver()
+    config = {"configurable": {"thread_id": "prefix-session"}}
+
+    def build_agent(model, *, pause_before_tools=False):
+        return create_agent(
+            model,
+            tools=[lookup_deployment],
+            system_prompt="Stable agent policy.",
+            middleware=[
+                OpenVikingContextMiddleware(
+                    client=client,
+                    target_uri="viking://~/memories",
+                    capture_on_after_agent=capture,
+                    # Python 3.10 async tasks cannot resolve the graph's config context.
+                    session_id_resolver=lambda _state, _runtime: "prefix-session",
+                )
+            ],
+            checkpointer=checkpointer,
+            interrupt_before=["tools"] if pause_before_tools else None,
+        )
+
+    async def run(agent, text):
+        payload = None if text is None else {"messages": [{"role": "user", "content": text}]}
+        if streaming:
+            events = (
+                [
+                    event
+                    async for event in agent.astream(
+                        payload, config, stream_mode=["messages", "updates"]
+                    )
+                ]
+                if asynchronous
+                else list(agent.stream(payload, config, stream_mode=["messages", "updates"]))
+            )
+            assert any(mode == "updates" for mode, _ in events)
+            # Python 3.10 lacks implicit async callback propagation in LangChain 1.0.
+            if not asynchronous or sys.version_info >= (3, 11):
+                assert any(
+                    mode == "messages" and isinstance(event[0], AIMessageChunk)
+                    for mode, event in events
+                )
+        elif asynchronous:
+            await agent.ainvoke(payload, config)
+        else:
+            agent.invoke(payload, config)
+
+    model = RecordingModel()
+    agent = build_agent(model)
+    for schema in (agent.get_input_schema(), agent.get_output_schema()):
+        assert "openviking_recall_ledger" not in schema.model_json_schema().get("properties", {})
+        assert "openviking_pending_context" not in schema.model_json_schema().get("properties", {})
+    await run(agent, "first azure deployment prompt")
+    client.records["viking://~/memories/profile.md"] = "Azure deployments must use Singapore."
+    if interrupt_tools:
+        agent = build_agent(model, pause_before_tools=True)
+    await run(agent, "second azure deployment prompt")
+    state = agent.get_state(config).values
+
+    assert len(client.search_calls) == 2
+    assert all(message.id for message in state["messages"] if message.type == "human")
+    assert [message.content for message in state["messages"] if message.type == "human"] == [
+        "first azure deployment prompt",
+        "second azure deployment prompt",
+    ]
+    assert sum(len(ledger) for ledger in state["openviking_recall_ledger"].values()) == 2
+    assert len(model.requests) == (3 if interrupt_tools else 4)
+    assert "azure deployments" in model.requests[0][1].content
+    assert "Singapore" in model.requests[2][-1].content
+
+    # A fresh middleware and graph recover the ledger from the same checkpointer.
+    restarted_model = RecordingModel()
+    restarted_agent = build_agent(restarted_model)
+    if interrupt_tools:
+        assert agent.get_state(config).next == ("tools",)
+        await run(restarted_agent, None)
+        assert len(client.search_calls) == 2
+        references = [
+            part
+            for message in client.sessions["prefix-session"]
+            for part in message.get("parts", [])
+            if part["type"] == "context"
+        ]
+        assert len(references) == (2 if capture else 0)
+        if capture:
+            assert references[-1] == {
+                "type": "context",
+                "uri": "viking://~/memories/profile.md",
+                "context_type": "memory",
+                "abstract": "Azure deployments must use Singapore.",
+            }
+    await run(restarted_agent, "third azure deployment prompt")
+    restarted_state = restarted_agent.get_state(config).values
+
+    assert len(client.search_calls) == 3
+    requests = model.requests + restarted_model.requests
+    for previous, current in zip(requests, requests[1:], strict=False):
+        assert request_bytes(current[: len(previous)]) == request_bytes(previous)
+        assert current[0].content == "Stable agent policy."
+    assert sum(len(ledger) for ledger in restarted_state["openviking_recall_ledger"].values()) == 3
+    captured = client.sessions["prefix-session"]
+    if capture:
+        assert len(captured) == 12
+        parts = [part for message in captured for part in message.get("parts", [])]
+        assert not any(
+            "<openviking_context>" in part.get("text", "")
+            for part in parts
+            if part["type"] == "text"
+        )
+        assert len([part for part in parts if part["type"] == "tool"]) == 6
+        assert len([part for part in parts if part["type"] == "context"]) == 3
+        assert [
+            message.content for message in restarted_state["messages"] if message.type == "human"
+        ] == [
+            "first azure deployment prompt",
+            "second azure deployment prompt",
+            "third azure deployment prompt",
+        ]
+        assert not restarted_state.get("openviking_pending_context")
+    else:
+        assert captured == []
+
+
+@pytest.mark.parametrize("has_context", [False, True])
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt])
+def test_langgraph_middleware_discards_recall_when_model_call_fails(has_context, error_type):
+    client = InMemoryOpenVikingClient(
+        {"viking://~/memories/profile.md": "Azure deployments use a stale region."}
+        if has_context
+        else {}
+    )
+    middleware = OpenVikingContextMiddleware(
+        client=client,
+        session_id_resolver=lambda _state, _runtime: "empty-failure-session",
+    )
+
+    class Request:
+        state = {}
+        runtime = None
+        messages = [HumanMessage(id="empty-failure-user", content="Find azure deployments.")]
+        system_message = None
+
+        def override(self, **overrides):
+            request = Request()
+            request.messages = overrides.get("messages", self.messages)
+            return request
+
+    def handler(_request):
+        raise error_type("model failed")
+
+    with pytest.raises(error_type, match="model failed"):
+        middleware.wrap_model_call(Request(), handler)
+
+    assert middleware.after_model({"messages": Request.messages}, runtime=None) is None
+    client.records["viking://~/memories/profile.md"] = "Azure deployments now use Singapore."
+    seen = []
+    middleware.wrap_model_call(Request(), lambda request: seen.append(request))
+    assert len(client.search_calls) == 2
+    assert "Singapore" in seen[0].messages[0].content
 
 
 def test_langgraph_middleware_batches_persistence_before_separate_commit():
@@ -2432,10 +2718,11 @@ def test_langgraph_middleware_does_not_duplicate_active_messages_in_context():
         return AIMessage(content="ok")
 
     middleware.wrap_model_call(Request(), handler)
-    system_content = captured_request["request"].system_message.content
-    assert "Middleware recall uses green context" in system_content
-    assert "OpenViking active duplicate user turn" not in system_content
-    assert "OpenViking active duplicate assistant turn" not in system_content
+    recalled_content = captured_request["request"].messages[0].content
+    assert captured_request["request"].system_message is None
+    assert "Middleware recall uses green context" in recalled_content
+    assert "OpenViking active duplicate user turn" not in recalled_content
+    assert "OpenViking active duplicate assistant turn" not in recalled_content
 
 
 def test_langgraph_middleware_uses_runtime_thread_id():
@@ -2468,7 +2755,8 @@ def test_langgraph_middleware_uses_runtime_thread_id():
         return AIMessage(content="ok")
 
     middleware.wrap_model_call(Request(), handler)
-    assert "Runtime thread users prefer teal" in captured_request["request"].system_message.content
+    assert captured_request["request"].system_message is None
+    assert "Runtime thread users prefer teal" in captured_request["request"].messages[0].content
     assert client.search_calls[-1]["session_id"] == "runtime-thread"
 
     middleware.after_agent(

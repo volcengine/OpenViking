@@ -55,6 +55,7 @@ class SemanticMessageWork:
             self.scope = await SemanticLockScope.resolve(
                 self.msg.lock_handoff,
                 caller_lock=self.caller_lock,
+                ctx=ctx,
                 fallback_path_factory=lambda: get_viking_fs()._uri_to_path(self.msg.uri, ctx=ctx),
             )
 
@@ -96,7 +97,11 @@ class SemanticMessageWork:
             if self.scope is not None and self.scope.lock is not None and self.scope._owned:
                 await self.processor._enqueue_semantic_retry(queue, msg, self.scope)
             else:
-                await queue.enqueue(msg)
+                # A retry is not a duplicate of the enqueue it is retrying. The
+                # circuit-breaker path requeues before a lock is taken, so this
+                # is the branch a memory message takes; deduplicating it here
+                # would ACK the delivery with no replacement.
+                await queue.enqueue(msg, deduplicate_memory=False)
 
         await self.processor._reenqueue_semantic_msg(self.msg, enqueue=enqueue)
 
@@ -195,7 +200,9 @@ class SkillSemanticMessageWork(SemanticMessageWork):
                     lambda: self.processor._enqueue_skill_retry(queue, msg, self.scope)
                 )
             else:
-                await run_to_completion(lambda: queue.enqueue(msg))
+                # Same reasoning as SemanticMessageWork.reenqueue: a retry must
+                # never be coalesced away by the memory parent window.
+                await run_to_completion(lambda: queue.enqueue(msg, deduplicate_memory=False))
 
         # The shared circuit-breaker delay remains interruptible. Only the
         # actual lock handoff and enqueue operation must finish once started.

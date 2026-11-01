@@ -67,6 +67,7 @@ pub struct MultiWriteWrappedFSBuilder {
     metadata_provider: Option<Arc<dyn MultiWriteProvider>>,
     initial_partitions: u32,
     checkpoint_interval: Duration,
+    reconcile_existing_data: bool,
     ctx_resolver: Arc<dyn FsContextResolver>,
 }
 
@@ -107,6 +108,12 @@ impl MultiWriteWrappedFSBuilder {
     /// Set the interval between checkpoint discovery rounds.
     pub fn checkpoint_interval(mut self, checkpoint_interval: Duration) -> Self {
         self.checkpoint_interval = checkpoint_interval;
+        self
+    }
+
+    /// Set whether startup should reconcile existing primary data into V2 metadata.
+    pub fn reconcile_existing_data(mut self, reconcile_existing_data: bool) -> Self {
+        self.reconcile_existing_data = reconcile_existing_data;
         self
     }
 
@@ -210,6 +217,7 @@ impl MultiWriteWrappedFSBuilder {
                 metadata_provider,
                 self.initial_partitions,
                 backup_names,
+                self.reconcile_existing_data,
             );
             fs.inner.runtime.set_import_worker(async move {
                 let result = importer.run().await;
@@ -234,6 +242,7 @@ impl MultiWriteWrappedFS {
             metadata_provider: None,
             initial_partitions: 16,
             checkpoint_interval: Duration::from_secs(86_400),
+            reconcile_existing_data: false,
             ctx_resolver: Arc::new(DefaultFsContextResolver),
         }
     }

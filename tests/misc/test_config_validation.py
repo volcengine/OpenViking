@@ -19,6 +19,7 @@ from openviking_cli.utils.config.cache_config import CacheConfig
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.storage_config import StorageConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -864,6 +865,74 @@ def test_redis_pathlock_enables_shared_runtime_without_cachefs(tmp_path):
         "lock_timeout_secs": 0.0,
     }
     assert binding["service_name"] == "prod-a"
+
+
+def test_sqlite_pathlock_binding_without_redis(tmp_path):
+    database = str(tmp_path / "custom" / "locks.sqlite3")
+    config = AGFSConfig(
+        path=str(tmp_path), pathlock={"provider": "sqlite", "sqlite_path": database}
+    )
+    binding = RagfsBindingConfig(agfs=config, service_name="local-a").to_binding_dict()
+    assert binding["pathlock"]["sqlite_path"] == database
+    assert binding["pathlock"]["provider"] == "sqlite"
+    assert binding["cache"]["runtime_enabled"] is False
+    assert Path(database).parent.is_dir()
+    for path in ["", "relative.sqlite3", ":memory:"]:
+        with pytest.raises(ValueError, match="sqlite_path"):
+            AGFSConfig(path=str(tmp_path), pathlock={"provider": "sqlite", "sqlite_path": path})
+
+
+@pytest.mark.parametrize("sqlite_path", [{}, {"sqlite_path": None}])
+def test_sqlite_pathlock_default_uses_final_workspace(tmp_path, monkeypatch, sqlite_path):
+    initial = tmp_path / "initial"
+    storage = StorageConfig(
+        workspace=str(initial),
+        agfs={"pathlock": {"provider": "sqlite", **sqlite_path}},
+    )
+    assert storage.agfs.pathlock.sqlite_path is None
+    assert not (initial / "_system" / "pathlock").exists()
+
+    # Runtime workspace overrides happen after model validation.
+    final = tmp_path / "final"
+    storage.workspace = str(final)
+    storage.agfs.path = str(final)
+    binding_config = RagfsBindingConfig(agfs=storage.agfs, service_name="local-a")
+    expected = final / "_system" / "pathlock" / "pathlock.db"
+    first = binding_config.to_binding_dict()
+    assert first["pathlock"]["sqlite_path"] == str(expected)
+    assert expected.parent.is_dir()
+    assert not (initial / "_system" / "pathlock").exists()
+    assert storage.agfs.pathlock.sqlite_path is None
+    assert first["cache"]["runtime_enabled"] is False
+
+    # Another process with a different cwd resolves the same absolute workspace.
+    monkeypatch.chdir(initial)
+    second = RagfsBindingConfig(agfs=storage.agfs, service_name="local-a").to_binding_dict()
+    assert second["pathlock"]["sqlite_path"] == first["pathlock"]["sqlite_path"]
+
+
+def test_sqlite_pathlock_explicit_path_survives_workspace_override(tmp_path):
+    database = tmp_path / "custom" / "locks.db"
+    config = AGFSConfig(
+        path=str(tmp_path / "initial"),
+        pathlock={"provider": "sqlite", "sqlite_path": str(database)},
+    )
+    config.path = str(tmp_path / "final")
+    binding = RagfsBindingConfig(agfs=config).to_binding_dict()
+    assert binding["pathlock"]["sqlite_path"] == str(database)
+    assert database.parent.is_dir()
+    assert not (tmp_path / "final" / "_system" / "pathlock").exists()
+
+
+def test_sqlite_pathlock_default_requires_workspace_and_leaves_other_providers_alone(tmp_path):
+    config = AGFSConfig(pathlock={"provider": "sqlite"})
+    with pytest.raises(ValueError, match="agfs_config.path"):
+        RagfsBindingConfig(agfs=config).to_binding_dict()
+    workspace = tmp_path / "unused"
+    config = AGFSConfig(path=str(workspace))
+    binding = RagfsBindingConfig(agfs=config).to_binding_dict()
+    assert "sqlite_path" not in binding["pathlock"]
+    assert not workspace.exists()
 
 
 def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):

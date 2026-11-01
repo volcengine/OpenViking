@@ -145,6 +145,7 @@ When a channel enables `ov_tools_enable`, the Agent can use:
 |------|------------|
 | `openviking_list` | Browse a Viking URI directory |
 | `openviking_search` | Semantically search Resources, Memories, and Skills |
+| `openviking_rule_search` (Beta) | Retrieve compiled Rules applicable to a concrete task context |
 | `openviking_grep` | Run regular-expression searches over OpenViking content |
 | `openviking_glob` | Search URI paths with glob patterns |
 | `openviking_multi_read` | Read the full content of multiple URIs concurrently |
@@ -153,7 +154,10 @@ When a channel enables `ov_tools_enable`, the Agent can use:
 
 OpenViking tools obtain the current actor peer and request-scoped connection through ToolContext. Retrieval covers Resources, Peer Memories, and Skill paths accessible to the current identity.
 
-`openviking_add_resource` starts asynchronous resource processing and is not registered in `readonly` mode. `openviking_memory_commit` is intended for cases where the user explicitly asks the Agent to remember something.
+`openviking_rule_search` is a read-only Rule search tool and is registered in `readonly`
+mode. `openviking_add_resource` starts asynchronous resource processing and is not
+registered in `readonly` mode. `openviking_memory_commit` is intended for cases where
+the user explicitly asks the Agent to remember something.
 
 ## Using Remote Skills
 

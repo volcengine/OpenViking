@@ -12,8 +12,7 @@ viking://user/{user_id}/sessions/{session_id}
 ```
 
 Session API 按认证用户作用域访问会话，并返回 canonical user session URI。
-基于 URI 的 API 也可以接受向后兼容的 `viking://session/{session_id}` 别名，
-该别名会在同一个用户上下文中解析。
+基于 URI 的 API 可以使用 `viking://~/sessions/{session_id}` 表示当前用户的会话。
 
 ## API 参考
 

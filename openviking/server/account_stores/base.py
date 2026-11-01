@@ -122,7 +122,11 @@ class AccountStore(ABC):
     async def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]: ...
 
     @abstractmethod
-    async def add_group_member(self, account_id: str, group_id: str, user_id: str) -> bool: ...
+    async def add_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
+    ) -> bool:
+        """Atomically add existing active users, ignoring duplicate memberships."""
+        ...
 
     @abstractmethod
     async def remove_group_member(self, account_id: str, group_id: str, user_id: str) -> bool: ...
@@ -190,7 +194,14 @@ class AccountStore(ABC):
         account_id: str,
         user_id: str,
         api_key: str,
-    ) -> None: ...
+        *,
+        expected_api_key: str | None = None,
+    ) -> None:
+        """Replace the key, atomically checking the active key when supplied.
+
+        A revoked or superseded expected key must raise UnauthenticatedError.
+        """
+        ...
 
     @abstractmethod
     async def revoke_active_api_keys(self, account_id: str, user_id: str | None = None) -> None: ...

@@ -1703,13 +1703,19 @@ class AgentLoop:
                 logger.warning("Tool-loop compaction summary attempt {}/3 failed: {}", attempt, exc)
         return ""
 
-    async def _preview_tool_result(self, result: Any, session_key: SessionKey) -> Any:
+    async def _preview_tool_result(
+        self,
+        result: Any,
+        session_key: SessionKey,
+        *,
+        preserve_complete: bool = False,
+    ) -> Any:
         """Save text exceeding 8,000 characters and return a bounded head/tail preview.
 
         Non-text results pass through. Saving failures are explicit in the preview;
         original tool outcomes still determine success and stop conditions.
         """
-        if not isinstance(result, str) or len(result) <= 8_000:
+        if preserve_complete or not isinstance(result, str) or len(result) <= 8_000:
             return result
         path = f"{TOOL_RESULT_DIRECTORY}/{uuid.uuid4().hex}.txt"
         try:
@@ -2130,7 +2136,11 @@ class AgentLoop:
                 for _idx, tool_call, outcome, tool_execute_duration in results:
                     result = outcome.result
                     result_text = str(result)
-                    model_result = await self._preview_tool_result(result, session_key)
+                    model_result = await self._preview_tool_result(
+                        result,
+                        session_key,
+                        preserve_complete=getattr(outcome, "preserve_complete_result", False),
+                    )
                     recorded_result = (
                         result_text if isinstance(result, MultimodalToolResult) else model_result
                     )

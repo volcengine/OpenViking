@@ -20,11 +20,12 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 |------|------|-------|------|
 | 创建/删除工作区 | Y | N | N |
 | 列出工作区 | Y | N | N |
+| 列出用户 | Y | Y（本 account） | Y（本 account） |
 | 注册/移除用户 | Y | Y（本 account） | N |
 | 管理用户组和成员 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
-| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | N |
-| 将用户提升为 ADMIN | Y | Y（本 account） | N |
+| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | Y（自身密钥） |
+| 在 USER 与 ADMIN 之间变更用户角色 | Y | Y（本 account） | N |
 
 ## CLI `--sudo` 选项
 
@@ -47,8 +48,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 - `ov --sudo admin` - 账户和用户管理
 - `ov --sudo system` - 系统工具命令
 - `ov --sudo reindex` - 重建索引
-- `ov --sudo admin migrate` - 旧 Session 迁移和清理
-- `ov --sudo task status/list` - 查询 root/system 后台任务，例如迁移任务
+- `ov --sudo task status/list` - 查询 root/system 后台任务，例如账号删除任务
 
 ### 使用限制
 
@@ -67,7 +67,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除组及其全部成员关系，允许组内仍有成员 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 幂等添加成员；重复调用返回 `added=true` |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个已有用户）原子地添加成员；已是成员的用户会跳过，结果为 `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
 
 ```bash
@@ -780,7 +780,7 @@ credential 合并；不能用 `extra_request_body` 设置 `stream`，因为 Open
 | 路径 | 生命周期 | 类型和约束 | 含义 |
 | --- | --- | --- | --- |
 | `embedding.dense` / `sparse` / `hybrid` | mode 存在性创建期 | object/null | 三种模型输出模式；创建后不能新增、删除或切换 |
-| `embedding.max_concurrent` | 动态 | integer，`>= 1` | 该 Account 的 provider 调用并发上限 |
+| `embedding.max_concurrent` | 动态 | integer，`>= 1` | 该 Account 的入库文档 Embedding 调用并发上限；检索查询的 Embedding 请求不受此限制 |
 | `embedding.max_retries` | 动态 | integer，`>= 0` | 瞬时 provider 错误重试次数 |
 | `embedding.circuit_breaker.failure_threshold` | 动态 | integer，`>= 1` | 熔断前的连续失败次数 |
 | `embedding.circuit_breaker.reset_timeout` | 动态 | number，`> 0` | 熔断恢复基础等待秒数 |
@@ -921,7 +921,7 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 
 **代码入口：**
 - `openviking/server/routers/admin.py:create_account` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.create_account` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.create_account` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_create_account` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1108,7 +1108,7 @@ ov --sudo admin create-account acme-private --admin alice \
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.get_accounts` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.get_accounts` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_accounts` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1319,7 +1319,7 @@ ov --sudo task status <task_id>
 
 **代码入口：**
 - `openviking/server/routers/admin.py:register_user` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.register_user` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.register_user` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_register_user` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1445,15 +1445,15 @@ ov admin register-user acme bob-private --role user \
 列出工作区中的活跃用户。正在删除中的用户不会返回。
 
 **处理流程：**
-1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
+1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN/USER
 2. 调用 API Key Manager 获取活跃用户列表（按创建顺序排列）
 3. 应用可选的过滤条件（name、role）
 4. 应用可选的 `limit`/`page` 分页
-5. 返回用户列表（trusted 模式下不包含 user_key）
+5. 按调用者角色返回密钥信息（trusted 模式下不包含密钥信息）
 
 **代码入口：**
 - `openviking/server/routers/admin.py:list_users` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.get_users` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.get_users` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_users` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1467,17 +1467,22 @@ ov admin register-user acme bob-private --role user \
 | role | str | 否 | null | 按角色过滤 |
 | query | str | 否 | null | 仅 HTTP，按用户 ID 做不区分大小写的字面包含匹配 |
 | include_summary | bool | 否 | false | 仅 HTTP，以对象返回分页用户和账号统计 |
-| include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；仅当服务端能读取完整 key 并用于服务端绑定时 `api_key_available` 才为 true，仅存哈希的凭据返回 false；默认保持现有按鉴权模式返回字段的行为。 |
+| include_credentials | bool | 否 | true | 仅 HTTP。ROOT 获取所有可用明文密钥；ADMIN 获取自身明文及他人的打码前缀；USER 仅获取自身密钥。设为 false 时返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；USER 仅自身行包含可用状态。仅当服务端能读取完整 key 并用于服务端绑定时可用状态才为 true，仅存哈希的凭据返回 false。 |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
 **说明：**
 - 结果按创建顺序返回
-- ADMIN 只能列出自己所属的 account 中的用户
-- 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
+- ADMIN 和 USER 只能列出自己所属 account 中的用户。
+- ROOT 可通过 `api_key` 获取全部已存储的明文密钥。ADMIN 获取自身明文及他人的打码 `key_prefix`。使用个人 API Key 认证的 USER 仅获取自身已存储密钥，其他行不包含 `api_key` 或 `key_prefix`。OAuth 等其他认证方式不授予 USER 查看已存储凭据的权限。自身匹配是严格匹配：列表 account、行内 user ID 以及三段式 key 内嵌的 account/user 段必须全部等于调用方认证身份；不匹配的 key 对 ADMIN 打码，对 USER 隐藏。
+- ADMIN 打码保留密钥前两段和 secret 的最后 4 个字符，secret 中其余每个字符均替换为 `*`；secret 不超过 4 个字符或密钥格式无效时完全隐藏。仅存哈希的凭据无法恢复明文，其已有前缀仅 ROOT/ADMIN 及凭据所属 USER 可见。
+- 打码在服务端执行，同时覆盖 HTTP 和 MCP 的 `list_users(include_credentials=true)`，因此 CLI/SDK 的 JSON 输出也受保护。客户端只能将 `key_prefix` 用于展示，切换身份时需要另行提供可用密钥。
+- `ov admin list-users` 默认还会在 CLI 侧对明文 `api_key` 行使用相同格式打码，table 和 JSON 输出保持一致，并在 stderr 打印提示。传入 `--reveal-api-keys` 可输出明文：ROOT 会显示全部密钥，ADMIN/USER 仍只能看到自身密钥；其他行对 ADMIN 打码，对 USER 完全隐藏密钥和前缀。该 flag 只影响 CLI 渲染，不改变服务端响应。table 输出会把服务端的 `api_key`（明文或 CLI 打码值）与 `key_prefix` 合并为同一个 `api_key` 列；JSON 输出保留服务端的字段名。
+- 创建用户与重置密钥仍会向 ROOT 或 ADMIN 返回新密钥；USER 使用个人 API Key 认证时可以重新生成自身密钥。
+- 在 `trusted` 模式下，响应中不会包含 `api_key` 或 `key_prefix` 字段
 - 用户删除开始后，不再出现在该列表中
 
-**带统计的响应（HTTP）：** 设置 `include_summary=true` 后，`result` 返回对象：`users` 为当前页，`total` 为匹配人数，`account_total` 为账号总人数，`manager_count` 为 admin/root 人数，`key_count` 为具有可见密钥或前缀的用户数。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。默认仍返回用户数组，兼容现有调用。
+**带统计的响应（HTTP）：** 设置 `include_summary=true` 后，`result` 返回对象：`users` 为当前页，`total` 为匹配人数，`account_total` 为账号总人数，`manager_count` 为 admin/root 人数，`key_count` 为具有可见密钥或前缀的用户数。USER 响应不包含 `key_count`。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。默认仍返回用户数组，兼容现有调用。
 
 `query` 对用户 ID 做去除首尾空格、不区分大小写的字面包含匹配，可与已有的 `name` 通配符、`role` 过滤组合。例如：
 
@@ -1539,11 +1544,14 @@ fmt.Println(users)
 **CLI**
 
 ```bash
-# ROOT 或本账户的 ADMIN 都可以执行
-# 如果使用普通用户的 api_key 但该用户是 acme 的 ADMIN：
+# ROOT 或 acme 中的 ADMIN/USER 都可以执行
 ov admin list-users acme
+# 显示自己的明文密钥（USER 仍看不到其他用户的密钥或前缀）
+ov admin list-users acme --reveal-api-keys
 # 如果使用 root_api_key（--sudo）：
 ov --sudo admin list-users acme
+# ROOT 可显示全部可用的明文密钥
+ov --sudo admin list-users acme --reveal-api-keys
 # 按通配符 name 过滤
 ov admin list-users acme --name '*ali*'
 # 分页
@@ -1667,7 +1675,7 @@ ov --sudo admin remove-user acme bob
 
 #### 1. API 实现介绍
 
-将账户用户提升为 ADMIN。ROOT 可以操作任意账户；ADMIN 只能操作自己的账户。
+在 USER 与 ADMIN 之间变更账户用户角色，支持提升和降级。该接口仅用于身份管理变更操作。ROOT 可以操作任意账户；ADMIN 只能操作自己的账户。
 
 **处理流程：**
 1. 验证请求者具有 ROOT 或 ADMIN 权限，并限制 ADMIN 只能操作自己的账户
@@ -1676,7 +1684,7 @@ ov --sudo admin remove-user acme bob
 
 **代码入口：**
 - `openviking/server/routers/admin.py:set_user_role` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.set_role` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.set_role` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_set_role` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1687,11 +1695,12 @@ ov --sudo admin remove-user acme bob
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | user_id | str | 是 | - | 用户 ID |
-| role | str | 是 | - | 固定为 "admin" |
+| role | str | 是 | - | 新角色："admin" 或 "user"，不区分大小写 |
 
 **说明：**
-- ROOT 和 ADMIN 可以将用户提升为 ADMIN；ADMIN 只能操作自己的账户
-- 该接口不支持设置 "user" 或 "root"；ROOT 身份只来自 `server.root_api_key`
+- ROOT 和 ADMIN 可以将用户提升为 ADMIN 或降级为 USER；ADMIN 只能操作自己的账户
+- 该接口仅接受 "user" 和 "admin"；ROOT 身份只来自 `server.root_api_key`
+- 角色输入不区分大小写：`user`/`User`/`USER` 等价，`admin`/`Admin`/`ADMIN` 等价；存储值和响应值统一为小写。
 
 #### 3. 使用示例
 
@@ -1741,6 +1750,9 @@ fmt.Println(result["role"])
 ```bash
 # ROOT 调用示例；acme 的 ADMIN 可用 ov admin set-role，无需 --sudo
 ov --sudo admin set-role acme bob admin
+
+# 将 bob 降级为 USER
+ov --sudo admin set-role acme bob user
 ```
 
 **响应示例**
@@ -1765,14 +1777,14 @@ ov --sudo admin set-role acme bob admin
 生成并保存用户的 API Key。默认随机生成时，更新成功后旧 Key 失效。同一 account、user 和 seed 会生成相同的 Key；轮换密钥时应使用新 seed，或省略 seed。
 
 **处理流程：**
-1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
+1. 验证请求者具有 ROOT 权限、为本账户的 ADMIN，或为使用个人 API Key 认证的目标 USER
 2. 调用 API Key Manager 重新生成用户密钥
 3. 随机生成或使用新 seed 时，旧密钥立即失效
 4. 返回新的用户密钥
 
 **代码入口：**
 - `openviking/server/routers/admin.py:regenerate_key` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.regenerate_key` - 核心实现
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.regenerate_key` - 核心实现
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
 
 #### 2. 接口和参数说明
@@ -1786,8 +1798,9 @@ ov --sudo admin set-role acme bob admin
 | seed | str | 否 | `null` | JSON request body 中可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 
 **说明：**
-- `trusted` 模式拒绝此操作，返回 HTTP 412（`FAILED_PRECONDITION`），不生成或修改密钥。
+- `trusted` 模式下，ROOT/ADMIN 请求返回 HTTP 412（`FAILED_PRECONDITION`），USER 自助轮换返回 HTTP 403，均不生成或修改密钥。
 - ADMIN 只能为自己所属的 account 中的用户重新生成密钥
+- USER 仅能使用个人 API Key 认证，轮换本 account 下的自身密钥。OAuth、trusted、OIDC 和 LDAP 身份不能使用 USER 自助轮换。
 - 随机生成或使用新 seed 时，旧密钥立即失效，需要更新使用该密钥的客户端
 - 省略 `seed` 时随机生成新密钥。确定性示例使用 `OV_KEY_SEED` 或 `OV_NEW_KEY_SEED`，运行前需将其设为安全生成的秘密值；Go 示例需导入 `os`。不要把示例变量名直接当作 seed。
 
@@ -1853,6 +1866,22 @@ ov admin regenerate-key acme bob --seed "$OV_NEW_KEY_SEED"
 ov --sudo admin regenerate-key acme bob
 ```
 
+以普通 USER `acme/alice` 的身份调用：
+
+```bash
+ov admin list-users acme --reveal-api-keys
+ov admin regenerate-key acme alice
+```
+
+当目标与当前配置中的个人 `api_key` 身份匹配时，CLI 自动更新该配置文件的 `api_key`，
+保留其他设置。配置路径优先使用 `OPENVIKING_CLI_CONFIG_FILE`，否则为
+`~/.openviking/ovcli.conf`。CLI 在请求轮换前向 stderr 提示将写入的文件路径，
+保存成功后确认更新，并提醒同步其他客户端；JSON stdout 保持可解析。
+使用 `--sudo` 或轮换其他用户的密钥时，不自动修改本地密钥。
+
+CLI 在请求轮换前检查能否准备替换文件。如果服务端已换钥但保存失败，或请求期间配置被修改，
+命令返回非零退出码并明确报错，stdout 仍保留返回的 `user_key`，供手动恢复到提示的配置文件中。
+
 **响应示例**
 
 ```json
@@ -1866,113 +1895,22 @@ ov --sudo admin regenerate-key acme bob
 
 ---
 
-### migrate_legacy_data
+### 预留迁移入口
 
-#### 1. API 实现介绍
+`POST /api/v1/admin/migrate` 为后续迁移需求保留，仅 ROOT 可调用。当前返回
+`400 Bad Request`，错误码为 `INVALID_ARGUMENT`，错误消息为
+`Data migration is not currently supported.`（当前不支持数据迁移）。
 
-将旧 `viking://session/...` 数据迁移到 `viking://user/<user_id>/sessions/...`，或在确认迁移结果后清理旧 Session 目录。该接口仅 ROOT 可调用，并以后台 task 执行。`agent` 是账号内公共目录，不参与迁移或 cleanup。
-
-**处理流程：**
-1. 验证请求者具有 ROOT 权限
-2. `action=migrate` 时执行 preflight，检查 account registry、session owner 等前置条件
-3. 创建 root 级后台 task
-4. 迁移时复制 Session 文件；cleanup 时先删除旧 Session 向量记录，再删除旧 Session AGFS 目录
-
-迁移保留目标路径中已有的文件。cleanup 不删除 `agent` 公共目录或已迁移的用户数据。
-
-**代码入口：**
-- `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP 路由
-- `openviking/service/legacy_migration.py:LegacyDataMigration` - 迁移实现
-
-#### 2. 接口和参数说明
-
-**HTTP API**
-
-```
-POST /api/v1/admin/migrate
-```
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| action | str | 否 | migrate | `migrate` 执行迁移；`cleanup` 清理旧 namespace |
-
-**迁移结果字段**
-
-| 字段 | 说明 |
-|------|------|
-| migrated.files / migrated.directories | 复制的文件和目录数量 |
-| migrated.operations | Session 迁移操作数量（`sessions`） |
-| skipped / created_users | 跳过的文件、自动创建的用户 |
-
-**Cleanup 结果字段**
-
-| 字段 | 说明 |
-|------|------|
-| cleanup.directories | 删除的 legacy 目录数量 |
-| cleanup.vector_records | 删除的旧向量记录数量 |
-| cleanup.targets | 已清理的 legacy scope |
-| skipped / warnings | 跳过项和告警 |
-
-#### 3. 使用示例
-
-**HTTP API**
+当前没有支持的迁移参数。传入原来的 `{"action":"migrate"}` 或
+`{"action":"cleanup"}` 也返回上述错误，不创建任务，不读写迁移数据。
+未认证请求返回 `401`；已认证的 ADMIN 或 USER 请求返回 `403`。
 
 ```bash
-# 执行迁移
 curl -X POST http://localhost:1933/api/v1/admin/migrate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"action": "migrate"}'
-
-# 迁移任务完成并核对目标数据后，再清理旧 namespace
-curl -X POST http://localhost:1933/api/v1/admin/migrate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"action": "cleanup"}'
+  -H "X-API-Key: <root-key>"
 ```
 
-**Python SDK**
-
-```python
-print(client.admin_migrate(cleanup=False))
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.adminMigrate(false));
-```
-
-**Go SDK**
-
-```go
-result, err := client.AdminMigrate(ctx, &openviking.AdminMigrateOptions{
-    Cleanup: false,
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["task_id"])
-```
-
-**CLI**
-
-```bash
-ov --sudo admin migrate --output json
-# 先用 ov --sudo task status <task_id> 查询返回的任务，再核对迁移结果。
-ov --sudo admin migrate --cleanup --output json
-```
-
-**CLI 响应示例（默认 compact 输出）**
-
-```json
-{
-  "ok": true,
-  "result": {"task_id": "6de05fc3-0334-40d6-ba9b-dd317eb4d351"}
-}
-```
+旧 `ov admin migrate` 命令和对应 SDK 方法已移除。
 
 ---
 

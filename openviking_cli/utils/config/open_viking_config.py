@@ -60,9 +60,11 @@ from .queue_worker_config import QueueWorkersConfig
 from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
+from .rules_config import RulesConfig
 from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
+from .ttl_config import TTLConfig
 from .vlm_config import VLMConfig
 
 
@@ -111,6 +113,27 @@ class ConnectorConfig(BaseModel):
         if self.poll_interval_ms <= 0:
             raise ValueError("connector.poll_interval_ms must be > 0")
         return self
+
+    def credential_resolve_url(self) -> str:
+        """Derive the unified credential-resolve endpoint from ``auth``.
+
+        The Feishu compatibility endpoint (``.../oauth/access_token``) and the
+        unified resolver (``.../credential/resolve``) are two fixed paths on the
+        same KernelAPI inner entry, so the resolver URL is derived from the
+        configured ``auth`` rather than adding a second endpoint setting; this
+        keeps existing Feishu deployments unchanged. Returns an empty string
+        when ``auth`` is unset or uses an unrecognized path.
+        """
+        auth = self.auth.strip()
+        if not auth:
+            return ""
+        compat_suffix = "/oauth/access_token"
+        resolve_suffix = "/credential/resolve"
+        if auth.endswith(compat_suffix):
+            return auth[: -len(compat_suffix)] + resolve_suffix
+        if auth.endswith(resolve_suffix):
+            return auth
+        return ""
 
 
 class ParserApiConfig(BaseModel):
@@ -249,6 +272,11 @@ class OpenVikingConfig(BaseModel):
 
     rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
 
+    rules: RulesConfig = Field(
+        default_factory=RulesConfig,
+        description="Rule compilation and applicability model configuration",
+    )
+
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,
         description="Retrieval behavior configuration",
@@ -354,6 +382,14 @@ class OpenVikingConfig(BaseModel):
             "Whether to start the background WatchScheduler that periodically re-processes "
             "watched resources. Disable on read-only replicas that share a writer's data "
             "so only the writer runs the watch/refresh background loop."
+        ),
+    )
+
+    reconcile_system_assets_on_startup: bool = Field(
+        default=True,
+        description=(
+            "Whether to reconcile packaged system assets for active accounts during startup. "
+            "Disable on read-only replicas that share a writer's data."
         ),
     )
 
@@ -488,6 +524,13 @@ class OpenVikingConfig(BaseModel):
     expiry: ExpiryConfig = Field(
         default_factory=ExpiryConfig,
         description="Distributed expiry scheduling configuration",
+    )
+
+    ttl: TTLConfig = RuntimeField(
+        default_factory=TTLConfig,
+        description=(
+            "Directory TTL recycling policy. Default-off; requires the enabled Redis TTL runtime."
+        ),
     )
 
     @model_validator(mode="after")

@@ -17,8 +17,11 @@ from openviking_cli.session.user_id import UserIdentifier
 class Role(str):
     """Role type — supports built-in roles and custom plugin-defined roles.
 
-    Built-in roles (root/admin/user) are available as class attributes.
+    Built-in roles (root/admin/user/global) are available as class attributes.
     Custom roles can be registered via ``Role.register(name, rank)``.
+
+    GLOBAL is reserved for account-scoped identities. Its capabilities are
+    orthogonal to ADMIN and must not be inferred from rank.
 
     Role comparison is string-based, so ``Role.ROOT == "root"`` and
     ``Role("custom") == "custom"`` both work.
@@ -27,9 +30,9 @@ class Role(str):
     ROOT = "root"
     ADMIN = "admin"
     USER = "user"
+    GLOBAL = "global"
 
-    # Privilege ranking for role-downgrade detection.
-    # Higher rank => more privilege.
+    # Legacy ranking for token role-downgrade checks, not request authorization.
     _BUILTIN_RANK: dict[str, int] = {
         USER: 0,
         ADMIN: 1,
@@ -45,12 +48,44 @@ class Role(str):
             name: Role identifier string.
             rank: Privilege rank — higher = more privilege.
         """
+        if not isinstance(name, str) or not name:
+            raise ValueError("Custom role name must be a non-empty string")
+        if name in (cls.ROOT, cls.ADMIN, cls.USER, cls.GLOBAL):
+            raise ValueError("Built-in roles cannot be registered as custom roles")
+        if not isinstance(rank, int) or isinstance(rank, bool):
+            raise ValueError("Custom role rank must be an integer")
         cls._CUSTOM_RANK[name] = rank
+
+    @classmethod
+    def parse(cls, value: object) -> Role:
+        """Validate a role before it enters an identity or request context.
+
+        Construction remains string-compatible. Only enabled built-in roles
+        and explicitly registered custom roles may become internal identities.
+        GLOBAL remains reserved until its authorization rules are implemented.
+        """
+        if not isinstance(value, str) or (
+            value not in (cls.ROOT, cls.ADMIN, cls.USER) and value not in cls._CUSTOM_RANK
+        ):
+            raise ValueError("Unknown or inactive identity role")
+        return cls(value)
 
     @property
     def rank(self) -> int:
-        """Return the privilege rank for this role."""
-        return self._BUILTIN_RANK.get(self, self._CUSTOM_RANK.get(self, 0))
+        """Return the legacy token rank; unknown roles have no implicit rank."""
+        if self in self._BUILTIN_RANK:
+            return self._BUILTIN_RANK[self]
+        if self in self._CUSTOM_RANK:
+            return self._CUSTOM_RANK[self]
+        raise ValueError("Role has no legacy token rank")
+
+    def allows_token_role(self, authorized_role: str) -> bool:
+        """Check a saved authorization role against this registered role.
+
+        This preserves legacy token compatibility, not operation permissions.
+        Neither role is allowed to acquire an implicit rank.
+        """
+        return self.parse(authorized_role).rank <= self.rank
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Role):
@@ -90,6 +125,9 @@ class ResolvedIdentity:
     # account/user.
     from_oauth: bool = False
 
+    def __post_init__(self) -> None:
+        self.role = Role.parse(self.role)
+
 
 @dataclass
 class RequestContext:
@@ -114,6 +152,9 @@ class RequestContext:
     # Trusted background workers may maintain derived content without replaying
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
+
+    def __post_init__(self) -> None:
+        self.role = Role.parse(self.role)
 
     @property
     def account_id(self) -> str:

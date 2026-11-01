@@ -80,7 +80,11 @@ def format_messages(messages: List[Dict[str, Any]]) -> str:
                     result_json = json.loads(content)
                     output.append(json.dumps(result_json, indent=2, ensure_ascii=False))
                 except (json.JSONDecodeError, TypeError):
-                    output.append(content)
+                    output.append(
+                        content
+                        if isinstance(content, str)
+                        else json.dumps(content, ensure_ascii=False, indent=2)
+                    )
         else:
             if content:
                 output.append(f"\n[{role}]")

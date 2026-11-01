@@ -171,11 +171,7 @@ async def test_add_resource_with_wait(
         "reason": "test resource",
         "wait": True,
     }
-    rejected = await client.post("/api/v1/resources", json={**payload, "timeout": 1.0})
-    assert rejected.status_code == 400
-    assert rejected.json()["error"]["code"] == "INVALID_ARGUMENT"
-
-    resp = await client.post("/api/v1/resources", json=payload)
+    resp = await client.post("/api/v1/resources", json={**payload, "timeout": 0.0})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import AclAction, AclManager, acl_allows
+from openviking.storage.acl import AclAction, AclManager, acl_allows, acl_filter
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.viking_vector_index_backend import (
@@ -315,9 +315,16 @@ async def test_keywords_tenant_search_reuses_scope_filter_and_sets_bm25_fields(a
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_mode", [{}, {"acl_mode": None}, {"acl_mode": "none"}])
+@pytest.mark.parametrize(
+    "legacy_mode,action",
+    [
+        ({}, AclAction.READ),
+        ({"acl_mode": None}, AclAction.WRITE),
+        ({"acl_mode": "none"}, AclAction.MANAGE),
+    ],
+)
 async def test_tenant_search_enforces_visible_roots_and_shared_acl(
-    vector_backend_factory, tmp_path, legacy_mode
+    vector_backend_factory, tmp_path, legacy_mode, action
 ):
     ctx = _ctx()
     own_uri = "viking://user/alice/resources/notes"
@@ -401,6 +408,8 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
             "uri": "viking://resources/foreign.md",
             "account_id": "other",
             "context_type": "resource",
+            "acl_mode": "restricted",
+            "acl_direct_grants": [],
         },
     ]
 
@@ -433,6 +442,27 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
                 ],
                 ctx=record_ctx,
             )
+
+        # The same ACL predicate supports existence checks for read, write and manage.
+        finance_ctx = RequestContext(user=ctx.user, role=ctx.role, group_ids=("finance",))
+        account_backend = await backend.get_account_backend(ctx.account_id)
+        denied = await account_backend.strict_query(
+            filter=And(
+                [
+                    Eq("account_id", ctx.account_id),
+                    PathScope("uri", "viking://resources", depth=-1),
+                    acl_filter(finance_ctx, action, denied=True),
+                ]
+            ),
+            limit=100,
+            output_fields=["id"],
+        )
+        expected_denied = {"restricted-inherited-shared"}
+        if action != AclAction.READ:
+            expected_denied.update({"direct-shared", "restricted-direct-shared"})
+        if action == AclAction.MANAGE:
+            expected_denied.add("denied-shared")
+        assert {record["id"] for record in denied} == expected_denied
 
         decay = {
             "events_time_decay_protection": "0",

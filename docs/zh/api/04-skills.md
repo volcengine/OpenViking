@@ -189,6 +189,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 | data | Any | 否 | - | 内联 SKILL.md、结构化/MCP 数据或 Git URL；与 `temp_file_id` 选择一个 |
 | temp_file_id | string | 否 | - | 临时上传文件 ID（通过 `temp_upload` 获取）；与 `data` 选择一个 |
 | wait | bool | 否 | False | 是否等待技能处理完成 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 | target_uri | string | 否 | 按目标优先级解析 | 目标 skills 根，例如 `viking://~/skills` 或 `viking://agent/skills` |
 | skills | List[str] | 否 | `[]` | 从目录/Git 集合按目录名选择 Skill；空列表或 `["*"]` 选择全部 |
@@ -706,6 +707,7 @@ curl -X POST http://localhost:1933/api/v1/skills/find \
 | `target_uri` | 未指定 | 优先查找的 skills 根，参见读取接口的回退规则 |
 | `source_metadata` | 自动生成 | 更新来源信息 |
 | `wait` | `false` | 是否等待后台处理 |
+| `timeout` | `null` | 已废弃：兼容旧请求，传入值会被忽略 |
 | `telemetry` | `false` | 遥测配置 |
 
 必须提供新内容/上传包，或设 `from_source=true`。新内容的名称必须与 URL 中的 `skill_name` 一致；更新不是重命名或局部 patch。先解析并检查新包，再备份替换；同步失败会尝试恢复旧包。需保留的辅助文件应随新包一起提交。

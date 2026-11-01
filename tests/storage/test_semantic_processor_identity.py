@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for SemanticProcessor internal context reconstruction."""
 
+from openviking.server.identity import Role
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
 
-def test_ctx_from_semantic_msg_preserves_identity_and_enables_acl_bypass():
+def test_ctx_from_semantic_msg_preserves_identity_and_enables_acl_bypass(monkeypatch):
+    monkeypatch.setattr(Role, "_CUSTOM_RANK", Role._CUSTOM_RANK.copy())
+    Role.register("reviewer", 1)
     msg = SemanticMsg(
         uri="viking://resources/doc",
         context_type="resource",

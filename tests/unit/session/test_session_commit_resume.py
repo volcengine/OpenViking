@@ -100,7 +100,7 @@ class _MemoryVikingFS:
     [(10, None, 5), (10, 1, 2), (10, 0, 15), (0, None, 15)],
 )
 async def test_commit_retention_boundary_and_pending_tokens_after_reload(
-    monkeypatch, keep_count, keep_turns, archive_count
+    monkeypatch, tmp_path, keep_count, keep_turns, archive_count
 ):
     session_uri = "viking://user/default/sessions/session-1"
     messages = [
@@ -118,11 +118,14 @@ async def test_commit_retention_boundary_and_pending_tokens_after_reload(
             for i in range(12)
         ],
     ]
-    storage = _MemoryVikingFS(
-        {
-            f"{session_uri}/messages.jsonl": "\n".join(message.to_jsonl() for message in messages),
-        }
+    from openviking.storage.viking_fs import VikingFS
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+    from openviking_cli.utils.config.agfs_config import AGFSConfig
+
+    agfs = create_agfs_client(
+        RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="local"))
     )
+    storage = VikingFS(agfs=agfs)
     tracker = TaskTracker(_TaskStore())
     monkeypatch.setattr("openviking.session.session._enabled_memory_types", lambda: set())
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
@@ -130,33 +133,45 @@ async def test_commit_retention_boundary_and_pending_tokens_after_reload(
         "openviking.storage.queuefs.get_queue_manager",
         lambda: SimpleNamespace(enqueue=AsyncMock()),
     )
-    session = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
-    turn_options = (
-        {"retention_mode": "turn_budget", "keep_recent_turn_count": keep_turns}
-        if keep_turns is not None
-        else {}
-    )
-    result = await session.commit_async(keep_recent_count=keep_count, **turn_options)
-    archived = await session._archives.read_messages(result["archive_uri"])
-    retained = messages[archive_count:]
-    assert [message.id for message in archived] == [m.id for m in messages[:archive_count]]
-    assert [message.id for message in session.messages] == [m.id for m in retained]
-    assert session.meta.pending_tokens == 0
+    try:
+        session = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
+        await session.ensure_exists()
+        await storage.write_file(
+            f"{session_uri}/messages.jsonl",
+            "\n".join(message.to_jsonl() for message in messages),
+            ctx=session.ctx,
+        )
+        turn_options = (
+            {"retention_mode": "turn_budget", "keep_recent_turn_count": keep_turns}
+            if keep_turns is not None
+            else {}
+        )
+        result = await session.commit_async(keep_recent_count=keep_count, **turn_options)
+        archived = await session._archives.read_messages(result["archive_uri"])
+        saved = await session._merge_and_save_commit_meta(archive_count, {"events": 1}, None)
+        assert saved is not None and saved.memories_extracted["events"] == 1
+        retained = messages[archive_count:]
+        assert [message.id for message in archived] == [m.id for m in messages[:archive_count]]
+        assert [message.id for message in session.messages] == [m.id for m in retained]
+        assert session.meta.pending_tokens == 0
 
-    reloaded = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
-    await reloaded.load()
-    assert reloaded.meta.pending_tokens == 0
-    appended = await reloaded.add_message_async("user", [TextPart("next question")])
-    if keep_turns == 0 or keep_count == 0:
-        expected = appended.estimated_tokens
-    elif keep_turns == 1:
-        expected = sum(message.estimated_tokens for message in retained)
-    else:
-        expected = retained[0].estimated_tokens
-    assert reloaded.meta.pending_tokens == expected
-    fresh = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
-    await fresh.load()
-    assert fresh.meta.pending_tokens == expected
+        reloaded = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
+        await reloaded.load()
+        assert reloaded.meta.pending_tokens == 0
+        appended = await reloaded.add_message_async("user", [TextPart("next question")])
+        if keep_turns == 0 or keep_count == 0:
+            expected = appended.estimated_tokens
+        elif keep_turns == 1:
+            expected = sum(message.estimated_tokens for message in retained)
+        else:
+            expected = retained[0].estimated_tokens
+        assert reloaded.meta.pending_tokens == expected
+        fresh = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
+        await fresh.load()
+        assert fresh.meta.pending_tokens == expected
+    finally:
+        await tracker.close()
+        agfs.close()
 
 
 def test_phase2_auto_commit_policy_parameters_are_appended():

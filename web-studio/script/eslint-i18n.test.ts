@@ -89,9 +89,9 @@ describe('i18n lint boundaries', () => {
   })
 
   it.each([
-    'src/components/ui/dialog.tsx',
-    'src/routes/__root.tsx',
-    'src/lib/clipboard.ts',
+    'src/shared/ui/dialog.tsx',
+    'src/app/router/root-layout.tsx',
+    'src/shared/lib/clipboard.ts',
   ])(
     'enforces i18n in the actual project config: %s',
     async (filePath) => {
