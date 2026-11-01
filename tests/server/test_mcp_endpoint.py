@@ -1198,14 +1198,19 @@ async def test_read_accepts_uri_and_uris(monkeypatch, arguments):
     ],
 )
 async def test_read_rejects_ambiguous_or_missing_uri(arguments, message):
-    with pytest.raises(InvalidArgumentError, match=message):
-        await read(**arguments)
+    result = await mcp_endpoint.mcp.call_tool("read", arguments)
+
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    assert result.content[0].text.startswith("INVALID_ARGUMENT: ")
+    assert message in result.content[0].text
 
 
 def test_read_schema_offers_uri_and_uris():
     schema = mcp_endpoint.mcp._tool_manager.get_tool("read").parameters
-    assert "uri" in schema["properties"]
-    assert "uris" in schema["properties"]
+    assert schema["properties"]["uri"]["type"] == "string"
+    assert schema["properties"]["uris"]["type"] == "array"
+    assert schema["properties"]["uris"]["items"]["type"] == "string"
     assert schema.get("required", []) == []
 
 

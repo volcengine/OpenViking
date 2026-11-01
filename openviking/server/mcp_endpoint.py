@@ -2362,8 +2362,8 @@ async def health() -> str:
 # advertised schemas into a plain-typed form: drop null branches, collapse
 # unions to their most general branch, and inline $refs. Runtime argument
 # validation still uses the original function signatures, so union parameters
-# keep accepting every branch (e.g. `read` still takes a bare URI string even
-# though the schema advertises an array).
+# keep accepting every branch (e.g. `read` still takes a bare string in `uris`
+# even though the schema advertises an array).
 
 _PORTABLE_TYPE_PREFERENCE = ("array", "object", "string", "number", "integer", "boolean")
 
@@ -2429,9 +2429,20 @@ def _portable_schema(schema: Any, defs: Optional[Dict[str, Any]] = None) -> Any:
     return node
 
 
+# Collapsing to the most general branch would advertise `read`'s `uri` as an
+# array, and clients that validate against the schema would then reject
+# read(uri="viking://..."). Pin it to the single-file shape it is meant for.
+_PORTABLE_PROPERTY_OVERRIDES = {
+    "read": {"uri": {"type": "string"}},
+}
+
+
 def _apply_portable_schemas() -> None:
     for tool in mcp._tool_manager.list_tools():
         tool.parameters = _portable_schema(tool.parameters)
+        properties = tool.parameters.get("properties", {})
+        for name, override in _PORTABLE_PROPERTY_OVERRIDES.get(tool.name, {}).items():
+            properties[name] = {**properties[name], **override}
 
 
 _apply_portable_schemas()
