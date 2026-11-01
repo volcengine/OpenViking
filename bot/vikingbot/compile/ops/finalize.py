@@ -20,6 +20,7 @@ from vikingbot.compile.renderer import (
     RenderedBundle,
     _body_markdown_links,
     _link_uri,
+    resource_tag_metadata,
     validate_relative_file_path,
 )
 from vikingbot.compile.results import StrictModel
@@ -262,6 +263,7 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
             "uri": uri,
             **file_ops.encode_content(payload),
             "mode": "replace" if revision else "create",
+            **resource_tag_metadata(uri, payload),
         }
         operation.pop("content_base64" if operation["content"] is not None else "content")
         rendered.operations.append(operation)
