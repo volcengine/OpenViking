@@ -18,6 +18,7 @@ from openviking.session.memory.utils.language import (
     _resolve_system_fallback_language,
     resolve_output_language,
     resolve_output_language_from_conversation,
+    strip_language_detection_noise,
 )
 
 
@@ -163,6 +164,47 @@ class TestLanguageDetection:
     def test_detect_latin_language_conservatively(self, text, expected):
         language = _detect_language_from_text(text, fallback_language=expected)
         assert language == expected
+
+    def test_task_notification_noise_does_not_flip_english_detection(self):
+        notification = (
+            "<task-notification>\n"
+            "<task-id>b7k2m9qxz</task-id>\n"
+            "<tool-use-id>toolu_01Xa9Fe3Da7bQwErTy</tool-use-id>\n"
+            r"<output-file>C:\Users\example\AppData\Local\Temp\claude\c--work-demo"
+            r"\3fa2e61b-1485-4007-bf42-9d3eda48da3c\tasks\b7k2m9qxz.output</output-file>"
+            "\n<status>completed</status>\n"
+            "<summary>Background command completed (exit code 0)</summary>\n"
+            "</task-notification>"
+        )
+        user_lines = ["Yeah, go ahead.", "yes", "ok. thank you. proceed"]
+        assert (
+            _detect_language_from_text("\n".join(user_lines), fallback_language="en") == "en"
+        )
+        assert (
+            _detect_language_from_text(
+                "\n".join(user_lines + [notification] * 2), fallback_language="en"
+            )
+            == "en"
+        )
+
+    @pytest.mark.parametrize(
+        "noisy_text,expected_clean",
+        [
+            (
+                r"see C:\Users\example\AppData\Local\Temp\claude\tasks"
+                r"\b7k2m9qxz.output for details",
+                "see   for details",
+            ),
+            (
+                "it failed for toolu_01Xa9Fe3Da7bQwErTy and 3fa2e61b-1485-4007-bf42-9d3eda48da3c",
+                "it failed for   and  ",
+            ),
+        ],
+    )
+    def test_strip_language_detection_noise_removes_windows_paths_and_id_tokens(
+        self, noisy_text, expected_clean
+    ):
+        assert strip_language_detection_noise(noisy_text) == expected_clean
 
 
 class TestLanguageFlow:

@@ -123,6 +123,26 @@ test("a subagent context line is not part of the conversation", () => {
   )
 })
 
+test("a task notification is not part of the conversation", () => {
+  assert.equal(
+    sanitizeCapturedText(
+      "before\n<task-notification>\n<task-id>b7k2m9qxz</task-id>\n"
+      + "<tool-use-id>toolu_01Xa9Fe3Da7bQwErTy</tool-use-id>\n</task-notification>\nafter",
+    ),
+    "before\n\nafter",
+  )
+})
+
+test("a turn that is only a task notification never reaches the extractor", () => {
+  const decision = shouldCaptureText(
+    "<task-notification>\n<task-id>b7k2m9qxz</task-id>\n"
+    + "<status>completed</status>\n</task-notification>",
+    "user",
+  )
+  assert.equal(decision.shouldCapture, false)
+  assert.equal(decision.reason, "empty")
+})
+
 test("a turn that is only a system reminder never reaches the extractor", () => {
   const decision = shouldCaptureText(
     "<system-reminder>the user opened a new file</system-reminder>",

@@ -626,6 +626,9 @@ export function sanitizeCapturedText(text) {
     // shapes. They are the host talking to itself, not the conversation.
     .replace(/<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder>/gi, " ")
     .replace(/^[ \t]*\[Subagent Context\][^\n]*$/gim, " ")
+    // Background-task completion notices are the harness reporting to itself;
+    // their paths and tool-use IDs are machine tokens, not user text.
+    .replace(/<task-notification\b[^>]*>[\s\S]*?<\/task-notification>/gi, " ")
     .replace(/^\s*Sender\s*\([^)]+\)\s*```[\s\S]*?```\s*/gim, " ")
     .replace(/^\s*Conversation (?:metadata|info):\s*```[\s\S]*?```\s*/gim, " ")
     .replace(/^[ \t]*\[\d{4}-\d{2}-\d{2}[T ][-+0-9:.Z]{5,35}\][ \t]*/gm, "")
