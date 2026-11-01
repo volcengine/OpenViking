@@ -617,7 +617,7 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     )
     assert {"execution", "skill_snapshot"}.isdisjoint(cancelled_operation["meta"])
 
-    # Binary version restore is guarded by the version the caller last observed.
+    # Binary restore is guarded by the last commit changing the file.
     await service.fs.batch_write(
         root_uri=target,
         operations=[
@@ -632,12 +632,12 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     assert versions["to"] == target
     restore = {
         "path": picture,
-        "restore_version": versions["versions"][-1]["version_id"],
-        "current_version": versions["current_version"],
+        "restore_commit_id": versions["versions"][-1]["snapshot_id"],
+        "current_commit_id": (await service.fs.log(ctx, paths=[picture], limit=1))[0]["oid"],
     }
     restored = await client.post("/api/v1/snapshot/restore", json=restore)
     assert restored.status_code == 200, restored.text
-    assert restored.json()["result"]["meta"]["restored_from"] == restore["restore_version"]
+    assert restored.json()["result"]["meta"]["restored_from"] == restore["restore_commit_id"]
     await service.resources.wait_processed()
     assert await service.fs.read_file_bytes(picture, ctx) == png
     assert (await client.post("/api/v1/snapshot/restore", json=restore)).status_code == 409

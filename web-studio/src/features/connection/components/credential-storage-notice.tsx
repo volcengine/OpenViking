@@ -6,11 +6,19 @@ import { toast } from 'sonner'
 export function CredentialStorageNotice() {
   const { t } = useTranslation('studio')
   useEffect(() => {
-    if (credentialStorageMode() === 'session') {
-      toast.warning(t('credentialStorage.sessionOnly'), {
-        id: 'credential-storage-session',
-        duration: Infinity,
-      })
+    const mode = credentialStorageMode()
+    if (mode !== 'persistent') {
+      toast.warning(
+        t(
+          mode === 'plaintext'
+            ? 'credentialStorage.plaintext'
+            : 'credentialStorage.sessionOnly',
+        ),
+        {
+          id: 'credential-storage-mode',
+          duration: Infinity,
+        },
+      )
     }
   }, [t])
   return null

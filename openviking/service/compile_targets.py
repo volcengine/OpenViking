@@ -2690,25 +2690,30 @@ class CompileVersions:
     async def restore(
         self,
         uri: str,
-        restore_version: str,
-        current_version: str,
+        restore_commit_id: str,
+        current_commit_id: str,
         ctx: RequestContext,
         write: Callable[[bytes, Callable[..., Awaitable[Any]]], Awaitable[Any]],
     ) -> Dict[str, Any]:
-        """Restore by UUID; reject stale current_version under lock and return metadata or noop."""
+        """Restore URI from a commit; reject stale file commits under lock, returning metadata or noop."""
         await self._fs._ensure_access(uri, ctx, action=AclAction.WRITE)
         record = await self._managed(uri, ctx)
-        index = await self.load(ctx.account_id, record["to"], uri) or {"versions": []}
-        current = index["versions"][-1]["version_id"] if index["versions"] else None
-        if current != current_version:
-            raise ConflictError(
-                f"Current version is {current}, not {current_version}",
-                resource="VERSION_CONFLICT",
-            )
-        source = next((v for v in index["versions"] if v["version_id"] == restore_version), None)
-        if source is None:
-            raise NotFoundError(restore_version, "file version")
-        content = await self._fs.show(source["snapshot_id"], path=source["snapshot_path"], ctx=ctx)
+
+        async def check_current_commit() -> None:
+            """Reject a stale file commit; unrelated paths do not cause conflicts."""
+            history = await self._fs.log(paths=[uri], limit=1, ctx=ctx)
+            current = history[0]["oid"] if history else None
+            if current != current_commit_id:
+                raise ConflictError(
+                    f"Current file commit is {current}, not {current_commit_id}",
+                    resource="VERSION_CONFLICT",
+                )
+
+        await check_current_commit()
+        try:
+            content = await self._fs.show(restore_commit_id, path=uri, ctx=ctx)
+        except AGFSNotFoundError as exc:
+            raise NotFoundError(f"{restore_commit_id}:{uri}", "snapshot file") from exc
         result: Dict[str, Any] = {}
 
         async def commit_restore(uris, *, lease_ref, write):
@@ -2721,16 +2726,12 @@ class CompileVersions:
                     raise ConflictError("Compile is running", resource="COMPILE_RUNNING")
                 index = await self.load(ctx.account_id, target_to, uri) or {"versions": []}
                 current = index["versions"][-1]["version_id"] if index["versions"] else None
-                if current != current_version:
-                    raise ConflictError(
-                        f"Current version is {current}, not {current_version}",
-                        resource="VERSION_CONFLICT",
-                    )
+                await check_current_commit()
                 written = await self.record_write(
                     uris, ctx, "restore", write=write, record_version=False
                 )
                 snapshot = await self._commit(
-                    uris, f"restore {uri} to {restore_version}", ctx, lease_ref=lease_ref
+                    uris, f"restore {uri} to {restore_commit_id}", ctx, lease_ref=lease_ref
                 )
             if not snapshot or not await self._changed(ctx, target_to, uri, snapshot):
                 result.update(
@@ -2749,8 +2750,8 @@ class CompileVersions:
                     {
                         "source": "restore",
                         "actor": ctx.user.user_id,
-                        "meta": {"restored_from": restore_version},
-                        "provenance": dict(source.get("provenance") or {}),
+                        "meta": {"restored_from": restore_commit_id},
+                        "provenance": {"source_roots": [uri]},
                     },
                 )
                 result.update(
@@ -2771,7 +2772,7 @@ class CompileVersions:
             [uri],
             ctx,
             "restore",
-            {"restore_version": restore_version, "current_version": current_version},
+            {"restore_commit_id": restore_commit_id, "current_commit_id": current_commit_id},
             restore_content,
         )
 

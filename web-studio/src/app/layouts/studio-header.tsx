@@ -4,6 +4,8 @@ import { StudioScopeSwitcher } from '#/features/connection/components/studio-sco
 import { StudioSettingsMenu } from '#/features/connection/components/studio-settings-menu'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { hasStudioAccountScope } from '#/features/connection/lib/studio-mode'
+import brandLockupDark from '#/assets/brand-lockup-dark.svg'
+import brandLockupLight from '#/assets/brand-lockup-light.svg'
 import { OpenVikingMark } from '#/shared/components/openviking-mark'
 import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
 import { SidebarTrigger } from '#/shared/ui/sidebar'
@@ -43,10 +45,19 @@ export function StudioHeader({
           aria-label={t('studioSettings.brand')}
           className="flex shrink-0 items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <OpenVikingMark className="size-8 sm:size-9" />
-          <span className="hidden text-lg font-semibold tracking-tight lg:inline">
-            {t('studioSettings.brand')}
-          </span>
+          <OpenVikingMark className="size-8 sm:size-9 lg:hidden" />
+          <img
+            src={brandLockupLight}
+            alt=""
+            aria-hidden="true"
+            className="hidden h-7 w-auto lg:block dark:lg:hidden"
+          />
+          <img
+            src={brandLockupDark}
+            alt=""
+            aria-hidden="true"
+            className="hidden h-7 w-auto dark:lg:block"
+          />
         </Link>
         <div className="hidden h-5 w-px bg-border/70 sm:block" />
         <StudioScopeSwitcher

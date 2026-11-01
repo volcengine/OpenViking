@@ -838,12 +838,9 @@ class CompileService:
         )
 
     async def restore_file_version(
-        self, uri: str, restore_version: str, current_version: str, ctx: RequestContext
+        self, uri: str, restore_commit_id: str, current_commit_id: str, ctx: RequestContext
     ) -> dict[str, Any]:
-        """Restore a file version, retaining current metadata for memory files.
-
-        Return version metadata after refresh; mismatches or active Compile raise ConflictError.
-        """
+        """Return restored version metadata; stale file commits or active Compile raise ConflictError."""
 
         async def write(content: bytes, commit_content: Any) -> None:
             # Use normal refresh while recording a restore version.
@@ -863,8 +860,8 @@ class CompileService:
 
         return await self._require_lifecycle().versions.restore(
             uri=uri,
-            restore_version=restore_version,
-            current_version=current_version,
+            restore_commit_id=restore_commit_id,
+            current_commit_id=current_commit_id,
             ctx=ctx,
             write=write,
         )
