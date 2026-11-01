@@ -138,8 +138,11 @@ class Shuffle:
         self.descriptions = {}
         self.model_id = ""
 
-    async def vectors(self, records: list[Record]) -> list[array]:
-        """Return compact vectors in record order using bounded, model-scoped cached batches."""
+    async def vectors(self, records: list[Record]) -> list[array | None]:
+        """Return compact vectors in record order using bounded, model-scoped cached batches.
+
+        Failed batches retry within a finite budget; records still without a vector are None.
+        """
         r = self.r
         metadata = await r.client.compile_embeddings([], target_uri=r.target)
         self.model_id = metadata["model"]
@@ -171,13 +174,29 @@ class Shuffle:
                 vectors[text] = array("f", vector)
                 await r.files.put(f"embeddings/{digest([self.model_id, text])}", vector)
 
-        await bounded_jobs(
-            (missing[start : start + 32] for start in range(0, len(missing), 32)),
-            embed,
-            concurrency=r.limits.shuffle_concurrency,
-            metrics=r.metrics,
-        )
-        return [vectors[text] for text in texts]
+        pending = [missing[start : start + 32] for start in range(0, len(missing), 32)]
+        errors: list[str] = []
+        for attempt in range(1, MAX_JOB_ATTEMPTS + 1):
+            if not pending:
+                break
+            if attempt > 1:
+                r.metrics["embedding_batch_retries"] += len(pending)
+            errors = []
+            await bounded_jobs(
+                pending,
+                embed,
+                concurrency=r.limits.shuffle_concurrency,
+                metrics=r.metrics,
+                failures=errors,
+            )
+            pending = [batch for batch in pending if any(text not in vectors for text in batch)]
+        if pending:
+            lost = sum(text not in vectors for text in texts)
+            r.failures.append(
+                f"{lost} records have no routing vector after {len(pending)} embedding "
+                f"batches failed: {errors[0]}"
+            )
+        return [vectors.get(text) for text in texts]
 
     async def candidates(self, text: str, stable_uri=None) -> list[dict]:
         """Recall only inside to; coalesce section/derived hits to visible parent files.
@@ -278,6 +297,18 @@ class Shuffle:
             )
             return [group]
         vectors = await self.vectors(records)
+        # Records without a routing vector are excluded on their own, like failed routes below.
+        kept = []
+        for record, vector in zip(records, vectors, strict=True):
+            if vector is None:
+                r.status[record.record_id] = "failed"
+                r.metrics["route_blocked_records"] += 1
+            else:
+                kept.append((record, vector))
+        if not kept:
+            return []
+        records = [record for record, _ in kept]
+        vectors = [vector for _, vector in kept]
         stop = Event()
         try:
             neighbours = await asyncio.to_thread(top_candidates, vectors, 5, stop)
