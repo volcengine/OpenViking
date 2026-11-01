@@ -32,6 +32,7 @@ from openviking.pyagfs.exceptions import (
     GitConcurrentCommitError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.utils.circuit_breaker import CircuitBreakerOpen
 from openviking.utils.exceptions import (
     HTTP_STATUS_TO_ERROR_CODE,
     AllCredentialsFailedError,
@@ -505,6 +506,14 @@ def map_exception(
         return OpenVikingError(
             str(exc) or "concurrent git commit", code="CONFLICT", details=details
         )
+    if isinstance(exc, CircuitBreakerOpen):
+        # The embedding resource path annotates the wait (see
+        # openviking/config/embedding.py _execute) so clients can back off.
+        unavailable = UnavailableError("embedding provider", reason=str(exc))
+        retry_after = getattr(exc, "retry_after", None)
+        if retry_after is not None:
+            unavailable.details["retry_after"] = retry_after
+        return unavailable
     if isinstance(exc, PermissionError):
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, FileNotFoundError):
