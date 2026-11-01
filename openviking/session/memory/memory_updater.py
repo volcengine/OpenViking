@@ -1723,7 +1723,12 @@ class MemoryUpdater:
                 and replacement_uri
                 and replacement_uri != source_uri
             ):
-                targets_by_source[source_uri] = [replacement_uri]
+                # Group under the terminal resolution of the replacement chain:
+                # with a chained 1:1 remap (S -> M -> F) the immediate target M
+                # is itself stale, so inheriting under it would lose the links.
+                terminal_uri = _resolve_replacement_uri(source_uri, uri_remap)
+                if terminal_uri and terminal_uri != source_uri:
+                    targets_by_source[source_uri] = [terminal_uri]
 
         def _fold_inherited_link(
             remapped: Dict[str, Any],

@@ -165,6 +165,181 @@ async def test_n_way_split_migrates_source_links_to_derived_files():
     }
 
 
+def _build_replacement_operations(delete_replacements, deleted_uris_with_links=None):
+    """1:1 replacement batch: delete S (and M when chained), upsert F.
+
+    S carries one forward link (S -> profile) and one backlink (event -> S),
+    mirrored in the neighbors' frontmatter, exactly like the 1:1 case that
+    worked on pristine base. ``deleted_uris_with_links`` restricts which
+    deleted files carry those relations (the chained case keeps them only on
+    the chain head, since the intermediate file holds nothing new).
+    """
+    source_uri = "viking://user/u/memories/preferences/Evan/hobby_preferences.md"
+    final_uri = "viking://user/u/memories/preferences/Evan/hobby_final.md"
+    profile_uri = "viking://user/u/memories/profile.md"
+    event_uri = "viking://user/u/memories/events/2026/01/02/audit.md"
+
+    deleted_uris = [uri for uri in (source_uri, *delete_replacements.keys())]
+    deleted_uris = [uri for uri in dict.fromkeys(deleted_uris) if uri != final_uri]
+    if deleted_uris_with_links is None:
+        deleted_uris_with_links = set(deleted_uris)
+
+    source_file = MemoryFile(
+        uri=source_uri,
+        content="old hobby preferences",
+        memory_type="preferences",
+        links=[_link(source_uri, profile_uri)],
+        backlinks=[_link(event_uri, source_uri)],
+    )
+    profile_file = MemoryFile(
+        uri=profile_uri,
+        content="profile",
+        memory_type="profile",
+        backlinks=[_link(source_uri, profile_uri)],
+    )
+    event_file = MemoryFile(
+        uri=event_uri,
+        content="event",
+        memory_type="events",
+        links=[_link(event_uri, source_uri)],
+    )
+    final_file = MemoryFile(
+        uri=final_uri,
+        content="consolidated hobby preferences",
+        memory_type="preferences",
+    )
+
+    deleted_files = []
+    files = {
+        profile_uri: MemoryFileUtils.write(profile_file),
+        event_uri: MemoryFileUtils.write(event_file),
+        final_uri: MemoryFileUtils.write(final_file),
+    }
+    for uri in deleted_uris:
+        carries_links = uri in deleted_uris_with_links
+        deleted_file = MemoryFile(
+            uri=uri,
+            content=f"stale {uri}",
+            memory_type="preferences",
+            links=[_link(uri, profile_uri)] if carries_links else [],
+            backlinks=[_link(event_uri, uri)] if carries_links else [],
+        )
+        deleted_files.append(deleted_file)
+        files[uri] = MemoryFileUtils.write(deleted_file)
+
+    mock_viking_fs = MagicMock()
+    mock_viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
+
+    async def write_file(uri, content, ctx=None, **kwargs):
+        files[uri] = content
+
+    mock_viking_fs.write_file = AsyncMock(side_effect=write_file)
+
+    updater = MemoryUpdater(registry=MagicMock())
+    updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+    updater._apply_upsert = AsyncMock(return_value=None)
+    updater._apply_delete = AsyncMock()
+    updater._vectorize_memories = AsyncMock()
+    updater.generate_overview = AsyncMock()
+
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                memory_fields={"name": "hobby_final"},
+                memory_type="preferences",
+                uris=[final_uri],
+            )
+        ],
+        delete_file_contents=deleted_files,
+        errors=[],
+        resolved_links=[],
+        delete_replacements=dict(delete_replacements),
+    )
+    return updater, operations, files, final_uri, profile_uri, event_uri
+
+
+@pytest.mark.asyncio
+async def test_direct_replacement_inherits_links_on_terminal_target():
+    """A direct 1:1 delete replacement keeps inheriting on the replacement
+    target (paired with base behavior)."""
+    (
+        updater,
+        operations,
+        files,
+        final_uri,
+        profile_uri,
+        event_uri,
+    ) = _build_replacement_operations(
+        {
+            "viking://user/u/memories/preferences/Evan/hobby_preferences.md":
+                "viking://user/u/memories/preferences/Evan/hobby_final.md"
+        }
+    )
+
+    result = await updater.apply_operations(operations, MagicMock())
+
+    assert result.errors == []
+    profile = MemoryFileUtils.read(files[profile_uri], uri=profile_uri)
+    assert (final_uri, profile_uri) in {
+        (link["from_uri"], link["to_uri"]) for link in profile.backlinks
+    }
+    final_file = MemoryFileUtils.read(files[final_uri], uri=final_uri)
+    assert (final_uri, profile_uri) in {
+        (link["from_uri"], link["to_uri"]) for link in final_file.links
+    }
+    assert (event_uri, final_uri) in {
+        (link["from_uri"], link["to_uri"]) for link in final_file.backlinks
+    }
+    event = MemoryFileUtils.read(files[event_uri], uri=event_uri)
+    assert (event_uri, final_uri) in {
+        (link["from_uri"], link["to_uri"]) for link in event.links
+    }
+
+
+@pytest.mark.asyncio
+async def test_chained_replacement_inherits_links_on_terminal_target():
+    """With a chained remap (S -> M -> F) the inheritance target must be the
+    terminal resolution F, not the immediate target M: M is itself deleted, so
+    grouping under it silently drops S's forward link and backlink (review
+    regression on 2026-10-12)."""
+    source_uri = "viking://user/u/memories/preferences/Evan/hobby_preferences.md"
+    intermediate_uri = "viking://user/u/memories/preferences/Evan/hobby_intermediate.md"
+    (
+        updater,
+        operations,
+        files,
+        final_uri,
+        profile_uri,
+        event_uri,
+    ) = _build_replacement_operations(
+        {
+            source_uri: intermediate_uri,
+            intermediate_uri: "viking://user/u/memories/preferences/Evan/hobby_final.md",
+        },
+        deleted_uris_with_links={source_uri},
+    )
+
+    result = await updater.apply_operations(operations, MagicMock())
+
+    assert result.errors == []
+    # The terminal record F receives the source's relations, not M.
+    final_file = MemoryFileUtils.read(files[final_uri], uri=final_uri)
+    assert (final_uri, profile_uri) in {
+        (link["from_uri"], link["to_uri"]) for link in final_file.links
+    }
+    assert (event_uri, final_uri) in {
+        (link["from_uri"], link["to_uri"]) for link in final_file.backlinks
+    }
+    profile = MemoryFileUtils.read(files[profile_uri], uri=profile_uri)
+    assert (final_uri, profile_uri) in {
+        (link["from_uri"], link["to_uri"]) for link in profile.backlinks
+    }
+    event = MemoryFileUtils.read(files[event_uri], uri=event_uri)
+    assert (event_uri, final_uri) in {
+        (link["from_uri"], link["to_uri"]) for link in event.links
+    }
+
+
 @pytest.mark.asyncio
 async def test_split_without_migration_reports_still_referenced_links():
     """Without a replacement or a derived_from signal there is no migration
