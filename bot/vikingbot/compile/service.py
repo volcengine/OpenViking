@@ -1127,6 +1127,10 @@ class BotCompileService:
         if not resume:
             await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
 
+        source_limits = self.limits.model_copy(
+            update={"source_batch_chars": min(self.limits.source_batch_chars, 10_000)}
+        )
+
         async def source_batches():
             """Retain at most one read batch of source bodies while seeding task shards."""
             for start in range(0, len(ordered), 8):
@@ -1151,7 +1155,7 @@ class BotCompileService:
                         raise content
                     else:
                         readable.append((uri, content))
-                for batch in pack_source_batches(readable, self.limits):
+                for batch in pack_source_batches(readable, source_limits):
                     yield batch
 
         try:

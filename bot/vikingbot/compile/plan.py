@@ -24,6 +24,11 @@ structured intermediate items called records. Each record contains information
 needed by later steps, such as facts extracted from a document.
 Map can also process records produced by an earlier step.
 
+Source-to-record extraction uses ranges. Describe work on assigned ranges rather
+than requiring the entire document. Preserve source identities, versions and
+applicability so later steps can combine evidence across ranges.
+Only file output can use input_unit=file to keep a document's ranges together.
+
 ### Shuffle
 
 Collects records into groups according to a grouping rule.
@@ -125,9 +130,10 @@ class Transform(PlanModel):
     )
     input_unit: Literal["range", "file"] = Field(
         default="range",
-        description="When Map reads source files: use file when processing needs context across "
-        "sections of the same document; otherwise use range. file keeps each file's ranges together; "
-        "range permits separate or batched ranges. Map over records handles each record separately.",
+        description="When Map reads sources: records extraction uses ranges. "
+        "file applies only to files output and keeps each file's ranges together; "
+        "range permits separate or budgeted batches of ranges. "
+        "Map over records handles each record separately.",
     )
     fields: dict[str, str] = Field(
         default_factory=lambda: {"text": "Facts extracted from the source."},
