@@ -49,15 +49,21 @@ _CJK_ENCODINGS = _CHINESE_ENCODINGS | _JAPANESE_ENCODINGS | _KOREAN_ENCODINGS
 # detector's rank with Korean script evidence.
 _MIN_STRONG_SCRIPT_CHARS = 4
 # Private-use code points exist so a font can map glyphs Unicode does not name.
-# Real text does not contain them, so a decode that lands in these ranges is a
-# codec reading bytes it was not meant for. This check only ever runs on bytes
-# that already failed UTF-8 decoding, where there is no legitimate source for
-# such characters.
+# GBK and GB18030 have user-defined areas that decode to exactly these code
+# points, so a private-use character on its own does not prove the bytes were
+# read by the wrong codec: a big5 document read as GBK lands here, but so does
+# a GB18030 document that legitimately carries a user-defined glyph. What it
+# does prove is that this candidate needed the codec's fallback area while
+# another CJK candidate explains the same bytes without it.
 _PRIVATE_USE_RANGES = (
     (0xE000, 0xF8FF),  # Private Use Area
     (0xF0000, 0xFFFFD),  # Supplementary Private Use Area-A
     (0x100000, 0x10FFFD),  # Supplementary Private Use Area-B
 )
+# A wrong-codec reading fills the user-defined area densely; a document that
+# really uses one of those glyphs has it among ordinary characters. Only the
+# dense case is evidence of the wrong codec.
+_MAX_PRIVATE_USE_SHARE = 0.10
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,7 @@ class _EncodingCandidate:
     decoded: str
     rank: int
     from_detector: bool
+    private_use: int = 0
 
 
 def normalize_text_bytes(content: bytes, file_path: Union[str, Path] = "") -> bytes:
@@ -173,6 +180,7 @@ def _decode_candidate(
         decoded=decoded,
         rank=rank,
         from_detector=from_detector,
+        private_use=_count_private_use(decoded),
     )
 
 
@@ -184,11 +192,12 @@ def _is_valid_text(decoded: str) -> bool:
     if "\ufffd" in sample:
         return False
 
-    if any(_is_private_use(char) for char in sample):
-        return False
-
     disallowed_controls = sum(1 for char in sample if _is_disallowed_control(char))
     return disallowed_controls / len(sample) <= 0.05
+
+
+def _count_private_use(decoded: str) -> int:
+    return sum(1 for char in decoded[:1000] if _is_private_use(char))
 
 
 def _is_disallowed_control(char: str) -> bool:
@@ -209,6 +218,8 @@ def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_Enc
     consistent = [candidate for candidate in candidates if _is_script_consistent(candidate)]
     if not consistent:
         consistent = candidates
+
+    consistent = _drop_codec_fallback_readings(consistent)
 
     # Preserve detector rank for Japanese: short kanji-only Shift-JIS has no
     # kana signal, but charset-normalizer still ranks CP932 first.
@@ -249,6 +260,48 @@ def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_Enc
         return preferred_chinese
 
     return first
+
+
+def _drop_codec_fallback_readings(
+    candidates: list[_EncodingCandidate],
+) -> list[_EncodingCandidate]:
+    """Drop CJK candidates that only resolve bytes through a user-defined area.
+
+    GB18030 and big5 both map their user-defined byte ranges to private-use code
+    points, so two codecs can each produce plausible text for the same bytes.
+    When one CJK candidate explains the bytes with assigned characters and the
+    other lands in the user-defined area, the assigned reading is the one the
+    bytes were written for.
+
+    The comparison is limited to CJK candidates and to readings where the
+    user-defined area carries a large share of the characters. A document that
+    genuinely uses a user-defined glyph keeps the rank-preferred codec, so the
+    fix does not turn one GB18030 file into big5 mojibake.
+
+    A two-byte sample stays undecidable: one user-defined glyph and one
+    full-width space are the same amount of evidence, so the share rule picks
+    the assigned reading there.
+    """
+    cjk = [candidate for candidate in candidates if candidate.encoding in _CJK_ENCODINGS]
+    if not cjk:
+        return candidates
+    if not any(candidate.private_use == 0 for candidate in cjk):
+        return candidates
+    return [
+        candidate
+        for candidate in candidates
+        if candidate.encoding not in _CJK_ENCODINGS
+        or candidate.private_use == 0
+        or _private_use_share(candidate) < _MAX_PRIVATE_USE_SHARE
+    ]
+
+
+def _private_use_share(candidate: _EncodingCandidate) -> float:
+    sample = candidate.decoded[:1000]
+    non_ascii = sum(1 for char in sample if ord(char) > 0x7F)
+    if not non_ascii:
+        return 0.0
+    return candidate.private_use / non_ascii
 
 
 def _preferred_chinese_candidate(

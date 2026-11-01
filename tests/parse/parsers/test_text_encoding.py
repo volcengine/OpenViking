@@ -90,16 +90,30 @@ def test_short_samples_are_not_misdetected(text, encoding):
 def test_short_big5_sample_does_not_decode_into_private_use_glyphs():
     """GBK can decode the Big5 bytes of ``繁體字`` without raising.
 
-    Two of the three characters land inside the Unicode Private Use Area, which
-    real text never contains, yet the decoded string is otherwise "valid": no
-    replacement characters, no control characters. Before the private-use check
-    this candidate was accepted, and the three-character title came back as
-    ``羉砰`` plus one unassigned glyph.
+    Two of the three characters land inside the Unicode Private Use Area, yet
+    the decoded string is otherwise "valid": no replacement characters, no
+    control characters. Before the private-use check this candidate was
+    accepted, and the three-character title came back as ``羉砰`` plus one
+    unassigned glyph.
     """
     result = _normalized(TRADITIONAL[:3], "big5")
 
     assert result == TRADITIONAL[:3]
     assert not any(0xE000 <= ord(char) <= 0xF8FF for char in result)
+
+
+def test_gb18030_user_defined_character_is_preserved():
+    """GB18030 maps its user-defined area to private-use code points.
+
+    A document carrying one such glyph is still a GB18030 document: the decode
+    is valid UTF-8, holds no control characters, and round-trips through the
+    codec it came from. Rejecting every private-use character on sight dropped
+    every CJK candidate for this file and returned it as cp1252 mojibake —
+    worse than the mojibake the check was added to prevent.
+    """
+    text = CHINESE * 2 + "\ue4c6" + CHINESE
+
+    assert _normalized(text, "gb18030") == text
 
 
 def test_binary_content_is_left_untouched():
