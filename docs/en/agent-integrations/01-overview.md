@@ -25,6 +25,31 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 
 Some agents, such as Claude Code, Codex, OpenCode, pi and DSH, can use either their plugin or OpenViking Gateway. To decide between them, see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin).
 
+## Claude Code plugin-compatible clients: install the plugin directly
+
+Before picking a client-specific page, check whether your client already loads the Claude Code plugin spec. OpenViking publishes its memory plugin through a standard `.claude-plugin/marketplace.json`, and several clients resolve that marketplace with their own plugin commands, so the same plugin installs with no per-client integration work:
+
+| Client | Claude Code compatibility evidence |
+|--------|------------------------------------|
+| GitHub Copilot | Official docs: looks up `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json` |
+| Factory Droid | Official docs: translates Claude layouts; marketplace falls back to `.claude-plugin/marketplace.json` |
+| Qoder | Marketplace resolution falls back to `.claude-plugin/marketplace.json` |
+| Grok Build (xAI) | Official docs: "fully compatible with Claude Code with zero configuration" |
+| CodeBuddy / WorkBuddy (Tencent) | Official docs: `.claude-plugin/` fallback; `${CLAUDE_PLUGIN_ROOT}` aliased |
+| Devin for Terminal | Official changelog: Claude-compatible manifest used when no `.devin-plugin/` is present |
+| MiniMax Code (0.4.0+) | Source: `CLAUDE_MANIFEST_PATH = '.claude-plugin/plugin.json'` |
+| OpenClaw | Official docs: auto-detects Claude bundle layouts |
+| Qwen Code | Source: fetches `.claude-plugin/marketplace.json` on extension install |
+| Oh My Pi | Source: dedicated `claude-plugins` discovery provider |
+
+If your client appears above (or its docs mention a Claude Code compatibility layer), add the OpenViking marketplace and install `openviking-memory@openviking` with the client's own plugin command — for example, in GitHub Copilot:
+
+```bash
+copilot plugin marketplace add volcengine/OpenViking
+```
+
+Then install the `openviking-memory` plugin from the `openviking` marketplace using the same plugin command. Only fall back to the client-specific pages above when the host has no Claude Code compatibility layer.
+
 ## Compare integrations side by side
 
 For the concrete differences between integrations — tool surface, automatic recall, session and commit behaviour, compaction takeover, degradation and fault tolerance — see the [Capability Reference](./16-capability-reference.md), a cross-integration comparison matrix.

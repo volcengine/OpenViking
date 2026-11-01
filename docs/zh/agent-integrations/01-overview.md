@@ -25,6 +25,31 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 
 Claude Code、Codex、OpenCode、pi、DSH 等 Agent 既能用自己的插件，也能接入 OpenViking 网关。两者怎么选，见[网关还是插件](../guides/15-gateway.md#gateway-or-plugin)。
 
+## 支持 Claude Code 插件规范的客户端：直接安装插件
+
+挑选某个客户端专属页面之前，先检查你的客户端是否已原生加载 Claude Code 插件规范。OpenViking 通过标准的 `.claude-plugin/marketplace.json` 发布记忆插件，不少客户端会用自家插件命令解析这个 marketplace，无需逐家写集成即可安装同一插件：
+
+| 客户端 | Claude Code 兼容性证据 |
+|--------|------------------------|
+| GitHub Copilot | 官方文档：会查找 `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json` |
+| Factory Droid | 官方文档：翻译 Claude 布局，marketplace 回退读 `.claude-plugin/marketplace.json` |
+| Qoder | marketplace 解析回退到 `.claude-plugin/marketplace.json` |
+| Grok Build（xAI） | 官方文档："fully compatible with Claude Code with zero configuration" |
+| CodeBuddy / WorkBuddy（腾讯） | 官方文档：`.claude-plugin/` 回退；`${CLAUDE_PLUGIN_ROOT}` 为别名 |
+| Devin for Terminal | 官方 changelog：无 `.devin-plugin/` 时使用 Claude 兼容 manifest |
+| MiniMax Code（0.4.0+） | 源码：`CLAUDE_MANIFEST_PATH = '.claude-plugin/plugin.json'` |
+| OpenClaw | 官方文档：auto-detects Claude bundle layouts |
+| Qwen Code | 源码：安装扩展时抓取 `.claude-plugin/marketplace.json` |
+| Oh My Pi | 源码：专门的 `claude-plugins` discovery provider |
+
+如果客户端在上表中（或其文档提到 Claude Code 兼容层），用客户端自己的插件命令添加 OpenViking marketplace 并安装 `openviking-memory@openviking`，例如在 GitHub Copilot 中：
+
+```bash
+copilot plugin marketplace add volcengine/OpenViking
+```
+
+然后用同一插件命令安装 `openviking` marketplace 中的 `openviking-memory` 插件。仅当宿主没有 Claude Code 兼容层时，才回退使用上文各客户端专属页面。
+
 ## 横向对比各集成能力
 
 想知道各个集成在工具面、自动召回、会话与 commit、压缩接管、降级容错上的具体差异，见 [集成能力参考](./16-capability-reference.md)——一份覆盖全部集成的横向对照矩阵。
