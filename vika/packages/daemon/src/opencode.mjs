@@ -28,6 +28,10 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function hasToolInput(rawInput) {
+  return rawInput != null && (typeof rawInput !== 'object' || Object.keys(rawInput).length > 0);
+}
+
 function appendBounded(current, chunk, label) {
   const next = current + chunk;
   if (Buffer.byteLength(next, 'utf8') > MAX_LINE_BYTES) {
@@ -106,6 +110,7 @@ export class OpencodeAgent {
     this.activitySeq = 0;
     this.idleWaiters = [];
     this.toolStarts = new Map();
+    this.noteText = '';
     this.pendingRpc = new Map();
     this.rpcSeq = 0;
     this.runtimeDir = null;
@@ -280,11 +285,12 @@ export class OpencodeAgent {
         this._notifyOn(child, 'initialized', {});
         if (this.resumeRequested && this.sessionId) {
           try {
-            await this._requestOn(child, 'session/load', {
+            const loaded = await this._requestOn(child, 'session/load', {
               sessionId: this.sessionId,
               cwd: this.config.workspace,
               mcpServers: [],
             });
+            this._captureModelOptions(loaded?.configOptions ?? []);
             this.sessionInitialized = true;
             this.needsHistoryPrefix = false;
           } catch (error) {
@@ -301,7 +307,8 @@ export class OpencodeAgent {
         // Apply the model before the stability window so start() only resolves
         // once the runtime is ready to accept a prompt with the right model.
         if (model) await this._applyModelOn(child, model);
-        this.appliedModel = model;
+        // With no configured model the session's own default is in effect.
+        this.appliedModel = model || this.model;
       }).then(() => new Promise((innerResolve) => {
         // A short no-input window lets a bad config/model fail the start before
         // the authority handoff instead of killing the first real turn.
@@ -328,10 +335,13 @@ export class OpencodeAgent {
     const config = {
       instructions: [this.promptPath],
       mcp: {
+        // OpenCode's local MCP schema takes the argv as one array and applies
+        // `timeout` (ms, default 5s) to every request, tool calls included.
         personal_agent: {
           type: 'local',
-          command: tools.command,
-          args: tools.args,
+          command: [tools.command, ...tools.args],
+          enabled: true,
+          timeout: Math.max(10_000, this.config.sendTimeoutMs + 5_000),
         },
       },
     };
@@ -386,7 +396,8 @@ export class OpencodeAgent {
   async _applyModelOn(child, model) {
     await this._requestOn(child, 'session/set_config_option', {
       sessionId: this.sessionId,
-      option: { id: 'model', value: model },
+      configId: 'model',
+      value: model,
     }, this.controlTimeoutMs);
   }
 
@@ -488,10 +499,11 @@ export class OpencodeAgent {
     return { body, seqs, deliveredThroughSeq };
   }
 
-  // The model is applied during startup before the stability window; a change
-  // between turns only needs to land before the next prompt.
+  // The model is applied during startup before the stability window. A /model
+  // choice arrives as a plain field (RuntimeAdapter.applySettings) and reaches
+  // the session through set_config_option before the next prompt.
   _settingsPending() {
-    return false;
+    return Boolean(this.model) && this.appliedModel !== this.model;
   }
 
   _writeBatch(items) {
@@ -542,11 +554,13 @@ export class OpencodeAgent {
       },
     });
     // session/prompt resolves when the turn ends (stopReason end_turn on
-    // success); a process/error rejection fails the active turn.
+    // success); a process/error rejection fails the active turn. A turn has no
+    // deadline: a non-finite timeout arms no timer (a huge finite one would
+    // overflow setTimeout and fire after 1 ms).
     this._request('session/prompt', {
       sessionId: this.sessionId,
       prompt: [{ type: 'text', text: prepared.body }],
-    }, Number.MAX_SAFE_INTEGER).then(
+    }, Infinity).then(
       (result) => {
         if (this.activeOwner !== owner) return;
         const failed = result?.stopReason && !['end_turn', 'tool_use', 'stop'].includes(result.stopReason)
@@ -686,53 +700,32 @@ export class OpencodeAgent {
         this.modelWorking = true;
         this.modelStartedAtMs = Date.now();
       }
+      // ACP streams the text in token-sized chunks; keep one row per message.
       const text = update.content?.text;
-      if (text) {
-        // Telemetry only: OpenCode must use a delivery tool to reach a person.
-        this._recordActivity('agent.note', {
-          inboundSeq: this._activeSeqs().at(-1) ?? null,
-          summary: String(text),
-          metadata: { runtime: OPENCODE_RUNTIME.id, delivery: 'telemetry_only' },
-        });
-      }
+      if (text) this.noteText += String(text);
       return;
     }
     if (kind === 'tool_call') {
+      this._flushNote();
       this.modelWorking = false;
       this.modelStartedAtMs = null;
       const toolCallId = String(update.toolCallId ?? randomUUID());
-      this.toolStarts.set(toolCallId, {
+      const started = {
         name: String(update.name ?? update.title ?? 'unknown tool'),
         atMs: Date.now(),
-      });
-      this._recordActivity('agent.tool_called', {
-        inboundSeq: this._activeSeqs().at(-1) ?? null,
-        summary: String(update.title ?? update.name ?? 'unknown tool'),
-        status: 'RUNNING',
-        metadata: {
-          runtime: OPENCODE_RUNTIME.id,
-          toolId: toolCallId,
-          toolName: update.name ?? undefined,
-          input: activityPayload(update.rawInput),
-        },
-      });
+        recorded: false,
+      };
+      this.toolStarts.set(toolCallId, started);
+      // OpenCode announces a call as pending with an empty rawInput and sends
+      // the arguments in the in_progress update: record it once, with them.
+      if (hasToolInput(update.rawInput)) this._recordToolCalled(toolCallId, started, update);
       return;
     }
     if (kind === 'tool_call_update') {
       const toolCallId = String(update.toolCallId ?? '');
       const started = this.toolStarts.get(toolCallId);
-      if (started && update.status === 'in_progress' && update.rawInput) {
-        this._recordActivity('agent.tool_called', {
-          inboundSeq: this._activeSeqs().at(-1) ?? null,
-          summary: String(update.title ?? started.name),
-          status: 'RUNNING',
-          metadata: {
-            runtime: OPENCODE_RUNTIME.id,
-            toolId: toolCallId,
-            toolName: started.name,
-            input: activityPayload(update.rawInput),
-          },
-        });
+      if (started && !started.recorded && (update.status !== 'pending' || hasToolInput(update.rawInput))) {
+        this._recordToolCalled(toolCallId, started, update);
       }
       if (started && (update.status === 'completed' || update.status === 'error' || update.error)) {
         this.toolStarts.delete(toolCallId);
@@ -765,8 +758,36 @@ export class OpencodeAgent {
     )];
   }
 
+  _recordToolCalled(toolCallId, started, update) {
+    started.recorded = true;
+    this._recordActivity('agent.tool_called', {
+      inboundSeq: this._activeSeqs().at(-1) ?? null,
+      summary: String(update.title ?? started.name),
+      status: 'RUNNING',
+      metadata: {
+        runtime: OPENCODE_RUNTIME.id,
+        toolId: toolCallId,
+        toolName: started.name,
+        input: activityPayload(update.rawInput),
+      },
+    });
+  }
+
+  // Telemetry only: OpenCode must use a delivery tool to reach a person.
+  _flushNote() {
+    const text = this.noteText;
+    this.noteText = '';
+    if (!text.trim()) return;
+    this._recordActivity('agent.note', {
+      inboundSeq: this._activeSeqs().at(-1) ?? null,
+      summary: text,
+      metadata: { runtime: OPENCODE_RUNTIME.id, delivery: 'telemetry_only' },
+    });
+  }
+
   _completeTurn(error = null) {
     if (!this.turnActive) return;
+    this._flushNote();
     const turnStartedAtMs = this.turnStartedAtMs;
     const items = this.activeItems.splice(0);
     const seqs = [...new Set(items.map((item) => item.seq).filter((seq) => seq != null))];

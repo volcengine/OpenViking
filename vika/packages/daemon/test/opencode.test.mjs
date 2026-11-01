@@ -8,6 +8,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 import { OpencodeAgent } from '../src/opencode.mjs';
+import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
@@ -140,7 +141,9 @@ function newAgent(store = makeStore(), options = {}, config = baseConfig) {
 }
 
 // Walks initialize -> session/new and lets the stability window pass.
-async function driveStart(agent, child, { sessionId = 'ses_start1', model = 'opencode/big-pickle', load = false } = {}) {
+async function driveStart(agent, child, {
+  sessionId = 'ses_start1', model = 'opencode/big-pickle', load = false, loadResult = {},
+} = {}) {
   await waitFor(() => requests(child).some((message) => message.method === 'initialize'));
   const init = requests(child).find((message) => message.method === 'initialize');
   child.feed({
@@ -153,7 +156,7 @@ async function driveStart(agent, child, { sessionId = 'ses_start1', model = 'ope
   if (load) {
     const sessionLoad = requests(child).find((message) => message.method === 'session/load');
     assert.ok(sessionLoad);
-    child.feed({ jsonrpc: '2.0', id: sessionLoad.id, result: {} });
+    child.feed({ jsonrpc: '2.0', id: sessionLoad.id, result: loadResult });
     await flush();
     // A resumed session reapplies the configured model before going ready.
     const setConfig = requests(child).find((message) => message.method === 'session/set_config_option');
@@ -215,12 +218,15 @@ describe('OpencodeAgent ACP backend', () => {
     assert.ok(configPath.startsWith(path.join(os.tmpdir(), 'vika-opencode-')));
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.equal(config.mcp.personal_agent.type, 'local');
-    assert.equal(config.mcp.personal_agent.command, process.execPath);
-    assert.deepEqual(config.mcp.personal_agent.args, [
+    assert.deepEqual(config.mcp.personal_agent.command, [
+      process.execPath,
       '/release/packages/daemon/src/actions/mcp.mjs',
       '--socket', '/tmp/vika-opencode-data/actions.sock',
       '--authority', 'oc-token',
     ]);
+    assert.equal(config.mcp.personal_agent.args, undefined);
+    assert.equal(config.mcp.personal_agent.enabled, true);
+    assert.equal(config.mcp.personal_agent.timeout, 10_000);
     const policy = fs.readFileSync(config.instructions[0], 'utf8');
     assert.match(policy, /Operating policy/);
     await agent.stop();
@@ -257,14 +263,18 @@ describe('OpencodeAgent ACP backend', () => {
     assert.equal(promptsMidTurn.length, 1);
     assert.equal(agent.state.queued, 1);
 
+    // The turn end drains the queue synchronously, so the next prompt starts
+    // at once: wait for it rather than for an idle gap that never shows.
     child.feed({ jsonrpc: '2.0', id: prompts[0].id, result: { stopReason: 'end_turn' } });
-    await waitFor(() => !agent.turnActive);
-    await flush();
+    await waitFor(() => requests(child).filter((message) => message.method === 'session/prompt').length === 2);
+    assert.equal(agent.turnActive, true);
     prompts = requests(child).filter((message) => message.method === 'session/prompt');
     assert.equal(prompts.length, 2);
     assert.deepEqual(prompts[1].params.prompt, [{ type: 'text', text: 'second task' }]);
     child.feed({ jsonrpc: '2.0', id: prompts[1].id, result: { stopReason: 'end_turn' } });
     await waitFor(() => !agent.turnActive);
+    const completed = store.activities.filter((activity) => activity.kind === 'agent.turn_completed');
+    assert.deepEqual(completed.map((activity) => activity.status), ['completed', 'completed']);
     await agent.stop();
   });
 
@@ -315,7 +325,17 @@ describe('OpencodeAgent ACP backend', () => {
         sessionId: 'ses_start1',
         update: {
           sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text: 'telemetry note' },
+          content: { type: 'text', text: 'telemetry ' },
+        },
+      },
+    });
+    child.feed({
+      method: 'session/update',
+      params: {
+        sessionId: 'ses_start1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'note' },
         },
       },
     });
@@ -325,9 +345,56 @@ describe('OpencodeAgent ACP backend', () => {
     assert.deepEqual(permissionAnswer.result, { outcome: { outcome: 'selected', optionId: 'opt-reject' } });
     const kinds = store.activities.map((activity) => activity.kind);
     assert.ok(kinds.includes('agent.interaction_declined'));
-    assert.ok(kinds.includes('agent.tool_called'));
+    assert.equal(kinds.filter((kind) => kind === 'agent.tool_called').length, 1);
     assert.ok(kinds.includes('agent.tool_completed'));
-    assert.ok(kinds.includes('agent.note'));
+    // Streamed chunks land as one row per message, not one per token.
+    const notes = store.activities.filter((activity) => activity.kind === 'agent.note');
+    assert.deepEqual(notes.map((note) => note.summary), ['telemetry note']);
+    await agent.stop();
+  });
+
+  it('records a tool call once, with the arguments OpenCode sends after announcing it', async () => {
+    const { agent, children, store } = newAgent();
+    const child = await startSession(agent, children);
+    agent.deliver('reply', 7);
+    await waitFor(() => agent.turnActive);
+    const update = (fields) => child.feed({
+      method: 'session/update',
+      params: { sessionId: 'ses_start1', update: { toolCallId: 'personal_agent_send_message_0', ...fields } },
+    });
+    // The frame sequence opencode 1.19 emits for an MCP tool call.
+    update({ sessionUpdate: 'tool_call', status: 'pending', title: 'personal_agent_send_message', kind: 'other', rawInput: {} });
+    update({
+      sessionUpdate: 'tool_call_update', status: 'in_progress', title: 'personal_agent_send_message', kind: 'other',
+      rawInput: { chat_id: 'oc-1', markdown: 'hi' },
+    });
+    update({ sessionUpdate: 'tool_call_update', status: 'completed', content: [], rawOutput: {} });
+    const prompt = requests(child).find((message) => message.method === 'session/prompt');
+    child.feed({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'end_turn' } });
+    await waitFor(() => !agent.turnActive);
+    const called = store.activities.filter((activity) => activity.kind === 'agent.tool_called');
+    assert.equal(called.length, 1);
+    assert.equal(called[0].metadata.toolName, 'personal_agent_send_message');
+    assert.match(JSON.stringify(called[0].metadata.input), /oc-1/);
+    const completed = store.activities.filter((activity) => activity.kind === 'agent.tool_completed');
+    assert.deepEqual(completed.map((activity) => activity.status), ['COMPLETED']);
+    await agent.stop();
+  });
+
+  it('keeps a long-running prompt open until OpenCode ends the turn', async () => {
+    const { agent, children, store } = newAgent();
+    const child = await startSession(agent, children);
+    agent.deliver('slow task', 7);
+    await waitFor(() => agent.turnActive);
+    // A turn has no deadline; real turns take seconds to minutes.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(agent.turnActive, true);
+    assert.equal(store.activities.some((activity) => activity.kind === 'agent.turn_completed'), false);
+    const prompt = requests(child).find((message) => message.method === 'session/prompt');
+    child.feed({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'end_turn' } });
+    await waitFor(() => !agent.turnActive);
+    const completed = store.activities.filter((activity) => activity.kind === 'agent.turn_completed');
+    assert.deepEqual(completed.map((activity) => activity.status), ['completed']);
     await agent.stop();
   });
 
@@ -341,14 +408,35 @@ describe('OpencodeAgent ACP backend', () => {
     await waitFor(() => requests(child).filter((message) => message.method === 'session/set_config_option').length
       === startupUpdates.length + 1);
     const setConfig = requests(child).filter((message) => message.method === 'session/set_config_option').at(-1);
-    assert.equal(setConfig.params.option.id, 'model');
-    assert.equal(setConfig.params.option.value, 'anthropic/claude-sonnet-5');
+    assert.deepEqual(setConfig.params, {
+      sessionId: 'ses_start1', configId: 'model', value: 'anthropic/claude-sonnet-5',
+    });
     child.feed({ jsonrpc: '2.0', id: setConfig.id, result: {} });
     await waitFor(() => agent.appliedModel === 'anthropic/claude-sonnet-5');
     agent.deliver('next turn', 7);
     await waitFor(() => requests(child).some((message) => message.method === 'session/prompt'));
     assert.equal(agent.threadId, sessionId);
     assert.equal(children.length, 1);
+    await agent.stop();
+  });
+
+  it('applies a /model choice published through the runtime adapter before the next prompt', async () => {
+    const { agent, children } = newAgent();
+    const child = await startSession(agent, children, { model: 'anthropic/claude-sonnet-5' });
+    const adapter = new RuntimeAdapter('opencode', agent);
+    const before = requests(child).filter((message) => message.method === 'session/set_config_option').length;
+    // AgentRuntime's /model path: persist, then publish the plain field.
+    adapter.applySettings({ model: 'opencode/big-pickle' });
+    agent.deliver('next turn', 7);
+    await waitFor(() => requests(child).filter((message) => message.method === 'session/set_config_option').length
+      === before + 1);
+    const setConfig = requests(child).filter((message) => message.method === 'session/set_config_option').at(-1);
+    assert.deepEqual(setConfig.params, { sessionId: 'ses_start1', configId: 'model', value: 'opencode/big-pickle' });
+    // The prompt waits for the session to acknowledge the model.
+    assert.equal(requests(child).some((message) => message.method === 'session/prompt'), false);
+    child.feed({ jsonrpc: '2.0', id: setConfig.id, result: {} });
+    await waitFor(() => requests(child).some((message) => message.method === 'session/prompt'));
+    assert.equal(agent.appliedModel, 'opencode/big-pickle');
     await agent.stop();
   });
 
@@ -405,10 +493,23 @@ describe('OpencodeAgent ACP backend', () => {
       },
     });
     const { agent, children } = newAgent(store);
-    await startSession(agent, children, { load: true, sessionId: 'ses_saved' });
+    await startSession(agent, children, {
+      load: true,
+      sessionId: 'ses_saved',
+      loadResult: {
+        configOptions: [{ id: 'model', type: 'select', currentValue: 'anthropic/claude-sonnet-5', options: [
+          { value: 'anthropic/claude-sonnet-5', name: 'Claude Sonnet 5' },
+          { value: 'opencode/big-pickle', name: 'Big Pickle' },
+        ] }],
+      },
+    });
     const load = requests(children[0]).find((message) => message.method === 'session/load');
     assert.equal(load.params.sessionId, 'ses_saved');
     assert.equal(agent.threadId, 'ses_saved');
+    // A resumed session still offers its models to /model.
+    assert.deepEqual((await agent.listModels()).map((entry) => entry.id), [
+      'anthropic/claude-sonnet-5', 'opencode/big-pickle',
+    ]);
     await agent.stop();
   });
 });
