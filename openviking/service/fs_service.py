@@ -1347,7 +1347,11 @@ class FSService:
     ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
-        namespace_policy = namespace_policy_for_uri(uri)
+        # Resolve a vector record id first: ``namespace_policy_for_uri`` parses
+        # the raw value and rejects bare ids, while only the canonical URI
+        # decides the correct processing mode (#6877).
+        resolved_uri = await self._resolve_uri(uri, ctx)
+        namespace_policy = namespace_policy_for_uri(resolved_uri)
         kwargs = {
             "ctx": ctx,
             "skip_count": skip_count,
@@ -1356,7 +1360,7 @@ class FSService:
         if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
             kwargs["skip_count"] = True
             kwargs["include_vector_fields"] = False
-        return await viking_fs.stat(uri, **kwargs)
+        return await viking_fs.stat(resolved_uri, **kwargs)
 
     async def ensure_write_access(self, uri: str, ctx: RequestContext) -> None:
         """Validate write access without mutating the target."""

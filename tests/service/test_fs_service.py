@@ -2049,3 +2049,51 @@ async def test_system_rejects_semantic_sidecar_reads(request_context, operation)
         await getattr(service, operation)(uri, ctx=request_context)
 
     getattr(viking_fs, operation).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stat_resolves_vector_record_id_before_policy(request_context):
+    """A bare 32-char hex record id must be resolved to its canonical URI
+    before the namespace policy parses it (#6877)."""
+    record_id = "56a9e047479a5d538cbf0f1190febee7"
+    canonical = "viking://resources/demo/a.md"
+
+    class _StubVikingFS:
+        async def resolve_uri(self, uri_or_id, ctx=None):
+            assert uri_or_id == record_id
+            return canonical
+
+        async def stat(self, uri, **kwargs):
+            assert uri == canonical
+            return {"uri": canonical, "id": record_id, "size": 12}
+
+    service = FSService(viking_fs=_StubVikingFS())
+
+    result = await service.stat(record_id, ctx=request_context)
+
+    assert result["uri"] == canonical
+    assert result["id"] == record_id
+
+
+@pytest.mark.asyncio
+async def test_stat_by_uri_skips_resolution(request_context):
+    """A regular viking:// URI keeps its existing single-lookup stat path."""
+
+    class _StubVikingFS:
+        def __init__(self):
+            self.resolve_calls = 0
+
+        async def resolve_uri(self, uri_or_id, ctx=None):
+            self.resolve_calls += 1
+            raise AssertionError("regular URIs must not be resolved")
+
+        async def stat(self, uri, **kwargs):
+            assert uri == "viking://resources/demo/a.md"
+            return {"uri": uri}
+
+    fs = _StubVikingFS()
+    service = FSService(viking_fs=fs)
+
+    result = await service.stat("viking://resources/demo/a.md", ctx=request_context)
+
+    assert result["uri"] == "viking://resources/demo/a.md"
