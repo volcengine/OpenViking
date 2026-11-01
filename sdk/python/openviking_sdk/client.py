@@ -1398,6 +1398,26 @@ class AsyncHTTPClient:
         )
         return self._handle_response_data(response).get("result", {})
 
+    async def ensure_directory_index(
+        self,
+        uri: str,
+        fallback_abstract: str,
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Preserve summaries; fallback_abstract seeds L0 only when both are absent.
+        Return readable levels, or a queued task with wait=False.
+        """
+        response = await self._request(
+            "POST",
+            "/api/v1/content/ensure_directory_index",
+            json={
+                "uri": VikingURI.normalize(uri),
+                "fallback_abstract": fallback_abstract,
+                "wait": wait,
+            },
+        )
+        return self._handle_response_data(response).get("result", {})
+
     async def set_tags(
         self,
         uri: str,
@@ -1682,6 +1702,7 @@ class AsyncHTTPClient:
         skill: str,
         options: Optional[CompileOptions] = None,
     ) -> Dict[str, Any]:
+        """Return a queued task, or saved settings when args explicitly configure scheduling."""
         payload = self._build_options_payload(
             options,
             CompileOptions,
@@ -2907,6 +2928,17 @@ class SyncHTTPClient:
                 wait=wait,
                 options=_normalize_timeout_options(timeout, options),
             )
+        )
+
+    def ensure_directory_index(
+        self,
+        uri: str,
+        fallback_abstract: str,
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Index uri; use fallback_abstract only when both summaries are absent."""
+        return run_async(
+            self._async_client.ensure_directory_index(uri, fallback_abstract, wait=wait)
         )
 
     def set_tags(

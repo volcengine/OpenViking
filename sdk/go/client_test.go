@@ -1520,6 +1520,15 @@ func TestAddSkillUploadsDirectoryZip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "references", "a.md"), []byte("ref"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range []string{"..notes.md", "..references/a.md"} {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("double-dot reference"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -1545,8 +1554,10 @@ func TestAddSkillUploadsDirectoryZip(t *testing.T) {
 				}
 			}
 			names := zipEntryNames(t, zipBytes)
-			if !contains(names, "SKILL.md") || !contains(names, "references/a.md") {
-				t.Fatalf("zip names = %#v", names)
+			for _, name := range []string{"SKILL.md", "references/a.md", "..notes.md", "..references/a.md"} {
+				if !contains(names, name) {
+					t.Fatalf("zip names = %#v, missing %q", names, name)
+				}
 			}
 			writeOK(t, w, map[string]any{"temp_file_id": "skill-upload"})
 		case "/api/v1/skills":

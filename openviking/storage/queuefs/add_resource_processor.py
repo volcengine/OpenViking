@@ -16,6 +16,7 @@ from openviking.service.task_work_index import (
     bind_task_context_from_message,
     extract_task_metadata,
 )
+from openviking.storage.pathlock_recovery import adopt_or_reacquire, prepare_handoff_retry
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -53,16 +54,13 @@ class AddResourceProcessor(DequeueHandlerBase):
         """Adopt a pathlock handoff ref, returning an owned lease dict."""
         if msg.lock_handoff is None:
             return None
-        try:
-            return await self._viking_fs._async_agfs.pathlock_adopt(msg.lock_handoff)
-        except Exception as handoff_error:
-            try:
-                return await self._resource_service.reacquire_add_resource_job_lock(
-                    msg.root_uri,
-                    ctx,
-                )
-            except Exception:
-                raise handoff_error
+
+        async def requests():
+            return [{"path": self._viking_fs._uri_to_path(msg.root_uri, ctx=ctx), "kind": "tree"}]
+
+        return await adopt_or_reacquire(
+            self._viking_fs._async_agfs, msg.lock_handoff, ctx=ctx, fallback_requests=requests
+        )
 
     async def _cleanup_staged_source(self, msg: AddResourceMsg, ctx: RequestContext) -> None:
         if msg.staged_source is None:
@@ -89,7 +87,10 @@ class AddResourceProcessor(DequeueHandlerBase):
         if msg.lock_handoff is not None:
             lock_guard = PathLockGuard(self._viking_fs._async_agfs)
             try:
-                await lock_guard.adopt(msg.lock_handoff)
+                if msg.cleanup_empty_target_on_failure:
+                    await lock_guard.acquire(lambda: self._load_lock(msg, ctx))
+                else:
+                    await lock_guard.adopt(msg.lock_handoff)
                 if msg.cleanup_empty_target_on_failure:
                     await self._resource_service._cleanup_reserved_target_if_empty(
                         root_uri=msg.root_uri,
@@ -141,13 +142,12 @@ class AddResourceProcessor(DequeueHandlerBase):
         await self._record_watch_execution(msg, "cancelled")
 
     async def _requeue_lock_handoff(self, msg: AddResourceMsg, exc: Exception) -> bool:
-        if msg.lock_handoff_retry >= 2:
+        payload = await prepare_handoff_retry(msg, exc, queue="AddResource")
+        if payload is None:
             return False
 
         from openviking.storage.queuefs import get_queue_manager
 
-        payload = msg.to_dict()
-        payload["lock_handoff_retry"] = msg.lock_handoff_retry + 1
         await get_queue_manager().enqueue(self._queue_name, payload)
         logger.warning(
             "[AddResource] Requeued task %s after lock handoff failure: %s",

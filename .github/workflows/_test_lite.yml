@@ -3,6 +3,11 @@ name: 12. _Test Suite (Lite)
 on:
   workflow_call:
     inputs:
+      native_artifact:
+        description: 'Validated same-run cp310-abi3 native runtime (empty builds locally)'
+        required: false
+        type: string
+        default: ''
       os_json:
         description: 'JSON string of OS to run on'
         required: false
@@ -69,21 +74,14 @@ jobs:
       if: runner.os == 'Windows'
       run: echo "C:\mingw64\bin" >> $env:GITHUB_PATH
 
-    - name: Install Python dependencies
-      run: uv sync --frozen --extra test
-
-    - name: Install build dependencies
-      run: uv pip install setuptools setuptools_scm cmake wheel
-
-    - name: Check ragfs-python workspace build
-      run: cargo check -p ragfs-python
-
-    - name: Build C++ extensions
-      run: uv run python setup.py build_ext --inplace
+    - name: Prepare native runtime
+      uses: ./.github/actions/native-runtime
+      with:
+        artifact: ${{ inputs.native_artifact || '' }}
 
     - name: Run cuVS CPU-only regression tests
       run: |
-        uv run pytest -q -o addopts='' \
+        uv run --no-sync pytest -q -o addopts='' \
           tests/vectordb/test_cuvs_config.py \
           tests/vectordb/test_cuvs_index.py \
           tests/vectordb/test_cuvs_collection.py \

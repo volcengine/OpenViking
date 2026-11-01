@@ -73,15 +73,19 @@ async def test_frontmatter_is_removed_only_when_explicitly_requested(
 
 
 @pytest.mark.asyncio
-async def test_frontmatter_title_still_names_the_document_when_kept() -> None:
-    document = "---\ntitle: Release Notes\n---\n\n# Guide\n\nbody text\n"
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize("extract_frontmatter", [False, True], ids=["keep", "remove"])
+async def test_frontmatter_title_and_body(newline: str, extract_frontmatter: bool) -> None:
+    body = "# Guide\n\nbody text\n".replace("\n", newline)
+    document = "---\ntitle: Release Notes\nowner: team\n---\n".replace("\n", newline) + body
 
-    layout = await MarkdownParser()._compute_layout(
-        document, "viking://temp/test", source_path="/tmp/whatever.md"
+    layout = await MarkdownParser(extract_frontmatter=extract_frontmatter)._compute_layout(
+        document, "viking://temp/test", source_path="/tmp/notes.md"
     )
 
     assert layout.doc_title == "Release Notes"
-    assert _written(layout) == [document]
+    assert layout.meta["frontmatter"] == {"title": "Release Notes", "owner": "team"}
+    assert _written(layout) == [body if extract_frontmatter else document]
 
 
 @pytest.mark.asyncio

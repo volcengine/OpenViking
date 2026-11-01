@@ -73,7 +73,7 @@ class ArtifactRelationGraph:
         cached = await self._valid_cache(ctx.account_id, record)
         if cached is None:
             async with lock_output(record["to"]) as lease:
-                record = await self._store.get(ctx.account_id, record["id"])
+                record = await self._store.get(ctx.account_id, record["to"])
                 cached = await self._valid_cache(ctx.account_id, record)
                 if cached is None:
                     wiki_head = record.get("wiki_head")
@@ -84,13 +84,13 @@ class ArtifactRelationGraph:
                                 "Snapshots are disabled",
                                 code="SNAPSHOT_DISABLED",
                             )
-                        async with self._store.edit(ctx.account_id, record["id"]) as editable:
+                        async with self._store.edit(ctx.account_id, record["to"]) as editable:
                             editable["wiki_head"] = wiki_head
                         record["wiki_head"] = wiki_head
                     try:
                         cached = await self._build(record["to"], wiki_head, ctx)
                         await self._store.write_artifact_relations(
-                            ctx.account_id, record["id"], cached
+                            ctx.account_id, record["to"], cached
                         )
                     except ArtifactGraphError:
                         raise
@@ -109,7 +109,7 @@ class ArtifactRelationGraph:
         wiki_head: str,
     ) -> dict[str, Any]:
         graph = await self._build(record["to"], wiki_head, ctx)
-        await self._store.write_artifact_relations(ctx.account_id, record["id"], graph)
+        await self._store.write_artifact_relations(ctx.account_id, record["to"], graph)
         return graph
 
     async def _valid_cache(
@@ -119,7 +119,7 @@ class ArtifactRelationGraph:
         if not wiki_head:
             return None
         try:
-            cached = await self._store.read_artifact_relations(account_id, record["id"])
+            cached = await self._store.read_artifact_relations(account_id, record["to"])
         except (ValueError, UnicodeDecodeError):
             return None
         if (

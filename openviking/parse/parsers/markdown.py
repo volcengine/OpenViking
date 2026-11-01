@@ -220,7 +220,8 @@ class MarkdownParser(BaseParser):
         self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
         self._list_pattern = re.compile(r"^(\s*)[-*+]\s+(.+)$", re.MULTILINE)
         self._numbered_list_pattern = re.compile(r"^(\s*)\d+\.\s+(.+)$", re.MULTILINE)
-        self._frontmatter_pattern = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+        # Optional CR so LF and Windows CRLF documents share the same delimiters.
+        self._frontmatter_pattern = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
         self._html_comment_pattern = re.compile(r"<!--.*?-->", re.DOTALL)
         self._indented_code_pattern = re.compile(r"^(?:    |\t).+$", re.MULTILINE)
 

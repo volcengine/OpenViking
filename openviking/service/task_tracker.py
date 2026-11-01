@@ -178,12 +178,14 @@ async def run_tracked_operation(
     wait: bool,
     timeout: Optional[float] = None,
     resource_id: Optional[str] = None,
+    meta: Optional[Dict[str, Any]] = None,
     existing_task: Optional[TaskRecord] = None,
     accept_failed_result: Callable[[_OperationResult], bool] | None = None,
     return_terminal_result: bool = False,
 ) -> tuple[_OperationResult, str]:
     """Run a top-level operation under a Task, reusing an existing Task context.
 
+    ``meta`` applies only to a newly created Task; reused Tasks keep their metadata.
     ``accept_failed_result`` is reserved for operations whose result explicitly
     reports record-level failures while the Task retains its failed status.
     ``return_terminal_result`` returns the Task's final projected result after
@@ -205,6 +207,7 @@ async def run_tracked_operation(
             resource_id=resource_id,
             account_id=account_id,
             user_id=user_id,
+            meta=meta,
         )
 
     try:

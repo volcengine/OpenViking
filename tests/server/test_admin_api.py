@@ -3938,7 +3938,12 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
     from openviking_cli.exceptions import PermissionDeniedError
 
     await manager.create_group(acct, "engineering")
-    await manager.add_group_member(acct, "engineering", "user-1")
+    added = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/groups/engineering/members",
+        json={"user_ids": ["user-1", "user-2", "user-1"]},
+        headers=root_headers(),
+    )
+    assert added.status_code == 200, added.text
     request = FastAPIRequest({"type": "http", "app": lightweight_admin_app})
     context = SimpleNamespace(request_context=SimpleNamespace(request=request))
     for role in (Role.USER, Role.ADMIN, Role.ROOT):

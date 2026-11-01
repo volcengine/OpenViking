@@ -131,12 +131,13 @@ async def test_cache_publish_uses_one_supported_write() -> None:
     store = CompileStateStore(agfs)
     graph = {"schema_version": 1, "nodes": [], "edges": []}
 
-    await store.write_artifact_relations("default", "target_1", graph)
+    await store.write_artifact_relations("default", "viking://resources/wiki", graph)
 
     assert len(agfs.writes) == 1
     path, data, ctx = agfs.writes[0]
     assert path == (
-        "/local/default/_system/compile/target_folders/target_1/"
+        "/local/default/_system/compile/target_folders/"
+        "3e0b9d0a07f9ee59930bdb9747bb71ae33da0e276cd1b48808167cc6888505ce/"
         "artifact_relations.json"
     )
     assert json.loads(data) == graph
@@ -287,7 +288,6 @@ async def test_actual_bytes_are_checked_when_metadata_underreports() -> None:
 @pytest.mark.asyncio
 async def test_cache_hit_avoids_tree_lock_and_rebuild() -> None:
     record = {
-        "id": "target_1",
         "to": "viking://resources/wiki",
         "initialized": True,
         "wiki_head": "abc123",
@@ -325,7 +325,6 @@ async def test_cache_hit_avoids_tree_lock_and_rebuild() -> None:
 @pytest.mark.asyncio
 async def test_legacy_target_initializes_wiki_head_inside_lock() -> None:
     record = {
-        "id": "target_1",
         "to": "viking://resources/wiki",
         "initialized": True,
         "wiki_head": None,

@@ -365,7 +365,7 @@ struct CompileArgs {
     /// Additional instructions for this Compile task
     #[arg(long, value_name = "text")]
     instruction: Option<String>,
-    /// Provider arguments as JSON; VikingBot wiki_links defaults to false
+    /// Provider arguments as JSON
     #[arg(long, value_name = "json")]
     args: Option<String>,
 }
@@ -875,7 +875,7 @@ enum Commands {
         /// Who made the edit, recorded in Compile output versions
         #[arg(
             long = "edit-source",
-            default_value = "agent",
+            default_value = "manual",
             value_parser = ["manual", "agent", "compile"],
             help_heading = "Advanced options"
         )]
@@ -4085,7 +4085,8 @@ mod tests {
     use super::{
         Cli, CliContext, Commands, CompileArgs, CompileCommands, ConfigAddTarget, ConfigCommands,
         LanguageGateAction, ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd,
-        UploadCliOptions, find_command_index, first_command_token, is_language_command_request,
+        UploadCliOptions,
+        find_command_index, first_command_token, is_language_command_request,
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
         pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
@@ -4440,6 +4441,7 @@ mod tests {
             _ => panic!("expected compile graph command"),
         }
     }
+
 
     #[test]
     fn server_commands_require_existing_cli_config() {
