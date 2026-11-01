@@ -57,6 +57,11 @@ The first run is full. Subsequent runs use the last successful baseline. The nam
 
 The direct `ov compile --from … --to … --skill …` form is deprecated and still performs a one-off full compile.
 
+Resource Markdown can declare retrieval tags in its frontmatter, for example
+`tags: [topic, role=canonical, type=guide]`. Compile publishes valid explicit `k=v`
+tags with append semantics, preserving unrelated existing tags. Plain topical labels
+remain document metadata. Missing or empty declarations do not clear retrieval tags.
+
 ## Open the body page
 
 ```bash

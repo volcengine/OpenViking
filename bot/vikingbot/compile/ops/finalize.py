@@ -3,7 +3,11 @@
 from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
-from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
+from vikingbot.compile.renderer import (
+    RenderedBundle,
+    resource_tag_metadata,
+    validate_relative_file_path,
+)
 
 
 async def run(runtime, documents):
@@ -26,6 +30,7 @@ async def run(runtime, documents):
         contents[path] = content
         outputs[path] = {"source_refs": document.source_refs, "sha256": content_hash(content)}
         uri = safe_join_viking_uri(runtime.target, path)
+        metadata = resource_tag_metadata(uri, content)
         read_before = path in runtime.old
         old = await file_ops.load_old(runtime, path)
         if old is not None and not read_before:
@@ -35,13 +40,13 @@ async def run(runtime, documents):
             current = await runtime.client.download_bytes(uri)
             if content_hash(current) != content_hash(old):
                 raise ValueError(f"Target changed after reading: {uri}")
-            if current == content.encode("utf-8"):
+            if current == content.encode("utf-8") and not metadata:
                 bundle.unchanged.append(uri)
                 continue
             mode = "replace"
         else:
             mode = "create"
-        bundle.operations.append({"uri": uri, "content": content, "mode": mode})
+        bundle.operations.append({"uri": uri, "content": content, "mode": mode, **metadata})
         (bundle.updated if mode == "replace" else bundle.created).append(uri)
         if runtime.output_format == "wiki":
             bundle.wiki_uris.append(uri)
