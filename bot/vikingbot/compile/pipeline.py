@@ -15,7 +15,7 @@ from openviking.core.namespace import classify_uri
 from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.compile import entry
 from vikingbot.compile.hashing import content_hash, digest
-from vikingbot.compile.models import CompileFailure, has_directory_plan, utc_now
+from vikingbot.compile.models import CompileFailure, utc_now
 from vikingbot.compile.ops import finalize as finalize_op
 from vikingbot.compile.ops import map as map_op
 from vikingbot.compile.ops import reduce as reduce_op
@@ -151,11 +151,7 @@ class Pipeline:
         self.noop = False
         failed = False
         try:
-            sources = (
-                []
-                if has_directory_plan(self.changes) and self.changes.get("head")
-                else await self.seed(batches)
-            )
+            sources = await self.seed(batches)
             runtime = await self.files.get("runtime")
             if runtime is None:
                 runtime = {
