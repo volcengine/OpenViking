@@ -115,6 +115,18 @@ _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 # Older failures are drained first so a long failure backlog cannot create an
 # unbounded generation prompt; later commits pick up the remaining ones.
 _PHASE2_MAX_COVERED_FAILED_ARCHIVES = 20
+# A failed archive that keeps failing the roll-forward it joins is left for
+# manual retry instead of being retried by every later commit.
+_PHASE2_MAX_ROLL_FORWARD_ATTEMPTS = 2
+
+
+def _roll_forward_attempt_count(failed_marker: Dict[str, Any]) -> int:
+    """Read the roll-forward attempt counter from a ``.failed.json`` payload."""
+    raw = failed_marker.get("roll_forward_attempts")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _load_render_prompt() -> Callable[..., str]:
@@ -2188,6 +2200,7 @@ class Session:
         skipped_memory_operations: list[dict[str, Any]] = []
         memory_diff_uri: Optional[str] = None
         completed_memory_steps: Dict[str, set[str]] = {}
+        covered_failed_archives: List[str] = []
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archives.archive_index_from_uri(archive_uri)
 
@@ -2198,7 +2211,11 @@ class Session:
                 coverage_end_archive,
                 covered_failed_archives,
                 completed_memory_steps,
-            ) = await self._prepare_phase2_archive_messages(archive_uri, messages)
+            ) = await self._prepare_phase2_archive_messages(
+                archive_uri,
+                messages,
+                auto_commit_policy=auto_commit_policy,
+            )
             if not messages:
                 raise ValueError("session commit archive has no recoverable messages")
             first_message_id = messages[0].id
@@ -2674,6 +2691,7 @@ class Session:
                     completed_memory_steps
                 ),
             )
+            await self._record_roll_forward_attempts(archive_uri, covered_failed_archives)
             await tracker.fail(
                 task_id, str(e), account_id=self.ctx.account_id, user_id=self.ctx.user.user_id
             )
@@ -2742,6 +2760,51 @@ class Session:
             content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             ctx=self.ctx,
         )
+
+    async def _record_roll_forward_attempts(
+        self,
+        archive_uri: str,
+        covered_archive_ids: List[str],
+    ) -> None:
+        """Count failed roll-forwards so one bad archive cannot fail every commit.
+
+        Only the archive whose Phase-2 run is executing gets a fresh
+        ``.failed.json``. The failed predecessors it dragged into that run need
+        their own counter, otherwise the next commit would pick the same batch
+        again and fail the same way. This is best-effort: a marker that cannot
+        be updated must not mask the extraction error being handled.
+        """
+        if not self._viking_fs or not covered_archive_ids:
+            return
+        history_root = archive_uri.rstrip("/").rsplit("/", 1)[0]
+        for archive_id in covered_archive_ids:
+            marker_uri = f"{history_root}/{archive_id}/.failed.json"
+            try:
+                raw_marker = await self._viking_fs.read_file(marker_uri, ctx=self.ctx)
+                payload = json.loads(raw_marker or "{}")
+            except Exception as exc:
+                logger.warning(
+                    "Cannot read failed marker %s while counting a roll-forward attempt: %s",
+                    marker_uri,
+                    exc,
+                )
+                continue
+            if not isinstance(payload, dict):
+                continue
+            payload["roll_forward_attempts"] = _roll_forward_attempt_count(payload) + 1
+            payload["roll_forward_failed_at"] = get_current_timestamp()
+            try:
+                await self._viking_fs.write_file(
+                    uri=marker_uri,
+                    content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    ctx=self.ctx,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Cannot update failed marker %s with a roll-forward attempt: %s",
+                    marker_uri,
+                    exc,
+                )
 
     async def get_session_context(self, token_budget: int = 128_000) -> Dict[str, Any]:
         """Get assembled session context with the latest summary archive and merged messages."""
@@ -3025,6 +3088,7 @@ class Session:
         self,
         archive_uri: str,
         current_messages: List[Message],
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> tuple[List[Message], str, str, List[str], Dict[str, set[str]]]:
         """Prepare the current archive plus failed predecessors it can cover.
 
@@ -3036,13 +3100,22 @@ class Session:
         Only failed archives that are not already covered by a completed
         archive, that precede the current archive, and whose failure stage is
         ``memory_extraction`` are eligible. Pending archives keep their live
-        owner and cancelled/overview failures are left untouched. The number
-        rolled into one run is bounded, so a large backlog drains over several
-        commits instead of producing an unbounded prompt.
+        owner and cancelled/overview failures are left untouched.
+
+        The rolled-forward messages are bounded by the policy's
+        ``failed_archive_roll_forward_token_budget`` and by a hard archive
+        count, so a large backlog drains over several commits instead of
+        producing an unbounded prompt. An archive that keeps failing inside the
+        roll-forward it joins is skipped after
+        ``_PHASE2_MAX_ROLL_FORWARD_ATTEMPTS`` attempts and left for manual
+        retry.
         """
         current_archive_id = archive_uri.rstrip("/").split("/")[-1]
         current_index = self._archives.archive_index_from_uri(archive_uri)
         completed_memory_steps: Dict[str, set[str]] = {}
+        token_budget = AutoCommitPolicy.from_dict(
+            auto_commit_policy
+        ).failed_archive_roll_forward_token_budget
 
         states = await self._archives.scan_states()
         already_covered = self._archives.covered_archive_ids(states)
@@ -3054,11 +3127,35 @@ class Session:
             and state.archive_id not in already_covered
             and state.failed.get("stage") == "memory_extraction"
         ]
+        exhausted_ids = {
+            state.archive_id
+            for state in failed_predecessors
+            if _roll_forward_attempt_count(state.failed) >= _PHASE2_MAX_ROLL_FORWARD_ATTEMPTS
+        }
+        if exhausted_ids:
+            logger.info(
+                "Leaving %d failed archive(s) of %s for manual retry after %d "
+                "failed roll-forward attempts",
+                len(exhausted_ids),
+                self.session_id,
+                _PHASE2_MAX_ROLL_FORWARD_ATTEMPTS,
+            )
+            failed_predecessors = [
+                state for state in failed_predecessors if state.archive_id not in exhausted_ids
+            ]
+        if token_budget <= 0:
+            logger.info(
+                "Failed archive roll-forward is disabled for %s by "
+                "auto_commit_policy.failed_archive_roll_forward_token_budget=0",
+                self.session_id,
+            )
+            failed_predecessors = []
         # Oldest first keeps the combined transcript in commit order.
         failed_predecessors.sort(key=lambda state: state.index)
 
         messages: List[Message] = []
         covered_failed_archives: List[str] = []
+        rolled_forward_tokens = 0
         for state in failed_predecessors:
             if len(covered_failed_archives) >= _PHASE2_MAX_COVERED_FAILED_ARCHIVES:
                 logger.info(
@@ -3090,6 +3187,19 @@ class Session:
             if not failed_messages:
                 continue
 
+            failed_tokens = estimate_extraction_message_tokens(failed_messages)
+            # Always take the oldest archive, even when it alone is larger than
+            # the budget, so a backlog can never stall completely.
+            if covered_failed_archives and rolled_forward_tokens + failed_tokens > token_budget:
+                logger.info(
+                    "Stopped rolling failed archives into %s at %d/%d tokens; "
+                    "remaining failures will be covered by a later commit",
+                    self.session_id,
+                    rolled_forward_tokens,
+                    token_budget,
+                )
+                break
+
             failed_meta = await self._archives.read_meta(state.archive_uri)
             self._archives.merge_completed_memory_steps(
                 completed_memory_steps,
@@ -3097,6 +3207,7 @@ class Session:
             )
             messages.extend(failed_messages)
             covered_failed_archives.append(state.archive_id)
+            rolled_forward_tokens += failed_tokens
 
         messages.extend(current_messages)
         messages = self._archives.stable_deduplicate_messages(messages)

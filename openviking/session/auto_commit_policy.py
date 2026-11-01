@@ -21,12 +21,16 @@ DEFAULT_MESSAGE_COUNT_THRESHOLD = 100
 DEFAULT_IDLE_TIMEOUT_SECONDS = 86400  # 1 day
 DEFAULT_KEEP_RECENT_COUNT = 0
 DEFAULT_MIN_COMMIT_INTERVAL_SECONDS = 0
+# Token budget for failed archives rolled into one Phase-2 run. 0 disables
+# rolling failed predecessors forward, leaving them for manual retry.
+DEFAULT_FAILED_ARCHIVE_ROLL_FORWARD_TOKEN_BUDGET = 150000
 
 # PRD bounds.
 MIN_IDLE_TIMEOUT_SECONDS = 300  # 5 minutes
 MAX_PENDING_TOKEN_THRESHOLD = 1000000
 MAX_MESSAGE_COUNT_THRESHOLD = 1000
 MAX_IDLE_TIMEOUT_SECONDS = 604800  # 7 days
+MAX_FAILED_ARCHIVE_ROLL_FORWARD_TOKEN_BUDGET = 1000000
 
 _POLICY_KEYS = {
     "pending_token_threshold",
@@ -34,6 +38,7 @@ _POLICY_KEYS = {
     "idle_timeout_seconds",
     "keep_recent_count",
     "min_commit_interval_seconds",
+    "failed_archive_roll_forward_token_budget",
 }
 
 
@@ -72,6 +77,7 @@ class AutoCommitPolicy:
     idle_timeout_seconds: int = DEFAULT_IDLE_TIMEOUT_SECONDS
     keep_recent_count: int = DEFAULT_KEEP_RECENT_COUNT
     min_commit_interval_seconds: int = DEFAULT_MIN_COMMIT_INTERVAL_SECONDS
+    failed_archive_roll_forward_token_budget: int = DEFAULT_FAILED_ARCHIVE_ROLL_FORWARD_TOKEN_BUDGET
 
     @classmethod
     def default(cls) -> "AutoCommitPolicy":
@@ -123,6 +129,15 @@ class AutoCommitPolicy:
                 minimum=0,
                 maximum=MAX_IDLE_TIMEOUT_SECONDS,
             ),
+            failed_archive_roll_forward_token_budget=_coerce_int(
+                data.get(
+                    "failed_archive_roll_forward_token_budget",
+                    default.failed_archive_roll_forward_token_budget,
+                ),
+                field="failed_archive_roll_forward_token_budget",
+                minimum=0,
+                maximum=MAX_FAILED_ARCHIVE_ROLL_FORWARD_TOKEN_BUDGET,
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -132,4 +147,7 @@ class AutoCommitPolicy:
             "idle_timeout_seconds": self.idle_timeout_seconds,
             "keep_recent_count": self.keep_recent_count,
             "min_commit_interval_seconds": self.min_commit_interval_seconds,
+            "failed_archive_roll_forward_token_budget": (
+                self.failed_archive_roll_forward_token_budget
+            ),
         }

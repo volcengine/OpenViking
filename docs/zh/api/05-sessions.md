@@ -54,8 +54,11 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 | `idle_timeout_seconds` | int | 86400 | 0（关闭）或 300 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
 | `keep_recent_count` | int | 0 | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
 | `min_commit_interval_seconds` | int | 0 | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
+| `failed_archive_roll_forward_token_budget` | int | 150000 | 0 | 1000000 | 单次 Phase-2 运行可滚动纳入的历史失败归档 token 预算。最老的失败归档始终会被纳入；达到预算后不再继续添加，其余归档由后续 commit 继续消化。`0` 表示关闭滚动恢复，失败归档只保留给手动重试。 |
 
 新传入的 `idle_timeout_seconds` 必须为 `0`（关闭）或不小于 `300`，超过 `604800` 时会被 clamp 到该上限；为兼容存量数据，已经保存的小于 300 的正值仍按原值读取。其他字段最小值为 `0`，并会被 clamp 到各自范围。未知字段会以 `InvalidArgumentError` 拒绝。idle 超时还要求服务端开启 `memory.session_auto_commit.enabled`；仅设置 `idle_timeout_seconds` 不会启动扫描器。
+
+被滚动纳入的历史失败归档如果再次失败，最多自动重试两次；之后后续 commit 会跳过它，留给手动重试，避免单个始终失败的归档拖垮之后每一次 commit。
 
 #### 3. 使用示例
 

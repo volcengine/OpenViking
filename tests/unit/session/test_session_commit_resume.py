@@ -576,3 +576,180 @@ async def test_prepare_phase2_bounds_the_failed_archive_backlog():
     assert covered == [f"archive_{index:03d}" for index in range(1, limit + 1)]
     assert [message.id for message in messages][-1] == "current"
     assert len(messages) == limit + 1
+
+
+def _roll_forward_files(session_uri: str, messages_by_archive: dict[str, list[Message]]) -> dict:
+    files = {}
+    for archive_id, archive_messages in messages_by_archive.items():
+        archive_uri = f"{session_uri}/history/{archive_id}"
+        files[f"{archive_uri}/messages.jsonl"] = "".join(
+            f"{message.to_jsonl()}\n" for message in archive_messages
+        )
+        files[f"{archive_uri}/.failed.json"] = json.dumps({"stage": "memory_extraction"})
+    return files
+
+
+@pytest.mark.asyncio
+async def test_prepare_phase2_stops_rolling_forward_at_the_token_budget():
+    from openviking.session.extraction_batch import estimate_extraction_message_tokens
+
+    session_uri = "viking://user/default/sessions/session-1"
+    first = Message(id="failed-1", role="user", parts=[TextPart("a" * 4000)])
+    second = Message(id="failed-2", role="user", parts=[TextPart("b" * 4000)])
+    current = Message(id="current-1", role="user", parts=[TextPart("current")])
+    files = _roll_forward_files(
+        session_uri,
+        {"archive_001": [first], "archive_002": [second], "archive_003": [current]},
+    )
+    first_tokens = estimate_extraction_message_tokens([first])
+    files.pop(f"{session_uri}/history/archive_003/.failed.json")
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+    policy = {"failed_archive_roll_forward_token_budget": first_tokens + 1}
+
+    messages, _, _, covered, _ = await session._prepare_phase2_archive_messages(
+        f"{session_uri}/history/archive_003",
+        [current],
+        auto_commit_policy=policy,
+    )
+
+    assert covered == ["archive_001"]
+    assert [message.id for message in messages] == ["failed-1", "current-1"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_phase2_still_includes_one_archive_larger_than_the_budget():
+    from openviking.session.extraction_batch import estimate_extraction_message_tokens
+
+    session_uri = "viking://user/default/sessions/session-1"
+    oversized = Message(id="failed-1", role="user", parts=[TextPart("a" * 4000)])
+    current = Message(id="current-1", role="user", parts=[TextPart("current")])
+    files = _roll_forward_files(session_uri, {"archive_001": [oversized], "archive_002": [current]})
+    files.pop(f"{session_uri}/history/archive_002/.failed.json")
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+    policy = {
+        "failed_archive_roll_forward_token_budget": (
+            estimate_extraction_message_tokens([oversized]) - 1
+        )
+    }
+
+    messages, _, _, covered, _ = await session._prepare_phase2_archive_messages(
+        f"{session_uri}/history/archive_002",
+        [current],
+        auto_commit_policy=policy,
+    )
+
+    assert covered == ["archive_001"]
+    assert [message.id for message in messages] == ["failed-1", "current-1"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_phase2_skips_all_predecessors_when_the_budget_is_zero():
+    session_uri = "viking://user/default/sessions/session-1"
+    failed = Message(id="failed-1", role="user", parts=[TextPart("failed")])
+    current = Message(id="current-1", role="user", parts=[TextPart("current")])
+    files = _roll_forward_files(session_uri, {"archive_001": [failed], "archive_002": [current]})
+    files.pop(f"{session_uri}/history/archive_002/.failed.json")
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+
+    messages, _, _, covered, _ = await session._prepare_phase2_archive_messages(
+        f"{session_uri}/history/archive_002",
+        [current],
+        auto_commit_policy={"failed_archive_roll_forward_token_budget": 0},
+    )
+
+    assert covered == []
+    assert [message.id for message in messages] == ["current-1"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_phase2_skips_archives_that_exhausted_roll_forward_attempts():
+    from openviking.session import session as session_module
+
+    session_uri = "viking://user/default/sessions/session-1"
+    poisoned = Message(id="poisoned", role="user", parts=[TextPart("poisoned")])
+    healthy = Message(id="healthy", role="user", parts=[TextPart("healthy")])
+    current = Message(id="current-1", role="user", parts=[TextPart("current")])
+    files = _roll_forward_files(
+        session_uri,
+        {"archive_001": [poisoned], "archive_002": [healthy], "archive_003": [current]},
+    )
+    files.pop(f"{session_uri}/history/archive_003/.failed.json")
+    files[f"{session_uri}/history/archive_001/.failed.json"] = json.dumps(
+        {
+            "stage": "memory_extraction",
+            "error": "parse error",
+            "roll_forward_attempts": session_module._PHASE2_MAX_ROLL_FORWARD_ATTEMPTS,
+        }
+    )
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+
+    messages, _, _, covered, _ = await session._prepare_phase2_archive_messages(
+        f"{session_uri}/history/archive_003", [current]
+    )
+
+    assert covered == ["archive_002"]
+    assert [message.id for message in messages] == ["healthy", "current-1"]
+
+
+@pytest.mark.asyncio
+async def test_roll_forward_failure_counts_attempts_without_losing_marker_fields():
+    session_uri = "viking://user/default/sessions/session-1"
+    current_uri = f"{session_uri}/history/archive_003"
+    files = {
+        f"{session_uri}/history/archive_001/.failed.json": json.dumps(
+            {
+                "stage": "memory_extraction",
+                "error": "parse error",
+                "failed_at": "2026-01-01T00:00:00Z",
+                "skipped": True,
+                "roll_forward_attempts": 1,
+                "completed_memory_steps": {"long_term": ["failed-1"]},
+            }
+        ),
+        f"{session_uri}/history/archive_002/.failed.json": json.dumps(
+            {"stage": "memory_extraction", "error": "provider timeout"}
+        ),
+    }
+    viking_fs = _MemoryVikingFS(files)
+    session = Session(viking_fs=viking_fs, session_id="session-1", session_uri=session_uri)
+
+    await session._record_roll_forward_attempts(current_uri, ["archive_001", "archive_002"])
+
+    first = json.loads(viking_fs.files[f"{session_uri}/history/archive_001/.failed.json"])
+    second = json.loads(viking_fs.files[f"{session_uri}/history/archive_002/.failed.json"])
+    assert first["roll_forward_attempts"] == 2
+    assert first["stage"] == "memory_extraction"
+    assert first["error"] == "parse error"
+    assert first["failed_at"] == "2026-01-01T00:00:00Z"
+    assert first["completed_memory_steps"] == {"long_term": ["failed-1"]}
+    assert first["roll_forward_failed_at"]
+    assert second["roll_forward_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_roll_forward_attempt_counting_tolerates_unreadable_markers():
+    session_uri = "viking://user/default/sessions/session-1"
+    viking_fs = _MemoryVikingFS({})
+    session = Session(viking_fs=viking_fs, session_id="session-1", session_uri=session_uri)
+
+    await session._record_roll_forward_attempts(
+        f"{session_uri}/history/archive_002", ["archive_001"]
+    )
+
+    assert viking_fs.files == {}
