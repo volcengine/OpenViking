@@ -97,17 +97,16 @@ export function isPluginEnabled() {
 /**
  * Load the full plugin configuration.
  *
- * `cwd` selects the workspace layer (`.openviking/config.json` and the
- * registry entry for that directory). It defaults to this process's directory,
- * which is all a hook knows at module load; a hook whose payload names the
- * session's directory calls this again with it. Re-resolving that late is safe
+ * Claude's project root selects the workspace layer even after a hook's cwd
+ * moves to a worktree or another directory. Without that host variable, `cwd`
+ * selects it; hooks reload with the directory in their payload. Re-resolving is safe
  * because a workspace file may not carry connection or credential keys, so
  * baseUrl/apiKey cannot move — loggers and fetch helpers built from the first
  * load stay valid.
  */
 export function loadConfig(cwd = process.cwd(), { env = process.env } = {}) {
   const config = buildPluginConfig("claude-code", {
-    cwd,
+    cwd: env.CLAUDE_PROJECT_DIR?.trim() || cwd,
     env,
     manifestUrl: MANIFEST_URL,
     logFile: "cc-hooks.log",
