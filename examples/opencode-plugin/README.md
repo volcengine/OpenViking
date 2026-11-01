@@ -267,3 +267,38 @@ Registry failures stop the workflow instead of treating an unavailable registry 
 an unused version. Only upstream `main` can publish the official npm `latest` tag.
 Manual dispatch on `main` retries a failed release using the existing npm credentials
 or Trusted Publishing configuration.
+
+## Read-only diagnostics (OpenCode V2)
+
+Run `node scripts/ov-memory-doctor.mjs --json` from the installed plugin directory.
+Use `--offline` to skip server probes. The CLI resolves the same OpenViking configuration
+as the plugin, reads capture metadata without transcript bodies, and reuses the shared
+memory doctor's authenticated HTTP/MCP probes and verdicts. It never repairs configuration,
+replays pending writes, or commits a session. Native plugin/MCP/skill inventories require
+an active OpenCode host; the standalone CLI labels them `unsupported`.
+
+The V2 server registers RPC `openviking.controls` for a native TUI/client consumer:
+
+| Method | Input | Result |
+| --- | --- | --- |
+| `status`, `doctor` | `{ "offline": true }` (optional boolean) | `schemaVersion: 1`, installation, MCP, skills, connection, capture, effective config, findings (`sections`), `text`, `exitCode` |
+| `commit` | `{ "sessionID": "<current OpenCode session>" }` | `status`, `traceId` when available, `extraction` |
+
+Read methods return only selected configuration fields and redact credentials. Inventory
+states distinguish disabled, unsupported, missing and failed registration. In particular,
+connected MCP with missing bundled native skills is a diagnostic failure. Capture timestamps
+record local activity and commit acceptance; they do not prove completed extraction.
+
+Commit is an intentional write. The caller must pass its current OpenCode session ID,
+never an OpenViking session ID. The server checks location ownership, respects capture and
+child-session privacy settings, waits for serialized capture, sends current-session messages
+before committing, and refuses to overtake queued capture. `pending_capture` requires normal
+recovery before retrying. Auth/network errors remain failures (`operation_failed` over RPC),
+and HTTP acceptance returns `extraction: "not_verified"`, never completed extraction.
+Automatic lifecycle commits retain their existing retry behavior.
+
+Visible `/ov status`, `/ov doctor` and `/ov commit` controls require the TUI consumer.
+OpenCode V2 server command callbacks return no display value; writing a synthetic session
+message merely to show diagnostics would alter conversation history and contaminate capture.
+The server therefore exposes RPC rather than registering silent commands. The consumer
+should show read results in native UI and invoke `commit` only after intentional user action.

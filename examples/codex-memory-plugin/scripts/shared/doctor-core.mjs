@@ -491,7 +491,7 @@ export async function httpProbe({ url, method = "GET", headers = {}, body, timeo
 // A connection record carries no `sendIdentityHeaders`: the doctor asks with
 // the identity and reports whatever the server echoes back.
 function authHeaders(conn, { identity = true } = {}) {
-  return buildOvHeaders(conn, { actorPeerId: conn.peerId, identityHeaders: identity });
+  return buildOvHeaders(conn, { actorPeerId: conn.peerId, identityHeaders: identity, extraHeaders: conn.extraHeaders });
 }
 
 export function serverErrorMessage(probe) {
@@ -518,7 +518,7 @@ export async function probeOpenViking(conn, { timeoutMs = 5000, mcp = true } = {
     // Hard network failure: the rest of the ladder would fail identically.
     return out;
   }
-  if (conn.apiKey || conn.account || conn.user) {
+  if (conn.apiKey || conn.account || conn.user || Object.keys(conn.extraHeaders ?? {}).length) {
     out.healthAuth = await httpProbe({ url: `${base}/health`, timeoutMs, headers: authHeaders(conn) });
   }
   out.systemStatus = await httpProbe({ url: `${base}/api/v1/system/status`, timeoutMs, headers: authHeaders(conn) });

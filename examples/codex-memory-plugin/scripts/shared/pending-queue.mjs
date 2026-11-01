@@ -230,6 +230,38 @@ export async function enqueue(type, sessionId, payload, options = {}) {
   return { ok: false, error: `pending file exists but dedup entry was not readable: ${filename}`, dedupKey };
 }
 
+/** True if this session has a queued or in-flight write. Never claim or replay it. */
+export async function hasPendingSessionWrites(sessionId) {
+  if (!sessionId) return false;
+  const dir = getPendingDir();
+  let files;
+  try {
+    files = await readdir(dir);
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+  for (const name of files) {
+    if (!/\.(json|processing)$/.test(name)) continue;
+    // A drainer may have just claimed a file from this listing. Inspect the
+    // claimed spelling too; if it was removed, the drainer finished it.
+    let entry;
+    try {
+      entry = await readEntry(dir, name);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      const counterpart = name.endsWith(".json") ? processingFilename(name) : pendingFromProcessingFilename(name);
+      try {
+        entry = await readEntry(dir, counterpart);
+      } catch (retryError) {
+        if (retryError.code !== "ENOENT") throw retryError;
+      }
+    }
+    if (entry?.sessionId === sessionId) return true;
+  }
+  return false;
+}
+
 /**
  * List all pending queue entries.
  * Returns array of { filename, entry } sorted by createdAt ascending.
