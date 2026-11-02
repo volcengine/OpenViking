@@ -599,6 +599,8 @@ async def run_import(args: argparse.Namespace) -> None:
     total_embedding_tokens = 0
     total_vlm_tokens = 0
 
+    tasks = []
+
     if args.input.endswith(".json"):
         # LoCoMo JSON format
         samples = load_locomo_data(args.input, args.sample)
@@ -810,6 +812,14 @@ def main():
         help="Import LoCoMo images as structured image_url parts. Default: false; use blip_caption text for compatibility.",
     )
     args = parser.parse_args()
+
+    if args.input == default_input and not Path(args.input).exists():
+        print(
+            f"Error: default data file not found: {args.input}\n"
+            "Place locomo10.json under benchmark/locomo/data/ or pass --input <path>.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # 确保输出目录存在
     Path(args.success_csv).parent.mkdir(parents=True, exist_ok=True)
