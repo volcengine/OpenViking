@@ -154,6 +154,64 @@ async def test_update_fallback_and_checkpoint_check_final_summary_budget(monkeyp
     if checkpoint:
         assert result.checkpoint_summaries == ("checkpoint",)
     assert completion.await_args_list[-1].kwargs["messages"][0]["role"] == "system"
+    if checkpoint:
+        from openviking.session.working_memory import merge_wm_sections
+
+        expected_overview = merge_wm_sections(prior, {"Current State": {"op": "KEEP"}})
+    else:
+        expected_overview = "x" * 12000
+    assert completion.await_args_list[-1].kwargs["messages"][1]["content"] == expected_overview
+
+
+@pytest.mark.asyncio
+async def test_update_budget_retry_uses_complete_merged_summary(monkeypatch):
+    from openviking.session.working_memory import merge_wm_sections
+
+    prior = "## Current State\n" + "x" * 12000 + "\n\n## Key Facts & Decisions\n- Old fact"
+    operations = {
+        "Current State": {"op": "KEEP"},
+        "Key Facts & Decisions": {"op": "APPEND", "items": ["New fact"]},
+    }
+    merged = merge_wm_sections(prior, operations)
+    completion = AsyncMock(
+        side_effect=[
+            VLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="1",
+                        name="update_working_memory",
+                        arguments={"sections": operations},
+                    )
+                ]
+            ),
+            "compact",
+        ]
+    )
+    session = Session(viking_fs=None)
+    session._get_vlm_config = AsyncMock(
+        return_value=SimpleNamespace(is_available=lambda: True, get_completion_async=completion)
+    )
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(
+            output_language_override="en",
+            memory=SimpleNamespace(summary_budget_retry_enabled=True),
+        ),
+    )
+
+    result = await session._generate_archive_summary_async(
+        [_message("u1", text="New fact")],
+        latest_archive_overview=prior,
+        session_window_context=10000,
+    )
+
+    assert result == "compact"
+    assert completion.await_count == 2
+    retry = completion.await_args_list[-1].kwargs
+    assert retry["messages"][1]["content"] == merged
+    assert "Old fact" in merged and "New fact" in merged
+    assert not retry.get("tools")
+    assert "complete Working Memory" in retry["messages"][0]["content"]
 
 
 @pytest.mark.asyncio

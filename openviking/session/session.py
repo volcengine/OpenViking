@@ -3376,7 +3376,6 @@ class Session:
 
         async def _fit_summary(
             *,
-            first_prompt: str,
             first_overview: str,
             input_material: str,
         ) -> str:
@@ -3403,7 +3402,10 @@ class Session:
                 f"Hard budget: {summary_budget_tokens} tokens\n"
                 f"Previous output: {actual_tokens} tokens\n"
                 f"Overage: {max(0, actual_tokens - summary_budget_tokens)} tokens\n\n"
-                "Regenerate a more compact Working Memory. Merge duplicate wording, "
+                "Rewrite the supplied complete Working Memory as a more compact complete "
+                "Working Memory. Return only the full summary text, not tool calls or "
+                "section update operations. "
+                f"Write the summary in {output_language}. Merge duplicate wording, "
                 "remove low-priority process details, resolved issues that no longer "
                 "matter, and non-essential URLs or media lists. Preserve current state, "
                 "open issues, concrete decisions, dates, numbers, file paths, and user "
@@ -3413,7 +3415,7 @@ class Session:
                 await _complete(
                     messages=[
                         {"role": "system", "content": second_system},
-                        {"role": "user", "content": first_prompt},
+                        {"role": "user", "content": overview},
                     ],
                 )
                 or ""
@@ -3541,7 +3543,6 @@ class Session:
                     raise ValueError("create_working_memory.working_memory is empty")
                 return _ArchiveSummaryResult(
                     overview=await _fit_summary(
-                        first_prompt=prompt,
                         first_overview=working_memory,
                         input_material=f"{latest_archive_overview}\n\n{formatted}",
                     ),
@@ -3554,7 +3555,6 @@ class Session:
                 prompt=prompt,
             )
             return await _fit_summary(
-                first_prompt=prompt,
                 first_overview=str(first or ""),
                 input_material=formatted,
             )
@@ -3606,7 +3606,6 @@ class Session:
                 reasoning_effort=reasoning_effort,
             )
             return await _fit_summary(
-                first_prompt=update_prompt,
                 first_overview=fallback,
                 input_material=f"{latest_archive_overview}\n\n{formatted}",
             )
@@ -3702,7 +3701,6 @@ class Session:
                     len(WM_SEVEN_SECTIONS),
                 )
                 return await _fit_summary(
-                    first_prompt=update_prompt,
                     first_overview=wm.merge_wm_sections(latest_archive_overview, salvaged),
                     input_material=f"{latest_archive_overview}\n\n{formatted}",
                 )
@@ -3721,7 +3719,6 @@ class Session:
                 reasoning_effort=reasoning_effort,
             )
             return await _fit_summary(
-                first_prompt=update_prompt,
                 first_overview=fallback,
                 input_material=f"{latest_archive_overview}\n\n{formatted}",
             )
@@ -3732,7 +3729,6 @@ class Session:
         )
         overview = wm.merge_wm_sections(latest_archive_overview, ops)
         overview = await _fit_summary(
-            first_prompt=update_prompt,
             first_overview=overview,
             input_material=f"{latest_archive_overview}\n\n{formatted}",
         )
