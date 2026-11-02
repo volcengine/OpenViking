@@ -2080,68 +2080,28 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 }
 ```
 
-`redis_mysql` requires the `redis-mysql` extra and wraps the same MySQL
-parameters. Its `cache` block follows the top-level `cache` `provider/params`
-shape. The Python client currently supports `standalone`, `cluster`, and
-`sentinel` Redis deployments. MySQL and Redis/MySQL support an aggregate API-key
-authentication snapshot containing the verified account, user, role, and group IDs.
-On a MySQL read, credential verification, account/user deletion checks, role, and
-group membership are resolved in a single SQL statement. For non-OAuth API-key
-requests, normal identity resolution carries the snapshot's group IDs on
-`ResolvedIdentity`; `RequestContext` reuses them without repeating group or
-deletion reads. Other providers use the default snapshot method, which composes
-credential verification, user, deletion, and group reads. Identities whose groups
-remain unknown (`None`), including trusted, OAuth, and signed identities, retain
-their existing group and deletion checks.
+`redis_mysql` requires the `redis-mysql` extra. Its `mysql` block uses the
+same parameters as the MySQL provider; its `cache` block follows the top-level
+cache `provider/params` structure and supports `standalone`, `cluster`, and
+`sentinel` Redis deployments.
 
-Redis/MySQL caches these snapshots for API keys with both account and user hints,
-as well as individual users, per-user group IDs, and deletion records, with a
-fixed 60-second TTL by default. Redis operations run on
-one dedicated event loop. The v2 cache namespace uses persistent random account
-and user generations without TTL; data keys include those generations outside
-the stable account hash tag. Lua atomically initializes missing generations and
-reads the current cache. Conditional fills reject changed or missing generations.
-Same-key/generation misses share an in-process query; different keys load in
-parallel, subject to the MySQL connection pool. A cache miss queries MySQL directly
-without a second Redis read; its fill still compares the originally captured
-generations. A delayed MISS arriving after an earlier shared query has retired
-may issue another MySQL query. No distributed cache-fill lock
-is acquired. Cancelling one waiter does not cancel the shared query. Both normal cache misses and
-Redis-error fallback reads use the same authoritative MySQL connection pool.
-There is no additional application admission limit or fixed eight-query gate.
-The MySQL provider's pool size, zero overflow and pool waiting timeout provide
-backpressure; Redis failure alone does not imply MySQL overload. Business read
-errors propagate normally; no automatic MySQL retry or circuit breaker is
-introduced by this cache provider.
+MySQL remains the source of truth. Redis caches authentication results, user
+information, groups, and deletion status. Cache misses and Redis read failures
+fall back to MySQL. Configure `cache.params.ttl_seconds` to control cache lifetime;
+the default is 60 seconds. Hits do not extend the TTL.
 
-MySQL mutations are followed by a user or account generation change. Account-wide
-operations invalidate the whole account namespace, while user operations only
-invalidate that user's entries. Old data expires at its fixed TTL, without hit-time
-renewal. If Redis generation updates fail, cached data may remain stale until TTL
-expiration; TTL starts at fill time, so this is not a strong consistency or a
-mutation-relative staleness guarantee. Generation keys remain until explicitly
-removed and require capacity planning. Missing generations are reinitialized with
-new random tokens; old fills cannot recreate their previous generation.
+Credential, permission, and deletion changes invalidate the affected cache.
+If invalidation fails, cached data may remain stale until its TTL expires.
+Upgrade all instances sharing the cache together: old and new cache formats
+do not invalidate each other. Cache-version metadata does not expire automatically
+and should be included in Redis capacity planning. Legacy `lock_ttl_seconds` and
+`lock_wait_seconds` settings are accepted but no longer used.
 
-All writers sharing this cache must use the generation protocol. v1 entries are
-ignored; mixed v1/v2 writers do not invalidate each other's cache. Coordinate writer
-upgrades before enabling the v2 cache. Legacy `lock_ttl_seconds` and
-`lock_wait_seconds` are accepted and ignored. API keys without both account and user
-hints are verified directly in MySQL. Unknown credential hints do not create
-permanent generation metadata until a MySQL verification succeeds. For an aggregate
-authentication snapshot with missing metadata, shared queries retain any existing
-account/user generation, so requests after a successful generation update do not
-join an earlier query. The first valid request performs
-one MySQL read and initializes fresh generations without caching that snapshot:
-the verification occurred before generation capture. A following request can read
-MySQL once and conditionally fill the cache against the captured generations.
-Preparing a fully warm snapshot cache therefore requires two request waves.
-Standalone `verify_api_key` calls always verify directly in MySQL, including
-keys with account/user hints; no independent binding cache is maintained.
-Redis connection and command timeouts are configured with
-`cache.params.connect_timeout_ms` and `cache.params.command_timeout_ms`; both
-default to 5000 milliseconds when omitted. These are socket timeouts, not an
-overall request deadline. Size `cache.params.pool_size` for expected concurrent Redis commands; the client default is 32, and exhausting it causes connection errors and MySQL fallback. The example uses 100 connections.
+Redis connection and command timeouts use `cache.params.connect_timeout_ms` and
+`cache.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
+are socket timeouts, not an overall request deadline. Set `cache.params.pool_size`
+for the expected concurrent Redis requests; the default is 32, and the example
+below uses 100. Pool exhaustion causes connection errors and MySQL fallback.
 
 ```json
 {
