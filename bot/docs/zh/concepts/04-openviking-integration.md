@@ -225,6 +225,8 @@ agents:
 
 在新一轮开始前，如果历史达到阈值，AgentLoop 会先同步和 commit OpenViking Session，再构建新的提示上下文，从而避免超长对话持续膨胀。
 
+DeepSeek 在开启思考和工具调用时，要求历史助手消息保留原始 `reasoning_content`。本地 Session 历史会为 DeepSeek 模型保留该字段，包括后端配置为 `openai` 或 `litellm` 的情况。OpenViking 服务端上下文不保留私有推理内容，因此压缩后的服务端历史目前无法满足这一要求。使用开启思考的 DeepSeek 会话时，请设置 `bot.agents.session_context_enabled=false`，改用本地历史。该设置不会恢复已有会话中已经缺失的推理内容。
+
 ## 显式记忆提交
 
 用户明确要求长期记住信息时，Agent 调用 `openviking_memory_commit`：

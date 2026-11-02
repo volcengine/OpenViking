@@ -13,6 +13,105 @@ from vikingbot.agent.tools.spawn import WaitSubagentsTool
 from vikingbot.bus.queue import MessageBus
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["openai", "litellm"])
+async def test_subagent_replays_deepseek_reasoning_after_tool(tmp_path, monkeypatch, backend):
+    import httpx
+    from openai import AsyncOpenAI
+    from vikingbot.agent.tools.base import Tool
+    from vikingbot.config.schema import SessionKey
+    from vikingbot.providers.vlm_adapter import VLMProviderAdapter
+
+    from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+    from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+
+    class EchoTool(Tool):
+        name = "echo"
+        description = "Return a test result."
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, tool_context, **kwargs):
+            return "tool result"
+
+    calls = []
+
+    def completion(request):
+        payload = json.loads(request.content)
+        calls.append(payload)
+        message = {"role": "assistant", "content": "done", "reasoning_content": "finish"}
+        if len(calls) == 1:
+            message.update(
+                content=None,
+                reasoning_content="call echo first",
+                tool_calls=[
+                    {
+                        "id": "call-echo",
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": "{}"},
+                    }
+                ],
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "test-completion",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "deepseek-flash",
+                "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+            },
+        )
+
+    async def send(client, request, **kwargs):
+        return completion(request)
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+
+    monkeypatch.setattr(
+        "vikingbot.agent.tools.register_subagent_tools",
+        lambda registry, config: registry.register(EchoTool()),
+    )
+    vlm_cls = OpenAIVLM if backend == "openai" else LiteLLMVLMProvider
+    vlm = vlm_cls(
+        {
+            "provider": backend,
+            "model": "deepseek-flash",
+            "api_key": "test",
+            "api_base": "https://deepseek.example/v1",
+        }
+    )
+    bus = MessageBus()
+    http_client = httpx.AsyncClient()
+    async with AsyncOpenAI(
+        api_key="test",
+        base_url="https://deepseek.example/v1",
+        http_client=http_client,
+    ) as client:
+        if backend == "openai":
+            monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+        manager = SubagentManager(
+            provider=VLMProviderAdapter(vlm, default_model="deepseek-flash"),
+            workspace=tmp_path,
+            bus=bus,
+            config=SimpleNamespace(ov_server=SimpleNamespace(is_available=lambda: False)),
+        )
+        await manager._run_subagent(
+            "test",
+            "run echo",
+            "echo task",
+            SessionKey(type="cli", channel_id="default", chat_id="deepseek"),
+        )
+
+    assert len(calls) == 2
+    assistant = next(message for message in calls[1]["messages"] if message["role"] == "assistant")
+    assert assistant["reasoning_content"] == "call echo first"
+    assert assistant["tool_calls"][0]["id"] == "call-echo"
+    assert calls[1]["messages"][-1]["content"] == "tool result"
+    announcement = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert "done" in announcement.content
+
+
 def _write_skill(workspace: Path, name: str, content: str) -> None:
     skill_dir = workspace / "skills" / name
     skill_dir.mkdir(parents=True)

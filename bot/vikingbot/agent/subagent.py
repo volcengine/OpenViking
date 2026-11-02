@@ -281,13 +281,14 @@ class SubagentManager:
                         }
                         for tc in response.tool_calls
                     ]
-                    messages.append(
-                        {
-                            "role": "assistant",
-                            "content": ensure_non_empty_assistant_content(response.content),
-                            "tool_calls": tool_call_dicts,
-                        }
-                    )
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": ensure_non_empty_assistant_content(response.content),
+                        "tool_calls": tool_call_dicts,
+                    }
+                    if response.reasoning_content:
+                        assistant_message["reasoning_content"] = response.reasoning_content
+                    messages.append(assistant_message)
 
                     # Execute tools
                     for tool_call in response.tool_calls:

@@ -226,6 +226,8 @@ By default, model history comes from the most recent `memory_window` messages in
 
 Before a new turn, if history reaches the threshold, AgentLoop first synchronizes and commits the OpenViking Session, then builds the new prompt context. This prevents long conversations from growing without bound.
 
+DeepSeek thinking with tools requires the original `reasoning_content` on earlier assistant messages. Local Session history preserves this field for DeepSeek models, including when the configured backend is `openai` or `litellm`. OpenViking server context does not retain private reasoning, so compressed server history cannot currently satisfy this requirement. For thinking-enabled DeepSeek conversations, set `bot.agents.session_context_enabled=false` to use local history. This does not recover reasoning already absent from an existing session.
+
 ## Explicit Memory Commit
 
 When the user explicitly asks to remember information long term, the Agent invokes `openviking_memory_commit`:

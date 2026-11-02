@@ -9,6 +9,7 @@ from pydantic.json_schema import SkipJsonSchema
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from openviking_cli.utils.config.vlm_config import VLMCredential
+from vikingbot.providers.registry import find_by_model
 
 
 class ChannelType(str, Enum):
@@ -1081,6 +1082,10 @@ class Config(BaseSettings):
     def get_provider_name(self, model: str | None = None) -> str | None:
         """Get the registry name of the matched provider (e.g. "deepseek", "openrouter")."""
         _, name = self._match_provider(model)
+        if name in {"openai", "litellm"}:
+            model_provider = find_by_model(model or self.agents.model)
+            if model_provider and model_provider.name == "deepseek":
+                return model_provider.name
         return name
 
     def get_api_key(self, model: str | None = None) -> str | None:
