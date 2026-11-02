@@ -118,16 +118,16 @@ export class OpencodeAgent {
     this.configPath = null;
     this.sessionRotation = null;
     this.appliedModel = null;
+    // The model the ACP session reports as current. `model` stays what the
+    // daemon asked for ('' = OpenCode's own default), as in the Codex adapter.
+    this.sessionModel = '';
     this.settingsUpdate = null;
     this.modelCatalog = [];
   }
 
   get threadId() { return this.sessionId; }
 
-  get resolvedModel() {
-    return this.modelCatalog.find((entry) => entry.id === (this.model || ''))?.resolvedModel
-      || this.model;
-  }
+  get resolvedModel() { return this.model || this.sessionModel || ''; }
 
   get policyHash() {
     return createHash('sha256')
@@ -307,8 +307,7 @@ export class OpencodeAgent {
         // Apply the model before the stability window so start() only resolves
         // once the runtime is ready to accept a prompt with the right model.
         if (model) await this._applyModelOn(child, model);
-        // With no configured model the session's own default is in effect.
-        this.appliedModel = model || this.model;
+        this.appliedModel = model;
       }).then(() => new Promise((innerResolve) => {
         // A short no-input window lets a bad config/model fail the start before
         // the authority handoff instead of killing the first real turn.
@@ -390,7 +389,7 @@ export class OpencodeAgent {
         effortsKnown: false,
         efforts: [],
       }));
-    if (current && !this.model) this.model = current;
+    this.sessionModel = current;
   }
 
   async _applyModelOn(child, model) {
@@ -399,6 +398,7 @@ export class OpencodeAgent {
       configId: 'model',
       value: model,
     }, this.controlTimeoutMs);
+    this.sessionModel = model;
   }
 
   _nextRpcId() {
@@ -547,7 +547,7 @@ export class OpencodeAgent {
       inboundSeq: prepared.seqs.at(-1) ?? null,
       metadata: {
         runtime: OPENCODE_RUNTIME.id,
-        model: this.appliedModel || undefined,
+        model: this.resolvedModel || undefined,
         input,
         historyChars: Math.max(0, prepared.body.length - input.length),
         inboundSeqs: prepared.seqs,

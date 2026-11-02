@@ -6,7 +6,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+import { EventEmitter } from 'node:events';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
+import { OpencodeAgent } from '../src/opencode.mjs';
 import { resolveRuntimeModelTarget as parseRuntimeModelTarget } from '../src/runtime-catalog.mjs';
 import { adaptRuntime } from '../src/runtime-adapter.mjs';
 import { ActionService } from '../src/actions/service.mjs';
@@ -52,6 +54,69 @@ function backend(runtime, options = {}) {
     },
     cancelSessionRotation() { this.preparedSession = null; },
   };
+}
+
+// An `opencode acp` child that answers the startup handshake by itself, with
+// the session's own default model and no daemon-side model configured.
+function autoAnsweringOpencode(spawns, { defaultModel = 'volcengine-ark/ep-default' } = {}) {
+  return () => {
+    const child = new EventEmitter();
+    child.pid = 987_654_400 + spawns.length;
+    child.exitCode = null;
+    child.stdout = new EventEmitter();
+    child.stdout.setEncoding = () => {};
+    child.stderr = new EventEmitter();
+    child.stderr.setEncoding = () => {};
+    child.stdin = new EventEmitter();
+    child.stdin.writable = true;
+    child.stdin.end = () => {};
+    child.kill = (signal) => {
+      if (child.exitCode !== null) return;
+      child.exitCode = 0;
+      child.emit('exit', 0, signal);
+    };
+    child.requests = [];
+    const send = (frame) => setImmediate(() => child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', ...frame })}\n`));
+    const answer = (id, result) => send({ id, result });
+    const models = [defaultModel, 'volcengine-ark/ep-other'];
+    child.stdin.write = (line) => {
+      const message = JSON.parse(line);
+      if (message.method) child.requests.push(message);
+      if (message.method === 'initialize') {
+        answer(message.id, { protocolVersion: 1, agentInfo: { name: 'OpenCode', version: '1.19.5' } });
+      } else if (message.method === 'session/new') {
+        answer(message.id, {
+          sessionId: 'ses_switch',
+          configOptions: [{ id: 'model', type: 'select', currentValue: defaultModel, options: [
+            { value: defaultModel, name: 'Default' },
+            { value: 'volcengine-ark/ep-other', name: 'Other' },
+          ] }],
+        });
+      } else if (message.method === 'session/set_config_option') {
+        if (models.includes(message.params.value)) answer(message.id, {});
+        // What opencode 1.19.5 answers for a model it does not know.
+        else send({ id: message.id, error: { code: -32602, message: `Invalid params: model not found: ${message.params.value}` } });
+      }
+      return true;
+    };
+    spawns.push(child);
+    return child;
+  };
+}
+
+// A real OpencodeAgent behind AgentRuntime, starting from a fake Codex.
+function opencodeSwitchRuntime(directory, store, spawns) {
+  const config = {
+    opencodeBin: 'opencode', opencodeModel: '', workspace: directory, dataDir: directory,
+    profile: 'test-profile', connectors: ['lark'], actionSocketPath: path.join(directory, 'actions.sock'),
+    actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs', sendTimeoutMs: 5_000, maxReplyChars: 1_000,
+  };
+  return new AgentRuntime(config, store, quietLogger, {
+    codexFactory: (options) => backend('codex', options),
+    opencodeFactory: (options) => new OpencodeAgent(config, store, quietLogger, {
+      ...options, spawn: autoAnsweringOpencode(spawns), startStabilityMs: 1,
+    }),
+  });
 }
 
 describe('global Codex/Claude hard switch', () => {
@@ -593,6 +658,55 @@ describe('global Codex/Claude hard switch', () => {
       assert.equal(result.runtimeChanged, true);
       assert.equal(runtime.runtime, 'claude');
       assert.deepEqual(previous.calls, ['interrupt']);
+    } finally {
+      await runtime.stop();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('switches to OpenCode with no configured model, keeping the session default', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-opencode-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    const spawns = [];
+    const runtime = opencodeSwitchRuntime(directory, store, spawns);
+
+    try {
+      await runtime.start();
+      // No opencode_model setting and no VIKA_OPENCODE_MODEL, as on an
+      // instance that never ran OpenCode: the target model is the default ''.
+      const result = await runtime.transition({ kind: 'select-runtime', runtime: 'opencode' });
+      assert.equal(result.runtimeChanged, true);
+      assert.equal(runtime.runtime, 'opencode');
+      // The canonical default stands for "OpenCode's own model"; the session
+      // reports which one that is.
+      assert.equal(runtime.model, 'opencode');
+      assert.equal(runtime.backend.model, '');
+      assert.equal(runtime.backend.resolvedModel, 'volcengine-ark/ep-default');
+      // The session default needs no set_config_option round trip.
+      assert.equal(spawns.at(-1).requests.some((message) => message.method === 'session/set_config_option'), false);
+    } finally {
+      await runtime.stop();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to the OpenCode default when the saved model is gone', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-opencode-gone-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    const spawns = [];
+    const runtime = opencodeSwitchRuntime(directory, store, spawns);
+
+    try {
+      await runtime.start();
+      store.setSetting('opencode_model', 'volcengine-ark/ep-removed');
+      const result = await runtime.transition({ kind: 'select-runtime', runtime: 'opencode' });
+      assert.equal(result.runtimeChanged, true);
+      assert.equal(runtime.runtime, 'opencode');
+      assert.equal(runtime.backend.model, '');
+      assert.equal(runtime.backend.resolvedModel, 'volcengine-ark/ep-default');
+      assert.equal(spawns.length, 2);
     } finally {
       await runtime.stop();
       store.close();
