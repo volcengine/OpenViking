@@ -166,7 +166,12 @@ class CompileStore(Protocol):
         self, account_id: str, to: str, *, include_deleted: bool = False
     ) -> Optional[Dict[str, Any]]: ...
     def edit(
-        self, account_id: str, to: str, *, create: bool = False
+        self,
+        account_id: str,
+        to: str,
+        *,
+        create: bool = False,
+        inherited_lease: Any = None,
     ) -> AsyncContextManager[Dict[str, Any]]: ...
     def edit_move(
         self, account_id: str, from_uri: str, to_uri: str
@@ -369,7 +374,12 @@ class CompileStateStore:
 
     @asynccontextmanager
     async def edit(
-        self, account_id: str, to: str, *, create: bool = False
+        self,
+        account_id: str,
+        to: str,
+        *,
+        create: bool = False,
+        inherited_lease: Any = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Edit under the target lock and save on clean exit.
 
@@ -378,7 +388,7 @@ class CompileStateStore:
         """
         to = to.rstrip("/")
         path = self._record_path(account_id, to)
-        async with self.locked(path) as lease:
+        async with self.locked(path, inherited_lease) as lease:
             record = await self.read_json(path)
             if record is None:
                 if not create:
@@ -2621,7 +2631,12 @@ class CompileVersions:
             for target_to in {record["to"] for record, _ in files}:
                 record = await self._store.get(ctx.account_id, target_to)
                 if record is not None and not await self._running(ctx.account_id, record):
-                    await self._set_wiki_head(ctx.account_id, target_to, snapshot)
+                    await self._set_wiki_head(
+                        ctx.account_id,
+                        target_to,
+                        snapshot,
+                        metadata_lease=metadata_lease,
+                    )
 
     async def _changed(self, ctx: RequestContext, target_to: str, uri: str, snapshot: str) -> bool:
         """Compare blob IDs at their recorded paths using the caller's identity.
@@ -2678,8 +2693,17 @@ class CompileVersions:
             for target_to in records:
                 await self._set_wiki_head(ctx.account_id, target_to, snapshot)
 
-    async def _set_wiki_head(self, account_id: str, target_to: str, head: str) -> None:
-        async with self._store.edit(account_id, target_to) as record:
+    async def _set_wiki_head(
+        self,
+        account_id: str,
+        target_to: str,
+        head: str,
+        *,
+        metadata_lease: Any = None,
+    ) -> None:
+        async with self._store.edit(
+            account_id, target_to, inherited_lease=metadata_lease
+        ) as record:
             if record["status"] == "active":
                 record["wiki_head"] = head
 

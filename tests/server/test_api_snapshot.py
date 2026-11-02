@@ -622,6 +622,11 @@ async def test_restore_without_project_dir_restores_full_account_tree(
     client, c1_oid, blob_uri, v1_bytes = client_with_resource_and_blob
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     extra_uri = "viking://resources/full_restore_new.txt"
+    target = "viking://resources"
+    store = service.compile.lifecycle.store
+    async with store.edit(ctx.account_id, target, create=True) as record:
+        record["initialized"] = True
+        record["wiki_head"] = c1_oid
 
     await service.viking_fs.write_file(blob_uri, b"v2 modified content\n", ctx=ctx)
     await service.viking_fs.write_file(extra_uri, b"new at v2\n", ctx=ctx)
@@ -642,6 +647,7 @@ async def test_restore_without_project_dir_restores_full_account_tree(
     assert result["parent_commit"] == c2_oid
     assert blob_uri.removeprefix("viking://") in result["written_paths"]
     assert extra_uri.removeprefix("viking://") in result["deleted_paths"]
+    assert (await store.get(ctx.account_id, target))["wiki_head"] == result["new_commit_oid"]
 
     show_resp = await client.get(
         "/api/v1/snapshot/show",
