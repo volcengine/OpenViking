@@ -537,6 +537,37 @@ describe('agent tools', () => {
     assert.equal(result.text, JSON.stringify({ archive_id: 'archive_002', messages: [] }));
     assert.equal((await call('read_openviking_session_context', { epoch })).data.text, JSON.stringify({ messages: [] }));
   });
+  it('keeps a thread\'s answer in its thread: a send back to that chat is refused with the reply that fits', async (t) => {
+    const { call, connectors, inbound, store } = setup(t, { ids: ['lark', 'slack'] });
+    inbound({ messageId: 'om_inThread12345', chatId: 'oc_group12345678', threadId: 'omt_topic1234567' });
+    inbound({ messageId: 'om_mainChat12345', chatId: 'oc_group12345678' });
+    // A card action's msg= is internal; the reply goes to its card.
+    inbound({ messageId: 'ca_cardAction123', chatId: 'oc_group12345678', threadId: 'omt_topic7654321',
+      messageType: 'card_action', parentId: 'om_card123456789' });
+    inbound({ source: 'slack', messageId: 'sl:T1:C1:1700000001.000200', chatId: 'C1', threadId: '1700000000.000100',
+      eventId: 'T1:C1:1700000001.000200' });
+    const refused = (pattern) => (error) => error.code === 'thread_target_mismatch' && pattern.test(error.message);
+    await assert.rejects(call('send_message', { chat_id: 'oc_group12345678', markdown: 'answer', decision_id: 'message:om_inThread12345' }),
+      refused(/reply_message, message_id=om_inThread12345, reply_in_thread=true/));
+    await assert.rejects(call('send_message', { chat_id: 'oc_group12345678', markdown: 'clicked', decision_id: 'message:ca_cardAction123' }),
+      refused(/message_id=om_card123456789,/));
+    await assert.rejects(call('send_message', { source: 'slack', chat_id: 'C1', markdown: 'answer', decision_id: 'T1:C1:1700000001.000200' }),
+      refused(/message_id=sl:T1:C1:1700000001\.000200,/));
+    assert.equal(connectors.calls.length, 0, 'a refused send reaches no connector');
+    assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM activities WHERE kind = 'delivery.blocked' AND detail_json LIKE '%thread_target_mismatch%'").get().n, 3);
+
+    // The answer inside the thread, a main-chat message's own send, and a send the
+    // task needs elsewhere (someone's direct chat) all go through.
+    await call('reply_message', { message_id: 'om_inThread12345', markdown: 'answer', reply_in_thread: true, decision_id: 'message:om_inThread12345' });
+    await call('send_message', { chat_id: 'oc_group12345678', markdown: 'answer', decision_id: 'message:om_mainChat12345' });
+    await call('send_message', { source: 'lark', chat_id: 'oc_p2pSomeone1234', markdown: 'the file', decision_id: 'message:om_inThread12345' });
+    assert.deepEqual(connectors.calls.map((item) => [item.action, item.input.message_id ?? item.input.chat_id]), [
+      ['message.reply', 'om_inThread12345'],
+      ['message.send', 'oc_group12345678'],
+      ['message.send', 'oc_p2pSomeone1234'],
+    ]);
+  });
+
 });
 
 describe('agent tool front-ends', () => {

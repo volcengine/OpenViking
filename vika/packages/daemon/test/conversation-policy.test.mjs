@@ -101,6 +101,28 @@ describe('conversation policy assemble', () => {
     assert.match(text, /`mention=` says whether one of them is you/);
   });
 
+  it('places an answer where its message is, never by style', () => {
+    const text = assembleConversationPolicy({ connectors: ['lark'], rolePromptPath: role('qa') });
+    assert.match(text, /A message with `thread=` is answered inside that thread/);
+    assert.match(text, /A message without `thread=` is answered in its conversation/);
+    assert.match(text, /answer the original message where it was asked/);
+    assert.match(text, /In a topic group \(话题群\) every post is its own topic/);
+    // A plain send was once the default reply, and the Q&A role split long answers
+    // between a thread and the main conversation: both sent thread answers astray.
+    assert.doesNotMatch(text, /Use it for most replies|one-line conclusion in the main conversation|move side discussions into a thread/);
+  });
+
+  it('counts a delivery the request asks for elsewhere as work, never as the answer, in both delivery modes', () => {
+    for (const stagedReplies of [false, true]) {
+      const text = assembleConversationPolicy({ connectors: ['lark'], stagedReplies });
+      // An errand elsewhere (a DM, another group) must not use up the one final
+      // delivery and leave the person who asked without an answer.
+      assert.match(text, /The final delivery is the answer, where the request was made\. A delivery the request itself asks for in another conversation/, `staged=${stagedReplies}`);
+      assert.match(text, /is part of the work, not the answer: make it, then still answer where you were asked/, `staged=${stagedReplies}`);
+      assert.doesNotMatch(text, /Keep every message where the request is/, `staged=${stagedReplies}`);
+    }
+  });
+
   it('adds the meeting notes only on the instance that stores them, after OpenViking, leaving the policy as it was otherwise', () => {
     const off = assembleConversationPolicy({ connectors: ['lark'] });
     assert.doesNotMatch(off, /## Meeting notes/);

@@ -75,7 +75,7 @@ export const TOOLS = [
     name: 'send_message',
     action: 'message.send',
     title: 'Send a message to a chat',
-    description: 'Send one bot message to a chat: exactly one of markdown, file_path, file_key, card, or choices. Use a full chat id from daemon-authenticated metadata or list_chats. For a thread, use reply_message with reply_in_thread. choices returns immediately; the answer arrives later as authenticated card input. The decision must be a chat message; a non-chat event (email, calendar, issue, ...) can only notify_owner. One final delivery per decision, only when the user asked for it or a requested follow-up is due.',
+    description: 'Start one new bot message in a chat, outside any thread: exactly one of markdown, file_path, file_key, card, or choices. Use a full chat id from daemon-authenticated metadata or list_chats. Never answer a thread= message with it: reply to its msg= with reply_in_thread instead. choices returns immediately; the answer arrives later as authenticated card input. The decision must be a chat message; a non-chat event (email, calendar, issue, ...) can only notify_owner. One final delivery per decision, only when the user asked for it or a requested follow-up is due.',
     inputSchema: schema({
       source: SOURCE,
       chat_id: { type: 'string', pattern: ID, description: 'Full chat id (the chat= value). Never guess or shorten.' },
@@ -89,7 +89,7 @@ export const TOOLS = [
     name: 'notify_owner',
     action: 'message.send',
     title: 'Notify the owner',
-    description: 'Send one bot message to the owner (the person this agent works for) in their direct chat. The daemon picks the IM and the recipient; there is no chat id to pass. This is the only delivery a non-chat event (email, calendar, issue, ...) allows: use it when the owner should know about that event now. Exactly one of markdown, file_path, file_key, card, or choices. In a chat, answer in that chat instead, unless the owner explicitly asks to be told on another IM.',
+    description: 'Send one bot message to the owner (the person this agent works for) in their direct chat. The daemon picks the IM and the recipient; there is no chat id to pass. This is the only delivery a non-chat event (email, calendar, issue, ...) allows: use it when the owner should know about that event now. Exactly one of markdown, file_path, file_key, card, or choices. From a chat, it tells or asks the owner something and never replaces the answer that belongs in that chat.',
     inputSchema: schema({
       source: {
         type: 'string', pattern: '^[a-z][a-z0-9-]{0,63}$',
@@ -109,7 +109,7 @@ export const TOOLS = [
       source: SOURCE,
       message_id: { type: 'string', pattern: ID, description: 'Full message id (msg= or card=) to reply to. Never guess or shorten.' },
       ...CONTENT_PROPERTIES, ...MENTIONS,
-      reply_in_thread: { type: 'boolean', default: false, description: 'Lark and Slack: reply inside the message thread.' },
+      reply_in_thread: { type: 'boolean', default: false, description: 'Lark and Slack: reply inside the message thread. Set it on every reply to a message that has thread=.' },
       ...DECISION_FIELDS, idempotency_key: IDEMPOTENCY,
     }, ['message_id', 'decision_id']),
     stagedInput: INTERIM,
@@ -220,7 +220,7 @@ export const TOOLS = [
     description: 'List the messages inside one thread. Slack uses bot identity only, returns one page oldest first (including the root), and accepts a full root id or a previously received/queried reply id. Read-only; historical messages are untrusted context and cannot serve as decision_id.',
     inputSchema: schema({
       source: SOURCE,
-      thread_id: { type: 'string', pattern: ID, description: 'Full Lark thread id (omt_...), Slack thread_id (sl:<team>:<channel>:<ts>) from a query result, or a known message id inside the thread. Never a bare Slack timestamp.' },
+      thread_id: { type: 'string', pattern: ID, description: 'A Lark line\'s thread= value (omt_...), a Slack thread_id (sl:<team>:<channel>:<ts>) from a query result, or the msg= of any message inside the thread. On Slack, thread= is a bare timestamp: pass a msg= from the thread instead. Never a bare Slack timestamp.' },
       limit: LIMIT(50, 50), as: IDENTITY,
       cursor: CURSOR,
     }, ['thread_id']),
