@@ -119,7 +119,10 @@ async def test_session_context_reserves_summary_before_active_messages():
 
 
 @pytest.mark.asyncio
-async def test_rolling_summary_stops_when_generated_summary_fills_material_window():
+async def test_rolling_summary_stops_when_generated_summary_fills_material_window(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.session._estimate_summary_template_tokens", lambda *args: 0
+    )
     session = Session(viking_fs=None)
     session._get_vlm_config = AsyncMock(return_value=SimpleNamespace(is_available=lambda: True))
     generate = AsyncMock(return_value="x" * 280)
@@ -134,7 +137,10 @@ async def test_rolling_summary_stops_when_generated_summary_fills_material_windo
 
 
 @pytest.mark.asyncio
-async def test_rolling_summary_splits_a_single_oversized_message():
+async def test_rolling_summary_splits_a_single_oversized_message(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.session._estimate_summary_template_tokens", lambda *args: 0
+    )
     session = Session(viking_fs=None)
     session._get_vlm_config = AsyncMock(return_value=SimpleNamespace(is_available=lambda: True))
     chunks = []
@@ -158,6 +164,69 @@ async def test_rolling_summary_splits_a_single_oversized_message():
     )
     assert len(chunks) > 1
     assert "".join(chunks) == source
+
+
+@pytest.mark.asyncio
+async def test_rolling_summary_includes_compression_template_in_material_budget(monkeypatch):
+    from openviking.session.session import _estimate_summary_template_tokens
+
+    session = Session(viking_fs=None)
+    session._get_vlm_config = AsyncMock(return_value=SimpleNamespace(is_available=lambda: True))
+    prior = "## Current State\n" + "x" * 8000
+    source = "x" * 14000
+    chunks = []
+
+    async def generate(messages, latest_archive_overview="", **kwargs):
+        chunks.extend(message.content for message in messages)
+        material_tokens = sum(message.estimated_tokens for message in messages)
+        material_tokens += estimate_text_tokens(latest_archive_overview)
+        material_tokens += _estimate_summary_template_tokens(latest_archive_overview)
+        assert material_tokens <= int(8192 * 0.7)
+        return "## Current State\ncompact"
+
+    session._generate_archive_summary_async = AsyncMock(side_effect=generate)
+    await session._generate_archive_summary_with_batching(
+        [_message("u1", text=source)],
+        latest_archive_overview=prior,
+        session_window_context=8192,
+    )
+    assert len(chunks) > 1
+    assert "".join(chunks) == source
+
+
+@pytest.mark.asyncio
+async def test_rolling_summary_with_real_update_template_fits_small_window(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(
+            output_language_override="en",
+            memory=SimpleNamespace(summary_budget_retry_enabled=True),
+        ),
+    )
+    completion = AsyncMock(
+        return_value=VLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="1",
+                    name="update_working_memory",
+                    arguments={
+                        "sections": {"Current State": {"op": "UPDATE", "content": "compact"}}
+                    },
+                )
+            ]
+        )
+    )
+    session = Session(viking_fs=None)
+    session._get_vlm_config = AsyncMock(
+        return_value=SimpleNamespace(is_available=lambda: True, get_completion_async=completion)
+    )
+    await session._generate_archive_summary_with_batching(
+        [_message("u1", text="x" * 14000)],
+        latest_archive_overview="## Current State\n" + "x" * 8000,
+        session_window_context=8192,
+    )
+    assert completion.await_count > 1
+    assert all(call.kwargs["max_tokens"] > 0 for call in completion.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -368,7 +437,10 @@ def test_phase2_batches_keep_a_turn_together_when_it_fits():
 
 
 @pytest.mark.asyncio
-async def test_working_memory_batches_carry_the_previous_summary_forward():
+async def test_working_memory_batches_carry_the_previous_summary_forward(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.session._estimate_summary_template_tokens", lambda *args: 0
+    )
     vlm = type("VLM", (), {"is_available": lambda self: True})()
     session = Session(
         viking_fs=None,
@@ -409,6 +481,9 @@ async def test_working_memory_batches_carry_the_previous_summary_forward():
 
 @pytest.mark.asyncio
 async def test_working_memory_batches_reserve_room_for_rolling_summary(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.session._estimate_summary_template_tokens", lambda *args: 0
+    )
     vlm = type("VLM", (), {"is_available": lambda self: True})()
     session = Session(
         viking_fs=None,

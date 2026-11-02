@@ -133,6 +133,30 @@ def _limit_summary_output_tokens(vlm: Any, output_budget: int) -> int:
     return output_budget
 
 
+def _estimate_summary_template_tokens(
+    latest_archive_overview: str,
+    checkpoint_count: int = 0,
+) -> int:
+    try:
+        render_prompt = _load_render_prompt()
+    except Exception:
+        return 0
+    is_update = any(f"## {section}" in latest_archive_overview for section in WM_SEVEN_SECTIONS)
+    variables = {
+        "messages": "",
+        "latest_archive_overview": latest_archive_overview,
+        "checkpoint_instructions": wm.checkpoint_prompt_instructions(checkpoint_count),
+        "output_language": "en",
+    }
+    if is_update:
+        variables["wm_section_reminders"] = wm.build_wm_section_reminders(latest_archive_overview)
+    prompt = render_prompt(
+        "compression.ov_wm_v2_update" if is_update else "compression.ov_wm_v2",
+        variables,
+    )
+    return max(0, estimate_text_tokens(prompt) - estimate_text_tokens(latest_archive_overview))
+
+
 def _publish_telemetry_summary_best_effort(snapshot: Any) -> None:
     """Publish a completed session telemetry summary without affecting the task outcome."""
     if snapshot is None:
@@ -2316,6 +2340,9 @@ class Session:
                             if latest_archive_overview
                             else 0
                         )
+                        material_tokens += _estimate_summary_template_tokens(
+                            latest_archive_overview, len(checkpoint_requests)
+                        )
                         if material_tokens + summary_material_tokens <= material_limit:
                             generated = await self._generate_archive_summary_async(
                                 extraction_messages,
@@ -3210,7 +3237,11 @@ class Session:
         )
         current_overview = latest_archive_overview
         remaining = deque(messages)
-        if estimate_text_tokens(current_overview) >= material_limit:
+        if (
+            estimate_text_tokens(current_overview)
+            + _estimate_summary_template_tokens(current_overview)
+            >= material_limit
+        ):
             remaining.appendleft(
                 Message(id="previous-summary", role="assistant", parts=[TextPart(current_overview)])
             )
@@ -3220,7 +3251,8 @@ class Session:
         while remaining:
             segment_index += 1
             summary_tokens = estimate_text_tokens(current_overview) if current_overview else 0
-            chunk_limit = material_limit - summary_tokens
+            template_tokens = _estimate_summary_template_tokens(current_overview)
+            chunk_limit = material_limit - summary_tokens - template_tokens
             if chunk_limit <= 0:
                 raise ValueError("Generated summary exceeds the rolling material budget")
             batch_messages: List[Message] = []
