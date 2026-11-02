@@ -28,6 +28,7 @@ EXACT = {"path": "/local/tenant/resources/file.md", "kind": "exact"}
 def client(error=None):
     return SimpleNamespace(
         pathlock_adopt=AsyncMock(side_effect=error, return_value={"lease_ref": "adopted"}),
+        pathlock_reacquire_batch=AsyncMock(return_value={"lease_ref": "fresh"}),
         pathlock_acquire_batch=AsyncMock(return_value={"lease_ref": "fresh"}),
         pathlock_release=AsyncMock(),
     )
@@ -45,7 +46,11 @@ async def test_migration_preserves_mixed_coverage_and_account():
         fallback_requests=fallback,
     )
     assert result == {"lease_ref": "fresh"}
-    agfs.pathlock_acquire_batch.assert_awaited_once_with(requests, fs_ctx={"account_id": "tenant"})
+    agfs.pathlock_adopt.assert_awaited_once()
+    agfs.pathlock_reacquire_batch.assert_awaited_once_with(
+        requests, "old", fs_ctx={"account_id": "tenant"}
+    )
+    agfs.pathlock_acquire_batch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -64,6 +69,56 @@ async def test_unrelated_adopt_errors_never_reacquire(error):
         await adopt_or_reacquire(agfs, {"covered_paths": [TREE]}, ctx=CTX)
     assert raised.value is error
     agfs.pathlock_acquire_batch.assert_not_awaited()
+    agfs.pathlock_reacquire_batch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_holder_adoption_contention_is_bounded_without_reacquiring():
+    agfs = client(LockAcquisitionError("another live owner"))
+    with pytest.raises(HandoffRecoveryBlocked):
+        await adopt_or_reacquire(
+            agfs, {"holder_id": "source", "owner_id": "owner", "covered_paths": [TREE]}, ctx=CTX
+        )
+    agfs.pathlock_acquire_batch.assert_not_awaited()
+    assert agfs.pathlock_adopt.await_count == 1
+    agfs.pathlock_reacquire_batch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_holder_adoption_does_not_resolve_historic_fallback():
+    agfs = client()
+    fallback = AsyncMock(side_effect=AssertionError("historic fallback was evaluated"))
+    result = await adopt_or_reacquire(
+        agfs,
+        {"holder_id": "source", "owner_id": "owner", "covered_paths": [TREE]},
+        ctx=CTX,
+        fallback_requests=fallback,
+    )
+    assert result == {"lease_ref": "adopted"}
+    fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["token_unavailable", "provider_changed"])
+async def test_explicit_same_owner_recovery_contention_is_bounded(reason):
+    agfs = client(HandoffRecoveryRequired(reason))
+    agfs.pathlock_reacquire_batch.side_effect = LockAcquisitionError("foreign owner")
+    with pytest.raises(HandoffRecoveryBlocked):
+        await adopt_or_reacquire(agfs, {"owner_id": "original", "covered_paths": [TREE]}, ctx=CTX)
+    agfs.pathlock_reacquire_batch.assert_awaited_once_with(
+        [TREE], "original", fs_ctx={"account_id": "tenant"}
+    )
+    agfs.pathlock_acquire_batch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", ["bad|owner", "bad:owner", "bad,owner", "bad\x00owner", 42])
+async def test_invalid_durable_owner_is_rejected_before_adoption(owner):
+    agfs = client()
+    with pytest.raises(InvalidPathLockRequestError):
+        await adopt_or_reacquire(agfs, {"owner_id": owner, "covered_paths": [TREE]}, ctx=CTX)
+    agfs.pathlock_adopt.assert_not_awaited()
+    agfs.pathlock_reacquire_batch.assert_not_awaited()
 
 
 @pytest.mark.asyncio

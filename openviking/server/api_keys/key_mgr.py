@@ -131,26 +131,34 @@ class APIKeyManager:
     async def resolve_identity(self, api_key: str) -> ResolvedIdentity:
         if self._root_api_key and hmac.compare_digest(api_key, self._root_api_key):
             return ResolvedIdentity(role=Role.ROOT)
-        account_id, user_id = await self._verify_key(api_key)
-        identity = await self._get_registered_identity(account_id, user_id)
-        deletion = await self.get_deletion(account_id, user_id) if identity is not None else None
-        if not self._is_authenticatable_identity(identity, deletion):
-            raise UnauthenticatedError("Account identity does not exist or is being deleted")
-        return identity
+        account_id, user_id = self._key_hints(api_key)
+        snapshot = await self._store.get_auth_snapshot(
+            api_key, account_id_hint=account_id, user_id_hint=user_id
+        )
+        if snapshot is None:
+            raise UnauthenticatedError("Invalid API key")
+        try:
+            registered_role = Role.parse(snapshot["role"])
+            if registered_role == Role.ROOT:
+                raise ValueError("ROOT is not an account role")
+        except (KeyError, ValueError):
+            raise UnauthenticatedError("Registered account identity has an invalid role") from None
+        return ResolvedIdentity(
+            role=registered_role,
+            account_id=snapshot["account_id"],
+            user_id=snapshot["user_id"],
+            group_ids=tuple(snapshot["group_ids"]),
+        )
 
-    async def _verify_key(self, key: str):
+    @staticmethod
+    def _key_hints(key: str) -> tuple[str, str]:
         if not is_valid_format_key(key):
             raise UnauthenticatedError("Invalid API key format")
         try:
             account_id, user_id, _ = parse_api_key(key)
         except (ValueError, UnicodeError):
             raise UnauthenticatedError("Invalid API key format") from None
-        binding = await self._store.verify_api_key(
-            key, account_id_hint=account_id, user_id_hint=user_id
-        )
-        if binding is not None:
-            return binding
-        raise UnauthenticatedError("Invalid API key")
+        return account_id, user_id
 
     async def create_account(
         self,
@@ -367,8 +375,8 @@ class APIKeyManager:
     async def add_group_members(self, account_id, group_id, user_ids):
         return await self._store.add_group_members(account_id, group_id, user_ids)
 
-    async def remove_group_member(self, account_id, group_id, user_id):
-        return await self._store.remove_group_member(account_id, group_id, user_id)
+    async def remove_group_members(self, account_id, group_id, user_ids):
+        return await self._store.remove_group_members(account_id, group_id, user_ids)
 
     async def delete_group(self, account_id, group_id):
         await self._store.delete_group(account_id, group_id)

@@ -69,15 +69,21 @@ class _FakeStreamingCompletions:
 
 
 class _FakeStreamingVLM:
+    _create_chat_completion = VolcEngineVLM._create_chat_completion
+    temperature = None
     provider = "volcengine"
     model = "test-model"
     thinking = False
 
     def __init__(self, completions: _FakeStreamingCompletions, max_retries: int = 2):
         self.max_retries = max_retries
-        self._client = SimpleNamespace(
-            chat=SimpleNamespace(completions=completions),
-        )
+
+        async def post(path, *, body, options, **_kwargs):
+            assert path == "/chat/completions"
+            assert "temperature" not in body
+            return await completions.create(**body, extra_headers=options.get("headers"))
+
+        self._client = SimpleNamespace(chat=SimpleNamespace(completions=completions), post=post)
 
     def get_async_client(self):
         return self._client
@@ -184,8 +190,14 @@ async def test_chat_without_tools_preserves_clean_content_and_metadata(
         assert "tools" not in kwargs
         return raw_response
 
+    async def post(path, *, body, **_kwargs):
+        assert path == "/chat/completions"
+        assert "temperature" not in body
+        return await create(**body)
+
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+        post=post,
     )
     vlm = vlm_type({"model": "gpt-5.6-terra", "api_key": "test-key"})
     if vlm_type is LiteLLMVLMProvider:
@@ -271,7 +283,7 @@ async def test_chat_stream_obeys_retry_policy(monkeypatch, code, expected_calls,
         create = AsyncMock(
             side_effect=[AsyncStream(cast_to=dict, response=r, client=client) for r in responses]
         )
-        monkeypatch.setattr(client.chat.completions, "create", create)
+        monkeypatch.setattr(client, "post", create)
         adapter = VLMProviderAdapter(vlm, "test-model", langfuse_client=_DisabledLangfuse())
         events = [event async for event in adapter.chat_stream(messages=[])]
     assert create.await_count == expected_calls
@@ -440,15 +452,16 @@ async def test_volcengine_request_settings_and_ids(monkeypatch, thinking, effort
             "reasoning_effort": "low",
         }
     )
+
+    def post(path, *, body, options, **_kwargs):
+        assert path == "/chat/completions"
+        assert "temperature" not in body
+        return create(**body, extra_headers=options.get("headers"))
+
     monkeypatch.setattr(
-        vlm,
-        "get_async_client",
-        lambda: SimpleNamespace(
-            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=create)))
-        ),
+        vlm, "get_async_client", lambda: SimpleNamespace(post=AsyncMock(side_effect=post))
     )
-    vlm._sync_client = vlm.get_async_client()
-    vlm._sync_client.chat.completions.create = create
+    vlm._sync_client = SimpleNamespace(post=post)
 
     for _ in range(2):
         assert await vlm.get_completion_async("hi", reasoning_effort=effort) == "ok"

@@ -1164,6 +1164,57 @@ async def test_read_passes_offset_limit_to_visible_read(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "arguments",
+    [
+        {"uri": "viking://resources/a.md"},
+        {"uri": ["viking://resources/a.md", "viking://resources/b.md"]},
+        {"uris": "viking://resources/a.md"},
+        {"uris": ["viking://resources/a.md", "viking://resources/b.md"]},
+    ],
+)
+async def test_read_accepts_uri_and_uris(monkeypatch, arguments):
+    read_visible = AsyncMock(return_value="body")
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
+    )
+    requested = next(iter(arguments.values()))
+    expected = requested if isinstance(requested, list) else [requested]
+
+    result = await mcp_endpoint.mcp.call_tool("read", arguments)
+
+    assert not getattr(result, "isError", False)
+    assert [call.args[0] for call in read_visible.await_args_list] == expected
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"uri": "viking://resources/a.md", "uris": "viking://resources/b.md"}, "not both"),
+        ({}, "read takes uri for one file"),
+        ({"uris": []}, "read takes uri for one file"),
+        ({"uri": ""}, "read takes uri for one file"),
+    ],
+)
+async def test_read_rejects_ambiguous_or_missing_uri(arguments, message):
+    result = await mcp_endpoint.mcp.call_tool("read", arguments)
+
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    assert result.content[0].text.startswith("INVALID_ARGUMENT: ")
+    assert message in result.content[0].text
+
+
+def test_read_schema_offers_uri_and_uris():
+    schema = mcp_endpoint.mcp._tool_manager.get_tool("read").parameters
+    assert schema["properties"]["uri"]["type"] == "string"
+    assert schema["properties"]["uris"]["type"] == "array"
+    assert schema["properties"]["uris"]["items"]["type"] == "string"
+    assert schema.get("required", []) == []
+
+
+@pytest.mark.parametrize(
     ("uri", "image_bytes", "mime_type"),
     [
         ("viking://resources/result.png", b"\x89PNG\r\n\x1a\nimage", "image/png"),

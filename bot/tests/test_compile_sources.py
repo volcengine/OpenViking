@@ -7,7 +7,7 @@ import json
 from dataclasses import asdict
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from PIL import Image, ImageDraw
@@ -31,6 +31,8 @@ from vikingbot.config.schema import Config, SessionKey
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
+
+from openviking.models.model_error import ModelErrorKind
 
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
@@ -103,9 +105,12 @@ async def seed(runtime):
 
 
 @pytest.mark.asyncio
-async def test_preloaded_image_fact_reaches_output_with_source_identity(runtime):
+@pytest.mark.parametrize("result_mode", ["files", "pipeline", "noop"])
+async def test_preloaded_image_fact_reaches_output_with_source_identity(runtime, result_mode):
     pipeline, png = runtime
     image = await seed(runtime)
+    if result_mode != "files":
+        pipeline.changes = {"diff_dirs": [], "full_dirs": pipeline.request.from_, "head": "head"}
     stored = await pipeline.files.get(image.payload_ref)
     assert "text" not in stored and stored["hash"] == content_hash(png)
     assert (stored["start_line"], stored["end_line"], stored["start_char"], stored["end_char"]) == (
@@ -135,6 +140,10 @@ async def test_preloaded_image_fact_reaches_output_with_source_identity(runtime)
         attached = next(p for p in content if p["type"] == "image_url")
         assert base64.b64decode(attached["image_url"]["url"].split(",")[1]) == png
         assert "RETRY LIMIT" not in json.dumps(data)
+        if result_mode == "noop":
+            return LLMResponse(content='{"files":[],"no_changes_reason":"No target changes."}')
+        if result_mode == "pipeline":
+            return LLMResponse(content='{"needs_pipeline":true,"files":[]}')
         # Simulated visual response: verifies transport and citation, not real-model OCR.
         return LLMResponse(
             content=json.dumps(
@@ -151,35 +160,79 @@ async def test_preloaded_image_fact_reaches_output_with_source_identity(runtime)
         )
 
     pipeline.model.provider.chat.side_effect = respond
-    result = await pipeline.model.ask("compile", "Inspect original images.", data, FileResponse)
-    assert "Retry limit: 7" in result.files[0].content and URI in result.files[0].content
-    assert result.files[0].inputs == [image.record_id]
+    if result_mode != "files":
+        expected = [] if result_mode == "noop" else None
+        assert await entry.run(pipeline, list(pipeline.records.values()), {}) == expected
+        assert pipeline.noop == (result_mode == "noop")
+    else:
+        result = await pipeline.model.ask("compile", "Inspect original images.", data, FileResponse)
+        assert "Retry limit: 7" in result.files[0].content and URI in result.files[0].content
+        assert result.files[0].inputs == [image.record_id]
 
 
-@pytest.mark.asyncio
-async def test_discovered_images_use_existing_multi_read_wrapper(runtime):
-    pipeline, png = runtime
-    pipeline.files.get = AsyncMock(wraps=pipeline.files.get)
-    pipeline.changes = {"diff_dirs": [], "full_dirs": ["viking://resources/cedar"], "head": "test"}
-    pipeline.tools = {
-        "openviking_multi_read": VikingMultiReadTool(),
-        "openviking_diff_paths": SimpleNamespace(name="openviking_diff_paths"),
-    }
-    pipeline.tool_context = ToolContext()
-
-    async def ask(*args, readers, **kwargs):
-        result = await readers["openviking_multi_read"].execute(uris=[URI])
-        assert isinstance(result, MultimodalToolResult) and URI in result.text
-        assert _inline_media_bytes([{"content": result.content}]) == len(png)
-        assert "base64," not in result.text
-        return SimpleNamespace(needs_pipeline=True)
-
-    pipeline.model.ask = AsyncMock(side_effect=ask)
-    assert await entry.run(pipeline, [], {}) is None
-    assert next(iter(pipeline.evidence.values()))["hash"] == content_hash(png)
-    assert not any(
-        call.args[0].startswith("sources/") for call in pipeline.files.get.await_args_list
+async def test_pipeline_inventory_combines_full_files_and_every_diff_page(runtime):
+    pipeline, _ = runtime
+    root, full = "viking://resources/cedar", "viking://resources/full"
+    uris = [f"{root}/{i:03}.md" for i in range(101)]
+    changes = {"diff_dirs": [root], "full_dirs": [full], "base": "base", "head": "head"}
+    pipeline.client.diff_paths = AsyncMock(
+        side_effect=lambda dirs, base, head, offset: {
+            "changes": [{"uri": uri, "change_type": "added"} for uri in uris[:100]]
+            if not offset
+            else [{"uri": uri, "change_type": "modified"} for uri in uris[99:]]
+            + [{"uri": f"{root}/deleted.md", "change_type": "deleted"}],
+            "has_more": not offset,
+            "next_offset": 100,
+        }
     )
+    directories = [full + "/nested" * depth for depth in range(5)]
+    full_files = [f"{full}/{i:03}.md" for i in range(500)] + [f"{directories[-1]}/notes.md"]
+    listings = {
+        parent: [{"uri": child, "isDir": True}]
+        for parent, child in zip(directories[:-1], directories[1:], strict=True)
+    }
+    listings[full] += [{"uri": uri} for uri in full_files[:-1]]
+    listings[directories[-1]] = [{"uri": full_files[-1]}]
+    pipeline.client.stat = AsyncMock(return_value={"isDir": True})
+    pipeline.client.list_resources = AsyncMock(
+        side_effect=lambda uri, node_limit, offset: listings[uri][offset : offset + node_limit]
+    )
+    service = BotCompileService.__new__(BotCompileService)
+    request = pipeline.request.model_copy(update={"changes": changes})
+    files = await service._list_pipeline_source_files(pipeline.client, request)
+    assert files == sorted([*uris, *full_files])
+    assert pipeline.client.diff_paths.await_args_list == [
+        call([root], base="base", head="head", offset=offset) for offset in (0, 100)
+    ]
+
+
+@pytest.mark.parametrize("fallback", ["requested", "budget", "model_limit"])
+async def test_directory_plan_pipeline_seeds_every_file_before_planning(runtime, fallback):
+    pipeline, _ = runtime
+    uris = [f"viking://resources/cedar/{i}.md" for i in range(100)]
+    pipeline.changes = {"diff_dirs": [], "full_dirs": pipeline.request.from_, "head": "head"}
+    pipeline.client.list_resources = AsyncMock(return_value=[])
+    pipeline.model.budget = 200_000
+    reply = LLMResponse(
+        content='{"needs_pipeline":true,"files":[]}',
+        finish_reason="error" if fallback == "model_limit" else "stop",
+        error_kind=ModelErrorKind.INPUT_TOO_LARGE if fallback == "model_limit" else None,
+    )
+    pipeline.model.provider.chat.side_effect = ([] if fallback == "budget" else [reply]) + [
+        CompileFailure("TEST_STOP", "Planning reached", stage="pipeline")
+    ]
+
+    async def batches():
+        text = "fact" * (1000 if fallback == "budget" else 1)
+        yield [part for uri in uris for part in split_source(uri, text, 40_000)]
+
+    with pytest.raises(CompileFailure, match="Planning reached"):
+        await pipeline.run(batches())
+    assert {e["uri"] for e in pipeline.evidence.values()} == set(uris)
+    calls = pipeline.model.provider.chat.await_args_list
+    assert len(calls) == (1 if fallback == "budget" else 2)
+    planned = json.loads(calls[-1].kwargs["messages"][1]["content"])
+    assert planned["source_summary"]["file_count"] == 100
 
 
 @pytest.mark.asyncio

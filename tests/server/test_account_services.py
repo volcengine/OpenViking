@@ -7,6 +7,8 @@ import os
 import threading
 from datetime import datetime
 from types import SimpleNamespace
+from typing import cast
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -22,9 +24,11 @@ from openviking.server.account_stores.mysql_schema import (
     GroupMember,
     User,
 )
+from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
 from openviking.server.api_keys import APIKeyManager, generate_api_key
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
+from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
@@ -432,6 +436,18 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
         assert await reader.get_user_group_ids("acme", "alice") == ("engineering",)
         assert await reader.get_user_group_ids("acme", "bob") == ("engineering",)
 
+        assert (
+            await writer.remove_group_members(
+                "acme", "engineering", ["alice", "bob", "alice", "missing"]
+            )
+            is True
+        )
+        assert await reader.get_group_members("acme", "engineering") == []
+        assert await reader.get_user_group_ids("acme", "alice") == ()
+        assert await reader.get_user_group_ids("acme", "bob") == ()
+        assert await writer.remove_group_members("acme", "engineering", ["alice", "bob"]) is False
+        await writer.add_group_members("acme", "engineering", ["alice", "bob"])
+
         await writer.delete_group("acme", "engineering")
 
         assert await reader.get_groups("acme") == []
@@ -466,11 +482,16 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
             )
     finally:
         try:
-            redis_client = writer._store._redis
-            if redis_client is not None:
+
+            async def clear_test_cache():
+                redis_client = writer._store._redis
+                if redis_client is None:
+                    return
                 keys = [key async for key in redis_client.scan_iter(match=f"{key_prefix}:*")]
                 if keys:
                     await redis_client.delete(*keys)
+
+            await writer._store._redis_runtime.run(clear_test_cache)
             async with engine.begin() as connection:
                 await connection.execute(
                     delete(Account).where(
@@ -584,3 +605,104 @@ async def test_group_deletion_preserves_users_and_persists_membership_removal():
     finally:
         await reloaded.close()
         await manager.close()
+
+
+async def test_file_batch_group_removal_is_atomic_and_persists_indexes(monkeypatch):
+    fs = SimpleNamespace(agfs=InMemoryAGFS())
+    manager = build_api_key_manager("root", cast(VikingFS, fs))
+    reloaded = build_api_key_manager("root", cast(VikingFS, fs))
+    await manager.load()
+    try:
+        await manager.create_account("acme", "alice")
+        await manager.register_user("acme", "bob")
+        for group in ("engineering", "reviewers"):
+            await manager.create_group("acme", group)
+            await manager.add_group_members("acme", group, ["alice", "bob"])
+        await manager.begin_deletion(
+            "acme", "bob", task_id="delete-bob", owner_account_id="acme", owner_user_id="alice"
+        )
+        store = manager._store
+        assert isinstance(store, FileStore)
+        write = AsyncMock(wraps=store._write_groups_json, side_effect=OSError("store unavailable"))
+        monkeypatch.setattr(store, "_write_groups_json", write)
+        before = dict(fs.agfs._files)
+        with pytest.raises(OSError, match="store unavailable"):
+            await manager.remove_group_members("acme", "engineering", ["alice", "bob"])
+        assert fs.agfs._files == before
+        assert await manager.get_group_members("acme", "engineering") == ["alice", "bob"]
+        for user_id in ("alice", "bob"):
+            assert await manager.get_user_group_ids("acme", user_id) == ("engineering", "reviewers")
+
+        write.reset_mock(side_effect=True)
+        assert (
+            await manager.remove_group_members(
+                "acme", "engineering", ["bob", "alice", "missing", "bob"]
+            )
+            is True
+        )
+        assert await manager.remove_group_members("acme", "engineering", ["alice", "bob"]) is False
+        write.assert_awaited_once()
+        await reloaded.load()
+        for reader in (manager, reloaded):
+            assert await reader.get_group_members("acme", "engineering") == []
+            assert await reader.get_group_members("acme", "reviewers") == ["alice", "bob"]
+            for user_id in ("alice", "bob"):
+                assert await reader.get_user_group_ids("acme", user_id) == ("reviewers",)
+    finally:
+        await reloaded.close()
+        await manager.close()
+
+
+async def test_file_concurrent_batch_group_removals_preserve_all_updates(monkeypatch):
+    store = _file_store()
+    await store.load()
+    try:
+        await store.create_account_with_api_key("acme", "alice", "alice-key")
+        for user_id in ("bob", "carol"):
+            await store.create_user("acme", user_id, "user")
+        await store.create_group("acme", "engineering")
+        await store.add_group_members("acme", "engineering", ["alice", "bob", "carol"])
+        write = store._write_groups_json
+
+        async def yielding_write(account_id, groups):
+            await asyncio.sleep(0)
+            await write(account_id, groups)
+
+        monkeypatch.setattr(store, "_write_groups_json", yielding_write)
+        assert await asyncio.gather(
+            store.remove_group_members("acme", "engineering", ["alice"]),
+            store.remove_group_members("acme", "engineering", ["bob", "missing"]),
+        ) == [True, True]
+        await store.load()
+        assert await store.get_group_members("acme", "engineering") == ["carol"]
+        assert await store.get_user_group_ids("acme", "alice") == ()
+        assert await store.get_user_group_ids("acme", "bob") == ()
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_redis_batch_group_removal_invalidates_account_after_attempt(monkeypatch, fails):
+    mysql = SimpleNamespace(
+        _service_name="test-remove",
+        _engine_options={},
+        remove_group_members=AsyncMock(return_value=True),
+    )
+    store = RedisMySQLAccountStore(
+        service_name="test-remove",
+        mysql_store=cast(MySQLAccountStore, mysql),
+        params={"cache": {"provider": "redis", "params": {}}},
+    )
+
+    bump = AsyncMock()
+    monkeypatch.setattr(store, "_bump_generation", bump)
+    if fails:
+        mysql.remove_group_members.side_effect = NotFoundError("engineering", "group")
+        with pytest.raises(NotFoundError):
+            await store.remove_group_members("acme", "engineering", ["alice", "bob", "alice"])
+    else:
+        assert await store.remove_group_members("acme", "engineering", ["alice", "bob", "alice"])
+    mysql.remove_group_members.assert_awaited_once_with("acme", "engineering", ["alice", "bob"])
+    # A failed call may have committed before reporting failure; conservatively
+    # invalidate the whole batch through the account generation in either case.
+    bump.assert_awaited_once_with("acme", None)

@@ -25,6 +25,7 @@ from openviking.service.task_work_index import extract_task_metadata, get_task_c
 from openviking.storage.errors import (
     HandoffRecoveryBlocked,
     HandoffRecoveryRequired,
+    InvalidPathLockRequestError,
     LockAcquisitionError,
 )
 from openviking.storage.pathlock_recovery import adopt_or_reacquire
@@ -82,6 +83,7 @@ Path(sys.argv[2]).write_text(json.dumps(handoff))
         handoff.pop("covered_paths")
         handoff["handle_id"] = handoff.pop("owner_id")
         handoff.pop("lease_ref")
+        handoff.pop("holder_id", None)
     config = RagfsBindingConfig(
         agfs=AGFSConfig(path=str(tmp_path), backend="local", pathlock={"provider": "cache"}),
         cache=CacheConfig(
@@ -92,6 +94,11 @@ Path(sys.argv[2]).write_text(json.dumps(handoff))
     )
     agfs = AsyncAGFSClient(create_agfs_client(config))
     ctx = SimpleNamespace(account_id="migration")
+    if not historic:
+        with pytest.raises(InvalidPathLockRequestError):
+            await adopt_or_reacquire(
+                agfs, handoff, ctx=SimpleNamespace(account_id="another-account")
+            )
     with pytest.raises(HandoffRecoveryRequired) as raised:
         await agfs.pathlock_adopt(handoff, fs_ctx={"account_id": "migration"})
     assert raised.value.reason == "provider_changed"
@@ -101,7 +108,7 @@ Path(sys.argv[2]).write_text(json.dumps(handoff))
 
     lease = await adopt_or_reacquire(agfs, handoff, ctx=ctx, fallback_requests=operation_requests)
     try:
-        assert lease["owner_id"] != handoff.get("owner_id", handoff.get("handle_id"))
+        assert lease["owner_id"] == handoff.get("owner_id", handoff.get("handle_id"))
         recovered = await agfs.pathlock_to_handoff(lease)
         assert recovered["covered_paths"] == coverage
         assert recovered["handle_mode"] == "logical_path"
@@ -174,6 +181,7 @@ async def main():
                 handoff.pop("covered_paths")
                 handoff["handle_id"] = handoff.pop("owner_id")
                 handoff.pop("lease_ref")
+                handoff.pop("holder_id", None)
         msg = ReindexMsg(task_id=task.task_id, uri=uri, object_type="resources",
                          mode="semantic", account_id="migration",
                          user_id="tester", role="root", lock_handoff=handoff,
@@ -288,7 +296,7 @@ async def test_sqlite_backlog_migrates_to_redis_and_is_consumed(
         )
         lease = lease_guard.lease
         assert time.monotonic() - item["acquired_at"] < 30
-        assert lease["owner_id"] != item["old_owner"]
+        assert lease["owner_id"] == item["old_owner"]
         assert lease["lease_ref"] != item["old_lease_ref"]
         handoff = await agfs.pathlock_to_handoff(lease)
         assert handoff["handle_mode"] == "logical_path"
@@ -381,10 +389,10 @@ async def test_sqlite_backlog_migrates_to_redis_and_is_consumed(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("historic", [False, True], ids=["current", "historic"])
 async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkeypatch, historic):
-    """Two native clients compete for one old handoff using real SQLite/Redis.
+    """Duplicate payloads recover independent holders under one logical owner.
 
-    Synchronization only forces the race and holds the winning write until the
-    losing consumer reports a real recovery conflict. No lock result is mocked.
+    Both writes are intentionally idempotent. A foreign owner remains excluded
+    until both independently responsible consumers release their holders.
     """
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
@@ -436,7 +444,7 @@ async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkey
     monkeypatch.setattr(manager_module, "_instance", managers[0])
     queues = []
     barrier = threading.Barrier(2)
-    conflict_seen, entered, finish = threading.Event(), threading.Event(), threading.Event()
+    entered, finish = threading.Event(), threading.Event()
     state_lock = threading.Lock()
     adoptions = 0
     active = 0
@@ -448,7 +456,6 @@ async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkey
         if isinstance(exc, HandoffRecoveryBlocked):
             with state_lock:
                 conflicts.append(msg.task_id)
-            conflict_seen.set()
         return await original_requeue(self, msg, exc)
 
     monkeypatch.setattr(ReindexProcessor, "_requeue_lock_handoff", record_conflict)
@@ -477,23 +484,22 @@ async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkey
         item = by_task[task_id]
         lease = lease_guard.lease
         agfs = lease_guard._agfs
-        assert lease["owner_id"] != item["old_owner"]
+        assert lease["owner_id"] == item["old_owner"]
         assert lease["lease_ref"] != item["old_lease_ref"]
         handoff = await agfs.pathlock_to_handoff(lease)
         assert handoff["covered_paths"] == [{"path": item["path"], "kind": "tree"}]
         output = item["path"] + "/contended.md"
         with state_lock:
             active += 1
-            assert active == 1, "two consumers entered the protected write"
+            if active == 2:
+                entered.set()
         try:
-            entered.set()
-            assert await asyncio.to_thread(finish.wait, 5), "winning write was never released"
+            assert await asyncio.to_thread(finish.wait, 5), "duplicate writes were never released"
             with pytest.raises(LockAcquisitionError):
                 await filesystems[0]._async_agfs.pathlock_acquire_exact(output)
-            previous = await agfs.read(output)
             await agfs.write(
                 output,
-                previous + task_id.encode() + b"\n",
+                b"replayed",
                 fs_ctx={"account_id": ctx.account_id, "lease_ref": lease["lease_ref"]},
             )
             with state_lock:
@@ -508,10 +514,7 @@ async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkey
         await managers[0].prepare_task_tracking(tracker)
         for manager in managers:
             manager.start()
-        assert await asyncio.to_thread(entered.wait, 5), "neither consumer acquired recovery lock"
-        assert await asyncio.to_thread(conflict_seen.wait, 5), (
-            "no real recovery contention observed"
-        )
+        assert await asyncio.to_thread(entered.wait, 5), "both duplicate holders must be acquired"
         assert len(executed) == 0
         finish.set()
         async with asyncio.timeout(10):
@@ -519,12 +522,12 @@ async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkey
                 await asyncio.sleep(0.05)
         for manager in managers:
             await asyncio.to_thread(manager.stop)
-        assert len(conflicts) == 1
+        assert len(conflicts) == 0
         assert {task_id for task_id, _ in executed} == set(by_task)
-        assert len({owner for _, owner in executed}) == 2
+        assert len({owner for _, owner in executed}) == 1
         assert active == 0
         statuses = [await queue.get_status() for queue in queues]
-        assert sum(status.requeue_count for status in statuses) == 1
+        assert sum(status.requeue_count for status in statuses) == 0
         assert sum(status.error_count for status in statuses) == 0
         assert await queues[0].snapshot() == []
         assert all(p.read_bytes() == data for p, data in old_files.items())
@@ -539,7 +542,7 @@ async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkey
             )
         agfs = filesystems[0]._async_agfs
         output = expected[0]["path"] + "/contended.md"
-        assert set((await agfs.read(output)).decode().splitlines()) == set(by_task)
+        assert await agfs.read(output) == b"replayed"
         lease = await agfs.pathlock_acquire_tree(expected[0]["path"])
         await agfs.pathlock_release(lease)
     finally:
@@ -551,7 +554,7 @@ async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkey
     reopened = create_agfs_client(config)
     agfs = AsyncAGFSClient(reopened)
     try:
-        assert set((await agfs.read(output)).decode().splitlines()) == set(by_task)
+        assert await agfs.read(output) == b"replayed"
         assert (
             await QueueManager(reopened)
             .get_queue(QueueManager.REINDEX, allow_create=True)
