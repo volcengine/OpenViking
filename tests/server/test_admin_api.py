@@ -2937,6 +2937,133 @@ async def test_list_users(admin_client: httpx.AsyncClient):
     assert user_ids == {"alice", "bob"}
 
 
+@pytest.mark.parametrize("caller", ["root", "admin"])
+async def test_remove_group_members_batch_is_idempotent_and_scoped(
+    lightweight_admin_client, lightweight_admin_app, caller
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account, other_account = _uid(), _uid()
+    admin_key = await manager.create_account(account, "owner")
+    await manager.register_user(account, "alice")
+    await manager.register_user(account, "bob")
+    await manager.register_user(account, "carol")
+    await manager.register_user(account, "nonmember")
+    await manager.create_account(other_account, "alice")
+    for account_id, group_id, members in (
+        (account, "engineering", ["alice", "bob", "carol", "owner"]),
+        (account, "reviewers", ["alice"]),
+        (other_account, "engineering", ["alice"]),
+    ):
+        await manager.create_group(account_id, group_id)
+        await manager.add_group_members(account_id, group_id, members)
+    headers = {"X-API-Key": ROOT_KEY if caller == "root" else admin_key}
+    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
+
+    single = await lightweight_admin_client.request(
+        "DELETE", url, json={"user_ids": ["alice"]}, headers=headers
+    )
+    assert single.status_code == 200, single.text
+    assert single.json()["result"] == {"removed": True}
+    body = {"user_ids": ["alice", "bob", "carol", "bob", "nonmember", "missing"]}
+    for removed in (True, False):
+        response = await lightweight_admin_client.request("DELETE", url, json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["result"] == {"removed": removed}
+
+    members = await lightweight_admin_client.get(url, headers=headers)
+    assert members.json()["result"] == {"group_id": "engineering", "members": ["owner"]}
+    assert await manager.get_group_members(account, "reviewers") == ["alice"]
+    assert await manager.get_group_members(other_account, "engineering") == ["alice"]
+    assert await manager.get_user_group_ids(account, "alice") == ("reviewers",)
+    assert await manager.get_user_group_ids(account, "bob") == ()
+    assert await manager.has_user(account, "alice")
+    assert await manager.has_user(account, "bob")
+
+
+async def test_remove_group_members_batch_enforces_permissions_and_group_existence(
+    lightweight_admin_client, lightweight_admin_app
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    await manager.create_account(account, "owner")
+    user_key = await manager.register_user(account, "alice")
+    other_admin_key = await manager.create_account(_uid(), "other-owner")
+    await manager.create_group(account, "engineering")
+    await manager.add_group_members(account, "engineering", ["alice", "owner"])
+    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
+    for headers, status in (
+        ({"X-API-Key": user_key}, 403),
+        ({"X-API-Key": other_admin_key}, 403),
+        ({}, 401),
+    ):
+        response = await lightweight_admin_client.request(
+            "DELETE", url, json={"user_ids": ["alice", "owner"]}, headers=headers
+        )
+        assert response.status_code == status, response.text
+    for missing_url in (
+        url.replace("/engineering/", "/missing/"),
+        url.replace(f"/{account}/", "/missing-account/"),
+    ):
+        response = await lightweight_admin_client.request(
+            "DELETE", missing_url, json={"user_ids": ["alice"]}, headers=root_headers()
+        )
+        assert response.status_code == 404, response.text
+    assert await manager.get_group_members(account, "engineering") == ["alice", "owner"]
+
+
+async def test_remove_group_members_batch_replaces_single_route_and_accepts_maximum_size(
+    lightweight_admin_client, lightweight_admin_app
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    await manager.create_account(account, "alice")
+    await manager.create_group(account, "engineering")
+    await manager.add_group_members(account, "engineering", ["alice"])
+    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
+
+    legacy = await lightweight_admin_client.delete(f"{url}/alice", headers=root_headers())
+    assert legacy.status_code == 404, legacy.text
+    assert await manager.get_group_members(account, "engineering") == ["alice"]
+    response = await lightweight_admin_client.request(
+        "DELETE", url, json={"user_ids": ["alice"] * 1000}, headers=root_headers()
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"] == {"removed": True}
+    assert await manager.get_group_members(account, "engineering") == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {},
+        {"user_ids": []},
+        {"user_ids": "alice"},
+        {"user_ids": [1]},
+        {"user_ids": [""]},
+        {"user_ids": [None]},
+        {"user_ids": ["alice"] * 1001},
+        {"user_ids": ["alice"], "extra": True},
+    ],
+)
+async def test_remove_group_members_batch_rejects_invalid_body(
+    admin_client, admin_app, body, monkeypatch
+):
+    remove = AsyncMock()
+    monkeypatch.setattr(admin_app.state.api_key_manager, "remove_group_members", remove)
+    response = await admin_client.request(
+        "DELETE",
+        "/api/v1/admin/accounts/acme/groups/engineering/members",
+        json=body,
+        headers=root_headers(),
+    )
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    assert error["details"]["validation_errors"]
+    remove.assert_not_awaited()
+
+
 async def test_remove_user(
     admin_client: httpx.AsyncClient,
     admin_service: OpenVikingService,
