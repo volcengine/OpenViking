@@ -11,15 +11,25 @@ import asyncio
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
-from openviking.core.context import Context, Vectorize
+from openviking.core.context import Context, ContextLevel, Vectorize
 from openviking.core.namespace import (
     canonical_user_root,
     context_type_for_uri,
     is_session_uri,
     user_space_fragment,
 )
+from openviking.pyagfs import AGFSNotFoundError
 from openviking.server.identity import RequestContext
-from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
+from openviking.storage.abstract_overview import (
+    AbstractOverviewFormatError,
+    body_for_preview,
+    render_abstract_overview,
+)
+from openviking.storage.acl import AclAction
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.pathlock_transfer import PathLockGuard
+from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.vector_ids import vector_record_id
 
@@ -216,18 +226,17 @@ class DirectoryInitializer:
         sync_system_assets: bool = True,
         lease_ref: Any = None,
     ) -> tuple[int, int]:
-        """Initialize account and first-user preset directories as one batch."""
+        """Initialize shared directories and the first user's space under the caller's lease."""
         if sync_system_assets and self._system_asset_synchronizer is not None:
             await self._system_asset_synchronizer.sync(ctx, lease_ref=lease_ref)
         account_roots, account_children = self._account_directory_targets(ctx)
-        user_root, user_children = self._user_directory_targets(ctx)
         created = await self._initialize_directory_trees(
-            (*account_roots, user_root),
-            (*account_children, *user_children),
+            account_roots,
+            account_children,
             lease_ref=lease_ref,
         )
-        user_count = sum(target.scope == "user" for target in created)
-        return len(created) - user_count, user_count
+        user_count = await self.initialize_user_directories(ctx, lease_ref=lease_ref)
+        return len(created), user_count
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
         """Initialize account-shared roots and their preset first-level directories.
@@ -241,17 +250,97 @@ class DirectoryInitializer:
         roots, children = self._account_directory_targets(ctx)
         return len(await self._initialize_directory_trees(roots, children))
 
-    async def initialize_user_directories(self, ctx: RequestContext) -> int:
-        """Initialize the current user's root and first-level entry directories.
+    async def initialize_user_directories(
+        self, ctx: RequestContext, *, lease_ref: Any = None
+    ) -> int:
+        """Create a user's preset space once, shared by registration and first use.
 
-        Concrete leaf namespaces under entries such as ``memories`` or ``sessions``
-        are still created lazily when content is written. This keeps a new user
-        root discoverable without materializing the full empty taxonomy.
+        Existing spaces return after one root listing, without locking, scanning,
+        or repairing their files. Empty spaces are checked again under the Tree
+        lease before creation. A failed creation retains its writes.
         """
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
-        return len(await self._initialize_directory_trees((user_root,), user_children))
+        viking_fs = self._get_viking_fs()
+        agfs = viking_fs._async_agfs
+        root_path = viking_fs._uri_to_path(user_root.uri, ctx=user_root.ctx)
+        guard = PathLockGuard(agfs)
+        try:
+            await viking_fs._ensure_access(user_root.uri, user_root.ctx, action=AclAction.WRITE)
+            if lease_ref is None:
+                try:
+                    entries = await agfs.ls(root_path)
+                except AGFSNotFoundError:
+                    entries = []
+                if any(not is_storage_internal_name(entry["name"]) for entry in entries):
+                    return 0
+                try:
+                    lease_ref = await guard.acquire(lambda: agfs.pathlock_acquire_tree(root_path))
+                except LockAcquisitionError as exc:
+                    raise ResourceBusyError(
+                        f"User workspace is busy and cannot be initialized now: {user_root.uri}",
+                        uri=user_root.uri,
+                    ) from exc
+            fs_ctx = viking_fs._pathlock_fs_ctx(user_root.ctx, lease_ref)
+            # A filesystem Tree token itself creates this directory. Only user
+            # content, not the storage-owned lock and metadata, makes it nonempty.
+            await agfs.ensure_parent_dirs(f"{root_path}/.abstract.md", fs_ctx=fs_ctx)
+            if any(
+                not is_storage_internal_name(entry["name"])
+                for entry in await agfs.ls(root_path, fs_ctx=fs_ctx)
+            ):
+                return 0
+
+            results = await asyncio.gather(
+                *(
+                    agfs.mkdir(viking_fs._uri_to_path(target.uri, ctx=target.ctx), fs_ctx=fs_ctx)
+                    for target in user_children
+                ),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+
+            targets = [user_root, *user_children]
+            results = await asyncio.gather(
+                *(
+                    agfs.write(
+                        viking_fs._uri_to_path(f"{target.uri}/{name}", ctx=target.ctx),
+                        render_abstract_overview(
+                            level,
+                            target.uri,
+                            body,
+                            {
+                                "generated_by": {
+                                    "component": "DirectoryInitializer",
+                                    "trigger": "user_initialization",
+                                }
+                            },
+                        ).encode("utf-8"),
+                        fs_ctx=fs_ctx,
+                    )
+                    for target in targets
+                    for name, level, body in (
+                        (".abstract.md", ContextLevel.ABSTRACT, target.definition.abstract),
+                        (".overview.md", ContextLevel.OVERVIEW, target.definition.overview),
+                    )
+                ),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+            await asyncio.gather(
+                *(
+                    self.vikingdb.enqueue_embedding_msg(message)
+                    for message in self._directory_l0_l1_messages(targets).values()
+                )
+            )
+            return len(targets)
+        finally:
+            await guard.close()
 
     async def _initialize_directory_trees(
         self,
@@ -402,6 +491,18 @@ class DirectoryInitializer:
 
     async def _ensure_directory_l0_l1_vectors(self, targets: list[_DirectoryTarget]) -> None:
         """Seed missing L0/L1 records after one batch existence read."""
+        messages = self._directory_l0_l1_messages(targets)
+        if not messages:
+            return
+        existing = await self.vikingdb.get(list(messages), ctx=targets[0].ctx)
+        for record in existing:
+            messages.pop(record.get("id"), None)
+        await asyncio.gather(
+            *(self.vikingdb.enqueue_embedding_msg(message) for message in messages.values())
+        )
+
+    def _directory_l0_l1_messages(self, targets: list[_DirectoryTarget]) -> dict[str, EmbeddingMsg]:
+        """Build the same preset records for new spaces and shared-directory repair."""
         vector_targets = [
             (target, level, vector_text)
             for target in targets
@@ -411,20 +512,8 @@ class DirectoryInitializer:
                 (1, target.definition.overview),
             )
         ]
-        if not vector_targets:
-            return
-
-        record_ids = [
-            vector_record_id(target.ctx.account_id, target.uri, level)
-            for target, level, _vector_text in vector_targets
-        ]
-        existing = await self.vikingdb.get(record_ids, ctx=vector_targets[0][0].ctx)
-        existing_ids = {record.get("id") for record in existing if record.get("id")}
-
-        messages = []
-        for record_id, (target, level, vector_text) in zip(record_ids, vector_targets, strict=True):
-            if record_id in existing_ids:
-                continue
+        messages = {}
+        for target, level, vector_text in vector_targets:
             context = Context(
                 uri=target.uri,
                 parent_uri=target.parent_uri,
@@ -439,10 +528,8 @@ class DirectoryInitializer:
             context.set_vectorize(Vectorize(text=vector_text))
             emb_msg = EmbeddingMsgConverter.from_context(context)
             if emb_msg:
-                messages.append(emb_msg)
-        await asyncio.gather(
-            *(self.vikingdb.enqueue_embedding_msg(message) for message in messages)
-        )
+                messages[vector_record_id(target.ctx.account_id, target.uri, level)] = emb_msg
+        return messages
 
     @staticmethod
     def _owner_space_for_scope(scope: str, ctx: RequestContext) -> str:

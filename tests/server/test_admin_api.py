@@ -2716,8 +2716,10 @@ async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
 # ---- User CRUD ----
 
 
-async def test_register_user(admin_client: httpx.AsyncClient):
-    """ROOT can register a user in an account."""
+async def test_register_user(
+    admin_client: httpx.AsyncClient, admin_service: OpenVikingService, monkeypatch
+):
+    """Registration creates a usable space and retains the identity on initialization failure."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -2741,6 +2743,33 @@ async def test_register_user(admin_client: httpx.AsyncClient):
         headers={"X-API-Key": bob_key},
     )
     assert resp.status_code == 200
+
+    resp = await admin_client.post("/api/v1/sessions", json={}, headers={"X-API-Key": bob_key})
+    assert resp.status_code == 200
+
+    agfs = admin_service.viking_fs._async_agfs
+    original_write = agfs.write
+
+    async def fail_user_overview(path, *args, **kwargs):
+        if path == f"/local/{acct}/user/carol/.overview.md":
+            raise OSError("user overview write failed")
+        return await original_write(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(agfs, "write", fail_user_overview)
+        failed = await admin_client.post(
+            f"/api/v1/admin/accounts/{acct}/users",
+            json={"user_id": "carol"},
+            headers=root_headers(),
+        )
+    assert failed.status_code == 500
+    assert await _agfs_exists(admin_service, f"/local/{acct}/user/carol/.abstract.md")
+    retry = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "carol"},
+        headers=root_headers(),
+    )
+    assert retry.status_code == 409
 
 
 async def test_root_can_register_admin_role_user(
