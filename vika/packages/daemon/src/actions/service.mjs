@@ -61,9 +61,11 @@ function blocked(code, message) {
 }
 
 // Tools whose success changes something (a delivery, a decision, a timer), as
-// against reads. Only these count as progress for the loop guard.
+// against reads. Only these count as progress for the loop guard; marking a
+// timer occurrence done counts only when it was marked.
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
-function changesState(tool) {
+function changesState(tool, result) {
+  if (tool?.name === 'complete_timer_occurrence') return result?.data?.completed === true;
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -215,7 +217,7 @@ export class ActionService {
       if (trace.outcome === 'duplicate') result = this.noteDuplicate(name, trace, result);
       // Progress: a call that changed something clears every count. Reads
       // neither count nor clear.
-      else if (changesState(tool)) this.duplicateCounts.clear();
+      else if (changesState(tool, result)) this.duplicateCounts.clear();
       this.logger.info('agent_tool', { ...trace, durationMs: Date.now() - startedAt });
       return result;
     } catch (error) {
