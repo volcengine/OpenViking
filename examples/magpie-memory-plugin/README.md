@@ -90,7 +90,9 @@ options override the corresponding file settings for this plugin; connection
 credentials and identity always remain file-owned. `gatewayTimeoutMs` controls
 the host's hook budget. The package supplies an example, not saved defaults;
 omitted keys retain the file/default behavior. Hooks and tools use the same
-options. Enabling tools or capture requires the literal boolean `true`.
+options. Memory tools are disabled by default; set `mcpEnabled: true` to enable
+them. Automatic capture is enabled by default and needs no additional setting;
+set `autoCapture: false` to disable it.
 
 File settings `plugin.magpie.bypassSession: true` or `bypassSessionPatterns`
 matching the Magpie session ID or working directory skip automatic recall and

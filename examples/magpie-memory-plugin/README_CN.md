@@ -67,7 +67,7 @@ Magpie 的文件读取策略排除环境变量和 workspace 层。
 Magpie 的“选项”支持 `autoRecall`、`autoCapture`、`mcpEnabled`、`recallMaxTokens`、
 `recallContextTimeoutMs`、`nativeAgents`，优先于本插件的文件行为配置；Hook 和工具使用同一套设置。
 服务连接、凭据和身份仍只从文件读取。`gatewayTimeoutMs` 控制宿主 Hook 预算。
-包内示例不会自动保存；未填写的字段继续沿用文件设置或默认值。开启工具或采集必须填写布尔值 `true`。
+包内示例不会自动保存；未填写的字段继续沿用文件设置或默认值。记忆工具默认关闭，设置 `mcpEnabled: true` 可开启。自动采集默认开启，无需额外配置；如需关闭，设置 `autoCapture: false`。
 
 不会修改文件、合并环境变量中的凭据，或回退读取 `ov.conf`、Root Key、Gateway Token。
 配置缺失、损坏或服务不可用时，召回跳过，模型请求继续；不会沿用旧配置。
