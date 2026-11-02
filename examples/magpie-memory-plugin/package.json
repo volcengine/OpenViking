@@ -1,0 +1,64 @@
+{
+  "name": "@openviking/magpie-plugin",
+  "version": "0.1.0",
+  "description": "Bring OpenViking memory to agents using Magpie, with automatic context recall, optional conversation capture and memory tools. Reuses your existing OpenViking configuration.",
+  "author": "OpenViking",
+  "homepage": "https://github.com/volcengine/OpenViking/tree/main/examples/magpie-memory-plugin",
+  "type": "module",
+  "main": "index.mjs",
+  "magpie": {
+    "name": "OpenViking",
+    "hooks": "./hooks.mjs",
+    "icon": "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/ov-logo-icon.png",
+    "options": {
+      "autoRecall": true,
+      "autoCapture": false,
+      "mcpEnabled": false,
+      "gatewayTimeoutMs": 1000,
+      "nativeAgents": []
+    }
+  },
+  "files": [
+    "index.mjs",
+    "hooks.mjs",
+    "runtime.mjs",
+    "config.mjs",
+    "http.mjs",
+    "conversation.mjs",
+    "recall-ledger.mjs",
+    "private-state.mjs",
+    "scope.mjs",
+    "capture.mjs",
+    "capture-messages.mjs",
+    "capture-history.mjs",
+    "capture-worker.mjs",
+    "shared/",
+    "marketplace.json",
+    "README.md",
+    "README_CN.md"
+  ],
+  "scripts": {
+    "prepack": "node ../memory-plugin-shared/sync.mjs",
+    "check": "node --check index.mjs && node --check hooks.mjs && node --check runtime.mjs && node --check config.mjs && node --check http.mjs && node --check conversation.mjs && node --check recall-ledger.mjs && node --check private-state.mjs && node --check scope.mjs && node --check capture.mjs && node --check capture-messages.mjs && node --check capture-history.mjs && node --check capture-worker.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "magpie",
+    "opencode",
+    "opencode-plugin",
+    "openviking",
+    "memory"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/volcengine/OpenViking.git",
+    "directory": "examples/magpie-memory-plugin"
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  }
+}
