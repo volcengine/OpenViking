@@ -2,6 +2,8 @@
 
 An isolated npm workspace for reusable React modules and an Rspress component documentation site. The initial scaffold includes one example, `StatusBadge`; it does not migrate any existing business components.
 
+Agent-facing development constraints are documented in [AGENTS.md](./AGENTS.md).
+
 ## Development
 
 Use Node.js 22.12+ (CI uses Node.js 22).
