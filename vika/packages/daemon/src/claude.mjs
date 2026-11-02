@@ -13,7 +13,7 @@ import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
-import { deliveryItem, receiptIds, withReceiptIds } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition, isModelUnavailableError } from './runtime-catalog.mjs';
 
 const MAX_LINE_BYTES = 5_000_000;
@@ -432,7 +432,7 @@ export class ClaudeAgent {
     ) ?? 0;
     // Native transcripts already own their history, even when the cursor is zero.
     const needsCatchup = this.needsHistoryPrefix;
-    let body = items.map((item) => item.text).join('\n');
+    let body = withTurnNotice(this, items.map((item) => item.text).join('\n'));
     let prefixThroughSeq = this.deliveredThroughSeq;
     if (needsCatchup) {
       const catchup = cognitionHistoryPrefix(
@@ -971,6 +971,18 @@ export class ClaudeAgent {
     this.sessionRotation = null;
     if (!rotation?.previous) return;
     await this._restorePreparedSession(rotation.previous);
+  }
+
+  // Loop breaker: the stream-json interrupt control request, keeping the
+  // process and the session. Claude then ends the turn with its result
+  // message, and _completeTurn ends the turn as usual, draining the queue into
+  // the same session.
+  cancelTurn() {
+    if (!this.turnActive || !this.child?.stdin?.writable) return false;
+    this._requestControl({ subtype: 'interrupt' }).catch((error) => {
+      this.logger.warn('claude_turn_cancel_failed', { error: safe(error) });
+    });
+    return true;
   }
 
   // /m must not wait for a stuck turn: kill the in-flight turn's process. The

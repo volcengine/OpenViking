@@ -54,6 +54,15 @@ export function formatEventLine(event) {
   return `[${fields.join(' ')}] ${oneLine(eventContent(event))}`;
 }
 
+// A transport's next prompt body: the one-shot daemon notice AgentRuntime left
+// on it (RuntimeAdapter.setTurnNotice), then the input lines. Taking it clears
+// it, so it is shown once.
+export function withTurnNotice(agent, text) {
+  const notice = agent.turnNotice;
+  agent.turnNotice = null;
+  return notice ? `${notice}\n${text}` : text;
+}
+
 export function deliveryItem({ text, seq = null, receiptId }) {
   return receiptId === null || receiptId === undefined
     ? { text, seq }

@@ -7,6 +7,8 @@ import { opaqueRef, safeError } from './logger.mjs';
 // Seqs already nudged in this process. A restart forgets them: the ledger is
 // durable, the reminder is best effort.
 const NUDGED_LIMIT = 1_000;
+// The failure notice for an input a loop-stopped turn held twice.
+const LOOP_STOPPED_ERROR = '模型反复做没有效果的调用，这一轮被 daemon 中止了';
 
 // A switch that only means something to a runtime with Core agent tools
 // (explicitSilence: stay_silent and the turn-end check; stagedReplies: interim
@@ -47,13 +49,16 @@ function expected(row) {
 // gets one reminder line (same event=, undecided=1, no seq); a seq is reminded
 // about at most once per process, and a later miss on it is only recorded.
 export class DecisionPolicy {
-  constructor({ store, harness, logger, recordActivity, isStopping = () => false }) {
-    Object.assign(this, { store, harness, logger, recordActivity, isStopping });
+  constructor({
+    store, harness, logger, recordActivity, explicitSilence = true, notifyFailure = null, isStopping = () => false,
+  }) {
+    Object.assign(this, { store, harness, logger, recordActivity, explicitSilence, notifyFailure, isStopping });
     this.nudged = new Set();
+    this.recovered = new Set();
   }
 
   onTurnSucceeded({ inboundSeqs = [] } = {}) {
-    if (this.isStopping()) return;
+    if (this.isStopping() || !this.explicitSilence) return;
     const runtime = this.store.getCognitionState().runtime;
     if (getRuntimeDefinition(runtime)?.capabilities.agentTools !== 'core') return;
     try {
@@ -63,7 +68,8 @@ export class DecisionPolicy {
     }
   }
 
-  settle({ inboundSeqs, runtime }) {
+  // The newest accepted input of each scope among a turn's seqs.
+  newestPerScope(inboundSeqs) {
     const scopes = new Map();
     for (const seq of Array.isArray(inboundSeqs) ? inboundSeqs : []) {
       if (seq === null || seq === undefined) continue;
@@ -72,6 +78,11 @@ export class DecisionPolicy {
       const current = scopes.get(row.scopeKey);
       if (!current || row.seq > current.seq) scopes.set(row.scopeKey, row);
     }
+    return scopes;
+  }
+
+  settle({ inboundSeqs, runtime }) {
+    const scopes = this.newestPerScope(inboundSeqs);
     const counts = { delivered: 0, silent: 0, superseded: 0, expected_unsettled: 0, optional_unsettled: 0, nudged: 0 };
     for (const [scopeKey, row] of scopes) {
       const outcome = this.store.coveringDecision(scopeKey, row.seq);
@@ -103,17 +114,61 @@ export class DecisionPolicy {
     return counts;
   }
 
-  remember(seq) {
-    this.nudged.add(seq);
-    if (this.nudged.size > NUDGED_LIMIT) this.nudged.delete(this.nudged.values().next().value);
+  remember(seq, seen = this.nudged) {
+    seen.add(seq);
+    if (seen.size > NUDGED_LIMIT) seen.delete(seen.values().next().value);
   }
 
-  missing(row, status, runtime) {
+  // A turn the loop breaker stopped (AgentRuntime.breakLoop), on any instance:
+  // the model may never have read what that turn held, and nothing else
+  // restarts it. Each of its inputs still without a decision (the newest in
+  // its scope, nothing newer accepted there) comes back once as a fresh line,
+  // with its seq; mail and other optional inputs too, since a stopped turn is
+  // no evidence they were looked at. One a stopped turn holds a second time is
+  // not shown again: its sender gets the failure notice instead.
+  onTurnStopped({ inboundSeqs = [] } = {}) {
+    if (this.isStopping()) return;
+    try {
+      this.recoverStopped(inboundSeqs, this.store.getCognitionState().runtime);
+    } catch (error) {
+      this.logger.warn('stopped_turn_recovery_failed', { error: safeError(error) });
+    }
+  }
+
+  recoverStopped(inboundSeqs, runtime) {
+    const scopes = this.newestPerScope(inboundSeqs);
+    const counts = { decided: 0, superseded: 0, redelivered: 0, missing: 0 };
+    for (const [scopeKey, row] of scopes) {
+      if (this.store.coveringDecision(scopeKey, row.seq)) {
+        counts.decided += 1;
+        continue;
+      }
+      if (this.store.newerAcceptedSeq(scopeKey, row.seq) !== null) {
+        counts.superseded += 1;
+        continue;
+      }
+      if (this.recovered.has(row.seq)) {
+        counts.missing += 1;
+        this.missing(row, 'MISSING', runtime, 'loop_stopped');
+        Promise.resolve(this.notifyFailure?.({ inboundSeqs: [row.seq], error: LOOP_STOPPED_ERROR }))
+          .catch((error) => this.logger.warn('stopped_turn_notice_failed', { error: safeError(error) }));
+        continue;
+      }
+      this.remember(row.seq, this.recovered);
+      this.harness.redeliverUndecided(row, { seq: row.seq, undecided: this.explicitSilence });
+      this.missing(row, 'NUDGED', runtime, 'loop_stopped');
+      counts.redelivered += 1;
+    }
+    if (scopes.size > 0) this.logger.info('stopped_turn_settlement', counts);
+    return counts;
+  }
+
+  missing(row, status, runtime, reason = null) {
     this.recordActivity('agent.decision_missing', {
       status,
       conversationKey: row.conversationKey,
       inboundSeq: row.seq,
-      metadata: { expectation: 'expected', runtime },
+      metadata: { expectation: reason ?? 'expected', runtime },
     });
   }
 }

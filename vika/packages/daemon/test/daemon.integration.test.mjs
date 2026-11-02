@@ -275,6 +275,109 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     }
   });
 
+  it('stops a turn that keeps redoing a settled decision and goes on in the same session with what arrived meanwhile', async () => {
+    const env = await startMockEnv({ codex: { behavior: 'loop' }, config: { explicitSilence: true } });
+    const decided = () => env.daemon.store.db.prepare('SELECT event_id, outcome FROM decisions ORDER BY event_id').all()
+      .map((row) => `${row.event_id}:${row.outcome}`);
+    try {
+      env.receive(textMessage({ messageId: 'om-loop', chatId: 'oc-group', chatType: 'group', text: 'LOOP 群里闲聊' }));
+      await env.waitFor(() => decided().length === 1);
+      const epoch = env.daemon.store.getCognitionState().epoch;
+      // Arrives while the model repeats itself: steered into the stuck turn.
+      env.receive(textMessage({ messageId: 'om-waiting', text: '在吗' }));
+      await env.waitFor(() => env.activities('agent.loop_stopped').length === 1);
+      await env.waitFor(() => decided().length === 2);
+      await env.daemon.agentRuntime.whenIdle();
+
+      assert.deepEqual(decided(), ['evt-om-loop:silent', 'evt-om-waiting:silent']);
+      assert.deepEqual(env.codexInput().map((entry) => entry.method),
+        ['turn/start', 'turn/steer', 'turn/interrupt', 'turn/start']);
+      const [stop] = env.activities('agent.loop_stopped');
+      assert.equal(stop.metadata.action, 'cancel');
+      assert.equal(stop.metadata.tool, 'stay_silent');
+      assert.equal(stop.metadata.count, 3);
+      // Same process, same thread, same cognition: only the turn ended.
+      assert.equal(env.codexSpawnArgs().length, 1);
+      assert.equal(env.daemon.agentRuntime.threadId, 'thread-mock');
+      assert.equal(env.daemon.store.getCognitionState().epoch, epoch);
+      // The next turn is told why, and gets the steered line back undecided.
+      const next = env.codexInput().at(-1).text;
+      assert.match(next, /^\[daemon notice\] The daemon stopped your previous turn: it called stay_silent for event=evt-om-loop 3 times/);
+      assert.match(next, /msg=om-waiting event=evt-om-waiting [^\]]* undecided=1\] 在吗/);
+      // Ended on purpose: no failure notice, nothing sent to anyone.
+      assert.deepEqual(env.activities('agent.failure_notice'), []);
+      assert.deepEqual(env.replies(), []);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal(env.codexInput().length, 4, 'the stopped loop does not come back');
+    } finally {
+      await env.stop();
+    }
+  });
+
+  it('moves a session stopped twice within the window to a new one that keeps the history', async () => {
+    const env = await startMockEnv({ codex: { behavior: 'loop' }, config: { explicitSilence: true } });
+    try {
+      env.receive(textMessage({ messageId: 'om-loop-1', chatId: 'oc-group', chatType: 'group', text: 'LOOP 第一次' }));
+      await env.waitFor(() => env.activities('agent.loop_stopped').length === 1, 6_000);
+      await env.daemon.agentRuntime.whenIdle();
+      const epoch = env.daemon.store.getCognitionState().epoch;
+      env.receive(textMessage({ messageId: 'om-loop-2', chatId: 'oc-group', chatType: 'group', text: 'LOOP 第二次' }));
+      await env.waitFor(() => env.activities('agent.loop_stopped').length === 2, 6_000);
+      await env.daemon.agentRuntime.whenIdle();
+      env.receive(textMessage({ messageId: 'om-after', text: '还在吗' }));
+      await env.waitForCodexInput(/msg=om-after/);
+
+      assert.deepEqual(env.activities('agent.loop_stopped').map((row) => row.metadata.action), ['cancel', 'new-session']);
+      // A fresh native session in the same cognition epoch, primed with history.
+      assert.equal(env.daemon.store.getCognitionState().epoch, epoch);
+      const next = env.codexInput().find((entry) => /msg=om-after/.test(entry.text)).text;
+      assert.match(next, /--- history above, new messages below ---\n\[daemon notice\] [^\n]*for event=evt-om-loop-2 3 times[^\n]*You are now in a new session/);
+      assert.match(next, /LOOP 第二次/, 'the history carries the stopped input');
+      assert.deepEqual(env.activities('agent.failure_notice'), []);
+    } finally {
+      await env.stop();
+    }
+  });
+
+  it('gets a line steered into a stopped turn handled on an instance without explicitSilence', async () => {
+    const env = await startMockEnv({ codex: { behavior: 'reply-loop' } });
+    const repliesTo = (id) => env.replies().filter((args) => args.join(' ').includes(id)).length;
+    try {
+      env.receive(textMessage({ messageId: 'om-loop', chatId: 'oc-group', chatType: 'group', text: 'LOOP 帮我看下' }));
+      await env.waitFor(() => repliesTo('om-loop') === 1);
+      // Steered into the turn that then keeps resending its reply.
+      env.receive(textMessage({ messageId: 'om-waiting', text: '在吗' }));
+      await env.waitFor(() => env.activities('agent.loop_stopped').length === 1);
+      await env.waitFor(() => repliesTo('om-waiting') === 1);
+
+      const next = env.codexInput().filter((entry) => entry.method === 'turn/start').at(-1).text;
+      assert.match(next, /^\[daemon notice\] The daemon stopped your previous turn: it called reply_message for event=evt-om-loop 3 times[^\n]*That input already has its decision/);
+      assert.match(next, /msg=om-waiting event=evt-om-waiting [^\]]*\] 在吗/);
+      assert.doesNotMatch(next, /undecided=1/, 'the tag means nothing without explicitSilence');
+      assert.equal(repliesTo('om-loop'), 1, 'the repeated reply went out once');
+      assert.deepEqual(env.activities('agent.failure_notice'), []);
+    } finally {
+      await env.stop();
+    }
+  });
+
+  it('still stops a loop in the session that replaced a session stopped twice', async () => {
+    const env = await startMockEnv({ codex: { behavior: 'loop' }, config: { explicitSilence: true } });
+    try {
+      env.receive(textMessage({ messageId: 'om-loop-a', chatId: 'oc-group', chatType: 'group', text: 'LOOP a' }));
+      await env.waitFor(() => env.daemon.store.db.prepare('SELECT COUNT(*) AS n FROM decisions').get().n === 1);
+      // Steered in, then brought back after the first stop: that turn loops too.
+      env.receive(textMessage({ messageId: 'om-loop-b', text: 'LOOP b' }));
+      await env.waitFor(() => env.activities('agent.loop_stopped').length === 2, 10_000);
+      await env.daemon.agentRuntime.whenIdle();
+      env.receive(textMessage({ messageId: 'om-loop-c', chatId: 'oc-group', chatType: 'group', text: 'LOOP c' }));
+      await env.waitFor(() => env.activities('agent.loop_stopped').length === 3, 10_000);
+      assert.deepEqual(env.activities('agent.loop_stopped').map((row) => row.metadata.action), ['cancel', 'new-session', 'cancel']);
+    } finally {
+      await env.stop();
+    }
+  });
+
   it('wakes on an @mention in a document comment and answers in that comment', async () => {
     const env = await startMockEnv({ codex: { behavior: 'reply' } });
     try {
@@ -300,7 +403,8 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
   it('without explicit silence (the default) checks no decisions and offers no stay_silent', async () => {
     const env = await startMockEnv({ codex: { behavior: 'complete' }, });
     try {
-      assert.equal(env.daemon.decisionPolicy, null);
+      // Kept only to recover what a loop-stopped turn left behind.
+      assert.equal(env.daemon.decisionPolicy.explicitSilence, false);
       assert.equal(env.daemon.actions.tools().some((tool) => tool.name === 'stay_silent'), false);
       env.receive(textMessage({ messageId: 'om-plain', text: '在吗' }));
       await env.waitFor(() => env.codexInput().length === 1);

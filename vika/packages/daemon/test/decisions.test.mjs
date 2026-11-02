@@ -12,7 +12,7 @@ import { chatEvent, mailEvent } from './event-fixture.mjs';
 const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
 // A real Store and Harness; the runtime only records what it is handed.
-function setup(t, { runtime = 'codex' } = {}) {
+function setup(t, { runtime = 'codex', explicitSilence = true, notifyFailure = null } = {}) {
   const store = new Store(':memory:', quiet);
   store.initializeCognition(runtime, 'token');
   const submitted = [];
@@ -30,6 +30,8 @@ function setup(t, { runtime = 'codex' } = {}) {
     store, harness,
     logger: { ...quiet, info: (message, fields) => logs.push({ message, ...fields }) },
     recordActivity: (kind, fields) => activities.push({ kind, ...fields }),
+    explicitSilence,
+    notifyFailure,
     isStopping: () => state.stopping,
   });
   t.after(() => { harness.stop(); store.close(); });
@@ -43,7 +45,12 @@ function setup(t, { runtime = 'codex' } = {}) {
     // A group line waits out the burst window otherwise.
     harness.flushBufferedIngress();
   };
-  return { store, policy, submitted, activities, logs, state, ingest, silence, settlement, turn };
+  const stopped = async (inboundSeqs) => {
+    policy.onTurnStopped({ inboundSeqs });
+    await harness.ingressBarrier;
+    harness.flushBufferedIngress();
+  };
+  return { store, policy, submitted, activities, logs, state, ingest, silence, settlement, turn, stopped };
 }
 
 describe('turn-end decision settlement', () => {
@@ -193,5 +200,47 @@ describe('explicit silence on a runtime without core agent tools', () => {
     for (const id of RUNTIME_IDS) assert.equal(warnIfSilenceInert({ explicitSilence: false }, id, logger), false, id);
     assert.equal(warnIfSilenceInert({}, 'volc', logger), false);
     assert.deepEqual(warnings, []);
+  });
+});
+
+describe('loop-stopped turn recovery', () => {
+  it('brings back once, with its seq, every input the stopped turn left undecided, then tells the sender', async (t) => {
+    const notices = [];
+    const { store, submitted, activities, logs, ingest, silence, stopped } = setup(t, {
+      notifyFailure: async (info) => { notices.push(info); },
+    });
+    const looped = ingest({ messageId: 'om_looped1234567', chatId: 'oc_loop12345678' });
+    silence(looped);
+    const waiting = ingest({ messageId: 'om_waiting123456', chatId: 'oc_wait12345678' });
+    const older = ingest({ messageId: 'om_older12345678', chatId: 'oc_later12345678' });
+    ingest({ messageId: 'om_newer12345678', chatId: 'oc_later12345678' });
+    // Mail too: a stopped turn is no evidence anyone looked at it.
+    const mail = store.ingest(mailEvent({ uid: 9 })).inbound;
+
+    await stopped([looped.seq, waiting.seq, older.seq, mail.seq]);
+    assert.deepEqual(submitted.map((item) => item.seq), [waiting.seq, mail.seq]);
+    assert.match(submitted[0].text, /msg=om_waiting123456 event=message:om_waiting123456 [^\]]* undecided=1\] hello$/);
+    assert.deepEqual(logs.filter((line) => line.message === 'stopped_turn_settlement').at(-1),
+      { message: 'stopped_turn_settlement', decided: 1, superseded: 1, redelivered: 2, missing: 0 });
+    assert.deepEqual(activities.map(({ status, inboundSeq, metadata }) => [status, inboundSeq, metadata.expectation]),
+      [['NUDGED', waiting.seq, 'loop_stopped'], ['NUDGED', mail.seq, 'loop_stopped']]);
+
+    // Held by a stopped turn again: not shown a third time, its sender is told.
+    await stopped([waiting.seq]);
+    assert.equal(submitted.length, 2);
+    assert.deepEqual(notices.map((info) => info.inboundSeqs), [[waiting.seq]]);
+    assert.match(notices[0].error, /中止/);
+    assert.deepEqual(activities.at(-1).status, 'MISSING');
+  });
+
+  it('brings a line back untagged on an instance without explicitSilence, where turn ends check nothing', async (t) => {
+    const { submitted, ingest, turn, stopped } = setup(t, { explicitSilence: false });
+    const row = ingest({ messageId: 'om_plain12345678', chatId: 'oc_plain1234567' });
+    await turn([row.seq]);
+    assert.deepEqual(submitted, [], 'no reminder after a normal turn');
+    await stopped([row.seq]);
+    assert.equal(submitted.length, 1);
+    assert.equal(submitted[0].seq, row.seq);
+    assert.doesNotMatch(submitted[0].text, /undecided=/);
   });
 });

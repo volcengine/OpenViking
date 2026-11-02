@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 import { DURABLE_VERSION, DURABLE_HOST, sanitizeDurableEnv } from '../src/durable-runtime.mjs';
 import { availableChatModels, loadDurableModels, piDefaultModel } from '../src/durable-models.mjs';
 import { DurableAgent } from '../src/durable.mjs';
+import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
@@ -584,6 +585,54 @@ describe('DurableAgent against the real host', () => {
       assert.ok(store.activities.some((activity) => activity.kind === 'agent.note'
         && activity.summary === 'resumed answer'));
       assert.equal(store.global().sessionId, sessionId);
+    } finally {
+      await agent.stop();
+      delete process.env.DURABLE_FAUX;
+      delete process.env.DURABLE_FAUX_DELAY_MS;
+      delete process.env.DURABLE_FAUX_RESPONSES;
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('cancels a running turn in place and runs the next prompt in the same host and conversation', async () => {
+    const dataDir = tempDir();
+    const config = baseConfig({ dataDir });
+    const store = makeStore();
+    const ended = [];
+    const agent = new DurableAgent(config, store, quietLogger, {
+      onTurnFailed: (failure) => ended.push(['failed', failure.inboundSeqs]),
+      onTurnSucceeded: (success) => ended.push(['succeeded', success.inboundSeqs]),
+    });
+    process.env.DURABLE_FAUX = '1';
+    process.env.DURABLE_FAUX_DELAY_MS = '1500';
+    process.env.DURABLE_FAUX_RESPONSES = JSON.stringify([{ text: 'first answer' }, { text: 'second answer' }]);
+    try {
+      await agent.start();
+      const adapter = new RuntimeAdapter('durable', agent);
+      const sessionId = agent.threadId;
+      const conversation = store.global().nativeSessionId;
+      agent.deliver('a turn that will not end by itself', 7);
+      await waitFor(() => agent.child && agent.turnActive, 5_000);
+      const host = agent.child;
+      assert.equal(adapter.cancelTurn(), true);
+      await waitFor(() => !agent.turnActive, 10_000);
+      assert.deepEqual(ended.map(([, seqs]) => seqs), [[7]]);
+      assert.equal(agent.child, host, 'same host process');
+
+      adapter.setTurnNotice('[daemon notice] stopped');
+      agent.deliver('next request', 8);
+      await waitFor(() => ended.length === 2, 20_000);
+      assert.deepEqual(ended[1], ['succeeded', [8]]);
+      assert.equal(agent.child, host);
+      assert.equal(agent.threadId, sessionId);
+      assert.equal(store.global().nativeSessionId, conversation);
+      // Local starts carry the inputs (the second behind the notice); the
+      // host's own turn_start lines never resume the cancelled run.
+      const started = store.activities.filter((activity) => activity.kind === 'agent.turn_started');
+      const local = started.filter((activity) => activity.metadata.inboundSeqs);
+      assert.deepEqual(local.map((activity) => activity.metadata.inboundSeqs), [[7], [8]]);
+      assert.equal(local[1].metadata.historyChars, '[daemon notice] stopped\n'.length);
+      assert.equal(started.some((activity) => activity.metadata.resumed === true), false);
     } finally {
       await agent.stop();
       delete process.env.DURABLE_FAUX;

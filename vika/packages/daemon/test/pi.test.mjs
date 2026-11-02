@@ -13,6 +13,7 @@ import {
   PiAgent,
   sanitizePiEnv,
 } from '../src/pi.mjs';
+import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
@@ -490,6 +491,33 @@ describe('PiAgent persistent rpc runtime', () => {
       message.type === 'prompt' && String(message.message).includes('queued after disconnect')
     )));
     assert.equal(failures.length, 0);
+    await agent.stop();
+  });
+
+  it('cancels a looping run in place: abort, the run settles, and the next prompt goes to the same process behind the notice', async () => {
+    const { agent, persistent, failures } = harness();
+    await agent.start();
+    const child = persistent[0];
+    const adapter = new RuntimeAdapter('pi', agent);
+    assert.equal(adapter.cancelTurn(), false, 'nothing to cancel while idle');
+    agent.deliver('stuck request', 7);
+    agent.deliver('live correction', 8);
+
+    assert.equal(adapter.cancelTurn(), true);
+    assert.equal(parsedWrites(child).at(-1).type, 'abort');
+    assert.equal(agent.turnInProgress, true, 'live until the aborted run settles');
+    assert.equal(child.exitCode, null);
+    child.feed({ type: 'message_end', message: { stopReason: 'aborted' } });
+    child.feed({ type: 'agent_settled' });
+    assert.equal(agent.turnInProgress, false);
+    // AgentRuntime turns this report of the stopped turn into a normal end.
+    assert.deepEqual(failures.map((info) => [info.inboundSeqs, info.error]), [[[7, 8], 'pi stop: aborted']]);
+
+    adapter.setTurnNotice('[daemon notice] stopped');
+    agent.deliver('next request', 9);
+    const prompt = parsedWrites(child).filter((message) => message.type === 'prompt').at(-1);
+    assert.equal(prompt.message, '[daemon notice] stopped\nnext request');
+    assert.equal(persistent.length, 1, 'same process');
     await agent.stop();
   });
 

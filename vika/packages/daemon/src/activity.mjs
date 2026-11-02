@@ -22,6 +22,7 @@ const DEFINITIONS = Object.freeze({
   'agent.failure_notice': { category: 'agent', severity: 'warn', priority: 88, title: '已通知本轮失败' },
   'agent.interaction_declined': { category: 'agent', severity: 'warn', priority: 72, title: '已拒绝交互请求' },
   'agent.decision_missing': { category: 'agent', severity: 'warn', priority: 78, title: '本轮未表态' },
+  'agent.loop_stopped': { category: 'agent', severity: 'warn', priority: 82, title: '已中止原地打转的一轮' },
   'delivery.queued': { category: 'delivery', severity: 'info', priority: 60, title: '等待发送' },
   'delivery.sent': { category: 'delivery', severity: 'success', priority: 70, title: '已回复' },
   'delivery.uncertain': { category: 'delivery', severity: 'error', priority: 100, title: '发送结果不确定' },

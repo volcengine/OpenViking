@@ -30,7 +30,8 @@ const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return 
 const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url));
 
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
-  owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false } = {}) {
+  owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
+  onNoProgress = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
@@ -41,7 +42,7 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   const record = (level) => (message, fields = {}) => logs.push({ level, message, ...fields });
   const service = new ActionService({
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies },
-    store, connectors, roster, liveness, meetingEnabled, ovClient,
+    store, connectors, roster, liveness, meetingEnabled, ovClient, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
   t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -1157,6 +1158,81 @@ describe('stay_silent decisions', () => {
     assert.equal(touches, 1);
   });
 
+  it('asks once per turn for the turn to end when calls keep changing nothing for one input', async (t) => {
+    const stops = [];
+    const { service, call, inbound, logs } = setupOn(t, { onNoProgress: (info) => stops.push(info) });
+    const looped = inbound({ messageId: 'om_loop123456789', chatId: 'oc_loop123456789' });
+    inbound({ messageId: 'om_other12345678', chatId: 'oc_other12345678' });
+    const silence = (id, reason) => call('stay_silent', { decision_id: `message:${id}`, reason });
+    await silence('om_loop123456789', '群内讨论，未直接询问我');
+    await silence('om_other12345678', 'chatter');
+    // Repeats on another input do not add up; two repeats are still a retry.
+    await silence('om_other12345678', 'chatter again');
+    await silence('om_loop123456789', '群内技术交流，未向我提问');
+    const second = await silence('om_loop123456789', '群内观点交流');
+    assert.deepEqual(stops, []);
+    assert.doesNotMatch(second.text, /ending this turn/);
+    // The third repeat for one input, whatever its wording, ends the turn.
+    const third = await silence('om_loop123456789', '群内讨论，无需回复');
+    assert.deepEqual(stops, [{ tool: 'stay_silent', decisionSeq: looped.seq, count: 3, runtime: 'codex' }]);
+    assert.match(third.text, /^STOP: .*Already recorded.* The daemon is ending this turn now: do nothing more in it\.$/);
+    assert.deepEqual(toolLines(logs).at(-1).loopBreak, true);
+    await silence('om_loop123456789', 'and again');
+    assert.equal(stops.length, 1);
+    // A turn end starts the count over.
+    service.resetLoopGuard();
+    await silence('om_loop123456789', 'next turn');
+    await silence('om_loop123456789', 'next turn again');
+    assert.equal(stops.length, 1);
+    await silence('om_loop123456789', 'next turn, third');
+    assert.equal(stops.length, 2);
+  });
+
+  it('does not count repeats that each follow real progress', async (t) => {
+    const stops = [];
+    const { call, inbound } = setupOn(t, { stagedReplies: true, onNoProgress: (info) => stops.push(info) });
+    inbound({ messageId: 'om_task123456789', chatId: 'oc_task123456789' });
+    const interim = (markdown) => call('send_message', {
+      chat_id: 'oc_task123456789', markdown, interim: true, decision_id: 'message:om_task123456789',
+    });
+    // Three findings on one request, each sent and then retried once.
+    for (const finding of ['查到了日志', '定位到了函数', '已经复现']) {
+      await interim(finding);
+      assert.equal((await interim(finding)).data.duplicate, true);
+    }
+    assert.deepEqual(stops, []);
+  });
+
+  it('asks again on the next repeat when the stop could not start yet', async (t) => {
+    const asked = [];
+    const answers = [{ action: 'skipped', reason: 'transition' }, { action: 'cancel' }];
+    const { call, inbound } = setupOn(t, { onNoProgress: (info) => { asked.push(info.count); return answers.shift(); } });
+    inbound({ messageId: 'om_busy123456789', chatId: 'oc_busy123456789' });
+    const silence = () => call('stay_silent', { decision_id: 'message:om_busy123456789' });
+    await silence();
+    await silence();
+    await silence();
+    const skipped = await silence();
+    assert.doesNotMatch(skipped.text, /ending this turn/);
+    const started = await silence();
+    assert.match(started.text, /ending this turn/);
+    await silence();
+    assert.deepEqual(asked, [3, 4]);
+  });
+
+  it('counts a resent delivery and a silence after it as the same repeat', async (t) => {
+    const stops = [];
+    const { call, inbound } = setupOn(t, { onNoProgress: (info) => stops.push(info) });
+    const row = inbound({ messageId: 'om_sent123456789', chatId: 'oc_sent123456789' });
+    const send = () => call('send_message', { chat_id: 'oc_sent123456789', markdown: '好的', decision_id: 'message:om_sent123456789' });
+    await send();
+    assert.equal((await send()).data.duplicate, true);
+    await call('stay_silent', { decision_id: 'message:om_sent123456789' });
+    assert.deepEqual(stops, []);
+    await call('stay_silent', { decision_id: 'message:om_sent123456789' });
+    assert.deepEqual(stops.map((stop) => [stop.tool, stop.decisionSeq, stop.count]), [['stay_silent', row.seq, 3]]);
+  });
+
   it('records silence on a superseded input instead of refusing it, and keeps the OnIt for the newer one', async (t) => {
     const { store, service, call, connectors, inbound, logs } = setupOn(t, { run: reactions() });
     const older = inbound({ messageId: 'om_older12345678', chatId: 'oc_burst12345678' });
@@ -1320,13 +1396,15 @@ describe('stay_silent decisions', () => {
 });
 
 describe('stay_silent switched off (the default)', () => {
-  it('offers no stay_silent, records no decision and keeps deliveries as they were', async (t) => {
+  it('offers no stay_silent and keeps deliveries as they were, only noting in the ledger what they answered', async (t) => {
     const { store, service, call, inbound } = setup(t, { ids: ['lark', 'weixin', 'email'] });
     assert.equal(service.tools().some((tool) => tool.name === 'stay_silent'), false);
-    inbound({ messageId: 'om_off123456789', chatId: 'oc_off123456789' });
+    const row = inbound({ messageId: 'om_off123456789', chatId: 'oc_off123456789' });
     await assert.rejects(call('stay_silent', { decision_id: 'message:om_off123456789' }), (error) => error.code === 'unknown_tool');
     await call('send_message', { chat_id: 'oc_off123456789', markdown: 'hi', decision_id: 'message:om_off123456789' });
-    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM decisions').get().n, 0);
+    // What a loop stop's recovery reads to skip an input already answered.
+    assert.deepEqual(store.db.prepare('SELECT seq, outcome FROM decisions').all().map((entry) => ({ ...entry })),
+      [{ seq: row.seq, outcome: 'delivered' }]);
     assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM activities WHERE kind IN ('delivery.silent', 'delivery.blocked')").get().n, 0);
   });
 

@@ -13,6 +13,7 @@ import { resolveRuntimeModelTarget as parseRuntimeModelTarget } from '../src/run
 import { adaptRuntime } from '../src/runtime-adapter.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { fakeConnectors } from './action-fixture.mjs';
+import { chatEvent } from './event-fixture.mjs';
 import { Store } from '../src/store.mjs';
 import { OVSessionContext } from '../src/ov-session-context.mjs';
 import { cognitionHistoryPrefix } from '../src/cognition.mjs';
@@ -1134,5 +1135,195 @@ describe('global Codex/Claude hard switch', () => {
       store.close();
       fs.rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe('loop breaker', () => {
+  // A Codex stand-in with a live turn. `ended(kind, info)` plays the
+  // transport reporting that turn's end through its backend callbacks.
+  function loopRuntime(t, { cancels = true, decided = true, reportsAbandon = true, ...options } = {}) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-loop-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    const seen = { succeeded: [], failed: [], abandoned: [], stopped: [], activities: [], commits: [] };
+    let instance;
+    let callbacks;
+    const runtime = new AgentRuntime({}, store, quietLogger, {
+      onTurnSucceeded: (info) => seen.succeeded.push(info),
+      onTurnFailed: (info) => seen.failed.push(info),
+      onTurnAbandoned: (info) => seen.abandoned.push(info),
+      onTurnStopped: (info) => seen.stopped.push(info),
+      recordActivity: (kind, fields) => seen.activities.push({ kind, ...fields }),
+      codexFactory: (backendOptions) => {
+        callbacks = backendOptions;
+        instance = backend('codex', backendOptions);
+        instance.turnInProgress = true;
+        instance.cancelCalls = 0;
+        instance.interrupts = 0;
+        instance.cancelTurn = () => { instance.cancelCalls += 1; return cancels; };
+        instance.interruptTurn = async () => {
+          instance.interrupts += 1;
+          if (!instance.turnInProgress) return;
+          instance.turnInProgress = false;
+          // A turn with no seq or receipt (a reminder line) reports nothing.
+          if (reportsAbandon) callbacks.onTurnAbandoned({ inboundSeqs: [7] });
+        };
+        let fresh = 0;
+        instance.prepareSessionRotation = async () => ({ id: `codex-fresh-${fresh += 1}`, sessionReady: true });
+        instance.commitSessionRotation = (prepared, commitOptions) => {
+          seen.commits.push(commitOptions);
+          instance.threadId = prepared.id;
+          return prepared.id;
+        };
+        return instance;
+      },
+      ...options,
+    });
+    t.after(async () => {
+      await runtime.stop();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    });
+    const ended = (kind, info) => {
+      instance.turnInProgress = false;
+      callbacks[{ failed: 'onTurnFailed', succeeded: 'onTurnSucceeded', abandoned: 'onTurnAbandoned' }[kind]](info);
+    };
+    const looped = store.ingest(chatEvent({ messageId: 'om-looped', eventId: 'evt-looped', chatType: 'group' })).inbound;
+    // The repeated call was a stay_silent or send on a decided input.
+    if (decided) store.recordDecision({ row: store.acceptedEvents('evt-looped')[0], outcome: 'silent' });
+    return { runtime, store, seen, ended, looped, backend: () => instance };
+  }
+
+  it('cancels the looping turn in place and ends it as a normal turn, with a notice for the next prompt', async (t) => {
+    const { runtime, seen, ended, looped, backend: current } = loopRuntime(t);
+    await runtime.start();
+    const result = runtime.breakLoop({ tool: 'stay_silent', decisionSeq: looped.seq, count: 3 });
+    assert.deepEqual(result, { action: 'cancel' });
+    assert.equal(current().cancelCalls, 1);
+    assert.deepEqual(runtime.breakLoop({ tool: 'stay_silent', decisionSeq: looped.seq, count: 4 }),
+      { action: 'skipped', reason: 'stop-in-flight' });
+    // OpenCode, Pi, Durable and Claude report a cancelled prompt as failed.
+    ended('failed', { inboundSeqs: [looped.seq, 8], error: 'opencode turn ended: cancelled' });
+    assert.deepEqual(seen.failed, []);
+    assert.deepEqual(seen.succeeded, []);
+    assert.deepEqual(seen.stopped, [{ inboundSeqs: [looped.seq, 8], error: 'opencode turn ended: cancelled' }]);
+    assert.match(current().turnNotice, /^\[daemon notice\] The daemon stopped your previous turn: it called stay_silent for event=evt-looped 3 times after that call had nothing left to change\. That input already has its decision; take no further action on it\. Go on with the inputs below\.$/);
+    assert.doesNotMatch(current().turnNotice, /new session/);
+    assert.deepEqual(seen.activities.map((row) => [row.kind, row.status, row.inboundSeq, row.metadata.action, row.metadata.endedAs]),
+      [['agent.loop_stopped', 'CANCELLED', looped.seq, 'cancel', 'failed']]);
+    assert.equal(current().interrupts, 0);
+    assert.deepEqual(seen.commits, [], 'same session');
+    // Later turn ends are reported as they are again.
+    ended('failed', { inboundSeqs: [9], error: 'boom' });
+    assert.deepEqual(seen.failed, [{ inboundSeqs: [9], error: 'boom' }]);
+  });
+
+  it('moves to a new session that keeps the history when the cancel does not end the turn in time', async (t) => {
+    const { runtime, store, seen, looped, backend: current } = loopRuntime(t, { loopCancelGraceMs: 20 });
+    await runtime.start();
+    const epoch = store.getCognitionState().epoch;
+    assert.deepEqual(runtime.breakLoop({ tool: 'stay_silent', decisionSeq: looped.seq, count: 3 }), { action: 'cancel' });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await runtime.transitionBarrier;
+    assert.equal(current().interrupts, 1);
+    assert.deepEqual(seen.stopped, [{ inboundSeqs: [7] }]);
+    assert.deepEqual(seen.abandoned, []);
+    assert.deepEqual(seen.commits, [{ persist: false, preserveContext: true }]);
+    assert.equal(runtime.threadId, 'codex-fresh-1');
+    assert.equal(store.getCognitionState().epoch, epoch);
+    assert.match(current().turnNotice, /You are now in a new session; what came before is in the history above\./);
+    assert.deepEqual(seen.activities.map((row) => [row.status, row.metadata.cancelTimedOut]), [['NEW_SESSION', true]]);
+  });
+
+  it('moves to a new session at once when the transport cannot cancel in place', async (t) => {
+    // A repeated timer leaves no decision: the notice does not call the input done.
+    const { runtime, seen, looped, backend: current } = loopRuntime(t, { cancels: false, decided: false });
+    await runtime.start();
+    assert.deepEqual(runtime.breakLoop({ tool: 'create_timer', decisionSeq: looped.seq, count: 3 }), { action: 'new-session' });
+    await runtime.transitionBarrier;
+    assert.equal(current().cancelCalls, 1);
+    assert.equal(current().interrupts, 1);
+    assert.deepEqual(seen.commits, [{ persist: false, preserveContext: true }]);
+    assert.deepEqual(seen.stopped, [{ inboundSeqs: [7] }]);
+    assert.match(current().turnNotice, /it called create_timer for event=evt-looped 3 times after that call had nothing left to change\. Do not repeat that call\. You are now in a new session/);
+  });
+
+  it('moves a session stopped again within the window to a new one, and cancels in place again after that', async (t) => {
+    let now = 1_000_000;
+    const { runtime, seen, ended, looped, backend: current } = loopRuntime(t, { clock: () => now });
+    await runtime.start();
+    const stop = () => runtime.breakLoop({ tool: 'stay_silent', decisionSeq: looped.seq, count: 3 });
+    assert.equal(stop().action, 'cancel');
+    ended('succeeded', { inboundSeqs: [looped.seq] });
+    // Ten minutes later the same session is cancelled in place once more.
+    now += 10 * 60_000;
+    current().turnInProgress = true;
+    assert.equal(stop().action, 'cancel');
+    ended('succeeded', { inboundSeqs: [looped.seq] });
+    // Within the window: a new session.
+    now += 60_000;
+    current().turnInProgress = true;
+    assert.equal(stop().action, 'new-session');
+    await runtime.transitionBarrier;
+    assert.equal(runtime.threadId, 'codex-fresh-1');
+    // That new session has no stop of its own yet.
+    now += 1_000;
+    current().turnInProgress = true;
+    assert.equal(stop().action, 'cancel');
+    assert.equal(current().cancelCalls, 3);
+    assert.deepEqual(seen.activities.map((row) => row.metadata.action), ['cancel', 'cancel', 'new-session']);
+  });
+
+  it('reports the end of a stop that the transport ended without telling, so the repeat counts reset', async (t) => {
+    // A reminder-only turn (lines without seq) interrupted on the way to a new
+    // session, and a cancelled turn that ends without any callback.
+    const replaced = loopRuntime(t, { cancels: false, reportsAbandon: false });
+    await replaced.runtime.start();
+    assert.equal(replaced.runtime.breakLoop({ tool: 'stay_silent', decisionSeq: replaced.looped.seq, count: 3 }).action, 'new-session');
+    await replaced.runtime.transitionBarrier;
+    assert.equal(replaced.backend().interrupts, 1);
+    assert.deepEqual(replaced.seen.stopped, [{ inboundSeqs: [] }]);
+    assert.equal(replaced.runtime.loopBreak, null);
+
+    const quiet = loopRuntime(t, { loopCancelGraceMs: 20 });
+    await quiet.runtime.start();
+    assert.equal(quiet.runtime.breakLoop({ tool: 'stay_silent', decisionSeq: quiet.looped.seq, count: 3 }).action, 'cancel');
+    quiet.backend().turnInProgress = false;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.deepEqual(quiet.seen.stopped, [{ inboundSeqs: [] }]);
+    assert.deepEqual(quiet.seen.commits, [], 'nothing left to replace');
+  });
+
+  it('forgets earlier stops once the session is replaced, whatever id the transport reuses', async (t) => {
+    const { runtime, seen, ended, looped, backend: current } = loopRuntime(t);
+    await runtime.start();
+    const stop = () => runtime.breakLoop({ tool: 'stay_silent', decisionSeq: looped.seq, count: 3 });
+    assert.equal(stop().action, 'cancel');
+    ended('succeeded', { inboundSeqs: [looped.seq] });
+    // /new hands back a session under the very same id.
+    current().prepareSessionRotation = async () => ({ id: 'codex-session', sessionReady: true });
+    await runtime.transition({ kind: 'new-session' });
+    assert.equal(runtime.threadId, 'codex-session');
+    current().turnInProgress = true;
+    assert.equal(stop().action, 'cancel');
+    ended('succeeded', { inboundSeqs: [looped.seq] });
+    assert.deepEqual(seen.activities.map((row) => row.metadata.action), ['cancel', 'cancel']);
+  });
+
+  it('skips with no live turn, and leaves a stop that /new already ended alone', async (t) => {
+    const { runtime, seen, looped, backend: current } = loopRuntime(t, { loopCancelGraceMs: 20 });
+    await runtime.start();
+    current().turnInProgress = false;
+    assert.deepEqual(runtime.breakLoop({ tool: 'stay_silent', decisionSeq: looped.seq, count: 3 }),
+      { action: 'skipped', reason: 'no-turn' });
+    current().turnInProgress = true;
+    assert.equal(runtime.breakLoop({ tool: 'stay_silent', decisionSeq: looped.seq, count: 3 }).action, 'cancel');
+    await runtime.transition({ kind: 'new-session' });
+    // The /new interrupt ended the stopped turn; its grace timer finds nothing to do.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await runtime.transitionBarrier;
+    assert.equal(current().interrupts, 1);
+    assert.deepEqual(seen.stopped, [{ inboundSeqs: [7] }]);
+    assert.deepEqual(seen.commits.length, 1);
+    assert.equal(runtime.loopBreak, null);
   });
 });
