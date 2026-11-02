@@ -250,6 +250,7 @@ def _plan_to_resolved_operations(
 ) -> tuple[ResolvedOperations, list[str]]:
     upserts: list[ResolvedOperation] = []
     deletes: list[MemoryFile] = []
+    delete_replacements: dict[str, str] = {}
     links: list[StoredLink] = []
     errors: list[str] = []
 
@@ -269,6 +270,8 @@ def _plan_to_resolved_operations(
 
         if item.kind == "delete":
             deletes.append(_policy_or_plan_item_memory_file(item, uri=uri, current=current))
+            if item.replacement_uri:
+                delete_replacements[uri] = item.replacement_uri
             continue
 
         if item.kind != "upsert":
@@ -306,6 +309,7 @@ def _plan_to_resolved_operations(
             delete_file_contents=deletes,
             errors=[],
             resolved_links=links,
+            delete_replacements=delete_replacements,
         ),
         errors,
     )

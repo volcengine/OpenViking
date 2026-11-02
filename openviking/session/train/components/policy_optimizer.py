@@ -519,6 +519,9 @@ def _operations_to_plan_items(
                     "rationale": "PatchMergeContextProvider merge requested memory deletion.",
                     "merge_gradient_count": len(gradients),
                 },
+                replacement_uri=(getattr(operations, "delete_replacements", {}) or {}).get(
+                    target_uri
+                ),
             )
         )
         delete_uris.add(target_uri)
