@@ -2004,6 +2004,20 @@ class _OpsMixin:
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
 
+        await self._write_file_content(
+            uri, content, ctx=ctx, lease_ref=lease_ref, auto_pathlock=auto_pathlock
+        )
+
+    async def _write_file_content(
+        self,
+        uri: str,
+        content: Union[str, bytes],
+        *,
+        ctx: Optional[RequestContext],
+        lease_ref: Dict[str, Any] | None = None,
+        auto_pathlock: bool = True,
+    ) -> None:
+        """Sanitize and persist an authorized file whose parent already exists."""
         if isinstance(content, str):
             sanitizer = getattr(self, "_privacy_sanitizer", None)
             if sanitizer is not None and ctx is not None:
@@ -2023,7 +2037,7 @@ class _OpsMixin:
             content = content.encode("utf-8")
 
         await self._async_agfs.write(
-            path,
+            self._uri_to_path(uri, ctx=ctx),
             content,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
