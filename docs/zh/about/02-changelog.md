@@ -7,6 +7,11 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 ## 未发布
 
+- **移除旧会话迁移（不兼容变更）**：删除旧迁移实现、`ov admin migrate`（含 `--cleanup`）
+  及 Python、TypeScript、Go SDK 的对应方法。保留仅 ROOT 可调用的
+  `POST /api/v1/admin/migrate` 入口，当前返回 `400 / INVALID_ARGUMENT`，不创建任务。
+  新版本不再提供 0.3.x 遗留会话的迁移和清理工具；升级不会自动迁移或删除这些旧目录。
+  已迁移的会话和正常会话操作不受影响。
 - **网关部署与行为**：
   - 新增独立 Helm chart `deploy/helm/openviking-gateway`：带 PVC 的单副本 SQLite，
     或共享 Redis 的多副本部署。在包含这些功能的版本发布之前，需要显式设置 `image.tag`，

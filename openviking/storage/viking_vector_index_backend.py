@@ -9,7 +9,7 @@ import re
 import threading
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, AsyncIterator, Awaitable, Callable, Container, Dict, List, Mapping, Optional
@@ -27,10 +27,8 @@ from openviking.storage.acl import (
     ACL_MODE_FIELD,
     AclAction,
     AclManager,
-    AclMode,
     AclUpdate,
-    acl_grant_tokens,
-    acl_principals,
+    acl_filter,
     is_acl_uri,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
@@ -149,6 +147,7 @@ class VectorTransferResult:
     deleted: int = 0
     restored: int = 0
     batches: int = 0
+    source_acl: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 class VectorTransferRollbackError(RuntimeError):
@@ -2638,7 +2637,14 @@ class VikingVectorIndexBackend:
             And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
         )
 
-    async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
+    async def delete_uris(
+        self, ctx: RequestContext, uris: List[str], *, recursive: bool = False
+    ) -> None:
+        if recursive:
+            backend = await self._get_backend_for_context(ctx)
+            for uri in uris:
+                await backend.delete_by_filter(self._uri_transfer_filter(ctx, uri, recursive=True))
+            return
         for uri in uris:
             conds: List[FilterExpr] = [
                 Eq("account_id", ctx.account_id),
@@ -2839,7 +2845,6 @@ class VikingVectorIndexBackend:
         *,
         recursive: bool,
         source_uris: List[str] | None,
-        preserve_target_acl: bool = False,
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
     ) -> tuple[List[Dict[str, Any]], int, Dict[str, Dict[str, Any]]]:
         """Read selected source records and remove affected target records."""
@@ -2896,9 +2901,8 @@ class VikingVectorIndexBackend:
                 )
         # A chunk cannot carry ACL for its base file URI. Keep the old main record
         # when copy has no main record to replace it, accepting its stale content.
-        acl_enabled = await self._acl_enabled(ctx)
         preserved_acl_uris: set[str] = set()
-        if preserve_target_acl and acl_enabled:
+        if self.acl_manager is not None:
             written_uris = {
                 rewrite_transfer_uri(str(record["uri"]), source_uri, target_uri)
                 for record in source_records
@@ -2930,8 +2934,7 @@ class VikingVectorIndexBackend:
             ):
                 affected_target_ids.append(str(record["id"]))
         target_acl_fields: Dict[str, Dict[str, Any]] = {}
-        if preserve_target_acl and acl_enabled and replacement_target_uris:
-            assert self.acl_manager is not None
+        if self.acl_manager is not None and replacement_target_uris:
             acl_target_uris = {uri for uri in replacement_target_uris if is_acl_uri(uri)}
             target_acl_fields = {
                 uri: effective.context_fields()
@@ -2964,7 +2967,6 @@ class VikingVectorIndexBackend:
             recursive=recursive,
             source_uris=source_uris,
             target_entry_exists=target_entry_exists,
-            preserve_target_acl=True,
         )
         result = VectorTransferResult(scanned=len(source_records), batches=batches)
         timestamp = get_current_timestamp()
@@ -3033,12 +3035,13 @@ class VikingVectorIndexBackend:
         *,
         source_uris: List[str] | None = None,
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
+        restore_acl: Dict[str, Dict[str, Any]] | None = None,
     ) -> VectorTransferResult:
         """Move every vector record in a URI scope with compensating rollback."""
         source_uri = resolve_uri(source_uri).uri
         target_uri = resolve_uri(target_uri).uri
         self._validate_uri_transfer_scopes(source_uri, target_uri)
-        source_records, batches, _ = await self._prepare_uri_transfer(
+        source_records, batches, target_acl_fields = await self._prepare_uri_transfer(
             ctx,
             source_uri,
             target_uri,
@@ -3046,13 +3049,23 @@ class VikingVectorIndexBackend:
             source_uris=source_uris,
             target_entry_exists=target_entry_exists,
         )
-        result = VectorTransferResult(scanned=len(source_records), batches=batches)
+        result = VectorTransferResult(
+            scanned=len(source_records),
+            batches=batches,
+            # Keep the original ACL only for a failed move's compensation.
+            source_acl={
+                str(record["uri"]): {
+                    key: value for key, value in record.items() if key in ACL_CONTEXT_FIELDS
+                }
+                for record in source_records
+            },
+        )
+        if restore_acl is not None:
+            target_acl_fields.update(restore_acl)
         if not source_records:
             return result
 
         timestamp = get_current_timestamp()
-        acl_enabled = await self._acl_enabled(ctx)
-        moved_acl_by_uri: Dict[str, Dict[str, Any]] = {}
         target_payloads: List[Dict[str, Any]] = []
         for record in source_records:
             payload = rewrite_vector_record(
@@ -3063,17 +3076,10 @@ class VikingVectorIndexBackend:
                 mode="move",
                 timestamp=timestamp,
             )
-            if acl_enabled:
-                assert self.acl_manager is not None
-                rewritten_uri = str(payload["uri"])
-                acl_fields = moved_acl_by_uri.get(rewritten_uri)
-                if acl_fields is None:
-                    acl_fields = await self.acl_manager.materialize_moved_record(
-                        record,
-                        rewritten_uri,
-                        ctx,
-                    )
-                    moved_acl_by_uri[rewritten_uri] = acl_fields
+            acl_fields = target_acl_fields.get(
+                self._vector_entry_uri(str(payload["uri"]), target_acl_fields)
+            )
+            if acl_fields is not None:
                 payload.update(acl_fields)
             target_payloads.append(payload)
         target_ids = [str(payload["id"]) for payload in target_payloads]
@@ -3084,7 +3090,7 @@ class VikingVectorIndexBackend:
                 attempted_target_ids.extend(str(payload["id"]) for payload in payload_batch)
                 written_ids = (
                     await self._upsert_many_raw(payload_batch, ctx=ctx)
-                    if acl_enabled
+                    if target_acl_fields
                     else await self.upsert_many(payload_batch, ctx=ctx)
                 )
                 if len(written_ids) != len(payload_batch):
@@ -3221,38 +3227,10 @@ class VikingVectorIndexBackend:
                 ]
             )
 
-        controlled_modes = [AclMode.INHERIT.value, AclMode.RESTRICTED.value]
-        # Shared records written while ACL was disabled retain the root's
-        # default user:* manage access. Controlled descendants must match their
-        # own grants, including inherit nodes below a restricted boundary.
-        default_shared_filter = RawDSL(
-            {"op": "must_not", "field": ACL_MODE_FIELD, "conds": controlled_modes}
-        )
-        read_grants = acl_grant_tokens(acl_principals(ctx), AclAction.READ)
         shared_acl_filter = And(
             [
                 PathScope("uri", "viking://resources", depth=-1),
-                Or(
-                    [
-                        default_shared_filter,
-                        And(
-                            [
-                                In(ACL_MODE_FIELD, controlled_modes),
-                                Or(
-                                    [
-                                        In("acl_direct_grants", read_grants),
-                                        And(
-                                            [
-                                                Eq(ACL_MODE_FIELD, AclMode.INHERIT.value),
-                                                In("acl_inherited_grants", read_grants),
-                                            ]
-                                        ),
-                                    ]
-                                ),
-                            ]
-                        ),
-                    ]
-                ),
+                acl_filter(ctx, AclAction.READ),
             ]
         )
         access_filters: List[FilterExpr] = [

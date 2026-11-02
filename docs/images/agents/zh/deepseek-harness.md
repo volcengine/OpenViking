@@ -21,6 +21,16 @@ curl -fsSL https://openviking.ai/install | bash
 2. 确认模型具有 `mcp__openviking__*` 工具，并能够在会话中正常调用。
 3. Desktop 用户在应用中新开会话，检查以上两点。`--dump-config` 对 Desktop 的 `desktop` profile 不可用，改为确认 `~/.dsh/profiles/desktop/package.json` 的 `dsh.profile.bundles` 中有该插件。
 
+## 步骤3：开始使用
+
+在 DeepSeek Harness 中新开一个会话，发送：
+
+```text
+按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+```
+
+Agent 会检查连接，并带你完成首次使用。
+
 ## 故障排查
 
 | 现象 | 排查方向 |

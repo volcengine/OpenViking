@@ -947,16 +947,35 @@ def _mcp_media_download_hint(uri: str) -> str:
 @_mcp_error_results(structured_output=False)
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
 async def read(
-    uris: str | list[str],
+    uri: Annotated[
+        str | list[str] | None,
+        Field(description="One viking:// file URI"),
+    ] = None,
+    uris: Annotated[
+        str | list[str] | None,
+        Field(description="Several viking:// file URIs, read in one call"),
+    ] = None,
     offset: int = 0,
     limit: int = -1,
 ) -> str | list[ContentBlock]:
-    """Read one or more viking:// file URIs. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+    """Read viking:// files. Pass uri for one file, or uris with a list to read several files in one call. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
+
+    # `uri` matches every other tool. Both names accept a string or a list, so a
+    # mismatched shape still reads instead of failing.
+    if uri is not None and uris is not None:
+        raise InvalidArgumentError("read takes uri or uris, not both")
+    requested = uri if uri is not None else uris
+    uri_list = requested if isinstance(requested, list) else [requested]
+    if not uri_list or any(not item for item in uri_list):
+        raise InvalidArgumentError(
+            'read takes uri for one file or uris for several, e.g. '
+            'read(uri="viking://resources/a.md") or '
+            'read(uris=["viking://resources/a.md", "viking://resources/b.md"])'
+        )
 
     service = get_service()
     ctx = _get_ctx()
-    uri_list = uris if isinstance(uris, list) else [uris]
     semaphore = asyncio.Semaphore(10)
 
     async def _preflight_one(
@@ -1413,6 +1432,7 @@ async def write(
         ),
     ] = None,
     acl: Optional[AclSpec] = None,
+    resolve_conflicts: bool = False,
 ) -> str:
     """Write text to a viking:// file. Use this for files you author yourself (notes, profiles, state), the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite. To store a file, document, URL, or repo the user gives you, use add_resource; for a skill, use add_skill. Do not copy its text into a file here instead.
 
@@ -1420,6 +1440,8 @@ async def write(
     - mode="create": compatibility alias for replace; overwrite an existing file or create it if missing.
     - Any new file (whether created by "replace", "append", or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
+    - resolve_conflicts: mark this edit as conflict resolution for an existing resource
+      Markdown file in replace mode (including its create alias); defaults to false.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL
       requires manage on the target, or its parent for a new file. Omit to preserve
@@ -1432,7 +1454,14 @@ async def write(
     uri = _resolve_mcp_workspace_uri(uri, ctx)
 
     result = await service.fs.write(
-        uri=uri, content=content, ctx=ctx, mode=mode, wait=wait, acl=acl
+        uri=uri,
+        content=content,
+        ctx=ctx,
+        mode=mode,
+        wait=wait,
+        acl=acl,
+        edit_source="agent",
+        resolve_conflicts=resolve_conflicts,
     )
     written = result.get("written_bytes", 0)
     message = (
@@ -1490,7 +1519,14 @@ async def edit(
     updated = current.replace(old_string, new_string)
     if updated == current:
         return f"No changes: {uri} already matches the requested edit."
-    result = await service.fs.write(uri=uri, content=updated, ctx=ctx, mode="replace", wait=wait)
+    result = await service.fs.write(
+        uri=uri,
+        content=updated,
+        ctx=ctx,
+        mode="replace",
+        wait=wait,
+        edit_source="agent",
+    )
     written = result.get("written_bytes", 0)
     message = f"Edited {result.get('uri', uri)} ({written} bytes written)."
     return message + _indexing_hint(result)
@@ -2326,8 +2362,8 @@ async def health() -> str:
 # advertised schemas into a plain-typed form: drop null branches, collapse
 # unions to their most general branch, and inline $refs. Runtime argument
 # validation still uses the original function signatures, so union parameters
-# keep accepting every branch (e.g. `read` still takes a bare URI string even
-# though the schema advertises an array).
+# keep accepting every branch (e.g. `read` still takes a bare string in `uris`
+# even though the schema advertises an array).
 
 _PORTABLE_TYPE_PREFERENCE = ("array", "object", "string", "number", "integer", "boolean")
 
@@ -2393,9 +2429,20 @@ def _portable_schema(schema: Any, defs: Optional[Dict[str, Any]] = None) -> Any:
     return node
 
 
+# Collapsing to the most general branch would advertise `read`'s `uri` as an
+# array, and clients that validate against the schema would then reject
+# read(uri="viking://..."). Pin it to the single-file shape it is meant for.
+_PORTABLE_PROPERTY_OVERRIDES = {
+    "read": {"uri": {"type": "string"}},
+}
+
+
 def _apply_portable_schemas() -> None:
     for tool in mcp._tool_manager.list_tools():
         tool.parameters = _portable_schema(tool.parameters)
+        properties = tool.parameters.get("properties", {})
+        for name, override in _PORTABLE_PROPERTY_OVERRIDES.get(tool.name, {}).items():
+            properties[name] = {**properties[name], **override}
 
 
 _apply_portable_schemas()

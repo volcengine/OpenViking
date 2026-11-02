@@ -9,9 +9,10 @@ Main service class that composes all sub-services and manages infrastructure lif
 import asyncio
 import inspect
 import os
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
+from openviking.core.namespace import canonical_user_root
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
@@ -37,7 +38,9 @@ from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
 from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import init_context_collection
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.index_consistency import check_index_consistency
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.content_write_processor import ContentWriteProcessor
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
@@ -71,6 +74,7 @@ if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
     from openviking.scheduling.expiry.runtime import ExpiryRuntime
     from openviking.session.compressor_v3 import SessionCompressorV3
+    from openviking.ttl.adapter import TTLAdapter
 
 
 class OpenVikingService:
@@ -116,6 +120,7 @@ class OpenVikingService:
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._rule_cleanup_scheduler: Optional[RuleCleanupScheduler] = None
         self._expiry_runtime: Optional["ExpiryRuntime"] = None
+        self._ttl_adapter: Optional["TTLAdapter"] = None
         self._compile_scheduler: Optional[CompileScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
@@ -461,7 +466,9 @@ class OpenVikingService:
         """Get the Compile task service."""
         return self._compile_service
 
-    async def initialize(self) -> None:
+    async def initialize(
+        self, *, before_background_start: Optional[Callable[[], Awaitable[None]]] = None
+    ) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
             logger.debug("Already initialized")
@@ -619,6 +626,9 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_service=self._session_service,
         )
+        # Install optional server write hooks before any producer or consumer starts.
+        if before_background_start is not None:
+            await before_background_start()
         try:
             session_auto_commit_config = get_openviking_config().memory.session_auto_commit
         except Exception:
@@ -689,6 +699,7 @@ class OpenVikingService:
                 self._compile_scheduler.save_credential
             )
         self._fs_service.compile_versions = self._compile_service.lifecycle.versions
+        self._fs_service.compile_lifecycle = self._compile_service.lifecycle
         self._resource_service.compile_versions = self._compile_service.lifecycle.versions
 
         if self._queue_manager:
@@ -754,9 +765,11 @@ class OpenVikingService:
             await system_asset_synchronizer.sync(default_ctx)
 
         compile_expiry_enabled = self._compile_scheduler is not None
-        if session_expiry_enabled or compile_expiry_enabled:
+        ttl_expiry_enabled = self._ttl_adapter is not None and self._ttl_adapter.supports_config()
+        if session_expiry_enabled or compile_expiry_enabled or ttl_expiry_enabled:
             from openviking.scheduling.expiry.runtime import ExpiryRuntime, ExpiryRuntimeRoles
 
+            expiry_config.validate_for_runtime()
             self._expiry_runtime = ExpiryRuntime(
                 expiry_config,
                 roles=ExpiryRuntimeRoles(
@@ -773,8 +786,12 @@ class OpenVikingService:
                     )
                 if compile_expiry_enabled:
                     self._compile_scheduler.install_expiry(self._expiry_runtime.scheduler)
+                if ttl_expiry_enabled:
+                    self._ttl_adapter.install_expiry(self._expiry_runtime.scheduler)
                 await self._expiry_runtime.start_storage()
                 await self._expiry_runtime.start_roles()
+                if ttl_expiry_enabled:
+                    await self._ttl_adapter.start()
             except Exception:
                 await self._stop_expiry()
                 raise
@@ -809,8 +826,15 @@ class OpenVikingService:
         self._initialized = True
         logger.info("OpenVikingService initialized")
 
+    def configure_ttl(self, adapter: "TTLAdapter") -> None:
+        """Install optional TTL before background producers and expiry roles start."""
+        self._ttl_adapter = adapter
+
     async def _stop_expiry(self) -> None:
         """Stop expiry work before releasing dependencies used by callbacks."""
+        ttl_adapter = getattr(self, "_ttl_adapter", None)
+        if ttl_adapter is not None:
+            await ttl_adapter.aclose()
         runtime = getattr(self, "_expiry_runtime", None)
         if runtime is None:
             session_service = getattr(self, "_session_service", None)
@@ -840,7 +864,11 @@ class OpenVikingService:
             self._compile_scheduler = None
             logger.info("CompileScheduler stopped")
 
-        await self._stop_expiry()
+        if self._ttl_adapter is None:
+            await self._stop_expiry()
+        elif self._expiry_runtime is not None:
+            # Stop new callbacks, but keep reports available while writers drain.
+            await self._expiry_runtime.stop_roles(keep_reporting=True)
 
         if self._runtime_config_manager:
             await self._runtime_config_manager.stop_refresh_loop()
@@ -867,6 +895,19 @@ class OpenVikingService:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
             logger.info("Queue manager stopped")
+
+        # Draining writers still need post-write registration.
+        # Stop TTL consumers only after those writers settle, while their storage
+        # and vector clients remain available for in-flight recycling.
+        from openviking.ttl.wiring import get_ttl_adapter, set_ttl_adapter
+
+        ttl_adapter = get_ttl_adapter()
+        if ttl_adapter is not None:
+            await ttl_adapter.aclose()
+            set_ttl_adapter(None)
+        self._ttl_adapter = None
+        if self._expiry_runtime is not None:
+            await self._stop_expiry()
 
         # Queue workers and scheduled producers persist their final Task/Work
         # transitions while stopping, so keep their store open until they drain.
@@ -1011,11 +1052,26 @@ class OpenVikingService:
         return await self._directory_initializer.initialize_account_directories(ctx)
 
     async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
-        """Initialize account and first-user preset directories in one batch."""
+        """Initialize a new account's workspace under one account Tree lease."""
         self._ensure_initialized()
         if not self._directory_initializer:
             return 0, 0
-        return await self._directory_initializer.initialize_account_workspace(ctx)
+        agfs = self._viking_fs._async_agfs
+        path = self._viking_fs._uri_to_path("viking://", ctx=ctx)
+        guard = PathLockGuard(agfs)
+        try:
+            try:
+                lease = await guard.acquire(lambda: agfs.pathlock_acquire_tree(path))
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    f"Account workspace is busy and cannot be initialized now: {ctx.account_id}",
+                    uri="viking://",
+                ) from exc
+            return await self._directory_initializer.initialize_account_workspace(
+                ctx, lease_ref=lease
+            )
+        finally:
+            await guard.close()
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
         """Synchronize packaged system assets for every active account."""
@@ -1031,8 +1087,24 @@ class OpenVikingService:
         ).sync_if_changed()
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
-        """Initialize current user's directory tree."""
+        """Initialize the user's preset directories under one user Tree lease."""
         self._ensure_initialized()
         if not self._directory_initializer:
             return 0
-        return await self._directory_initializer.initialize_user_directories(ctx)
+        agfs = self._viking_fs._async_agfs
+        uri = canonical_user_root(ctx)
+        path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        guard = PathLockGuard(agfs)
+        try:
+            try:
+                lease = await guard.acquire(lambda: agfs.pathlock_acquire_tree(path))
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    f"User workspace is busy and cannot be initialized now: {ctx.user.user_id}",
+                    uri=uri,
+                ) from exc
+            return await self._directory_initializer.initialize_user_directories(
+                ctx, lease_ref=lease
+            )
+        finally:
+            await guard.close()

@@ -604,9 +604,7 @@ class TestWatchManager:
         assert tasks[0].is_active is True
 
     @pytest.mark.asyncio
-    async def test_get_all_tasks_admin_scoped_to_own_tasks(
-        self, watch_manager: WatchManager
-    ):
+    async def test_get_all_tasks_admin_scoped_to_own_tasks(self, watch_manager: WatchManager):
         """ADMIN is scoped to its own tasks; ROOT still sees the whole account."""
         await watch_manager.create_task(path="/test/alice1", user_id="alice")
         await watch_manager.create_task(path="/test/bob1", user_id="bob")
@@ -626,9 +624,7 @@ class TestWatchManager:
         assert len(alice_tasks) == 2
 
     @pytest.mark.asyncio
-    async def test_get_all_tasks_isolates_same_account_users(
-        self, watch_manager: WatchManager
-    ):
+    async def test_get_all_tasks_isolates_same_account_users(self, watch_manager: WatchManager):
         """Same account, different user_id → each caller sees only its own tasks."""
         await watch_manager.create_task(path="/test/alice1", user_id="alice")
         await watch_manager.create_task(path="/test/bob1", user_id="bob")
@@ -927,6 +923,168 @@ class TestWatchManagerConcurrency:
 
 
 _CONNECTOR_AUTH = {"provider": "connector_encrypted", "ciphertext": "unused"}
+
+
+class TestWatchCredentialLifecycle:
+    @staticmethod
+    def state(version, authorized, **overrides):
+        return {
+            "account_id": "volcano-account",
+            "resource_id": "ov-resource",
+            "user_id": "volcano-user",
+            "ov_user_id": "default",
+            "ov_account_id": "default",
+            "type": "oauth",
+            "platform": "dingtalk",
+            "version": version,
+            "authorized": authorized,
+            **overrides,
+        }
+
+    async def task(self, manager, active=True, legacy=False):
+        reference = self.state(1, True)
+        reference.pop("version")
+        reference.pop("authorized")
+        reference["binding_version"] = 3
+        if legacy:
+            reference.pop("ov_account_id")
+        return await manager.create_task(
+            path="dingtalk://node",
+            source_type="dingtalk",
+            account_id="default",
+            user_id="default",
+            original_role="user",
+            is_active=active,
+            auth_state={
+                "provider": "connector_plaintext",
+                "request": {
+                    "api_key": "test-key",
+                    "account_id": "default",
+                    "add_type": "dingtalk",
+                    "path": "dingtalk://node",
+                    "connector_args": {},
+                    "connector_auth_config": {"openviking_credential_ref": reference},
+                },
+            },
+        )
+
+    async def notify(self, manager, task, version, authorized, **overrides):
+        return await manager.update_task(
+            task.task_id,
+            "default",
+            "default",
+            "user",
+            credential_state=self.state(version, authorized, **overrides),
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("legacy", [False, True])
+    async def test_reauthorization_resumes_only_credential_pause(self, watch_manager, legacy):
+        task = await self.task(watch_manager, legacy=legacy)
+        task.last_status, task.last_error = "failed", "credential resolution failed"
+        original_auth = task.auth_state.copy()
+        await self.notify(watch_manager, task, 8, False)
+        assert not task.is_active and task.credential_paused
+        assert task.next_execution_time is None
+        await self.notify(watch_manager, task, 10, True)
+        assert task.is_active and not task.credential_paused
+        assert task.next_execution_time is not None
+        assert task.watch_interval == 60
+        assert task.last_status == "failed" and task.last_error == "credential resolution failed"
+        assert task.auth_state == original_auth
+        assert "credential_paused" not in task.to_dict()
+        assert "credential_version" not in task.to_dict()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("pause_after_unbind", [False, True])
+    async def test_manual_pause_is_preserved(self, watch_manager, pause_after_unbind):
+        task = await self.task(watch_manager, active=pause_after_unbind)
+        await self.notify(watch_manager, task, 8, False)
+        if pause_after_unbind:
+            await watch_manager.update_task(
+                task.task_id, "default", "default", "user", is_active=False
+            )
+        await self.notify(watch_manager, task, 10, True)
+        assert not task.is_active and not task.credential_paused
+        assert task.next_execution_time is None
+
+    @pytest.mark.asyncio
+    async def test_delayed_notifications_cannot_override_newer_state(self, watch_manager):
+        task = await self.task(watch_manager)
+        await self.notify(watch_manager, task, 8, False)
+        await self.notify(watch_manager, task, 10, True)
+        await self.notify(watch_manager, task, 8, False)
+        assert task.is_active and task.credential_version == 10
+        await self.notify(watch_manager, task, 11, False)
+        await self.notify(watch_manager, task, 10, True)
+        assert not task.is_active and task.credential_version == 11
+        await self.notify(watch_manager, task, 11, False)
+        assert task.credential_paused
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "account_id",
+            "resource_id",
+            "user_id",
+            "ov_user_id",
+            "ov_account_id",
+            "type",
+            "platform",
+        ],
+    )
+    async def test_other_binding_cannot_change_watch(self, watch_manager, field):
+        task = await self.task(watch_manager)
+        await self.notify(watch_manager, task, 8, False, **{field: "other"})
+        assert task.is_active and task.credential_version == 0
+
+    @pytest.mark.asyncio
+    async def test_pause_survives_restart(self, watch_manager, mock_viking_fs):
+        task = await self.task(watch_manager)
+        await self.notify(watch_manager, task, 8, False)
+        restored = WatchManager(viking_fs=mock_viking_fs)
+        await restored.initialize()
+        saved = await restored.get_task(task.task_id, "default", "default", "user")
+        assert saved.credential_paused and saved.credential_version == 8
+        await self.notify(restored, saved, 10, True)
+        assert saved.is_active and not saved.credential_paused
+
+    @pytest.mark.asyncio
+    async def test_explicit_credentials_are_not_changed(self, watch_manager):
+        task = await watch_manager.create_task(path="dingtalk://explicit", source_type="dingtalk")
+        await self.notify(watch_manager, task, 8, False)
+        assert task.is_active and task.credential_version == 0
+
+    @pytest.mark.asyncio
+    async def test_encrypted_reference_owner_is_checked(self, watch_manager):
+        from openviking.connector.delegate import ConnectorDelegate
+
+        class Encryptor:
+            async def encrypt(self, account_id, plaintext):
+                assert account_id == "default"
+                return b"OVE1" + plaintext[::-1]
+
+            async def decrypt(self, account_id, ciphertext):
+                assert account_id == "default"
+                return ciphertext[4:][::-1]
+
+        task = await self.task(watch_manager)
+        watch_manager._viking_fs._encryptor = Encryptor()
+        delegate = ConnectorDelegate(
+            viking_fs=watch_manager._viking_fs,
+            background_tasks=set(),
+            link_reason_memory=AsyncMock(),
+        )
+        request = task.auth_state["request"]
+        task.auth_state = await delegate.create_watch_auth_state(**request)
+        assert task.auth_state["provider"] == "connector_encrypted"
+        await self.notify(watch_manager, task, 8, False, user_id="other-user")
+        assert task.is_active
+        await self.notify(watch_manager, task, 8, False)
+        assert task.credential_paused and not task.is_active
+        await self.notify(watch_manager, task, 10, True)
+        assert task.is_active
 
 
 class TestSharedConnectorTargets:

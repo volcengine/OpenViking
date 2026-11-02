@@ -53,8 +53,8 @@
 | Cursor | 是，带会话 | profile、记忆索引、skill | 每捕获 8 条消息 | 否 | 先提交，再由宿主摘要 |
 | TRAE、TRAE CN | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
 | ZCode | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
-| Kimi Code | 是，带会话 | profile、记忆索引、skill，在首次提问时 | 每捕获 8 条消息 | 仅当 `SessionEnd` 捕获到新消息 | 提交新捕获的消息 |
-| CodeBuddy Code | 是，带会话，仅限交互式 TUI | profile、记忆索引、skill | 每捕获 8 条消息 | 仅当 `SessionEnd` 捕获到新消息，且仅限交互式 TUI | 提交新捕获的消息 |
+| Kimi Code | 是，带会话 | profile、记忆索引、skill，在首次提问时 | 每捕获 8 条消息 | 是 | 提交尚未提交的消息 |
+| CodeBuddy Code | 是，带会话，仅限交互式 TUI | profile、记忆索引、skill | 每捕获 8 条消息 | 是，仅限交互式 TUI | 提交尚未提交的消息 |
 | OpenCode | 是，带会话 | profile、记忆索引、skill、已索引的仓库 | 空闲时，待提交 token 达到 20,000 | 是，在宿主的清理时限内 | 在压缩前后提交 |
 | DSH | 是，带会话 | profile、记忆索引、skill，每个会话一次 | 待提交 token 达到 20,000 | 是，预算 3 秒 | 先提交，再由宿主摘要 |
 | pi | 是，带会话 | profile、记忆索引、skill，每轮 | takeover 开：约 30,000 token；关：20,000 | takeover 开：否；关：是 | takeover 替换 pi 的摘要 |
@@ -321,8 +321,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Cursor | 距上次提交捕获满 8 条消息时，在 `stop` 提交（`commitTurnThreshold`），本地计数 | `sessionEnd` 已注册，但实际不会运行 | `preCompact` 总是提交 |
 | TRAE、TRAE CN | 每个捕获到内容的 `Stop` | 无 | 没有压缩前事件 |
 | ZCode | 每个 `Stop`；漏掉的 `Stop` 对应的轮次，在下一个 `Stop` 从 rollout 文件补齐 | 无 | 没有压缩前事件 |
-| Kimi Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd` 和 `Interrupt` 捕获到新消息时提交 | `PreCompact` 捕获到新消息时提交 |
-| CodeBuddy Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd`（仅交互式 TUI）捕获到新消息时提交；`SessionStart` 重放排队的写入 | `PreCompact` 捕获到新消息时提交 |
+| Kimi Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd` 和 `Interrupt` 提交所有尚未提交的消息，包括 `Stop` 已经发送的 | `PreCompact` 提交所有尚未提交的消息 |
+| CodeBuddy Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd`（仅交互式 TUI）提交所有尚未提交的消息，包括 `Stop` 已经发送的；`SessionStart` 重放排队的写入 | `PreCompact` 提交所有尚未提交的消息 |
 | OpenCode | v1 `session.idle`、v2 执行结束时：待提交 token 达到 20,000 | 删除会话、v1 `session.error`、v1 dispose 和 v2 cleanup 强制提交 | v1 在压缩前后各一次；v2 在压缩结束后一次 |
 | DSH | `turn/end` 时待提交 token 达到 20,000 | Cordis teardown 提交每个会话 | `compaction/start` 提交，跳过阈值检查 |
 | pi，takeover 开（默认） | 本地估算达到 30,000 token，且用户轮多于 3 个 | `/viking commit` | `session_before_compact` |
@@ -345,8 +345,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Cursor | 否 | 否 | 否 | 否 | 否 | 关闭或切换对话不触发任何事件。`sessionEnd` 只在关闭窗口时触发，而此时宿主已停止执行 hook 命令。不足 8 条消息阈值的部分要等同一会话的后续消息 |
 | TRAE、TRAE CN | 否 | 否 | 否 | 否 | 否 | 每个 `Stop` 已经提交，最多丢失正在进行的那一轮 |
 | ZCode | 否 | 视情况 | 否 | 否 | 否 | 按 Ctrl+C 时如果该轮的 `Stop` 已触发，分离的 worker 会写完。每个 `Stop` 都提交，漏掉的轮次在下一个 `Stop` 补齐 |
-| Kimi Code | 视情况 | 视情况 | 未验证 | 未验证 | 否 | `SessionEnd` 和 `Interrupt` 只在捕获到新消息时提交；已被 `Stop` 捕获的尾部等待下一次提交 |
-| CodeBuddy Code | 视情况 | 否 | 否 | 否 | 否 | `SessionEnd` 只在交互式 TUI 触发，且只在捕获到新消息时提交，因此 headless 运行依赖阈值或 `/compact`。捕获由分离的 worker 完成，hook 自身的超时不会波及它 |
+| Kimi Code | 提交 | 视情况 | 未验证 | 未验证 | 否 | `SessionEnd` 和 `Interrupt` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。`Interrupt` 的捕获和提交共用 2 秒请求预算，捕获慢时提交留给同一会话的下一次提交 |
+| CodeBuddy Code | 视情况 | 否 | 否 | 否 | 否 | `SessionEnd` 只在交互式 TUI 触发，会提交所有尚未提交的消息，包括 `Stop` 已经发送的；headless 运行依赖阈值或 `/compact`。捕获由分离的 worker 完成，hook 自身的超时不会波及它 |
 | OpenCode | 视情况 | 视情况 | 视情况 | 视情况 | 否 | v1 1.15.11+ 的 `dispose` 和 v2 cleanup 会提交所有会话，但宿主留给清理的时间有限，慢请求或会话较多时可能被截断。v2 cleanup 还会在空闲 60 分钟和插件热重载时运行 |
 | DSH | 提交 | 提交 | 提交 | 否 | 否 | teardown 给每个会话一次 3 秒的提交，排在慢写入之后，整体处于 5 秒的进程宽限期内。第二次 Ctrl+C 会强制退出，跳过提交。Web 形态下关闭浏览器标签页不会触发 teardown |
 | pi，takeover 开 | 否 | 否 | 否 | 否 | 否 | `session_shutdown` 保存 takeover 状态但不提交。等下次运行达到阈值，或执行 `/viking commit` |
@@ -400,9 +400,9 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Claude Code | 宿主摘要 | `PreCompact` 同步提交；这是唯一不在后台运行的写入，因为宿主紧接着就会重写 transcript | `source="compact"` 的 `SessionStart` 注入归档概览和最多 5 条摘要 |
 | Codex、TraeCode CLI 2.0 | 宿主摘要 | `PreCompact` 补齐未捕获的轮次，提交全部内容，并开始一个新的 OpenViking 会话。补齐不完整时不提交，稍后重试 | resume 时注入归档摘要 |
 | Cursor | 宿主摘要 | `preCompact` 提交 | 无 |
-| CodeBuddy Code | 宿主摘要 | `PreCompact` 提交新捕获的消息 | 无 |
+| CodeBuddy Code | 宿主摘要 | `PreCompact` 提交 | 无 |
 | TRAE、TRAE CN、ZCode | 宿主摘要 | 没有压缩前事件 | 无 |
-| Kimi Code | 宿主摘要 | `PreCompact` 提交新捕获的消息 | 无 |
+| Kimi Code | 宿主摘要 | `PreCompact` 提交 | 无 |
 | OpenCode | 宿主摘要 | v1 刷新并提交；v2 捕获 transcript | v1 在 `session.compacted` 时再提交一次；v2 在 `session.compaction.ended` 后提交 |
 | DSH | 宿主摘要 | `compaction/start` 无论 token 阈值如何都会提交。注入的上下文是一条用户消息，随宿主压缩一起缩减；profile 不再发送 | 无 |
 | pi | takeover，默认开启 | 提交并等待归档概览 | 用概览替换 pi 的摘要；失败时 pi 照常压缩 |

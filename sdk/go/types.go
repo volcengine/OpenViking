@@ -285,6 +285,12 @@ type BatchWriteOptions struct {
 	Extra          map[string]any
 }
 
+// EnsureDirectoryIndexOptions controls readiness waiting.
+type EnsureDirectoryIndexOptions struct {
+	Wait      *bool // Nil waits for indexes to become readable.
+	Telemetry any
+}
+
 // SetTagsOptions controls SetTags.
 type SetTagsOptions struct {
 	Mode      string
@@ -519,11 +525,6 @@ type PackOptions struct {
 type ImportPackOptions struct {
 	OnConflict string
 	VectorMode string
-}
-
-// AdminMigrateOptions controls AdminMigrate.
-type AdminMigrateOptions struct {
-	Cleanup bool
 }
 
 // FindResult is the structured retrieval response returned by Find and Search.

@@ -23,6 +23,7 @@ from openviking.storage.acl import AclSpec
 from openviking.storage.expr import And, Eq, In
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+from openviking.ttl.wiring import attach_expires_at
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import NotFoundError
 
@@ -127,6 +128,7 @@ async def ls(
         if mapped is not None:
             raise mapped from e
         raise
+    await attach_expires_at(page.entries, _ctx)
     return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
@@ -183,6 +185,7 @@ async def tree(
         if mapped is not None:
             raise mapped from e
         raise
+    await attach_expires_at(page.entries, _ctx)
     return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
@@ -204,7 +207,9 @@ async def stat(
         # URI requests use the canonical validated URI. ID requests are resolved
         # inside VikingFS, which returns the corresponding canonical URI.
         response_uri = result.get("uri", resolved)
-        return Response(status="ok", result={**result, "uri": response_uri})
+        payload = {**result, "uri": response_uri}
+        await attach_expires_at([payload], _ctx)
+        return Response(status="ok", result=payload)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:

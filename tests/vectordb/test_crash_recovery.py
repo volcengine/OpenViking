@@ -4,6 +4,7 @@ import multiprocessing
 import os
 import shutil
 import sys
+import tempfile
 import time
 import unittest
 import weakref
@@ -501,6 +502,139 @@ class TestTornSnapshotSelection(unittest.TestCase):
         finally:
             col.close()
         print("[Main] get_newest_version rejected torn snapshots.")
+
+
+def worker_failed_snapshot(path, scalar, connection):
+    import resource
+    import signal
+
+    exit_code = 0
+    try:
+        dim = 4 if scalar else 128
+        meta = {
+            "CollectionName": "failed_snapshot",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
+                {"FieldName": "text", "FieldType": "string"},
+            ],
+        }
+        col = get_or_create_local_collection(
+            meta_data=meta,
+            path=path,
+            config={"ttl_cleanup_seconds": 0, "index_maintenance_seconds": 3600},
+        )
+        rows = [
+            {"id": i, "vector": [0.25] * dim, "text": f"record-{i}" + "x" * 512}
+            for i in range(1, 3002)
+        ]
+        col.upsert_data(rows[:1])
+        col.create_index(
+            "idx",
+            {
+                "IndexName": "idx",
+                "VectorIndex": {"IndexType": "flat", "Distance": "l2"},
+                "ScalarIndex": ["text"] if scalar else [],
+            },
+        )
+        index = col.get_index("idx")
+        version_before = index.get_newest_version()
+        markers_before = sorted(Path(index.version_dir).glob("*.write_done"))
+        col.upsert_data(rows[1:])
+        local = col._Collection__collection
+        delta_before = len(list(local.store_mgr.get_delta_data_after_ts(0)))
+        real_dump = index.engine_proxy.dump
+        failed_file_size = None
+
+        def limited_dump(directory):
+            nonlocal failed_file_size
+            payload = "scalar_index/scalar_index.data" if scalar else "vector_index/index_flat.data"
+            failed_file = Path(directory) / payload
+            old_limit = resource.getrlimit(resource.RLIMIT_FSIZE)
+            old_handler = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            try:
+                resource.setrlimit(resource.RLIMIT_FSIZE, (131072, old_limit[1]))
+                return real_dump(directory)
+            finally:
+                resource.setrlimit(resource.RLIMIT_FSIZE, old_limit)
+                signal.signal(signal.SIGXFSZ, old_handler)
+                failed_file_size = failed_file.stat().st_size
+
+        with patch.object(index.engine_proxy, "dump", side_effect=limited_dump):
+            flushed = local.flush_all_indexes()
+        connection.send(
+            {
+                "flushed": flushed,
+                "delta_before": delta_before,
+                "delta_after": len(list(local.store_mgr.get_delta_data_after_ts(0))),
+                "version_before": version_before,
+                "version_after": index.get_newest_version(),
+                "markers_unchanged": markers_before
+                == sorted(Path(index.version_dir).glob("*.write_done")),
+                "failed_file_size": failed_file_size,
+            }
+        )
+    except Exception as exc:
+        connection.send({"error": repr(exc)})
+        exit_code = 1
+    finally:
+        connection.close()
+        # A normal close would retry persistence and overwrite the failure evidence.
+        os._exit(exit_code)
+
+
+@unittest.skipUnless(sys.platform in {"darwin", "linux"}, "Requires RLIMIT_FSIZE and SIGXFSZ")
+class TestFailedSnapshotWrite(unittest.TestCase):
+    def check_failed_snapshot(self, scalar):
+        with tempfile.TemporaryDirectory() as path:
+            ctx = multiprocessing.get_context("spawn")
+            receiver, sender = ctx.Pipe(duplex=False)
+            worker = ctx.Process(target=worker_failed_snapshot, args=(path, scalar, sender))
+            worker.start()
+            sender.close()
+            try:
+                self.assertTrue(receiver.poll(60), "Snapshot writer timed out")
+                report = receiver.recv()
+                worker.join(10)
+                self.assertEqual(worker.exitcode, 0, report)
+            finally:
+                receiver.close()
+                if worker.is_alive():
+                    worker.terminate()
+                worker.join()
+            self.assertEqual(report["failed_file_size"], 131072, "Real write failure must occur")
+            self.assertEqual(report["delta_before"], 3000)
+            self.assertEqual(report["flushed"], 0, "Failed snapshot must not count as saved")
+            self.assertEqual(report["version_after"], report["version_before"])
+            self.assertTrue(report["markers_unchanged"])
+            self.assertEqual(report["delta_after"], 3000, "Recovery deltas must survive")
+            col = get_or_create_local_collection(path=path)
+            try:
+                self.assertEqual(col.fetch_data(list(range(1, 3002))).ids_not_exist, [])
+                result = col.search_by_vector(
+                    "idx", dense_vector=[0.25] * (4 if scalar else 128), limit=3101
+                )
+                self.assertEqual({item.id for item in result.data}, set(range(1, 3002)))
+                if scalar:
+                    filtered = col.search_by_vector(
+                        "idx",
+                        dense_vector=[0.25] * 4,
+                        limit=10,
+                        filters={
+                            "op": "must",
+                            "field": "text",
+                            "conds": ["record-3001" + "x" * 512],
+                        },
+                    )
+                    self.assertEqual([item.id for item in filtered.data], [3001])
+            finally:
+                col.close()
+
+    def test_failed_vector_write_preserves_recovery(self):
+        self.check_failed_snapshot(scalar=False)
+
+    def test_failed_scalar_write_preserves_recovery(self):
+        self.check_failed_snapshot(scalar=True)
 
 
 if __name__ == "__main__":

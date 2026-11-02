@@ -150,6 +150,30 @@ def test_oversized_latest_turn_keeps_anchor_and_atomic_raw_tail():
     assert plan.checkpoint_source_message_ids == archived_ids[1:]
 
 
+def test_oversized_final_step_archives_full_source_and_retains_preview():
+    final_text = ("HEAD-" * 1000) + ("TAIL-" * 1000)
+    messages = [
+        _message("u1", "user", "investigate"),
+        _message("a1", "assistant", final_text),
+    ]
+
+    plan = plan_retention(
+        messages,
+        keep_recent_turn_count=1,
+        token_budget=120,
+        min_raw_tail_steps=1,
+    )
+
+    assert [message.id for message in plan.archive_messages] == ["u1", "a1"]
+    assert [message.id for message in plan.retained_messages] == ["u1", "a1"]
+    assert plan.checkpoint_source_message_ids == ["a1"]
+    assert plan.archive_messages[-1].content == final_text
+    assert plan.retained_messages[-1].content != final_text
+    assert "HEAD-" in plan.retained_messages[-1].content
+    assert "TAIL-" in plan.retained_messages[-1].content
+    assert plan.estimated_active_tokens <= 120
+
+
 def test_oversized_legacy_assistant_only_turn_archives_without_checkpoint():
     messages = [
         _message("a1", "assistant", "A" * 1000),

@@ -64,6 +64,7 @@ from .rules_config import RulesConfig
 from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
+from .ttl_config import TTLConfig
 from .vlm_config import VLMConfig
 
 
@@ -523,6 +524,13 @@ class OpenVikingConfig(BaseModel):
     expiry: ExpiryConfig = Field(
         default_factory=ExpiryConfig,
         description="Distributed expiry scheduling configuration",
+    )
+
+    ttl: TTLConfig = RuntimeField(
+        default_factory=TTLConfig,
+        description=(
+            "Directory TTL recycling policy. Default-off; requires the enabled Redis TTL runtime."
+        ),
     )
 
     @model_validator(mode="after")

@@ -137,7 +137,7 @@ class QueueWorkSummary:
     processed: int = 0
     requeue_count: int = 0
     error_count: int = 0
-    errors: list[str] = field(default_factory=list)
+    errors: list[Any] = field(default_factory=list)
     queue_wait_ms: float = 0.0
     execute_ms: float = 0.0
 
@@ -161,6 +161,60 @@ def sanitize_error(error: str) -> str:
     if len(sanitized) > _MAX_ERROR_LEN:
         sanitized = sanitized[:_MAX_ERROR_LEN] + "...[truncated]"
     return sanitized
+
+
+def make_work_error(
+    message: str,
+    uri: Optional[str] = None,
+    err_brief: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build one per-resource work error dict (the persisted/public shape).
+
+    Embedding/semantic handlers call this directly; optional fields are
+    omitted when empty so legacy ``{message}`` records stay byte-stable.
+    """
+    entry: Dict[str, Any] = {"message": message}
+    if uri:
+        entry["uri"] = uri
+    if err_brief:
+        entry["err_brief"] = err_brief
+    return entry
+
+
+def project_work_error(raw: Any) -> Dict[str, Any]:
+    """Project one work error (legacy string or shaped dict) into
+    ``{message, uri?, err_brief?}``, keeping known fields only.
+
+    Unknown types yield an empty ``message`` so callers drop them instead of
+    fabricating a fake error; historical records are never back-filled.
+    """
+    if isinstance(raw, str):
+        return {"message": raw}
+    if isinstance(raw, dict):
+        entry: Dict[str, Any] = {"message": str(raw.get("message") or "")}
+        if isinstance(raw.get("uri"), str) and raw["uri"]:
+            entry["uri"] = raw["uri"]
+        if isinstance(raw.get("err_brief"), str) and raw["err_brief"]:
+            entry["err_brief"] = raw["err_brief"]
+        return entry
+    return {"message": ""}
+
+
+def serialize_work_errors(values: Optional[Iterable[Any]]) -> list[Dict[str, Any]]:
+    """Project handler work errors into stored dicts, masking only ``message``.
+
+    Accepts legacy plain strings or shaped dicts. ``uri``/``err_brief`` are
+    never masked. Empty messages are dropped.
+    """
+    details: list[Dict[str, Any]] = []
+    for value in values or ():
+        entry = project_work_error(value)
+        message = sanitize_error(str(entry.get("message") or ""))
+        if not message:
+            continue
+        entry["message"] = message
+        details.append(entry)
+    return details
 
 
 def sanitize_task_result(result: Any) -> Any:
@@ -236,7 +290,7 @@ class WorkRecord:
     state: WorkState = WorkState.PENDING
     requeue_count: int = 0
     error: Optional[str] = None
-    errors: list[str] = field(default_factory=list)
+    errors: list[Any] = field(default_factory=list)
     context_count: int = 0
     enqueued_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
@@ -349,8 +403,31 @@ def queue_result(summary: Optional[QueueWorkSummary]) -> Dict[str, Any]:
         "processed": summary.processed,
         "requeue_count": summary.requeue_count,
         "error_count": summary.error_count,
-        "errors": [{"message": error} for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]],
+        "errors": [
+            project_work_error(error)
+            for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]
+        ],
     }
+
+
+def collect_queue_work_errors(result: Optional[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """Collect projected per-resource errors from a terminal task result.
+
+    The synchronous wait paths (add_resource / content write / reindex) expose
+    the same ``message``/``uri``/``err_brief`` items that ``GET /tasks`` returns
+    under ``result.queue_status.<stage>.errors``.
+    """
+    if not isinstance(result, dict):
+        return []
+    queue_status = result.get("queue_status")
+    if not isinstance(queue_status, dict):
+        return []
+    collected: list[Dict[str, Any]] = []
+    for stage_name in ("Semantic", "Embedding"):
+        stage = queue_status.get(stage_name)
+        if isinstance(stage, dict) and isinstance(stage.get("errors"), (list, tuple)):
+            collected.extend(project_work_error(item) for item in stage["errors"])
+    return collected[:MAX_QUEUE_ERROR_DETAILS]
 
 
 def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:

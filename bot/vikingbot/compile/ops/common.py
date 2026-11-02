@@ -48,9 +48,16 @@ Cover every input. Preserve source paths and applicability in content where rele
 async def payload(runtime: Pipeline, record: Record, *, combine=False) -> dict:
     """Load assigned evidence; Combine receives content and identity, without runtime metadata.
 
-    Ready drafts retain their supporting facts and scope because the body alone may
-    omit relationships. Missing stored evidence fails the assignment.
+    Image metadata is registered only after its snapshot write succeeds; load its
+    body on viewing. Ready drafts retain their supporting facts and scope because
+    the body alone may omit relationships. Missing other payloads fail the assignment.
     """
+    data = runtime.evidence.get(record.record_id, {})
+    if data.get("media_kind") == "image":
+        return {
+            "id": record.record_id,
+            "payload": {**data, "source_ranges": [record.record_id]},
+        }
     data = await runtime.files.get(record.payload_ref)
     if data is None:
         raise ValueError(f"Missing evidence/payload: {record.payload_ref}")

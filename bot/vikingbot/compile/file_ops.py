@@ -167,7 +167,7 @@ def validate_files(runtime: Pipeline, response, group, records, old):
             json.loads(value)
 
 
-async def save_files(runtime: Pipeline, response, group, records, old, *, origin=None):
+async def save_files(runtime: Pipeline, response, group, records, old):
     """Persist candidates with lineage; only resolved paths enter publication via accept_files."""
     output = []
     for draft in response.files:
@@ -180,7 +180,6 @@ async def save_files(runtime: Pipeline, response, group, records, old, *, origin
             "sha256": content_hash(value),
             "base_hash": content_hash(previous) if previous is not None else None,
             "owner": group.group_id,
-            "origin": origin or draft.path,
             "source_refs": sorted(
                 {ref for r in records if r.record_id in inputs for ref in r.source_refs}
             ),

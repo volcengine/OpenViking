@@ -44,6 +44,8 @@ After installation, use the verification steps below to check tool access and cr
 
 </details>
 
+Once installed, start a new DSH session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
 ## Verify
 
 Start `dsh --profile web` and open a conversation. You should see an OpenViking context injection at the top of the session, and the model should have `mcp__openviking__*` tools available. Ask it about something from an earlier session to confirm recall.

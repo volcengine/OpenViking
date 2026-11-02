@@ -15,17 +15,21 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | ROOT | System administrator with full access |
 | ADMIN | Workspace administrator, manages users within their account |
 | USER | Regular user |
+| GLOBAL | Account-scoped data-plane identity, typically used by agents; only ROOT may create, destroy, or modify it, while other roles may only observe its existence |
 
-| Operation | ROOT | ADMIN | USER |
-|-----------|------|-------|------|
-| Create/delete workspace | Y | N | N |
-| List workspaces | Y | N | N |
-| List users | Y | Y (own account) | Y (own account) |
-| Register/remove users | Y | Y (own account) | N |
-| Manage groups and membership | Y | Y (own account) | N |
-| List agents (deprecated, returns empty list) | Y | Y (own account) | N |
-| Regenerate user key (API Key mode only) | Y | Y (own account) | Y (own key) |
-| Change user role between USER and ADMIN | Y | Y (own account) | N |
+| Operation | ROOT | ADMIN | USER | GLOBAL |
+|-----------|------|-------|------|--------|
+| Create/delete workspace | Y | N | N | N |
+| List workspaces | Y | N | N | N |
+| List users | Y | Y (own account) | Y (own account) | N |
+| Register/remove users | Y | Y (own account) | N | N |
+| Create GLOBAL identity | Y | N | N | N |
+| Observe GLOBAL identity existence | Y | Y (own account) | Y (own account) | Y (self) |
+| Destroy/rotate GLOBAL or change its group membership | Y | N | N | N |
+| Change an existing role to or from GLOBAL | N | N | N | N |
+| Manage groups and membership | Y | Y (own account) | N | N |
+| Regenerate user key (API Key mode only) | Y | Y (own account) | Y (own key) | N |
+| Change user role between USER and ADMIN | Y | Y (own account) | N | N |
 
 ## CLI `--sudo` Option
 
@@ -48,8 +52,7 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 - `ov --sudo admin` - Account and user management
 - `ov --sudo system` - System utility commands
 - `ov --sudo reindex` - Rebuild indexes
-- `ov --sudo admin migrate` - Legacy session migration and cleanup
-- `ov --sudo task status/list` - Query root/system background tasks, such as migration tasks
+- `ov --sudo task status/list` - Query root/system background tasks, such as account deletion tasks
 
 ### Usage Limitations
 
@@ -68,7 +71,7 @@ The server adds memberships to `RequestContext.group_ids` for each request. Addi
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group and all its memberships, including when the group is non-empty |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add members from a JSON body `{"user_ids": [...]}` (1–1000 existing users) atomically; users who are already members are skipped, and the result is `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
 
 ```bash
@@ -1064,7 +1067,7 @@ Create a new workspace with its first admin user.
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:create_account` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.create_account` - Core implementation
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.create_account` - Core implementation
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_create_account` - Python SDK
 
 #### 2. Interface and Parameters
@@ -1253,7 +1256,7 @@ List all workspaces (ROOT only).
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.get_accounts` - Core implementation
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.get_accounts` - Core implementation
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_accounts` - Python SDK
 
 #### 2. Interface and Parameters
@@ -1464,7 +1467,7 @@ Register a new user in a workspace.
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:register_user` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.register_user` - Core implementation
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.register_user` - Core implementation
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_register_user` - Python SDK
 
 #### 2. Interface and Parameters
@@ -1475,7 +1478,7 @@ Register a new user in a workspace.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
-| role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. ROOT identity comes only from `server.root_api_key`. |
+| role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`; only `ROOT` may register `"global"`. ROOT identity comes only from `server.root_api_key`. |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 | user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 
@@ -1483,6 +1486,7 @@ Register a new user in a workspace.
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
 - ADMIN can only register users in their own account
+- `"global"` is creation-only. Only ROOT can create, delete, rotate, or modify group membership for a GLOBAL identity. No identity, including ROOT, can change an existing role to or from GLOBAL; delete and recreate instead. ADMIN and USER can observe that a GLOBAL identity exists in user listings, but never receive its credentials or management controls.
 - The `"root"` role cannot be minted through user registration
 - `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
 - `user_config.add_targets.skill_uri` must be `viking://~/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
@@ -1598,7 +1602,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_users` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.get_users` - Core implementation
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.get_users` - Core implementation
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_users` - Python SDK
 
 #### 2. Interface and Parameters
@@ -1612,7 +1616,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | role | str | No | null | Filter by role |
 | query | str | No | null | HTTP-only, case-insensitive literal substring match on user IDs |
 | include_summary | bool | No | false | HTTP-only, return paginated users and account statistics in an object |
-| include_credentials | bool | No | true | HTTP-only. ROOT receives all available plaintext keys; ADMIN receives its own plaintext key and masked prefixes for other users; USER receives only its own key. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. USER receives availability only for its own row. Availability is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. |
+| include_credentials | bool | No | true | HTTP-only. ROOT receives all available plaintext keys; ADMIN receives its own plaintext key and masked prefixes for other users, while GLOBAL identities report only `api_key_available`; USER receives only its own key. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. USER receives availability only for its own row. Availability is true only when the server can read the complete key for a server-side binding; hash-only credentials return false. |
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
@@ -1830,7 +1834,7 @@ Change an account user's role between USER and ADMIN, including promotion and de
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:set_user_role` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.set_role` - Core implementation
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.set_role` - Core implementation
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_set_role` - Python SDK
 
 #### 2. Interface and Parameters
@@ -1930,7 +1934,7 @@ Generate and store a user API key. With the default random generation, the old k
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:regenerate_key` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.regenerate_key` - Core implementation
+- `openviking/server/api_keys/key_mgr.py:APIKeyManager.regenerate_key` - Core implementation
 - `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
 
 #### 2. Interface and Parameters
@@ -2044,113 +2048,23 @@ the request is in progress, the command exits with an error and keeps the return
 
 ---
 
-### migrate_legacy_data
+### Reserved migration endpoint
 
-#### 1. API Implementation Overview
+`POST /api/v1/admin/migrate` is reserved for future migration operations. It requires
+ROOT authentication and currently returns `400 Bad Request` with error code
+`INVALID_ARGUMENT` and message `Data migration is not currently supported.`
 
-Migrate legacy `viking://session/...` data into `viking://user/<user_id>/sessions/...`, or clean up old session directories after verifying migration. This endpoint is ROOT-only and runs as a background task. The account-shared `agent` directory is excluded from migration and cleanup.
-
-**Processing Flow:**
-1. Verify requester has ROOT privileges
-2. For `action=migrate`, run preflight checks for account registry, session owner metadata, and other prerequisites
-3. Create a root-level background task
-4. During migration, copy session files; during cleanup, delete old session vector records before deleting old session AGFS directories
-
-Migration preserves files that already exist at the destination. Cleanup leaves shared `agent` directories and migrated user data intact.
-
-**Code Entry Points:**
-- `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP route
-- `openviking/service/legacy_migration.py:LegacyDataMigration` - Migration implementation
-
-#### 2. Interface and Parameters
-
-**HTTP API**
-
-```
-POST /api/v1/admin/migrate
-```
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| action | str | No | migrate | `migrate` runs migration; `cleanup` removes old namespaces |
-
-**Migration result fields**
-
-| Field | Description |
-|-------|-------------|
-| migrated.files / migrated.directories | Number of files and directories copied |
-| migrated.operations | Session migration operation count (`sessions`) |
-| skipped / created_users | Skipped files and users created automatically |
-
-**Cleanup result fields**
-
-| Field | Description |
-|-------|-------------|
-| cleanup.directories | Number of legacy directories deleted |
-| cleanup.vector_records | Number of old vector records deleted |
-| cleanup.targets | Legacy scopes that were cleaned |
-| skipped / warnings | Skipped items and warnings |
-
-#### 3. Usage Examples
-
-**HTTP API**
+No migration parameters are currently supported. Sending the previous
+`{"action":"migrate"}` or `{"action":"cleanup"}` body also returns this error.
+The endpoint does not create a task or modify migration data. Unauthenticated
+requests return `401`; authenticated ADMIN or USER requests return `403`.
 
 ```bash
-# Run migration
 curl -X POST http://localhost:1933/api/v1/admin/migrate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"action": "migrate"}'
-
-# Clean old namespaces after the migration task finishes and migrated data is verified
-curl -X POST http://localhost:1933/api/v1/admin/migrate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-key>" \
-  -d '{"action": "cleanup"}'
+  -H "X-API-Key: <root-key>"
 ```
 
-**Python SDK**
-
-```python
-print(client.admin_migrate(cleanup=False))
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.adminMigrate(false));
-```
-
-**Go SDK**
-
-```go
-result, err := client.AdminMigrate(ctx, &openviking.AdminMigrateOptions{
-    Cleanup: false,
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["task_id"])
-```
-
-**CLI**
-
-```bash
-ov --sudo admin migrate --output json
-# Check the returned task with ov --sudo task status <task_id>, then verify migrated data.
-ov --sudo admin migrate --cleanup --output json
-```
-
-**CLI Response Example (default compact output)**
-
-```json
-{
-  "ok": true,
-  "result": {"task_id": "6de05fc3-0334-40d6-ba9b-dd317eb4d351"}
-}
-```
+The old `ov admin migrate` command and corresponding SDK methods have been removed.
 
 ---
 

@@ -1398,6 +1398,26 @@ class AsyncHTTPClient:
         )
         return self._handle_response_data(response).get("result", {})
 
+    async def ensure_directory_index(
+        self,
+        uri: str,
+        fallback_abstract: str,
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Preserve summaries; fallback_abstract seeds L0 only when both are absent.
+        Return readable levels, or a queued task with wait=False.
+        """
+        response = await self._request(
+            "POST",
+            "/api/v1/content/ensure_directory_index",
+            json={
+                "uri": VikingURI.normalize(uri),
+                "fallback_abstract": fallback_abstract,
+                "wait": wait,
+            },
+        )
+        return self._handle_response_data(response).get("result", {})
+
     async def set_tags(
         self,
         uri: str,
@@ -1682,6 +1702,7 @@ class AsyncHTTPClient:
         skill: str,
         options: Optional[CompileOptions] = None,
     ) -> Dict[str, Any]:
+        """Return a queued task, or saved settings when args explicitly configure scheduling."""
         payload = self._build_options_payload(
             options,
             CompileOptions,
@@ -2196,11 +2217,6 @@ class AsyncHTTPClient:
         response = await self._http.delete(
             f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
         )
-        return self._handle_response(response)
-
-    async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        action = "cleanup" if cleanup else "migrate"
-        response = await self._request("POST", "/api/v1/admin/migrate", json={"action": action})
         return self._handle_response(response)
 
     async def admin_get_agent_evolution(self) -> Dict[str, Any]:
@@ -2914,6 +2930,17 @@ class SyncHTTPClient:
             )
         )
 
+    def ensure_directory_index(
+        self,
+        uri: str,
+        fallback_abstract: str,
+        wait: bool = True,
+    ) -> Dict[str, Any]:
+        """Index uri; use fallback_abstract only when both summaries are absent."""
+        return run_async(
+            self._async_client.ensure_directory_index(uri, fallback_abstract, wait=wait)
+        )
+
     def set_tags(
         self,
         uri: str,
@@ -3323,9 +3350,6 @@ class SyncHTTPClient:
         return run_async(
             self._async_client.admin_remove_group_member(account_id, group_id, user_id)
         )
-
-    def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_migrate(cleanup=cleanup))
 
     def admin_get_agent_evolution(self) -> Dict[str, Any]:
         return run_async(self._async_client.admin_get_agent_evolution())
