@@ -347,6 +347,17 @@ SQLite 与 filesystem 锁文件不共享协议。进程运行期间不能删除�
 崩溃进程的锁在 `lock_expire_secs`（默认 30 秒）后可被接管。
 此配置不会改变 workspace 进程锁或其他后端的并发限制。
 
+升级 holder 租约协议时，同样需要先停止全部锁参与者（包括队列 worker），再部署新的
+native binding。SQLite 会自动增加 `holders` 列。新代码可以读取旧 owner token，
+但旧进程无法维护 holder 记录，因此不能在同一个数据库、filesystem 锁或 Redis
+namespace 中混跑新旧版本；保留已有持久化队列 handoff。
+每个租约独立续租和释放自己的 holder。native adopt 只接管仍有效的来源 holder。
+来源消失或过期、旧 payload 缺少 holder 或 Provider 变化时，由 `adopt_or_reacquire`
+统一校验账号和覆盖范围，完整检查冲突后在 payload 的原 owner 下申请新的 holder。
+重复投递通过恢复可能创建多个 holder，业务写入需保证幂等。
+仅有一个 holder 的 consumer 崩溃时，其他 owner 要等待配置的 TTL 到期；原 delivery
+在 holder 过期后可通过恢复 helper 继续处理。
+
 远程存储后端还需要配置 endpoint、bucket/collection、鉴权和超时等字段。完整后端示例见[配置指南](../guides/01-configuration.md#storage)。
 
 `parse_output.mode=local` 可避免把 parser 中间产物写入共享 AGFS。当前 worker
