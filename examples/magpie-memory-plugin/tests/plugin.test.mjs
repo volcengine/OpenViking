@@ -544,10 +544,9 @@ test("separate host processes coordinate and replay the same private ledger", as
   assert.equal(count, 1);
 });
 
-test("unknown histories, missing sessions, explicit auxiliary requests and stored Responses skip recall", async (t) => {
+test("unknown histories, explicit auxiliary requests and stored Responses skip recall", async (t) => {
   const f = await fixture(t);
   const cases = [
-    [body(), context({ session: "" })],
     [{ ...body(), messages: [...body().messages, { role: "assistant", content: "unknown answer" }, { role: "user", content: "next" }] }, context()],
     [{ ...body(), metadata: { request_kind: "auxiliary" } }, context()],
     [{ model: "test-model", store: true, input: "question" }, context({ protocol: "responses" })],
@@ -683,4 +682,43 @@ test("CJK profile and combined recall respect token budgets and replay their sna
   await f.save({ plugin: { magpie: { profileTokenBudget: 1000, recallMaxTokens: 4000 } } });
   assert.deepEqual(await recallRequest(body(), context(), f.env), first);
   assert.equal(f.profileCalls.length, 1);
+});
+
+
+test("capture defaults on and preserves explicit file/host false", async (t) => {
+  const f = await fixture(t);
+  assert.equal((await loadConfig(f.env)).autoCapture, true);
+  assert.equal((await loadConfig(f.env, { autoCapture: false })).autoCapture, false);
+  for (const plugin of [{ autoCapture: false }, { magpie: { autoCapture: false } }]) {
+    await f.save({ plugin }); assert.equal((await loadConfig(f.env)).autoCapture, false);
+  }
+});
+
+test("sessionless full histories recall independently without writing state", async (t) => {
+  let memory = "First memory";
+  const f = await fixture(t, () => ({ rendered: memory }));
+  const messages = [{ role: "user", content: "Earlier" }, { role: "assistant", content: "Reply" }, { role: "user", content: "Latest question" }];
+  for (const protocol of ["chat", "anthropic", "responses", "gemini"]) {
+    const wire = protocol === "responses" ? { store: false, input: messages }
+      : protocol === "gemini" ? { contents: messages.map(m => ({ role: m.role === "assistant" ? "model" : m.role, parts: [{ text: m.content }] })) }
+      : { messages };
+    memory = "First memory";
+    assert.match(JSON.stringify(await recallRequest(wire, context({ protocol, session: "" }), f.env)), /First memory/);
+    memory = "Second memory";
+    const out = await recallRequest(wire, context({ protocol, session: undefined }), f.env);
+    assert.match(JSON.stringify(out), /Second memory/);
+    assert.doesNotMatch(JSON.stringify(out), /First memory/);
+  }
+  assert.equal(f.calls.length, 8);
+  await assert.rejects(readdir(join(f.dir, "state")), { code: "ENOENT" });
+});
+
+test("sessionless native ownership never persists across requests", async (t) => {
+  const f = await fixture(t);
+  await f.save({ plugin: { magpie: { nativeAgents: ["native"] } } });
+  assert.equal(await recallRequest(body(), context({ session: "", agent: "native" }), f.env), undefined);
+  assert.ok(await recallRequest(body(), context({ session: "", agent: "ordinary" }), f.env));
+  await f.save({ plugin: { bypassSession: true } });
+  assert.equal(await recallRequest(body(), context({ session: "" }), f.env), undefined);
+  await assert.rejects(readdir(join(f.dir, "state")), { code: "ENOENT" });
 });
