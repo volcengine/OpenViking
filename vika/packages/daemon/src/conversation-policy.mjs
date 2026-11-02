@@ -131,7 +131,8 @@ function bundledCliSection(config) {
   ].join('\n');
 }
 
-// Codex, TraeX, Claude and Pi: the whole policy, delivered through the Core tools.
+// Codex, TraeX, Claude, Pi, Durable and OpenCode: the whole policy, delivered
+// through the Core tools.
 export function assembleConversationPolicy(config = {}) {
   return joinSections([
     renderPrompt(config, 'core.md').replace('{{DELIVERY_RULES}}', () => deliveryRules(config)),

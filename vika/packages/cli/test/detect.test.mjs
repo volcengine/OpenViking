@@ -160,6 +160,7 @@ test('runtimes: installed and logged-in CLIs are offered, the rest say what is m
     { id: 'claude', available: false, model: 'claude:' },
     { id: 'pi', available: true, model: 'pi' },
     { id: 'durable', available: false, model: 'durable' },
+    { id: 'opencode', available: false, model: 'opencode' },
   ]);
   assert.equal(runtimes[0].bin, path.join(bin, 'codex'));
   assert.match(runtimes[1].note, /claude auth login/);
@@ -200,7 +201,7 @@ test('runtimes: a Pi with no model points the user at vika pi', async () => {
     execFileImpl: async () => ({ stdout: 'No models available.\n' }),
   });
   assert.deepEqual(runtimes.map(({ id, available }) => [id, available]), [
-    ['codex', false], ['claude', false], ['pi', false], ['durable', false],
+    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['opencode', false],
   ]);
   assert.match(runtimes[2].note, /vika pi/);
 });
@@ -288,6 +289,40 @@ test('TraeX: resolves and deduplicates aliases before probing or pinning a binar
   for (const name of ['traex', 'traecli']) fs.symlinkSync(path.join(f.bin, 'actual'), path.join(f.bin, name));
   f.options.probe = async (bin) => { f.probed.push(bin); return { compatible: false }; };
   const runtime = await f.detect();
-  assert.deepEqual(f.probed, [path.join(f.bin, 'actual')]);
-  assert.equal(runtime.bin, path.join(f.bin, 'actual'));
+  assert.deepEqual(f.probed, [fs.realpathSync(path.join(f.bin, 'actual'))]);
+  assert.equal(runtime.bin, fs.realpathSync(path.join(f.bin, 'actual')));
+});
+
+test('OpenCode: an installed supported 1.x CLI is offered after an ACP handshake', async (t) => {
+  const bin = tempDir(t, 'vika-opencode-');
+  fs.writeFileSync(path.join(bin, 'opencode'), '#!/bin/sh\n', { mode: 0o755 });
+  const options = {
+    env: { PATH: bin }, piBin: '/managed/pi.js',
+    acpProbe: async () => ({ compatible: true }),
+    execFileImpl: async (command, args) => {
+      assert.deepEqual(args, ['--version']);
+      return { stdout: 'opencode version 1.19.5\n' };
+    },
+  };
+  const runtime = (await detectRuntimes(options)).find(({ id }) => id === 'opencode');
+  assert.equal(runtime.installed, true);
+  assert.equal(runtime.available, true);
+  assert.equal(runtime.bin, path.join(bin, 'opencode'));
+  assert.equal(runtime.binEnv, 'OPENCODE_BIN');
+  assert.match(runtime.note, /1\.19\.5/);
+});
+
+test('OpenCode: an unsupported 2.x CLI is reported and not offered', async (t) => {
+  const bin = tempDir(t, 'vika-opencode2-');
+  fs.writeFileSync(path.join(bin, 'opencode'), '#!/bin/sh\n', { mode: 0o755 });
+  const acpProbes = [];
+  const runtime = (await detectRuntimes({
+    env: { PATH: bin }, piBin: '/managed/pi.js',
+    acpProbe: async (command) => { acpProbes.push(command); return { compatible: true }; },
+    execFileImpl: async () => ({ stdout: 'opencode v2.2.5\n' }),
+  })).find(({ id }) => id === 'opencode');
+  assert.equal(runtime.installed, true);
+  assert.equal(runtime.available, false);
+  assert.match(runtime.note, /OpenCode 1\.x/);
+  assert.deepEqual(acpProbes, [], 'version gate runs before the ACP handshake');
 });

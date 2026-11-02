@@ -224,6 +224,7 @@ export function getConfig() {
     traexBin: process.env.TRAEX_BIN || process.env.TRAECLI_BIN || traexCommand(),
     claudeBin: process.env.CLAUDE_BIN || 'claude',
     piBin: process.env.PI_BIN || managedPiBin(),
+    opencodeBin: process.env.OPENCODE_BIN || 'opencode',
     initialModel: process.env.VIKA_MODEL || '',
     codexEffort: enumEnv('VIKA_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
     traexEffort: enumEnv('VIKA_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
@@ -244,6 +245,7 @@ export function getConfig() {
       'medium',
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),
+    opencodeModel: process.env.VIKA_OPENCODE_MODEL || '',
     volcApiKey: process.env.ARK_API_KEY || '',
     volcSessionId: process.env.VIKA_VOLC_SESSION_ID
       || process.env.ARK_SESSION_ID
