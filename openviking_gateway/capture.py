@@ -163,6 +163,9 @@ class CapturePipeline:
                 protocol=request.protocol,
                 policy=policy.model_dump(),
             )
+            # The session is the peer's alone (see peer_session), so its peer never changes.
+            if request.peer:
+                value["peer"] = request.peer
             if value == old.value or await self.queue.swap(
                 request.scope, request.session, old, value, ready_at(value)
             ):
@@ -407,8 +410,9 @@ class CaptureWorker:
         # duplicate in OpenViking is accepted.
         while state["pending"] and state["pending"][0]["ready"] <= time.time():
             turn = state["pending"][0]
-            for offset in range(0, len(turn["messages"]), 100):
-                await self.viking.write(token, session, turn["messages"][offset : offset + 100])
+            outgoing = with_peer(turn["messages"], state.get("peer"))
+            for offset in range(0, len(outgoing), 100):
+                await self.viking.write(token, session, outgoing[offset : offset + 100])
             count = len(turn["messages"])
             if turn.get("continued") and state["retained"]:
                 # Commits keep whole turns, so a continuation joins its turn.
@@ -452,6 +456,16 @@ class CaptureWorker:
         state["archive"] = archive if uri else None
         state["retained"] = state["retained"][len(archived) :]
         await self.save(item, doc, state)
+
+
+def with_peer(messages, peer):
+    """Copies naming ``peer`` as the counterpart of the user's messages.
+
+    The queue keeps the messages as captured: delivery compares them to find its place.
+    """
+    if not peer:
+        return messages
+    return [{**m, "peer_id": peer} if m["role"] == "user" else m for m in messages]
 
 
 def remaining(pending, written):

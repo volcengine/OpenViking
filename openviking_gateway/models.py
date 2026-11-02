@@ -5,6 +5,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from openviking.core.peer_id import normalize_peer_id
+
 ProtocolName = Literal["anthropic", "chat", "responses"]
 KEY_PLACEHOLDER = "{api_key}"
 # Largest integer JSON readers, Studio included, hold exactly.
@@ -34,6 +36,13 @@ def validation_detail(error: ValidationError) -> str:
 class CaptureReset(BaseModel):
     session: str = Field(min_length=1, max_length=128)
     protocol: ProtocolName
+    # The X-OpenViking-Actor-Peer of a conversation named by its session header.
+    peer_id: str | None = None
+
+    @field_validator("peer_id")
+    @classmethod
+    def validate_peer_id(cls, value: str | None) -> str | None:
+        return normalize_peer_id(value)
 
 
 class Policy(BaseModel):
@@ -184,3 +193,11 @@ class KeyRequest(BaseModel):
     policy_id: str
     upstream_ids: list[str] = Field(min_length=1)
     models: list[str] = Field(default_factory=list)
+    # The peer requests use when they send no X-OpenViking-Actor-Peer header.
+    default_peer_id: str | None = None
+
+    @field_validator("default_peer_id")
+    @classmethod
+    def validate_default_peer_id(cls, value: str | None) -> str | None:
+        # The rule OpenViking applies to a message's peer_id; blank means none.
+        return normalize_peer_id(value)

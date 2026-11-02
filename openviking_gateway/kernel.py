@@ -13,7 +13,7 @@ import orjson
 from .blocks import RECALL_PROVENANCE_NOTE, block, gateway_note, history_hint, token_estimate
 from .capture import CapturePipeline, lineage
 from .capture_store import Document
-from .client import VikingError
+from .client import VikingError, peer_argument
 from .compaction import (
     BACKOFF_SECONDS,
     active_cut,
@@ -34,10 +34,12 @@ from .protocols import (
     clean_text,
     client_openviking_tools,
     is_user,
+    peer_session,
     plugin_present,
     prefix_chain,
     replays_reasoning,
     session_id,
+    session_peer_tag,
     strip_thinking,
     text_content,
     unwrap_client,
@@ -96,6 +98,8 @@ class Prepared:
     reply_anchor: str = ""
     # What the reply starts with for the user: the recall notice of this turn's injection.
     reply_lead: str = ""
+    # The OpenViking peer this conversation is with; None leaves OpenViking unscoped.
+    peer: str | None = None
 
 
 class MemoryKernel:
@@ -109,9 +113,9 @@ class MemoryKernel:
             return {**body, adapter.field: strip_thinking(body.get(adapter.field, []))}
         return body
 
-    async def enhance(self, body, protocol, *args):
+    async def enhance(self, body, protocol, *args, **kwargs):
         try:
-            prepared = await self.prepare(body, protocol, *args)
+            prepared = await self.prepare(body, protocol, *args, **kwargs)
             return prepared.body, prepared, prepared.metrics
         except Exception:
             logger.exception("OpenViking Gateway preparation failed")
@@ -141,7 +145,7 @@ class MemoryKernel:
             for m in messages
         ], sorted(known)
 
-    async def identity(self, scope, messages, protocol, headers):
+    async def identity(self, scope, messages, protocol, headers, peer=None):
         """Resolve the session and the sessions whose replies the history contains.
 
         Replies are matched in the chain flavour ``completed`` records them in. A
@@ -149,6 +153,8 @@ class MemoryKernel:
         latest reply it contains, or starts a new one when two sessions produced it.
         """
         sid = session_id(headers)
+        if sid is not None:
+            sid = peer_session(sid, peer)
         adapter = tool_protocol(protocol)
 
         def chains():
@@ -166,10 +172,21 @@ class MemoryKernel:
             a for a, m in zip(body_chain, messages, strict=True) if a and adapter.is_reply(m)
         ]
         owners = await self.store.replay.replies(scope, endpoints) if endpoints else {}
+        # A reply another peer's session produced proves nothing about this peer's.
+        tag = peer_session("", peer)
+        owners = {
+            a: mine
+            for a, o in owners.items()
+            if (mine := {s for s in o if session_peer_tag(s) == tag})
+        }
         anonymous = sid is None
         if anonymous:
             latest = next((owners[a] for a in reversed(endpoints) if a in owners), set())
-            sid = next(iter(latest)) if len(latest) == 1 else "anonymous-" + uuid.uuid4().hex
+            sid = (
+                next(iter(latest))
+                if len(latest) == 1
+                else peer_session("anonymous-" + uuid.uuid4().hex, peer)
+            )
         # A reply two sessions produced, such as a greeting, proves no inheritance.
         ancestors = sorted({next(iter(o)) for o in owners.values() if len(o) == 1} - {sid})
         return sid, anonymous, chain, body_chain, ancestors
@@ -185,6 +202,7 @@ class MemoryKernel:
         counting=False,
         upstreams=(),
         summarize=None,
+        peer=None,
     ):
         """Build the upstream body; ``summarize(prepared, body)`` sends a summary request."""
         adapter = tool_protocol(protocol)
@@ -199,7 +217,7 @@ class MemoryKernel:
         # the upstream still gets exactly what the client sent.
         messages, thinking = await self.sent_history(scope, sent, protocol)
         sid, anonymous, chain, body_chain, ancestors = await self.identity(
-            scope, messages, protocol, headers
+            scope, messages, protocol, headers, peer
         )
         as_text = (
             {a for a, m, s in zip(body_chain, messages, sent, strict=True) if m != s}
@@ -270,6 +288,7 @@ class MemoryKernel:
             ancestors=ancestors,
             thinking=thinking,
             thinking_as_text=as_text,
+            peer=peer,
             metrics={
                 "kind": kind,
                 "replay_hits": 0,
@@ -526,7 +545,12 @@ class MemoryKernel:
                 return {**decision, "reason": "budget"}
             try:
                 response = await self.viking.recall(
-                    credential["openviking_key"], query, policy, exclude, budget - overhead
+                    credential["openviking_key"],
+                    query,
+                    policy,
+                    exclude,
+                    budget - overhead,
+                    **peer_argument(request.peer),
                 )
                 rendered = response.get("rendered") or ""
                 text = lead + "\n" + rendered if rendered else ""

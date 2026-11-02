@@ -40,9 +40,21 @@ A client can change the settings of its key's context profile for a new conversa
 
 A conversation keeps the settings it started with, so a changed header takes effect in the next new conversation, for example with a new `X-OpenViking-Session` value. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
 
+## Scope memory to a peer {#peer}
+
+When one key serves several counterparts, such as a bot that talks to many people as one OpenViking user, the client can name the counterpart of each conversation with an `X-OpenViking-Actor-Peer` header, for example `X-OpenViking-Actor-Peer: review-agent`. The value is an OpenViking [Peer](../getting-started/20-peers.md) ID, and the header has the same name as in OpenViking's own API and SDKs. With a peer, the gateway:
+
+- searches with that peer's view: recall and OpenViking tools see the user's own memories and that peer's, but not other peers' memories;
+- saves the conversation's user messages with that `peer_id`, so OpenViking can extract memories about the peer when it commits the session;
+- keeps the conversation apart from the user's conversations with other peers, even when they send the same `X-OpenViking-Session` value.
+
+A request without the header uses the key's [default peer](09-gateway-keys.md#default-peer), if the key has one; with neither, nothing changes. A blank header also falls back to the default. The value must be one path segment of letters, digits, `_`, `.` and `-`, with at most one `@`. Any other value gets 400 `peer_invalid` before the request reaches the provider. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
+
+A peer is not an access boundary: whoever holds the key can name any peer, or none. Give people who need their own memory their own key; see [One key per person](09-gateway-keys.md#one-key-per-person).
+
 ## Add a header to a client {#add-a-header}
 
-The two headers above go on every request. To add one:
+The headers above go on every request. To add one:
 
 | Client | How to add a header |
 | --- | --- |

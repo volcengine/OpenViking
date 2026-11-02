@@ -71,6 +71,7 @@ The log holds metadata only, never message content. A record is written when a r
 | `status` | The provider's HTTP status |
 | `upstream_id`, `credential_id` | The upstream that served the request, and the gateway key that sent it |
 | `session`, `protocol` | The conversation and its protocol; use them to [reset saving](#gateway-keys) |
+| `peer` | The request's [peer](../gateway/03-connect-clients.md#peer), from `X-OpenViking-Actor-Peer` or the key's default |
 | `degradation` | Issue code; see [Issues on degraded requests](../gateway/12-troubleshooting.md#issues-on-degraded-requests) |
 | `recall_reason`, `recall_count`, `recall_ms` | Memory search result code, entries added and search time; see [No memory is added](../gateway/12-troubleshooting.md#no-memory-is-added) |
 | `replay_hits` | Earlier messages whose memory was replayed unchanged |
@@ -190,6 +191,7 @@ Request body for issuing a key:
 | `models` | No | Allowed model names (as clients send them, including aliases); an empty list allows all. |
 | `user_id` | No | The OpenViking user the key belongs to; defaults to the caller. Root is not an account user, so root must name one (or supply `openviking_key`). Users can only name themselves. |
 | `openviking_key` | No | That user's OpenViking API key. Usually not needed; see below. |
+| `default_peer_id` | No | The peer requests use when they send no `X-OpenViking-Actor-Peer` header; see [Scope memory to a peer](../gateway/03-connect-clients.md#peer). It follows the rules of a message's `peer_id`; a blank value means none. |
 
 The gateway needs the target user's OpenViking API key, because it searches and saves memory as that user:
 
@@ -219,11 +221,11 @@ curl -X POST "$SERVER_URL/gateway/admin/keys?account_id=team" \
 }
 ```
 
-Save the `key` from the response right away; the gateway keeps only its hash. `GET` returns the same fields without `key`. Gateway keys cannot be changed and have no `PUT`. To change the context profile, upstreams, models or user, issue a new key and revoke the old one.
+Save the `key` from the response right away; the gateway keeps only its hash. `GET` returns the same fields without `key`. Gateway keys cannot be changed and have no `PUT`. To change the context profile, upstreams, models, default peer or user, issue a new key and revoke the old one.
 
 When the user's OpenViking API key is regenerated or the user is deleted, the gateway keys bound to it stop working and are deleted; the user's data stays. See [Gateway keys](../gateway/09-gateway-keys.md#gateway-keys).
 
-**Resetting saving.** The body is `{"session":"<session header value or the session from the log>","protocol":"chat"}`, where `protocol` is `chat`, `anthropic` or `responses`. On success the response is `{"status":"ready","message":"…"}`, and on the conversation's next request the gateway writes the full history to a new OpenViking session. If the conversation is not found, the response is 404 `not_found`.
+**Resetting saving.** The body is `{"session":"<session header value or the session from the log>","protocol":"chat"}`, where `protocol` is `chat`, `anthropic` or `responses`. On success the response is `{"status":"ready","message":"…"}`, and on the conversation's next request the gateway writes the full history to a new OpenViking session. If the conversation is not found, the response is 404 `not_found`. For a conversation with a [peer](../gateway/03-connect-clients.md#peer), add `"peer_id":"<peer>"` when `session` is the session header value; a `session` from the log already includes the peer.
 
 **Deleting data.** Both delete endpoints remove conversation content the gateway has not yet saved, and logs. Sessions and memories already stored in OpenViking are not affected. Retention and the other ways data is deleted are described in [Security and data](../gateway/11-security-and-data.md).
 
