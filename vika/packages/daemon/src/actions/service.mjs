@@ -64,6 +64,11 @@ function eventRef(row) {
   return [row.connector_instance, row.event_id];
 }
 
+function deliveryRef(row) {
+  const occurrenceId = timerDelivery(row) && JSON.parse(row.event_json).data.timer.occurrence_id;
+  return occurrenceId ? ['timer', `timer:${occurrenceId}`] : eventRef(row);
+}
+
 function timerDelivery(row) {
   if (row?.connector_instance !== 'timer' || row?.kind !== 'reminder.due' || !row.event_json) return null;
   try {
@@ -649,7 +654,7 @@ export class ActionService {
       const result = await this.deliver({
         caller, connector, action: 'message.send',
         input: { chat_id: input.chat_id, content: content.payload },
-        key: this.key(input.idempotency_key, 'send', connector, eventRef(fence), eventRef(responseTo), input.chat_id, content.canonical),
+        key: this.key(input.idempotency_key, 'send', connector, deliveryRef(fence), deliveryRef(responseTo), input.chat_id, content.canonical),
         summary: content.summary,
         scope: { chatId: input.chat_id, convKey: responseTo.conv_key },
         fence,
@@ -676,7 +681,7 @@ export class ActionService {
       const result = await this.deliver({
         caller, connector, action: 'message.send',
         input: { ...owner.target, content: content.payload },
-        key: this.key(input.idempotency_key, 'notify', connector, eventRef(fence), eventRef(responseTo), owner.id, content.canonical),
+        key: this.key(input.idempotency_key, 'notify', connector, deliveryRef(fence), deliveryRef(responseTo), owner.id, content.canonical),
         summary: content.summary,
         scope: {},
         fence,
@@ -705,16 +710,16 @@ export class ActionService {
     // has no chat: it never borrows the decision's.
     const chatId = target ? target.chat_id : fence.chat_id;
     const interim = this.interim(input, caller, fence, connector, target?.conv_key ?? null);
+    this.authorizeTimerDelivery(fence, { connector, action: 'message.reply', chatId });
     if (this.manifest(connector).actions['message.reply'].approval) return this.proposeReply(input, caller, connector, fence);
     this.authorize(fence);
-    this.authorizeTimerDelivery(fence, { connector, action: 'message.reply', chatId });
     const responseTo = this.attribution(caller, input.response_to_id, fence, { connector, messageId: input.message_id });
     const content = await this.content(input, connector, 'message.reply', { chatId, fence, caller });
     try {
       const result = await this.deliver({
         caller, connector, action: 'message.reply',
         input: { message_id: input.message_id, content: content.payload, reply_in_thread: inThread },
-        key: this.key(input.idempotency_key, 'reply', connector, eventRef(fence), eventRef(responseTo),
+        key: this.key(input.idempotency_key, 'reply', connector, deliveryRef(fence), deliveryRef(responseTo),
           input.message_id, inThread, content.canonical),
         summary: content.summary,
         scope: { chatId, threadId: target?.thread_id ?? null, convKey: target ? target.conv_key : responseTo.conv_key },
@@ -775,7 +780,7 @@ export class ActionService {
     const key = this.key(input.idempotency_key, 'approval', connector, eventRef(fence), input.message_id, draftText);
     const delivery = { caller, connector: im, action: 'message.send', key,
       summary: `[mail reply draft for the owner to approve] ${draftText}`,
-      scope: {}, fence, inboundSeq: responseTo.seq, metadata: { notify: 'owner', decisionEvent: fence.event_id } };
+      scope: {}, fence, inboundSeq: responseTo.seq, metadata: { notify: 'owner', decisionEvent: fence.event_id, approval: true } };
     if (!byCard) return this.proposeByMessage({ delivery, draft, im, owner });
     const question = approvalQuestion(draft, owner.id);
     const result = await this.deliver({
@@ -1295,7 +1300,13 @@ export class ActionService {
 
   completeTimerOccurrence(input) {
     if (!this.timers) throw blocked('unknown_tool', 'timer tools are not available');
-    if (!this.store.sentTimerOccurrenceDelivery(input.occurrence_id)) {
+    const pending = this.timers.getOccurrenceCheck(input.occurrence_id);
+    const delivery = pending?.event.data?.timer?.delivery;
+    const connector = delivery?.mode === 'owner' ? this.config.channel : delivery?.source;
+    const target = delivery?.mode === 'owner'
+      ? this.connectors.owner?.(connector)?.target
+      : delivery?.mode === 'chat' ? { chat_id: delivery.chat_id } : null;
+    if (!target || !this.store.sentTimerOccurrenceDelivery(input.occurrence_id, { connector, target })) {
       return {
         text: `Timer occurrence is not complete: no successful delivery is recorded for occurrence_id=${input.occurrence_id}.`,
         data: { occurrence_id: input.occurrence_id, completed: false },

@@ -10,18 +10,18 @@ import { ActionService } from '../src/actions/service.mjs';
 import { normalizeEvent } from '../src/event.mjs';
 import { Store } from '../src/store.mjs';
 import { TimerConnector, TimerRepository } from '../src/timers.mjs';
-import { chatEvent } from './event-fixture.mjs';
+import { chatEvent, mailEvent } from './event-fixture.mjs';
 import { fakeConnectors } from './action-fixture.mjs';
 
 const TOKEN = 'runtime-token';
 const OWNER = { id: 'ou_owner12345678', target: { user_id: 'ou_owner12345678' } };
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
-function setup(t, { now = 1_790_000_000_000, run = null } = {}) {
+function setup(t, { now = 1_790_000_000_000, run = null, ids = ['lark'], channel = 'lark' } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'timers-'));
   const store = new Store(path.join(directory, 'state.sqlite3'), logger);
   store.initializeCognition('codex', TOKEN);
-  const connectors = fakeConnectors({ run, owners: { lark: OWNER } });
+  const connectors = fakeConnectors({ run, ids, owners: { [channel]: OWNER } });
   const repository = new TimerRepository(store.db);
   let wakeups = 0;
   const service = new ActionService({
@@ -29,7 +29,7 @@ function setup(t, { now = 1_790_000_000_000, run = null } = {}) {
       workspace: path.join(directory, 'workspace'),
       tempDir: path.join(directory, 'tmp'),
       maxReplyChars: 1_000,
-      channel: 'lark',
+      channel,
     },
     store,
     connectors,
@@ -327,6 +327,91 @@ describe('timer MCP tools', () => {
 });
 
 describe('timer reminder delivery', () => {
+  function pendingTimer(repository, store, delivery = { mode: 'owner' }) {
+    const occurrenceId = 'tm_retry:1790000000000';
+    const event = {
+      protocol_version: '0.2', type: 'EVENT', connector: 'timer', instance: 'timer',
+      id: `timer:${occurrenceId}`, kind: 'reminder.due', occurred_at: 1_790_000_000_000,
+      subject: { type: 'timer', id: 'tm_retry' }, actor: null,
+      content: { text: 'report', attachments: [] }, conversation: null, message: null, reply_route: null,
+      data: { timer: { id: 'tm_retry', occurrence_id: occurrenceId, delivery } },
+    };
+    store.ingest(normalizeEvent(event));
+    repository.createOccurrenceCheck({ occurrenceId, eventId: event.id, nextCheckAtMs: 1_790_000_300_000, event });
+    return event;
+  }
+
+  for (const uncertain of [false, true]) {
+    it(`preserves ${uncertain ? 'UNCERTAIN protection' : 'SENT deduplication'} across occurrence checks`, async (t) => {
+      const { store, repository, call, connectors } = setup(t, {
+        run: uncertain ? () => { throw new Error('response lost'); } : null,
+        ids: ['weixin'], channel: 'weixin',
+      });
+      const event = pendingTimer(repository, store);
+      const send = (decisionId) => call('notify_owner', { decision_id: decisionId, markdown: 'report' });
+      if (uncertain) await assert.rejects(send(event.id), /response lost/);
+      else await send(event.id);
+      const check = { ...event, id: 'timer-check:tm_retry:1790000000000:1' };
+      store.ingest(normalizeEvent(check));
+      if (uncertain) await assert.rejects(send(check.id), /outcome is uncertain/);
+      else assert.equal((await send(check.id)).data.duplicate, true);
+      assert.equal(connectors.calls.length, 1);
+    });
+  }
+
+  it('blocks mail approval drafts for a chat timer', async (t) => {
+    const { store, repository, call, connectors } = setup(t, { ids: ['lark', 'email'] });
+    store.ingest(mailEvent());
+    const event = pendingTimer(repository, store, { mode: 'chat', source: 'lark', chat_id: 'oc_report_group123' });
+    await assert.rejects(call('reply_message', {
+      source: 'email', message_id: 'mail:1:7', markdown: 'report', decision_id: event.id,
+    }), /configured for lark chat/);
+    assert.equal(connectors.calls.length, 0);
+  });
+
+  for (const tool of ['send_message', 'reply_message']) {
+    it(`deduplicates ${tool} across checks but allows the next occurrence`, async (t) => {
+      const { store, repository, call, connectors } = setup(t);
+      store.ingest(chatEvent({ chatId: 'oc_report_group123', messageId: 'om_report123' }));
+      const event = pendingTimer(repository, store, { mode: 'chat', source: 'lark', chat_id: 'oc_report_group123' });
+      const send = (decisionId) => call(tool, {
+        source: 'lark', markdown: 'report', decision_id: decisionId, idempotency_key: 'report',
+        ...(tool === 'send_message' ? { chat_id: 'oc_report_group123' } : { message_id: 'om_report123' }),
+      });
+      await send(event.id);
+      const check = { ...event, id: 'timer-check:tm_retry:1790000000000:1' };
+      store.ingest(normalizeEvent(check));
+      assert.equal((await send(check.id)).data.duplicate, true);
+      assert.equal(connectors.calls.length, 1);
+      const next = {
+        ...event, id: 'timer:tm_retry:1790086400000',
+        data: { timer: { ...event.data.timer, occurrence_id: 'tm_retry:1790086400000' } },
+      };
+      store.ingest(normalizeEvent(next));
+      await send(next.id);
+      assert.equal(connectors.calls.length, 2);
+    });
+  }
+
+  it('requires the configured target and excludes approval drafts before completion', async (t) => {
+    const { store, repository, call } = setup(t);
+    const event = pendingTimer(repository, store, { mode: 'chat', source: 'lark', chat_id: 'oc_report_group123' });
+    const inbound = store.acceptedEvents(event.id)[0];
+    const record = (key, payload, metadata = {}) => {
+      const outbox = store.reserveOutbox({
+        connector: 'lark', action: 'message.send', idempotencyKey: key, payload,
+        caller: 'agent', inboundSeq: inbound.seq, metadata,
+      });
+      store.settleOutbox(outbox.id, 'SENT', { result: { message_id: key } });
+    };
+    record('wrong-target', { ...OWNER.target });
+    assert.equal((await call('complete_timer_occurrence', { occurrence_id: event.data.timer.occurrence_id })).data.completed, false);
+    record('draft', { chat_id: 'oc_report_group123' }, { approval: true });
+    assert.equal((await call('complete_timer_occurrence', { occurrence_id: event.data.timer.occurrence_id })).data.completed, false);
+    record('final', { chat_id: 'oc_report_group123' });
+    assert.equal((await call('complete_timer_occurrence', { occurrence_id: event.data.timer.occurrence_id })).data.completed, true);
+  });
+
   it('accepts a fired timer event, delivers it to the target chat, and suppresses the completion check after receipt', async (t) => {
     let nowMs = 1_790_000_000_000;
     const { store, call, connectors, repository } = setup(t, { now: () => nowMs });
