@@ -1,5 +1,6 @@
 export default {
   schedule: {
+    lastRunFailed: 'The last Compile run failed. Review the technical details.',
     listDescription:
       'Turn automatic updates on or off, or adjust the schedule here. Schedules use Beijing time (Asia/Shanghai).',
     autoUpdate: 'Automatic updates',

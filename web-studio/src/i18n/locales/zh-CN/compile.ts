@@ -1,5 +1,6 @@
 export default {
   schedule: {
+    lastRunFailed: '上次编译失败，请查看技术详情。',
     listDescription:
       '直接开启、关闭自动更新，或调整执行时间。计划统一使用北京时间（Asia/Shanghai）。',
     autoUpdate: '自动更新',

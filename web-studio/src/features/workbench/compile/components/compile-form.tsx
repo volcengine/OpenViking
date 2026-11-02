@@ -107,6 +107,7 @@ export function CompileForm({
     queryKey: ['compile-config', identityScopeKey, target],
     queryFn: ({ signal }) => fetchCompileConfig(target!, signal),
     enabled: !!target,
+    staleTime: 0,
   })
   const [recoverKey, setRecoverKey] = useState(() => {
     if (target) return null
@@ -183,7 +184,8 @@ export function CompileForm({
     }
   }, [draft, draftKey, draftStarted, target])
   useEffect(() => {
-    if (!config.data || !config.isFetchedAfterMount || filled.current) return
+    if (!config.isSuccess || !config.isFetchedAfterMount || filled.current)
+      return
     filled.current = true
     setDraft({
       skill: config.data.skill,
@@ -194,7 +196,7 @@ export function CompileForm({
     setAutoUpdate(config.data.auto_update)
     setSchedule(config.data.update_schedule || defaultSchedule)
     setLocationRevision((value) => value + 1)
-  }, [config.data, config.isFetchedAfterMount])
+  }, [config.data, config.isSuccess, config.isFetchedAfterMount])
   const skills = useCompileSkills()
   const original = useQuery({
     queryKey: ['compile-task', identityScopeKey, fromTask],
@@ -487,9 +489,13 @@ export function CompileForm({
         />
       )}
       {target && config.data?.last_error && (
-        <p role="status" className="break-words text-sm text-destructive">
-          {config.data.last_error}
-        </p>
+        <div role="status" className="break-words text-sm text-destructive">
+          <p>{t('schedule.lastRunFailed')}</p>
+          <details className="mt-2">
+            <summary className="cursor-pointer">{t('errors.details')}</summary>
+            <p className="mt-1 whitespace-pre-wrap">{config.data.last_error}</p>
+          </details>
+        </div>
       )}
       {recoverKey && (
         <Button

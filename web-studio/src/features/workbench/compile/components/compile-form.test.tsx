@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { queryClient as studioQueryClient } from '#/app/providers/query-client'
 import { CompileForm } from '#/features/workbench/compile/components/compile-form'
 import { prepareCompileHandoff } from '#/features/workbench/compile/lib/handoff'
 import { OvClientError } from '#/shared/api/ov-client/index'
@@ -47,7 +48,12 @@ vi.mock('#/features/workbench/compile/components/shared', () => ({
   CompileShell: ({ children }: { children: ReactNode }) => (
     <div>{children}</div>
   ),
-  CompileError: () => <div role="alert">Submission error</div>,
+  CompileError: ({ retry }: { retry?: () => void }) => (
+    <div role="alert">
+      Submission error
+      {retry && <button onClick={retry}>Retry read</button>}
+    </div>
+  ),
 }))
 vi.mock('#/features/workbench/compile/components/skill-picker', () => ({
   SkillPicker: () => null,
@@ -77,15 +83,17 @@ const task = { task_id: 'cmp-original', status: 'pending' }
 function mount(
   props: { fromTask?: string; sourceUri?: string; target?: string } = {},
   cachedConfig?: unknown,
+  cachedAt = Date.now(),
 ) {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: studioQueryClient.getDefaultOptions().queries },
   })
   clients.push(client)
   if (cachedConfig)
     client.setQueryData(
       ['compile-config', 'recovery-test', props.target],
       cachedConfig,
+      { updatedAt: cachedAt },
     )
   const page = render(
     <QueryClientProvider client={client}>
@@ -350,7 +358,7 @@ it('loads a registered target and disables its schedule without requiring an exe
   expect(api.createCompile).not.toHaveBeenCalled()
 })
 
-it('waits for fresh configuration before filling an editor with stale cached settings', async () => {
+it('refetches a fresh cached configuration before enabling the editor', async () => {
   api.fetchCompileConfig.mockResolvedValueOnce({
     ...configuredTarget,
     auto_update: false,
@@ -379,6 +387,49 @@ it('waits for fresh configuration before filling an editor with stale cached set
       }) as HTMLInputElement
     ).checked,
   ).toBe(false)
+})
+
+it('loads fresh configuration after a failed read instead of submitting cached settings', async () => {
+  const freshConfig = {
+    ...configuredTarget,
+    from: ['viking://resources/new-source'],
+    skill: 'viking://agent/skills/new-skill',
+    instruction: 'Use the latest configuration',
+    auto_update: false,
+    update_schedule: null,
+  }
+  api.fetchCompileConfig.mockReset()
+  api.fetchCompileConfig
+    .mockRejectedValueOnce(new Error('Network unavailable'))
+    .mockResolvedValueOnce(freshConfig)
+  api.updateCompileConfig.mockResolvedValueOnce(freshConfig)
+  const page = mount(
+    { target: savedDraft.to },
+    configuredTarget,
+    Date.now() - 20_000,
+  )
+  await page.findByRole('alert')
+  page.submit()
+  expect(api.updateCompileConfig).not.toHaveBeenCalled()
+  fireEvent.click(page.getByRole('button', { name: 'Retry read' }))
+  await waitFor(() =>
+    expect(
+      page
+        .getByRole('button', { name: 'schedule.save' })
+        .hasAttribute('disabled'),
+    ).toBe(false),
+  )
+  page.submit()
+  await waitFor(() =>
+    expect(api.updateCompileConfig).toHaveBeenCalledWith({
+      to: savedDraft.to,
+      from: freshConfig.from,
+      skill: freshConfig.skill,
+      instruction: freshConfig.instruction,
+      auto_update: false,
+      update_schedule: null,
+    }),
+  )
 })
 
 afterEach(() => {
