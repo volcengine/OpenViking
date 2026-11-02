@@ -410,7 +410,9 @@ def test_provider_loads_single_schema_from_to():
 
 def test_provider_unknown_type_raises():
     provider = ConsolidationExtractContextProvider(memory_types=["does_not_exist"])
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError, match=r"use ov compile memory.*ov snapshot restore.*06-memory-consolidation\.md"
+    ):
         provider.get_memory_schemas(_ctx())
 
 
