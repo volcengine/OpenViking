@@ -31,6 +31,7 @@ from openviking.core.identifiers import MAX_IDENTIFIER_LENGTH
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
     AccountSummary,
+    AuthSnapshot,
     DeletionRecord,
     GroupSummary,
     UsersPage,
@@ -1076,9 +1077,7 @@ class MySQLAccountStore(AccountStore):
             ).all()
         return tuple(group_id for group_id in group_ids if group_id is not None)
 
-    async def add_group_members(
-        self, account_id: str, group_id: str, user_ids: list[str]
-    ) -> bool:
+    async def add_group_members(self, account_id: str, group_id: str, user_ids: list[str]) -> bool:
         user_ids = list(dict.fromkeys(user_ids))
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
@@ -1207,8 +1206,12 @@ class MySQLAccountStore(AccountStore):
             await session.delete(group)
 
     async def replace_active_user_api_key(
-        self, account_id: str, user_id: str, api_key: str,
-        *, expected_api_key: str | None = None,
+        self,
+        account_id: str,
+        user_id: str,
+        api_key: str,
+        *,
+        expected_api_key: str | None = None,
     ) -> None:
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
@@ -1281,6 +1284,91 @@ class MySQLAccountStore(AccountStore):
                         Credential.credential_id.in_(old_credentials),
                     )
                 )
+
+    async def get_auth_snapshot(
+        self,
+        api_key: str,
+        *,
+        account_id_hint: str | None = None,
+        user_id_hint: str | None = None,
+    ) -> AuthSnapshot | None:
+        """Verify credentials and read current authorization in one unlocked SELECT."""
+        predicates = [
+            Credential.service_name == self._service_name,
+            Credential.lookup_digest == _credential_digest(api_key),
+            Credential.revoked.is_(False),
+            Account.deletion_task_id.is_(None),
+            User.deletion_task_id.is_(None),
+        ]
+        if account_id_hint is not None:
+            predicates.append(Account.account_id == account_id_hint)
+        if user_id_hint is not None:
+            predicates.append(User.user_id == user_id_hint)
+        statement = (
+            select(
+                Credential.credential_id,
+                Credential.material,
+                Account.account_id,
+                User.user_id,
+                User.role,
+                Group.group_id,
+            )
+            .select_from(Credential)
+            .join(
+                User,
+                and_(
+                    User.service_name == Credential.service_name,
+                    User.user_pk == Credential.user_pk,
+                ),
+            )
+            .join(
+                Account,
+                and_(
+                    Account.service_name == User.service_name,
+                    Account.account_pk == User.account_pk,
+                ),
+            )
+            .outerjoin(
+                GroupMember,
+                and_(
+                    GroupMember.service_name == User.service_name,
+                    GroupMember.account_pk == User.account_pk,
+                    GroupMember.user_pk == User.user_pk,
+                ),
+            )
+            .outerjoin(
+                Group,
+                and_(
+                    Group.service_name == GroupMember.service_name,
+                    Group.account_pk == GroupMember.account_pk,
+                    Group.group_pk == GroupMember.group_pk,
+                ),
+            )
+            .where(*predicates)
+        )
+        async with self._session_factory() as session:
+            candidates = (await session.execute(statement)).all()
+        verified: dict[str, bool] = {}
+        snapshot: AuthSnapshot | None = None
+        groups: set[str] = set()
+        for credential_id, material, account_id, user_id, role, group_id in candidates:
+            if credential_id not in verified:
+                verified[credential_id] = self._matches_credential(
+                    account_id, user_id, material, api_key
+                )
+            if not verified[credential_id]:
+                continue
+            if snapshot is None:
+                snapshot = AuthSnapshot(
+                    account_id=account_id, user_id=user_id, role=role, group_ids=()
+                )
+            if (account_id, user_id) != (snapshot["account_id"], snapshot["user_id"]):
+                continue
+            if group_id is not None:
+                groups.add(group_id)
+        if snapshot is not None:
+            snapshot["group_ids"] = tuple(sorted(groups))
+        return snapshot
 
     async def verify_api_key(
         self,

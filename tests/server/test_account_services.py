@@ -5,7 +5,6 @@ import asyncio
 import json
 import os
 import threading
-from contextlib import asynccontextmanager
 from datetime import datetime
 from types import SimpleNamespace
 from typing import cast
@@ -483,11 +482,16 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
             )
     finally:
         try:
-            redis_client = writer._store._redis
-            if redis_client is not None:
+
+            async def clear_test_cache():
+                redis_client = writer._store._redis
+                if redis_client is None:
+                    return
                 keys = [key async for key in redis_client.scan_iter(match=f"{key_prefix}:*")]
                 if keys:
                     await redis_client.delete(*keys)
+
+            await writer._store._redis_runtime.run(clear_test_cache)
             async with engine.begin() as connection:
                 await connection.execute(
                     delete(Account).where(
@@ -678,7 +682,7 @@ async def test_file_concurrent_batch_group_removals_preserve_all_updates(monkeyp
 
 
 @pytest.mark.parametrize("fails", [False, True])
-async def test_redis_batch_group_removal_invalidates_every_target_after_success(monkeypatch, fails):
+async def test_redis_batch_group_removal_invalidates_account_after_attempt(monkeypatch, fails):
     mysql = SimpleNamespace(
         _service_name="test-remove",
         _engine_options={},
@@ -690,21 +694,15 @@ async def test_redis_batch_group_removal_invalidates_every_target_after_success(
         params={"cache": {"provider": "redis", "params": {}}},
     )
 
-    @asynccontextmanager
-    async def unlocked(account_id):
-        assert account_id == "acme"
-        yield
-
-    monkeypatch.setattr(store, "_account_lock", unlocked)
-    invalidate = AsyncMock()
-    monkeypatch.setattr(store, "_invalidate", invalidate)
+    bump = AsyncMock()
+    monkeypatch.setattr(store, "_bump_generation", bump)
     if fails:
         mysql.remove_group_members.side_effect = NotFoundError("engineering", "group")
         with pytest.raises(NotFoundError):
             await store.remove_group_members("acme", "engineering", ["alice", "bob", "alice"])
-        invalidate.assert_not_awaited()
     else:
         assert await store.remove_group_members("acme", "engineering", ["alice", "bob", "alice"])
-        invalidate.assert_awaited_once_with(
-            "acme", store._group_ids_key("acme", "alice"), store._group_ids_key("acme", "bob")
-        )
+    mysql.remove_group_members.assert_awaited_once_with("acme", "engineering", ["alice", "bob"])
+    # A failed call may have committed before reporting failure; conservatively
+    # invalidate the whole batch through the account generation in either case.
+    bump.assert_awaited_once_with("acme", None)
