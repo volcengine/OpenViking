@@ -314,6 +314,14 @@ class APIKeyManager:
                 user.pop("key_prefix", None)
         elif mask_keys or hide_other_keys:
             for user in page["users"]:
+                # GLOBAL identities are ROOT-only to manage. Other roles may
+                # observe that the identity exists, never its credentials.
+                if str(user.get("role")) == Role.GLOBAL:
+                    api_key = user.pop("api_key", None)
+                    user.pop("key_prefix", None)
+                    if not hide_other_keys:
+                        user["api_key_available"] = bool(api_key)
+                    continue
                 if hide_other_keys and (
                     account_id != viewer_account_id or user.get("user_id") != viewer_user_id
                 ):
