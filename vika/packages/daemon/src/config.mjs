@@ -268,6 +268,7 @@ export function getConfig() {
     httpEnabled: boolEnv('VIKA_HTTP_ENABLED', true),
     logLevel: enumEnv('VIKA_LOG_LEVEL', 'info', ['debug', 'info', 'warn', 'error']),
     profile: daemonProfile || cliProfile,
+    larkMessageAccess: enumEnv('VIKA_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
     ignoredSenderIds: csvEnv('VIKA_IGNORED_SENDER_IDS'),
     sendTimeoutMs: intEnv('VIKA_SEND_TIMEOUT_MS', 30_000, { min: 1_000 }),
     shutdownTimeoutMs: intEnv('VIKA_SHUTDOWN_TIMEOUT_MS', 20_000, { min: 5_000, max: 25_000 }),

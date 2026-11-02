@@ -196,6 +196,17 @@ test('Feishu login without the update asks the owner only for the user scopes th
   assert.equal(login[login.indexOf('--scope') + 1], lark.few.user.join(' '));
 });
 
+test('Feishu login keeps a bot-only instance off owner message scopes', async (t) => {
+  const m = machine(t, (home) => [agent(home, 'haha', { larkMessageAccess: 'bot' })], { answers: ['n'] });
+  const lark = fakeLarkCli(m.home);
+  fs.writeFileSync(path.join(m.home, 'updated'), '');
+  m.options.env.LARK_CLI_BIN = lark.bin;
+  assert.equal(await loginCommand(['lark'], m.options), 0);
+  const login = lark.calls().find((args) => args.includes('--no-wait'));
+  assert.equal(login[login.indexOf('--scope') + 1], larkScopes('bot').user.join(' '));
+  assert.match(m.written(), /不读取你的消息/);
+});
+
 test('Feishu login with a version under review says the scan would withdraw it, and does not scan by default', async (t) => {
   const m = machine(t, (home) => [agent(home, 'haha')], { answers: [''] });
   const lark = fakeLarkCli(m.home);

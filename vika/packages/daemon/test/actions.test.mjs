@@ -31,7 +31,7 @@ const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url)
 
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
-  onNoProgress = null } = {}) {
+  larkMessageAccess = 'owner', onNoProgress = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
@@ -41,7 +41,8 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   const logs = [];
   const record = (level) => (message, fields = {}) => logs.push({ level, message, ...fields });
   const service = new ActionService({
-    config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies },
+    config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
+      larkMessageAccess },
     store, connectors, roster, liveness, meetingEnabled, ovClient, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
@@ -70,6 +71,24 @@ describe('agent tools', () => {
     assert.deepEqual(names(setup(t, { ids: ['weixin'], explicitSilence: true }).service), [
       'send_message', 'notify_owner', 'reply_message', 'stay_silent', 'get_message_media', 'read_openviking_session_context',
     ]);
+  });
+
+  it('limits a bot-only Lark instance to messages in chats the bot joined', async (t) => {
+    const { service, call, connectors } = setup(t, {
+      larkMessageAccess: 'bot',
+      run: async (_connector, operation) => operation === 'chat.messages'
+        ? { messages: [], has_more: false, next_cursor: null }
+        : { message_id: 'om_delivered123456' },
+    });
+    const tools = new Map(service.tools().map((tool) => [tool.name, tool]));
+    assert.equal(tools.has('search_messages'), false);
+    assert.deepEqual(tools.get('list_chat_messages').inputSchema.properties.as.enum, ['bot']);
+    assert.deepEqual(tools.get('list_thread_messages').inputSchema.properties.as.enum, ['bot']);
+    await assert.rejects(() => call('list_chat_messages', { source: 'lark', chat_id: 'oc_test12345678', as: 'user' }),
+      /as must be one of bot/);
+    await call('list_chat_messages', { source: 'lark', chat_id: 'oc_test12345678', as: 'bot' });
+    assert.deepEqual(connectors.calls, [{ connector: 'lark', action: 'chat.messages',
+      input: { chat_id: 'oc_test12345678', as: 'bot' } }]);
   });
 
   it('validates input against the tool schema before any connector call', async (t) => {

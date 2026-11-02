@@ -60,10 +60,28 @@ function shortenHome(value, homeDir) {
   return value.startsWith(`${homeDir}${path.sep}`) ? path.join('~', path.relative(homeDir, value)) : value;
 }
 
-export function larkScopes() {
+const LARK_USER_MESSAGE_READ_SCOPES = new Set([
+  'im:chat.members:read',
+  'im:chat:read',
+  'im:message.group_msg:get_as_user',
+  'im:message.p2p_msg:get_as_user',
+  'im:message.pins:read',
+  'im:message.reactions:read',
+  'im:message:readonly',
+  'search:message',
+]);
+
+export function larkScopes(messageAccess = 'owner') {
   const { scopes } = JSON.parse(fs.readFileSync(PERMISSIONS, 'utf8'));
-  return { tenant: scopes.tenant, user: scopes.user };
+  return {
+    tenant: scopes.tenant,
+    user: messageAccess === 'bot' ? scopes.user.filter((scope) => !LARK_USER_MESSAGE_READ_SCOPES.has(scope)) : scopes.user,
+  };
 }
+
+const larkMessageAccessShown = (value) => value === 'bot'
+  ? t('只读机器人所在会话', 'Only chats the bot belongs to')
+  : t('可读我能看到的消息', 'Messages visible to me');
 
 const imChoices = () => [
   { label: IM_LABELS.lark, value: 'lark', hint: larkAccountNote() },
@@ -231,6 +249,9 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     channel: current?.channel ?? connectors[0],
     ovConfig: current?.ovConfig,
     switches: Object.fromEntries(Object.entries(SWITCH_DEFAULTS).map(([key, value]) => [key, current?.[key] ?? value])),
+    // New Lark connections choose this immediately before authorization. Old
+    // manifests keep the historical owner-wide access unless changed.
+    larkMessageAccess: current && connectorsOf(current).includes('lark') ? (current.larkMessageAccess ?? 'owner') : null,
     larkApp: null,
     mail: { kept: current ? mailboxesOf(current) : [], added: [], updated: new Map(), removed: [] },
   };
@@ -431,12 +452,18 @@ async function askLarkApp(ctx, state) {
       hint: t(`${needsShown(needs)}；保存时扫码，你要是这个应用的所有者或管理员`, `${needsShown(needs)}; scanned on saving, by an owner or administrator of the app`) }] : []),
     ...(connected ? [{ value: 'keep', label: t('不换，用现在的应用', 'Keep the current app') }] : []),
     ...larkSources(),
+    ...(connected ? [{ value: 'access', label: t('更改消息读取范围', 'Change message access'),
+      hint: larkMessageAccessShown(state.larkMessageAccess ?? 'owner') }] : []),
   ];
   const chosen = state.larkRepair ? 'repair' : larkSource(state, current);
   const mark = prompter.mark();
   for (;;) {
     const source = await prompter.select(t('飞书机器人', 'Feishu/Lark bot'), choices,
       { initial: Math.max(0, choices.findIndex(({ value }) => value === chosen)) });
+    if (source === 'access') {
+      await askLarkMessageAccess(ctx, state);
+      return;
+    }
     state.larkRepair = source === 'repair';
     if (source !== 'manual') {
       state.larkApp = ['keep', 'repair'].includes(source) ? null : { source };
@@ -451,6 +478,25 @@ async function askLarkApp(ctx, state) {
     }
   }
   if (state.larkApp && state.larkApp.source !== 'create') for (const text of existingAppNotes(state.larkApp.source)) note(ctx, text);
+}
+
+async function askLarkMessageAccess(ctx, state) {
+  if (!state.connectors.includes('lark')) {
+    if (ctx.menu) note(ctx, t('没有接飞书：先在「接入的 IM」里勾上飞书', 'Feishu/Lark is not connected: tick it in Connected IMs first'));
+    return;
+  }
+  const choices = [
+    { value: 'bot', label: larkMessageAccessShown('bot'),
+      hint: t('不申请以你身份读取消息；不能跨会话搜索，只能读机器人已加入的会话',
+        'does not ask to read messages as you; no cross-chat search, only chats the bot has joined') },
+    { value: 'owner', label: larkMessageAccessShown('owner'),
+      hint: t('支持跨会话搜索和读取你可见的历史消息', 'supports cross-chat search and reading history visible to you') },
+  ];
+  const current = state.larkMessageAccess ?? 'owner';
+  state.larkMessageAccess = await ctx.prompter.select(t('飞书消息读取范围', 'Feishu/Lark message access'), choices, {
+    initial: choices.findIndex(({ value }) => value === current),
+    label: t('消息读取范围', 'Message access'),
+  });
 }
 
 // The primary IM is its own question, Feishu unless it is left out; with a
@@ -912,8 +958,18 @@ async function confirmUnshared({ prompter, larkCli, appId, others }) {
 // name being the app's own, when it could be read.
 export async function connectLark({
   plan, prompter, larkCli, fetchImpl, profile, source = 'create', app: typed = null, others = [], debug = false, canGoBack = false, register = null,
+  messageAccess = 'owner',
 }) {
-  const scopes = larkScopes();
+  const choseMessageAccess = messageAccess === null;
+  if (messageAccess === null) {
+    messageAccess = await prompter.select(t('飞书消息读取范围', 'Feishu/Lark message access'), [
+      { value: 'bot', label: larkMessageAccessShown('bot'),
+        hint: t('不申请以你身份读取消息；不能跨会话搜索', 'does not ask to read messages as you; no cross-chat search') },
+      { value: 'owner', label: larkMessageAccessShown('owner'),
+        hint: t('支持跨会话搜索和读取你可见的历史消息', 'supports cross-chat search and reading history visible to you') },
+    ], { initial: 1, label: t('消息读取范围', 'Message access') });
+  }
+  const scopes = larkScopes(messageAccess);
   prompter.section(IM_LABELS.lark);
   // Only the first code can be gone back from: once it is confirmed the app exists.
   const app = typed ?? await registerApp({ plan, prompter, scopes, debug, canGoBack, mode: source, fetchImpl, register });
@@ -947,9 +1003,13 @@ export async function connectLark({
   const login = await larkCli.beginUserLogin({ profile, scopes: grantedUserScopes(scopes, inspected) });
   const scan = showScan(prompter, {
     url: login.url, where: IM_LABELS.lark, label: t('等待授权', 'Waiting for authorization'),
-    title: source === 'manual'
-      ? t('扫码授权 Vika 以你的身份读消息（用于搜索和读历史）', 'Scan to let Vika read messages as you (for search and history)')
-      : t('第 2 次扫码：授权 Vika 以你的身份读消息（用于搜索和读历史）', 'Scan 2 of 2: let Vika read messages as you (for search and history)'),
+    title: messageAccess === 'bot'
+      ? (source === 'manual'
+        ? t('扫码授权 Vika 使用所需的用户能力（不读取你的消息）', 'Scan to authorize the user capabilities Vika needs (without reading your messages)')
+        : t('第 2 次扫码：授权 Vika 使用所需的用户能力（不读取你的消息）', 'Scan 2 of 2: authorize the user capabilities Vika needs (without reading your messages)'))
+      : (source === 'manual'
+        ? t('扫码授权 Vika 以你的身份读消息（用于搜索和读历史）', 'Scan to let Vika read messages as you (for search and history)')
+        : t('第 2 次扫码：授权 Vika 以你的身份读消息（用于搜索和读历史）', 'Scan 2 of 2: let Vika read messages as you (for search and history)')),
   });
   try {
     await larkCli.finishUserLogin({ profile, deviceCode: login.deviceCode });
@@ -963,7 +1023,8 @@ export async function connectLark({
       'The two scans came from different Feishu/Lark accounts; the bot takes the second as its owner.'));
   }
   prompter.success(t('飞书已接好', 'Feishu/Lark is connected'));
-  return { profile, ownerOpenId, name: inspected?.botName ?? inspected?.name ?? null };
+  return { profile, ownerOpenId, name: inspected?.botName ?? inspected?.name ?? null,
+    ...(choseMessageAccess ? { messageAccess } : {}) };
 }
 
 // The app as its bot reads it, through the instance's profile.
@@ -981,7 +1042,7 @@ async function loginLacks(larkCli, agent, scopes, inspected) {
 // What a Feishu/Lark instance lacks of what this release asks for: the
 // app's scopes, events and card callback, and the owner's login. Rejects
 // when the app cannot be read.
-export async function larkNeeds({ agent, larkCli, scopes = larkScopes() }) {
+export async function larkNeeds({ agent, larkCli, scopes = larkScopes(agent?.larkMessageAccess) }) {
   const inspected = await readInstanceApp(larkCli, agent);
   const missing = missingConfig(scopes, inspected);
   const login = await loginLacks(larkCli, agent, scopes, inspected);
@@ -993,7 +1054,7 @@ export async function larkNeeds({ agent, larkCli, scopes = larkScopes() }) {
 // lacks, the platform's confirm page showing the change. Resolves with
 // { inspected, updated }: what was read last (null when the app's settings
 // cannot be read) and whether the platform confirmed a change.
-export async function completeLarkApp({ agent, prompter, larkCli, scopes = larkScopes(), register = null }) {
+export async function completeLarkApp({ agent, prompter, larkCli, scopes = larkScopes(agent?.larkMessageAccess), register = null }) {
   const read = async () => {
     const spinning = prompter.spin(t('核对应用的权限和事件', 'Checking the app\'s permissions and events'));
     try {
@@ -1037,11 +1098,14 @@ export async function completeLarkApp({ agent, prompter, larkCli, scopes = larkS
 
 // The owner authorizes Vika as a user again (a scan), for the user scopes
 // the app has.
-export async function reauthorizeOwner({ agent, prompter, larkCli, scopes = larkScopes(), inspected = null }) {
+export async function reauthorizeOwner({ agent, prompter, larkCli, scopes = larkScopes(agent?.larkMessageAccess), inspected = null }) {
   const login = await larkCli.beginUserLogin({ profile: agent.profile, scopes: grantedUserScopes(scopes, inspected) });
   const scan = showScan(prompter, {
     url: login.url, where: IM_LABELS.lark, label: t('等待授权', 'Waiting for authorization'),
-    title: t(`扫码重新授权 ${agent.displayName}（${agent.profile}）以你的身份读消息`, `Scan to let ${agent.displayName} (${agent.profile}) read messages as you again`),
+    title: agent.larkMessageAccess === 'bot'
+      ? t(`扫码重新授权 ${agent.displayName}（${agent.profile}）使用所需的用户能力（不读取你的消息）`,
+        `Scan to authorize the user capabilities ${agent.displayName} (${agent.profile}) needs (without reading your messages)`)
+      : t(`扫码重新授权 ${agent.displayName}（${agent.profile}）以你的身份读消息`, `Scan to let ${agent.displayName} (${agent.profile}) read messages as you again`),
   });
   try {
     await larkCli.finishUserLogin({ profile: agent.profile, deviceCode: login.deviceCode });
@@ -1053,7 +1117,7 @@ export async function reauthorizeOwner({ agent, prompter, larkCli, scopes = lark
 
 // After an upgrade: the app gets what it lacks with one scan, then the owner authorizes again if their
 // login lacks scopes the app now has. Resolves with whether the app changed.
-export async function updateLarkApp({ agent, prompter, larkCli, scopes = larkScopes(), register = null }) {
+export async function updateLarkApp({ agent, prompter, larkCli, scopes = larkScopes(agent?.larkMessageAccess), register = null }) {
   const { inspected, updated } = await completeLarkApp({ agent, prompter, larkCli, scopes, register });
   const lacking = await loginLacks(larkCli, agent, scopes, inspected);
   if (lacking.length) {
@@ -1072,9 +1136,8 @@ export async function checkLarkApps({ prompter, env, manifest }) {
   const bin = agents.length ? env.LARK_CLI_BIN || manifest.env?.LARK_CLI_BIN || resolveLarkCli(env) : null;
   if (!bin) return [];
   const larkCli = new LarkCli(bin);
-  const scopes = larkScopes();
   const spinning = prompter.spin(t('核对飞书应用的权限和事件', 'Checking the Feishu/Lark apps\' permissions and events'));
-  const checked = await Promise.all(agents.map((agent) => larkNeeds({ agent, larkCli, scopes }).then(
+  const checked = await Promise.all(agents.map((agent) => larkNeeds({ agent, larkCli }).then(
     (needs) => (needs.count ? { agent, ...needs } : null), () => null)));
   const lacking = checked.filter(Boolean);
   if (lacking.length) {
@@ -1505,6 +1568,8 @@ async function setupFlow({
     else delete agent.role;
     if (state.connectors.includes('lark')) agent.profile = current?.profile ?? `vika-${state.id}`;
     else delete agent.profile;
+    if (state.connectors.includes('lark') && state.larkMessageAccess === 'bot') agent.larkMessageAccess = 'bot';
+    else delete agent.larkMessageAccess;
     agent.ovConfig = state.ovConfig;
     Object.assign(agent, state.switches);
     if (emailAccounts.length) agent.emailAccounts = emailAccounts;
@@ -1622,9 +1687,14 @@ async function setupFlow({
         ? await connect.lark({
           plan, prompter, larkCli: new LarkCli(larkCliBin), fetchImpl, profile: agent.profile, debug: Boolean(env.VIKA_DEBUG), canGoBack: prompter.tty,
           source: larkSource(state, current), app: state.larkApp?.app ?? null,
+          messageAccess: state.larkMessageAccess,
           others: (manifest?.agents ?? []).filter((other) => other.id !== state.id && other.profile),
         })
         : null;
+      if (lark?.messageAccess) {
+        state.larkMessageAccess = lark.messageAccess;
+        agent = build();
+      }
       // People @ the bot by its app's name, so that is the default; an owner
       // who has called it something else for long may keep that.
       if (lark?.name && lark.name !== state.displayName && lark.name.length <= 40
@@ -1665,7 +1735,15 @@ async function setupFlow({
   }
   // The app the instance keeps gets what it lacks (a scan) before the
   // instance restarts, so it starts with it.
-  if (current && state.larkRepair && !newIms.includes('lark')) {
+  const larkMessageAccessChanged = Boolean(current && state.connectors.includes('lark')
+    && (current.larkMessageAccess ?? 'owner') !== (state.larkMessageAccess ?? 'owner'));
+  if (current && larkMessageAccessChanged && !newIms.includes('lark')) {
+    live?.release();
+    const larkCli = new LarkCli(larkCliBin);
+    const scopes = larkScopes(state.larkMessageAccess);
+    const { inspected } = await completeLarkApp({ agent, prompter, larkCli, scopes, register: connect.register });
+    await reauthorizeOwner({ agent, prompter, larkCli, scopes, inspected });
+  } else if (current && state.larkRepair && !newIms.includes('lark')) {
     live?.release();
     await (connect.larkApp ?? updateLarkApp)({ agent, prompter, larkCli: new LarkCli(larkCliBin), register: connect.register });
   }
@@ -1798,6 +1876,11 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
     changes.push(t(`工作目录：${move}（模型会开一次新的会话）`, `Workspace: ${move} (the model starts a new session)`));
   }
   if (before.model !== after.model) changes.push(`${t('运行时：', 'Runtime: ')}${before.model} → ${after.model}`);
+  if (was.includes('lark') && after.connectors.includes('lark')
+    && (before.larkMessageAccess ?? 'owner') !== (after.larkMessageAccess ?? 'owner')) {
+    changes.push(t(`飞书消息范围：${larkMessageAccessShown(before.larkMessageAccess ?? 'owner')} → ${larkMessageAccessShown(after.larkMessageAccess ?? 'owner')}（需要重新扫码授权）`,
+      `Feishu/Lark message access: ${larkMessageAccessShown(before.larkMessageAccess ?? 'owner')} → ${larkMessageAccessShown(after.larkMessageAccess ?? 'owner')} (needs authorization again)`));
+  }
   for (const { key, label } of SWITCHES()) {
     const was = before[key] ?? SWITCH_DEFAULTS[key];
     if (was === after[key]) continue;

@@ -1028,6 +1028,14 @@ test('setup asks for the full permission.json scope set', () => {
   assert.ok(scopes.tenant.includes('im:message.group_msg'));
   assert.ok(scopes.user.includes('im:message.group_msg:get_as_user'));
   assert.ok(scopes.tenant.length > 100 && scopes.user.length > 100);
+  const botOnly = larkScopes('bot');
+  assert.deepEqual(botOnly.tenant, scopes.tenant);
+  for (const scope of ['im:message.group_msg:get_as_user', 'im:message.p2p_msg:get_as_user', 'im:message:readonly',
+    'im:chat:read', 'im:chat.members:read', 'search:message']) {
+    assert.ok(scopes.user.includes(scope));
+    assert.ok(!botOnly.user.includes(scope));
+  }
+  assert.ok(botOnly.user.includes('contact:user.base:readonly'));
 });
 
 // The Feishu/Lark connection as setup hands it over, recorded.
@@ -1310,6 +1318,22 @@ test('connecting a picked app: another instance on it is a warning, what it lack
   (error) => error.name === 'GoBack' && /这个机器人的卡片回调走 webhook，事件多半也是，Vika 接不了/.test(error.notice));
   assert.doesNotMatch(refused.written(), /仍然用这个应用/);
   assert.deepEqual(hooked.calls, []);
+});
+
+test('a new Lark connection can choose bot-only message access before either scan', async () => {
+  const scopes = larkScopes('bot');
+  const granted = [...scopes.tenant.map((scope) => ({ scope, token_types: ['tenant'] })),
+    ...scopes.user.map((scope) => ({ scope, token_types: ['user'] }))];
+  const larkCli = fakeLarkCli();
+  const { prompter, written } = pipePrompter(['1']);
+  const register = async () => ({ client_id: 'cli_bot_only', client_secret: 's', user_info: { open_id: 'ou_owner' } });
+  const result = await connectLark({ plan: { displayName: 'Vika' }, prompter, larkCli, fetchImpl: pickedApp(granted),
+    profile: 'vika-new', source: 'create', register, messageAccess: null });
+  assert.equal(result.messageAccess, 'bot');
+  assert.deepEqual(larkCli.calls, [['profile', 'vika-new', 'cli_bot_only'], ['login', scopes.user]]);
+  assert.match(written(), /飞书消息读取范围[\s\S]*只读机器人所在会话/);
+  assert.match(written(), /不读取你的消息/);
+  assert.doesNotMatch(written(), /用于搜索和读历史/);
 });
 
 // The platform as an app of a Doubao-account Feishu sees it: the app is

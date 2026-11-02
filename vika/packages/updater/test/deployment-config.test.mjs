@@ -452,6 +452,34 @@ test('OV recall is opt-in per instance, with actor scope and no Lark profile for
   });
 });
 
+test('Lark message access defaults to owner visibility and can be pinned to bot-only', () => {
+  const manifest = validManifest();
+  manifest.agents[1].larkMessageAccess = 'bot';
+  withManifest(manifest, (manifestPath) => {
+    const env = { VIKA_CONFIG: manifestPath, VIKA_LARK_MESSAGE_ACCESS: 'owner' };
+    const deployment = loadDeploymentManifest(env);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').larkMessageAccess, 'owner');
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.VIKA_LARK_MESSAGE_ACCESS, 'owner');
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.VIKA_LARK_MESSAGE_ACCESS, 'bot');
+    applyDeploymentAgentEnv(env, deployment, 'gamma');
+    assert.equal(env.VIKA_LARK_MESSAGE_ACCESS, 'owner');
+  });
+
+  for (const [mutate, error] of [
+    [(agent) => { agent.larkMessageAccess = 'all'; }, /larkMessageAccess must be owner or bot/],
+    [(agent) => { agent.connectors = ['weixin']; agent.channel = 'weixin'; delete agent.profile; agent.larkMessageAccess = 'bot'; },
+      /larkMessageAccess is only used by the lark connector/],
+  ]) {
+    const broken = validManifest();
+    mutate(broken.agents[0]);
+    withManifest(broken, (manifestPath) => {
+      assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), error);
+    });
+  }
+});
+
 test('explicit silence is opt-in per instance and always pinned in the daemon env', () => {
   const manifest = validManifest();
   manifest.agents[1].explicitSilence = true;

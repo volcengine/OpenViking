@@ -78,6 +78,7 @@ const AGENT_FIELDS = Object.freeze([
   'channel',
   'connectors',
   'profile',
+  'larkMessageAccess',
   'port',
   'dataDir',
   'tempDir',
@@ -278,6 +279,12 @@ function parseAgent(value, index, ignored) {
   if (!connectors.includes('lark') && value.profile !== undefined) {
     throw new Error(`${label}.profile is only used by the lark connector`);
   }
+  if (!connectors.includes('lark') && value.larkMessageAccess !== undefined) {
+    throw new Error(`${label}.larkMessageAccess is only used by the lark connector`);
+  }
+  if (value.larkMessageAccess !== undefined && !['owner', 'bot'].includes(value.larkMessageAccess)) {
+    throw new Error(`${label}.larkMessageAccess must be owner or bot`);
+  }
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
@@ -302,6 +309,7 @@ function parseAgent(value, index, ignored) {
     channel,
     connectors: Object.freeze(connectors),
     profile: connectors.includes('lark') ? manifestString(value.profile, `${label}.profile`) : null,
+    larkMessageAccess: connectors.includes('lark') ? (value.larkMessageAccess ?? 'owner') : null,
     port: value.port,
     dataDir: manifestAbsolutePath(value.dataDir, `${label}.dataDir`),
     tempDir: value.tempDir == null ? null : manifestAbsolutePath(value.tempDir, `${label}.tempDir`),
@@ -504,9 +512,11 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   if (agent.profile) {
     env.VIKA_LARK_PROFILE = agent.profile;
     env.LARKSUITE_CLI_PROFILE = agent.profile;
+    env.VIKA_LARK_MESSAGE_ACCESS = agent.larkMessageAccess;
   } else {
     delete env.VIKA_LARK_PROFILE;
     delete env.LARKSUITE_CLI_PROFILE;
+    delete env.VIKA_LARK_MESSAGE_ACCESS;
   }
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.

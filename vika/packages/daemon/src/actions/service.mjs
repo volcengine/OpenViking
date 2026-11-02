@@ -169,6 +169,7 @@ export class ActionService {
   }
 
   offered(tool) {
+    if (tool.larkOwnerMessages && this.config.larkMessageAccess === 'bot') return false;
     if (tool.action) return this.supporting(tool.action, 'actions').length > 0;
     if (tool.query) return this.supporting(tool.query, 'queries').length > 0;
     if (tool.connector) return this.connectors.manifests().some(([, manifest]) => manifest.name === tool.connector);
@@ -187,6 +188,7 @@ export class ActionService {
   definition(tool) {
     return toolDefinition(tool, {
       explicitSilence: Boolean(this.config.explicitSilence), stagedReplies: Boolean(this.config.stagedReplies),
+      larkMessageAccess: this.config.larkMessageAccess,
     });
   }
 
@@ -1116,6 +1118,10 @@ export class ActionService {
 
   async query(caller, operation, { source, ...input }, ids = {}) {
     const connector = this.route(caller, operation, 'queries', source, ids);
+    if (this.config.larkMessageAccess === 'bot' && this.manifest(connector).name === 'lark'
+      && (operation === 'message.search' || input.as === 'user')) {
+      throw blocked('unsupported', 'This instance can read only chats the Lark bot has joined; user-identity message access is disabled.');
+    }
     if (input.cursor !== undefined && this.manifest(connector).name !== 'slack') {
       throw blocked('unsupported', 'cursor is currently supported only for Slack queries.');
     }

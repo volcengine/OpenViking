@@ -110,6 +110,14 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /VIKA_STAGED_REPLIES must be a boolean/);
     setEnv('VIKA_STAGED_REPLIES', undefined);
   });
+  it('defaults Lark message access to owner visibility and accepts bot-only mode', () => {
+    setEnv('VIKA_LARK_MESSAGE_ACCESS', undefined);
+    assert.equal(getConfig().larkMessageAccess, 'owner');
+    setEnv('VIKA_LARK_MESSAGE_ACCESS', 'bot');
+    assert.equal(getConfig().larkMessageAccess, 'bot');
+    setEnv('VIKA_LARK_MESSAGE_ACCESS', 'all');
+    assert.throws(() => getConfig(), /VIKA_LARK_MESSAGE_ACCESS must be one of: owner, bot/);
+  });
   it('stores meeting notes only on an instance that opts in and has Feishu/Lark', () => {
     setEnv('VIKA_MEETING_NOTES', undefined);
     assert.equal(getConfig().meetingNotes, false);
