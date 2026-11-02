@@ -15,8 +15,8 @@ from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonical_user_root
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
-from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
-from openviking.resource.watch_scheduler import WatchScheduler
+from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_runtime import WatchRuntime
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
@@ -115,8 +115,8 @@ class OpenVikingService:
         self._session_compressor: Optional["SessionCompressorV3"] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._system_asset_synchronizer: Optional[SystemAssetSynchronizer] = None
-        self._uri_mutation_coordinator = UriMutationCoordinator()
-        self._watch_scheduler: Optional[WatchScheduler] = None
+        self._watch_manager: Optional[WatchManager] = None
+        self._watch_runtime: Optional[WatchRuntime] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._rule_cleanup_scheduler: Optional[RuleCleanupScheduler] = None
         self._expiry_runtime: Optional["ExpiryRuntime"] = None
@@ -133,9 +133,7 @@ class OpenVikingService:
         self._data_dir_lock_path: Optional[str] = None
 
         # Sub-services
-        self._fs_service = FSService(
-            uri_mutation_coordinator=self._uri_mutation_coordinator,
-        )
+        self._fs_service = FSService()
         self._pack_service = PackService()
         self._search_service = SearchService()
         self._resource_memory_link_service = ResourceMemoryLinkService()
@@ -402,9 +400,13 @@ class OpenVikingService:
         return self._compile_scheduler
 
     @property
-    def watch_scheduler(self) -> Optional[WatchScheduler]:
-        """Get WatchScheduler instance."""
-        return self._watch_scheduler
+    def watch_manager(self) -> Optional[WatchManager]:
+        """Watch management and resource submission, available without Runtime."""
+        return self._watch_manager
+
+    @property
+    def watch_runtime(self) -> Optional[WatchRuntime]:
+        return self._watch_runtime
 
     @property
     def fs(self) -> FSService:
@@ -471,6 +473,8 @@ class OpenVikingService:
     ) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
+            if before_background_start is not None:
+                await before_background_start()
             logger.debug("Already initialized")
             return
 
@@ -581,11 +585,19 @@ class OpenVikingService:
             vlm_resolver=self._vlm_resolver,
         )
 
-        self._watch_scheduler = WatchScheduler(
-            resource_service=self._resource_service,
+        self._watch_manager = WatchManager(
+            self._config.storage.build_watch_store(
+                service_name=self._config.service_name, viking_fs=self._viking_fs
+            ),
             viking_fs=self._viking_fs,
-            uri_mutation_coordinator=self._uri_mutation_coordinator,
+            resource_service=self._resource_service,
             runtime_config_manager=self._runtime_config_manager,
+        )
+        await self._watch_manager.initialize()
+        self._watch_runtime = WatchRuntime(
+            self._watch_manager,
+            leader_enabled=self._config.enable_watch_scheduler,
+            leader_provider=self._config.watch_leader_provider,
         )
 
         # Wire up sub-services
@@ -595,8 +607,7 @@ class OpenVikingService:
             privacy_config_service=self._privacy_config_service,
             privacy_sanitizer=self._privacy_sanitizer,
             resource_memory_link_service=self._resource_memory_link_service,
-            watch_scheduler=self._watch_scheduler,
-            uri_mutation_coordinator=self._uri_mutation_coordinator,
+            watch_manager=self._watch_manager,
         )
         self._pack_service.set_dependencies(
             viking_fs=self._viking_fs,
@@ -609,7 +620,7 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             resource_processor=self._resource_processor,
             skill_processor=self._skill_processor,
-            watch_scheduler=self._watch_scheduler,
+            watch_manager=self._watch_manager,
             resource_memory_link_service=self._resource_memory_link_service,
             runtime_config_manager=self._runtime_config_manager,
         )
@@ -626,9 +637,6 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_service=self._session_service,
         )
-        # Install optional server write hooks before any producer or consumer starts.
-        if before_background_start is not None:
-            await before_background_start()
         try:
             session_auto_commit_config = get_openviking_config().memory.session_auto_commit
         except Exception:
@@ -648,7 +656,6 @@ class OpenVikingService:
                 session_auto_commit_config,
                 check_interval=session_auto_commit_config.check_interval_seconds,
             )
-            await self._session_auto_commit_scheduler.start()
         else:
             self._session_auto_commit_scheduler = None
         self._debug_service.set_dependencies(
@@ -677,7 +684,6 @@ class OpenVikingService:
                 self._viking_fs,
                 config.rules,
             )
-            await self._rule_cleanup_scheduler.start()
         else:
             self._rule_cleanup_scheduler = None
         compile_config = self._config.compile_api
@@ -701,6 +707,11 @@ class OpenVikingService:
         self._fs_service.compile_versions = self._compile_service.lifecycle.versions
         self._fs_service.compile_lifecycle = self._compile_service.lifecycle
         self._resource_service.compile_versions = self._compile_service.lifecycle.versions
+
+        if self._queue_manager:
+            self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
+        if before_background_start is not None:
+            await before_background_start()
 
         if self._queue_manager:
             for queue_name in (
@@ -740,10 +751,6 @@ class OpenVikingService:
                 ),
                 allow_create=True,
             )
-            # Auth state is initialized by the HTTP server after the core service.
-            # Register durable cleanup work before restoring tracked tasks;
-            # the deletion service binds consumers once auth is ready.
-            self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
             tracker = get_task_tracker()
             await self._queue_manager.prepare_task_tracking(tracker)
             # Target reservations need recovery even when Work is already durable.
@@ -752,11 +759,11 @@ class OpenVikingService:
             )
             await self._external_task_service.restore_tasks(restored_tasks)
 
-        if self._config.enable_watch_scheduler:
-            await self._watch_scheduler.start()
-            logger.info("WatchScheduler started")
-        else:
-            logger.info("WatchScheduler disabled by config (enable_watch_scheduler=false)")
+        if self._session_auto_commit_scheduler is not None:
+            await self._session_auto_commit_scheduler.start()
+        if self._rule_cleanup_scheduler is not None:
+            await self._rule_cleanup_scheduler.start()
+        await self._watch_runtime.start()
 
         if self._queue_manager:
             self._queue_manager.start()
@@ -856,7 +863,9 @@ class OpenVikingService:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
-        await self._resource_service.close_background_tasks()
+        if self._watch_runtime is not None:
+            await self._watch_runtime.stop()
+            self._watch_runtime = None
         vlm_resolver = getattr(self, "_vlm_resolver", None)
 
         if self._compile_scheduler is not None:
@@ -875,11 +884,6 @@ class OpenVikingService:
             self._runtime_config_manager = None
             logger.info("Runtime config manager stopped")
 
-        if self._watch_scheduler:
-            await self._watch_scheduler.stop()
-            self._watch_scheduler = None
-            logger.info("WatchScheduler stopped")
-
         if self._session_auto_commit_scheduler:
             await self._session_auto_commit_scheduler.stop()
             self._session_auto_commit_scheduler = None
@@ -891,6 +895,7 @@ class OpenVikingService:
             self._rule_cleanup_scheduler = None
             logger.info("RuleCleanupScheduler stopped")
 
+        await self._resource_service.close_background_tasks()
         if self._queue_manager:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
@@ -911,6 +916,9 @@ class OpenVikingService:
 
         # Queue workers and scheduled producers persist their final Task/Work
         # transitions while stopping, so keep their store open until they drain.
+        if self._watch_manager is not None:
+            await self._watch_manager.close()
+            self._watch_manager = None
         await get_task_tracker().close()
 
         close_vlm_resolver = getattr(vlm_resolver, "close", None)

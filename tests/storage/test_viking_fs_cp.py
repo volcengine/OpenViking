@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.resource.watch_storage import WATCH_TASK_CONTROL_URIS
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.viking_fs import VikingFS
@@ -244,12 +245,13 @@ async def test_cp_rejects_non_root_container_sources(monkeypatch, uri):
 
 
 @pytest.mark.asyncio
-async def test_cp_rejects_watch_control_source(monkeypatch):
+@pytest.mark.parametrize("uri", sorted(WATCH_TASK_CONTROL_URIS))
+async def test_cp_rejects_watch_control_source(monkeypatch, uri):
     fs = _viking_fs(monkeypatch, _CopyAGFS())
 
     with pytest.raises(PermissionDeniedError, match="watch-task control"):
         await fs._ensure_copy_source_access(
-            "viking://resources/.watch_tasks.json",
+            uri,
             recursive=False,
             ctx=_ctx(),
         )

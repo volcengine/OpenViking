@@ -57,7 +57,7 @@ from openviking.pyagfs.exceptions import (
     AGFSNotSupportedError,
     GitConcurrentCommitError,
 )
-from openviking.resource.uri_mutation_coordinator import uri_matches_prefix
+from openviking.resource.watch_types import uri_matches_prefix
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskSnapshot
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
