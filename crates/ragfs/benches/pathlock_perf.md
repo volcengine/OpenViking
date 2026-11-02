@@ -1,5 +1,26 @@
 # PathLock performance baselines
 
+Holder-lease comparison on 2026-11-01 (macOS arm64, release native binding,
+Python 3.13, local Redis, 200 unrelated live locks in the same namespace).
+Each provider used a fresh local workspace, 10 warmup cycles and 300 measured
+Exact/Tree acquire cycles; release pooled both kinds (600 samples). The comparison
+base was `main` at `f423d8e72`. Times include the synchronous Python binding.
+
+| Provider | Exact acquire P50, µs (main → holders) | Tree acquire P50, µs | Release P50, µs |
+| --- | --- | --- | --- |
+| Memory | 29.3 → 5.2 | 30.8 → 5.5 | 1.5 → 1.5 |
+| Filesystem on local disk | 1975.5 → 1849.6 | 2050.8 → 1931.0 | 329.7 → 334.4 |
+| SQLite on local disk | 82.2 → 66.1 | 88.2 → 67.8 | 54.1 → 54.7 |
+| Redis | 138.2 → 121.0 | 490.4 → 258.4 | 230.5 → 206.7 |
+
+Filesystem acquire P95 varied (Exact: 3060.6 → 3581.4 µs, Tree:
+3256.5 → 3506.3 µs); this small local sample does not establish tail-latency
+equivalence. No acquisition or release failed. Holder adoption performs a storage
+mutation even locally; its cost is no longer comparable to main's registry-only
+local adoption. Redis Tree acquisition still scans HASH fields, although unrelated
+holder decoding/cleanup is bounded. Run the concurrency benchmark below for
+database writer contention and multi-process behavior.
+
 Run from the repository root:
 
 ```sh

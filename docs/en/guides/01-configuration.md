@@ -778,6 +778,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `forward_api_key` | bool | LiteLLM only. Overrides whether `api_key` is forwarded to LiteLLM. By default, OpenViking does not forward placeholder keys for native AWS/GCP routes such as `bedrock/`, `sagemaker/`, and `vertex_ai/`; set to `true` when intentionally using a LiteLLM API-key route such as Bedrock bearer-token auth |
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
+| `temperature` | float or null | Sampling temperature (default: `null`). Omit or set to `null` to leave it out of requests and use the provider default |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
@@ -796,6 +797,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `media.file_processing_timeout` | float | Maximum provider-side preprocessing wait in seconds (default: `1800`) |
 | `media.file_poll_interval` | float | Provider-side preprocessing poll interval in seconds (default: `3`) |
 | `media.video_fps` | float | Video frame sampling rate when supported by the provider, from `0.2` through `5.0` (default: `1.0`) |
+
+The `vlm` and any dedicated `query_planner` configuration leave temperature unspecified by default. Omitting `temperature` or setting `"temperature": null` uses provider-default sampling for both fixed and routed models. The setting is shared by all credentials in that configuration; standalone VikingBot configuration and call interfaces also leave temperature unspecified by default. Explicit numeric settings retain each backend's existing behavior. To retain the previous VLM default, explicitly set `"temperature": 0.0` if the model supports it. Switching to provider defaults may change output randomness; the endpoint must support omitting temperature. Thinking mode and its supported settings remain model-specific.
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
@@ -2080,29 +2083,28 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 }
 ```
 
-`redis_mysql` requires the `redis-mysql` extra and wraps the same MySQL
-parameters. Its `cache` block follows the top-level `cache` `provider/params`
-shape. The Python client currently supports `standalone`, `cluster`, and
-`sentinel` Redis deployments. It caches API-key bindings, users, per-user group
-IDs, and deletion records for a fixed 60 seconds by default. Cache fills and account mutations
-share an account-scoped Redis lease; normal cache hits do not acquire that
-lease. Mutations commit to MySQL first, then invalidate affected cache entries.
-If Redis is unavailable, the MySQL mutation still succeeds and stale cache
-entries remain valid only until their fixed TTL expires. Cache fills also
-maintain an
-account-scoped, expiry-scored key index. Each indexed cache fill removes expired
-index members, allowing account deletion or recreation to clear only that
-account's current cached users, groups, deletion records, and credential data.
-API-key bindings are checked against account and user credential fences, so
-normal key replacement, revocation, and user deletion invalidate old bindings.
-Redis automatically removes the index when its last sorted-set member is removed.
-Cleanup does not issue a separate index deletion, which could remove a newer
-fill's index after lease loss. Provisioning
-and key replacement clear negative lookups both with and without a user hint.
-Redis connection and command timeouts are configured with
-`cache.params.connect_timeout_ms` and `cache.params.command_timeout_ms`; both
-default to 5000 milliseconds when omitted. These are socket timeouts, not an
-overall request deadline.
+`redis_mysql` requires the `redis-mysql` extra. Its `mysql` block uses the
+same parameters as the MySQL provider; its `cache` block follows the top-level
+cache `provider/params` structure and supports `standalone`, `cluster`, and
+`sentinel` Redis deployments.
+
+MySQL remains the source of truth. Redis caches authentication results, user
+information, groups, and deletion status. Cache misses and Redis read failures
+fall back to MySQL. Configure `cache.params.ttl_seconds` to control cache lifetime;
+the default is 60 seconds. Hits do not extend the TTL.
+
+Credential, permission, and deletion changes invalidate the affected cache.
+If invalidation fails, cached data may remain stale until its TTL expires.
+Upgrade all instances sharing the cache together: old and new cache formats
+do not invalidate each other. Cache-version metadata does not expire automatically
+and should be included in Redis capacity planning. Legacy `lock_ttl_seconds` and
+`lock_wait_seconds` settings are accepted but no longer used.
+
+Redis connection and command timeouts use `cache.params.connect_timeout_ms` and
+`cache.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
+are socket timeouts, not an overall request deadline. Set `cache.params.pool_size`
+for the expected concurrent Redis requests; the default is 32, and the example
+below uses 100. Pool exhaustion causes connection errors and MySQL fallback.
 
 ```json
 {
@@ -2130,9 +2132,8 @@ overall request deadline.
             "password_env": "OPENVIKING_REDIS_PASSWORD",
             "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
             "key_prefix": "ov:account-auth",
-            "ttl_seconds": 60,
-            "lock_ttl_seconds": 60,
-            "lock_wait_seconds": 30
+            "pool_size": 100,
+            "ttl_seconds": 60
           }
         }
       }

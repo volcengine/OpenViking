@@ -771,6 +771,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `forward_api_key` | bool | 仅 LiteLLM 使用。覆盖是否把 `api_key` 透传给 LiteLLM。默认情况下，OpenViking 不会把占位 key 透传给 `bedrock/`、`sagemaker/`、`vertex_ai/` 等 AWS/GCP 原生鉴权路由；如果明确使用 LiteLLM 的 Bedrock bearer-token API-key 鉴权，可设为 `true` |
 | `model` | str | 模型名称 |
 | `api_base` | str | API 端点（可选） |
+| `temperature` | float 或 null | 采样温度（默认：`null`）。省略或设为 `null` 时请求不携带该字段，使用服务端默认值 |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
@@ -789,6 +790,8 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `media.file_processing_timeout` | float | Provider 侧媒体预处理最长等待秒数（默认：`1800`） |
 | `media.file_poll_interval` | float | Provider 侧媒体预处理轮询间隔秒数（默认：`3`） |
 | `media.video_fps` | float | Provider 支持时使用的视频采样帧率，范围 `0.2` 到 `5.0`（默认：`1.0`） |
+
+`vlm` 及单独配置的 `query_planner` 默认不指定温度；省略 `temperature` 或设置 `"temperature": null` 均使用服务端默认采样设置，适用于固定模型和自动路由模型。同一配置下的所有凭据共享此设置，VikingBot 的独立配置和调用接口也默认不指定温度。现有显式数字配置保留各后端原有处理逻辑；如需延续原 VLM 默认温度，可显式设置 `"temperature": 0.0`（需模型支持）。从原默认值改为服务端默认值后，输出随机性可能变化；具体接口需支持省略温度参数。思考模式及其支持的参数仍由具体模型决定。
 
 `vlm.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；认证、鉴权、欠费等永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
 
@@ -2054,21 +2057,23 @@ schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`�
 }
 ```
 
-`redis_mysql` 需要安装 `redis-mysql` extra，并在参数中嵌套同一份 MySQL 配置。
-其 `cache` 配置沿用顶层 `cache` 的 `provider/params` 结构，目前 Python
-客户端支持 `standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
-它默认以固定 60 秒 TTL 缓存 API Key 绑定、User、每个 User 的 Group ID 和删除记录。
-缓存重建与同一 Account 的修改共用 Redis 租约，正常缓存命中不获取该租约。修改会先
-提交 MySQL，再失效相关缓存。Redis 不可用时 MySQL 修改仍会成功，遗留缓存最多保持到
-固定 TTL 到期。缓存回填同时维护 Account
-级、按过期时间排序的 key 索引；每次写入已索引缓存时会清理过期成员，因此删除或重建
-Account 时只会清理该 Account 当前的 User、Group、删除记录和凭据缓存。API Key 绑定会
-校验 Account 和 User 的凭据 fence，所以正常的换 Key、吊销和删 User 会使旧绑定失效。
-索引的最后一个有序集合成员被移除后，Redis 会自动删除空索引；清理结束时不再单独删除
-索引，避免失去租约的旧请求误删新回填的索引。创建身份或换 Key 会同时清除携带和未携带
-User 提示的负缓存。
-Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
-`cache.params.command_timeout_ms` 配置，未配置时均为 5000 毫秒；这不是整个请求的总超时。
+`redis_mysql` 需要安装 `redis-mysql` extra。`mysql` 部分使用与 MySQL provider
+相同的参数；`cache` 部分沿用顶层缓存的 `provider/params` 结构，支持
+`standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
+
+MySQL 是数据来源，Redis 缓存鉴权结果、用户信息、组和删除状态。缓存未命中或
+Redis 读取失败时会查询 MySQL。通过 `cache.params.ttl_seconds` 配置缓存有效期，
+默认 60 秒；命中不会延长有效期。
+
+凭据、权限和删除状态变更会失效相关缓存。如果失效操作失败，缓存可能保持旧值
+直到 TTL 到期。共享同一缓存的实例应一起升级，旧、新缓存格式无法互相失效。
+缓存版本元数据不会自动过期，需要计入 Redis 容量规划。旧的 `lock_ttl_seconds`
+和 `lock_wait_seconds` 配置兼容接受，但不再使用。
+
+Redis 连接和命令超时分别通过 `cache.params.connect_timeout_ms` 和
+`cache.params.command_timeout_ms` 配置，默认均为 5000 毫秒；它们不是整个请求的
+总超时。`cache.params.pool_size` 应按并发 Redis 请求数配置，默认 32，下面示例
+使用 100；连接池耗尽会触发连接错误并转为查询 MySQL。
 
 ```json
 {
@@ -2096,9 +2101,8 @@ Redis 连接和命令超时通过 `cache.params.connect_timeout_ms` 和
             "password_env": "OPENVIKING_REDIS_PASSWORD",
             "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
             "key_prefix": "ov:account-auth",
-            "ttl_seconds": 60,
-            "lock_ttl_seconds": 60,
-            "lock_wait_seconds": 30
+            "pool_size": 100,
+            "ttl_seconds": 60
           }
         }
       }
