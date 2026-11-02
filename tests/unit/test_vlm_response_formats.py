@@ -173,8 +173,14 @@ async def test_async_completion_with_empty_tools_preserves_usage(
         assert "tools" not in kwargs
         return raw_response
 
+    async def post(path, *, body, **_kwargs):
+        assert path == "/chat/completions"
+        assert "temperature" not in body
+        return await create(**body)
+
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+        post=post,
     )
     vlm = vlm_type({"provider": provider, "model": "test-model"})
     if provider == "litellm":

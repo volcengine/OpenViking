@@ -377,6 +377,7 @@ class TestOpenAIVLMClientRetries:
         )
         mock_client = MagicMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=error)
+        mock_client.post = AsyncMock(side_effect=error)
         mock_async_ark_class.return_value = mock_client
         vlm = VolcEngineVLM(
             {
@@ -392,7 +393,9 @@ class TestOpenAIVLMClientRetries:
 
         assert raised.value.kind == expected_kind
         assert raised.value.__cause__ is error
-        assert mock_client.chat.completions.create.await_count == 1
+        assert mock_client.post.await_count == 1
+        assert "temperature" not in mock_client.post.call_args.kwargs["body"]
+        mock_client.chat.completions.create.assert_not_called()
         call_kwargs = mock_async_ark_class.call_args.kwargs
         assert call_kwargs["timeout"] == 12.0
         assert call_kwargs["max_retries"] == 0
@@ -1038,9 +1041,12 @@ class TestLiteLLMVLMModelResolution:
     "backend,sync_client,async_client",
     [(OpenAIVLM, OpenAI, AsyncOpenAI), (VolcEngineVLM, Ark, AsyncArk)],
 )
-@pytest.mark.parametrize("temperature", [None, 0.0, 0.6])
+@pytest.mark.parametrize("temperature", ["omitted", None, 0.0, 0.6])
 @pytest.mark.asyncio
-async def test_temperature_defaults_on_the_wire(backend, sync_client, async_client, temperature):
+@pytest.mark.parametrize("model", ["ark-code-latest", "fixed-model"])
+async def test_temperature_defaults_on_the_wire(
+    backend, sync_client, async_client, temperature, model
+):
     bodies = []
 
     def send(request):
@@ -1057,10 +1063,10 @@ async def test_temperature_defaults_on_the_wire(backend, sync_client, async_clie
 
     config = VLMConfig(
         provider="openai" if backend is OpenAIVLM else "volcengine",
-        model="routed-model",
+        model=model,
         api_key="test-key",
         api_base="https://example.invalid/v1",
-        temperature=temperature,
+        **({"temperature": temperature} if temperature != "omitted" else {}),
         thinking=True,
         extra_headers={"X-Test": "sampling"},
         extra_request_body={"thinking": {"type": "enabled"}},
@@ -1091,19 +1097,23 @@ async def test_temperature_defaults_on_the_wire(backend, sync_client, async_clie
     assert len(bodies) == 4
     for body in bodies:
         assert body["thinking"] == {"type": "enabled"}
-        if temperature is None:
+        if temperature is None or temperature == "omitted":
             assert "temperature" not in body
         else:
             assert body["temperature"] == temperature
 
 
-@pytest.mark.parametrize("temperature", [None, 0.0, 0.6])
+@pytest.mark.parametrize("temperature", ["omitted", None, 0.0, 0.6])
 def test_litellm_temperature_defaults(temperature):
     vlm = LiteLLMVLMProvider(
-        {"model": "openai/routed-model", "provider": "litellm", "temperature": temperature}
+        {
+            "model": "openai/fixed-model",
+            "provider": "litellm",
+            **({"temperature": temperature} if temperature != "omitted" else {}),
+        }
     )
     kwargs = vlm._build_text_kwargs(prompt="hello")
-    if temperature is None:
+    if temperature is None or temperature == "omitted":
         assert "temperature" not in kwargs
     else:
         assert kwargs["temperature"] == temperature

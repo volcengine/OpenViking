@@ -479,7 +479,7 @@ class AgentsConfig(BaseModel):
 
     model: str = "openai/doubao-seed-2-0-pro-260215"
     temperature: Optional[float] = Field(
-        default=0.7,
+        default=None,
         ge=0.0,
         le=2.0,
         description="Sampling temperature for LLM requests; None uses the provider default.",

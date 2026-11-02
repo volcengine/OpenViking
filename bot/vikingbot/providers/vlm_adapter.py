@@ -257,7 +257,7 @@ class VLMProviderAdapter(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
-        temperature: float | None = 0.7,
+        temperature: float | None = None,
         session_id: str | None = None,
         thinking: bool | None = None,
         reasoning_effort: str | None = None,
@@ -329,7 +329,7 @@ class VLMProviderAdapter(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
-        temperature: float | None = 0.7,
+        temperature: float | None = None,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
         if not self._supports_native_stream(self._vlm):

@@ -162,7 +162,7 @@ class VLMConfig(BaseModel):
     )
     api_base: Optional[str] = Field(default=None, description="API base URL")
     temperature: Optional[float] = Field(
-        default=0.0, description="Generation temperature; None uses the provider default"
+        default=None, description="Generation temperature; None uses the provider default"
     )
     max_retries: int = Field(default=3, description="Maximum retry attempts")
     timeout: float = Field(

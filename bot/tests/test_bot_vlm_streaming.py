@@ -56,7 +56,14 @@ def stream_chunk(
 
 
 def attach_client(vlm, completions: FakeCompletions) -> None:
-    vlm.get_async_client = lambda: SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    async def post(path, *, body, options, **_kwargs):
+        assert path == "/chat/completions"
+        assert "temperature" not in body
+        return await completions.create(**body, extra_headers=options.get("headers"))
+
+    vlm.get_async_client = lambda: SimpleNamespace(
+        chat=SimpleNamespace(completions=completions), post=post
+    )
 
 
 def make_adapter(vlm, default_model: str) -> VLMProviderAdapter:
@@ -226,7 +233,7 @@ async def test_credential_stream_does_not_replay_after_a_visible_delta():
 @pytest.mark.parametrize(
     "backend,client_type", [(OpenAIVLM, AsyncOpenAI), (VolcEngineVLM, AsyncArk)]
 )
-@pytest.mark.parametrize("temperature", [None, 0.6])
+@pytest.mark.parametrize("temperature", ["omitted", None, 0.0, 0.6])
 @pytest.mark.asyncio
 async def test_bot_stream_temperature_defaults_on_the_wire(backend, client_type, temperature):
     bodies = []
@@ -240,7 +247,13 @@ async def test_bot_stream_temperature_defaults_on_the_wire(backend, client_type,
             content="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
         )
 
-    vlm = backend({"model": "routed-model", "api_key": "test-key", "temperature": temperature})
+    vlm = backend(
+        {
+            "model": "fixed-model",
+            "api_key": "test-key",
+            **({"temperature": temperature} if temperature != "omitted" else {}),
+        }
+    )
     async with client_type(
         api_key="test-key",
         base_url="https://example.invalid/v1",
@@ -257,7 +270,7 @@ async def test_bot_stream_temperature_defaults_on_the_wire(backend, client_type,
     assert events[-1].response.content == "ok"
     assert len(bodies) == 1
     assert bodies[0]["stream"] is True
-    if temperature is None:
+    if temperature is None or temperature == "omitted":
         assert "temperature" not in bodies[0]
     else:
         assert bodies[0]["temperature"] == temperature
