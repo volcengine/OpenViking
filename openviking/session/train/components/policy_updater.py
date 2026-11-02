@@ -5,10 +5,9 @@
 from __future__ import annotations
 
 import re
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator
+from typing import Any
 
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -18,7 +17,6 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.memory_updater import MemoryUpdater
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train.domain import (
     Policy,
     PolicyApplyResult,
@@ -28,7 +26,6 @@ from openviking.session.train.domain import (
 )
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
-from openviking_cli.exceptions import NotFoundError
 
 _EXPERIENCE_NAME_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
@@ -104,13 +101,44 @@ class MemoryFilePolicyUpdater:
             policy_set=policy_set,
             updated_policy_set=updated_policy_set,
         )
-        async with _policy_apply_link_lease(
-            operations,
-            viking_fs=viking_fs,
-            root_uri=policy_set.root_uri,
-            ctx=context,
-            transaction_handle=transaction_handle,
-        ) as operation_lease:
+        related_uris = {
+            uri for link in operations.resolved_links for uri in (link.from_uri, link.to_uri) if uri
+        }
+        related_uris.update(operations.delete_replacements)
+        related_uris.update(operations.delete_replacements.values())
+        # The caller reloads these files under the EXP tree lock before planning.
+        for source in operations.delete_file_contents:
+            if source.uri not in operations.delete_replacements:
+                continue
+            related_uris.update(
+                uri
+                for link in [*source.links, *source.backlinks]
+                for uri in (link.get("from_uri"), link.get("to_uri"))
+                if uri
+            )
+        operation_lease = transaction_handle
+        combined_lease = None
+        if related_uris:
+            uri_to_path = getattr(viking_fs, "_uri_to_path", None)
+            if not callable(uri_to_path):
+                raise RuntimeError("VikingFS must provide _uri_to_path for policy link locking")
+            root_path = uri_to_path(policy_set.root_uri, ctx=context).rstrip("/")
+            exact_paths = {uri_to_path(uri, ctx=context) for uri in related_uris if uri}
+            exact_paths = {
+                path
+                for path in exact_paths
+                if path != root_path and not path.startswith(root_path + "/")
+            }
+            if exact_paths:
+                combined_lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
+                    sorted(exact_paths),
+                    [root_path],
+                    timeout_secs=300.0,
+                    owner_lease_ref=transaction_handle,
+                )
+                operation_lease = combined_lease
+
+        try:
             updater = MemoryUpdater(
                 registry=get_default_registry(),
                 vikingdb=self.vikingdb,
@@ -124,6 +152,9 @@ class MemoryFilePolicyUpdater:
                 extract_context=None,
                 isolation_handler=None,
             )
+        finally:
+            if combined_lease is not None:
+                await viking_fs._async_agfs.pathlock_release(combined_lease)
         errors = [*preflight_errors, *[f"{uri}: {exc}" for uri, exc in apply_result.errors]]
 
         return PolicyApplyResult(
@@ -138,69 +169,6 @@ class MemoryFilePolicyUpdater:
                 "operation_delete_count": len(operations.delete_file_contents),
             },
         )
-
-
-@asynccontextmanager
-async def _policy_apply_link_lease(
-    operations: ResolvedOperations,
-    *,
-    viking_fs: Any,
-    root_uri: str,
-    ctx: Any,
-    transaction_handle: Any,
-) -> AsyncIterator[Any]:
-    source_uris = {uri for uri in operations.delete_replacements if uri}
-    related_uris = source_uris | {uri for uri in operations.delete_replacements.values() if uri}
-    related_uris.update(
-        uri for link in operations.resolved_links for uri in (link.from_uri, link.to_uri) if uri
-    )
-    if not related_uris:
-        yield transaction_handle
-        return
-
-    uri_to_path = getattr(viking_fs, "_uri_to_path", None)
-    if not callable(uri_to_path):
-        raise RuntimeError("VikingFS must provide _uri_to_path for policy link locking")
-    root_path = uri_to_path(root_uri, ctx=ctx).rstrip("/")
-    required_paths = {uri_to_path(uri, ctx=ctx) for uri in related_uris}
-    lock_client = viking_fs._async_agfs
-    for _ in range(3):
-        exact_paths = {
-            path
-            for path in required_paths
-            if path != root_path and not path.startswith(root_path + "/")
-        }
-        lease = await lock_client.pathlock_acquire_exact_tree_batch(
-            sorted(exact_paths),
-            [root_path],
-            timeout_secs=300.0,
-            owner_lease_ref=transaction_handle,
-        )
-        try:
-            # Persisted relations can include endpoints absent from this batch's new links.
-            for uri in sorted(source_uris):
-                try:
-                    content = await viking_fs.read_file(uri, ctx=ctx)
-                except (NotFoundError, FileNotFoundError):
-                    continue
-                if not content:
-                    continue
-                source = MemoryFileUtils.read(content, uri=uri)
-                required_paths.update(
-                    uri_to_path(endpoint, ctx=ctx)
-                    for link in [*source.links, *source.backlinks]
-                    for endpoint in (link.get("from_uri"), link.get("to_uri"))
-                    if endpoint
-                )
-            if all(
-                path in exact_paths or path == root_path or path.startswith(root_path + "/")
-                for path in required_paths
-            ):
-                yield lease
-                return
-        finally:
-            await lock_client.pathlock_release(lease)
-    raise RuntimeError("Policy link lock coverage changed repeatedly; retry required")
 
 
 def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet) -> PolicySet:

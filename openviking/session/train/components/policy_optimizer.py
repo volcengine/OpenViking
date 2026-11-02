@@ -526,8 +526,12 @@ def _operations_to_plan_items(
         )
         delete_uris.add(target_uri)
 
+    replacement_uris = sorted(upsert_target_uris)
     for policy in superseded_policies:
         if policy.uri in upsert_target_uris or policy.uri in delete_uris:
+            continue
+        # Keep the old URI unless the merged replacement is unambiguous.
+        if len(replacement_uris) != 1:
             continue
         items.append(
             PolicyPlanItem(
@@ -543,12 +547,9 @@ def _operations_to_plan_items(
                 metadata={
                     "rationale": "Superseded by broader experience from semantic gradient.",
                     "merge_gradient_count": len(gradients),
-                    "superseded_by": [
-                        item.target_uri or item.target_name
-                        for item in items
-                        if item.kind == "upsert"
-                    ],
+                    "superseded_by": replacement_uris,
                 },
+                replacement_uri=replacement_uris[0],
             )
         )
         delete_uris.add(policy.uri)
