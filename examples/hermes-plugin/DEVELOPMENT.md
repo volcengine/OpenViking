@@ -28,6 +28,11 @@ host must bind that home at spawn. Legacy commands and missing home binding
 fail before profile reads or HTTP. Existing old-code processes require a
 reload or restart after upgrade.
 
+One task owns each reusable HTTP/MCP connection's SDK context managers. Parallel
+calls share that session. A configuration change retires the old connection
+after its active calls finish; shutdown closes all connection tasks. Preserve
+anonymous managed-listener checks and the no-replay rule during reconnect.
+
 Acceptance must cover real installation, read-only and write approval, cloned
 and imported profiles, routed profiles, missing host binding, cold startup,
 retained-provider recovery and concurrent local embeddings. Preserve the

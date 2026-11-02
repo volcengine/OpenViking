@@ -5,11 +5,14 @@ import asyncio
 import copy
 import importlib
 import json
+import os
+import sys
 import threading
 import time
 from builtins import ExceptionGroup
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -24,8 +27,10 @@ def mcp_server(
     health_payload=None,
     health_auth=False,
     mcp_status=200,
+    call_statuses=(),
 ):
     requests = []
+    call_statuses = list(call_statuses)
     entered, release = threading.Event(), threading.Event()
     release.set()
     schema = {
@@ -57,11 +62,12 @@ def mcp_server(
         def do_GET(self):
             requests.append((self.path, dict(self.headers), None))
             if self.path == "/health":
+                code = health_status() if callable(health_status) else health_status
                 if health_payload is not None:
                     entered.set()
                 if health_auth and "Authorization" not in self.headers:
                     return self.respond({"error": {"message": "Authentication required"}}, 401)
-                if health_status == 302:
+                if code == 302:
                     self.send_response(302)
                     self.send_header("Location", "https://www.example.com/canonical-location")
                     self.send_header("Content-Length", "0")
@@ -71,7 +77,7 @@ def mcp_server(
                     health_payload
                     if health_payload is not None
                     else {"status": "ok", "healthy": True, "version": "0.4.23"},
-                    health_status,
+                    code,
                 )
             if self.path != "/api/v1/system/status":
                 return self.respond(status=405)
@@ -108,6 +114,8 @@ def mcp_server(
                 result = {"tools": [schema]}
             elif method == "tools/call":
                 time.sleep(call_delay)
+                if call_statuses and (status := call_statuses.pop(0)) != 200:
+                    return self.respond({"error": "synthetic failed operation"}, status)
                 result = {
                     "content": [{"type": "text", "text": "server result"}],
                     "structuredContent": {"uri": body["params"]["arguments"]["uri"]},
@@ -279,6 +287,206 @@ def test_server_owns_schemas_results_and_identity(external_provider, trusted):
         assert headers["X-OpenViking-Actor-Peer"] == "hermes.alice"
         assert headers["X-Custom"] == "alice"
         assert headers.get("X-OpenViking-Account") == ("alice" if trusted else None)
+
+
+@pytest.mark.parametrize("concurrent", [False, True])
+def test_connection_reuses_session_and_closes_background_tasks(external_provider, concurrent):
+    from mcp import types
+
+    home, _, module, _ = external_provider("mcp-reuse")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(call_delay=0.05) as (endpoint, requests, *_):
+        configure_home(home, endpoint)
+        connection = adapter.Connection(home, module)
+
+        async def exercise():
+            original_tasks = asyncio.all_tasks()
+
+            async def call(index):
+                uri = f"viking://user/alice/memories/{index}.md"
+                result = await connection.request(
+                    "tools/call", types.CallToolRequestParams(name="forget", arguments={"uri": uri})
+                )
+                assert result.structured_content == {"uri": uri}
+
+            if concurrent:
+                await asyncio.gather(*(call(index) for index in range(3)))
+            else:
+                await connection.request("tools/list", None)
+                for index in range(3):
+                    await call(index)
+            methods = [body["method"] for _, _, body in requests if body]
+            assert methods.count("initialize") == 1
+            assert methods.count("tools/call") == 3
+            assert sum(path == "/health" for path, _, _ in requests) == 1
+            await connection.aclose()
+            assert asyncio.all_tasks() <= original_tasks
+
+        asyncio.run(exercise())
+
+
+def test_connection_replaces_credentials_without_interrupting_inflight_call(external_provider):
+    from mcp import types
+
+    home, _, module, _ = external_provider("mcp-rotate")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(call_delay=0.1) as (endpoint, requests, *_):
+        configure_home(home, endpoint, linked=True)
+        connection = adapter.Connection(home, module)
+
+        async def exercise():
+            await connection.request("tools/list", None)
+            first = asyncio.create_task(
+                connection.request(
+                    "tools/call",
+                    types.CallToolRequestParams(name="forget", arguments={"uri": "first"}),
+                )
+            )
+            async with asyncio.timeout(5):
+                while not any(
+                    body and body.get("method") == "tools/call" for _, _, body in requests
+                ):
+                    await asyncio.sleep(0.01)
+            configure_home(home, endpoint, label="bob", linked=True)
+            second = await connection.request(
+                "tools/call",
+                types.CallToolRequestParams(name="forget", arguments={"uri": "second"}),
+            )
+            assert (await first).structured_content == {"uri": "first"}
+            assert second.structured_content == {"uri": "second"}
+            await connection.request("tools/list", None)
+            methods = [body["method"] for _, _, body in requests if body]
+            assert methods.count("initialize") == 2
+            calls = [
+                (headers, body)
+                for _, headers, body in requests
+                if body and body.get("method") == "tools/call"
+            ]
+            assert [headers["Authorization"] for headers, _ in calls] == [
+                "Bearer key-alice",
+                "Bearer key-bob",
+            ]
+            await connection.aclose()
+
+        asyncio.run(exercise())
+
+
+def test_connection_recovers_after_failed_call_without_replaying_it(external_provider):
+    from mcp import types
+    from mcp.shared.exceptions import MCPError
+
+    home, _, module, _ = external_provider("mcp-reconnect")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    with mcp_server(call_statuses=(500, 200)) as (endpoint, requests, *_):
+        configure_home(home, endpoint)
+        connection = adapter.Connection(home, module)
+
+        async def exercise():
+            await connection.request("tools/list", None)
+            params = types.CallToolRequestParams(name="forget", arguments={"uri": "first"})
+            with pytest.raises(MCPError):
+                await connection.request("tools/call", params)
+            calls = [body for _, _, body in requests if body and body.get("method") == "tools/call"]
+            assert len(calls) == 1
+            params = types.CallToolRequestParams(name="forget", arguments={"uri": "second"})
+            assert (await connection.request("tools/call", params)).structured_content == {
+                "uri": "second"
+            }
+            methods = [body["method"] for _, _, body in requests if body]
+            assert methods.count("initialize") == 2
+            assert methods.count("tools/call") == 2
+            await connection.aclose()
+
+        asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("health_status", [401, 403, 200])
+def test_reused_managed_connection_checks_identity_without_sending_credentials(
+    external_provider, monkeypatch, health_status
+):
+    from mcp import types
+
+    home, _, module, _ = external_provider("mcp-managed-reuse")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    health = {"status": "ok", "healthy": True, "version": "0.4.23"}
+    health_code = [200]
+    with mcp_server(health_payload=health, health_status=lambda: health_code[0]) as (
+        endpoint,
+        requests,
+        *_,
+    ):
+        configure_home(home, endpoint)
+        connection = adapter.Connection(home, module)
+        resolve = connection.resolve
+        monkeypatch.setattr(connection, "resolve", lambda: (*resolve()[:2], True))
+
+        async def exercise():
+            await connection.request("tools/list", None)
+            before = len(requests)
+            if health_status == 200:
+                health["healthy"] = False
+            else:
+                # Make the same listener challenge an otherwise valid identity.
+                health_code[0] = health_status
+            params = types.CallToolRequestParams(name="forget", arguments={"uri": "private"})
+            with pytest.raises(adapter._UnverifiedServerError):
+                await connection.request("tools/call", params)
+            added = requests[before:]
+            assert len(added) == 1 and added[0][0] == "/health"
+            assert not {"Authorization", "X-API-Key", "X-Custom"} & added[0][1].keys()
+            await connection.aclose()
+
+        asyncio.run(exercise())
+
+
+def test_stdio_adapter_reuses_upstream_session(external_provider):
+    import hermes_cli
+    from mcp import ClientSession, StdioServerParameters, types
+    from mcp.client.stdio import stdio_client
+
+    home, _, module, _ = external_provider("mcp-stdio-reuse")
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"}
+    }
+    env.update(
+        HERMES_HOME=str(home),
+        HOME=str(home),
+        USERPROFILE=str(home),
+        HERMES_ENABLE_PROJECT_PLUGINS="0",
+        PYTHONPATH=str(Path(hermes_cli.__file__).resolve().parents[1]),
+    )
+    with mcp_server() as (endpoint, requests, *_):
+        configure_home(home, endpoint)
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=[adapter.__file__, "--profile-bound"],
+            env=env,
+        )
+
+        async def exercise():
+            async with stdio_client(params) as (read, write), ClientSession(read, write) as client:
+                await client.initialize()
+                assert (await client.list_tools()).tools[0].name == "forget"
+                for uri in ("first", "second"):
+                    result = await client.send_request(
+                        types.CallToolRequest(
+                            params=types.CallToolRequestParams(
+                                name="forget",
+                                arguments={"uri": uri},
+                            )
+                        ),
+                        types.CallToolResult,
+                    )
+                    assert not result.is_error
+                    assert result.structured_content == {"uri": uri}
+
+        asyncio.run(exercise())
+        methods = [body["method"] for _, _, body in requests if body]
+        assert methods.count("initialize") == 1
+        assert methods.count("tools/call") == 2
 
 
 def test_connection_snapshot_survives_reload_and_next_call_uses_new_connection(external_provider):

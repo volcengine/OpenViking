@@ -292,6 +292,13 @@ linked `ovcli.conf` changes and Quick Local port recovery. It passes configured
 CA and proxy settings to the connection. It does not manage the server process
 or retry tool calls.
 
+The adapter reuses its HTTP connection pool and MCP session. It replaces the
+connection when profile credentials, endpoint, headers or TLS settings change.
+Calls already in progress finish with their original connection. Managed local
+connections still check anonymous server health before authenticated calls.
+After a failed operation, the next call can reconnect; the failed call is not
+replayed.
+
 The saved command is `hermes openviking mcp --profile-bound`. It does not save
 an absolute `env.HERMES_HOME`. Hermes must supply the owning profile home when
 it starts the child, including for routed gateway and desktop profiles. This

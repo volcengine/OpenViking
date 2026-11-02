@@ -147,6 +147,7 @@ jobs:
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_routes.py" \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_preflight.py" \
             "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_mcp_profile_binding.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_mcp_tools.py" \
             --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
       - name: Run the complete provider suite on the release host
         if: matrix.host == 'release'

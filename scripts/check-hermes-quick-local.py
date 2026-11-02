@@ -36,12 +36,19 @@ def check_mcp(provider, home):
     module = importlib.import_module(type(provider).__module__)
     adapter = importlib.import_module(module.__name__ + ".mcp_tools")
     connection = adapter.Connection(home, module)
-    tools = asyncio.run(connection.request("tools/list", None))
-    assert {"find", "read", "remember", "forget"} <= {tool.name for tool in tools.tools}
-    result = asyncio.run(
-        connection.request("tools/call", types.CallToolRequestParams(name="health", arguments={}))
-    )
-    assert not result.is_error, result
+
+    async def probe():
+        try:
+            tools = await connection.request("tools/list", None)
+            assert {"find", "read", "remember", "forget"} <= {tool.name for tool in tools.tools}
+            result = await connection.request(
+                "tools/call", types.CallToolRequestParams(name="health", arguments={})
+            )
+            assert not result.is_error, result
+        finally:
+            await connection.aclose()
+
+    asyncio.run(probe())
 
 
 def check_llm_transports(home, ql, runtime_python):

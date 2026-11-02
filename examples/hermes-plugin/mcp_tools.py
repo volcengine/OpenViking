@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import os
 import ssl
 import sys
 from builtins import BaseExceptionGroup
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 SERVER_NAME = "openviking"
@@ -235,6 +237,9 @@ class Connection:
     def __init__(self, home: Path, provider_module):
         self.home = home
         self.ov = provider_module
+        self._current = None
+        self._sessions = set()
+        self._closed = False
 
     def resolve(self):
         env = self.ov._profile_openviking_env(str(self.home))
@@ -244,8 +249,61 @@ class Connection:
         return values, entry, config.get("deployment") == self.ov.quick_local.DEPLOYMENT
 
     async def request(self, method: str, params):
+        if self._closed:
+            raise RuntimeError("OpenViking MCP connection is closed")
         values, entry, managed = await asyncio.to_thread(self.resolve)
-        return await _request(self.ov, values, entry, method, params, managed=managed)
+        if self._closed:
+            raise RuntimeError("OpenViking MCP connection is closed")
+        settings = {
+            key: entry.get(key)
+            for key in (
+                "headers",
+                "ssl_verify",
+                "client_cert",
+                "client_key",
+                "timeout",
+                "connect_timeout",
+            )
+        }
+        key = json.dumps([values, settings, managed], sort_keys=True)
+        current = self._current
+        if current is None or current.key != key or current.retired or current.task.done():
+            if current is not None:
+                current.retire()
+            current = _RemoteSession(key, self.ov, values, entry, managed)
+            self._current = current
+            self._sessions.add(current)
+            current.task.add_done_callback(lambda _task: self._sessions.discard(current))
+        current.users += 1
+        recheck = managed and current.requests > 0
+        current.requests += 1
+        try:
+            async with asyncio.timeout(_request_timeout(entry, method)):
+                http, session, headers = await asyncio.shield(current.ready)
+                if recheck:
+                    # A managed port can be reassigned while an HTTP pool is idle.
+                    # Anonymous health must still precede any authenticated call.
+                    checked = await _verify_server(http, self.ov, values, entry, managed=True)
+                    if checked != headers:
+                        raise _UnverifiedServerError()
+                return await _call_session(session, method, params)
+        except BaseException:
+            # Retire for the NEXT call; never replay an operation that may have landed.
+            current.retire()
+            raise
+        finally:
+            current.users -= 1
+            if current.retired:
+                current.retire()
+
+    async def aclose(self):
+        self._closed = True
+        sessions = list(self._sessions)
+        for session in sessions:
+            session.retire()
+            if not session.task.done():
+                session.task.cancel()
+        await asyncio.gather(*(session.task for session in sessions), return_exceptions=True)
 
     async def discover(self, params):
         """Allow bounded startup recovery for every deployment; never own its process."""
@@ -284,20 +342,59 @@ class Connection:
             raise
 
 
-async def _request(ov, values, entry, method, params, *, managed=False):
+class _RemoteSession:
+    """One task owns the SDK context managers through initialization and shutdown."""
+
+    def __init__(self, key, ov, values, entry, managed):
+        self.key = key
+        self.users = 0
+        self.requests = 0
+        self.retired = False
+        self.ready = asyncio.get_running_loop().create_future()
+        self.ready.add_done_callback(
+            lambda future: None if future.cancelled() else future.exception()
+        )
+        self.stop = asyncio.Event()
+        self.task = asyncio.create_task(self._run(ov, values, entry, managed))
+
+    async def _run(self, ov, values, entry, managed):
+        try:
+            async with _open_session(ov, values, entry, managed=managed) as connection:
+                self.ready.set_result(connection)
+                await self.stop.wait()
+        except BaseException as exc:
+            if not self.ready.done():
+                self.ready.set_exception(exc)
+
+    def retire(self):
+        self.retired = True
+        if not self.users:
+            self.stop.set()
+            if not self.ready.done():
+                self.task.cancel()
+
+
+def _request_timeout(entry, method):
+    return float(
+        entry.get("connect_timeout" if method == "tools/list" else "timeout")
+        or (60 if method == "tools/list" else 300)
+    )
+
+
+async def _call_session(session, method, params):
+    from mcp import types
+
+    if method == "tools/list":
+        return await session.list_tools(params=params)
+    return await session.send_request(types.CallToolRequest(params=params), types.CallToolResult)
+
+
+@asynccontextmanager
+async def _open_session(ov, values, entry, *, managed=False):
     import httpx2
-    from mcp import ClientSession, types
+    from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    rest = ov._VikingClient(**values)
-    extra = {
-        k: v
-        for k, v in (entry.get("headers") or {}).items()
-        if k.lower() not in _CONNECTION_HEADERS
-    }
-    timeout = float(entry.get("timeout") or 300)
-    if method == "tools/list":
-        timeout = float(entry.get("connect_timeout") or 60)
     cert = entry.get("client_cert")
     if entry.get("client_key"):
         cert = (cert, entry["client_key"])
@@ -306,68 +403,89 @@ async def _request(ov, values, entry, method, params, *, managed=False):
     url = values["endpoint"].rstrip("/") + "/mcp"
     # No redirect forwarding: neither credentials nor custom headers may
     # be sent to a second origin. Use the final server URL in setup.
-    async with (
-        asyncio.timeout(timeout),
-        httpx2.AsyncClient(
-            timeout=timeout,
-            verify=entry.get("ssl_verify", True),
-            follow_redirects=False,
-            cert=cert,
-        ) as http,
-    ):
-        headers = {**extra, **rest._headers()}
-        response = await http.get(
-            values["endpoint"] + "/health", headers={"Accept": "application/json"}
+    async with AsyncExitStack() as stack:
+        http = await stack.enter_async_context(
+            httpx2.AsyncClient(
+                timeout=float(entry.get("timeout") or 300),
+                verify=entry.get("ssl_verify", True),
+                follow_redirects=False,
+                cert=cert,
+            )
         )
-        if 300 <= response.status_code < 400:
-            raise _UnverifiedServerError()
-        try:
-            health = rest._parse_response(response)
-        except ov._OpenVikingHTTPError as exc:
-            # Quick Local exposes anonymous health. A 401/403 at its saved port
-            # may belong to a foreign listener while the provider moves ports.
-            # Discovery may wait for that move, but must not send it the root key.
-            if managed and exc.status_code in {401, 403}:
-                raise _UnverifiedServerError() from exc
-            # Preserve the provider's existing hosted-server authentication
-            # challenge. An ordinary redirect never authorizes credentials.
-            if not values["api_key"] or exc.status_code not in {401, 403}:
-                raise
-            response = await http.get(
+        async with asyncio.timeout(float(entry.get("connect_timeout") or 60)):
+            headers = await _verify_server(http, ov, values, entry, managed=managed)
+            http.headers.update(headers)
+            streams = await stack.enter_async_context(streamable_http_client(url, http_client=http))
+            session = await stack.enter_async_context(ClientSession(streams[0], streams[1]))
+            await session.initialize()
+        yield http, session, headers
+
+
+async def _verify_server(http, ov, values, entry, *, managed=False):
+    import httpx2
+
+    rest = ov._VikingClient(**values)
+    extra = {
+        k: v
+        for k, v in (entry.get("headers") or {}).items()
+        if k.lower() not in _CONNECTION_HEADERS
+    }
+    headers = {**extra, **rest._headers()}
+    # An explicit Request bypasses client default headers. A reused MCP client's
+    # Authorization must never be merged into the anonymous identity probe.
+    response = await http.send(
+        httpx2.Request(
+            "GET", values["endpoint"] + "/health", headers={"Accept": "application/json"}
+        )
+    )
+    if 300 <= response.status_code < 400:
+        raise _UnverifiedServerError()
+    try:
+        health = rest._parse_response(response)
+    except ov._OpenVikingHTTPError as exc:
+        if managed and exc.status_code in {401, 403}:
+            raise _UnverifiedServerError() from exc
+        if not values["api_key"] or exc.status_code not in {401, 403}:
+            raise
+        response = await http.send(
+            httpx2.Request(
+                "GET",
                 values["endpoint"] + "/health",
                 headers={**extra, **rest._headers(include_tenant=False)},
             )
-            health = rest._parse_response(response)
-        if not ov._is_modern_openviking_health(health):
-            raise _UnverifiedServerError()
-        from packaging.version import InvalidVersion, Version
+        )
+        health = rest._parse_response(response)
+    if not ov._is_modern_openviking_health(health):
+        raise _UnverifiedServerError()
+    from packaging.version import InvalidVersion, Version
 
-        try:
-            supported = Version(health["version"]) >= Version("0.4.23")
-        except InvalidVersion:
-            supported = False
-        if not supported:
-            raise _UnsupportedMCPServerError()
-        response = await http.get(values["endpoint"] + "/api/v1/system/status", headers=headers)
-        try:
-            rest._parse_response(response)
-        except Exception as exc:
-            if not values["api_key"] or not rest._needs_trusted_identity_retry(exc):
-                raise
-            headers = {**extra, **rest._headers(include_tenant=True)}
-            response = await http.get(values["endpoint"] + "/api/v1/system/status", headers=headers)
-            rest._parse_response(response)
-        http.headers.update(headers)
-        async with streamable_http_client(url, http_client=http) as streams:
-            # The outer deadline bounds the complete exchange. A second MCP
-            # timer at the same deadline races the HTTP timeout across platforms.
-            async with ClientSession(streams[0], streams[1]) as session:
-                await session.initialize()
-                if method == "tools/list":
-                    return await session.list_tools(params=params)
-                return await session.send_request(
-                    types.CallToolRequest(params=params), types.CallToolResult
-                )
+    try:
+        supported = Version(health["version"]) >= Version("0.4.23")
+    except InvalidVersion:
+        supported = False
+    if not supported:
+        raise _UnsupportedMCPServerError()
+    response = await http.send(
+        httpx2.Request("GET", values["endpoint"] + "/api/v1/system/status", headers=headers)
+    )
+    try:
+        rest._parse_response(response)
+    except Exception as exc:
+        if not values["api_key"] or not rest._needs_trusted_identity_retry(exc):
+            raise
+        headers = {**extra, **rest._headers(include_tenant=True)}
+        response = await http.send(
+            httpx2.Request("GET", values["endpoint"] + "/api/v1/system/status", headers=headers)
+        )
+        rest._parse_response(response)
+    return headers
+
+
+async def _request(ov, values, entry, method, params, *, managed=False):
+    """One-shot connection for the synchronous setup validator."""
+    async with asyncio.timeout(_request_timeout(entry, method)):
+        async with _open_session(ov, values, entry, managed=managed) as (_, session, _headers):
+            return await _call_session(session, method, params)
 
 
 def validate_connection(ov, values):
@@ -430,8 +548,11 @@ async def serve(home: Path, provider_module=None):
             )
 
     server = Server("openviking", on_list_tools=list_tools, on_call_tool=call_tool)
-    async with stdio_server() as (read, write):
-        await server.run(read, write, server.create_initialization_options())
+    try:
+        async with stdio_server() as (read, write):
+            await server.run(read, write, server.create_initialization_options())
+    finally:
+        await connection.aclose()
 
 
 def run(args):
