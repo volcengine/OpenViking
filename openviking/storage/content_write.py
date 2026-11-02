@@ -528,7 +528,12 @@ class ContentWriteCoordinator:
         if acl is not None and not namespace_policy.supports_acl:
             raise InvalidArgumentError(f"ACL is not supported for namespace: {normalized_uri}")
         if isinstance(content, str):
-            content = await self._sanitize_text(content, uri=normalized_uri, ctx=ctx)
+            if not is_abstract_overview_uri(normalized_uri):
+                content = await self._sanitize_text(content, uri=normalized_uri, ctx=ctx)
+            # System-generated sidecars (.abstract.md / .overview.md) skip privacy
+            # substitution: their frontmatter embeds canonical URIs that are not
+            # secrets, and a substituted {{ov_privacy:...}} scalar breaks the YAML
+            # parse, silently stripping the target's description (#6909).
         content = normalize_account_memory_template_write(normalized_uri, content, mode)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
         if acl is not None:
