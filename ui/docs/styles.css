@@ -1,0 +1,50 @@
+:root {
+  --rp-c-brand: #bc3346;
+  --rp-c-brand-light: #d44a5b;
+  --rp-c-brand-lighter: #e67581;
+  --rp-c-brand-dark: #a42638;
+  --rp-c-brand-darker: #8e2030;
+}
+
+.dark {
+  --rp-c-brand: #f18b97;
+  --rp-c-brand-light: #ffa2ad;
+  --ov-ui-status-ready: #78d3a3;
+  --ov-ui-status-processing: #8ab8ff;
+  --ov-ui-status-error: #ff9595;
+}
+
+.ov-demo-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.ov-demo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.ov-demo-controls button {
+  padding: 6px 12px;
+  border: 1px solid var(--rp-c-divider);
+  border-radius: 6px;
+  color: var(--rp-c-text-1);
+  background: var(--rp-c-bg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-demo-controls button:hover,
+.ov-demo-controls button[aria-pressed='true'] {
+  border-color: var(--rp-c-brand);
+  color: var(--rp-c-brand);
+}
+
+.ov-demo-controls button:focus-visible {
+  outline: 2px solid var(--rp-c-brand);
+  outline-offset: 3px;
+}
