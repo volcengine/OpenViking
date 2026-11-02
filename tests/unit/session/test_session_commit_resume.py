@@ -177,10 +177,20 @@ async def test_commit_retention_boundary_and_pending_tokens_after_reload(
 def test_phase2_auto_commit_policy_parameters_are_appended():
     signature = inspect.signature(Session._run_memory_extraction)
 
-    assert list(signature.parameters)[-1] == "auto_commit_policy"
+    assert list(signature.parameters)[-4:] == [
+        "auto_commit_policy",
+        "session_window_context",
+        "summary_token_ratio",
+        "reasoning_effort",
+    ]
     # New snapshot metadata is appended after the existing positional fields.
-    assert fields(SessionCommitMsg)[-2].name == "auto_commit_policy"
-    assert fields(SessionCommitMsg)[-1].name == "memory_policy_version"
+    assert [item.name for item in fields(SessionCommitMsg)[-5:]] == [
+        "auto_commit_policy",
+        "session_window_context",
+        "summary_token_ratio",
+        "reasoning_effort",
+        "memory_policy_version",
+    ]
 
 
 @pytest.mark.asyncio
