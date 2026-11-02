@@ -145,13 +145,20 @@ class TEIRerankClient(RerankBase):
                 if type(idx) is not int or not (0 <= idx < len(documents)) or idx in seen:
                     logger.warning("[TEIRerankClient] Invalid or duplicate result index")
                     return None
-                score = float(item.get("score", item.get("relevance_score")))
+                raw_score = item.get("score", item.get("relevance_score"))
+                if isinstance(raw_score, bool):
+                    logger.warning("[TEIRerankClient] Invalid boolean result score")
+                    return None
+                score = float(raw_score)
                 if not math.isfinite(score):
                     logger.warning("[TEIRerankClient] Non-finite result score")
                     return None
                 seen.add(idx)
                 scores[idx] = score
 
+            if len(seen) != len(documents):
+                logger.warning("[TEIRerankClient] Incomplete result indices")
+                return None
             return scores
 
         except Exception as e:

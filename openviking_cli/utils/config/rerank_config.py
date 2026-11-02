@@ -50,8 +50,8 @@ class RerankConfig(BaseModel):
     timeout: float = Field(
         default=30.0,
         description=(
-            "HTTP request timeout in seconds for rerank calls. "
-            "Increase for local LLM servers with model cold-start latency."
+            "HTTP request timeout in seconds for rerank calls. Increase for local "
+            "LLM servers with model cold-start latency."
         ),
     )
 

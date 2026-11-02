@@ -57,14 +57,14 @@ class TestTEIRerankClient:
         assert "Authorization" not in mock_post.call_args.kwargs["headers"]
 
     @patch("openviking.models.rerank.tei_rerank.requests.post")
-    def test_rerank_batch_fills_missing_top_n_results(self, mock_post):
+    def test_rerank_batch_incomplete_results_fall_back(self, mock_post):
         mock_response = MagicMock()
         mock_response.json.return_value = [{"index": 2, "score": 0.99}]
         mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
 
         client = TEIRerankClient(api_base="http://tei.local:8080")
-        assert client.rerank_batch("q", ["first", "second", "third"]) == [0.0, 0.0, 0.99]
+        assert client.rerank_batch("q", ["first", "second", "third"]) is None
 
     @patch("openviking.models.rerank.tei_rerank.requests.post")
     def test_rerank_batch_supports_results_wrapper(self, mock_post):
@@ -231,6 +231,8 @@ def test_actual_three_chunk_requests_timeout_and_headers(mock_post):
         [{"index": "0", "score": 0.4}],
         [{"index": 0}],
         [{"index": 0, "score": "invalid"}],
+        [{"index": 0, "score": True}],
+        [{"index": 0, "score": False}],
         [{"index": 0, "score": float("nan")}],
         [{"index": 0, "score": float("inf")}],
         [{"index": 0, "score": 0.4}, {"index": 0, "score": 0.5}],
@@ -305,3 +307,36 @@ def test_auto_detection_preserves_provider_precedence(kwargs, expected):
 def test_factory_without_config_is_unavailable():
     assert TEIRerankClient.from_config(None) is None
     assert RerankClient.from_config(RerankConfig()) is None
+
+
+@patch("openviking.models.rerank.tei_rerank.requests.post")
+def test_incomplete_later_chunk_discards_all_scores(mock_post):
+    first, second = MagicMock(), MagicMock()
+    first.json.return_value = [{"index": 0, "score": 0.8}, {"index": 1, "score": 0.7}]
+    second.json.return_value = [{"index": 0, "score": 0.6}]
+    mock_post.side_effect = [first, second]
+    assert (
+        TEIRerankClient("http://tei.local", batch_size=2).rerank_batch(
+            "q", ["a", "b", "c", "d", "e"]
+        )
+        is None
+    )
+    assert mock_post.call_count == 2
+
+
+def test_tei_optional_defaults_and_null_config():
+    config = RerankConfig(
+        provider="tei",
+        api_base="http://tei.local",
+        model=None,
+        api_key=None,
+        extra_headers=None,
+        mode=None,
+    )
+    client = RerankClient.from_config(config)
+    assert client.model_name is None
+    assert client.extra_headers == {}
+    assert client.timeout == 30.0
+    assert config.threshold == 0.1
+    assert config.candidates_visible is False
+    assert config.mode is None

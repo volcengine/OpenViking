@@ -1227,7 +1227,9 @@ chunk-local indices back to input order. If any chunk fails, reranking returns
 `None` so retrieval can fall back, rather than use a partial result. The timeout
 applies to each HTTP request, not to the complete multi-chunk operation.
 
-For TEI, `api_base` accepts the server base URL or full `/rerank` endpoint. Authentication is optional; with `api_key`, set `"provider": "tei"` explicitly. A bare `api_base` auto-detects TEI only after the existing Jev,
+For TEI, `api_base` accepts the server base URL or full `/rerank` endpoint.
+Authentication is optional; with `api_key`, set `"provider": "tei"` explicitly.
+A bare `api_base` auto-detects TEI only after the existing Jev,
 OpenAI, Cohere, and VikingDB detection rules. `api_key` plus `api_base` still
 auto-detects OpenAI for compatibility. `extra_headers` can override generated
 headers, including Authorization.
