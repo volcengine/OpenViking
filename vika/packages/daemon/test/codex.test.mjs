@@ -120,9 +120,22 @@ describe('formatting helpers', () => {
     });
     assert.equal(
       line,
-      '[chat=oc_chat1234abcd thread=omt_topic567 source=lark msg=om_msg1234abcd event=evt_msg1234 time=2026-01-02T03:04Z'
+      '[chat=oc_chat1234abcd thread=omt_topic5678efgh source=lark msg=om_msg1234abcd event=evt_msg1234 time=2026-01-02T03:04Z'
         + ' from=ou_user1234] @李雷的测试机器人 飞书CLI',
     );
+  });
+
+  it('shows the full thread id, a tool-usable value, escaped like other metadata', () => {
+    const line = (threadId) => formatInboundLine({
+      chatId: 'oc_chat1234abcd', threadId, messageId: 'om_msg1234abcd', eventId: 'evt_msg1234',
+      senderId: 'ou_user1234abcd', createTimeMs: Date.UTC(2026, 0, 2, 3, 4, 5), content: 'hi',
+    });
+    // Two topics sharing their first characters stay distinguishable.
+    assert.match(line('omt_1981825aa4cf8762'), / thread=omt_1981825aa4cf8762 /);
+    assert.match(line('omt_1981825abbbb0000'), / thread=omt_1981825abbbb0000 /);
+    // Nothing a connector reports can close the metadata bracket or split a tag.
+    assert.match(line('omt_a b]c'), / thread=omt_a%20b%5Dc /);
+    assert.doesNotMatch(line(null), /thread=/);
   });
 
   it('renders the daemon-resolved quote-reply target', () => {

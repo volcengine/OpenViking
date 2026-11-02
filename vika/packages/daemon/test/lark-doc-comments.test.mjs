@@ -89,7 +89,7 @@ describe('document comment events', () => {
     assert.equal(event.parentId, `comment:docx:${TOKEN}:7618859513273112345:7618859513273110002`);
     assert.deepEqual(event.replyRoute, { action: 'message.reply', input: { message_id: MSG } });
     assert.match(formatInboundLine(event, null, { mention: 'mixed', replyTo: { kind: 'me', text: '对的，来自 Q3 报表。' } }),
-      new RegExp(`^\\[chat=doc:docx:${TOKEN} thread=76188595132 source=lark msg=${MSG} event=5e3702a84e847582be8db7fb73283c02 `
+      new RegExp(`^\\[chat=doc:docx:${TOKEN} thread=7618859513273112345 source=lark msg=${MSG} event=5e3702a84e847582be8db7fb73283c02 `
         + 'time=\\S+ from=Alice reply_to=me quote=对的，来自_Q3_报表。 mention=mixed\\] \\[document "Q4 计划" '));
   });
 

@@ -101,6 +101,17 @@ describe('conversation policy assemble', () => {
     assert.match(text, /`mention=` says whether one of them is you/);
   });
 
+  it('places an answer where its message is, never by style', () => {
+    const text = assembleConversationPolicy({ connectors: ['lark'], rolePromptPath: role('qa') });
+    assert.match(text, /A message with `thread=` is answered inside that thread/);
+    assert.match(text, /A message without `thread=` is answered in its conversation/);
+    assert.match(text, /answer the original message where it was asked/);
+    assert.match(text, /In a topic group \(话题群\) every post is its own topic/);
+    // A plain send was once the default reply, and the Q&A role split long answers
+    // between a thread and the main conversation: both sent thread answers astray.
+    assert.doesNotMatch(text, /Use it for most replies|one-line conclusion in the main conversation|move side discussions into a thread/);
+  });
+
   it('adds the meeting notes only on the instance that stores them, after OpenViking, leaving the policy as it was otherwise', () => {
     const off = assembleConversationPolicy({ connectors: ['lark'] });
     assert.doesNotMatch(off, /## Meeting notes/);

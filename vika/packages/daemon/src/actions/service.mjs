@@ -526,6 +526,22 @@ export class ActionService {
     throw blocked('timer_delivery_target', `Delivery blocked: this timer occurrence is configured for ${delivery.source ?? 'unknown'} chat ${delivery.chat_id ?? 'unknown'}. ${NO_ACTION}`);
   }
 
+  // A message inside a thread is answered inside that thread. send_message to
+  // the decision's own chat would post outside it: into the main conversation,
+  // or as a new topic in a Lark topic group. Models fall back to that send when
+  // reading the thread fails, so refuse it here and name the reply that fits;
+  // with that hint they answer in the thread. Only the decision's own chat is
+  // checked: a send the task needs elsewhere (a person's direct chat, another
+  // group) goes through. There is deliberately no opt-out for a new top-level
+  // message in the same chat asked for from a thread; add one if it is needed.
+  assertStaysInThread(fence, connector, chatId) {
+    if (!fence.thread_id || connector !== fence.connector_instance || chatId !== fence.chat_id) return;
+    // A card action's msg= is internal (ca_...); replies go to its card= id.
+    const target = fence.message_type === 'card_action' ? fence.parent_id : fence.message_id;
+    throw blocked('thread_target_mismatch',
+      `Delivery blocked: decision_id is a message inside a thread, and send_message to its chat posts outside that thread. Answer inside the thread with reply_message, message_id=${target}, reply_in_thread=true. ${NO_ACTION}`);
+  }
+
   isTimerReminder(fence) {
     return fence.connector_instance === 'timer' && fence.kind === 'reminder.due';
   }
@@ -728,6 +744,7 @@ export class ActionService {
     // A plain send lands in the chat's main conversation.
     const interim = this.interim(input, caller, fence, connector,
       conversationKeyFor(connector, { tenant_id: fence.tenant_key, id: input.chat_id }));
+    this.assertStaysInThread(fence, connector, input.chat_id);
     const responseTo = this.attribution(caller, input.response_to_id, fence);
     const content = await this.content(input, connector, 'message.send', { chatId: input.chat_id, fence, caller });
     try {

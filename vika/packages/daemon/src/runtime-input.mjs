@@ -117,9 +117,12 @@ function quoteTag(text) {
   return chars.length > QUOTE_CHARS ? `${chars.slice(0, QUOTE_CHARS).join('')}…` : words;
 }
 
+// `thread=` carries the full thread id, escaped like msg= and event=. It once
+// showed only a prefix: models passed that prefix to list_thread_messages,
+// which rejects it, and threads sharing a prefix looked like one thread.
 export function chatTag(chatId, threadId) {
   const chat = chatId || 'unknown';
-  return threadId ? `${chat} thread=${shortenId(threadId)}` : chat;
+  return threadId ? `${chat} thread=${metadataTag(threadId)}` : chat;
 }
 
 export function oneLine(text) {
