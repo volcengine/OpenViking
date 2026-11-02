@@ -10,6 +10,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const api = vi.hoisted(() => ({
   BUILTIN_SKILLS_ROOT: 'viking://system/compile/example-skills',
   createCompile: vi.fn(),
+  fetchCompileConfig: vi.fn(),
+  updateCompileConfig: vi.fn(),
   lookupSubmission: vi.fn(),
   fetchCompileSkills: vi.fn(async () => []),
   fetchCompileTask: vi.fn(),
@@ -57,11 +59,19 @@ vi.mock('#/features/workbench/resources/lib/api', () => ({
 const storageKey = 'compile-submission:recovery-test'
 const clients: QueryClient[] = []
 const task = { task_id: 'cmp-original', status: 'pending' }
-function mount(props: { fromTask?: string; sourceUri?: string } = {}) {
+function mount(
+  props: { fromTask?: string; sourceUri?: string; target?: string } = {},
+  cachedConfig?: unknown,
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
   clients.push(client)
+  if (cachedConfig)
+    client.setQueryData(
+      ['compile-config', 'recovery-test', props.target],
+      cachedConfig,
+    )
   const page = render(
     <QueryClientProvider client={client}>
       <CompileForm {...props} />
@@ -226,6 +236,138 @@ it('still recovers an accepted task when execution is no longer configured', asy
   await waitFor(() => expect(api.navigate).toHaveBeenCalled())
   expect(api.createCompile).not.toHaveBeenCalled()
 })
+const configuredTarget = {
+  ...savedDraft,
+  from: savedDraft.sources.split('\n'),
+  auto_update: true,
+  update_schedule: { frequency: 'weekly', weekday: 3, hour: 14, minute: 30 },
+  next_run_at: '2026-11-04T14:30:00+08:00',
+}
+
+it('saves a weekly plan without navigating to a task or leaving a submission recovery key', async () => {
+  prepareCompileHandoff(
+    'recovery-test',
+    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
+  )
+  api.createCompile.mockResolvedValueOnce(configuredTarget)
+  const page = mount()
+  fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
+  fireEvent.change(page.getByRole('combobox', { name: 'schedule.frequency' }), {
+    target: { value: 'weekly' },
+  })
+  fireEvent.change(page.getByRole('combobox', { name: 'schedule.weekday' }), {
+    target: { value: '3' },
+  })
+  fireEvent.change(page.getByRole('combobox', { name: 'schedule.hour' }), {
+    target: { value: '14' },
+  })
+  fireEvent.change(page.getByRole('combobox', { name: 'schedule.minute' }), {
+    target: { value: '30' },
+  })
+  page.submit()
+  await waitFor(() =>
+    expect(api.navigate).toHaveBeenCalledWith({
+      to: '/compile',
+      search: { tab: 'schedules' },
+    }),
+  )
+  expect(api.createCompile.mock.calls[0][0].args).toEqual({
+    auto_update: true,
+    update_schedule: configuredTarget.update_schedule,
+  })
+  expect(sessionStorage.getItem(storageKey)).toBeNull()
+})
+
+it('keeps a failed plan save retryable without task submission recovery', async () => {
+  prepareCompileHandoff(
+    'recovery-test',
+    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
+  )
+  api.createCompile
+    .mockRejectedValueOnce(new Error('response lost'))
+    .mockResolvedValueOnce(configuredTarget)
+  const page = mount()
+  fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
+  page.submit()
+  await waitFor(() => expect(page.getByRole('alert')).toBeTruthy())
+  expect(sessionStorage.getItem(storageKey)).toBeNull()
+  expect(page.queryByText('unknownSubmission')).toBeNull()
+  page.submit()
+  await waitFor(() => expect(api.navigate).toHaveBeenCalled())
+  expect(api.lookupSubmission).not.toHaveBeenCalled()
+})
+
+it('loads a registered target and disables its schedule without requiring an execution runtime', async () => {
+  api.fetchCompileConfig.mockResolvedValueOnce(configuredTarget)
+  api.updateCompileConfig.mockResolvedValueOnce({
+    ...configuredTarget,
+    auto_update: false,
+    update_schedule: null,
+  })
+  api.fetchCapabilities.mockResolvedValue({
+    configured: false,
+    can_create: false,
+  })
+  const page = mount({ target: savedDraft.to })
+  await waitFor(() =>
+    expect(
+      (
+        page.getByRole('checkbox', {
+          name: 'schedule.enabled',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true),
+  )
+  expect(
+    (page.getByRole('textbox', { name: 'target *' }) as HTMLInputElement)
+      .readOnly,
+  ).toBe(true)
+  fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
+  page.submit()
+  await waitFor(() =>
+    expect(api.updateCompileConfig).toHaveBeenCalledWith({
+      to: savedDraft.to,
+      from: configuredTarget.from,
+      skill: savedDraft.skill,
+      instruction: savedDraft.instruction,
+      auto_update: false,
+      update_schedule: null,
+    }),
+  )
+  expect(api.createCompile).not.toHaveBeenCalled()
+})
+
+it('waits for fresh configuration before filling an editor with stale cached settings', async () => {
+  api.fetchCompileConfig.mockResolvedValueOnce({
+    ...configuredTarget,
+    auto_update: false,
+    update_schedule: null,
+  })
+  const page = mount({ target: savedDraft.to }, configuredTarget)
+  page.submit()
+  expect(api.updateCompileConfig).not.toHaveBeenCalled()
+  await waitFor(() =>
+    expect(
+      (page.getByRole('textbox', { name: 'target *' }) as HTMLInputElement)
+        .value,
+    ).toBe(savedDraft.to),
+  )
+  await waitFor(() =>
+    expect(
+      page
+        .getByRole('button', { name: 'schedule.save' })
+        .hasAttribute('disabled'),
+    ).toBe(false),
+  )
+  expect(
+    (
+      page.getByRole('checkbox', {
+        name: 'schedule.enabled',
+      }) as HTMLInputElement
+    ).checked,
+  ).toBe(false)
+})
+
 afterEach(() => {
   cleanup()
   clients.splice(0).forEach((client) => client.clear())

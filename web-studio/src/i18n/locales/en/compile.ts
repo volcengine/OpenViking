@@ -1,4 +1,60 @@
 export default {
+  schedule: {
+    listDescription:
+      'Manage automatic updates for compilation output directories, including targets with automatic updates turned off. Schedules use Beijing time (Asia/Shanghai).',
+    filter: 'Automatic update status',
+    allTargets: 'All targets',
+    active: 'Enabled',
+    disabled: 'Disabled',
+    empty: 'No compilation targets yet',
+    emptyFiltered: 'No matching targets',
+    emptyLoaded:
+      'No matches on loaded pages. Load more to check the remaining targets.',
+    timing: 'Schedule',
+    dailyAt: 'Daily at {{time}}',
+    weeklyAt: 'Every {{weekday}} at {{time}}',
+    noSchedule: 'No schedule configured',
+    nextRun: 'Next run',
+    notScheduled: 'Not scheduled',
+    execution: 'Execution',
+    running: 'Running',
+    idle: 'Idle',
+    tasksTab: 'Execution history',
+    plansTab: 'Scheduled plans',
+    enabled: 'Scheduled automatic updates',
+    frequency: 'Frequency',
+    daily: 'Every day',
+    weekly: 'Every week',
+    weekday: 'Day of week',
+    time: 'Run at',
+    hour: 'Hour',
+    minute: 'Minute',
+    timezone: 'Beijing time (Asia/Shanghai)',
+    weekdays: {
+      1: 'Monday',
+      2: 'Tuesday',
+      3: 'Wednesday',
+      4: 'Thursday',
+      5: 'Friday',
+      6: 'Saturday',
+      7: 'Sunday',
+    },
+    save: 'Save settings',
+    edit: 'Edit update settings',
+    saved: 'Update settings saved',
+    saveHint:
+      'Save the plan to run at the next scheduled time. No compilation starts now.',
+    manualHint:
+      'Automatic updates are off. A new compilation runs immediately; editing settings only saves the configuration.',
+    reservedArgs:
+      'Use the automatic update controls above to configure auto_update and update_schedule.',
+    schedulerDisabled:
+      'Scheduled Compile is not enabled on this server. Ask an administrator to enable scheduling and configure Redis.',
+    credentialInvalid:
+      'A valid OpenViking API key is required. Update connection credentials and save the plan again.',
+    credentialKeyUnavailable:
+      'The server could not securely save the execution credential. Ask an administrator to check its encryption key configuration.',
+  },
   builtinSkills: 'Built-in',
   installedSkills: 'My and shared skills',
   specializedSkill: 'Specialized session input',

@@ -11,14 +11,22 @@ import {
   CompileShell,
 } from '#/features/workbench/compile/components/shared'
 import { SkillPicker } from '#/features/workbench/compile/components/skill-picker'
+import {
+  defaultSchedule,
+  ScheduleFields,
+} from '#/features/workbench/compile/components/schedule-fields'
 import type {
+  CompileConfig,
   CompileRequest,
   CompileTask,
+  UpdateSchedule,
 } from '#/features/workbench/compile/lib/api'
 import {
   createCompile,
+  fetchCompileConfig,
   fetchCompileTask,
   lookupSubmission,
+  updateCompileConfig,
 } from '#/features/workbench/compile/lib/api'
 import {
   compileCommand,
@@ -54,7 +62,7 @@ import {
   DialogTrigger,
 } from '#/shared/ui/dialog'
 import { Textarea } from '#/shared/ui/textarea'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useBlocker, useNavigate } from '@tanstack/react-router'
 import { EyeIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -79,9 +87,11 @@ function readDraft(key: string): Draft {
 export function CompileForm({
   fromTask,
   sourceUri,
+  target,
 }: {
   fromTask?: string
   sourceUri?: string
+  target?: string
 }) {
   const { t } = useTranslation('compile'),
     navigate = useNavigate()
@@ -90,7 +100,16 @@ export function CompileForm({
   const draftKey = `compile-draft:${identityScopeKey}`,
     submissionKey = `compile-submission:${identityScopeKey}`
   const [handoff] = useState(() => readCompileHandoff(identityScopeKey))
+  const queryClient = useQueryClient()
+  const [autoUpdate, setAutoUpdate] = useState(false)
+  const [schedule, setSchedule] = useState<UpdateSchedule>(defaultSchedule)
+  const config = useQuery({
+    queryKey: ['compile-config', identityScopeKey, target],
+    queryFn: ({ signal }) => fetchCompileConfig(target!, signal),
+    enabled: !!target,
+  })
   const [recoverKey, setRecoverKey] = useState(() => {
+    if (target) return null
     try {
       return sessionStorage.getItem(submissionKey)
     } catch {
@@ -105,24 +124,28 @@ export function CompileForm({
     clearCompileHandoff()
   }, [])
   const [draft, setDraft] = useState(() =>
-    recoverKey
-      ? savedDraft
-      : handoff
-        ? {
-            skill: handoff.skill || '',
-            sources: handoff.from?.join('\n') || '',
-            to: handoff.to || '',
-            instruction: handoff.instruction || '',
-          }
-        : fromTask
-          ? savedDraft
-          : {
-              ...empty,
-              sources: sourceUri || userResourceRoot.replace(/\/$/, ''),
-            },
+    target
+      ? { ...empty, to: target }
+      : recoverKey
+        ? savedDraft
+        : handoff
+          ? {
+              skill: handoff.skill || '',
+              sources: handoff.from?.join('\n') || '',
+              to: handoff.to || '',
+              instruction: handoff.instruction || '',
+            }
+          : fromTask
+            ? savedDraft
+            : {
+                ...empty,
+                sources: sourceUri || userResourceRoot.replace(/\/$/, ''),
+              },
   )
   const [args, setArgs] = useState(
-      !recoverKey && handoff?.args ? JSON.stringify(handoff.args, null, 2) : '',
+      !target && !recoverKey && handoff?.args
+        ? JSON.stringify(handoff.args, null, 2)
+        : '',
     ),
     [preview, setPreview] = useState(false)
   const [locationRevision, setLocationRevision] = useState(0)
@@ -151,14 +174,27 @@ export function CompileForm({
     enableBeforeUnload: () => !completed.current && !!args.trim(),
   })
   useEffect(() => {
-    if (completed.current || !draftStarted) return
+    if (completed.current || !draftStarted || target) return
     try {
       localStorage.setItem(draftKey, JSON.stringify(draft))
       setSavingError(false)
     } catch {
       setSavingError(true)
     }
-  }, [draft, draftKey, draftStarted])
+  }, [draft, draftKey, draftStarted, target])
+  useEffect(() => {
+    if (!config.data || !config.isFetchedAfterMount || filled.current) return
+    filled.current = true
+    setDraft({
+      skill: config.data.skill,
+      sources: config.data.from.join('\n'),
+      to: config.data.to,
+      instruction: config.data.instruction || '',
+    })
+    setAutoUpdate(config.data.auto_update)
+    setSchedule(config.data.update_schedule || defaultSchedule)
+    setLocationRevision((value) => value + 1)
+  }, [config.data, config.isFetchedAfterMount])
   const skills = useCompileSkills()
   const original = useQuery({
     queryKey: ['compile-task', identityScopeKey, fromTask],
@@ -207,7 +243,9 @@ export function CompileForm({
     to: targetError(draft.to.trim()) ? t(targetError(draft.to.trim())!) : '',
     args: (() => {
       try {
-        parseArgs(args)
+        const parsed = parseArgs(args)
+        if (parsed && ('auto_update' in parsed || 'update_schedule' in parsed))
+          return t('schedule.reservedArgs')
         return ''
       } catch {
         return t('argsError')
@@ -264,28 +302,56 @@ export function CompileForm({
       ...(draft.instruction.trim()
         ? { instruction: draft.instruction.trim() }
         : {}),
-      ...(parsed ? { args: parsed } : {}),
+      ...(parsed || autoUpdate
+        ? {
+            args: {
+              ...parsed,
+              ...(autoUpdate
+                ? { auto_update: true, update_schedule: schedule }
+                : {}),
+            },
+          }
+        : {}),
     }
   }
   function isCurrent() {
     return mounted.current
   }
-  async function finish(task: CompileTask) {
+  async function finish(result: CompileTask | CompileConfig) {
     if (!isCurrent()) return
     completed.current = true
-    try {
-      localStorage.removeItem(draftKey)
-      sessionStorage.removeItem(submissionKey)
-    } catch {
-      /* storage is optional */
+    if (!target) {
+      try {
+        localStorage.removeItem(draftKey)
+        sessionStorage.removeItem(submissionKey)
+      } catch {
+        /* storage is optional */
+      }
     }
-    await navigate({
-      to: '/compile/tasks/$taskId',
-      params: { taskId: task.task_id },
-    })
+    if ('task_id' in result) {
+      await navigate({
+        to: '/compile/tasks/$taskId',
+        params: { taskId: result.task_id },
+      })
+    } else {
+      await queryClient.invalidateQueries({
+        queryKey: ['compile-configs', identityScopeKey],
+      })
+      await queryClient.invalidateQueries({
+        queryKey: ['compile-config', identityScopeKey],
+        refetchType: 'none',
+      })
+      toast.success(t('schedule.saved'))
+      await navigate({ to: '/compile', search: { tab: 'schedules' } })
+    }
   }
   async function submit() {
-    if (busy) return
+    if (
+      busy ||
+      (target &&
+        (!config.data || !config.isFetchedAfterMount || config.isError))
+    )
+      return
     setError(null)
     const restoredKey = submission.current ? null : recoverKey
     setBusy(true)
@@ -307,6 +373,20 @@ export function CompileForm({
           throw new Error(t('expiredSubmission'))
       }
       if (!submission.current && !validate()) return
+      if (target) {
+        const body = request()
+        await finish(
+          await updateCompileConfig({
+            to: target,
+            from: body.from,
+            skill: body.skill,
+            instruction: draft.instruction.trim() || null,
+            auto_update: autoUpdate,
+            update_schedule: autoUpdate ? schedule : null,
+          }),
+        )
+        return
+      }
       const checked = await capability.refetch()
       if (!isCurrent() || checked.isError || !checked.data?.can_create) return
       if (!submission.current && !restoredKey) {
@@ -328,6 +408,13 @@ export function CompileForm({
           if ((cause as { code?: string }).code !== 'NOT_FOUND') throw cause
         }
         if (!isCurrent()) return
+      }
+      if (autoUpdate && !submission.current && !restoredKey) {
+        // Saving a plan creates no task submission to recover by idempotency key.
+        await finish(
+          await createCompile(request(), `${Date.now()}:${createRandomUuid()}`),
+        )
+        return
       }
       const body = submission.current?.request || request()
       if (!submission.current)
@@ -388,8 +475,22 @@ export function CompileForm({
     ['sharedSkills', skills.shared],
   ] as const
   return (
-    <CompileShell title={t('new')}>
-      <CapabilityNotice capability={capability} />
+    <CompileShell title={t(target ? 'schedule.edit' : 'new')}>
+      {!target && <CapabilityNotice capability={capability} />}
+      {target && !config.isFetchedAfterMount && !config.isError && (
+        <p role="status">{t('loading')}</p>
+      )}
+      {target && config.isError && (
+        <CompileError
+          error={config.error}
+          retry={() => void config.refetch()}
+        />
+      )}
+      {target && config.data?.last_error && (
+        <p role="status" className="break-words text-sm text-destructive">
+          {config.data.last_error}
+        </p>
+      )}
       {recoverKey && (
         <Button
           variant="outline"
@@ -429,26 +530,33 @@ export function CompileForm({
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-muted-foreground">{t('formIntro')}</p>
-          {!draftStarted && Object.values(savedDraft).some(Boolean) && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={busy || uncertain}
-              onClick={() => {
-                setDraft(savedDraft)
-                setDraftStarted(true)
-                setAttempted(false)
-                setError(null)
-                setLocationRevision((value) => value + 1)
-              }}
-            >
-              {t('restoreDraft')}
-            </Button>
-          )}
+          {!target &&
+            !draftStarted &&
+            Object.values(savedDraft).some(Boolean) && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={busy || uncertain}
+                onClick={() => {
+                  setDraft(savedDraft)
+                  setDraftStarted(true)
+                  setAttempted(false)
+                  setError(null)
+                  setLocationRevision((value) => value + 1)
+                }}
+              >
+                {t('restoreDraft')}
+              </Button>
+            )}
         </div>
         <fieldset
-          disabled={busy || uncertain}
+          disabled={
+            busy ||
+            uncertain ||
+            (!!target &&
+              (!config.data || !config.isFetchedAfterMount || config.isError))
+          }
           className="space-y-6 rounded-xl border bg-card p-5 disabled:opacity-60 sm:p-6"
         >
           <section className="space-y-2">
@@ -576,6 +684,7 @@ export function CompileForm({
             attempted={attempted}
             sourceError={fieldErrors.sources}
             destinationError={fieldErrors.to}
+            targetReadOnly={!!target}
           />
           <section className="space-y-2">
             <label
@@ -595,22 +704,30 @@ export function CompileForm({
               onChange={(e) => update('instruction', e.target.value)}
             />
           </section>
-          <details id="compile-advanced" className="border-t pt-4">
-            <summary className="cursor-pointer rounded text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-              {t('advanced')}
-            </summary>
-            <ArgsEditor
-              value={args}
-              onChange={(value) => {
-                setDraftStarted(true)
-                setArgs(value)
-              }}
-            />
-            <p className="mt-2 text-xs text-muted-foreground">
-              {t('argsHint')}
-            </p>
-            {fieldError('args')}
-          </details>
+          <ScheduleFields
+            enabled={autoUpdate}
+            schedule={schedule}
+            onEnabled={setAutoUpdate}
+            onChange={setSchedule}
+          />
+          {!target && (
+            <details id="compile-advanced" className="border-t pt-4">
+              <summary className="cursor-pointer rounded text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
+                {t('advanced')}
+              </summary>
+              <ArgsEditor
+                value={args}
+                onChange={(value) => {
+                  setDraftStarted(true)
+                  setArgs(value)
+                }}
+              />
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t('argsHint')}
+              </p>
+              {fieldError('args')}
+            </details>
+          )}
         </fieldset>
         <div className="sticky bottom-0 space-y-3 border-t bg-background py-4">
           {draft.skill && sourceUris(draft.sources).length > 0 && draft.to && (
@@ -624,64 +741,83 @@ export function CompileForm({
               })}
             </p>
           )}
-          {draftStarted && (
+          {!target && draftStarted && (
             <p className="text-xs text-muted-foreground">
               {t(savingError ? 'storageFailed' : 'draft')}
             </p>
           )}
           <div className="flex flex-wrap justify-between gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                try {
-                  if (!validate()) return
-                  const body = request()
-                  void copyTextToClipboard(compileCommand(body))
-                    .then(() => toast.success(t('copied')))
-                    .catch(setError)
-                } catch (cause) {
-                  setError(cause)
-                }
-              }}
-            >
-              {t('copyCommand')}
-            </Button>
-            <div className="flex gap-2">
+            {!target && (
               <Button
                 type="button"
-                variant="ghost"
-                disabled={busy || uncertain}
+                variant="outline"
+                disabled={autoUpdate}
                 onClick={() => {
-                  setDraftStarted(true)
-                  setDraft(empty)
-                  setLocationRevision((value) => value + 1)
-                  setArgs('')
-                  setAttempted(false)
-                  setError(null)
-                  setPreview(false)
-                  submission.current = null
-                  filled.current = true
-                  setRecoverKey(null)
                   try {
-                    sessionStorage.removeItem(submissionKey)
-                  } catch {
-                    /* optional */
+                    if (!validate()) return
+                    const body = request()
+                    void copyTextToClipboard(compileCommand(body))
+                      .then(() => toast.success(t('copied')))
+                      .catch(setError)
+                  } catch (cause) {
+                    setError(cause)
                   }
                 }}
               >
-                {t('clear')}
+                {t('copyCommand')}
               </Button>
+            )}
+            <div className="flex gap-2">
+              {!target && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={busy || uncertain}
+                  onClick={() => {
+                    setAutoUpdate(false)
+                    setSchedule(defaultSchedule)
+                    setDraftStarted(true)
+                    setDraft(empty)
+                    setLocationRevision((value) => value + 1)
+                    setArgs('')
+                    setAttempted(false)
+                    setError(null)
+                    setPreview(false)
+                    submission.current = null
+                    filled.current = true
+                    setRecoverKey(null)
+                    try {
+                      sessionStorage.removeItem(submissionKey)
+                    } catch {
+                      /* optional */
+                    }
+                  }}
+                >
+                  {t('clear')}
+                </Button>
+              )}
               <Button
                 type="submit"
                 disabled={
                   busy ||
-                  (!recoverKey &&
-                    !uncertain &&
-                    (capability.isError || !capability.data?.can_create))
+                  (target
+                    ? !config.data ||
+                      !config.isFetchedAfterMount ||
+                      config.isError
+                    : !recoverKey &&
+                      !uncertain &&
+                      (capability.isError || !capability.data?.can_create))
                 }
               >
-                {t(busy ? 'submitting' : uncertain ? 'retry' : 'start')}
+                {t(
+                  busy
+                    ? 'submitting'
+                    : uncertain
+                      ? 'retry'
+                      : target || autoUpdate
+                        ? 'schedule.save'
+                        : 'start',
+                )}
               </Button>
             </div>
           </div>
