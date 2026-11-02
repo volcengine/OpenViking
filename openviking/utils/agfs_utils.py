@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
 from typing import Any, Callable, Dict
+from urllib.parse import urlsplit
 
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.config_utils import (
@@ -33,6 +34,7 @@ class RagfsBindingConfig:
     provider_type: int | None = None
     log: Dict[str, Any] | None = None
     service_name: str = DEFAULT_SERVICE_NAME
+    shared_redis_backend: bool = False
 
     def __post_init__(self) -> None:
         """Validate the service name used by cache-backed modules."""
@@ -87,6 +89,10 @@ class RagfsBindingConfig:
                 uses_runtime,
                 self.service_name,
             )
+            if not self.shared_redis_backend:
+                # Cache entries only need an admission priority when they compete with
+                # stateful keys in the same Redis service.
+                cache_config["priority_ttl_seconds"] = 0
         elif self.cache is not None:
             cache_config = _disabled_cache_config(cachefs, self.service_name)
         else:
@@ -131,6 +137,7 @@ def _disabled_cache_config(
         "max_file_size_bytes": getattr(cachefs_model, "max_file_size_bytes", 1024 * 1024),
         "traversal_mode": getattr(traversal_mode, "value", traversal_mode),
         "bypass_prefixes": list(getattr(cachefs_model, "bypass_prefixes", [])),
+        "priority_ttl_seconds": int(getattr(cachefs_model, "priority_ttl_seconds", 0)),
     }
 
 
@@ -187,6 +194,42 @@ def _run_coro_blocking(coro: Any) -> Any:
     return result[0] if result else None
 
 
+def _redis_service_keys(endpoints: Any) -> set[str]:
+    """Normalize Redis endpoints into comparable service keys."""
+    if not endpoints:
+        return set()
+    if isinstance(endpoints, str):
+        endpoints = [endpoints]
+    keys = set()
+    for endpoint in endpoints:
+        parsed = urlsplit(str(endpoint))
+        host = (parsed.hostname or "").lower()
+        if not host:
+            continue
+        keys.add(f"{parsed.scheme}://{host}:{parsed.port or 6379}")
+    return keys
+
+
+def _cache_shares_redis_backend(cache_config: Any, agfs_config: Any, expiry_config: Any) -> bool:
+    """Whether cache entries compete with stateful keys in the same Redis service.
+
+    QueueFS and PathLock reuse the top-level cache provider, so they always share
+    the cache backend. The expiry scheduler owns its own Redis connection and only
+    shares the backend when both configurations point at the same service.
+    """
+    queuefs = _get_config_value(agfs_config, "queuefs")
+    if _get_config_value(queuefs, "backend") == "cache":
+        return True
+    pathlock = _get_config_value(agfs_config, "pathlock")
+    if _get_config_value(pathlock, "provider") == "cache":
+        return True
+    cache_params = _get_config_value(cache_config, "params")
+    expiry_redis = _get_config_value(expiry_config, "redis")
+    cache_keys = _redis_service_keys(_get_config_value(cache_params, "endpoints"))
+    expiry_keys = _redis_service_keys(_get_config_value(expiry_redis, "endpoints"))
+    return bool(cache_keys & expiry_keys)
+
+
 def _dump_openviking_config(config: Any) -> Dict[str, Any]:
     """Return a full OpenViking config dict for encryption bootstrap."""
     if hasattr(config, "to_dict"):
@@ -211,6 +254,8 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
     if agfs_config is None:
         raise ValueError("OpenViking config storage.agfs is required")
     cache_config = _get_config_value(config, "cache")
+    expiry_config = _get_config_value(config, "expiry")
+    shared_redis_backend = _cache_shares_redis_backend(cache_config, agfs_config, expiry_config)
 
     log_config = _get_config_value(config, "log")
     log_level = _get_config_value(log_config, "level", "INFO")
@@ -233,6 +278,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             cache=cache_config,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
+            shared_redis_backend=shared_redis_backend,
         ), None
 
     root_key = _run_coro_blocking(encryptor.provider.get_root_key())
@@ -247,6 +293,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             provider_type=encryptor.provider_type,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
+            shared_redis_backend=shared_redis_backend,
         ),
         encryptor,
     )

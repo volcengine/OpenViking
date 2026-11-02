@@ -322,6 +322,7 @@ struct RagfsCacheConfig {
     max_file_size_bytes: usize,
     traversal_mode: CacheTraversalMode,
     bypass_prefixes: Vec<String>,
+    priority_ttl_seconds: u64,
     redis: RedisCacheConfig,
     dynamic: DynamicCacheConfig,
 }
@@ -371,6 +372,7 @@ impl Default for RagfsCacheConfig {
             max_file_size_bytes: CachePolicy::default().max_file_size(),
             traversal_mode: CacheTraversalMode::Backend,
             bypass_prefixes: Vec::new(),
+            priority_ttl_seconds: 0,
             redis: RedisCacheConfig::default(),
             dynamic: DynamicCacheConfig::default(),
         }
@@ -650,6 +652,11 @@ fn cache_config_from_canonical_ov_conf_with_runtime(
             .ok_or_else(|| "storage.agfs.cachefs must be an object".to_string())?;
         config.max_file_size_bytes =
             usize_field(cachefs, "max_file_size_bytes", config.max_file_size_bytes)?;
+        config.priority_ttl_seconds = u64_field_allow_zero(
+            cachefs,
+            "priority_ttl_seconds",
+            config.priority_ttl_seconds,
+        )?;
         config.traversal_mode =
             traversal_mode(string_field(cachefs, "traversal_mode", "backend")?)?;
         config.bypass_prefixes = string_array_field(cachefs, "bypass_prefixes")?;
@@ -731,6 +738,8 @@ fn cache_config_from_value(
     config.provider = provider_kind(provider)?;
     config.max_file_size_bytes =
         usize_field(cache, "max_file_size_bytes", config.max_file_size_bytes)?;
+    config.priority_ttl_seconds =
+        u64_field_allow_zero(cache, "priority_ttl_seconds", config.priority_ttl_seconds)?;
     config.traversal_mode = traversal_mode(string_field(cache, "traversal_mode", "backend")?)?;
     config.bypass_prefixes = string_array_field(cache, "bypass_prefixes")?;
 
@@ -980,8 +989,12 @@ fn string_array_field_or_default(
 }
 
 fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
+    let priority_ttl = (config.priority_ttl_seconds > 0)
+        .then(|| Duration::from_secs(config.priority_ttl_seconds));
     config.bypass_prefixes.iter().fold(
-        CachePolicy::new(config.max_file_size_bytes).with_traversal_mode(config.traversal_mode),
+        CachePolicy::new(config.max_file_size_bytes)
+            .with_traversal_mode(config.traversal_mode)
+            .with_priority_ttl(priority_ttl),
         |policy, prefix| policy.with_bypass_prefix(prefix),
     )
 }

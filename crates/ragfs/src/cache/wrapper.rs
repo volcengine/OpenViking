@@ -1,8 +1,10 @@
 //! A transparent [`FileSystem`](crate::FileSystem) cache wrapper.
 
 use super::envelope::{CacheEnvelope, CacheObjectKind, GenerationSnapshot};
-use super::{CacheMetrics, CachePolicy, CacheTraversalMode};
-use crate::cache_runtime::{CacheError, CacheResult, CacheRuntime, SetOptions, SetResult};
+use super::{CacheDecision, CacheMetrics, CachePolicy, CacheTraversalMode};
+use crate::cache_runtime::{
+    CacheError, CacheResult, CacheRuntime, Expiration, SetOptions, SetResult,
+};
 use crate::core::filesystem::{
     apply_read_dir_options, compile_grep_regex, is_excluded_path, normalize_prefix_path,
     paginate_entries, relative_depth, relative_match_file,
@@ -436,9 +438,22 @@ impl CachedFileSystem {
         Ok(values)
     }
 
-    async fn cache_put(&self, key: &str, value: Bytes, affected_path: &str) -> bool {
+    async fn cache_put(
+        &self,
+        key: &str,
+        value: Bytes,
+        affected_path: &str,
+        decision: CacheDecision,
+    ) -> bool {
         let started = Instant::now();
-        let result = self.runtime.set(key, value, SetOptions::default()).await;
+        let options = match self.policy.entry_ttl(decision) {
+            Some(ttl) => SetOptions {
+                expiration: Some(Expiration::After(ttl)),
+                ..SetOptions::default()
+            },
+            None => SetOptions::default(),
+        };
+        let result = self.runtime.set(key, value, options).await;
         self.metrics.put(started.elapsed());
         match result {
             Ok(SetResult::Applied) => true,
@@ -648,7 +663,12 @@ impl CachedFileSystem {
         let next = current.wrapping_add(1);
         self.generations.write().await.insert(key.clone(), next);
         if self
-            .cache_put(&key, Bytes::copy_from_slice(&next.to_be_bytes()), path)
+            .cache_put(
+                &key,
+                Bytes::copy_from_slice(&next.to_be_bytes()),
+                path,
+                CacheDecision::Cache,
+            )
             .await
         {
             self.metrics.invalidation();
@@ -927,7 +947,8 @@ impl CachedFileSystem {
     }
 
     async fn fill_file(&self, key: &str, path: &str, data: &[u8]) {
-        if !self.policy.cache_file(path, data.len()) {
+        let decision = self.policy.file_decision(path, data.len());
+        if !decision.should_cache() {
             return;
         }
         let generations = match self.generation_snapshots(path).await {
@@ -939,14 +960,15 @@ impl CachedFileSystem {
         };
         match CacheEnvelope::file(path.to_string(), data.to_vec(), generations).encode() {
             Ok(value) => {
-                self.cache_put(key, value, path).await;
+                self.cache_put(key, value, path, decision).await;
             }
             Err(_) => self.metrics.error(),
         }
     }
 
     async fn fill_directory(&self, key: &str, path: &str, entries: &[FileInfo]) {
-        if !self.policy.cache_directory_entries(path, entries.len()) {
+        let decision = self.policy.directory_decision(path);
+        if !decision.should_cache() || entries.len() > self.policy.max_cached_dir_entries() {
             return;
         }
         let generations = match self.generation_snapshots(path).await {
@@ -958,7 +980,7 @@ impl CachedFileSystem {
         };
         match CacheEnvelope::directory(path.to_string(), entries.to_vec(), generations).encode() {
             Ok(value) => {
-                self.cache_put(key, value, path).await;
+                self.cache_put(key, value, path, decision).await;
             }
             Err(_) => self.metrics.error(),
         }

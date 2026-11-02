@@ -1,5 +1,7 @@
 //! Provider-independent cache eligibility rules.
 
+use std::time::Duration;
+
 use crate::core::internal_names::is_hidden_runtime_lock_name;
 
 const DEFAULT_MAX_CACHED_DIR_ENTRIES: usize = 4096;
@@ -16,7 +18,8 @@ pub enum CacheDecision {
 }
 
 impl CacheDecision {
-    fn should_cache(self) -> bool {
+    /// Whether the object is admitted to the cache at all.
+    pub fn should_cache(self) -> bool {
         self != Self::Bypass
     }
 }
@@ -40,6 +43,7 @@ pub struct CachePolicy {
     max_cached_dir_entries: usize,
     traversal_mode: CacheTraversalMode,
     bypass_prefixes: Vec<String>,
+    priority_ttl: Option<Duration>,
 }
 
 impl CachePolicy {
@@ -50,6 +54,7 @@ impl CachePolicy {
             max_cached_dir_entries: DEFAULT_MAX_CACHED_DIR_ENTRIES,
             traversal_mode: CacheTraversalMode::Backend,
             bypass_prefixes: Vec::new(),
+            priority_ttl: None,
         }
     }
 
@@ -68,6 +73,25 @@ impl CachePolicy {
     /// Set the tree traversal strategy.
     pub fn with_tree_mode(self, mode: CacheTreeMode) -> Self {
         self.with_traversal_mode(mode)
+    }
+
+    /// Set the TTL applied to high-priority cache entries.
+    ///
+    /// `None` keeps every entry on the provider default TTL.
+    pub fn with_priority_ttl(mut self, ttl: Option<Duration>) -> Self {
+        self.priority_ttl = ttl;
+        self
+    }
+
+    /// Return the TTL to apply to an entry with the given admission decision.
+    ///
+    /// Only [`CacheDecision::Prefer`] entries use the priority TTL; every other
+    /// decision keeps the provider default.
+    pub fn entry_ttl(&self, decision: CacheDecision) -> Option<Duration> {
+        match decision {
+            CacheDecision::Prefer => self.priority_ttl,
+            CacheDecision::Cache | CacheDecision::Bypass => None,
+        }
     }
 
     /// Return the maximum cacheable file size.
@@ -185,6 +209,44 @@ fn is_same_or_descendant(path: &str, prefix: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn priority_entries_use_the_priority_ttl() {
+        let policy = CachePolicy::new(1024).with_priority_ttl(Some(Duration::from_secs(600)));
+
+        assert_eq!(
+            policy.entry_ttl(CacheDecision::Prefer),
+            Some(Duration::from_secs(600))
+        );
+        assert_eq!(policy.entry_ttl(CacheDecision::Cache), None);
+        assert_eq!(policy.entry_ttl(CacheDecision::Bypass), None);
+    }
+
+    #[test]
+    fn priority_ttl_is_absent_by_default() {
+        let policy = CachePolicy::new(1024);
+
+        assert_eq!(policy.entry_ttl(CacheDecision::Prefer), None);
+    }
+
+    #[test]
+    fn abstracts_and_directory_entries_are_preferred() {
+        let policy = CachePolicy::new(1024);
+
+        assert_eq!(
+            policy.file_decision("/data/doc.abstract.md", 16),
+            CacheDecision::Prefer
+        );
+        assert_eq!(
+            policy.file_decision("/data/doc.overview.md", 16),
+            CacheDecision::Prefer
+        );
+        assert_eq!(
+            policy.file_decision("/data/doc.md", 16),
+            CacheDecision::Cache
+        );
+        assert_eq!(policy.directory_decision("/data"), CacheDecision::Prefer);
+    }
 
     #[test]
     fn runtime_lock_files_bypass_cache() {

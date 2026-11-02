@@ -182,12 +182,18 @@ class AGFSCacheFSConfig(BaseModel):
         default_factory=list,
         description="Path prefixes that bypass cache",
     )
+    priority_ttl_seconds: int = Field(
+        default=0,
+        description="TTL for high-priority cache entries; 0 keeps the provider default",
+    )
 
     @model_validator(mode="after")
     def validate_config(self):
         """Validate CacheFS limits."""
         if self.max_file_size_bytes <= 0:
             raise ValueError("cachefs max_file_size_bytes must be > 0")
+        if self.priority_ttl_seconds < 0:
+            raise ValueError("cachefs priority_ttl_seconds must be >= 0")
         return self
 
 
