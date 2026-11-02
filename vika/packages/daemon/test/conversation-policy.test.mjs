@@ -112,6 +112,17 @@ describe('conversation policy assemble', () => {
     assert.doesNotMatch(text, /Use it for most replies|one-line conclusion in the main conversation|move side discussions into a thread/);
   });
 
+  it('counts a delivery the request asks for elsewhere as work, never as the answer, in both delivery modes', () => {
+    for (const stagedReplies of [false, true]) {
+      const text = assembleConversationPolicy({ connectors: ['lark'], stagedReplies });
+      // An errand elsewhere (a DM, another group) must not use up the one final
+      // delivery and leave the person who asked without an answer.
+      assert.match(text, /The final delivery is the answer, where the request was made\. A delivery the request itself asks for in another conversation/, `staged=${stagedReplies}`);
+      assert.match(text, /is part of the work, not the answer: make it, then still answer where you were asked/, `staged=${stagedReplies}`);
+      assert.doesNotMatch(text, /Keep every message where the request is/, `staged=${stagedReplies}`);
+    }
+  });
+
   it('adds the meeting notes only on the instance that stores them, after OpenViking, leaving the policy as it was otherwise', () => {
     const off = assembleConversationPolicy({ connectors: ['lark'] });
     assert.doesNotMatch(off, /## Meeting notes/);
