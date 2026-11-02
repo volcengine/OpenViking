@@ -64,6 +64,7 @@ from .rules_config import RulesConfig
 from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
+from .ttl_config import TTLConfig
 from .vlm_config import VLMConfig
 
 
@@ -384,6 +385,14 @@ class OpenVikingConfig(BaseModel):
         ),
     )
 
+    reconcile_system_assets_on_startup: bool = Field(
+        default=True,
+        description=(
+            "Whether to reconcile packaged system assets for active accounts during startup. "
+            "Disable on read-only replicas that share a writer's data."
+        ),
+    )
+
     auto_generate_l0: bool = Field(
         default=True, description="Automatically generate L0 (abstract) if not provided"
     )
@@ -515,6 +524,13 @@ class OpenVikingConfig(BaseModel):
     expiry: ExpiryConfig = Field(
         default_factory=ExpiryConfig,
         description="Distributed expiry scheduling configuration",
+    )
+
+    ttl: TTLConfig = RuntimeField(
+        default_factory=TTLConfig,
+        description=(
+            "Directory TTL recycling policy. Default-off; requires the enabled Redis TTL runtime."
+        ),
     )
 
     @model_validator(mode="after")

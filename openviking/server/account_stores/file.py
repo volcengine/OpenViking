@@ -15,6 +15,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from typing_extensions import deprecated
 
+from openviking.concurrency import AsyncSemaphore
 from openviking.core.identifiers import validate_identifier_length
 from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
@@ -29,6 +30,7 @@ from openviking.server.account_stores.models import (
 from openviking.server.api_keys.models import (
     AccountInfo,
     UserKeyEntry,
+    validate_account_user_creation_role,
     validate_account_user_role,
 )
 from openviking.server.identity import Role
@@ -39,6 +41,7 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
+    UnauthenticatedError,
 )
 from openviking_cli.session.user_id import (
     validate_account_id,
@@ -130,42 +133,21 @@ class FileStore(AccountStore):
         )
         self._watch_task: Optional[asyncio.Task] = None
         self._accounts: Dict[str, AccountInfo] = {}
-        # Prefix index: key_prefix -> list[UserKeyEntry]
-        self._prefix_index: Dict[str, list[UserKeyEntry]] = {}
+        # account_id -> key_prefix -> credentials; replace one account at a time.
+        self._account_key_indexes: Dict[str, Dict[str, list[UserKeyEntry]]] = {}
         self._user_group_ids: Dict[tuple[str, str], tuple[str, ...]] = {}
         # Serializes internal refreshes so overlapping reloads can't interleave.
-        self._reload_lock = asyncio.Lock()
+        self._reload_lock = AsyncSemaphore(1)
         # Serializes all mutations made by the unified manager in this process.
         # File locks remain responsible for inter-instance coordination.
-        self._mutation_lock = asyncio.Lock()
-        self._deletion_lock = asyncio.Lock()
+        self._mutation_lock = AsyncSemaphore(1)
+        self._deletion_lock = AsyncSemaphore(1)
 
     def _discard_account_state(self, account_id: str) -> None:
         """Remove an account and its key index entries from in-memory state."""
-        account = self._accounts.pop(account_id, None)
+        self._accounts.pop(account_id, None)
+        self._account_key_indexes.pop(account_id, None)
         self._discard_account_group_index(account_id)
-        if account is None:
-            return
-
-        for user_id, user_info in account.users.items():
-            key_or_hash = user_info.get("key", "")
-            if not key_or_hash:
-                continue
-
-            key_prefix = user_info.get("key_prefix", "")
-            if not key_prefix:
-                key_prefix = self._get_key_prefix(key_or_hash)
-
-            if key_prefix not in self._prefix_index:
-                continue
-
-            self._prefix_index[key_prefix] = [
-                entry
-                for entry in self._prefix_index[key_prefix]
-                if not (entry.account_id == account_id and entry.user_id == user_id)
-            ]
-            if not self._prefix_index[key_prefix]:
-                del self._prefix_index[key_prefix]
 
     async def _rollback_create_account(self, account_id: str, *, account_was_created: bool) -> None:
         """Best-effort rollback for partially persisted account creation."""
@@ -187,11 +169,11 @@ class FileStore(AccountStore):
                 accounts_data = {"accounts": {"default": {"created_at": now}}}
                 await self._write_json(ACCOUNTS_PATH, accounts_data)
 
-            accounts, prefix_index, user_group_ids = await self._build_state(
+            accounts, account_key_indexes, user_group_ids = await self._build_state(
                 accounts_data, allow_migration=True
             )
             self._accounts = accounts
-            self._prefix_index = prefix_index
+            self._account_key_indexes = account_key_indexes
             self._user_group_ids = user_group_ids
             logger.info(
                 "FileStore loaded: %d accounts, %d user keys",
@@ -258,12 +240,12 @@ class FileStore(AccountStore):
                 # Store not initialized yet (reader started before writer): keep state.
                 return
 
-            accounts, prefix_index, user_group_ids = await self._build_state(
+            accounts, account_key_indexes, user_group_ids = await self._build_state(
                 accounts_data, allow_migration=False
             )
             # Atomic swap: rebind so readers never observe a half-built index.
             self._accounts = accounts
-            self._prefix_index = prefix_index
+            self._account_key_indexes = account_key_indexes
             self._user_group_ids = user_group_ids
             logger.debug(
                 "FileStore reloaded: %d accounts, %d user keys",
@@ -303,48 +285,26 @@ class FileStore(AccountStore):
             raise NotFoundError(account_id, "account")
 
         users = users_data.get("users", {}) if users_data else {}
-        prefix_entries: list[tuple[str, UserKeyEntry]] = []
-        for user_id, user_info in users.items():
-            key_or_hash = user_info.get("key", "")
-            if not key_or_hash:
-                continue
-            key_prefix = user_info.get("key_prefix", "") or self._get_key_prefix(key_or_hash)
-            if key_prefix:
-                prefix_entries.append(
-                    (
-                        key_prefix,
-                        UserKeyEntry(
-                            account_id=account_id,
-                            user_id=user_id,
-                            role=Role(user_info.get("role", "user")),
-                            key_or_hash=key_or_hash,
-                            is_hashed=key_or_hash.startswith("$argon2"),
-                        ),
-                    )
-                )
+        key_index = self._build_account_key_index(account_id, users)
 
         if account is None:
             account = AccountInfo(created_at="", groups_loaded=False)
             self._accounts[account_id] = account
 
-        for user_id, user_info in account.users.items():
-            self._remove_key_index_entry(account_id, user_id, user_info)
-
         account.users = users
-        for key_prefix, entry in prefix_entries:
-            self._prefix_index.setdefault(key_prefix, []).append(entry)
+        self._account_key_indexes[account_id] = key_index
         self._rebuild_account_group_index(account_id)
 
     async def _build_state(
         self, accounts_data: dict, *, allow_migration: bool
     ) -> tuple[
         Dict[str, AccountInfo],
-        Dict[str, list[UserKeyEntry]],
+        Dict[str, Dict[str, list[UserKeyEntry]]],
         Dict[tuple[str, str], tuple[str, ...]],
     ]:
-        """Build fresh (accounts, prefix_index) state; migrate plaintext only if allow_migration."""
+        """Build fresh account state; migrate plaintext only if allow_migration."""
         accounts: Dict[str, AccountInfo] = {}
-        prefix_index: Dict[str, list[UserKeyEntry]] = {}
+        account_key_indexes: Dict[str, Dict[str, list[UserKeyEntry]]] = {}
         user_group_ids: Dict[tuple[str, str], tuple[str, ...]] = {}
 
         for account_id, info in accounts_data.get("accounts", {}).items():
@@ -368,46 +328,21 @@ class FileStore(AccountStore):
                 }
             )
 
-            for user_id, user_info in users.items():
-                key_or_hash = user_info.get("key", "")
-                if not key_or_hash:
-                    continue
-
-                if key_or_hash.startswith("$argon2"):
-                    # Already hashed
-                    stored_key = key_or_hash
-                    is_hashed = True
-                    key_prefix = user_info.get("key_prefix", "")
-                elif self._api_key_hashing_enabled and allow_migration:
+            if self._api_key_hashing_enabled and allow_migration:
+                for user_id, user_info in users.items():
+                    key_or_hash = user_info.get("key", "")
+                    if not key_or_hash or key_or_hash.startswith("$argon2"):
+                        continue
                     # Migrate plaintext to hashed and persist.
                     stored_key = self._hash_api_key(key_or_hash)
-                    is_hashed = True
                     key_prefix = self._get_key_prefix(key_or_hash)
                     user_info["key"] = stored_key
                     user_info["key_prefix"] = key_prefix
                     await self._save_users_json(account_id, {user_id: user_info})
                     logger.info("Migrated API key for user %s in account %s", user_id, account_id)
-                else:
-                    # Keep plaintext (hashing off or read-only refresh); prefix on the fly.
-                    stored_key = key_or_hash
-                    is_hashed = False
-                    key_prefix = self._get_key_prefix(key_or_hash)
+            account_key_indexes[account_id] = self._build_account_key_index(account_id, users)
 
-                entry = UserKeyEntry(
-                    account_id=account_id,
-                    user_id=user_id,
-                    role=Role(user_info.get("role", "user")),
-                    key_or_hash=stored_key,
-                    is_hashed=is_hashed,
-                )
-
-                # Add to prefix index
-                if key_prefix:
-                    if key_prefix not in prefix_index:
-                        prefix_index[key_prefix] = []
-                    prefix_index[key_prefix].append(entry)
-
-        return accounts, prefix_index, user_group_ids
+        return accounts, account_key_indexes, user_group_ids
 
     async def _compute_store_signature(self) -> tuple:
         """Return a cheap (path, size, modTime) signature over accounts.json + all users.json."""
@@ -513,7 +448,7 @@ class FileStore(AccountStore):
         api_key: str | None = None,
     ) -> None:
         """Create a user, optionally including its initial API key."""
-        resolved_role = validate_account_user_role(role)
+        resolved_role = validate_account_user_creation_role(role)
         if error := validate_user_id(user_id):
             raise InvalidArgumentError(error)
         if error := validate_identifier_length(user_id, "user_id"):
@@ -553,6 +488,7 @@ class FileStore(AccountStore):
         api_key: str,
         *,
         rotate: bool,
+        expected_api_key: str | None = None,
     ) -> None:
         """Persist one credential in the legacy user record."""
         self._ensure_account_active(account_id)
@@ -580,10 +516,18 @@ class FileStore(AccountStore):
         else:
             user_info.pop("key_prefix", None)
         try:
-            await self._save_users_json(account_id, {user_id: user_info})
+            await self._save_users_json(
+                account_id,
+                {user_id: user_info},
+                expected_api_keys={user_id: expected_api_key}
+                if expected_api_key is not None
+                else None,
+            )
         except Exception:
             account.users[user_id] = old_user_info
-            self._rebuild_prefix_index()
+            self._account_key_indexes[account_id] = self._build_account_key_index(
+                account_id, account.users
+            )
             raise
 
     async def _revoke_user_keys(
@@ -610,7 +554,9 @@ class FileStore(AccountStore):
                 await self._save_users_json(account_id, updates)
             except Exception:
                 account.users.update(originals)
-                self._rebuild_prefix_index()
+                self._account_key_indexes[account_id] = self._build_account_key_index(
+                    account_id, account.users
+                )
                 raise
 
     async def ensure_trusted_identities(self, identities: Dict[str, set[str]]) -> dict[str, int]:
@@ -869,7 +815,9 @@ class FileStore(AccountStore):
             except Exception:
                 account.users[user_id] = user_info
                 account.groups = old_groups
-                self._rebuild_prefix_index()
+                self._account_key_indexes[account_id] = self._build_account_key_index(
+                    account_id, account.users
+                )
                 self._rebuild_account_group_index(account_id)
                 raise
             if groups != old_groups:
@@ -912,6 +860,10 @@ class FileStore(AccountStore):
             raise NotFoundError(user_id, "user")
         if account.users[user_id].get("deletion"):
             raise FailedPreconditionError("User deletion is in progress")
+        if account.users[user_id].get("role") == Role.GLOBAL:
+            raise InvalidArgumentError(
+                "GLOBAL identities cannot change roles; delete and recreate instead."
+            )
 
         account.users[user_id]["role"] = resolved_role
 
@@ -924,11 +876,10 @@ class FileStore(AccountStore):
             if not key_prefix:
                 key_prefix = self._get_key_prefix(key_or_hash)
 
-            if key_prefix in self._prefix_index:
-                for entry in self._prefix_index[key_prefix]:
-                    if entry.account_id == account_id and entry.user_id == user_id:
-                        entry.role = resolved_role
-                        break
+            for entry in self._account_key_indexes.get(account_id, {}).get(key_prefix, []):
+                if entry.user_id == user_id:
+                    entry.role = resolved_role
+                    break
 
         await self._save_users_json(account_id, {user_id: account.users[user_id]})
 
@@ -1078,36 +1029,39 @@ class FileStore(AccountStore):
         group = self._require_group(account_id, group_id)
         return sorted(set(group.get("members", [])))
 
-    async def _add_group_member(
-        self, account_id: str, group_id: str, user_id: str
+    async def _add_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
     ) -> bool:
         async with self._reload_lock:
             account = self._require_account(account_id)
             await self._load_account_groups_if_needed(account_id, account)
-            if user_id not in account.users:
-                raise NotFoundError(user_id, "user")
             group = self._require_group(account_id, group_id)
-            if user_id in group.get("members", []):
+            user_ids = list(dict.fromkeys(user_ids))
+            for user_id in user_ids:
+                if user_id not in account.users:
+                    raise NotFoundError(user_id, "user")
+                if account.users[user_id].get("deletion"):
+                    raise FailedPreconditionError("User deletion is in progress")
+            members = set(group.get("members", []))
+            if members.issuperset(user_ids):
                 return True
             groups = copy.deepcopy(account.groups)
-            groups[group_id].setdefault("members", []).append(user_id)
-            groups[group_id]["members"].sort()
+            groups[group_id]["members"] = sorted(members.union(user_ids))
             await self._replace_groups(account_id, account, groups)
             return True
 
-    async def _remove_group_member(
-        self, account_id: str, group_id: str, user_id: str
+    async def _remove_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
     ) -> bool:
         async with self._reload_lock:
             account = self._require_account(account_id)
             await self._load_account_groups_if_needed(account_id, account)
             group = self._require_group(account_id, group_id)
-            if user_id not in group.get("members", []):
+            members = set(group.get("members", []))
+            if members.isdisjoint(user_ids):
                 return False
             groups = copy.deepcopy(account.groups)
-            groups[group_id]["members"] = [
-                member for member in groups[group_id].get("members", []) if member != user_id
-            ]
+            groups[group_id]["members"] = sorted(members.difference(user_ids))
             await self._replace_groups(account_id, account, groups)
             return True
 
@@ -1211,15 +1165,16 @@ class FileStore(AccountStore):
         if not key_or_hash:
             return
         key_prefix = user_info.get("key_prefix", "") or self._get_key_prefix(key_or_hash)
-        if key_prefix not in self._prefix_index:
+        key_index = self._account_key_indexes.get(account_id, {})
+        if key_prefix not in key_index:
             return
-        self._prefix_index[key_prefix] = [
+        key_index[key_prefix] = [
             entry
-            for entry in self._prefix_index[key_prefix]
-            if not (entry.account_id == account_id and entry.user_id == user_id)
+            for entry in key_index[key_prefix]
+            if entry.user_id != user_id
         ]
-        if not self._prefix_index[key_prefix]:
-            del self._prefix_index[key_prefix]
+        if not key_index[key_prefix]:
+            del key_index[key_prefix]
 
     def _get_key_prefix(self, api_key: str) -> str:
         """Extract API Key prefix for indexing."""
@@ -1288,26 +1243,28 @@ class FileStore(AccountStore):
         except AGFSAlreadyExistsError:
             return
 
-    def _rebuild_prefix_index(self) -> None:
+    def _build_account_key_index(
+        self, account_id: str, users: Dict[str, dict]
+    ) -> Dict[str, list[UserKeyEntry]]:
+        """Build one account's complete index without traversing other accounts."""
         prefix_index: Dict[str, list[UserKeyEntry]] = {}
-        for account_id, account in self._accounts.items():
-            for user_id, user_info in account.users.items():
-                key_or_hash = user_info.get("key", "")
-                if not key_or_hash:
-                    continue
-                key_prefix = user_info.get("key_prefix", "") or self._get_key_prefix(key_or_hash)
-                if not key_prefix:
-                    continue
-                prefix_index.setdefault(key_prefix, []).append(
-                    UserKeyEntry(
-                        account_id=account_id,
-                        user_id=user_id,
-                        role=Role(user_info.get("role", "user")),
-                        key_or_hash=key_or_hash,
-                        is_hashed=key_or_hash.startswith("$argon2"),
-                    )
+        for user_id, user_info in users.items():
+            key_or_hash = user_info.get("key", "")
+            if not key_or_hash:
+                continue
+            key_prefix = user_info.get("key_prefix", "") or self._get_key_prefix(key_or_hash)
+            if not key_prefix:
+                continue
+            prefix_index.setdefault(key_prefix, []).append(
+                UserKeyEntry(
+                    account_id=account_id,
+                    user_id=user_id,
+                    role=Role(user_info.get("role", "user")),
+                    key_or_hash=key_or_hash,
+                    is_hashed=key_or_hash.startswith("$argon2"),
                 )
-        self._prefix_index = prefix_index
+            )
+        return prefix_index
 
     async def _read_accounts_for_update(self) -> dict:
         data = await self._read_json(ACCOUNTS_PATH)
@@ -1364,6 +1321,7 @@ class FileStore(AccountStore):
         deleted_user_ids: set[str] | None = None,
         reject_existing_user_ids: set[str] | None = None,
         replace_existing: bool = False,
+        expected_api_keys: dict[str, str] | None = None,
     ) -> None:
         """Merge targeted user mutations, or initialize a newly created account."""
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
@@ -1382,6 +1340,14 @@ class FileStore(AccountStore):
             else:
                 data = await self._read_json(path) or {"users": {}}
                 users = data.setdefault("users", {})
+            # Check persisted credentials while holding the cross-instance lease.
+            # Request-time authentication and the local cache may already be stale.
+            for user_id, expected_key in (expected_api_keys or {}).items():
+                current_user = users.get(user_id, {})
+                if current_user.get("deletion") or not await self._key_matches(
+                    current_user.get("key", ""), expected_key
+                ):
+                    raise UnauthenticatedError("API key is no longer active")
             if updated_users is None:
                 account = self._accounts.get(account_id)
                 if account is None:
@@ -1399,8 +1365,9 @@ class FileStore(AccountStore):
 
             account = self._accounts.get(account_id)
             if account is not None:
+                key_index = self._build_account_key_index(account_id, users)
                 account.users = users
-                self._rebuild_prefix_index()
+                self._account_key_indexes[account_id] = key_index
         finally:
             await self._async_agfs.pathlock_release(lease)
 
@@ -1667,24 +1634,27 @@ class FileStore(AccountStore):
         await self._ensure_account_groups_loaded(account_id)
         return self._get_user_group_ids(account_id, user_id)
 
-    async def add_group_member(
-        self, account_id: str, group_id: str, user_id: str
+    async def add_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
     ) -> bool:
-        await self._refresh_users_for_management_read(account_id)
-        return await self._add_group_member(account_id, group_id, user_id)
+        async with self._mutation_lock:
+            await self._refresh_users_for_management_read_unlocked(account_id)
+            return await self._add_group_members(account_id, group_id, user_ids)
 
-    async def remove_group_member(
-        self, account_id: str, group_id: str, user_id: str
+    async def remove_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
     ) -> bool:
-        await self._refresh_accounts_for_management_read()
-        return await self._remove_group_member(account_id, group_id, user_id)
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+            return await self._remove_group_members(account_id, group_id, user_ids)
 
     async def delete_group(self, account_id: str, group_id: str) -> None:
         await self._refresh_accounts_for_management_read()
         await self._delete_group(account_id, group_id)
 
     async def replace_active_user_api_key(
-        self, account_id: str, user_id: str, api_key: str
+        self, account_id: str, user_id: str, api_key: str,
+        *, expected_api_key: str | None = None,
     ) -> None:
         async with self._mutation_lock:
             await self._set_user_key(
@@ -1692,7 +1662,19 @@ class FileStore(AccountStore):
                 user_id,
                 api_key,
                 rotate=True,
+                expected_api_key=expected_api_key,
             )
+
+    @staticmethod
+    async def _key_matches(material: str, api_key: str) -> bool:
+        if not material:
+            return False
+        if not material.startswith("$argon2"):
+            return hmac.compare_digest(material, api_key)
+        try:
+            return await asyncio.to_thread(PasswordHasher().verify, material, api_key)
+        except VerificationError:
+            return False
 
     async def verify_api_key(
         self,
@@ -1701,35 +1683,24 @@ class FileStore(AccountStore):
         account_id_hint: str | None = None,
         user_id_hint: str | None = None,
     ) -> tuple[str, str] | None:
-        for entry in self._prefix_index.get(self._get_key_prefix(api_key), []):
-            if account_id_hint is not None and entry.account_id != account_id_hint:
-                continue
-            if user_id_hint is not None and entry.user_id != user_id_hint:
-                continue
-            account = self._accounts.get(entry.account_id)
-            if account is None or account.deletion is not None:
-                continue
-            user = account.users.get(entry.user_id)
-            if user is None or user.get("deletion"):
-                continue
-            if entry.is_hashed:
-                try:
-                    matched = await asyncio.to_thread(
-                        PasswordHasher(
-                            time_cost=ARGON2_TIME_COST,
-                            memory_cost=ARGON2_MEMORY_COST,
-                            parallelism=ARGON2_PARALLELISM,
-                            hash_len=ARGON2_HASH_LENGTH,
-                        ).verify,
-                        entry.key_or_hash,
-                        api_key,
-                    )
-                except VerificationError:
-                    matched = False
-            else:
-                matched = hmac.compare_digest(entry.key_or_hash, api_key)
-            if matched:
-                return entry.account_id, entry.user_id
+        indexes = (
+            (self._account_key_indexes.get(account_id_hint, {}),)
+            if account_id_hint is not None
+            else tuple(self._account_key_indexes.values())
+        )
+        key_prefix = self._get_key_prefix(api_key)
+        for key_index in indexes:
+            for entry in key_index.get(key_prefix, []):
+                if user_id_hint is not None and entry.user_id != user_id_hint:
+                    continue
+                account = self._accounts.get(entry.account_id)
+                if account is None or account.deletion is not None:
+                    continue
+                user = account.users.get(entry.user_id)
+                if user is None or user.get("deletion"):
+                    continue
+                if await self._key_matches(entry.key_or_hash, api_key):
+                    return entry.account_id, entry.user_id
         return None
 
     async def revoke_active_api_keys(

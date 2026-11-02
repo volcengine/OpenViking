@@ -5,6 +5,7 @@
 import asyncio
 import base64
 import os
+import signal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -331,6 +332,17 @@ class TestGitAccessor:
             "1234567",
         )
 
+    def test_parse_repo_source_explicit_commit_overrides_url_commit(
+        self, accessor: GitAccessor
+    ) -> None:
+        source = "https://github.com/org/repo/commit/abcdef1234567890"
+
+        assert accessor._parse_repo_source(source, commit="deadbeef") == (
+            "https://github.com/org/repo",
+            None,
+            "deadbeef",
+        )
+
     def test_parse_repo_source_gitlab_project_named_tree(self, accessor: GitAccessor) -> None:
         """A project named tree must not shadow the /-/tree route marker."""
         source = "https://gitlab.com/org/tree/-/tree/main"
@@ -539,6 +551,197 @@ class TestGitAccessor:
             + base64.b64encode(f"oauth2:{token}".encode()).decode("ascii")
         )
 
+    async def test_archive_fallback_uses_commit_only_and_records_pin(
+        self,
+        accessor: GitAccessor,
+        tmp_path: Path,
+    ) -> None:
+        source = "https://github.com/org/repo.git"
+        commit = "a" * 40
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_github_zip_download",
+                new=AsyncMock(side_effect=RuntimeError("archive unavailable")),
+            ) as zip_download,
+            patch.object(
+                accessor,
+                "_git_clone",
+                new=AsyncMock(return_value="org/repo"),
+            ) as git_clone,
+            patch.object(
+                accessor,
+                "_resolve_local_head",
+                new_callable=AsyncMock,
+            ) as resolve_local_head,
+        ):
+            resource = await accessor.access(
+                source,
+                branch="main",
+                commit=commit,
+            )
+
+        zip_download.assert_awaited_once_with(
+            source,
+            commit,
+            str(tmp_path),
+            github_token=None,
+        )
+        git_clone.assert_awaited_once_with(
+            source,
+            str(tmp_path),
+            branch=None,
+            commit=commit,
+            env=None,
+        )
+        resolve_local_head.assert_not_awaited()
+        assert resource.meta["resolved_head_sha"] == commit
+        assert resource.meta["repo_commit"] == commit
+        assert "repo_ref" not in resource.meta
+
+    async def test_archive_success_records_hint_sha_without_reading_local_head(
+        self,
+        accessor: GitAccessor,
+        tmp_path: Path,
+    ) -> None:
+        source = "https://github.com/org/repo.git"
+        probed_sha = "a" * 40
+        extracted = tmp_path / "repo"
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_github_zip_download",
+                new=AsyncMock(return_value=(extracted, "org/repo")),
+            ) as zip_download,
+            patch.object(
+                accessor,
+                "_resolve_local_head",
+                new_callable=AsyncMock,
+            ) as resolve_local_head,
+        ):
+            resource = await accessor.access(
+                source,
+                branch="main",
+                git_head_sha_hint=probed_sha,
+            )
+
+        zip_download.assert_awaited_once_with(
+            source,
+            probed_sha,
+            str(tmp_path),
+            github_token=None,
+        )
+        resolve_local_head.assert_not_awaited()
+        assert resource.path == extracted
+        assert resource.meta["resolved_head_sha"] == probed_sha
+
+    async def test_github_token_archive_download_uses_hint_without_self_probe(
+        self,
+        accessor: GitAccessor,
+        tmp_path: Path,
+    ) -> None:
+        source = "https://github.com/org/private.git"
+        probed_sha = "a" * 40
+        extracted = tmp_path / "repo"
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_git_ls_remote_head",
+                new_callable=AsyncMock,
+            ) as ls_remote,
+            patch.object(
+                accessor,
+                "_github_zip_download",
+                new=AsyncMock(return_value=(extracted, "org/private")),
+            ) as zip_download,
+        ):
+            await accessor.access(
+                source,
+                branch="main",
+                commit=None,
+                github_token="account-token",
+                git_head_sha_hint=probed_sha,
+            )
+
+        ls_remote.assert_not_awaited()
+        zip_download.assert_awaited_once_with(
+            source,
+            probed_sha,
+            str(tmp_path),
+            github_token="account-token",
+        )
+
+    async def test_commit_pin_records_supplied_commit_without_remote_probe(
+        self,
+        accessor: GitAccessor,
+        tmp_path: Path,
+    ) -> None:
+        source = "https://github.com/org/repo.git"
+        commit = "a" * 40
+        extracted = tmp_path / "repo"
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_git_ls_remote_head",
+                new_callable=AsyncMock,
+            ) as ls_remote,
+            patch.object(
+                accessor,
+                "_github_zip_download",
+                new=AsyncMock(return_value=(extracted, "org/repo")),
+            ) as zip_download,
+            patch.object(
+                accessor,
+                "_resolve_local_head",
+                new_callable=AsyncMock,
+            ) as resolve_local_head,
+        ):
+            resource = await accessor.access(source, commit=commit)
+
+        ls_remote.assert_not_awaited()
+        zip_download.assert_awaited_once_with(
+            source,
+            commit,
+            str(tmp_path),
+            github_token=None,
+        )
+        resolve_local_head.assert_not_awaited()
+        assert resource.meta["resolved_head_sha"] == commit
+
+    async def test_commit_pin_probe_returns_supplied_commit_without_ls_remote(
+        self,
+        accessor: GitAccessor,
+    ) -> None:
+        commit = "a" * 40
+        with patch.object(
+            accessor,
+            "_git_ls_remote_head",
+            new_callable=AsyncMock,
+        ) as ls_remote:
+            probed = await accessor.probe_git_remote_head(
+                "https://github.com/org/repo.git",
+                commit=commit,
+            )
+
+        ls_remote.assert_not_awaited()
+        assert probed == ("", commit)
+
     async def test_environment_github_token_does_not_replace_ssh_clone_auth(
         self,
         accessor: GitAccessor,
@@ -654,6 +857,21 @@ class TestGitAccessor:
         assert "--no-recurse-submodules" in clone_args
         assert "--recursive" not in clone_args
 
+    async def test_git_clone_prefers_commit_over_branch(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        with patch.object(accessor, "_run_git", new_callable=AsyncMock) as run_git:
+            await accessor._git_clone(
+                "https://github.com/volcengine/OpenViking.git",
+                str(tmp_path),
+                branch="main",
+                commit="deadbeef",
+            )
+
+        clone_args = run_git.await_args_list[0].args[0]
+        assert "--branch" not in clone_args
+        assert run_git.await_args_list[-1].args[0][-2:] == ["checkout", "deadbeef"]
+
     async def test_git_clone_reuses_auth_env_for_clone_and_commit_fetches(
         self, accessor: GitAccessor, tmp_path: Path
     ) -> None:
@@ -727,11 +945,12 @@ class TestGitAccessor:
         assert "remote reflected" not in caplog.text
         assert os.environ.get("GIT_CONFIG_COUNT") != env["GIT_CONFIG_COUNT"]
 
-    async def test_cancelled_git_process_is_killed_and_reaped(
+    async def test_cancelled_git_process_group_is_killed_and_reaped(
         self,
         accessor: GitAccessor,
     ) -> None:
         process = SimpleNamespace(
+            pid=43210,
             communicate=AsyncMock(side_effect=asyncio.CancelledError),
             kill=Mock(),
             wait=AsyncMock(),
@@ -740,13 +959,74 @@ class TestGitAccessor:
             "openviking.parse.accessors.git_accessor.asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=process),
         ):
-            with pytest.raises(asyncio.CancelledError):
-                await accessor._run_git(
-                    ["git", "clone", "https://git.example.com/org/private.git"]
-                )
+            with patch(
+                "openviking.parse.accessors.git_accessor.os.killpg"
+            ) as killpg:
+                with pytest.raises(asyncio.CancelledError):
+                    await accessor._run_git(
+                        ["git", "clone", "https://git.example.com/org/private.git"]
+                    )
+
+        killpg.assert_called_once_with(43210, signal.SIGKILL)
+        process.kill.assert_not_called()
+        process.wait.assert_awaited_once_with()
+
+    async def test_cancelled_git_process_falls_back_to_direct_kill_without_pgid(
+        self,
+        accessor: GitAccessor,
+    ) -> None:
+        process = SimpleNamespace(
+            pid=43210,
+            communicate=AsyncMock(side_effect=asyncio.CancelledError),
+            kill=Mock(),
+            wait=AsyncMock(),
+        )
+        with patch(
+            "openviking.parse.accessors.git_accessor.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            with patch(
+                "openviking.parse.accessors.git_accessor.os.name", "nt"
+            ):
+                with pytest.raises(asyncio.CancelledError):
+                    await accessor._run_git(
+                        ["git", "clone", "https://git.example.com/org/private.git"]
+                    )
 
         process.kill.assert_called_once_with()
         process.wait.assert_awaited_once_with()
+
+    async def test_cancelled_git_reap_is_bounded_when_wait_hangs(
+        self,
+        accessor: GitAccessor,
+    ) -> None:
+        async def hang_forever() -> None:
+            await asyncio.Event().wait()
+
+        process = SimpleNamespace(
+            pid=43210,
+            communicate=AsyncMock(side_effect=asyncio.CancelledError),
+            kill=Mock(),
+            wait=AsyncMock(side_effect=hang_forever),
+        )
+        accessor.CANCEL_REAP_TIMEOUT = 0.01
+        with patch(
+            "openviking.parse.accessors.git_accessor.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            with patch(
+                "openviking.parse.accessors.git_accessor.os.killpg"
+            ) as killpg:
+                loop = asyncio.get_running_loop()
+                start = loop.time()
+                with pytest.raises(asyncio.CancelledError):
+                    await accessor._run_git(
+                        ["git", "clone", "https://git.example.com/org/private.git"]
+                    )
+                elapsed = loop.time() - start
+
+        killpg.assert_called_once_with(43210, signal.SIGKILL)
+        assert elapsed < 1.0
 
     @pytest.mark.parametrize(
         ("source", "repo_name"),

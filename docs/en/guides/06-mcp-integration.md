@@ -134,7 +134,7 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `invoke_mcp_tool` | Execute a tool selected by `find_mcp_tools`. OpenViking resolves the upstream server and credentials, and transparently preserves its `content`, `structuredContent`, and `isError` result. The upstream tool may have external side effects, and calls are not retried | `tool_uri`, `arguments` (optional; must conform to the discovered `tool.inputSchema`) |
 | `find` | Fast semantic retrieval without session context. `context_type="skill"` on its own switches to package-level skill retrieval: one hit per skill package, its URI pointing at that package's `SKILL.md` and its summary taken from the skill itself, even when an auxiliary file inside the package is what matched. Without `target_uri` it searches both your own skills and the account-shared `viking://agent/skills`. Mixing `skill` with another context type keeps the generic retrieval path | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional), `read_content` (optional — inline each hit's content), `events_time_decay_protection` (optional) |
 | `search` | Deep semantic retrieval; `mode="context"` assembles injection-ready context and replaces the former `recall` tool. `list` mode also returns one hit per skill package, its URI pointing at `SKILL.md` and its summary taken from the package itself, but `limit` applies before that merge, so a package matching in several files takes several slots and fewer than `limit` results come back | `query`, `mode` (`list` or `context`), `target_uri` (list mode only), `session_id` (optional), `limit`, `min_score`, `level` (list mode), `context_type` (optional), `events_time_decay_protection` (optional in both modes), plus context-mode `quotas`, `purpose`, `max_tokens`, `detail` or `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, scalar `other_peer_penalty` or `other_peer_penalties` by category, and `rewrite` (`off` or `auto`) |
-| `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block; use `download` for the original bytes | `uris` (single string or array), `offset`, `limit` (text lines) |
+| `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block; use `download` for the original bytes | `uri` (one file) or `uris` (array, several files in one call), `offset`, `limit` (text lines) |
 | `download` | Return a short-lived, single-use URL for fetching the original bytes of one file (any type, including PDF, images, archives, audio and video) with `curl`; it does not return the content. Directories are not supported | `uri` |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive`, `offset`, `limit`, `sort_by`, `sort_order` (optional) |
 | `tree` | Show the recursive directory tree under a `viking://` URI, indented by depth — use when you need a full picture of the file tree (prefer `list` for a single level, `glob` for filename patterns) | `uri` (optional), `level_limit` (default 3), `node_limit` (default 1000), `offset`, `limit`, `include_abstract` (optional — also show each directory's summary; for a skill directory that is its name and description) |
@@ -152,7 +152,7 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `privacy_tree` | Check which credentials are saved; return active field metadata and references without values | `category` (optional) |
 | `privacy_resolve` | Turn a complete <code v-pre>{{ov_privacy:...}}</code> placeholder into one current field's actual value for immediate use | `reference` |
 | `privacy_upsert` | Save user-supplied credential fields with an atomic merge; return metadata and references without values | `category`, `target_key`, `values` |
-| `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true requires ADMIN/ROOT) |
+| `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true applies role-based visibility) |
 | `list_groups` | List group IDs in the caller's account without membership | None |
 | `get_acl` | Read direct, inherited and effective ACL; requires resource manage or account ADMIN | `uri` |
 | `set_acl` | Update a shared resource ACL; authorize against the permissions before the change | `uri`, `acl` |
@@ -221,9 +221,10 @@ All account users may call `list_users` and `list_groups`; neither tool accepts 
 The default output contains only user IDs and a matching total, or group IDs. Even administrators
 must explicitly set `include_credentials=true` to include credential fields: ROOT receives
 every available plaintext key in `api_key`; ADMIN receives its own plaintext key and masked
-`key_prefix` values for every other user. A USER requesting
-credentials receives `PERMISSION_DENIED`, even when the query matches no users. Trusted auth mode
-forbids credential disclosure. Group membership remains available through the admin API.
+`key_prefix` values for every other user. USER authenticated with a personal API key receives
+only its own stored key (or prefix for hash-only storage); every other row omits both credential
+fields. USER authenticated through OAuth or other methods receives no credentials. Trusted auth
+mode forbids credential disclosure. Group membership remains available through the admin API.
 
 `get_acl` and `set_acl` require resource `manage` permission. A resource manager does not gain
 account administrator privileges. `write` and `add_resource` accept an optional `acl` object;

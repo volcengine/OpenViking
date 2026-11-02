@@ -57,7 +57,7 @@ class TaskTrackerCollector(StateMetricCollector):
             self.FAILED,
             self.CANCELLED,
         ):
-            registry.gauge_delete_matching(metric_name, match_labels={})
+            registry.delete_matching(metric_name, match_labels={})
         for task_type, counts in counts_by_type.items():
             labels = {"task_type": str(task_type)}
             registry.set_gauge(

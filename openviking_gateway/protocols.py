@@ -5,6 +5,7 @@
 What differs between wire protocols lives in their adapters in ``tool_protocols``.
 """
 
+import asyncio
 import hashlib
 import json
 import math
@@ -491,6 +492,51 @@ def usage_of(value: dict, excludes_cache: bool = False) -> dict:
         "cached_tokens": cached,
         "cache_write_tokens": written,
     }
+
+
+# Stay below the common 60-second load-balancer idle timeout.
+HEARTBEAT_SECONDS = 15
+
+
+async def heartbeat(chunks, seconds):
+    """Yield None during idle periods while one task owns the source iterator."""
+    queue, end = asyncio.Queue(1), object()
+
+    async def pump():
+        try:
+            async for chunk in chunks:
+                await queue.put(chunk)
+        except asyncio.CancelledError as error:
+            # A deadline can cancel queue.put while the source's timeout is suspended at yield.
+            if throw := getattr(chunks, "athrow", None):
+                await throw(error)
+            raise
+        finally:
+            # Close suspended generators in the task that owns their timeout contexts.
+            if close := getattr(chunks, "aclose", None):
+                await close()
+
+    def wake_consumer(task):
+        # A full queue already wakes the consumer; completion must not block cleanup.
+        if queue.empty():
+            queue.put_nowait(end)
+
+    task = asyncio.create_task(pump())
+    task.add_done_callback(wake_consumer)
+    try:
+        while not task.done() or not queue.empty():
+            try:
+                chunk = await asyncio.wait_for(queue.get(), seconds)
+            except asyncio.TimeoutError:
+                yield None
+                continue
+            if chunk is end:
+                break
+            yield chunk
+        await task
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 class SSEDecoder:

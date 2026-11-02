@@ -10,12 +10,9 @@ import {
   isOvClientError,
   normalizeOvClientError,
   postFsMkdir,
-} from '#/lib/ov-client'
-import {
-  fileNameFromUri,
-  normalizeFsEntries,
-} from '#/routes/resources/-lib/normalize'
-import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
+} from '#/shared/api/ov-client'
+import { fileNameFromUri, normalizeFsEntries } from '#/shared/lib/viking-fs'
+import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
 import type {
   JsonSchema,

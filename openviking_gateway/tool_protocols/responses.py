@@ -150,7 +150,7 @@ class ResponsesProtocol(ToolProtocol):
 
     def public_response(self, value):
         value = {**value, "id": self.identifier}
-        if "tools" in value:
+        if isinstance(value.get("tools"), list):
             value["tools"] = [t for t in value["tools"] if not t.get("name", "").startswith(PREFIX)]
         return value
 

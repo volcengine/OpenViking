@@ -795,7 +795,7 @@ class UnderstandingAPI(BaseParser):
             parse_output_store,
             viking_fs=get_viking_fs() if parse_output_store is None else None,
         )
-        resource_rel = str(resource_name).strip("/")
+        resource_rel = str(resource_name).strip("/").strip() or "unnamed"
         try:
             await writer.mkdir(resource_rel)
 

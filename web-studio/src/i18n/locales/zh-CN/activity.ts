@@ -5,10 +5,13 @@ const activity = {
     },
     threadList: {
       title: '会话',
+      backToList: '返回会话列表',
       newSession: '新建会话',
       count: '{{count}} 个会话',
       count_other: '{{count}} 个会话',
       loading: '正在加载会话...',
+      loadFailed: '会话加载失败',
+      retry: '重试',
       emptyTitle: '还没有会话',
       emptyDescription: '点击右上角的加号开始一段新对话。',
       deleteSession: '删除“{{title}}”',
@@ -283,6 +286,19 @@ const activity = {
         '用法：/add-skill <Git URL> [-p viking://agent/skills]。本地文件请到「技能」页面上传。',
       addResourceUsage:
         '用法：/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>] [--reason <说明>]。可视化上传请点击文件系统上方的「添加资源」。',
+      mkdirUsage: '用法：/mkdir <viking://URI> [--description "描述"]',
+      mvUsage: '用法：/mv <源 viking://URI> <目标 viking://URI>',
+      cpUsage:
+        '用法：/cp <源 viking://URI> <目标 viking://URI> [-r|--recursive]',
+      mkdirCreated: '已创建目录：{{uri}}',
+      mvCompleted: '已移动：{{from}} → {{to}}',
+      cpCompleted: '已复制：{{from}} → {{to}}',
+      rmUsage: '用法：/rm <viking://URI> [-r|--recursive]，必须明确指定目标。',
+      rmConfirm: '确认删除 {{uri}}？此操作无法撤销。',
+      rmConfirmRecursive:
+        '确认删除 {{uri}} 及其所有子文件和子目录？此操作无法撤销。',
+      rmCancelled: '已取消删除',
+      rmDeleted: '已删除：{{uri}}',
       writeUsage:
         '用法：/write <URI> --content "文本" [--mode replace|append|create] [--wait]',
       waitUsage: '用法：/wait（当前开源 API 不接收超时参数）',
@@ -393,6 +409,22 @@ const activity = {
         writeMode: {
           name: '--mode <模式>',
           description: '可选。replace、append 或 create；默认 replace。',
+        },
+        sourceUri: {
+          name: '<source URI>',
+          description: '必填，明确指定源文件或目录的 Viking URI。',
+        },
+        targetUri: {
+          name: '<target URI>',
+          description: '必填，明确指定目标 Viking URI。',
+        },
+        directoryDescription: {
+          name: '--description <text>',
+          description: '可选，目录的初始描述；含空格时请加引号。',
+        },
+        recursive: {
+          name: '-r, --recursive',
+          description: '递归处理目录及其所有内容（用于复制或删除）。',
         },
         writeWait: {
           name: '--wait',
@@ -576,6 +608,38 @@ const activity = {
           remote: {
             code: `ov add-resource https://github.com/volcengine/OpenViking --to viking://resources/openviking-repo --args '{"branch":"main"}'`,
             description: '导入 OpenViking 仓库的 main 分支',
+          },
+        },
+        mkdir: {
+          default: {
+            code: '/mkdir viking://resources/new-docs --description "Project docs"',
+            description: '创建目录并设置描述',
+          },
+        },
+        mv: {
+          default: {
+            code: '/mv viking://resources/old.md viking://resources/new.md',
+            description: '移动或重命名文件或目录',
+          },
+        },
+        cp: {
+          file: {
+            code: '/cp viking://resources/notes.md viking://resources/notes-copy.md',
+            description: '复制单个文件',
+          },
+          directory: {
+            code: '/cp viking://resources/docs viking://resources/docs-copy --recursive',
+            description: '递归复制目录',
+          },
+        },
+        rm: {
+          file: {
+            code: '/rm viking://resources/notes.md',
+            description: '删除单个文件（需确认）',
+          },
+          directory: {
+            code: '/rm viking://resources/old-docs --recursive',
+            description: '删除目录及其内容（需确认）',
           },
         },
         write: {
@@ -767,6 +831,22 @@ const activity = {
           description: '添加外部资源',
           usage:
             '/add-resource <URL> [--to <URI>|--parent <URI>] [--args <JSON>]',
+        },
+        mkdir: {
+          description: '创建目录',
+          usage: '/mkdir <URI> [--description <text>]',
+        },
+        mv: {
+          description: '移动或重命名文件或目录',
+          usage: '/mv <source URI> <target URI>',
+        },
+        cp: {
+          description: '复制文件或目录',
+          usage: '/cp <source URI> <target URI> [-r|--recursive]',
+        },
+        rm: {
+          description: '删除文件或目录（执行前确认）',
+          usage: '/rm <URI> [-r|--recursive]',
         },
         write: {
           description: '写入或追加资源文件',

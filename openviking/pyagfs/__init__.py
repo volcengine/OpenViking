@@ -40,6 +40,7 @@ from .exceptions import (
     GitRestoreWritebackPartialError,
 )
 from .helpers import cp, download, upload
+from .leader import LeaderCandidate, Leadership
 from .protocols import AGFSSyncClientProtocol
 
 _logger = logging.getLogger(__name__)
@@ -204,6 +205,8 @@ except Exception:
 
 __all__ = [
     "AsyncAGFSClient",
+    "LeaderCandidate",
+    "Leadership",
     "AGFSSyncClientProtocol",
     "AGFSBindingClient",
     "RAGFSBindingClient",

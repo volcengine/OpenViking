@@ -40,7 +40,7 @@ The internal `registry.parse()` interface is asynchronous and returns a `ParseRe
 
 ### Document Splitting
 
-The Markdown parser organizes sections by headings and size, merging short sections and splitting oversized content. Defaults are `max_section_size=2048` tokens and `max_section_chars=6000` characters. The configuration also declares `section_size_flexibility=0.3`, but the current Markdown splitting code does not use it. A single oversized table row may remain intact. These are splitting targets, not absolute limits on every output file.
+The Markdown parser organizes sections by headings and character count. The default `max_section_chars` is 2000; `max_section_size` and `section_size_flexibility` remain accepted for configuration compatibility but do not control splitting. Ordinary text obeys the character limit; an oversized table row remains intact. Explicit `no_split` mode preserves the entire body.
 
 Behavior varies by parser and `parse_mode`. Use `parse_mode="no_split"` for supported imports when a single file is needed; see [Resource Management](../api/02-resources.md).
 
@@ -92,7 +92,7 @@ L0/L1 are directory sidecars, not per-file sidecars. Parent-summary generation c
 
 ### Freshness, Sampling, and Parent Refresh
 
-Each generation records direct-child coverage and uses stable sampling above `semantic.overview_sample_limit` (default 32). Resource/skill parent refreshes depend on child L0 body changes and freshness thresholds; unchanged L0 bodies do not propagate. `pending_child_changes` counts change events awaiting refresh, including repeated changes to the same child. See [Context Layers](03-context-layers.md#freshness-and-stable-sampling) for thresholds, manual refresh behavior, and deferred updates.
+Each generation collects all direct-child summaries without a 32-entry sample cap. The existing `semantic.max_overview_prompt_chars` budget (60000 characters by default) and batching/truncation behavior are unchanged. Resource/skill parent refreshes depend on child L0 body changes and freshness thresholds; unchanged L0 bodies do not propagate. `pending_child_changes` counts change events awaiting refresh, including repeated changes to the same child. See [Context Layers](03-context-layers.md#freshness-and-stable-sampling) for thresholds, manual refresh behavior, and deferred updates.
 
 ### Processing Limits
 
@@ -101,7 +101,7 @@ Each generation records direct-child coverage and uses stable sampling above `se
 | `vlm.max_concurrent` | 32 | Semantic-processing concurrency, passed to `SemanticProcessor.max_concurrent_llm` |
 | `max_images_per_call` | 10 | `VLMProcessor` constructor parameter: images per call; not an `ov.conf` field |
 | `max_sections_per_call` | 20 | `VLMProcessor` constructor parameter: sections per call; not an `ov.conf` field |
-| `semantic.overview_sample_limit` | 32 | Maximum direct-child sample used for one directory summary |
+| `semantic.overview_sample_limit` | 32 | Small-directory threshold for freshness scheduling, not a summary input count cap |
 
 ## Code Skeleton Extraction
 

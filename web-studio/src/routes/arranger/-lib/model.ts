@@ -1,4 +1,4 @@
-import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
+import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
 export type ArrangerView = 'graph' | 'list'
 

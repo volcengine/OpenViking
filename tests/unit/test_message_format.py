@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import pytest
+
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
 
 
@@ -22,11 +24,12 @@ def test_format_messages_renders_roles_and_content():
     )
 
 
-def test_format_messages_renders_multimodal_content_as_json():
+@pytest.mark.parametrize("role", ["user", "tool"])
+def test_format_messages_renders_multimodal_content_as_json(role):
     rendered = format_messages(
         [
             {
-                "role": "user",
+                "role": role,
                 "content": [
                     {"type": "text", "text": "Describe this image."},
                     {"type": "image_url", "image_url": {"url": "[redacted]"}},
@@ -35,7 +38,7 @@ def test_format_messages_renders_multimodal_content_as_json():
         ]
     )
 
-    assert "[user]" in rendered
+    assert f"[{role}]" in rendered
     assert '"type": "image_url"' in rendered
     assert '"url": "[redacted]"' in rendered
 

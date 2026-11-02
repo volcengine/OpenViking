@@ -19,8 +19,8 @@ import type { LucideIcon } from 'lucide-react'
 
 import '@xyflow/react/dist/style.css'
 
-import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
-import { cn } from '#/lib/utils'
+import type { VikingFsEntry } from '#/shared/types/viking-fs'
+import { cn } from '#/shared/lib/utils'
 import { normalizeVikingUri, parentVikingUri } from '../-lib/uri'
 
 type GraphData = {

@@ -38,8 +38,8 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { CodeEditor } from '#/components/code-editor'
-import { Alert, AlertDescription, AlertTitle } from '#/components/ui/alert'
+import { CodeEditor } from '#/shared/components/code-editor'
+import { Alert, AlertDescription, AlertTitle } from '#/shared/ui/alert'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,9 +49,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '#/components/ui/alert-dialog'
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
+} from '#/shared/ui/alert-dialog'
+import { Badge } from '#/shared/ui/badge'
+import { Button } from '#/shared/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -59,24 +59,24 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '#/components/ui/dialog'
-import { Input } from '#/components/ui/input'
-import { Label } from '#/components/ui/label'
-import { ScrollArea } from '#/components/ui/scroll-area'
+} from '#/shared/ui/dialog'
+import { Input } from '#/shared/ui/input'
+import { Label } from '#/shared/ui/label'
+import { ScrollArea } from '#/shared/ui/scroll-area'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '#/components/ui/select'
-import { Textarea } from '#/components/ui/textarea'
-import { useAppConnection } from '#/hooks/use-app-connection'
-import { cn } from '#/lib/utils'
-import { isOvClientError } from '#/lib/ov-client'
-import { AddResourceForm } from '#/routes/resources/-components/add-resource-page'
-import { ResourceUploadProvider } from '#/routes/resources/-hooks/use-resource-upload'
-import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
+} from '#/shared/ui/select'
+import { Textarea } from '#/shared/ui/textarea'
+import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { cn } from '#/shared/lib/utils'
+import { isOvClientError } from '#/shared/api/ov-client'
+import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
+import { ResourceUploadProvider } from '#/features/workbench/resources/hooks/use-resource-upload'
+import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
 import { LiveContextInspector } from './-components/live-context'
 import { SchemaArgumentsForm } from './-components/schema-arguments-form'

@@ -2,10 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
+from unittest.mock import patch
+
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
+from openviking.ingest.orchestrator import IngestOrchestrator
+from openviking.ingest.poller import IngestPoller
 from openviking.ingest.replay import ConversationReplayClient, SessionReplayer
+from openviking.ingest.sources.hermes import HermesSource
 from openviking_cli.exceptions import NotFoundError
+from openviking_cli.utils.config.ingest_config import IngestConfig, IngestHarnessConfig
 
 
 class _FakeSDK:
@@ -118,25 +124,46 @@ async def test_append_batch_confirms_cursor_and_marks_needs_commit(tmp_path):
     assert fake.committed == []  # append does not commit
 
 
-async def test_reconcile_confirms_landed_batch(tmp_path):
-    store = CursorStore(tmp_path)
-    sid = "import__claude_code__s1"
+async def test_reconcile_defers_replay_then_confirms_landed_batch(tmp_path):
+    (tmp_path / "s1.jsonl").write_text('{"role": "user", "content": "hello"}\n')
+    config = IngestHarnessConfig(enabled=True, paths=[str(tmp_path)])
+    source = HermesSource(config, fallback_user="test")
+    ref = next(iter(source.discover_sessions()))
+    _, cursor = source.read_messages(ref, None)
+    store = CursorStore(tmp_path / "state")
     store.set_pending(
-        "claude_code",
+        "hermes",
         "s1",
-        sid,
-        Cursor(BYTE_OFFSET, {"offset": 0}),
-        Cursor(BYTE_OFFSET, {"offset": 50}),
-        pend_count=2,
+        "import__hermes__s1",
+        Cursor.zero(BYTE_OFFSET),
+        cursor,
+        pend_count=1,
         baseline=0,
     )
-    fake = _FakeReplay(count=2)  # server already has the 2 messages -> batch landed
+    pending = store.get("hermes", "s1")
+    fake = _FakeReplay(count=1, pending=1)  # The batch landed before the crash.
     replayer = SessionReplayer(fake, store)
-    await replayer.reconcile("claude_code", _ref())
-    rec = store.get("claude_code", "s1")
-    assert rec.cursor.value["offset"] == 50  # confirmed without re-append
+    orchestrator = IngestOrchestrator(IngestConfig(), replayer)
+    poller = IngestPoller([("hermes", config, source)], replayer)
+
+    with patch.object(fake, "message_count", side_effect=OSError("temporary session read failure")):
+        stats = await orchestrator.backfill_source("hermes", config, source)
+        assert stats.sessions == 0
+        assert stats.errors == ["hermes/s1: pending batch reconciliation deferred"]
+        await poller._tick()
+        assert fake.appended == []
+        assert store.get("hermes", "s1") == pending
+
+    await poller._tick()
+    rec = store.get("hermes", "s1")
+    assert rec.cursor == cursor
     assert rec.pending_count == 0
     assert rec.needs_commit is True
+    stats = await orchestrator.backfill_source("hermes", config, source)
+    assert stats.sessions == 1
+    assert stats.messages == 0
+    assert stats.errors == []
+    assert fake.appended == []
 
 
 async def test_reconcile_drops_unlanded_batch(tmp_path):
@@ -153,7 +180,7 @@ async def test_reconcile_drops_unlanded_batch(tmp_path):
     )
     fake = _FakeReplay(count=0)  # batch did not land
     replayer = SessionReplayer(fake, store)
-    await replayer.reconcile("claude_code", _ref("s2"))
+    assert await replayer.reconcile("claude_code", _ref("s2")) is True
     rec = store.get("claude_code", "s2")
     assert rec.cursor.value["offset"] == 0  # NOT advanced -> will re-read & re-append
     assert rec.pending_count == 0  # intent cleared

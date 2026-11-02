@@ -208,17 +208,6 @@ func (c *Client) AdminRemoveGroupMember(ctx context.Context, accountID, groupID,
 	return result, err
 }
 
-// AdminMigrate starts legacy data migration or cleanup.
-func (c *Client) AdminMigrate(ctx context.Context, opts *AdminMigrateOptions) (map[string]any, error) {
-	action := "migrate"
-	if opts != nil && opts.Cleanup {
-		action = "cleanup"
-	}
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/migrate", nil, map[string]any{"action": action}, &result)
-	return result, err
-}
-
 // AdminGetAgentEvolution returns the effective Agent Evolution switch for the
 // caller's account.
 func (c *Client) AdminGetAgentEvolution(ctx context.Context) (map[string]any, error) {

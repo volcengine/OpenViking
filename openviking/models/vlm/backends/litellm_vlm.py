@@ -286,18 +286,21 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         thinking: Optional[bool] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         """Build kwargs for LiteLLM call."""
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": sanitize_openai_messages(messages),
-            "temperature": self.temperature,
+            **({"temperature": self.temperature} if self.temperature is not None else {}),
             "timeout": self.timeout,
             "num_retries": 0,
         }
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
             kwargs["max_tokens"] = effective_max_tokens
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
 
         if self._should_forward_api_key(model):
             kwargs["api_key"] = self.api_key
@@ -409,6 +412,9 @@ class LiteLLMVLMProvider(VLMBase):
                     "completion_tokens": response.usage.completion_tokens,
                     "total_tokens": response.usage.total_tokens,
                     "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+                    "completion_tokens_details": getattr(
+                        response.usage, "completion_tokens_details", None
+                    ),
                 }
 
             return VLMResponse(
@@ -427,11 +433,18 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         model = self._resolve_model(self.model or "gpt-4o-mini")
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         return self._build_kwargs(
-            model, kwargs_messages, tools, tool_choice, thinking=thinking, max_tokens=max_tokens
+            model,
+            kwargs_messages,
+            tools,
+            tool_choice,
+            thinking=thinking,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def _build_vision_kwargs(
@@ -491,10 +504,17 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously."""
         kwargs = self._build_text_kwargs(
-            prompt, thinking, tools, tool_choice, messages, max_tokens=max_tokens
+            prompt,
+            thinking,
+            tools,
+            tool_choice,
+            messages,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
         # 用 tracer.info 打印请求（人类可读格式）
         tracer.info(
@@ -580,10 +600,14 @@ class LiteLLMVLMProvider(VLMBase):
         if hasattr(response, "usage") and response.usage:
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
+            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+            completion_details = getattr(response.usage, "completion_tokens_details", None)
             self.update_token_usage(
                 model_name=self.model or "unknown",
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 duration_seconds=duration_seconds,
+                prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
+                completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) or 0,
             )

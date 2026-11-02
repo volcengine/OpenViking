@@ -85,6 +85,15 @@ class WatchTask(BaseModel):
     connector_states: Optional[Dict[str, Any]] = Field(
         default=None, description="Private external Connector stream states"
     )
+    source_checkpoint: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Private source version checkpoint used to skip unchanged refreshes, "
+            "e.g. {'kind': 'git', 'head_sha': '<sha>', 'instruction': '<instruction>'}"
+        ),
+    )
+    credential_version: int = Field(default=0, description="Private credential lifecycle watermark")
+    credential_paused: bool = Field(default=False, description="Paused by credential revocation")
     created_at: datetime = Field(default_factory=datetime.now, description="Task creation time")
     last_execution_time: Optional[datetime] = Field(None, description="Last execution time")
     last_task_id: Optional[str] = Field(None, description="Latest ingestion task identifier")
@@ -135,10 +144,14 @@ class WatchTask(BaseModel):
         """Convert task to dictionary for watch-task persistence."""
         data = self.to_dict()
         data["to_is_directory"] = self.to_is_directory
+        data["credential_version"] = self.credential_version
+        data["credential_paused"] = self.credential_paused
         if self.auth_state is not None:
             data["auth_state"] = self.auth_state
         if self.connector_states is not None:
             data["connector_states"] = self.connector_states
+        if self.source_checkpoint is not None:
+            data["source_checkpoint"] = self.source_checkpoint
         return data
 
     @classmethod
@@ -159,6 +172,10 @@ class WatchTask(BaseModel):
             data.get("connector_states"), dict
         ):
             data["connector_states"] = None
+        if data.get("source_checkpoint") is not None and not isinstance(
+            data.get("source_checkpoint"), dict
+        ):
+            data["source_checkpoint"] = None
         return cls(**data)
 
     def calculate_next_execution_time(self) -> datetime:
@@ -537,6 +554,8 @@ class WatchManager:
         auth_state: Any = _UNSET,
         connector_states: Any = _UNSET,
         is_active: Optional[bool] = None,
+        invalidate_source_checkpoint: bool = False,
+        credential_state: Optional[Dict[str, Any]] = None,
     ) -> WatchTask:
         """Update a watch task while its current and requested target URIs are stable."""
         while True:
@@ -580,6 +599,8 @@ class WatchManager:
                         auth_state=auth_state,
                         connector_states=connector_states,
                         is_active=is_active,
+                        invalidate_source_checkpoint=invalidate_source_checkpoint,
+                        credential_state=credential_state,
                     )
 
     async def _update_task_unlocked(
@@ -603,8 +624,29 @@ class WatchManager:
         auth_state: Any,
         connector_states: Any,
         is_active: Optional[bool],
+        invalidate_source_checkpoint: bool,
+        credential_state: Optional[Dict[str, Any]],
     ) -> WatchTask:
         task_id = task.task_id
+        if credential_state is not None:
+            if is_active is not None or watch_interval is not None:
+                raise ValueError("credential_state cannot be combined with scheduling changes")
+            if (
+                not await self._credential_owner_matches(task, credential_state)
+                or credential_state["version"] <= task.credential_version
+            ):
+                return task
+            task.credential_version = credential_state["version"]
+            if credential_state["authorized"]:
+                if task.credential_paused:
+                    task.credential_paused = False
+                    is_active = task.watch_interval > 0
+            elif task.is_active:
+                task.credential_paused = True
+                is_active = False
+        elif is_active is not None or (watch_interval is not None and watch_interval <= 0):
+            # An explicit user pause/resume takes ownership of the scheduling state.
+            task.credential_paused = False
         if self._check_uri_conflict(
             to_uri,
             account_id=task.account_id,
@@ -657,6 +699,8 @@ class WatchManager:
             task.connector_states = connector_states
         if is_active is not None:
             task.is_active = is_active
+        if invalidate_source_checkpoint:
+            task.source_checkpoint = None
 
         if watch_interval is not None:
             if task.is_active and task.watch_interval > 0:
@@ -680,6 +724,39 @@ class WatchManager:
         await self._save_tasks()
         logger.info(f"[WatchManager] Updated task {task_id} by user {account_id}/{user_id}")
         return task
+
+    async def _credential_owner_matches(self, task: WatchTask, state: Dict[str, Any]) -> bool:
+        """Only mutate watches whose private reference matches the complete binding owner."""
+        from openviking.connector.auth import extract_credential_reference
+        from openviking.connector.delegate import ConnectorDelegate
+
+        if not ConnectorDelegate.is_watch_auth_state(task.auth_state):
+            return False
+        delegate = ConnectorDelegate(
+            viking_fs=self._viking_fs,
+            background_tasks=set(),
+            link_reason_memory=self._save_tasks,
+        )
+        _, _, _, auth_config = await delegate.restore_watch_request(
+            task.auth_state, account_id=task.account_id, path=task.path
+        )
+        reference = extract_credential_reference(auth_config)
+        if reference is None:
+            return False
+        if task.account_id != state["ov_account_id"] or task.user_id != state["ov_user_id"]:
+            return False
+        return all(
+            reference.get(key, "default" if key == "ov_account_id" else None) == state[key]
+            for key in (
+                "account_id",
+                "resource_id",
+                "user_id",
+                "ov_user_id",
+                "ov_account_id",
+                "type",
+                "platform",
+            )
+        )
 
     async def update_auth_state(
         self,
@@ -707,6 +784,21 @@ class WatchManager:
             if not task:
                 return
             task.connector_states = connector_states
+            await self._save_tasks()
+
+    async def update_source_checkpoint(
+        self,
+        task_id: str,
+        source_checkpoint: Optional[Dict[str, Any]],
+    ) -> None:
+        """Persist the source version checkpoint recorded after a successful refresh."""
+        if source_checkpoint is not None and not isinstance(source_checkpoint, dict):
+            raise ValueError("source_checkpoint must be an object")
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            task.source_checkpoint = source_checkpoint
             await self._save_tasks()
 
     async def record_execution(

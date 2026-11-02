@@ -9,6 +9,7 @@ import tempfile
 
 import pytest
 
+from openviking.crypto.encryptor import PROVIDER_LOCAL, FileEncryptor
 from openviking.crypto.providers import LocalFileProvider
 
 
@@ -68,3 +69,30 @@ async def test_local_file_provider_different_accounts(local_file_provider):
 
     decrypted2 = await local_file_provider.decrypt_file_key(encrypted_key2, iv2, account2)
     assert decrypted2 == plaintext_key
+
+
+@pytest.mark.asyncio
+async def test_local_provider_accepts_inline_root_key_with_local_envelope_type():
+    root_key = bytes(range(32))
+
+    provider = LocalFileProvider(root_key=root_key.hex())
+
+    assert await provider.get_root_key() == root_key
+    assert FileEncryptor(provider).provider_type == PROVIDER_LOCAL
+
+
+@pytest.mark.asyncio
+async def test_inline_and_file_local_providers_are_ciphertext_compatible(tmp_path):
+    root_key = bytes(range(32))
+    key_file = tmp_path / "master.key"
+    key_file.write_text(root_key.hex())
+    file_encryptor = FileEncryptor(LocalFileProvider(key_file=str(key_file)))
+    inline_encryptor = FileEncryptor(LocalFileProvider(root_key=root_key.hex()))
+    account_id = "test_account"
+    plaintext = b"compatible local provider ciphertext"
+
+    file_ciphertext = await file_encryptor.encrypt(account_id, plaintext)
+    inline_ciphertext = await inline_encryptor.encrypt(account_id, plaintext)
+
+    assert await inline_encryptor.decrypt(account_id, file_ciphertext) == plaintext
+    assert await file_encryptor.decrypt(account_id, inline_ciphertext) == plaintext

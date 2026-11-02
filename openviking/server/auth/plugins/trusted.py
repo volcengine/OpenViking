@@ -18,8 +18,8 @@ from openviking.core.identifiers import (
     validate_identifier_part,
     validate_user_id,
 )
-from openviking.server.api_keys import APIKeyManager
 from openviking.server.account_stores.file import validate_file_account_id
+from openviking.server.api_keys import APIKeyManager
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager
@@ -170,7 +170,15 @@ class TrustedAuthPlugin(AuthPlugin):
         # parameters such as ``account_id`` identify the managed resource, so
         # they must not be mistaken for a partial caller identity.
         is_admin_path = _is_trusted_admin_path(request.url.path)
-        if is_admin_path:
+        # A key-only health probe reports control-plane identity. Probes with
+        # tenant identity keep reporting the asserted/resolved data-plane role.
+        is_control_probe = (
+            request.url.path == "/health"
+            and not effective_account_id
+            and not effective_user_id
+            and asserted_role is None
+        )
+        if is_admin_path or is_control_probe:
             return ResolvedIdentity(
                 role=Role.ROOT,
                 account_id=effective_account_id or "trusted",

@@ -1113,6 +1113,58 @@ class VikingMultiReadTool(OVFileTool):
             "required": ["uris"],
         }
 
+    @classmethod
+    async def _read_image(cls, client, uri):
+        """Load one native image for multi-read and Compile using the same checks."""
+        stat = await client.stat(uri)
+        size = stat.get("size") if isinstance(stat, dict) else None
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            return {
+                "uri": uri,
+                "content": "Image size is unavailable; cannot attach it safely.",
+                "success": False,
+                "media_kind": "image",
+            }
+        if size > cls._MAX_INLINE_MEDIA_BYTES:
+            return {
+                "uri": uri,
+                "content": (
+                    f"Image is {size} bytes; the inline limit is "
+                    f"{cls._MAX_INLINE_MEDIA_BYTES} bytes."
+                ),
+                "success": False,
+                "media_kind": "image",
+            }
+        data = await client.download_bytes(uri)
+        if len(data) > size:
+            return {
+                "uri": uri,
+                "content": "Image changed after its size was checked; retry the read.",
+                "success": False,
+                "media_kind": "image",
+            }
+        image_format = sniff_image_format(data)
+        if image_format is None or image_format.mime_type not in cls._INLINE_IMAGE_MIME_TYPES:
+            return {
+                "uri": uri,
+                "content": ("File bytes do not match a supported PNG, JPEG, GIF, or WebP image."),
+                "success": False,
+                "media_kind": "image",
+            }
+        encoded = base64.b64encode(data).decode("ascii")
+        return {
+            "uri": uri,
+            "content": (f"Image resource ({image_format.mime_type}, {len(data)} bytes)."),
+            "image": {
+                "type": "image_url",
+                "image_url": {"url": f"data:{image_format.mime_type};base64,{encoded}"},
+            },
+            "media_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "success": True,
+            "media_kind": "image",
+        }
+
     async def execute(
         self,
         tool_context: ToolContext,
@@ -1145,7 +1197,9 @@ class VikingMultiReadTool(OVFileTool):
                         if with_revision and (
                             media_kind or offset < 0 or (limit != -1 and limit < 1)
                         ):
-                            raise ValueError("Revision reads require text files and valid line ranges")
+                            raise ValueError(
+                                "Revision reads require text files and valid line ranges"
+                            )
                         if media_kind == "image":
                             if index not in inline_image_indexes:
                                 return {
@@ -1158,63 +1212,7 @@ class VikingMultiReadTool(OVFileTool):
                                     "success": False,
                                     "media_kind": media_kind,
                                 }
-                            stat = await client.stat(uri)
-                            size = stat.get("size") if isinstance(stat, dict) else None
-                            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-                                return {
-                                    "uri": uri,
-                                    "content": "Image size is unavailable; cannot attach it safely.",
-                                    "success": False,
-                                    "media_kind": media_kind,
-                                }
-                            if size > self._MAX_INLINE_MEDIA_BYTES:
-                                return {
-                                    "uri": uri,
-                                    "content": (
-                                        f"Image is {size} bytes; the inline limit is "
-                                        f"{self._MAX_INLINE_MEDIA_BYTES} bytes."
-                                    ),
-                                    "success": False,
-                                    "media_kind": media_kind,
-                                }
-                            data = await client.download_bytes(uri)
-                            if len(data) > size:
-                                return {
-                                    "uri": uri,
-                                    "content": "Image changed after its size was checked; retry the read.",
-                                    "success": False,
-                                    "media_kind": media_kind,
-                                }
-                            image_format = sniff_image_format(data)
-                            if (
-                                image_format is None
-                                or image_format.mime_type not in self._INLINE_IMAGE_MIME_TYPES
-                            ):
-                                return {
-                                    "uri": uri,
-                                    "content": (
-                                        "File bytes do not match a supported PNG, JPEG, GIF, "
-                                        "or WebP image."
-                                    ),
-                                    "success": False,
-                                    "media_kind": media_kind,
-                                }
-                            encoded = base64.b64encode(data).decode("ascii")
-                            return {
-                                "uri": uri,
-                                "content": (
-                                    f"Image resource ({image_format.mime_type}, {len(data)} bytes)."
-                                ),
-                                "image": {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:{image_format.mime_type};base64,{encoded}"
-                                    },
-                                },
-                                "media_bytes": len(data),
-                                "success": True,
-                                "media_kind": media_kind,
-                            }
+                            return await self._read_image(client, uri)
 
                         if media_kind in {"audio", "video"}:
                             content = await client.read_content(uri, level="overview")
@@ -1259,7 +1257,9 @@ class VikingMultiReadTool(OVFileTool):
                             return {
                                 "uri": uri,
                                 "content": "".join(
-                                    lines[offset:] if limit == -1 else lines[offset : offset + limit]
+                                    lines[offset:]
+                                    if limit == -1
+                                    else lines[offset : offset + limit]
                                 ),
                                 "base_hash": hashlib.sha256(raw).hexdigest(),
                                 "success": True,

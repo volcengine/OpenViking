@@ -848,7 +848,7 @@ enum Commands {
         /// Who made the edit, recorded in Compile output versions
         #[arg(
             long = "edit-source",
-            default_value = "agent",
+            default_value = "manual",
             value_parser = ["manual", "agent", "compile"],
             help_heading = "Advanced options"
         )]
@@ -1284,7 +1284,10 @@ enum Commands {
         no_history: bool,
     },
     /// [Interactive] Compile source materials with a VikingBot Skill
+    #[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands = true)]
     Compile {
+        #[command(subcommand)]
+        command: Option<CompileCommands>,
         /// Source file or directory; repeat the flag or separate entries with commas.
         /// Omitted with `--skill memory`, which consolidates `--to` in place.
         #[arg(
@@ -1293,16 +1296,16 @@ enum Commands {
             value_name = "uri"
         )]
         from_uris: Vec<String>,
-        /// Target resource directory or skills namespace
+        /// Target directory; required unless --skill memory selects the current user's memories root
         #[arg(long, value_name = "uri")]
-        to: String,
+        to: Option<String>,
         /// Skill directory or SKILL.md Viking URI; the literal `memory` runs memory consolidation
-        #[arg(long, value_name = "uri")]
-        skill: String,
+        #[arg(long, value_name = "uri", required = true)]
+        skill: Option<String>,
         /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]
         instruction: Option<String>,
-        /// Provider arguments as JSON; VikingBot wiki_links defaults to false
+        /// Provider arguments as JSON
         #[arg(long, value_name = "json")]
         args: Option<String>,
     },
@@ -1444,6 +1447,23 @@ fn legacy_upload_option_error(
     } else {
         None
     }
+}
+
+/// Compile shortcuts select a fixed skill and reuse the Compile request pipeline.
+#[derive(Subcommand)]
+enum CompileCommands {
+    /// Consolidate existing memories in place without external sources
+    Memory {
+        /// Existing writable memory directory; ~ identifies the current request user
+        #[arg(long, value_name = "uri", default_value = "viking://~/memories")]
+        to: String,
+        /// Additional instructions for memory consolidation
+        #[arg(long, value_name = "text")]
+        instruction: Option<String>,
+        /// Provider arguments as JSON
+        #[arg(long, value_name = "json")]
+        args: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2288,12 +2308,6 @@ enum AdminCommands {
         #[arg(value_name = "account-id")]
         account_id: String,
     },
-    /// Migrate legacy agent/session data to user-owned namespaces (ROOT only)
-    Migrate {
-        /// Remove legacy agent/session directories after migration is verified
-        #[arg(long)]
-        cleanup: bool,
-    },
     /// Register a new user in an account
     RegisterUser {
         /// Account ID
@@ -2302,7 +2316,7 @@ enum AdminCommands {
         /// User ID to register
         #[arg(value_name = "user-id")]
         user_id: String,
-        /// Role: admin or user
+        /// Role: admin, user, or global (global requires ROOT)
         #[arg(long, default_value = "user", value_name = "role")]
         role: String,
         /// Deterministic API key seed
@@ -2386,7 +2400,7 @@ enum AdminCommands {
         #[arg(value_name = "user-id")]
         user_id: String,
     },
-    /// Change a user's role (ROOT only)
+    /// Change a user's role for identity management (ROOT or own-account ADMIN)
     SetRole {
         /// Account ID
         #[arg(value_name = "account-id")]
@@ -2394,11 +2408,11 @@ enum AdminCommands {
         /// User ID
         #[arg(value_name = "user-id")]
         user_id: String,
-        /// New role: admin or user
+        /// New role: admin or user (case-insensitive)
         #[arg(value_name = "role")]
         role: String,
     },
-    /// Regenerate a user's API key (old key immediately invalidated)
+    /// Regenerate a user's API key; self-rotation updates the active ovcli.conf
     RegenerateKey {
         /// Account ID
         #[arg(value_name = "account-id")]
@@ -3028,7 +3042,6 @@ fn is_admin_subcommand(token: &str) -> bool {
         "create-account"
             | "list-accounts"
             | "delete-account"
-            | "migrate"
             | "register-user"
             | "list-users"
             | "create-group"
@@ -4159,12 +4172,27 @@ async fn main() {
             cmd.run().await
         }
         Commands::Compile {
+            command,
             from_uris,
             to,
             skill,
             instruction,
             args,
         } => {
+            let (from_uris, to, skill, instruction, args) = match command {
+                Some(CompileCommands::Memory {
+                    to,
+                    instruction,
+                    args,
+                }) => (Vec::new(), Some(to), "memory".to_string(), instruction, args),
+                None => (
+                    from_uris,
+                    to,
+                    skill.expect("--skill is required without a Compile subcommand"),
+                    instruction,
+                    args,
+                ),
+            };
             let client = ctx.get_client();
             commands::compile::run(
                 &client,
@@ -4370,6 +4398,20 @@ async fn main() {
     };
 
     if let Err(e) = result {
+        if e.code() == "INTERRUPTED" {
+            if matches!(output_format, OutputFormat::Json) {
+                error_ui::print_runtime_error(
+                    &command_display,
+                    &e,
+                    output_format,
+                    compact,
+                    verbose_errors,
+                );
+            } else if let Error::Api { message, .. } = &e {
+                eprintln!("{message}");
+            }
+            std::process::exit(130);
+        }
         if !matches!(e, Error::AlreadyReported) {
             error_ui::print_runtime_error(
                 &command_display,
@@ -4386,8 +4428,9 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions,
+        Cli, CliContext, Commands, CompileCommands, ConfigAddTarget, ConfigCommands,
+        LanguageGateAction, ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd,
+        UploadCliOptions,
         find_command_index, first_command_token, is_language_command_request,
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
@@ -4395,8 +4438,8 @@ mod tests {
         render_pre_language_help_request, resolve_output_format,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
+    use crate::handlers;
     use crate::output::OutputFormat;
-    use crate::{AdminCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -4533,31 +4576,6 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_admin_migrate_cleanup_flag() {
-        let migrate = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate"])
-            .expect("admin migrate should parse");
-        match migrate.command {
-            Commands::Admin { action } => match action {
-                AdminCommands::Migrate { cleanup } => assert!(!cleanup),
-                _ => panic!("expected admin migrate command"),
-            },
-            _ => panic!("expected admin command"),
-        }
-
-        let cleanup = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate", "--cleanup"])
-            .expect("admin migrate cleanup should parse");
-
-        assert!(cleanup.sudo);
-        match cleanup.command {
-            Commands::Admin { action } => match action {
-                AdminCommands::Migrate { cleanup } => assert!(cleanup),
-                _ => panic!("expected admin migrate command"),
-            },
-            _ => panic!("expected admin command"),
-        }
-    }
-
-    #[test]
     fn cli_parses_search_context_mode_and_type() {
         let cli = Cli::try_parse_from([
             "ov",
@@ -4681,13 +4699,15 @@ mod tests {
         match cli.command {
             Commands::Compile {
                 from_uris,
+                to,
                 skill,
                 instruction,
                 args,
                 ..
             } => {
                 assert_eq!(from_uris.len(), 3);
-                assert_eq!(skill, "viking://agent/skills/wiki");
+                assert_eq!(to.as_deref(), Some("viking://resources/wiki"));
+                assert_eq!(skill.as_deref(), Some("viking://agent/skills/wiki"));
                 assert_eq!(instruction.as_deref(), Some("Keep supporting evidence."));
                 assert_eq!(args.as_deref(), Some(r#"{"model_name":"endpoint-1"}"#));
             }
@@ -4739,24 +4759,48 @@ mod tests {
     }
 
     #[test]
-    fn cli_compile_memory_mode_parses_without_from() {
-        let cli = Cli::try_parse_from([
-            "ov",
-            "compile",
-            "--to",
-            "viking://user/u1/memories/entities",
-            "--skill",
-            "memory",
-        ])
-        .expect("memory-mode compile should parse without --from");
-        match cli.command {
-            Commands::Compile {
-                from_uris, skill, ..
-            } => {
-                assert!(from_uris.is_empty());
-                assert_eq!(skill, "memory");
+    fn cli_compile_memory_modes_accept_optional_target_and_reject_conflicts() {
+        for mode in [vec!["memory"], vec!["--skill", "memory"]] {
+            for target in [None, Some("viking://~/memories/entities")] {
+                let cli = Cli::try_parse_from(
+                    ["ov", "compile"]
+                        .into_iter()
+                        .chain(mode.clone())
+                        .chain(target.into_iter().flat_map(|uri| ["--to", uri])),
+                )
+                .unwrap();
+                match cli.command {
+                    Commands::Compile {
+                        command: Some(CompileCommands::Memory { to, .. }),
+                        skill,
+                        ..
+                    } => {
+                        assert!(skill.is_none());
+                        assert_eq!(to, target.unwrap_or("viking://~/memories"));
+                    }
+                    Commands::Compile {
+                        from_uris,
+                        to,
+                        skill,
+                        ..
+                    } => {
+                        assert!(from_uris.is_empty());
+                        assert_eq!(to.as_deref(), target);
+                        assert_eq!(skill.as_deref(), Some("memory"));
+                    }
+                    _ => panic!("expected compile command"),
+                }
             }
-            _ => panic!("expected compile command"),
+        }
+        for options in [
+            vec![],
+            vec!["unknown"],
+            vec!["memory", "--skill", "memory"],
+            vec!["--skill", "memory", "memory"],
+            vec!["memory", "--from", "viking://resources/a"],
+            vec!["--from", "viking://resources/a", "memory"],
+        ] {
+            assert!(Cli::try_parse_from(["ov", "compile"].into_iter().chain(options)).is_err());
         }
     }
 
@@ -5052,7 +5096,6 @@ mod tests {
             &["ov", "admin", "create-account"],
             &["ov", "admin", "list-accounts"],
             &["ov", "admin", "delete-account"],
-            &["ov", "admin", "migrate"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
             &["ov", "admin", "create-group"],
@@ -5628,7 +5671,7 @@ mod tests {
             "task",
             "list",
             "--task-type",
-            "legacy_migration",
+            "admin_reindex",
         ])
         .expect("sudo task list should parse");
         assert!(list.sudo);

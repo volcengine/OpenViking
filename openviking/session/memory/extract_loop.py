@@ -409,16 +409,12 @@ class ExtractLoop:
                 # retry would only hit the budget again, and replaying the
                 # truncated output just grows the prompt. Fail fast with the
                 # dedicated error recorded by _call_llm().
-                raise RuntimeError(
-                    f"Memory extraction aborted: {parse_error or failure_kind}"
-                )
+                raise RuntimeError(f"Memory extraction aborted: {parse_error or failure_kind}")
 
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                retry_reason = (
-                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
-                )
+                retry_reason = "refusal_text" if failure_kind == "refusal_text" else "format_retry"
                 tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
@@ -500,9 +496,7 @@ class ExtractLoop:
         """
         usage = getattr(response, "usage", None)
         completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
-        details = (
-            f"finish_reason='length', output cap={self._effective_max_output_tokens} tokens"
-        )
+        details = f"finish_reason='length', output cap={self._effective_max_output_tokens} tokens"
         if completion_tokens:
             details += f", completion_tokens={completion_tokens}"
         return (
@@ -554,13 +548,6 @@ class ExtractLoop:
 
     def _build_resolution_repair_instruction(self, issues: List[Dict[str, Any]]) -> str:
         return self._output_protocol.render_resolution_repair(issues)
-
-    @staticmethod
-    def _is_event_schema(schema: Any) -> bool:
-        return (
-            getattr(schema, "memory_type", None) == "events"
-            and getattr(schema, "operation_mode", None) == "add_only"
-        )
 
     def _uri_belongs_to_schema(self, uri: str, schema: Any) -> Optional[bool]:
         """Return a path-based ownership result without trusting file metadata."""
@@ -770,43 +757,40 @@ class ExtractLoop:
             if value is None:
                 continue
             items = value if isinstance(value, list) else [value]
-            is_event = self._is_event_schema(schema)
+            is_add_only = getattr(schema, "operation_mode", "upsert") == "add_only"
             for item_index, item in enumerate(items):
                 requested_page_id = dict(item).get("page_id")
-                entries.append((schema_index, item_index, requested_page_id, is_event))
+                entries.append((schema_index, item_index, requested_page_id, is_add_only))
 
         assigned_page_ids: Dict[Tuple[int, int], int] = {}
         page_id_assignments: Dict[int, List[int]] = {}
         page_id_allocator = None
 
-        # Preserve non-Event behavior where possible. Events are always new and therefore
-        # allocate after every other memory type has claimed its response-local ID.
-        for event_phase in (False, True):
-            for schema_index, item_index, requested_page_id, is_event in entries:
-                if is_event != event_phase:
-                    continue
-                existing_uri = None
-                if requested_page_id is not None and page_id_map is not None:
-                    existing_uri = page_id_map.resolve(requested_page_id)
-                if not is_event and existing_uri is not None:
-                    page_id = requested_page_id
-                else:
-                    if page_id_allocator is None:
-                        allocator_factory = getattr(
-                            page_id_map,
-                            "new_page_id_allocator",
-                            None,
-                        )
-                        page_id_allocator = (
-                            allocator_factory()
-                            if callable(allocator_factory)
-                            else ResponsePageIdAllocator()
-                        )
-                    page_id = page_id_allocator.allocate(requested_page_id)
+        # Keep upsert IDs stable before allocating IDs for add_only operations.
+        entries.sort(key=lambda entry: entry[3])
+        for schema_index, item_index, requested_page_id, is_add_only in entries:
+            existing_uri = None
+            if not is_add_only and requested_page_id is not None and page_id_map is not None:
+                existing_uri = page_id_map.resolve(requested_page_id)
+            if existing_uri is not None:
+                page_id = requested_page_id
+            else:
+                if page_id_allocator is None:
+                    allocator_factory = getattr(
+                        page_id_map,
+                        "new_page_id_allocator",
+                        None,
+                    )
+                    page_id_allocator = (
+                        allocator_factory()
+                        if callable(allocator_factory)
+                        else ResponsePageIdAllocator()
+                    )
+                page_id = page_id_allocator.allocate(requested_page_id)
 
-                assigned_page_ids[(schema_index, item_index)] = page_id
-                if requested_page_id is not None:
-                    page_id_assignments.setdefault(requested_page_id, []).append(page_id)
+            assigned_page_ids[(schema_index, item_index)] = page_id
+            if requested_page_id is not None:
+                page_id_assignments.setdefault(requested_page_id, []).append(page_id)
 
         return assigned_page_ids, page_id_assignments
 
@@ -828,6 +812,7 @@ class ExtractLoop:
 
         for schema_index, schema in enumerate(schemas):
             memory_type = schema.memory_type
+            is_add_only = getattr(schema, "operation_mode", "upsert") == "add_only"
             value = getattr(operations, memory_type, None)
             if value is None:
                 continue
@@ -870,7 +855,6 @@ class ExtractLoop:
 
                 requested_page_id = item_dict.pop("page_id", None)
                 page_id = assigned_page_ids[(schema_index, item_index)]
-                is_event = self._is_event_schema(schema)
                 resolved_op = ResolvedOperation(
                     old_memory_file_content=None,
                     memory_fields=item_dict,
@@ -880,16 +864,14 @@ class ExtractLoop:
                     resolution_skip=identity_resolution_skip,
                 )
 
-                if is_event:
-                    # Event page_ids are temporary link anchors. They must never select an
-                    # existing memory file; URI collision handling remains unchanged downstream.
-                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
-                        memory_type_schema=schema,
-                        operation=resolved_op,
-                        extract_context=self._extract_context,
-                    )
-                elif requested_page_id is not None and page_id_map is not None:
-                    resolved_uri = page_id_map.resolve(requested_page_id)
+                try:
+                    resolved_uri = None
+                    if (
+                        not is_add_only
+                        and requested_page_id is not None
+                        and page_id_map is not None
+                    ):
+                        resolved_uri = page_id_map.resolve(requested_page_id)
                     if resolved_uri:
                         old_content = self.context_provider.read_file_contents.get(resolved_uri)
                         belongs_to_schema = self._uri_belongs_to_schema(resolved_uri, schema)
@@ -940,11 +922,18 @@ class ExtractLoop:
                             operation=resolved_op,
                             extract_context=self._extract_context,
                         )
-                else:
-                    resolved_op.uris = self._isolation_handler.calculate_memory_uris(
-                        memory_type_schema=schema,
-                        operation=resolved_op,
-                        extract_context=self._extract_context,
+                except ValueError as exc:
+                    resolved_op.uris = []
+                    resolved_op.resolution_skip = MemoryOperationSkip(
+                        reason_code=MemoryOperationSkipCode.INVALID_URI_TEMPLATE_VARS,
+                        reason=str(exc),
+                    )
+                    logger.warning(
+                        "Skipping memory operation with unrenderable URI: "
+                        "memory_type=%s page_id=%s error=%s",
+                        memory_type,
+                        page_id,
+                        exc,
                     )
 
                 upsert_operations.append(resolved_op)

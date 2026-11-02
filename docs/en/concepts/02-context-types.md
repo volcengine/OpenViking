@@ -1,14 +1,15 @@
 # Context Types
 
-OpenViking manages three types of context: resources provide reference material, memories retain information from interactions, and skills describe how to carry out tasks.
+OpenViking resources provide reference material, memories retain information from interactions, and skills describe how to carry out tasks. [Rules (Beta)](./17-rule-scenarios.md) are a separate type of mandatory constraint that an Agent must follow when its conditions hold.
 
 ## Overview
 
 | Type | Purpose | Lifecycle | Initiative |
 |------|---------|-----------|------------|
-| **Resource** | Knowledge and rules | Retained until updated or deleted | User adds |
+| **Resource** | Source knowledge and reference material | Retained until updated or deleted | User adds |
 | **Memory** | Preferences, facts, and task experience | Long-term, dynamically updated | Extracted from sessions or recorded explicitly |
 | **Skill** | Task instructions and supporting resources | Long-term, updatable | User or system adds |
+| **Rule (Beta)** | Durable, executable mandatory constraints | active / paused / archived | Explicit compilation and on-demand recall |
 
 ## Example Setup
 

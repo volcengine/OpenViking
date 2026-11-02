@@ -324,8 +324,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(openviking_http_request_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "HTTP P95",
+          "expr": "histogram_quantile(0.95, sum by (le, bucket_schema) (label_replace(rate(openviking_http_request_duration_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "HTTP P95 / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -1586,8 +1586,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(openviking_http_request_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{route}}",
+          "expr": "histogram_quantile(0.95, sum by (le, route, bucket_schema) (label_replace(rate(openviking_http_request_duration_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{route}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -1687,8 +1687,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_http_request_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{account_id}}",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id, bucket_schema) (label_replace(rate(openviking_http_request_duration_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{account_id}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -2219,8 +2219,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, context_type) (rate(openviking_retrieval_latency_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{context_type}}",
+          "expr": "histogram_quantile(0.95, sum by (le, context_type, bucket_schema) (label_replace(rate(openviking_retrieval_latency_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{context_type}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -2320,8 +2320,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_retrieval_latency_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{account_id}}",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id, bucket_schema) (label_replace(rate(openviking_retrieval_latency_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{account_id}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -2623,8 +2623,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(openviking_operation_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{operation}}",
+          "expr": "histogram_quantile(0.95, sum by (le, operation, bucket_schema) (label_replace(rate(openviking_operation_duration_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{operation}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -2724,8 +2724,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_operation_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{account_id}}",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id, bucket_schema) (label_replace(rate(openviking_operation_duration_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{account_id}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -3041,8 +3041,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(openviking_resource_stage_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{stage}}",
+          "expr": "histogram_quantile(0.95, sum by (le, stage, bucket_schema) (label_replace(rate(openviking_resource_stage_duration_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{stage}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -3142,8 +3142,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_resource_stage_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{account_id}}",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id, bucket_schema) (label_replace(rate(openviking_resource_stage_duration_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{account_id}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -3858,8 +3858,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, provider, model_name) (rate(openviking_vlm_call_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{provider}} / {{model_name}}",
+          "expr": "histogram_quantile(0.95, sum by (le, provider, model_name, bucket_schema) (label_replace(rate(openviking_vlm_call_duration_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{provider}} / {{model_name}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -3959,8 +3959,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_vlm_call_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{account_id}}",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id, bucket_schema) (label_replace(rate(openviking_vlm_call_duration_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{account_id}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -4262,8 +4262,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, status) (rate(openviking_embedding_latency_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{status}}",
+          "expr": "histogram_quantile(0.95, sum by (le, status, bucket_schema) (label_replace(rate(openviking_embedding_latency_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{status}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -4363,8 +4363,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_embedding_latency_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "{{account_id}}",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id, bucket_schema) (label_replace(rate(openviking_embedding_latency_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{account_id}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }
@@ -4895,7 +4895,24 @@
           },
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -4953,8 +4970,8 @@
         },
         {
           "editorMode": "code",
-          "expr": "topk(10, histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_embedding_latency_seconds_bucket[$__rate_interval]))))",
-          "legendFormat": "embedding p95 {{account_id}}",
+          "expr": "(histogram_quantile(0.95, sum by (le, account_id, bucket_schema) (label_replace(rate(openviking_embedding_latency_seconds_bucket[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))) and on (account_id) (topk(10, sum by (account_id) (rate(openviking_vlm_calls_total[$__rate_interval]))))",
+          "legendFormat": "embedding p95 {{account_id}} / {{bucket_schema}}",
           "range": true,
           "refId": "D"
         }
@@ -5054,7 +5071,7 @@
         "x": 0,
         "y": 196
       },
-      "id": 59,
+      "id": 64,
       "panels": [],
       "title": "Memory Extraction",
       "type": "row"
@@ -5089,7 +5106,7 @@
         "x": 0,
         "y": 197
       },
-      "id": 60,
+      "id": 65,
       "options": {
         "legend": {
           "calcs": [],
@@ -5245,8 +5262,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(openviking_resource_stage_duration_seconds_bucket{stage=~\"semantic_queue_wait|semantic_execute|embedding_queue_wait|embedding_execute\"}[$__rate_interval])))",
-          "legendFormat": "{{stage}}",
+          "expr": "histogram_quantile(0.95, sum by (le, stage, bucket_schema) (label_replace(rate(openviking_resource_stage_duration_seconds_bucket{stage=~\"semantic_queue_wait|semantic_execute|embedding_queue_wait|embedding_execute\"}[$__rate_interval]), \"bucket_schema\", \"legacy\", \"bucket_schema\", \"^$\")))",
+          "legendFormat": "{{stage}} / {{bucket_schema}}",
           "range": true,
           "refId": "A"
         }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from enum import Enum
 from typing import Any, List, Literal, Optional
 from urllib.parse import urlparse
@@ -298,7 +299,12 @@ class AGFSPathLockConfig(BaseModel):
 
     provider: str = Field(
         default="filesystem",
-        description="PathLock provider: 'filesystem' | 'memory' | 'cache'",
+        description="PathLock provider: 'filesystem' | 'memory' | 'sqlite' | 'cache'",
+    )
+    sqlite_path: Optional[str] = Field(
+        default=None,
+        description="Absolute local SQLite lock database file shared by all participating processes. "
+        "Defaults to '{storage.workspace}/_system/pathlock/pathlock.db' when not set.",
     )
     lock_timeout_secs: float = Field(
         default=0.0,
@@ -312,8 +318,16 @@ class AGFSPathLockConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate provider and timeout/expiry ranges."""
-        if self.provider not in {"filesystem", "memory", "cache"}:
-            raise ValueError("pathlock provider must be one of: 'filesystem', 'memory', 'cache'")
+        if self.provider not in {"filesystem", "memory", "sqlite", "cache"}:
+            raise ValueError(
+                "pathlock provider must be one of: 'filesystem', 'memory', 'sqlite', 'cache'"
+            )
+        if (
+            self.provider == "sqlite"
+            and self.sqlite_path is not None
+            and not os.path.isabs(self.sqlite_path)
+        ):
+            raise ValueError("pathlock sqlite_path must be an absolute local file path")
         if not math.isfinite(self.lock_expire_secs) or self.lock_expire_secs < 1.0:
             raise ValueError("pathlock lock_expire_secs must be finite and >= 1.0")
         return self

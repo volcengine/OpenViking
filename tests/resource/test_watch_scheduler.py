@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -385,3 +386,303 @@ class TestWatchSchedulerResourceExistence:
         assert updated.last_task_id == "add-resource-task-1"
         assert updated.last_status == "failed"
         assert updated.last_error == "document import failed"
+
+
+class TestWatchSchedulerGitShaGate:
+    REPO = "https://github.com/volcengine/OpenViking.git"
+
+    def _build_scheduler(self, monkeypatch, probe):
+        monkeypatch.setattr(
+            "openviking.parse.accessors.git_accessor.GitAccessor.probe_git_remote_head",
+            probe,
+        )
+
+        class FakeResourceService(ResourceService):
+            def __init__(self):
+                super().__init__()
+                self.calls = []
+
+            async def refresh_resource(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"root_uri": kwargs.get("to"), "status": "completed"}
+
+        resource_service = FakeResourceService()
+        scheduler = WatchScheduler(resource_service=resource_service, check_interval=1)
+        return scheduler, resource_service
+
+    async def _setup_task(
+        self,
+        scheduler,
+        *,
+        source_checkpoint=None,
+        path=None,
+        processor_kwargs=None,
+        instruction="",
+    ):
+        manager = WatchManager(viking_fs=None)
+        await manager.initialize()
+        scheduler._watch_manager = manager
+        task = await manager.create_task(
+            path=path or self.REPO,
+            to_uri="viking://resources/openviking",
+            watch_interval=30.0,
+            processor_kwargs=processor_kwargs,
+            instruction=instruction,
+        )
+        if source_checkpoint is not None:
+            await manager.update_source_checkpoint(task.task_id, source_checkpoint)
+        return manager, task
+
+    @pytest.mark.asyncio
+    async def test_unchanged_head_sha_skips_refresh(self, monkeypatch):
+        state = {"kind": "git", "head_sha": "a" * 40, "instruction": ""}
+        probe = AsyncMock(return_value=("refs/heads/main", "a" * 40))
+        scheduler, resource_service = self._build_scheduler(monkeypatch, probe)
+        manager, task = await self._setup_task(scheduler, source_checkpoint=state)
+
+        await scheduler._execute_task(task)
+
+        probe.assert_awaited_once()
+        assert resource_service.calls == []
+        updated = await manager.get_task(task.task_id)
+        assert updated.last_status == "completed"
+        assert updated.source_checkpoint == state
+        assert updated.next_execution_time is not None
+        assert updated.next_execution_time > datetime.now()
+
+    @pytest.mark.asyncio
+    async def test_unchanged_skip_preserves_last_task_id(self, monkeypatch):
+        state = {"kind": "git", "head_sha": "a" * 40, "instruction": ""}
+        probe = AsyncMock(return_value=("refs/heads/main", "a" * 40))
+        scheduler, resource_service = self._build_scheduler(monkeypatch, probe)
+        manager, task = await self._setup_task(scheduler, source_checkpoint=state)
+        await manager.record_execution(
+            task.task_id,
+            status="completed",
+            execution_task_id="ingest-task-1",
+        )
+
+        await scheduler._execute_task(task)
+
+        assert resource_service.calls == []
+        updated = await manager.get_task(task.task_id)
+        assert updated.last_status == "completed"
+        assert updated.last_task_id == "ingest-task-1"
+
+    @pytest.mark.asyncio
+    async def test_commit_pin_uses_commit_checkpoint_without_refresh(self, monkeypatch):
+        commit = "a" * 40
+        probe = AsyncMock(return_value=("", commit))
+        scheduler, resource_service = self._build_scheduler(monkeypatch, probe)
+        manager, task = await self._setup_task(
+            scheduler,
+            source_checkpoint={"kind": "git", "head_sha": commit, "instruction": ""},
+            processor_kwargs={"commit": commit},
+        )
+
+        await scheduler._execute_task(task)
+
+        probe.assert_awaited_once()
+        assert resource_service.calls == []
+        updated = await manager.get_task(task.task_id)
+        assert updated.last_status == "completed"
+        assert updated.source_checkpoint == {
+            "kind": "git",
+            "head_sha": commit,
+            "instruction": "",
+        }
+
+    @pytest.mark.asyncio
+    async def test_account_github_token_is_used_for_probe_without_persisting(self, monkeypatch):
+        state = {"kind": "git", "head_sha": "a" * 40, "instruction": ""}
+        probe = AsyncMock(return_value=("refs/heads/main", "a" * 40))
+        scheduler, resource_service = self._build_scheduler(monkeypatch, probe)
+        token_resolver = AsyncMock(return_value="account-token")
+        resource_service._resource_processor = SimpleNamespace(
+            github_token_for=token_resolver,
+        )
+        manager, task = await self._setup_task(scheduler, source_checkpoint=state)
+
+        await scheduler._execute_task(task)
+
+        token_resolver.assert_awaited_once()
+        probe.assert_awaited_once_with(
+            self.REPO,
+            auth_config={"token": "account-token"},
+        )
+        assert resource_service.calls == []
+        updated = await manager.get_task(task.task_id)
+        assert updated.source_checkpoint == state
+        assert "auth_config" not in updated.processor_kwargs
+
+    @pytest.mark.asyncio
+    async def test_changed_instruction_triggers_refresh(self, monkeypatch):
+        sha = "a" * 40
+        probe = AsyncMock(return_value=("refs/heads/main", sha))
+        scheduler, resource_service = self._build_scheduler(monkeypatch, probe)
+        manager, task = await self._setup_task(
+            scheduler,
+            source_checkpoint={
+                "kind": "git",
+                "head_sha": sha,
+                "instruction": "old instruction",
+            },
+            instruction="new instruction",
+        )
+
+        await scheduler._execute_task(task)
+
+        assert len(resource_service.calls) == 1
+        assert resource_service.calls[0]["instruction"] == "new instruction"
+        updated = await manager.get_task(task.task_id)
+        assert updated.last_status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_probe_timeout_fails_open_to_refresh(self, monkeypatch):
+        async def blocked_probe(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        scheduler, resource_service = self._build_scheduler(monkeypatch, blocked_probe)
+        monkeypatch.setattr(scheduler, "DEFAULT_GIT_PROBE_TIMEOUT", 0.01)
+        manager, task = await self._setup_task(scheduler)
+
+        await asyncio.wait_for(scheduler._execute_task(task), timeout=1.0)
+
+        assert len(resource_service.calls) == 1
+        updated = await manager.get_task(task.task_id)
+        assert updated.last_status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_changed_head_sha_triggers_refresh(self, monkeypatch):
+        probe = AsyncMock(return_value=("refs/heads/main", "b" * 40))
+        scheduler, resource_service = self._build_scheduler(monkeypatch, probe)
+        manager, task = await self._setup_task(scheduler)
+
+        await scheduler._execute_task(task)
+
+        assert len(resource_service.calls) == 1
+        updated = await manager.get_task(task.task_id)
+        assert updated.source_checkpoint is None
+        assert updated.last_status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_async_refresh_uses_completed_result_checkpoint(self, monkeypatch):
+        probe = AsyncMock(return_value=("refs/heads/main", "b" * 40))
+        monkeypatch.setattr(
+            "openviking.parse.accessors.git_accessor.GitAccessor.probe_git_remote_head",
+            probe,
+        )
+
+        class FakeResourceService(ResourceService):
+            async def refresh_resource(self, **_kwargs):
+                return {"status": "success", "task_id": "refresh-task-1"}
+
+        class CompletedStatus:
+            value = "completed"
+
+        class CompletedTask:
+            status = CompletedStatus()
+            error = None
+            result = {"meta": {"resolved_head_sha": "b" * 40}}
+
+        tracker = AsyncMock()
+        tracker.wait.return_value = CompletedTask()
+        monkeypatch.setattr(
+            "openviking.service.task_tracker.get_task_tracker",
+            lambda: tracker,
+        )
+        scheduler = WatchScheduler(
+            resource_service=FakeResourceService(),
+            check_interval=1,
+        )
+        manager, task = await self._setup_task(
+            scheduler,
+            source_checkpoint={
+                "kind": "git",
+                "head_sha": "b" * 40,
+                "instruction": "old instruction",
+            },
+            instruction="new instruction",
+        )
+
+        await scheduler._execute_task(task)
+
+        updated = await manager.get_task(task.task_id)
+        assert updated.source_checkpoint == {
+            "kind": "git",
+            "head_sha": "b" * 40,
+            "instruction": "new instruction",
+        }
+        assert updated.last_status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_probe_failure_fails_open_to_full_refresh(self, monkeypatch):
+        async def failing_probe(*_args, **_kwargs):
+            raise RuntimeError("ls-remote boom")
+
+        scheduler, resource_service = self._build_scheduler(monkeypatch, failing_probe)
+        manager, task = await self._setup_task(
+            scheduler,
+            source_checkpoint={"kind": "git", "head_sha": "a" * 40},
+        )
+
+        await scheduler._execute_task(task)
+
+        assert len(resource_service.calls) == 1
+        updated = await manager.get_task(task.task_id)
+        assert updated.last_status == "completed"
+        # No fresh checkpoint available: previous state is left untouched.
+        assert updated.source_checkpoint["head_sha"] == "a" * 40
+
+    @pytest.mark.asyncio
+    async def test_sync_completed_refresh_persists_checkpoint(self, monkeypatch):
+        sha = "c" * 40
+        probe = AsyncMock(return_value=("refs/heads/main", sha))
+        monkeypatch.setattr(
+            "openviking.parse.accessors.git_accessor.GitAccessor.probe_git_remote_head",
+            probe,
+        )
+
+        class SyncResourceService(ResourceService):
+            def __init__(self):
+                super().__init__()
+                self.calls = []
+
+            async def refresh_resource(self, **kwargs):
+                self.calls.append(kwargs)
+                # No queue manager: the terminal result is returned directly,
+                # carrying the imported revision meta without a task_id.
+                return {
+                    "root_uri": kwargs.get("to"),
+                    "status": "completed",
+                    "meta": {"resolved_head_sha": sha},
+                }
+
+        resource_service = SyncResourceService()
+        scheduler = WatchScheduler(resource_service=resource_service, check_interval=1)
+        manager, task = await self._setup_task(scheduler)
+
+        await scheduler._execute_task(task)
+
+        assert len(resource_service.calls) == 1
+        updated = await manager.get_task(task.task_id)
+        assert updated.last_status == "completed"
+        assert updated.source_checkpoint == {
+            "kind": "git",
+            "head_sha": sha,
+            "instruction": "",
+        }
+
+    @pytest.mark.asyncio
+    async def test_non_git_source_does_not_probe(self, monkeypatch):
+        probe = AsyncMock(return_value=("refs/heads/main", "a" * 40))
+        scheduler, resource_service = self._build_scheduler(monkeypatch, probe)
+        manager, task = await self._setup_task(
+            scheduler,
+            path="https://example.com/doc.md",
+        )
+
+        await scheduler._execute_task(task)
+
+        probe.assert_not_awaited()
+        assert len(resource_service.calls) == 1

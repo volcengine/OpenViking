@@ -4,7 +4,7 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 
 # 把客户端接入 OpenViking 网关
 
-本页按客户端给出具体配置，以及验证配置是否生效的方法。每个客户端都需要三样东西：网关地址、网关密钥，以及这把密钥绑定的一个已启用上游——它要支持客户端使用的协议，并提供客户端请求的模型。还没有网关密钥？先看[快速上手](02-quickstart.md)。
+本页按客户端给出具体配置，以及验证配置是否生效的方法。每个客户端都需要三样东西：网关地址、网关密钥（部署方开启 `openviking_keys` 时，也可以用用户的 OpenViking API 密钥，见[直接使用 OpenViking API 密钥](09-gateway-keys.md#openviking-keys)），以及这把密钥绑定的一个已启用上游——它要支持客户端使用的协议，并提供客户端请求的模型。还没有网关密钥？先看[快速上手](02-quickstart.md)。
 
 以下两条限制对所有客户端都适用：
 
@@ -32,12 +32,22 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 
 默认情况下，服务商的 API Key 由网关保管，客户端只需发送网关密钥。[上游](07-upstreams.md#upstreams)也可以把 **API Key 由谁提供**设为**每个客户端自带 API Key**（见[凭证](07-upstreams.md#credentials)）。这时客户端仍把网关密钥填在原来填 API Key 的地方，同时在每个请求里用 `X-OpenViking-Upstream-Key` 请求头带上自己的服务商 API Key。在 Studio 中，**接入**标签页的**客户端自带服务商 API Key**卡片会列出哪些上游需要它。
 
-缺了这个请求头，所有请求都会返回 401 `Upstream API key is missing`。各客户端的添加方式：
+缺了这个请求头，所有请求都会返回 401 `Upstream API key is missing`。各客户端的添加方式见[在客户端里添加请求头](#add-a-header)。
 
-| 客户端 | 如何发送 `X-OpenViking-Upstream-Key` |
+## 覆盖上下文配置 {#override-profile-settings}
+
+客户端可以用 `X-OpenViking-Context` 请求头，为新对话修改密钥所用上下文配置的设置。它的值是一个 JSON 对象，列出要修改的字段，例如 `{"recall":false}` 表示不召回，`{"disabled_tools":[]}` 表示提供全部 OpenViking 工具，包括会修改数据的工具。配置需要开启**允许客户端覆盖设置**（默认开启）；请求头能包含什么、可能返回哪些错误，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。各客户端的添加方式见[在客户端里添加请求头](#add-a-header)。
+
+对话会沿用开始时的设置，所以修改后的请求头从下一段新对话起生效，例如换一个新的 `X-OpenViking-Session` 值。与所有 `X-OpenViking-*` 请求头一样，它不会转发给服务商。
+
+## 在客户端里添加请求头 {#add-a-header}
+
+上面两个请求头都要随每个请求发送。各客户端的添加方式：
+
+| 客户端 | 如何添加请求头 |
 | --- | --- |
-| Claude Code | `export ANTHROPIC_CUSTOM_HEADERS='X-OpenViking-Upstream-Key: <provider-key>'` |
-| Codex CLI | 在服务商配置里使用 `env_http_headers`，例如 `env_http_headers = { "X-OpenViking-Upstream-Key" = "PROVIDER_API_KEY" }`，并把服务商 API Key 导出为 `PROVIDER_API_KEY` |
+| Claude Code | `export ANTHROPIC_CUSTOM_HEADERS='<Name>: <value>'`。有多个请求头时每行一个，例如 `export ANTHROPIC_CUSTOM_HEADERS=$'X-OpenViking-Upstream-Key: <provider-key>\nX-OpenViking-Context: {"recall":false}'` |
+| Codex CLI | 在服务商配置里，固定值用 `http_headers`，例如 `http_headers = { "X-OpenViking-Context" = '{"recall":false}' }`；从环境变量读取用 `env_http_headers`，例如 `env_http_headers = { "X-OpenViking-Upstream-Key" = "PROVIDER_API_KEY" }`，并把服务商 API Key 导出为 `PROVIDER_API_KEY` |
 | OpenAI 和 Anthropic SDK | 在客户端上设置 `default_headers`，或在每个请求里传 `extra_headers` |
 | Open WebUI | 加到连接的自定义请求头里，与会话请求头放在一起 |
 
@@ -228,7 +238,7 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 
 ## DSH {#dsh}
 
-[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）的模型层基于 pi，`api` 和 Base URL 的取值与 pi 相同：`https://ov.example.com/gateway/v1`，Anthropic Messages 用 `https://ov.example.com/gateway`。在 profile 配置中添加一个服务商；`dsh web` 使用的 profile 是 `web`，所以文件是 `~/.dsh/profiles/web/cordis.patch.yml`：
+[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）的模型层基于 pi，`api` 和 Base URL 的取值与 pi 相同：`https://ov.example.com/gateway/v1`，Anthropic Messages 用 `https://ov.example.com/gateway`。在 profile 配置中添加一个服务商；`dsh web` 使用的 profile 是 `web`，所以文件是 `~/.dsh/profiles/web/cordis.patch.yml`；DeepSeek Harness Desktop 桌面应用用的是 `~/.dsh/profiles/desktop/cordis.patch.yml`：
 
 ```yaml
 - id: llm-pi-ai
@@ -247,6 +257,7 @@ pi 可以使用 Chat Completions、Anthropic Messages 或 Responses，Base URL �
 把网关密钥导出为 `OPENVIKING_GATEWAY_KEY`（也就是 `apiKeyEnv` 填的变量名），然后启动 `dsh web`，在模型选择器中选择 `openviking` 服务商下的 `<model>`。
 
 - 也可以在 Web UI 的 Settings → Models → Add model provider → Custom model API 中添加，写入的是同一个文件。
+- Desktop 看不到在终端里 export 的变量。macOS 上把 `OPENVIKING_GATEWAY_KEY` 写进 shell 启动文件（`~/.zprofile` 或 `~/.zshrc`）；Windows 上用 `setx` 设置。然后用 ⌘Q 或托盘菜单退出 Desktop，再重新打开。Desktop 的恢复对话框会把 `cordis.patch.yml` 挪成 `.bak-<时间戳>` 文件，运行过恢复后需要重新添加服务商。
 - DSH 的一个服务商只使用一种协议。要通过多种协议使用网关，就为每种协议各声明一个服务商。
 - 除非 DSH 发送了某个会话请求头，否则网关根据历史匹配它的对话（见[网关如何识别对话](#how-conversations-are-recognized)）。
 - 同一个 profile 里装了 [OpenViking 的 DSH 插件](../agent-integrations/17-dsh.md)时，网关会让出这些对话，两者选一个即可。

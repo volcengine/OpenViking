@@ -620,9 +620,6 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
                 .await
         }
-        AdminCommands::Migrate { cleanup } => {
-            commands::admin::migrate(&client, cleanup, ctx.output_format, ctx.compact).await
-        }
         AdminCommands::RegisterUser {
             account_id,
             user_id,
@@ -773,6 +770,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 &account_id,
                 &user_id,
                 seed.as_deref(),
+                if ctx.sudo { None } else { Some(&ctx.config) },
                 ctx.output_format,
                 ctx.compact,
             )

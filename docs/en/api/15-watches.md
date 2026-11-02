@@ -36,7 +36,9 @@ For every single-task endpoint the path `{task_id}` can be replaced with a `?to_
 | watch_interval | float | New cadence in minutes. Must be `> 0`; use `is_active=false` to pause without losing the cadence. |
 | is_active | bool | Toggle activation without losing the cadence (pause / resume). |
 | reason | string | Update the recorded reason for the watch. |
-| instruction | string | Update the semantic processing instruction. |
+| instruction | string | Update semantic processing instruction. |
+
+The managed Connector control plane may also submit a separate `credential_state` notification, without combining it with the fields above. It contains the reference owner fields `account_id`, `resource_id`, `user_id`, `ov_user_id`, `ov_account_id`, `type`, `platform`, a positive storage `version`, and boolean `authorized`. The kernel verifies the private watch reference and ignores stale or duplicate notifications. Revocation records a credential pause; reauthorization resumes only watches with that marker. Explicit manual pause/resume clears the marker. Execution history is preserved. The watermark and marker stay in private watch storage; historical paused watches without a marker retain their state.
 
 Unrecognized fields are rejected with HTTP `400` and `INVALID_ARGUMENT` (`extra="forbid"` on the request model). Fields left unset preserve their current values.
 

@@ -16,20 +16,20 @@ import validator from '@rjsf/validator-ajv8'
 import { PlusIcon, Trash2Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { Badge } from '#/components/ui/badge'
-import { Button } from '#/components/ui/button'
-import { Input } from '#/components/ui/input'
-import { Label } from '#/components/ui/label'
+import { Badge } from '#/shared/ui/badge'
+import { Button } from '#/shared/ui/button'
+import { Input } from '#/shared/ui/input'
+import { Label } from '#/shared/ui/label'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '#/components/ui/select'
-import { Switch } from '#/components/ui/switch'
-import { Textarea } from '#/components/ui/textarea'
-import { cn } from '#/lib/utils'
+} from '#/shared/ui/select'
+import { Switch } from '#/shared/ui/switch'
+import { Textarea } from '#/shared/ui/textarea'
+import { cn } from '#/shared/lib/utils'
 
 import type { JsonSchema } from '../-lib/model'
 import { cleanSchemaArguments, toRjsfSchema } from '../-lib/schema'

@@ -49,6 +49,22 @@ class RagfsBindingConfig:
         cachefs = getattr(self.agfs, "cachefs", None)
         cachefs_backend = getattr(cachefs, "backend", "local")
         pathlock = self.agfs.pathlock.model_dump(mode="json", exclude_none=True)
+        if pathlock.get("provider") == "sqlite":
+            sqlite_path = pathlock.get("sqlite_path")
+            if sqlite_path is None:
+                workspace = getattr(self.agfs, "path", None)
+                if not workspace:
+                    raise ValueError(
+                        "agfs_config.path is required for the default SQLite lock database"
+                    )
+                # Resolve at binding time so later workspace overrides are respected.
+                database = (
+                    Path(workspace).expanduser().resolve() / "_system" / "pathlock" / "pathlock.db"
+                )
+            else:
+                database = Path(sqlite_path).resolve()
+            database.parent.mkdir(parents=True, exist_ok=True)
+            pathlock["sqlite_path"] = str(database)
         pathlock_uses_cache = pathlock.get("provider") == "cache"
         backups = getattr(self.agfs, "backups", None)
         uses_runtime = (

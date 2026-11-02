@@ -342,7 +342,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`; must be `>= 1`) |
+| `max_concurrent` | int | Maximum concurrent document embedding requests (`embedding.max_concurrent`, default: `10`; must be `>= 1`). Retrieval query embeddings bypass this limit |
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
 | `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` is a deprecated alias for `summary_first`; existing configurations still load, log a warning, and normalize to `summary_first`. Default: `content_only` |
 | `max_input_tokens` | int | Maximum estimated raw text tokens sent to the embedding model when content is used. Default: `4096` |
@@ -778,6 +778,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `forward_api_key` | bool | LiteLLM only. Overrides whether `api_key` is forwarded to LiteLLM. By default, OpenViking does not forward placeholder keys for native AWS/GCP routes such as `bedrock/`, `sagemaker/`, and `vertex_ai/`; set to `true` when intentionally using a LiteLLM API-key route such as Bedrock bearer-token auth |
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
+| `temperature` | float or null | Sampling temperature (default: `null`). Omit or set to `null` to leave it out of requests and use the provider default |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
@@ -796,6 +797,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `media.file_processing_timeout` | float | Maximum provider-side preprocessing wait in seconds (default: `1800`) |
 | `media.file_poll_interval` | float | Provider-side preprocessing poll interval in seconds (default: `3`) |
 | `media.video_fps` | float | Video frame sampling rate when supported by the provider, from `0.2` through `5.0` (default: `1.0`) |
+
+The `vlm` and any dedicated `query_planner` configuration leave temperature unspecified by default. Omitting `temperature` or setting `"temperature": null` uses provider-default sampling for both fixed and routed models. The setting is shared by all credentials in that configuration; standalone VikingBot configuration and call interfaces also leave temperature unspecified by default. Explicit numeric settings retain each backend's existing behavior. To retain the previous VLM default, explicitly set `"temperature": 0.0` if the model supports it. Switching to provider defaults may change output randomness; the endpoint must support omitting temperature. Thinking mode and its supported settings remain model-specific.
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 
@@ -1137,6 +1140,8 @@ OpenAI-compatible APIs, LiteLLM, and Jev.
     "provider": "jev",
     "api_key": "your-typesafe-api-key",
     "model": "jev-latest",
+    "mode": "noul",
+    "candidates_visible": false,
     "timeout": 120,
     "log_payloads": false,
     "threshold": 0.1
@@ -1171,14 +1176,29 @@ Notes for Vercel:
 - `api_base` must include the `/typesafe` suffix. `https://ai-gateway.vercel.sh/v1`
   is Vercel's own evaluate protocol and is not supported by the adapter.
 
-The Jev adapter sends the query and candidate documents as shared System One `state`
-and supports two modes:
+The Jev adapter supports two scoring modes:
 
 - `noul` (default): one independent relevance question per document, using its returned yes
   probability as the score. All questions are sent in one HTTP request, and document
   scores do not have to sum to 1.
 - `choice`: one question compares all candidate documents, with `candidate_{index}`
   mapped to input indices. Scores come from `probabilities` in document order.
+
+For Noul, candidate visibility is controlled by `rerank.candidates_visible`:
+
+- `false` (default, Noul only): shared `state` contains only the query; each question
+  carries its own document in `instructions.candidate_document`. Other candidates are
+  not included in that question or in shared state. All questions still use one HTTP
+  request, and scores retain the original document order.
+- `true`: the query and all candidate documents are in shared `state`.
+  Independent Noul answers do not mean the candidates are hidden from each other.
+
+For Noul, omitting `candidates_visible` now enables isolation. To retain shared
+candidate context, set `"candidates_visible": true` explicitly.
+
+Choice ignores this Noul-only option and always compares the full candidate set in
+shared `state`. With `"mode": "choice"`, omitting `candidates_visible` or setting it
+to either `false` or `true` produces the same request and scoring behavior.
 
 Select the mode with `rerank.mode`; omitting it or setting it to `null` keeps the
 default `noul` behavior. Choice scores are relative probabilities summing to 1 within
@@ -1199,6 +1219,7 @@ using Choice through MCP.
 | `api_base` | str | Complete endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai/v1/systemone`, Vercel uses `https://ai-gateway.vercel.sh/typesafe/v1/systemone`; custom Jev URLs are used unchanged) |
 | `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
 | `mode` | `"noul"`, `"choice"`, or `null` | Jev rerank mode. `null` and omission use `"noul"` |
+| `candidates_visible` | bool | Jev Noul only. Default: `false`, isolating each candidate in its own question. Explicit `true` shares candidates in state. Choice ignores this option. |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
 | `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
@@ -1315,10 +1336,12 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 
 Task records use the local FileStore by default. To share Task/Work state across
 OpenViking processes, provision `openviking/service/sql/task_store_init.sql` in
-MySQL and select the relational backend:
+MySQL, apply the SQL changes under `openviking/service/sql/changes/`, configure
+a stable top-level `service_name`, and select the relational backend:
 
 ```json
 {
+  "service_name": "production",
   "storage": {
     "task_store": {
       "provider": "mysql",
@@ -1342,9 +1365,15 @@ Replace `ov_tasks` consistently in the provisioning SQL when using a custom pref
 
 The MySQL backend requires the `openviking[mysql]` extra. Its mutations,
 Task finalization, and execution-event updates commit in one database
-transaction. `task_id` is globally unique; `account_id` and `user_id` scope
-authorization and queries. Do not use the FileStore tables and MySQL tables as
-active writers for the same deployment.
+transaction. Top-level `service_name` is stored on every Task/Work/Event row and
+isolates multiple OpenViking deployments that share one table set. Within one
+`service_name`, `task_id` is unique; `account_id` and `user_id` scope
+authorization and queries. Fresh deployments should run the init SQL and then
+the change scripts in order; existing TaskStore tables created before
+`service_name` must run
+`openviking/service/sql/changes/0001_task_store_service_name.sql` before
+upgrading. Do not use the FileStore tables and MySQL tables as active writers
+for the same deployment.
 
 #### agfs (RAGFS)
 
@@ -1378,6 +1407,7 @@ top-level backend remains the only direct read source.
       "backups": {
         "initial_partitions": 16,
         "checkpoint_interval_secs": 86400,
+        "reconcile_existing_data": false,
         "provider": "filesystem",
         "items": [
           {
@@ -1400,6 +1430,7 @@ Common `backups` fields:
 |-----------|------|-------------|---------|
 | `initial_partitions` | int | Initial metadata partitions; changes do not affect existing accounts | `16` |
 | `checkpoint_interval_secs` | int | Checkpoint discovery interval; minimum `60` | `86400` |
+| `reconcile_existing_data` | bool | Scan primary files that already exist when multi-write is first enabled and record them in V2 metadata. Keep `false` only when backups are already aligned or historical backfill is intentionally skipped. | `false` |
 | `provider` | str | Metadata provider: `filesystem` or top-level CacheRuntime-backed `cache` | `"filesystem"` |
 | `items` | array | Backups with `name`, `backend`, `params`, and optional `encryption` | `[]` |
 
@@ -1435,9 +1466,20 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `sqlite_path` | str / null | Optional absolute local shared lock database path. See [local SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
 | `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
+
+SQLite PathLock is limited to processes sharing one actual database file on the
+same machine's local disk. Do not put it on EFS/NFS/SMB or give each replica its
+own container-local database. A workspace on EFS also puts the default
+`sqlite_path` on EFS. See [SQLite deployment limits](../configuration/01-server.md#storage).
+
+For multiple containers or hosts sharing EFS, use shared Redis PathLock as in
+the example below. All replicas must use the same Redis deployment, top-level
+`service_name`, and lock expiry setting. The example also uses Redis QueueFS
+so its default SQLite database is not placed on EFS.
 
 ```json
 {
@@ -2041,29 +2083,28 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 }
 ```
 
-`redis_mysql` requires the `redis-mysql` extra and wraps the same MySQL
-parameters. Its `cache` block follows the top-level `cache` `provider/params`
-shape. The Python client currently supports `standalone`, `cluster`, and
-`sentinel` Redis deployments. It caches API-key bindings, users, per-user group
-IDs, and deletion records for a fixed 60 seconds by default. Cache fills and account mutations
-share an account-scoped Redis lease; normal cache hits do not acquire that
-lease. Mutations commit to MySQL first, then invalidate affected cache entries.
-If Redis is unavailable, the MySQL mutation still succeeds and stale cache
-entries remain valid only until their fixed TTL expires. Cache fills also
-maintain an
-account-scoped, expiry-scored key index. Each indexed cache fill removes expired
-index members, allowing account deletion or recreation to clear only that
-account's current cached users, groups, deletion records, and credential data.
-API-key bindings are checked against account and user credential fences, so
-normal key replacement, revocation, and user deletion invalidate old bindings.
-Redis automatically removes the index when its last sorted-set member is removed.
-Cleanup does not issue a separate index deletion, which could remove a newer
-fill's index after lease loss. Provisioning
-and key replacement clear negative lookups both with and without a user hint.
-Redis connection and command timeouts are configured with
-`cache.params.connect_timeout_ms` and `cache.params.command_timeout_ms`; both
-default to 5000 milliseconds when omitted. These are socket timeouts, not an
-overall request deadline.
+`redis_mysql` requires the `redis-mysql` extra. Its `mysql` block uses the
+same parameters as the MySQL provider; its `cache` block follows the top-level
+cache `provider/params` structure and supports `standalone`, `cluster`, and
+`sentinel` Redis deployments.
+
+MySQL remains the source of truth. Redis caches authentication results, user
+information, groups, and deletion status. Cache misses and Redis read failures
+fall back to MySQL. Configure `cache.params.ttl_seconds` to control cache lifetime;
+the default is 60 seconds. Hits do not extend the TTL.
+
+Credential, permission, and deletion changes invalidate the affected cache.
+If invalidation fails, cached data may remain stale until its TTL expires.
+Upgrade all instances sharing the cache together: old and new cache formats
+do not invalidate each other. Cache-version metadata does not expire automatically
+and should be included in Redis capacity planning. Legacy `lock_ttl_seconds` and
+`lock_wait_seconds` settings are accepted but no longer used.
+
+Redis connection and command timeouts use `cache.params.connect_timeout_ms` and
+`cache.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
+are socket timeouts, not an overall request deadline. Set `cache.params.pool_size`
+for the expected concurrent Redis requests; the default is 32, and the example
+below uses 100. Pool exhaustion causes connection errors and MySQL fallback.
 
 ```json
 {
@@ -2091,9 +2132,8 @@ overall request deadline.
             "password_env": "OPENVIKING_REDIS_PASSWORD",
             "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
             "key_prefix": "ov:account-auth",
-            "ttl_seconds": 60,
-            "lock_ttl_seconds": 60,
-            "lock_wait_seconds": 30
+            "pool_size": 100,
+            "ttl_seconds": 60
           }
         }
       }
@@ -2274,7 +2314,7 @@ At-rest encryption protects newly written files with account-specific keys throu
 | `provider` | str | Key provider: `"local"`, `"vault"`, or `"volcengine_kms"` | - |
 | `api_key_hashing.enabled` | bool | File-provider only: whether to apply Argon2id one-way hashing to API key values (independent of file-level `enabled`); see [Encryption Guide](./08-encryption.md) | `false` |
 
-### Local (File)
+### Local
 
 Suitable for development environments and single-node deployments:
 
@@ -2293,6 +2333,11 @@ Suitable for development environments and single-node deployments:
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `local.key_file` | str | Root key file path | `~/.openviking/master.key` |
+| `local.root_key` | str | Inline 32-byte root key encoded as exactly 64 hexadecimal characters | - |
+
+Do not configure `local.key_file` and `local.root_key` together. If both are omitted,
+`local.key_file` defaults to `~/.openviking/master.key`. See the [Encryption Guide](./08-encryption.md)
+for inline-key handling and security requirements.
 
 ### Vault (HashiCorp Vault)
 
