@@ -2085,10 +2085,6 @@ class ResourceService:
                 connector_watch_processor_kwargs[CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG] = (
                     resource_config
                 )
-            on_success: Optional[Callable[[Optional[Dict[str, Any]]], Awaitable[None]]] = None
-            on_complete: Optional[
-                Callable[[str, Optional[str], Optional[str]], Awaitable[None]]
-            ] = None
             watch_task_id: Optional[str] = None
             first_run_id: Optional[str] = None
 
@@ -2121,34 +2117,8 @@ class ResourceService:
                 if on_task_created is not None:
                     await on_task_created(record)
 
-            if create_watch:
-
-                async def record_first_run(status, execution_task_id, error) -> None:
-                    if watch_task_id and first_run_id:
-                        await self.record_watch_execution(
-                            watch_task_id,
-                            status=status,
-                            execution_task_id=first_run_id,
-                            error=error,
-                        )
-
-                on_complete = record_first_run
-            if acl_update is not None:
-                watch_on_success = on_success
-
-                async def apply_connector_acl(new_states=None):
-                    await self._viking_fs.set_acl(
-                        acl_update.uri,
-                        acl_update.acl.entries,
-                        ctx=ctx,
-                        acl_mode=acl_update.acl.acl_mode,
-                    )
-                    if watch_on_success is not None:
-                        await watch_on_success(new_states)
-
-                on_success = apply_connector_acl
             try:
-                result = await connector.submit(
+                result = await connector.create(
                     path=path,
                     ctx=ctx,
                     declared_add_type=add_type,
@@ -2164,23 +2134,14 @@ class ResourceService:
                         else wait_for_completion
                     ),
                     connector_states=connector_states,
-                    on_success=on_success,
-                    on_complete=on_complete,
+                    acl_update=acl_update,
                     task_id=task_id,
                     on_task_created=register_connector_task,
                     **kwargs,
                 )
-            except asyncio.CancelledError:
-                if on_complete is not None:
-                    await on_complete(
-                        "failed",
-                        None,
-                        "connector task submission cancelled",
-                    )
-                raise
-            except Exception as exc:
-                if on_complete is not None:
-                    await on_complete("failed", None, str(exc))
+            except BaseException:
+                if watch_task_id and first_run_id and watch_manager is not None:
+                    await watch_manager.settle(watch_task_id, first_run_id)
                 raise
             # A one-off Connector import (watch_interval <= 0) leaves any watch on the
             # target alone: many imports share one folder, so the native
@@ -2618,8 +2579,7 @@ class ResourceService:
 
             self._connector_delegate = ConnectorDelegate(
                 viking_fs=self._viking_fs,
-                background_tasks=self._background_tasks,
-                link_reason_memory=self._link_resource_reason_memory,
+                resource_memory_link_service=self._resource_memory_link_service,
             )
         return self._connector_delegate
 

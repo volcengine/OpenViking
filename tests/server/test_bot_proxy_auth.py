@@ -462,8 +462,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(tasks_router_module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(
-        external_task_service_module,
-        "get_queue_manager",
+        "openviking.storage.queuefs.get_queue_manager",
         lambda: SimpleNamespace(enqueue=AsyncMock()),
     )
     connection = {"api_key": "active-user-key", "request_id": "compile-request-123", **identity}
@@ -596,7 +595,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     tracker = TaskTracker(store)
     monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
     monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
-    monkeypatch.setattr(external_task_service_module, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
     monkeypatch.setattr(
         "openviking.storage.queuefs.external_task_processor.get_queue_manager", lambda: manager
     )
