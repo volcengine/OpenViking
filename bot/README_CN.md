@@ -407,7 +407,7 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 |------|------|
 | 文件与命令 | `read_file`、`write_file`、`edit_file`、`list_dir`、`exec` |
 | Web | `web_search`、`web_fetch` |
-| OpenViking | `openviking_list`、`openviking_search`、`openviking_grep`、`openviking_glob`、`openviking_multi_read`、`openviking_add_resource`、`openviking_memory_commit` |
+| OpenViking | `openviking_list`、`openviking_search`、`openviking_rule_search`、`openviking_grep`、`openviking_glob`、`openviking_multi_read`、`openviking_add_resource`、`openviking_memory_commit` |
 | 其他 | `message`、`generate_image`、`cron`、`spawn` |
 
 `readonly` 模式不会注册 `openviking_add_resource`。渠道设置 `ov_tools_enable: false` 时，该渠道不显示 OpenViking 工具，也不注入 Profile、Memory 和 Experience。

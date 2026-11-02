@@ -10,7 +10,7 @@ from test_review_regressions import worker_for
 
 from openviking_gateway.records import RecordKind as K
 from openviking_gateway.state_store import get_state
-from openviking_gateway.storage import SCHEMA_VERSION, ManagementStore, SQLiteKernelStore
+from openviking_gateway.storage import SCHEMA_VERSION, SQLiteKernelStore, SQLiteManagementStore
 from openviking_gateway.tool_protocols import ResponseCapture, hidden_chain
 
 QUESTION = {"role": "user", "content": "How do I deploy?"}
@@ -395,7 +395,7 @@ async def test_expiry_removes_stale_sessions_records_and_documents(
 
 
 @pytest.mark.parametrize("old", [1, 2, 3, 4, SCHEMA_VERSION + 1])
-@pytest.mark.parametrize("kind", [SQLiteKernelStore, ManagementStore])
+@pytest.mark.parametrize("kind", [SQLiteKernelStore, SQLiteManagementStore])
 async def test_storage_rejects_other_schema_versions(tmp_path, setup_kernel, kind, old):
     """Versions 1-4 were stamped on older pre-release layouts and must not pass."""
     _, _, _, encryption = setup_kernel

@@ -193,7 +193,7 @@ peer 解析使用共享实现。现状默认从 Git 身份推导，普通非 Git
 | 压缩前 | 确认压缩前消息已写入，再执行相应提交 | `PreCompact` 提交已有消息；本入口不补采 transcript | `PreCompact` 补齐 transcript 后提交 |
 | 会话结束 | 完成尚未完成的写入与提交 | `SessionEnd` 提交已有消息；本入口不补采 transcript | `SessionEnd` 后台补齐并提交，保留启动补偿 |
 | 子代理 | 保留身份和父子关系，避免重复 | `SubagentStart`、`SubagentStop` | 当前 hook manifest 没有这两个事件 |
-| 本地工具检查 | 文件工具的路径是虚拟 URI 时拒绝；shell 命令带虚拟 URI 时附加提示 | `PreToolUse` URI guard，匹配 Read、Glob、Grep、Edit、Write、Bash | `PreToolUse` URI guard 只匹配 Bash，只附加提示；文件编辑走 `apply_patch`，没有路径参数 |
+| 本地工具检查 | 文件工具的路径是虚拟 URI 时拒绝；shell 命令带虚拟 URI 时附加提示 | `PreToolUse` URI guard，匹配 Read、Glob、Grep、Edit、Write、Bash | 不注册：Codex 会把 `PreToolUse` 的上下文作为 developer 消息插在工具调用和输出之间，部分 Responses 服务端会拒绝；文件编辑走 `apply_patch`，没有路径参数 |
 
 以两份 [Claude Code hooks.json](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/hooks/hooks.json) 和 [Codex hooks.json](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/hooks/hooks.json) 为事件注册依据。相同事件名称不保证 payload 或输出格式相同。没有结束事件的宿主必须选择并说明替代提交点，例如 ZCode 在 Stop 提交；不能假装存在一个永远不会执行的 SessionEnd。
 

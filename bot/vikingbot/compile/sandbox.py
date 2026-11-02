@@ -37,7 +37,15 @@ class CompileSandboxManager(SandboxManager):
         connection: Mapping[str, Any],
     ):
         """Snapshot verified connection fields; reject missing non-dev tenant/user identity."""
-        super().__init__(config, sandbox_parent_path, source_workspace_path)
+        # storage.workspace may be configured as a relative path, which Docker
+        # deployments commonly rely on by running the server from the state root.
+        # Sandbox subprocesses use the workspace as their working directory, so a
+        # relative root makes server-side paths built from sandbox_cwd (task
+        # credentials, staged skill resources) resolve against that directory and
+        # fail; keep the compile workspace root absolute.
+        super().__init__(
+            config, Path(sandbox_parent_path).expanduser().resolve(), source_workspace_path
+        )
         dev = config.ov_server.effective_auth_mode == "dev"
         if not dev and (not connection.get("account_id") or not connection.get("user_id")):
             raise ValueError("Compile shell requires the authenticated account and user")

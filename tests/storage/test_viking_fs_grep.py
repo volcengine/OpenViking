@@ -37,18 +37,6 @@ class _FailingVectorStore:
         raise RuntimeError("remote keyword search failed")
 
 
-class _KeywordFailingButTagFilterWorkingStore:
-    def __init__(self):
-        self.filter_calls = []
-
-    async def search_by_keywords(self, **kwargs):
-        raise RuntimeError("remote keyword search failed")
-
-    async def filter(self, **kwargs):
-        self.filter_calls.append(kwargs)
-        return [{"uri": "viking://resources/tagged.md"}]
-
-
 class _FulltextMetaFailureStore:
     def __init__(self):
         self.calls = 0
@@ -335,8 +323,41 @@ async def test_collect_grep_files_propagates_root_stat_failure(monkeypatch):
         )
 
 
-def test_grep_config_default_switch_to_remote_threshold_is_10000():
-    assert GrepConfig().switch_to_remote_threshold == 10000
+@pytest.mark.asyncio
+async def test_opengauss_auto_grep_only_matches_bm25_candidates(monkeypatch):
+    store = _SequencedFulltextMetaStore([_fulltext_meta(True)])
+    store.backend._mode = "opengauss"
+    store._backend_type = "local"
+    store.search_by_keywords = AsyncMock(return_value=[{"uri": "viking://resources/a.md"}])
+    fs = VikingFS(
+        agfs=_DummyAgfs(),
+        vector_store=store,
+        grep_config=GrepConfig(switch_to_remote_threshold=0),
+    )
+    monkeypatch.setattr(fs, "stat", _fake_stat)
+    monkeypatch.setattr(fs, "read", AsyncMock(return_value=b"needle\nother"))
+    monkeypatch.setattr(
+        fs, "_grep_fs", AsyncMock(side_effect=AssertionError("successful recall must not scan FS"))
+    )
+    ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
+
+    result = await fs.grep("viking://resources", "needle", ctx=ctx, node_limit=2)
+    assert result == {
+        "matches": [{"uri": "viking://resources/a.md", "line": 1, "content": "needle"}],
+        "count": 1,
+        "match_count": 1,
+        "files_scanned": 1,
+    }
+
+    store.search_by_keywords.return_value = []
+    fs.read.reset_mock()
+    assert await fs.grep("viking://resources", "needle", ctx=ctx, node_limit=2) == {
+        "matches": [],
+        "count": 0,
+        "match_count": 0,
+        "files_scanned": 0,
+    }
+    fs.read.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -424,14 +445,7 @@ async def test_grep_without_config_uses_documented_remote_threshold(monkeypatch)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "uri",
-    [
-        "viking://user/alice/sessions/session-1",
-        "viking://session/session-1",
-    ],
-)
-async def test_session_grep_forces_fs_engine_in_auto_mode(monkeypatch, uri):
+async def test_session_grep_forces_fs_engine_in_auto_mode(monkeypatch):
     viking_fs = VikingFS(agfs=_DummyAgfs())
     monkeypatch.setattr(viking_fs, "stat", AsyncMock(return_value={"isDir": True}))
     resolve_engine = AsyncMock(return_value="vikingdb_then_fs")
@@ -444,7 +458,7 @@ async def test_session_grep_forces_fs_engine_in_auto_mode(monkeypatch, uri):
     monkeypatch.setattr(viking_fs, "_grep_vikingdb_then_fs", grep_vikingdb)
 
     await viking_fs.grep(
-        uri,
+        "viking://user/alice/sessions/session-1",
         pattern="needle",
     )
 
@@ -454,12 +468,11 @@ async def test_session_grep_forces_fs_engine_in_auto_mode(monkeypatch, uri):
 
 
 @pytest.mark.asyncio
-async def test_primary_only_session_grep_uses_native_agfs(monkeypatch):
+async def test_session_grep_uses_native_agfs(monkeypatch):
     viking_fs = VikingFS(agfs=_DummyAgfs())
     native_result = {"matches": [], "count": 0, "match_count": 0, "files_scanned": 4}
     native_grep = AsyncMock(return_value=native_result)
     fallback_grep = AsyncMock()
-    monkeypatch.setattr(viking_fs, "_session_native_grep_safe", AsyncMock(return_value=True))
     monkeypatch.setattr(viking_fs, "_grep_with_agfs", native_grep)
     monkeypatch.setattr(viking_fs, "_grep_encrypted", fallback_grep)
 
@@ -486,92 +499,6 @@ async def test_primary_only_session_grep_uses_native_agfs(monkeypatch):
         after_context=0,
     )
     fallback_grep.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_session_grep_with_visible_legacy_data_uses_merge_fallback(monkeypatch):
-    viking_fs = VikingFS(agfs=_DummyAgfs())
-    fallback_result = {"matches": [], "count": 0, "match_count": 0, "files_scanned": 2}
-    native_grep = AsyncMock()
-    fallback_grep = AsyncMock(return_value=fallback_result)
-    monkeypatch.setattr(viking_fs, "_session_native_grep_safe", AsyncMock(return_value=False))
-    monkeypatch.setattr(viking_fs, "_grep_with_agfs", native_grep)
-    monkeypatch.setattr(viking_fs, "_grep_encrypted", fallback_grep)
-
-    result = await viking_fs._grep_fs(
-        uri="viking://user/alice/sessions/session-1",
-        pattern="needle",
-        exclude_uri=None,
-        case_insensitive=False,
-        node_limit=None,
-        level_limit=10,
-        ctx=None,
-    )
-
-    assert result == fallback_result
-    native_grep.assert_not_awaited()
-    fallback_grep.assert_awaited_once()
-    assert fallback_grep.await_args.kwargs["level_limit"] == 10
-
-
-@pytest.mark.asyncio
-async def test_session_native_and_legacy_fallback_keep_level_limit_results_equal(monkeypatch):
-    viking_fs = VikingFS(agfs=_DummyAgfs())
-    match = {
-        "uri": "viking://user/alice/sessions/s1/messages.jsonl",
-        "line": 1,
-        "content": "payment failed",
-    }
-
-    async def fake_native_grep(**kwargs):
-        matches = [match] if kwargs["level_limit"] >= 2 else []
-        return {
-            "matches": matches,
-            "count": len(matches),
-            "match_count": len(matches),
-            "files_scanned": len(matches),
-        }
-
-    async def fake_fallback_grep(**kwargs):
-        matches = [match] if kwargs["level_limit"] >= 1 else []
-        return {
-            "matches": matches,
-            "count": len(matches),
-            "match_count": len(matches),
-            "files_scanned": len(matches),
-        }
-
-    monkeypatch.setattr(viking_fs, "_grep_with_agfs", fake_native_grep)
-    monkeypatch.setattr(viking_fs, "_grep_encrypted", fake_fallback_grep)
-    native_safe = AsyncMock(side_effect=[True, False])
-    monkeypatch.setattr(viking_fs, "_session_native_grep_safe", native_safe)
-    kwargs = {
-        "uri": "viking://user/alice/sessions",
-        "pattern": "payment failed",
-        "exclude_uri": None,
-        "case_insensitive": False,
-        "node_limit": None,
-        "level_limit": 1,
-        "ctx": None,
-    }
-
-    assert await viking_fs._grep_fs(**kwargs) == await viking_fs._grep_fs(**kwargs)
-
-
-@pytest.mark.asyncio
-async def test_virtual_empty_session_root_uses_merge_fallback(monkeypatch):
-    viking_fs = VikingFS(agfs=_DummyAgfs())
-    primary_path = "/local/default/user/alice/sessions"
-    path_exists = AsyncMock(return_value=False)
-    legacy_items = AsyncMock(return_value=[])
-    monkeypatch.setattr(viking_fs, "_agfs_path_exists", path_exists)
-    monkeypatch.setattr(viking_fs, "_legacy_session_root_items", legacy_items)
-
-    assert not await viking_fs._session_native_grep_safe(
-        "viking://user/alice/sessions", None
-    )
-    path_exists.assert_awaited_once_with(primary_path)
-    legacy_items.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -692,37 +619,66 @@ async def test_grep_vikingdb_remote_error_falls_back_to_fs(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_grep_vikingdb_tagged_remote_error_falls_back_with_tag_allowlist(monkeypatch):
-    fs = VikingFS(agfs=_DummyAgfs())
-    vector_store = _KeywordFailingButTagFilterWorkingStore()
-    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
-
-    calls = []
+async def test_opengauss_tagged_grep_fallback_enumerates_all_matching_pages(monkeypatch):
+    store = _SequencedFulltextMetaStore([_fulltext_meta(True)])
+    store.backend._mode = "opengauss"
+    store._backend_type = "local"
+    store.search_by_keywords = AsyncMock(side_effect=RuntimeError("remote keyword search failed"))
+    store.filter = AsyncMock(
+        side_effect=[
+            [
+                {"uri": f"viking://resources/other/{index}.md", "search_tags": ["env=prod"]}
+                for index in range(100000)
+            ],
+            [{"uri": "viking://resources/tagged.md", "search_tags": ["env=prod"]}],
+        ]
+    )
+    fs = VikingFS(
+        agfs=_DummyAgfs(),
+        vector_store=store,
+        grep_config=GrepConfig(switch_to_remote_threshold=0),
+    )
+    monkeypatch.setattr(fs, "stat", _fake_stat)
 
     async def fake_grep_fs(**kwargs):
-        calls.append(kwargs)
-        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+        assert len(kwargs["allowed_uris"]) == 100001
+        assert "viking://resources/tagged.md" in kwargs["allowed_uris"]
+        return {
+            "matches": [{"uri": "viking://resources/tagged.md", "line": 1, "content": "needle"}],
+            "count": 1,
+            "match_count": 1,
+            "files_scanned": 1,
+        }
 
     monkeypatch.setattr(fs, "_grep_fs", fake_grep_fs)
-
-    await fs._grep_vikingdb_then_fs(
-        uri="viking://resources",
-        pattern="needle",
-        exclude_uri=None,
-        case_insensitive=False,
-        node_limit=10,
+    ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
+    result = await fs.grep(
+        "viking://resources",
+        "needle",
+        node_limit=1,
         level_limit=3,
-        ctx=None,
+        ctx=ctx,
         tag_filter={"op": "must", "field": "search_tags", "conds": ["env=prod"]},
     )
 
-    assert vector_store.filter_calls[0]["filter"] == And(
+    assert result["matches"] == [
+        {
+            "uri": "viking://resources/tagged.md",
+            "line": 1,
+            "content": "needle",
+            "tags": ["env=prod"],
+        }
+    ]
+    store.search_by_keywords.assert_awaited_once()
+    pages = [call.kwargs for call in store.filter.await_args_list]
+    assert [page["offset"] for page in pages] == [0, 100000]
+    assert all(page["order_by"] == "id" and page["order_desc"] is False for page in pages)
+    assert pages[0]["filter"] == And(
         [
             PathScope("uri", "viking://resources", depth=3),
             RawDSL({"op": "must", "field": "search_tags", "conds": ["env=prod"]}),
         ]
     )
-    assert calls[0]["allowed_uris"] == {"viking://resources/tagged.md"}
 
 
 @pytest.mark.asyncio

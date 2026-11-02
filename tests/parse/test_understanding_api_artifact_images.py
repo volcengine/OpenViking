@@ -118,3 +118,35 @@ async def test_unpack_artifact_supports_local_output_store(tmp_path: Path):
     assert ref.resource_rel == "resource"
     assert Path(ref.root, "resource", "section.md").read_text() == "content"
     assert set(await read_artifact_manifest(store, ref)) == {"resource/section.md"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("title", ["Title ", "Title\t\n", "Title\u00a0\u3000"])
+@pytest.mark.parametrize("backend", ["agfs", "local"])
+async def test_title_whitespace_uses_one_artifact_root(tmp_path, title, backend):
+    class TrimmingFS(_FakeVikingFS):
+        async def mkdir(self, uri, exist_ok=False):
+            self.dirs.add(uri.strip())
+
+        async def write_file_bytes(self, uri, content):
+            self.dirs.add(uri.rsplit("/", 1)[0])
+            await super().write_file_bytes(uri, content)
+
+    archive_path = tmp_path / "artifact.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("document/body.md", "content")
+    fs = TrimmingFS()
+    options = {}
+    if backend == "local":
+        options["parse_output_store"] = LocalParseOutputStore(str(tmp_path / "artifacts"))
+    with patch("openviking.parse.understanding_api.get_viking_fs", return_value=fs):
+        ref = await UnderstandingAPI.__new__(UnderstandingAPI)._unpack_zip_to_temp_dir(
+            archive_path, title, **options
+        )
+    assert ref.resource_rel == "Title"
+    if backend == "local":
+        assert [p.name for p in Path(ref.root).iterdir() if p.is_dir()] == ["Title"]
+        assert Path(ref.root, "Title/body.md").read_text() == "content"
+    else:
+        assert fs.dirs - {ref.root} == {f"{ref.root}/Title"}
+        assert fs.files[f"{ref.root}/Title/body.md"] == b"content"

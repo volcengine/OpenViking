@@ -1,8 +1,6 @@
 # 隐私配置
 
-隐私配置用于按 `category + target_key` 管理敏感字段版本（如 skill 的 `api_key`、`base_url`）。
-
-配置值变化时会生成版本快照，可查询历史版本并切换生效版本。提交与当前版本相同的值不会创建新版本。
+隐私配置在当前用户空间内，按 `category + target_key` 管理技能、会话中的敏感信息（如密钥、凭据等）。配置值变化时会生成版本快照，可查询历史版本并切换生效版本。提交与当前版本相同的值不会创建新版本。
 
 以下示例使用当前用户的 API Key。trusted 模式需补充部署要求的身份头。读取值的接口和 CLI 命令会返回实际值；树总览和字段元数据接口不返回值。下文的 `***` 仅为示例占位符，不表示接口自动脱敏。
 
@@ -10,10 +8,10 @@
 
 ## 典型场景
 
-- 为某个 skill 保存密钥等敏感配置
+- 为某个 skill 或 session 保存密钥等敏感配置
 - 轮换密钥（新版本）
 - 回滚到历史版本
-- 在读取 skill 内容时按占位符自动恢复配置值
+- 在读取 skill 或 session 内容时按占位符恢复配置值
 
 ---
 
@@ -84,7 +82,8 @@
 | 项目 | 限制 |
 |------|------|
 | `category` / `target_key` | 非空、最多 255 个 ASCII 字符；仅允许字母、数字、`_`、`-`、`.`、`@`；禁止 `.`、`..`，`@` 最多一个 |
-| values 顶层字段 | 最多 128 个 |
+| Session 的 `target_key` | 当 Session ID 符合上行的限制时，使用 Session ID 作为 `target_key`；否则为 `_` 加 SHA-256 前 24 位十六进制（原始 Session ID 会自动记录在 `labels.session_id`） |
+| values 顶层字段 | `category=session` 最多 1024 个；其他类别最多 128 个 |
 | 字段名 | 非空、最多 255 UTF-8 字节、禁止控制字符 |
 | 单个字符串值 | 最多 64 KiB UTF-8 |
 | values 序列化总量 | 最多 1 MiB |
@@ -138,9 +137,11 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs \
 ```json
 {
   "status": "ok",
-  "result": ["skill"]
+  "result": ["session", "skill"]
 }
 ```
+
+只返回已有配置的分类；Session 未提取到原值时，不会创建对应的 Privacy 配置。
 
 ---
 
@@ -572,6 +573,7 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
 # 分类/目标
 ov privacy categories
 ov privacy list skill
+ov privacy list session
 
 # 树形盘点当前目标和字段，不显示值
 ov privacy tree
@@ -626,5 +628,7 @@ ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 ## 相关文档
 
 - [技能](04-skills.md) - 技能写入与读取
+- [会话](05-sessions.md) - 会话创建与隐私配置
+- [隐私配置](../concepts/13-privacy.md) - 隐私敏感值的提取与还原机制
 - [文件系统](03-filesystem.md) - `read`/`write`/`ls` 等
 - [系统](07-system.md) - 服务状态与可观测性

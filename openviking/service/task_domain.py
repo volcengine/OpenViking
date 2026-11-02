@@ -57,6 +57,52 @@ class TaskWorkRejected(Exception):
     """Task lifecycle state prevented Work registration."""
 
 
+_TASK_PATCHABLE_FIELDS = frozenset({"result", "stage", "meta", "auth"})
+
+
+@dataclass(frozen=True)
+class TaskPatch:
+    """One atomic, field-scoped Task mutation.
+
+    Non-``None`` values update their matching fields. ``clear_fields`` is the
+    explicit counterpart for nullable fields, keeping ``None`` available to
+    mean "leave unchanged". Status, errors, and Work state remain owned by
+    their dedicated state-transition methods.
+    """
+
+    result: Optional[Dict[str, Any]] = None
+    stage: Optional[str] = None
+    meta: Optional[Dict[str, Any]] = None
+    auth: Optional[Dict[str, Any]] = None
+    clear_fields: frozenset[str] = field(default_factory=frozenset)
+    add_enqueue_complete_work_ids: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        clear_fields = frozenset(str(name) for name in self.clear_fields)
+        unknown = clear_fields - _TASK_PATCHABLE_FIELDS
+        if unknown:
+            raise ValueError(f"unsupported TaskPatch clear fields: {sorted(unknown)}")
+        for field_name in clear_fields:
+            if getattr(self, field_name) is not None:
+                raise ValueError(f"TaskPatch cannot update and clear {field_name}")
+        object.__setattr__(self, "clear_fields", clear_fields)
+        object.__setattr__(
+            self,
+            "add_enqueue_complete_work_ids",
+            frozenset(str(work_id) for work_id in self.add_enqueue_complete_work_ids if work_id),
+        )
+
+    def is_empty(self) -> bool:
+        return (
+            self.result is None
+            and self.stage is None
+            and self.meta is None
+            and self.auth is None
+            and not self.clear_fields
+            and not self.add_enqueue_complete_work_ids
+        )
+
+
 @dataclass(frozen=True)
 class TaskRetentionPolicy:
     completed_seconds: float

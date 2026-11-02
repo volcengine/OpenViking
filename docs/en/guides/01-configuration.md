@@ -342,7 +342,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`; must be `>= 1`) |
+| `max_concurrent` | int | Maximum concurrent document embedding requests (`embedding.max_concurrent`, default: `10`; must be `>= 1`). Retrieval query embeddings bypass this limit |
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
 | `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` is a deprecated alias for `summary_first`; existing configurations still load, log a warning, and normalize to `summary_first`. Default: `content_only` |
 | `max_input_tokens` | int | Maximum estimated raw text tokens sent to the embedding model when content is used. Default: `4096` |
@@ -573,7 +573,7 @@ Version 1.39.0 is the minimum SDK version with the client context managers and c
     "dense": {
       "provider": "gemini",
       "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
+      "model": "gemini-embedding-2",
       "dimension": 3072
     }
   }
@@ -581,11 +581,17 @@ Version 1.39.0 is the minimum SDK version with the client context managers and c
 ```
 
 Available Gemini embedding models:
-- `gemini-embedding-2-preview`: 8192 token input limit, 1–3072 output dimension (MRL)
+- `gemini-embedding-2`: 8192 token input limit, 1–3072 output dimension (MRL)
 - `gemini-embedding-001`: 2048 token input limit, 1–3072 output dimension (MRL)
 - `text-embedding-004`: 2048 token input limit, 768 output dimension (fixed)
 
 Recommended dimensions: `768`, `1536`, or `3072` (default: `3072`).
+
+Gemini Embedding 2 represents task types as documented text instructions because
+the stable model does not accept the `task_type` request field. OpenViking applies
+these instructions when `query_param` or `document_param` is configured. If you
+change the model for an existing index, rebuild its vectors unless the provider
+explicitly guarantees that the two embedding spaces are compatible.
 
 Get your API key at https://aistudio.google.com/apikey
 
@@ -648,7 +654,7 @@ Get your API key at https://dashscope.console.aliyun.com/api-key
     "dense": {
       "provider": "gemini",
       "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
+      "model": "gemini-embedding-2",
       "dimension": 3072,
       "query_param": "RETRIEVAL_QUERY",
       "document_param": "RETRIEVAL_DOCUMENT"
@@ -1131,6 +1137,8 @@ OpenAI-compatible APIs, LiteLLM, and Jev.
     "provider": "jev",
     "api_key": "your-typesafe-api-key",
     "model": "jev-latest",
+    "mode": "noul",
+    "candidates_visible": false,
     "timeout": 120,
     "log_payloads": false,
     "threshold": 0.1
@@ -1148,7 +1156,7 @@ TypeSafe direct access; the adapter does not special-case Vercel:
   "rerank": {
     "provider": "jev",
     "api_key": "your-vercel-ai-gateway-api-key",
-    "api_base": "https://ai-gateway.vercel.sh/typesafe",
+    "api_base": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
     "model": "typesafe-ai/jev",
     "threshold": 0.1
   }
@@ -1165,14 +1173,29 @@ Notes for Vercel:
 - `api_base` must include the `/typesafe` suffix. `https://ai-gateway.vercel.sh/v1`
   is Vercel's own evaluate protocol and is not supported by the adapter.
 
-The Jev adapter sends the query and candidate documents as shared System One `state`
-and supports two modes:
+The Jev adapter supports two scoring modes:
 
 - `noul` (default): one independent relevance question per document, using its returned yes
   probability as the score. All questions are sent in one HTTP request, and document
   scores do not have to sum to 1.
 - `choice`: one question compares all candidate documents, with `candidate_{index}`
   mapped to input indices. Scores come from `probabilities` in document order.
+
+For Noul, candidate visibility is controlled by `rerank.candidates_visible`:
+
+- `false` (default, Noul only): shared `state` contains only the query; each question
+  carries its own document in `instructions.candidate_document`. Other candidates are
+  not included in that question or in shared state. All questions still use one HTTP
+  request, and scores retain the original document order.
+- `true`: the query and all candidate documents are in shared `state`.
+  Independent Noul answers do not mean the candidates are hidden from each other.
+
+For Noul, omitting `candidates_visible` now enables isolation. To retain shared
+candidate context, set `"candidates_visible": true` explicitly.
+
+Choice ignores this Noul-only option and always compares the full candidate set in
+shared `state`. With `"mode": "choice"`, omitting `candidates_visible` or setting it
+to either `false` or `true` produces the same request and scoring behavior.
 
 Select the mode with `rerank.mode`; omitting it or setting it to `null` keeps the
 default `noul` behavior. Choice scores are relative probabilities summing to 1 within
@@ -1190,13 +1213,14 @@ using Choice through MCP.
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
 | `api_key` | str | API key (for `openai`, `cohere`, or `jev` providers) |
-| `api_base` | str | Endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai`, Vercel uses `https://ai-gateway.vercel.sh/typesafe`) |
+| `api_base` | str | Complete endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai/v1/systemone`, Vercel uses `https://ai-gateway.vercel.sh/typesafe/v1/systemone`; custom Jev URLs are used unchanged) |
 | `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
 | `mode` | `"noul"`, `"choice"`, or `null` | Jev rerank mode. `null` and omission use `"noul"` |
+| `candidates_visible` | bool | Jev Noul only. Default: `false`, isolating each candidate in its own question. Explicit `true` shares candidates in state. Choice ignores this option. |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
 | `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
-| `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `threshold` | float | Rerank score threshold between `0.0` and `1.0`; reranked results below this are filtered out. It never filters vector scores (rerank not used, or failed), and a request `score_threshold` overrides it. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Supported providers:**
@@ -1216,6 +1240,7 @@ Configuration for session intent analysis and context assembly timeouts.
 {
   "retrieval": {
     "enable_intent": true,
+    "apply_rerank_to_context": false,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -1225,6 +1250,7 @@ Configuration for session intent analysis and context assembly timeouts.
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `enable_intent` | bool | Run intent analysis and query planning when `search()` receives a `session_id`. | `true` |
+| `apply_rerank_to_context` | bool | Rerank `mode="context"` candidates with the configured [`rerank`](#rerank) model, once per request against the original query and its expansions, before quotas and the token budget apply. Needs a usable `rerank` config; image queries keep vector scores. | `false` |
 
 Session intent analysis in ordinary `search()` and query expansion in `mode="context"` share `recall_intent_timeout_s`. Context digest rewriting uses a separate timeout:
 
@@ -1307,10 +1333,12 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 
 Task records use the local FileStore by default. To share Task/Work state across
 OpenViking processes, provision `openviking/service/sql/task_store_init.sql` in
-MySQL and select the relational backend:
+MySQL, apply the SQL changes under `openviking/service/sql/changes/`, configure
+a stable top-level `service_name`, and select the relational backend:
 
 ```json
 {
+  "service_name": "production",
   "storage": {
     "task_store": {
       "provider": "mysql",
@@ -1334,9 +1362,15 @@ Replace `ov_tasks` consistently in the provisioning SQL when using a custom pref
 
 The MySQL backend requires the `openviking[mysql]` extra. Its mutations,
 Task finalization, and execution-event updates commit in one database
-transaction. `task_id` is globally unique; `account_id` and `user_id` scope
-authorization and queries. Do not use the FileStore tables and MySQL tables as
-active writers for the same deployment.
+transaction. Top-level `service_name` is stored on every Task/Work/Event row and
+isolates multiple OpenViking deployments that share one table set. Within one
+`service_name`, `task_id` is unique; `account_id` and `user_id` scope
+authorization and queries. Fresh deployments should run the init SQL and then
+the change scripts in order; existing TaskStore tables created before
+`service_name` must run
+`openviking/service/sql/changes/0001_task_store_service_name.sql` before
+upgrading. Do not use the FileStore tables and MySQL tables as active writers
+for the same deployment.
 
 #### agfs (RAGFS)
 
@@ -1370,6 +1404,7 @@ top-level backend remains the only direct read source.
       "backups": {
         "initial_partitions": 16,
         "checkpoint_interval_secs": 86400,
+        "reconcile_existing_data": false,
         "provider": "filesystem",
         "items": [
           {
@@ -1392,6 +1427,7 @@ Common `backups` fields:
 |-----------|------|-------------|---------|
 | `initial_partitions` | int | Initial metadata partitions; changes do not affect existing accounts | `16` |
 | `checkpoint_interval_secs` | int | Checkpoint discovery interval; minimum `60` | `86400` |
+| `reconcile_existing_data` | bool | Scan primary files that already exist when multi-write is first enabled and record them in V2 metadata. Keep `false` only when backups are already aligned or historical backfill is intentionally skipped. | `false` |
 | `provider` | str | Metadata provider: `filesystem` or top-level CacheRuntime-backed `cache` | `"filesystem"` |
 | `items` | array | Backups with `name`, `backend`, `params`, and optional `encryption` | `[]` |
 
@@ -1424,9 +1460,20 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `sqlite_path` | str / null | Optional absolute local shared lock database path. See [local SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
 | `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
+
+SQLite PathLock is limited to processes sharing one actual database file on the
+same machine's local disk. Do not put it on EFS/NFS/SMB or give each replica its
+own container-local database. A workspace on EFS also puts the default
+`sqlite_path` on EFS. See [SQLite deployment limits](../configuration/01-server.md#storage).
+
+For multiple containers or hosts sharing EFS, use shared Redis PathLock as in
+the example below. All replicas must use the same Redis deployment, top-level
+`service_name`, and lock expiry setting. The example also uses Redis QueueFS
+so its default SQLite database is not placed on EFS.
 
 ```json
 {
@@ -2263,7 +2310,7 @@ At-rest encryption protects newly written files with account-specific keys throu
 | `provider` | str | Key provider: `"local"`, `"vault"`, or `"volcengine_kms"` | - |
 | `api_key_hashing.enabled` | bool | File-provider only: whether to apply Argon2id one-way hashing to API key values (independent of file-level `enabled`); see [Encryption Guide](./08-encryption.md) | `false` |
 
-### Local (File)
+### Local
 
 Suitable for development environments and single-node deployments:
 
@@ -2282,6 +2329,11 @@ Suitable for development environments and single-node deployments:
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `local.key_file` | str | Root key file path | `~/.openviking/master.key` |
+| `local.root_key` | str | Inline 32-byte root key encoded as exactly 64 hexadecimal characters | - |
+
+Do not configure `local.key_file` and `local.root_key` together. If both are omitted,
+`local.key_file` defaults to `~/.openviking/master.key`. See the [Encryption Guide](./08-encryption.md)
+for inline-key handling and security requirements.
 
 ### Vault (HashiCorp Vault)
 

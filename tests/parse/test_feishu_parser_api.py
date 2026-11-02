@@ -16,7 +16,8 @@ from openviking.parse.understanding_api import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
-from openviking.service.task_tracker import TaskStatus
+from openviking.service.task_domain import QueueWorkSummary, WorkSummary
+from openviking.service.task_tracker import TaskStatus, TaskTracker
 from openviking.service.task_work_index import TASK_WORK_ID_FIELD
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg, AddResourcePhase
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
@@ -105,7 +106,7 @@ async def _interrupt_staged_add_resource(monkeypatch, task_status):
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING, result=None)),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
         get=AsyncMock(return_value=SimpleNamespace(status=task_status)),
     )
@@ -586,7 +587,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
     )
@@ -797,12 +798,19 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
     enqueue = AsyncMock()
     handoff = AsyncMock()
     release = AsyncMock()
+    handoff_started = asyncio.Event()
+    finish_handoff = asyncio.Event()
     if cancel_stage == "submit":
         submit_url.side_effect = asyncio.CancelledError
     elif cancel_stage == "enqueue":
         enqueue.side_effect = asyncio.CancelledError
     else:
-        handoff.side_effect = asyncio.CancelledError
+
+        async def slow_handoff(_lease):
+            handoff_started.set()
+            await finish_handoff.wait()
+
+        handoff.side_effect = slow_handoff
 
     resource_processor = SimpleNamespace(
         should_use_understanding_directly=lambda _source, **_kwargs: True,
@@ -811,7 +819,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
     )
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
     queue_manager = SimpleNamespace(enqueue=enqueue)
@@ -877,8 +885,8 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         role=Role.USER,
     )
 
-    with pytest.raises(asyncio.CancelledError):
-        await service.add_resource(
+    request = asyncio.create_task(
+        service.add_resource(
             path=source,
             ctx=ctx,
             to=root_uri,
@@ -886,21 +894,33 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
             allow_local_path_resolution=False,
             args={"feishu_access_token": "u-secret"},
         )
+    )
+    if cancel_stage == "handoff":
+        await handoff_started.wait()
+        request.cancel()
+        await asyncio.sleep(0)
+        assert not request.done()
+        finish_handoff.set()
+    with pytest.raises(asyncio.CancelledError):
+        await request
 
     if cancel_stage == "submit":
         release.assert_not_awaited()
         task_tracker.create.assert_not_awaited()
         task_tracker.fail.assert_not_awaited()
         enqueue.assert_not_awaited()
-    else:
+    elif cancel_stage == "enqueue":
         release.assert_awaited_once_with(lock_lease)
         task_tracker.create.assert_awaited_once()
         enqueue.assert_awaited_once()
         assert enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
-        if cancel_stage == "enqueue":
-            task_tracker.fail.assert_awaited_once()
-        else:
-            task_tracker.fail.assert_not_awaited()
+        task_tracker.fail.assert_awaited_once()
+    else:
+        release.assert_not_awaited()
+        task_tracker.create.assert_awaited_once()
+        enqueue.assert_awaited_once()
+        assert enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
+        task_tracker.fail.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -1080,29 +1100,19 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
         wait_for_task_work=AsyncMock(),
-        build_queue_status=Mock(
-            return_value={
-                "Semantic": {
-                    "processed": 0,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
-                "Embedding": {
-                    "processed": 9,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
-            }
+        get_work_summary=AsyncMock(
+            return_value=WorkSummary(
+                queues={"Embedding": QueueWorkSummary(processed=9)},
+                context_count=9,
+            )
         ),
-        get_context_count=Mock(return_value=9),
-        get_queue_timing=Mock(return_value={}),
+        format_queue_status=TaskTracker.format_queue_status,
+        format_queue_timing=TaskTracker.format_queue_timing,
     )
 
     service = SimpleNamespace(
@@ -1226,14 +1236,14 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
     task_tracker = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
         wait_for_task_work=AsyncMock(),
-        build_queue_status=Mock(return_value={}),
-        get_context_count=Mock(return_value=context_count),
-        get_queue_timing=Mock(return_value={}),
+        get_work_summary=AsyncMock(return_value=WorkSummary(context_count=context_count)),
+        format_queue_status=Mock(return_value={}),
+        format_queue_timing=Mock(return_value={}),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
@@ -1307,12 +1317,13 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
             )
         ),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
         wait_for_task_work=AsyncMock(),
-        build_queue_status=Mock(return_value={}),
-        get_queue_timing=Mock(return_value={}),
+        get_work_summary=AsyncMock(return_value=WorkSummary()),
+        format_queue_status=Mock(return_value={}),
+        format_queue_timing=Mock(return_value={}),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",

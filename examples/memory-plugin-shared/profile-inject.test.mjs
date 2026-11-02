@@ -7,7 +7,7 @@ import { buildProfileBlock, estimateTokens, isRepeatInjection, truncateToBytes }
 
 const CATALOG = { skillCatalog: true, skillCatalogTokenBudget: 1200 };
 
-function fakeServer({ profile = "", skills = [], skillsResponse, memories = [] } = {}) {
+function fakeServer({ profile = "", skills = [], skillsResponse, memories = [], profilesByUri, memoriesByUri = {} } = {}) {
   const calls = [];
   const fetchJSON = async (path) => {
     calls.push(path);
@@ -15,8 +15,13 @@ function fakeServer({ profile = "", skills = [], skillsResponse, memories = [] }
       return skillsResponse ?? { ok: true, result: { skills, total: skills.length } };
     }
     if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+    const uri = new URL(path, "http://localhost").searchParams.get("uri");
     if (path.startsWith("/api/v1/content/read")) {
-      return profile ? { ok: true, result: profile } : { ok: false, status: 404 };
+      const body = profilesByUri ? profilesByUri[uri] : profile;
+      return body ? { ok: true, result: body } : { ok: false, status: 404 };
+    }
+    if (path.startsWith("/api/v1/fs/ls") && Object.hasOwn(memoriesByUri, uri)) {
+      return { ok: true, result: memoriesByUri[uri] };
     }
     if (path.startsWith("/api/v1/fs/ls") && path.includes("preferences")) return { ok: true, result: memories };
     return { ok: true, result: [] };
@@ -212,6 +217,201 @@ test("the two roots share no client-side cap, so shared skills survive a full pr
   assert.match(result.block, /deploy-runbook/);
 });
 
+const PEER = "github.com-acme-app";
+const USER_ROOT = "viking://user/default/memories";
+const PEER_ROOT = `viking://user/default/peers/${PEER}/memories`;
+const entries = (...names) => names.map((name) => ({ name, rel_path: name, isDir: false, abstract: `${name} abstract` }));
+const memoryUris = (calls) => calls
+  .filter((path) => path.startsWith("/api/v1/content/read") || path.startsWith("/api/v1/fs/ls"))
+  .map((path) => new URL(path, "http://localhost").searchParams.get("uri"))
+  .filter((uri) => uri.includes("/memories/"));
+
+test("without an actor peer only the user root is read and the block keeps its shape", async () => {
+  const { calls, fetchJSON } = fakeServer({
+    profilesByUri: { [`${USER_ROOT}/profile.md`]: "# Alice\n- prefers small PRs" },
+    memoriesByUri: { [`${USER_ROOT}/preferences`]: entries("alice/style.md") },
+  });
+
+  const result = await buildProfileBlock(fetchJSON, 2000, "");
+
+  assert.deepEqual(memoryUris(calls), [`${USER_ROOT}/profile.md`, `${USER_ROOT}/preferences`, `${USER_ROOT}/entities`]);
+  assert.equal(result.block, [
+    `<user-profile uri="${USER_ROOT}/profile.md">`,
+    "# Alice\n- prefers small PRs",
+    "</user-profile>",
+    "<available-memories>",
+    `  ${USER_ROOT}/preferences/`,
+    "    - alice/style.md — alice/style.md abstract",
+    "</available-memories>",
+  ].join("\n"));
+  assert.equal(result.profileUri, `${USER_ROOT}/profile.md`);
+  assert.equal(result.peerProfileUri, "");
+});
+
+test("with an actor peer both roots are read at once, user root first", async () => {
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const { calls, fetchJSON: inner } = fakeServer({ skills: [skill(OWN, "pr-review")] });
+  const fetchJSON = async (path, ...rest) => {
+    inFlight++;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    inFlight--;
+    return inner(path, ...rest);
+  };
+
+  await buildProfileBlock(fetchJSON, 2000, PEER, CATALOG);
+
+  assert.deepEqual(memoryUris(calls), [
+    `${USER_ROOT}/profile.md`, `${USER_ROOT}/preferences`, `${USER_ROOT}/entities`,
+    `${PEER_ROOT}/profile.md`, `${PEER_ROOT}/preferences`, `${PEER_ROOT}/entities`,
+  ]);
+  // Six memory reads plus the skill catalog, after the space lookup.
+  assert.equal(maxInFlight, 7);
+});
+
+test("a peer session with only peer memories injects the peer root", async () => {
+  const { fetchJSON } = fakeServer({
+    profilesByUri: { [`${PEER_ROOT}/profile.md`]: "# app\n- uses pnpm" },
+    memoriesByUri: { [`${PEER_ROOT}/entities`]: entries("app/db.md") },
+  });
+
+  const result = await buildProfileBlock(fetchJSON, 2000, PEER);
+
+  assert.equal(result.block, [
+    `<user-profile uri="${PEER_ROOT}/profile.md">`,
+    "# app\n- uses pnpm",
+    "</user-profile>",
+    "<available-memories>",
+    `  ${PEER_ROOT}/entities/`,
+    "    - app/db.md — app/db.md abstract",
+    "</available-memories>",
+  ].join("\n"));
+  assert.equal(result.entCount, 1);
+  assert.equal(result.peerProfileUri, `${PEER_ROOT}/profile.md`);
+});
+
+test("a peer session with only user memories still injects the user root", async () => {
+  const { fetchJSON } = fakeServer({
+    profilesByUri: { [`${USER_ROOT}/profile.md`]: "# Alice\n- prefers small PRs" },
+    memoriesByUri: { [`${USER_ROOT}/preferences`]: entries("alice/style.md") },
+  });
+
+  const result = await buildProfileBlock(fetchJSON, 2000, PEER);
+  const plain = await buildProfileBlock(fetchJSON, 2000, "");
+
+  assert.equal(result.block, plain.block);
+  assert.equal(result.prefCount, 1);
+  assert.equal(result.peerProfileChars, 0);
+});
+
+test("both profiles render as their own elements, user first, sharing the profile budget", async () => {
+  const userProfile = "# Alice\n- prefers small PRs";
+  const peerProfile = "# app\n- deploys with helm";
+  const { fetchJSON } = fakeServer({
+    profilesByUri: { [`${USER_ROOT}/profile.md`]: userProfile, [`${PEER_ROOT}/profile.md`]: peerProfile },
+  });
+
+  const result = await buildProfileBlock(fetchJSON, 2000, PEER);
+
+  assert.equal(result.block, [
+    `<user-profile uri="${USER_ROOT}/profile.md">`, userProfile, "</user-profile>",
+    `<user-profile uri="${PEER_ROOT}/profile.md">`, peerProfile, "</user-profile>",
+  ].join("\n"));
+  assert.equal(result.profileChars, userProfile.length + peerProfile.length);
+  assert.equal(result.peerProfileChars, peerProfile.length);
+});
+
+test("a byte cap keeps the user profile whole and trims or points at the peer profile", async () => {
+  const userProfile = HEAVY_PROFILE.split("\n").slice(0, 12).join("\n");
+  const peerProfile = HEAVY_PROFILE.replace(/feat\/x-/g, "feat/peer-");
+  for (const [userBody, label] of [[userProfile, "fits"], [HEAVY_PROFILE, "over"]]) {
+    const { fetchJSON } = fakeServer({
+      profilesByUri: { [`${USER_ROOT}/profile.md`]: userBody, [`${PEER_ROOT}/profile.md`]: peerProfile },
+      memoriesByUri: { [`${USER_ROOT}/preferences`]: HEAVY_MEMORIES, [`${PEER_ROOT}/preferences`]: HEAVY_MEMORIES },
+      skills: HEAVY_SKILLS,
+    });
+    const result = await buildProfileBlock(fetchJSON, 10000, PEER, { ...CATALOG, sessionStartMaxBytes: 9500 });
+
+    assert.ok(Buffer.byteLength(result.block) <= 9500, `${label}: ${Buffer.byteLength(result.block)} bytes`);
+    const peerElement = result.block.slice(result.block.indexOf(`<user-profile uri="${PEER_ROOT}/profile.md">`));
+    assert.ok(result.block.indexOf(`${USER_ROOT}/profile.md`) < result.block.indexOf(`${PEER_ROOT}/profile.md`), label);
+    if (label === "fits") {
+      assert.ok(result.block.includes(userProfile), "user profile kept whole");
+      assert.match(peerElement, /profile (middle elided|truncated)|Omitted for length/);
+    } else {
+      assert.match(result.block, /profile (middle elided|truncated)/);
+      assert.match(peerElement, /^<user-profile uri="[^"]+">Omitted for length; read this uri with the read tool\.<\/user-profile>/);
+    }
+    for (const tag of ["<available-memories>", "<available-skills>"]) assert.ok(result.block.includes(tag), `${label}: ${tag}`);
+  }
+});
+
+test("a CJK peer profile never renders past what the user profile leaves it", async () => {
+  const cjkLine = (i) => `- 第${i}条：喜欢在提交前运行全部测试并检查格式`;
+  const userProfile = Array.from({ length: 5 }, (_, i) => cjkLine(`甲${i}`)).join("\n");
+  const peerProfile = Array.from({ length: 400 }, (_, i) => cjkLine(i)).join("\n");
+  for (const total of [800, 1000, 1200]) {
+    const { fetchJSON } = fakeServer({
+      profilesByUri: { [`${USER_ROOT}/profile.md`]: userProfile, [`${PEER_ROOT}/profile.md`]: peerProfile },
+    });
+    const result = await buildProfileBlock(fetchJSON, total, PEER);
+    const peerBudget = Math.floor(total / 2) - estimateTokens(userProfile);
+    assert.ok(peerBudget >= 200 && peerBudget < 550, `${total}: peer budget ${peerBudget}`);
+    assert.ok(result.block.includes(userProfile), `${total}: user profile kept whole`);
+    const start = result.block.indexOf(`<user-profile uri="${PEER_ROOT}/profile.md">`);
+    const peerElement = result.block.slice(start, result.block.indexOf("</user-profile>", start) + "</user-profile>".length);
+    const body = peerElement.replace(/^<user-profile uri="[^"]+">\n?/, "").replace(/\n?<\/user-profile>$/, "");
+    assert.ok(
+      estimateTokens(body) <= peerBudget || /Omitted for length/.test(peerElement),
+      `${total}: peer body ${estimateTokens(body)} tokens over ${peerBudget}`,
+    );
+  }
+});
+
+test("peer profile lines already in the user profile are not repeated", async () => {
+  const { fetchJSON } = fakeServer({
+    profilesByUri: {
+      [`${USER_ROOT}/profile.md`]: "# Alice\n- prefers small PRs\n- writes Go",
+      [`${PEER_ROOT}/profile.md`]: "# Alice\n\n  - prefers small PRs\n\n- owns the billing service",
+    },
+  });
+  const result = await buildProfileBlock(fetchJSON, 2000, PEER);
+  assert.ok(result.block.endsWith(`<user-profile uri="${PEER_ROOT}/profile.md">\n- owns the billing service\n</user-profile>`), result.block);
+
+  const duplicate = fakeServer({
+    profilesByUri: {
+      [`${USER_ROOT}/profile.md`]: "# Alice\n- prefers small PRs",
+      [`${PEER_ROOT}/profile.md`]: "# Alice\n\n- prefers small PRs\n",
+    },
+  });
+  const only = await buildProfileBlock(duplicate.fetchJSON, 2000, PEER);
+  assert.doesNotMatch(only.block, /peers\//);
+});
+
+test("listings put the user root before the peer root under one shared budget", async () => {
+  const many = (prefix) => entries(...Array.from({ length: 200 }, (_, i) => `${prefix}/item-${String(i).padStart(3, "0")}.md`));
+  const memoriesByUri = {
+    [`${USER_ROOT}/preferences`]: many("alice"),
+    [`${USER_ROOT}/entities`]: many("alice"),
+    [`${PEER_ROOT}/preferences`]: many("app"),
+    [`${PEER_ROOT}/entities`]: many("app"),
+  };
+  const { fetchJSON } = fakeServer({ memoriesByUri });
+  const result = await buildProfileBlock(fetchJSON, 2000, PEER);
+
+  const order = [`${USER_ROOT}/preferences/`, `${USER_ROOT}/entities/`, `${PEER_ROOT}/preferences/`, `${PEER_ROOT}/entities/`]
+    .map((header) => result.block.indexOf(`  ${header}`));
+  assert.ok(order.every((index, i) => index >= 0 && (i === 0 || index > order[i - 1])), order.join(","));
+  // Two roots split the budget one root would get alone instead of doubling it.
+  const single = await buildProfileBlock(fetchJSON, 2000, "");
+  assert.ok(Math.abs(result.tokens - single.tokens) <= 20, `${result.tokens} vs ${single.tokens} tokens`);
+  assert.equal(result.prefCount, 400);
+  assert.equal(result.entCount, 400);
+  assert.ok(result.droppedPref > 0 && result.droppedEnt > 0);
+  assert.equal((result.block.match(/\.\.\. \+\d+ more/g) || []).length, 4);
+});
+
 test("truncateToBytes cuts on a line boundary and marks the cut", () => {
   const text = ["第一行", "second line", "第三行内容"].join("\n");
   assert.equal(truncateToBytes(text, 0), text);
@@ -228,4 +428,21 @@ test("isRepeatInjection reports an unchanged block for the same session only", (
   assert.equal(isRepeatInjection(path, "s2", "block A"), false);
   assert.equal(isRepeatInjection(path, "s1", "block B"), false);
   assert.equal(isRepeatInjection(path, "s1", "block B"), true);
+});
+
+test("a peer profile left with only headings after dedup is omitted", async () => {
+  const user = "# Alice\n- a\n- b";
+  const peer = "# Alice (app)\n## Notes\n- a\n- b";
+  const fetchJSON = async (path) => {
+    const uri = decodeURIComponent((path.match(/uri=([^&]+)/) || [])[1] || "");
+    if (path.startsWith("/api/v1/content/read")) {
+      if (uri.endsWith("/peers/p1/memories/profile.md")) return { ok: true, result: peer };
+      if (uri.endsWith("/memories/profile.md")) return { ok: true, result: user };
+    }
+    if (path.startsWith("/api/v1/system/status")) return { ok: true, result: { user: "alice" } };
+    return { ok: true, result: [] };
+  };
+  const out = await buildProfileBlock(fetchJSON, 4000, "p1");
+  assert.ok(out.block.includes("- a"));
+  assert.equal((out.block.match(/<user-profile /g) || []).length, 1);
 });

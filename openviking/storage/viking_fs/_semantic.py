@@ -4,7 +4,7 @@
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
@@ -27,7 +27,7 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_decay import parse_duration_ms
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
 from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
@@ -37,56 +37,25 @@ class _SemanticMixin:
 
     # ========== VikingFS Specific Capabilities ==========
 
-    async def _read_abstract_file(
-        self,
-        path: str,
-        uri: str,
-        ctx: Optional[RequestContext] = None,
+    async def _read_directory_summary(
+        self, uri: str, field: Literal["abstract", "overview"], ctx: Optional[RequestContext] = None
     ) -> str:
-        """Read and decrypt/decode .abstract.md from a known directory path.
-
-        Does NOT perform stat or isDir check -- caller is responsible for
-        ensuring the path points to a directory.
-        """
-        file_path = f"{path}/.abstract.md"
+        """Read a fixed summary file from an already authorized, known directory."""
+        path = self._uri_to_path(uri, ctx=ctx)
         try:
-            content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
-            return body_for_preview(self._decode_bytes(content_bytes))
+            raw = self._handle_agfs_read(await self._async_agfs.read(f"{path}/.{field}.md"))
+            return body_for_preview(self._decode_bytes(raw))
         except AbstractOverviewFormatError as exc:
-            logger.warning("Malformed directory abstract for %s: %s", uri, exc)
+            logger.warning("Malformed directory %s for %s: %s", field, uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-        return f"# {uri} [Directory abstract is not ready]"
-
-    async def _read_abstract_for_known_dir(
-        self,
-        uri: str,
-        ctx: Optional[RequestContext] = None,
-    ) -> str:
-        """Read .abstract.md for a directory that is already known to be a directory.
-
-        Bypasses stat() and isDir check. Caller (i.e. _batch_fetch_abstracts)
-        must guarantee that the URI points to a directory.
-        """
-        await self._ensure_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
-                continue
-            try:
-                if not await self._agfs_path_exists(path):
-                    continue
-                return await self._read_abstract_file(path, uri, ctx=ctx)
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    continue
-                raise
-        return f"# {uri} [Directory abstract is not ready]"
+        if field == "abstract":
+            return f"# {uri} [Directory abstract is not ready]"
+        return f"# {uri}\n\n[Directory overview is not ready]"
 
     async def abstract(
         self,
@@ -99,31 +68,14 @@ class _SemanticMixin:
         the endpoint remains usable for both file and directory URIs.
         """
         await self._ensure_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        path = primary_path
-        last_exc: Optional[Exception] = None
-        for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
-                continue
-            try:
-                info = await self._async_agfs.stat(candidate_path)
-                path = candidate_path
-                break
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_exc = exc
-                    continue
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-        else:
-            if last_exc is not None:
-                mapped = map_exception(last_exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from last_exc
-            raise NotFoundError(uri, "directory") from last_exc
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            info = await self._async_agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
             parent_path = path.rsplit("/", 1)[0] or "/"
             parent_uri = self._path_to_uri(parent_path, ctx=ctx)
@@ -133,7 +85,7 @@ class _SemanticMixin:
                 parent_uri,
             )
             return await self.abstract(parent_uri, ctx=ctx)
-        return await self._read_abstract_file(path, uri, ctx=ctx)
+        return await self._read_directory_summary(uri, "abstract", ctx=ctx)
 
     async def overview(
         self,
@@ -146,31 +98,14 @@ class _SemanticMixin:
         the endpoint remains usable for both file and directory URIs.
         """
         await self._ensure_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        path = primary_path
-        last_exc: Optional[Exception] = None
-        for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
-                continue
-            try:
-                info = await self._async_agfs.stat(candidate_path)
-                path = candidate_path
-                break
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_exc = exc
-                    continue
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-        else:
-            if last_exc is not None:
-                mapped = map_exception(last_exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from last_exc
-            raise NotFoundError(uri, "directory") from last_exc
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            info = await self._async_agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
             parent_path = path.rsplit("/", 1)[0] or "/"
             parent_uri = self._path_to_uri(parent_path, ctx=ctx)
@@ -180,19 +115,7 @@ class _SemanticMixin:
                 parent_uri,
             )
             return await self.overview(parent_uri, ctx=ctx)
-        file_path = f"{path}/.overview.md"
-        try:
-            content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
-            return body_for_preview(self._decode_bytes(content_bytes))
-        except AbstractOverviewFormatError as exc:
-            logger.warning("Malformed directory overview for %s: %s", uri, exc)
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-        return f"# {uri}\n\n[Directory overview is not ready]"
+        return await self._read_directory_summary(uri, "overview", ctx=ctx)
 
     async def find(
         self,

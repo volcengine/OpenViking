@@ -9,7 +9,9 @@ from collections.abc import Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
 from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.storage.errors import InvalidPathLockRequestError
 
+from .leader import _LOCAL_LEADER_BACKEND, LeaderCandidate, LeaderMode, leader_candidate
 from .protocols import AGFSSyncClientProtocol
 
 _SYSTEM_ACCOUNT_ID = "_system"
@@ -90,6 +92,28 @@ class AsyncAGFSClient:
 
     def __init__(self, client: AGFSSyncClientProtocol):
         self._client = client
+
+    def leader_candidate(
+        self,
+        key: str,
+        holder_id: str,
+        *,
+        ttl_secs: float,
+        renew_interval_secs: float,
+        retry_interval_secs: float,
+        mode: LeaderMode = "distributed",
+    ) -> LeaderCandidate:
+        """Create a leader candidate whose terms expose only a stop event."""
+        return leader_candidate(
+            self._client,
+            _LOCAL_LEADER_BACKEND,
+            key=key,
+            holder_id=holder_id,
+            ttl_secs=ttl_secs,
+            renew_interval_secs=renew_interval_secs,
+            retry_interval_secs=retry_interval_secs,
+            mode=mode,
+        )
 
     async def run(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
         """Run a sync method off-thread, settling I/O before propagating cancellation."""
@@ -551,11 +575,19 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Adopt a handoff ref, returning a new owned lease."""
-        return await self.run(
-            "pathlock_adopt",
-            _fs_ctx_or_default("/", fs_ctx),
-            handoff_ref,
-        )
+        try:
+            return await self.run(
+                "pathlock_adopt",
+                _fs_ctx_or_default("/", fs_ctx),
+                handoff_ref,
+            )
+        except ValueError as exc:
+            # The native binding maps PathLockError::InvalidRequest to ValueError.
+            # Give queue consumers a typed, non-retryable error without changing
+            # unrelated ValueError contracts from legacy binding clients.
+            if str(exc).startswith("invalid lock request:"):
+                raise InvalidPathLockRequestError(str(exc)) from exc
+            raise
 
     async def pathlock_is_locked(
         self,

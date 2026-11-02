@@ -28,19 +28,85 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `host` | Standalone | `127.0.0.1` | | Listen address |
 | `port` | Standalone | `1935` | 1–65,535 | Listen port |
 | `workers` | Standalone | `1` | 1–64 | Worker processes |
+| `keep_alive_seconds` | Standalone | `75` | More than 0 | Seconds to keep an idle HTTP connection open between requests; set it above the load balancer's backend idle timeout |
 | `public_url` | Both | empty | HTTP(S) URL, without `/gateway` | The external address clients use; the gateway appends `/gateway` itself. When empty, an embedded gateway uses the server's public address; with neither, setup guides use the request's origin, and MCP file uploads and downloads do not work unless `mcp_file_links` is `direct`. See [Public address](../guides/22-gateway-operations.md#public-address) |
 | `mcp_file_links` | Both | `proxy` | `proxy`, `direct` | How links from the MCP upload and download tools reach the client. `proxy` rewrites them to `public_url` plus `/gateway/uploads` or `/gateway/downloads` and needs `public_url`. `direct` passes OpenViking's links through unchanged and needs the server's `OPENVIKING_PUBLIC_BASE_URL` (or `server.public_base_url`) to be reachable by the client |
 | `storage_path` | Both | `~/.openviking/gateway` | | Local storage directory |
+| `storage` | Both | Both ports `sqlite` | See [Storage providers](#storage) | Per-port providers and one shared Redis connection |
 | `encryption` | Standalone | not set (plain text) | Same fields as the `encryption` section of `ov.conf` | Encrypts stored data; see [Encryption](../guides/22-gateway-operations.md#encryption). Embedded gateways use the server's section |
+| `management_api` | Both | `true` | `true`, `false` | Registers the gateway administration routes; disabling it also removes the standalone OpenViking admin proxy and Studio. Model routes and `/health` remain available |
 | `management_key` | Both | empty | At least 32 characters | Optional [gateway management key](../guides/22-gateway-operations.md#gateway-management-key) |
+| `openviking_keys` | Both | `false` | `true`, `false` | Lets clients use a user's OpenViking API key in place of a gateway key, with the account's default context profile and every enabled upstream; see [Use an OpenViking API key directly](09-gateway-keys.md#openviking-keys) |
+| `tenancy` | Both | `account` | `account`, `key` | Partitions OpenViking-key requests by account or by key; `key` requires `management_api: false` |
+| `default_upstreams` | Both | `{}` | Object mapping stable IDs to [upstream settings](#upstream-settings) | Upstreams for OpenViking keys when the account stores none; see [Deployment default upstreams](07-upstreams.md#deployment-default-upstreams) |
+| `default_profile` | Both | Built-in profile defaults | [Context profile settings](#context-profile-settings) | Used when the account has no profile with the ID `default`; also the initial profile seeded in embedded dev mode |
 | `min_server_version` | Both | `0.4.16` | Version string | Lowest OpenViking Server version a standalone gateway accepts |
-| `session_ttl_days` | Both | `30` | 1 or more | Days of inactivity before a conversation expires |
+| `session_ttl_seconds` | Both | `2592000` (30 days) | 3600 or more | Seconds of inactivity before a conversation expires; also the fixed lifetime of cached OpenViking keys and their user records. |
 | `response_ttl_seconds` | Both | `2592000` (30 days) | 60 or more | Seconds to remember which upstream created a Responses response |
-| `log_retention_days` | Both | `30` | 1 or more | Days to keep request logs |
+| `request_log_sink` | Both | `store` | `store`, `stdout` | Write request and background saving logs to storage or one flushed JSON line per record on stdout; see [Monitoring](../guides/22-gateway-operations.md#monitoring) |
+| `log_retention_days` | Both | `30` | 1 or more | Days to keep request logs in storage; stdout retention is managed by the log collector |
 | `max_body_bytes` | Both | `33554432` (32 MiB) | 1,024 or more | Size limit for requests and uploads, in bytes |
 | `upstream_timeout_seconds` | Both | `600` | More than 0 | Timeout for provider requests |
 | `health_interval_seconds` | Both | `60` | 1 or more | Seconds between OpenViking status checks |
+| `capture_concurrency` | Both | `1` | 1 or more | Concurrent conversation deliveries per process; shutdown stops new claims and gives in-flight deliveries up to 100 seconds to finish |
 | `client_rules` | Both | `{}` (packaged rules only) | See [Client rules](#client-rules) | Text added to or removed from what the gateway recognizes as housekeeping requests and client-inserted messages |
+
+For example, a standalone `gateway.conf` can route OpenViking keys before any account is configured:
+
+```json
+{
+  "openviking_url": "http://openviking:1933",
+  "openviking_keys": true,
+  "default_upstreams": {
+    "ark-chat": {
+      "name": "Ark Chat",
+      "protocol": "chat",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "$ARK_API_KEY",
+      "models": ["your-model-id"]
+    }
+  },
+  "default_profile": {"max_tokens": 2400}
+}
+```
+
+## Storage providers {#storage}
+
+The default is local SQLite, with no external service. `storage.kernel` and `storage.management` each select `sqlite` or `redis`; Redis ports share one client and the settings in `storage.redis`. Install `pip install "openviking[expiry]"` for Redis; the official image already includes it. Standalone Redis and Redis Cluster are tested. Sentinel configuration is accepted but is not covered by gateway CI.
+
+```json
+{
+  "storage": {
+    "kernel": "redis",
+    "management": "redis",
+    "key_prefix": "ovgw:",
+    "redis": {
+      "mode": "standalone",
+      "endpoints": ["rediss://redis.example.com:6379"],
+      "username": "gateway",
+      "password_env": "OPENVIKING_GATEWAY_REDIS_PASSWORD",
+      "pool_size": 32,
+      "command_timeout_ms": 5000
+    }
+  },
+  "session_ttl_seconds": 604800
+}
+```
+
+`OPENVIKING_GATEWAY_STORAGE` accepts the same `storage` object as JSON. Inject the password through the named environment variable, for example from a Kubernetes Secret. `key_prefix` defaults to `ovgw:` and cannot contain `{`, `}`, `*`, `?`, `[`, `]` or `\`; every key starts with that prefix plus `v1:`. Give separate deployments different prefixes.
+
+`storage.redis` reuses OpenViking's `RedisCacheConfig`: `mode`, `endpoints`, `username`, `password_env`, legacy `password`, `db`, `pool_size`, `connect_timeout_ms`, `command_timeout_ms`, `default_ttl_seconds`, `tls_insecure_skip_verify`, and the Sentinel fields `master_name`, `sentinel_username`, `sentinel_password_env`, `sentinel_password`. The gateway overrides the command timeout default from 20 to 5000 ms for large conversation values; `default_ttl_seconds` does not set gateway retention. URLs contain only a scheme, host and port; use the dedicated credentials and `db` fields. For Cluster use `mode: "cluster"`, multiple seed endpoints and `db: 0`. TLS follows the `rediss://` scheme. For a private CA, mount its certificate and set `SSL_CERT_FILE` to its path (with Helm, use `extraVolumes` and `extraVolumeMounts`).
+
+Give the gateway its own Redis instance with `volatile-lru` eviction and AOF; the `redis.conf` settings and what to monitor are in [Redis memory policy](../guides/22-gateway-operations.md#redis-memory-policy).
+
+Create an ACL user with the following command, replacing the password and prefix. Run it on **every Cluster node**, because ACLs are not replicated between nodes:
+
+```bash
+redis-cli ACL SETUSER gateway reset on '>replace-with-secret' '~ovgw:*' \
+  +@read +@write +@scripting +@connection +@transaction +ping +time +scan +unlink
+```
+
+For Cluster also grant `'+cluster|slots' '+cluster|shards'`. `+time` is required by Lua scripts. These permissions and prefix isolation are exercised in CI. Application commands do not retry after connection errors because a failed write may already have reached Redis.
 
 ## Environment variables {#environment-variables}
 
@@ -55,7 +121,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 - Values that start with `tcp://` or `udp://` are ignored, so the variables Kubernetes sets for a Service named `openviking-gateway` (such as `OPENVIKING_GATEWAY_PORT=tcp://…`) do not override the file.
 - A value in the file can also be a `"$VAR"` reference, resolved from the environment.
 - The `encryption` block can only be set in the file.
-- `client_rules` takes the whole section as JSON: `OPENVIKING_GATEWAY_CLIENT_RULES='{"auxiliary_patterns":{"add":["You are the Acme title writer"]}}'`.
+- `client_rules`, `storage`, `default_upstreams` and `default_profile` take whole sections as JSON, for example `OPENVIKING_GATEWAY_CLIENT_RULES='{"auxiliary_patterns":{"add":["You are the Acme title writer"]}}'` or `OPENVIKING_GATEWAY_DEFAULT_PROFILE='{"max_tokens":2400}'`.
 - Containers usually need no file: set the fields they need as variables.
 
 ## Validation {#validation}
@@ -65,9 +131,10 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `openviking_url` and `public_url` | HTTP(S), with no credentials, query or fragment |
 | Upstream `base_url` | Its own rules; see [Endpoint](07-upstreams.md#endpoint) |
 | `management_key` | At least 32 characters once `$VAR` references are resolved; an unresolved `$VAR` fails |
+| `tenancy` | `key` requires `management_api: false`; it has no effect when `openviking_keys` is off |
 | `client_rules` | Every added pattern must be a valid Python regular expression; added tag names start with an ASCII letter and use only ASCII letters, digits, `_`, `.`, `:` and `-` |
 | Unknown fields | Fail validation |
-| Removed fields | Ignored, with a startup warning: `encryption_key_env`, and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
+| Removed fields | Ignored, with a startup warning: `encryption_key_env`, `session_ttl_days` (replaced by `session_ttl_seconds`), and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
 
 ## Client rules {#client-rules}
 
@@ -103,7 +170,7 @@ In `gateway.conf`, `client_rules` sits at the root, without the `gateway` wrappe
 
 ## Context profile settings {#context-profile-settings}
 
-In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles).
+In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles). **Let clients override settings** (`client_overrides`, default `true`) lets clients change every other setting for a new conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides).
 
 ### Recall memory {#profile-recall}
 
@@ -123,7 +190,7 @@ Explained in [Recall memory](08-context-profiles.md#recall-memory).
 | Query length | `query_max_chars` | `8000` | 3–32,000 | Characters of the message used as the search query. |
 | Limit by category | `quotas` | `{}` (off) | Keys: `events`, `entities`, `preferences`, `experiences`, `resources`, `skills`; when set, at least one above 0 (checked by Studio only) | Most entries per category; only categories above 0 are searched. |
 
-The management API saves `context_types` and `quotas` without checking them. An unknown `quotas` key makes every recall fail, because OpenViking rejects it.
+The management API saves `context_types` and the `quotas` keys without checking them. An unknown `quotas` key makes every recall fail, because OpenViking rejects it.
 
 ### Save conversations {#profile-saving}
 

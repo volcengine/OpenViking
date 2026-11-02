@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from openviking.core.namespace import context_type_for_uri
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
@@ -60,6 +61,7 @@ class Summarizer:
         *,
         file_uri: str,
         ctx: "RequestContext",
+        lock_handoff: Dict[str, Any] | None = None,
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
         created: bool = False,
@@ -94,6 +96,7 @@ class Summarizer:
                 ),
             ),
             ctx=ctx,
+            lock_handoff=lock_handoff,
             skip_vectorization=skip_vectorization,
             ingest_options=ingest_options,
             generation_trigger=generation_trigger,
@@ -110,6 +113,7 @@ class Summarizer:
         *,
         changes: Sequence[FileRefreshRequest],
         ctx: "RequestContext",
+        lock_handoff: Dict[str, Any] | None = None,
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
         generation_trigger: str = "semantic_refresh",
@@ -135,6 +139,8 @@ class Summarizer:
 
         if not grouped:
             return {"status": "success", "enqueued_count": 0, "parent_actions": {}}
+        if lock_handoff is not None and len(grouped) != 1:
+            raise ValueError("one semantic lock handoff requires exactly one parent refresh")
 
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
@@ -178,6 +184,7 @@ class Summarizer:
                 user_id=ctx.user.user_id,
                 peer_id=ctx.user.user_id,
                 role=str(ctx.role),
+                lock_handoff=lock_handoff,
                 skip_vectorization=skip_vectorization,
                 telemetry_id=telemetry_id,
                 changes={
@@ -193,7 +200,7 @@ class Summarizer:
                         user_id=ctx.user.user_id,
                         peer_id=ctx.user.user_id,
                     )
-                    if aggregate_directory
+                    if aggregate_directory and lock_handoff is None
                     else ""
                 ),
                 generation_trigger=generation_trigger,
@@ -232,7 +239,7 @@ class Summarizer:
         resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
-        lock: Optional[Dict[str, Any]] = None,
+        lock: Optional[Dict[str, Any] | PathLockGuard] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -267,12 +274,20 @@ class Summarizer:
                 "status": "error",
                 "message": "temp_uris length must match resource_uris length",
             }
+        if lock is not None and len(resource_uris) != 1:
+            raise ValueError("one semantic lock handoff requires exactly one resource")
         enqueued_count = 0
 
         telemetry = get_current_telemetry()
+        agfs = get_viking_fs()._async_agfs
+        lock_guard = (
+            lock
+            if isinstance(lock, PathLockGuard)
+            else PathLockGuard(agfs, lock) if lock is not None else None
+        )
         lock_handoff: Optional[Dict[str, Any]] = None
-        if lock is not None:
-            lock_handoff = await get_viking_fs()._async_agfs.pathlock_to_handoff(lock)
+        if lock_guard is not None:
+            lock_handoff = await lock_guard.to_handoff()
 
         def is_resources_root(uri: str) -> bool:
             return (uri or "").rstrip("/") == "viking://resources"
@@ -333,7 +348,25 @@ class Summarizer:
                     file_abstracts=file_abstracts,
                     plan=semantic_plan,
                 )
-                enqueue_id = await semantic_queue.enqueue(msg)
+                try:
+                    if lock_guard is None:
+                        enqueue_id = await semantic_queue.enqueue(msg)
+                    else:
+                        enqueue_id = await lock_guard.handoff_and_dispatch(
+                            lock_handoff,
+                            lambda msg=msg: semantic_queue.enqueue(msg),
+                            accepted=lambda result: result != "deduplicated",
+                        )
+                except BaseException:
+                    if (
+                        isinstance(lock, dict)
+                        and lock_guard is not None
+                        and lock_guard.lease is not None
+                        and lock_guard.lease is not lock
+                    ):
+                        lock.clear()
+                        lock.update(lock_guard.lease)
+                    raise
                 if enqueue_id == "deduplicated":
                     logger.info("Semantic generation already queued for: %s", target_uri)
                     continue
@@ -342,4 +375,8 @@ class Summarizer:
                     f"Enqueued semantic generation for: {target_uri} (skip_vectorization={skip_vectorization})"
                 )
 
-        return {"status": "success", "enqueued_count": enqueued_count}
+        return {
+            "status": "success",
+            "enqueued_count": enqueued_count,
+            "lock_handed_off": lock_guard is not None and lock_guard.transferred,
+        }

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,7 @@ from openviking.privacy.reference import (
 )
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.exceptions import ResourceExhaustedError
+from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -43,17 +44,10 @@ def _ctx(user_id="alice"):
     return RequestContext(user=UserIdentifier("account-a", user_id), role=Role.USER)
 
 
-def test_privacy_sanitizer_uses_native_ragfs_matcher():
-    sanitizer = PrivacySanitizer(_PrivacyCatalog())
-    assert sanitizer._matcher_class.__module__ == "ragfs_python"
-    assert sanitizer._matcher_class.__name__ == "PrivacyMatcher"
-
-
 def test_privacy_reference_roundtrip_encodes_individual_segments():
     rendered = build_privacy_field_reference("alice", "custom-config", "prod-key", "api/key")
     assert rendered == (
-        "{{ov_privacy:alice:viking://~/privacy/custom-config/"
-        "prod-key#/values/api%2Fkey}}"
+        "{{ov_privacy:alice:viking://~/privacy/custom-config/prod-key#/values/api%2Fkey}}"
     )
     assert parse_privacy_field_reference(rendered) == PrivacyFieldReference(
         owner_user_id="alice",
@@ -233,3 +227,96 @@ async def test_sanitizer_never_rewrites_privacy_storage_itself():
     assert result.content == "secret"
     assert not result.changed
     assert catalog.build_reads == 0
+
+
+async def test_prepared_matcher_returns_original_offsets_in_worker_thread():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "secret", "long_key": "secrets"}}})
+    find = await PrivacySanitizer(catalog).prepare_matcher(_ctx())
+    reference = build_privacy_field_reference("alice", "credential", "service", "key")
+    text = f"前缀🙂secrets {reference} secret"
+
+    matches = await asyncio.to_thread(find, text)
+
+    assert [(item.start, item.end, item.reference) for item in matches] == [
+        (3, 10, build_privacy_field_reference("alice", "credential", "service", "long_key")),
+        (len(text) - 6, len(text), reference),
+    ]
+
+
+@pytest.mark.parametrize("text", ["abcdef", "中文"])
+async def test_prepared_matcher_enforces_utf8_byte_limit_with_empty_catalog(text):
+    find = await PrivacySanitizer(_PrivacyCatalog(), max_content_bytes=6).prepare_matcher(_ctx())
+
+    assert find(text) == []
+    with pytest.raises(ResourceExhaustedError, match="size limit"):
+        find(text + "a")
+
+
+async def test_prepared_matcher_rejects_dense_or_ambiguous_matches():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "secret"}}})
+    find = await PrivacySanitizer(catalog, max_replacements=2).prepare_matcher(_ctx())
+
+    assert len(find("secret secret")) == 2
+    with pytest.raises(ResourceExhaustedError, match="replacement limit"):
+        find("secret secret secret")
+
+    catalog.configs["credential"]["other"] = {"key": "secret"}
+    catalog.revision += 1
+    find = await PrivacySanitizer(catalog).prepare_matcher(_ctx())
+    with pytest.raises(InvalidArgumentError, match="multiple fields"):
+        find("secret")
+
+
+async def test_prepared_matcher_rejects_unpaired_surrogates():
+    find = await PrivacySanitizer(_PrivacyCatalog()).prepare_matcher(_ctx())
+
+    with pytest.raises(UnicodeEncodeError):
+        find("invalid \ud800")
+
+
+@pytest.mark.parametrize(
+    "credentials,ordinary,expected",
+    [
+        (1, 2, ("credential", "target-0")),
+        (2, 1, None),
+        (0, 2, None),
+    ],
+)
+async def test_credential_preference_selects_only_an_unambiguous_field(
+    credentials, ordinary, expected
+):
+    configs = {
+        category: {f"target-{i}": {"key": "shared-secret"} for i in range(count)}
+        for category, count in [("credential", credentials), ("session", ordinary)]
+    }
+    sanitizer = PrivacySanitizer(_PrivacyCatalog(configs))
+    find = await sanitizer.prepare_matcher(_ctx(), prefer_credentials=True)
+    if expected is None:
+        with pytest.raises(InvalidArgumentError, match="multiple fields"):
+            find("shared-secret")
+    else:
+        assert [hit.reference for hit in find("shared-secret")] == [
+            build_privacy_field_reference("alice", *expected, "key")
+        ]
+
+
+async def test_matcher_cache_separates_policies_and_refreshes_both_after_rotation():
+    catalog = _PrivacyCatalog(
+        {
+            "credential": {"managed": {"key": "shared-secret"}},
+            "session": {"captured": {"key": "shared-secret"}},
+        }
+    )
+    sanitizer = PrivacySanitizer(catalog)
+    credential = build_privacy_field_reference("alice", "credential", "managed", "key")
+    captured = build_privacy_field_reference("alice", "session", "captured", "key")
+    for preferred in [False, True] * 2:
+        result = await sanitizer.sanitize("shared-secret", ctx=_ctx(), prefer_credentials=preferred)
+        assert result.content == (credential if preferred else "{{ov_privacy:ambiguous}}")
+    catalog.configs["credential"]["managed"]["key"] = "rotated-secret"
+    catalog.revision += 1
+    for preferred in [False, True]:
+        result = await sanitizer.sanitize(
+            "shared-secret rotated-secret", ctx=_ctx(), prefer_credentials=preferred
+        )
+        assert result.content == f"{captured} {credential}"

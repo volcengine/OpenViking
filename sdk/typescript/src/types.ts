@@ -74,6 +74,8 @@ export interface RequestOptions {
 /** Options shared by asynchronous processing APIs. */
 export interface WaitOptions {
   wait?: boolean;
+  /** @deprecated Accepted for compatibility and ignored. */
+  timeout?: number;
   telemetry?: unknown;
 }
 /** Writable direct grants and inheritance mode. */
@@ -123,6 +125,7 @@ export interface BatchWriteOperation {
 }
 /** Batch-write request options. */
 export interface BatchWriteOptions extends WaitOptions {
+  deferProcessing?: boolean;
   processingMode?: ProcessingMode;
   extra?: JsonObject;
 }

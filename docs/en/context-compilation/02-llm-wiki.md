@@ -15,7 +15,7 @@ The Skill picks the smallest page type that matches each page's retrieval purpos
 
 The default page types are `entity` and `concept`; other types follow the conditions in the Skill. Related material from multiple sources is grouped under the same topic.
 
-Skill source: [examples/compile/ov-compile-skills/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/llm-wiki) · Visualization script: [examples/compile/graph-show/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki)
+Skill source: [openviking/system_assets/compile/example-skills/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/llm-wiki) · Visualization script: [examples/compile/graph-show/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki)
 
 Check the [prerequisites](01-overview.md#prerequisites) and run these commands from the OpenViking repository root. Replace the source directory with your own material.
 
@@ -44,7 +44,7 @@ ov ls -r viking://resources/research
 This example installs the Skill under `viking://agent/skills`, matching the compile command below. Omit `-p` for a private installation, then use the returned URI in `--skill`:
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/llm-wiki -p viking://agent/skills --wait
+ov add-skill openviking/system_assets/compile/example-skills/llm-wiki -p viking://agent/skills --wait
 ```
 
 Find the installed Skill URI:

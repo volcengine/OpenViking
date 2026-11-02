@@ -7,6 +7,11 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from openviking.privacy.operations import (
+    build_privacy_tree,
+    require_privacy_owner,
+    resolve_privacy_field,
+)
 from openviking.privacy.reference import (
     build_privacy_field_reference,
     parse_privacy_field_selector,
@@ -14,15 +19,12 @@ from openviking.privacy.reference import (
 )
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.scan import PRIVACY_SCAN_MAX_NODES, scan_privacy_content
-from openviking.privacy.validation import (
-    validate_privacy_field_name,
-    validate_privacy_identifier,
-)
+from openviking.privacy.validation import validate_privacy_field_name
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/privacy-configs", tags=["privacy-configs"])
 
@@ -73,14 +75,6 @@ class PrivacySelectorRequest(BaseModel):
     selector: str = Field(..., min_length=1, max_length=2048)
 
 
-def _require_selector_owner(owner_user_id: str, ctx: RequestContext) -> None:
-    if owner_user_id != ctx.user.user_id:
-        raise PermissionDeniedError(
-            f"Privacy reference belongs to user {owner_user_id}",
-            resource=owner_user_id,
-        )
-
-
 @router.get("")
 async def list_privacy_categories(
     _ctx: RequestContext = Depends(get_request_context),
@@ -116,35 +110,9 @@ async def resolve_privacy_reference(
     request: PrivacySelectorRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    reference = parse_privacy_field_selector(
-        request.selector,
-        current_user_id=_ctx.user.user_id,
-    )
-    if reference is None:
-        raise InvalidArgumentError(
-            "selector must be an owner-bound Privacy reference or a field-level Privacy URI"
-        )
-    _require_selector_owner(reference.owner_user_id, _ctx)
-    validate_privacy_field_name(reference.field, location="field")
-    service = get_service()
-    privacy = service.privacy_configs
-    await _require_privacy_target(privacy, _ctx, reference.category, reference.target_key)
-    current = await privacy.get_current(_ctx, reference.category, reference.target_key)
-    if current is None or reference.field not in current.values:
-        raise NotFoundError(request.selector, "privacy config field")
-    value = current.values[reference.field]
     return Response(
         status="ok",
-        result={
-            "owner_user_id": reference.owner_user_id,
-            "category": reference.category,
-            "target_key": reference.target_key,
-            "field": reference.field,
-            "version": current.version,
-            "configured": value is not None and str(value) != "",
-            "reference": reference.render(),
-            "value": value,
-        },
+        result=await resolve_privacy_field(get_service().privacy_configs, _ctx, request.selector),
     )
 
 
@@ -160,7 +128,7 @@ async def delete_privacy_selector(
         current_user_id=_ctx.user.user_id,
     )
     if field_reference is not None:
-        _require_selector_owner(field_reference.owner_user_id, _ctx)
+        require_privacy_owner(field_reference.owner_user_id, _ctx)
         outcome = await privacy.delete_field(
             _ctx,
             field_reference.category,
@@ -192,7 +160,7 @@ async def delete_privacy_selector(
         raise InvalidArgumentError(
             "selector must be a Privacy target URI, field URI, or owner-bound reference"
         )
-    _require_selector_owner(target_reference.owner_user_id, _ctx)
+    require_privacy_owner(target_reference.owner_user_id, _ctx)
     deleted = await privacy.delete(
         _ctx,
         target_reference.category,
@@ -216,55 +184,9 @@ async def list_privacy_tree(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List the caller's active Privacy targets and field metadata without values."""
-    if category is not None:
-        validate_privacy_identifier(category, "category")
-    service = get_service()
-    privacy = service.privacy_configs
-    if privacy is None:
-        return Response(
-            status="ok",
-            result={"owner_user_id": _ctx.user.user_id, "categories": []},
-        )
-
-    if category is not None:
-        categories = [category]
-    else:
-        categories = await privacy.list_categories(_ctx)
-
-    tree = []
-    for name in categories:
-        targets = []
-        for target_key in await privacy.list_targets(_ctx, name):
-            current = await privacy.get_current(_ctx, name, target_key)
-            if current is None:
-                # A Skill update may leave an empty directory behind solely for
-                # its lock; only persisted configuration belongs in the tree.
-                continue
-            fields = [
-                {
-                    "field": field,
-                    "configured": value is not None and str(value) != "",
-                    "reference": build_privacy_field_reference(
-                        _ctx.user.user_id,
-                        name,
-                        target_key,
-                        field,
-                    ),
-                }
-                for field, value in sorted(current.values.items())
-            ]
-            targets.append(
-                {
-                    "target_key": target_key,
-                    "version": current.version,
-                    "fields": fields,
-                }
-            )
-        tree.append({"category": name, "targets": targets})
-
     return Response(
         status="ok",
-        result={"owner_user_id": _ctx.user.user_id, "categories": tree},
+        result=await build_privacy_tree(get_service().privacy_configs, _ctx, category),
     )
 
 

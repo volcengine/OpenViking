@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
-import type { ComponentType } from 'react'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import type { ComponentType } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 
-import { Route } from './route'
-import type * as AuditApi from './-lib/api'
+import type * as AuditApi from '#/features/workbench/request-logs/lib/api'
+import { Route } from '#/routes/request-logs/route'
 
 const { fetchLogs } = vi.hoisted(() => ({ fetchLogs: vi.fn() }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
       baseUrl: 'http://localhost:1933',
@@ -21,10 +21,13 @@ vi.mock('#/hooks/use-app-connection', () => ({
     isConnectionRoleLoading: false,
   }),
 }))
-vi.mock('./-lib/api', async (importOriginal) => ({
-  ...(await importOriginal<typeof AuditApi>()),
-  fetchAuditLogs: fetchLogs,
-}))
+vi.mock(
+  '#/features/workbench/request-logs/lib/api',
+  async (importOriginal) => ({
+    ...(await importOriginal<typeof AuditApi>()),
+    fetchAuditLogs: fetchLogs,
+  }),
+)
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))

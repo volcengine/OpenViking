@@ -11,8 +11,8 @@ from openviking.scheduling.expiry.config import ExpiryRedisConfig
 from openviking.scheduling.expiry.keys import ExpiryKeys
 from openviking.scheduling.expiry.metrics import ExpiryMetrics
 from openviking.scheduling.expiry.redis_store import RedisExpiryStore
+from openviking.server.account_stores.file import FileStore
 from openviking.server.account_stores.redis_client import create_redis_client
-from openviking.server.api_keys.legacy import FileStore
 from openviking.server.config import AccountStoreConfig
 from openviking.server.store_assembly import (
     build_account_store,

@@ -284,10 +284,16 @@ class OpenVikingSessionRecorder:
         messages: Iterable[BaseMessage],
         peer_id: str | None = None,
         context_parts: Sequence[dict[str, Any]] = (),
+        *,
+        commit_policy: OpenVikingCommitPolicy | None = None,
     ) -> OpenVikingRecordResult:
-        """Persist a caller-selected batch and apply the configured commit policy."""
+        """Persist messages with a per-call policy, or the recorder default if None.
+
+        Use a ``never`` policy to suppress this call's post-write commit.
+        """
 
         self._raise_if_closed()
+        policy = self.commit_policy if commit_policy is None else commit_policy
         self._retry_pending_commit(session_id)
         input_messages = list(messages)
         prepared_messages = _prepare_messages(
@@ -343,7 +349,7 @@ class OpenVikingSessionRecorder:
             apply_commit_policy(
                 client,
                 session_id,
-                self.commit_policy,
+                policy,
                 persisted_pending_tokens=persisted_pending_tokens,
             )
         except Exception as exc:
@@ -362,10 +368,13 @@ class OpenVikingSessionRecorder:
         messages: Iterable[BaseMessage],
         peer_id: str | None = None,
         context_parts: Sequence[dict[str, Any]] = (),
+        *,
+        commit_policy: OpenVikingCommitPolicy | None = None,
     ) -> OpenVikingRecordResult:
-        """Asynchronously persist messages and apply the configured commit policy."""
+        """Async ``record`` with the same per-call and default policy behavior."""
 
         self._raise_if_closed()
+        policy = self.commit_policy if commit_policy is None else commit_policy
         await self._aretry_pending_commit(session_id)
         input_messages = list(messages)
         prepared_messages = _prepare_messages(
@@ -435,7 +444,7 @@ class OpenVikingSessionRecorder:
             await aapply_commit_policy(
                 client,
                 session_id,
-                self.commit_policy,
+                policy,
                 persisted_pending_tokens=persisted_pending_tokens,
             )
         except asyncio.CancelledError as exc:

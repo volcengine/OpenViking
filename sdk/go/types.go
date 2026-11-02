@@ -25,14 +25,16 @@ type Config struct {
 
 // AddResourceOptions controls AddResource.
 type AddResourceOptions struct {
-	ACL                 *ACLSpec
-	To                  string
-	Parent              string
-	CreateParent        *bool
-	AddType             string
-	Reason              string
-	Instruction         string
-	Wait                bool
+	ACL          *ACLSpec
+	To           string
+	Parent       string
+	CreateParent *bool
+	AddType      string
+	Reason       string
+	Instruction  string
+	Wait         bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout             *float64
 	Strict              bool
 	IgnoreDirs          string
 	Include             string
@@ -50,7 +52,9 @@ type AddResourceOptions struct {
 
 // AddSkillOptions controls AddSkill.
 type AddSkillOptions struct {
-	Wait      bool
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout   *float64
 	Telemetry any
 	Extra     map[string]any
 	// TargetURI scopes the operation to a skills root such as
@@ -138,7 +142,9 @@ type GetSkillOptions struct {
 
 // UpdateSkillOptions controls UpdateSkill.
 type UpdateSkillOptions struct {
-	Wait           bool
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout        *float64
 	SourceMetadata map[string]any
 	Telemetry      any
 	TargetURI      any
@@ -148,6 +154,14 @@ type UpdateSkillOptions struct {
 // DeleteSkillOptions controls DeleteSkill.
 type DeleteSkillOptions struct {
 	TargetURI any
+}
+
+// WaitProcessedOptions controls WaitProcessed.
+//
+// Deprecated: Waiting-specific timeout options are ignored.
+type WaitProcessedOptions struct {
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout *float64 `json:"timeout,omitempty"`
 }
 
 // ObserverStatusOptions controls observer status formatting.
@@ -231,13 +245,17 @@ type TreePage struct {
 type RemoveOptions struct {
 	Recursive bool
 	Wait      bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout *float64
 }
 
 // WriteOptions controls Write.
 type WriteOptions struct {
-	ACL            *ACLSpec
-	Mode           string
-	Wait           bool
+	ACL  *ACLSpec
+	Mode string
+	Wait bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
 	Tags           []string
@@ -258,10 +276,19 @@ type BatchWriteOperation struct {
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
-	Wait           *bool
+	DeferProcessing bool
+	Wait            *bool
+	// Deprecated: Timeout is accepted for compatibility and ignored.
+	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
 	Extra          map[string]any
+}
+
+// EnsureDirectoryIndexOptions controls readiness waiting.
+type EnsureDirectoryIndexOptions struct {
+	Wait      *bool // Nil waits for indexes to become readable.
+	Telemetry any
 }
 
 // SetTagsOptions controls SetTags.
@@ -498,11 +525,6 @@ type PackOptions struct {
 type ImportPackOptions struct {
 	OnConflict string
 	VectorMode string
-}
-
-// AdminMigrateOptions controls AdminMigrate.
-type AdminMigrateOptions struct {
-	Cleanup bool
 }
 
 // FindResult is the structured retrieval response returned by Find and Search.

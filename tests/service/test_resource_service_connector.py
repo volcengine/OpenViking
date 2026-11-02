@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
+from openviking.connector import auth
 from openviking.connector import delegate as connector_delegate_module
 from openviking.parse.mode import ParseMode
 from openviking.resource.watch_manager import WatchManager
@@ -109,7 +110,7 @@ def _task_tracker():
     return SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
         start=AsyncMock(),
-        update_stage=AsyncMock(),
+        patch_task=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
         mark_cancelled=AsyncMock(),
@@ -140,6 +141,48 @@ def _install_connector_dependencies(
         return _BackgroundTask()
 
     monkeypatch.setattr(connector_delegate_module.asyncio, "create_task", discard_monitor)
+
+
+@pytest.mark.asyncio
+async def test_feishu_document_connector_separates_private_auth(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    reference = {
+        "account_id": "external",
+        "user_id": "owner",
+        "ov_user_id": "alice",
+        "type": "oauth",
+        "platform": "feishu_doc",
+    }
+    connector_config.allowed_add_types.append("feishu_doc")
+    client = SimpleNamespace(submit_doc_add=AsyncMock(return_value={"task_key": "C1"}))
+    _install_connector_dependencies(monkeypatch, _task_tracker(), client)
+    resolve = AsyncMock(
+        return_value={"lark_access_token": "secret", "openviking_oauth_ref": reference}
+    )
+    monkeypatch.setattr(connector_delegate_module, "document_auth_config", resolve)
+    args = {
+        "urls": [{"obj_type": "wiki", "obj_token": "W1", "include_child": True}],
+        "openviking_oauth_ref": reference,
+    }
+    result = await service.add_resource(
+        path="https://team.feishu.cn/wiki/W1",
+        ctx=ctx,
+        add_type="feishu_doc",
+        to="viking://resources/docs",
+        args=args,
+    )
+    assert result["task_id"] == "task-1"
+    payload = client.submit_doc_add.await_args.kwargs
+    assert payload["add_type"] == "feishu_doc"
+    assert payload["param_config"]["urls"][0]["include_child"] is True
+    assert "openviking_oauth_ref" not in payload["param_config"]
+    assert payload["auth_config"]["lark_access_token"] == "secret"
+    assert "secret" not in str(payload["param_config"])
+    resolve.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -239,12 +282,19 @@ async def test_connector_watch_stores_only_encrypted_replay_state(
 
     monkeypatch.setattr(service._connector, "_monitor", complete_monitor)
 
-    await service.add_resource(
+    result = await service.add_resource(
         path="tos://bucket/docs/",
         ctx=ctx,
         to="viking://resources/x/y",
         watch_interval=5,
-        args={"tos_prefix": ["tos://bucket/docs/"]},
+        args={
+            "tos_prefix": ["tos://bucket/docs/"],
+            "resource_config": {
+                "resource_name": "Team Docs",
+                "resource_tag": "tos_docs",
+                "ignored": "value",
+            },
+        },
     )
 
     task = await watch_manager.get_task_by_uri(
@@ -254,6 +304,7 @@ async def test_connector_watch_stores_only_encrypted_replay_state(
         role=str(Role.USER),
     )
     assert task is not None
+    assert result["watch_id"] == task.task_id
     assert task.is_active is True
     assert task.last_status is None
     background_tasks = list(service._background_tasks)
@@ -263,6 +314,14 @@ async def test_connector_watch_stores_only_encrypted_replay_state(
     assert task.last_status == "completed"
     assert task.last_task_id == "task-1"
     assert task.source_type == "tos"
+    assert task.processor_kwargs["resource_config"] == {
+        "resource_name": "Team Docs",
+        "resource_tag": "tos_docs",
+    }
+    assert task.to_dict()["processor_kwargs"]["resource_config"] == {
+        "resource_name": "Team Docs",
+        "resource_tag": "tos_docs",
+    }
     assert task.auth_state["provider"] == "connector_encrypted"
     assert "secret" not in json.dumps(task.auth_state)
     assert "auth_state" not in task.to_dict()
@@ -274,7 +333,11 @@ async def test_connector_watch_stores_only_encrypted_replay_state(
         "secret",
         "tos",
         {"tos_prefix": ["tos://bucket/docs/"]},
+        None,
     )
+    assert connector_client.submit_doc_add.await_args.kwargs["param_config"] == {
+        "tos_prefix": ["tos://bucket/docs/"]
+    }
 
 
 @pytest.mark.asyncio
@@ -759,7 +822,7 @@ async def test_git_connector_watch_keeps_args_only_in_encrypted_state(
         task.auth_state,
         account_id="acct",
         path="https://git.example/org/private.git",
-    ) == ("secret", "git", connector_args)
+    ) == ("secret", "git", connector_args, None)
 
 
 @pytest.mark.asyncio
@@ -807,7 +870,7 @@ async def test_connector_watch_allows_plaintext_private_state_without_encryption
         task.auth_state,
         account_id="acct",
         path="tos://bucket/docs/",
-    ) == ("secret", "tos", {})
+    ) == ("secret", "tos", {}, None)
 
 
 @pytest.mark.asyncio
@@ -969,7 +1032,7 @@ async def test_connector_watch_keeps_running_when_target_is_missing():
 
     service = ResourceService()
     service.refresh_resource = AsyncMock(return_value={"status": "completed"})
-    service._connector.restore_watch_request = AsyncMock(return_value=("secret", "tos", {}))
+    service._connector.restore_watch_request = AsyncMock(return_value=("secret", "tos", {}, None))
     scheduler = WatchScheduler(resource_service=service, viking_fs=MissingTargetFS())
     watch_manager = WatchManager()
     scheduler._watch_manager = watch_manager
@@ -1826,6 +1889,7 @@ async def test_git_credentials_with_include_never_enqueue_native_job(
 )
 async def test_native_git_enqueue_rejects_credentials_before_durable_job(
     monkeypatch,
+    connector_config,
     ctx,
     service,
     credential_args,
@@ -1847,6 +1911,43 @@ async def test_native_git_enqueue_rejects_credentials_before_durable_job(
 
 
 @pytest.mark.asyncio
+async def test_native_git_preflight_sha_is_carried_as_transient_msg_hint(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
+    service._connector.should_delegate = Mock(return_value=False)
+    head_sha = "e" * 40
+    service._preflight_git_source = AsyncMock(
+        return_value=SimpleNamespace(
+            source_name="private",
+            source_path="https://git.example/org/private.git",
+            source_format="repository",
+            head_sha=head_sha,
+        )
+    )
+    service._plan_source_job_target = AsyncMock(
+        return_value=("viking://resources/private", None, False, False)
+    )
+    service._enqueue_add_resource_job = AsyncMock(
+        return_value=SimpleNamespace(task_id="task-private")
+    )
+
+    await service.add_resource(
+        path="https://git.example/org/private.git",
+        ctx=ctx,
+        to="viking://resources/private",
+    )
+
+    message = service._enqueue_add_resource_job.await_args.args[0]
+    assert message.git_head_sha_hint == head_sha
+    # Transient hint survives durable serialization for the worker.
+    assert AddResourceMsg.from_dict(message.to_dict()).git_head_sha_hint == head_sha
+
+
+@pytest.mark.asyncio
 async def test_native_git_nested_auth_is_owned_by_durable_task(
     monkeypatch,
     connector_config,
@@ -1860,6 +1961,7 @@ async def test_native_git_nested_auth_is_owned_by_durable_task(
             source_name="private",
             source_path="https://git.example/org/private.git",
             source_format="repository",
+            head_sha=None,
         )
     )
     service._plan_source_job_target = AsyncMock(
@@ -1909,6 +2011,7 @@ async def test_native_git_nested_auth_watch_is_copied_from_task_state_by_worker(
             source_name="private",
             source_path="https://git.example/org/private.git",
             source_format="repository",
+            head_sha=None,
         )
     )
     service._plan_source_job_target = AsyncMock(
@@ -1952,6 +2055,7 @@ async def test_native_git_watch_refresh_queues_with_restored_task_auth(
             source_name="private",
             source_path="https://git.example/org/private.git",
             source_format="repository",
+            head_sha=None,
         )
     )
     service._plan_source_job_target = AsyncMock(
@@ -1986,7 +2090,7 @@ async def test_native_git_watch_refresh_queues_with_restored_task_auth(
 
 @pytest.mark.asyncio
 async def test_native_git_rejects_malformed_nested_auth_without_secret_in_error(
-    monkeypatch, ctx, service
+    monkeypatch, connector_config, ctx, service
 ):
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
     service._connector.should_delegate = Mock(return_value=False)
@@ -2110,6 +2214,7 @@ async def test_add_resource_falls_back_for_shared_source_with_parent(
             source_name="repo",
             source_path="https://git.example/org/repo.git",
             source_format="repository",
+            head_sha=None,
         )
     )
     service._plan_source_job_target = AsyncMock(
@@ -2167,6 +2272,7 @@ async def test_add_resource_job_executes_frozen_route(ctx, service):
     )
     resource_lock = SimpleNamespace(close=AsyncMock())
     stage_callback = AsyncMock()
+    head_sha = "f" * 40
     msg = AddResourceMsg(
         task_id="task-1",
         path="git://example.com/repo.git",
@@ -2175,6 +2281,7 @@ async def test_add_resource_job_executes_frozen_route(ctx, service):
         user_id=ctx.user.user_id,
         role=str(ctx.role),
         args={"parser_backend": "understanding"},
+        git_head_sha_hint=head_sha,
     )
 
     result = await service.execute_add_resource_job(
@@ -2191,6 +2298,7 @@ async def test_add_resource_job_executes_frozen_route(ctx, service):
     assert call["defer_post_processing"] is False
     assert call["resource_lock"] is resource_lock
     assert call["parser_backend"] == "understanding"
+    assert call["git_head_sha_hint"] == head_sha
 
 
 @pytest.mark.asyncio
@@ -2512,7 +2620,7 @@ async def test_monitor_connector_task_maps_terminal_status(
             on_success=on_success,
         )
 
-    assert tracker.update_stage.await_args.args[1] == expected_stage
+    assert tracker.patch_task.await_args.args[1].stage == expected_stage
     assert outcome["status"] == expected_status
     if expected_status == "completed":
         on_success.assert_awaited_once_with(None)
@@ -2757,6 +2865,63 @@ async def test_declared_add_type_routes_generic_type_to_connector(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("with_oauth_ref", [False, True])
+async def test_confluence_uses_oauth_ref_only_when_present(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+    with_oauth_ref,
+):
+    connector_config.allowed_add_types = ["confluence"]
+    connector_config.auth = "https://connector.example/oauth/access_token"
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+    reference = {
+        "account_id": "cloud-account",
+        "user_id": "cloud-user",
+        "ov_user_id": "alice",
+        "platform": "confluence",
+        "type": "oauth",
+    }
+    fetch = Mock(return_value={"access_token": " oauth-token ", "expires_at": 4102444800})
+    monkeypatch.setattr(auth.ConnectorClient, "get_oauth_access_token", fetch)
+    args = {
+        "cloud_id": "cloud-1",
+        "resources": [{"type": "page", "id": "123"}],
+    }
+    expected_auth = {"email": "user@example.com", "api_token": "api-token"}
+    if with_oauth_ref:
+        args[auth.OAUTH_REF_ARG] = reference
+    else:
+        args["auth_config"] = expected_auth
+
+    await service.add_resource(
+        path="https://example.atlassian.net/wiki/spaces/ENG/pages/123/Page",
+        ctx=ctx,
+        add_type="confluence",
+        to="viking://resources/kb/confluence",
+        args=args,
+    )
+
+    request = connector_client.submit_doc_add.await_args.kwargs
+    assert request["param_config"] == {
+        "cloud_id": "cloud-1",
+        "resources": [{"type": "page", "id": "123"}],
+        "path": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/Page",
+    }
+    if with_oauth_ref:
+        assert request["auth_config"] == {"access_token": "oauth-token"}
+        fetch.assert_called_once_with(connector_config.auth, ctx.api_key, reference)
+    else:
+        assert request["auth_config"] == expected_auth
+        fetch.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_declared_registry_type_routes_like_probed(
     monkeypatch,
     connector_config,
@@ -2924,7 +3089,7 @@ async def test_project_oauth_dispatch_and_watch_replay(
         api_key=ctx.api_key, account_id=ctx.account_id, add_type=add_type, path=path, connector_args=args
     )
     for token in ("first", "second"):
-        api_key, restored_type, restored_args = await delegate.restore_watch_request(
+        api_key, restored_type, restored_args, _ = await delegate.restore_watch_request(
             state, account_id=ctx.account_id, path=path
         )
         assert api_key == ctx.api_key
@@ -2943,3 +3108,205 @@ async def test_project_oauth_dispatch_and_watch_replay(
             path=path, ctx=ctx, add_type=add_type, to="viking://resources/kb/project", args=args
         )
     assert client.submit_doc_add.await_count == 2
+
+
+def _feishu_oauth_reference(**changes):
+    return {
+        "account_id": "external",
+        "user_id": "owner",
+        "ov_user_id": "alice",
+        "type": "oauth",
+        "platform": "feishu_doc",
+        **changes,
+    }
+
+
+def _feishu_request_context():
+    return RequestContext(
+        user=UserIdentifier("kernel", "alice"),
+        role=Role.USER,
+        api_key="key",
+    )
+
+
+@pytest.mark.asyncio
+async def test_document_auth_resolves_token_and_retains_only_private_reference(monkeypatch):
+    provider = Mock(get_token=Mock(return_value="token"))
+    factory = Mock(return_value=provider)
+    monkeypatch.setattr(auth, "ExternalFeishuToken", factory)
+    args = {"openviking_oauth_ref": _feishu_oauth_reference()}
+
+    resolved = await auth.document_auth_config(args, _feishu_request_context())
+
+    assert resolved == {
+        "lark_access_token": "token",
+        "openviking_oauth_ref": _feishu_oauth_reference(),
+    }
+    factory.assert_called_once_with(_feishu_oauth_reference(), "key")
+    assert args == {"openviking_oauth_ref": _feishu_oauth_reference()}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"feishu_access_token": "secret"},
+        {"auth_config": {}},
+        {"openviking_oauth_ref": _feishu_oauth_reference(ov_user_id="bob")},
+        {"openviking_oauth_ref": _feishu_oauth_reference(platform="feishu_project")},
+        {"openviking_oauth_ref": {"account_id": "missing"}},
+    ],
+)
+async def test_document_auth_rejects_ambiguous_or_foreign_credentials(patch, monkeypatch):
+    factory = Mock()
+    monkeypatch.setattr(auth, "ExternalFeishuToken", factory)
+    with pytest.raises(InvalidArgumentError):
+        await auth.document_auth_config(
+            {"openviking_oauth_ref": _feishu_oauth_reference(), **patch},
+            _feishu_request_context(),
+        )
+    factory.assert_not_called()
+
+
+_DINGTALK_URL = "https://alidocs.dingtalk.com/i/nodes/NODE1"
+
+
+def _dingtalk_credential_ref(**changes):
+    return {
+        "account_id": "acct",
+        "resource_id": "ov-resource",
+        "user_id": "alice",
+        "ov_user_id": "ov-user",
+        "type": "oauth",
+        "platform": "dingtalk",
+        "binding_version": 3,
+        **changes,
+    }
+
+
+def _dingtalk_auth_config(token):
+    return {
+        "auth_mode": "internal_app",
+        "token_scope": "internal_app",
+        "client_id": "ding-client",
+        "client_secret": "ding-secret",
+        "user_access_token": token,
+        "corp_id": "ding-corp",
+        "user_id": "open-id",
+        "operator_id": "union-id",
+    }
+
+
+@pytest.mark.asyncio
+async def test_dingtalk_import_resolves_managed_credential_reference(
+    monkeypatch, connector_config, ctx, service
+):
+    connector_config.allowed_add_types.append("dingtalk")
+    client = SimpleNamespace(submit_doc_add=AsyncMock(return_value={"task_key": "C1"}))
+    _install_connector_dependencies(monkeypatch, _task_tracker(), client)
+    resolve = AsyncMock(return_value=_dingtalk_auth_config("live-token"))
+    monkeypatch.setattr(connector_delegate_module, "resolve_connector_auth_config", resolve)
+
+    result = await service.add_resource(
+        path=_DINGTALK_URL,
+        ctx=ctx,
+        add_type="dingtalk",
+        to="viking://resources/docs",
+        args={"binding_version": 3},
+        connector_auth_config={"openviking_credential_ref": _dingtalk_credential_ref()},
+    )
+
+    assert result["task_id"] == "task-1"
+    payload = client.submit_doc_add.await_args.kwargs
+    assert payload["add_type"] == "dingtalk"
+    # The resolver output is forwarded verbatim as the private auth_config and
+    # never leaks into param_config.
+    assert payload["auth_config"] == _dingtalk_auth_config("live-token")
+    assert "user_access_token" not in str(payload["param_config"])
+    assert payload["param_config"]["path"] == _DINGTALK_URL
+    assert payload["param_config"]["binding_version"] == 3
+    resolve.assert_awaited_once()
+    forwarded_reference = resolve.await_args.args[0]
+    assert forwarded_reference == _dingtalk_credential_ref()
+
+
+@pytest.mark.asyncio
+async def test_dingtalk_watch_replays_reference_and_reresolves_each_round(
+    monkeypatch, connector_config, ctx, service
+):
+    connector_config.allowed_add_types.append("dingtalk")
+    client = SimpleNamespace(submit_doc_add=AsyncMock(return_value={"task_key": "C1"}))
+    _install_connector_dependencies(monkeypatch, _task_tracker(), client)
+    tokens = iter(["round-1", "round-2"])
+    resolve = AsyncMock(side_effect=lambda *_: _dingtalk_auth_config(next(tokens)))
+    monkeypatch.setattr(connector_delegate_module, "resolve_connector_auth_config", resolve)
+
+    delegate = service._connector
+    connector_auth_config = {"openviking_credential_ref": _dingtalk_credential_ref()}
+    state = await delegate.create_watch_auth_state(
+        api_key=ctx.api_key,
+        account_id=ctx.account_id,
+        add_type="dingtalk",
+        path=_DINGTALK_URL,
+        connector_args={"binding_version": 3},
+        connector_auth_config=connector_auth_config,
+    )
+    # Encrypted watch state only persists the secret-free reference.
+    assert "user_access_token" not in json.dumps(state)
+
+    for expected in ("round-1", "round-2"):
+        api_key, add_type, restored_args, restored_ref = await delegate.restore_watch_request(
+            state, account_id=ctx.account_id, path=_DINGTALK_URL
+        )
+        assert api_key == ctx.api_key
+        assert add_type == "dingtalk"
+        assert restored_ref == connector_auth_config
+        await service.refresh_resource(
+            path=_DINGTALK_URL,
+            ctx=ctx,
+            add_type=add_type,
+            to="viking://resources/docs",
+            args=restored_args,
+            connector_auth_config=restored_ref,
+        )
+        assert client.submit_doc_add.await_args.kwargs["auth_config"] == _dingtalk_auth_config(
+            expected
+        )
+    assert resolve.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_managed_reference_without_connector_route_is_rejected(
+    monkeypatch, connector_config, ctx, service
+):
+    # A credential reference must resolve inside Connector delegation; a source
+    # that does not route to the Connector must fail instead of silently
+    # degrading to an unauthorized standard-pipeline import.
+    client = SimpleNamespace(submit_doc_add=AsyncMock(return_value={"task_key": "C1"}))
+    _install_connector_dependencies(monkeypatch, _task_tracker(), client)
+    with pytest.raises(InvalidArgumentError, match="requires a Connector import"):
+        await service.add_resource(
+            path="https://example.com/page",
+            ctx=ctx,
+            to="viking://resources/docs",
+            connector_auth_config={"openviking_credential_ref": _dingtalk_credential_ref()},
+        )
+    client.submit_doc_add.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dingtalk_registry_type_rejects_managed_reference(
+    monkeypatch, connector_config, ctx, service
+):
+    # Registry types (tos/git) carry credentials through their own channels, so
+    # a managed reference on such a declared type is rejected.
+    connector_config.allowed_add_types = ["git"]
+    _install_connector_dependencies(monkeypatch, _task_tracker(), SimpleNamespace())
+    with pytest.raises(InvalidArgumentError, match="does not accept a managed credential reference"):
+        await service._connector.submit(
+            path=_GIT_REPO_PREFIX + "org/repo",
+            ctx=ctx,
+            to="viking://resources/repo",
+            declared_add_type="git",
+            connector_auth_config={"openviking_credential_ref": _dingtalk_credential_ref()},
+        )

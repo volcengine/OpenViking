@@ -2,17 +2,21 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import json
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.core.namespace import canonical_user_root
+from openviking.privacy.reference import build_privacy_field_reference
 from openviking.privacy.service import UserPrivacyConfigService
+from openviking.privacy.session_extractor import build_session_placeholder
 from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
-from openviking.privacy.validation import PRIVACY_MAX_FIELDS
+from openviking.privacy.validation import PRIVACY_MAX_FIELDS, SESSION_PRIVACY_MAX_FIELDS
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import AlreadyExistsError, InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -64,6 +68,26 @@ class _MemoryPrivacyStorage:
             for path in self.files
             if path.startswith(prefix) and "/" not in path.removeprefix(prefix)
         ]
+
+
+@pytest.mark.asyncio
+async def test_patch_values_preserves_snapshot_history():
+    privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
+    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_merge"), role=Role.ROOT)
+    for added, expected, version in [
+        ({"one": "secret-1"}, {"one": "secret-1"}, 1),
+        ({"one": "secret-1"}, {"one": "secret-1"}, 1),
+        ({"two": "secret-2"}, {"one": "secret-1", "two": "secret-2"}, 2),
+    ]:
+        result = await privacy.patch_values(ctx, "session", "demo", added)
+        assert result.values == expected
+        assert result.version == version
+
+    await privacy.activate_version(ctx, "session", "demo", 1)
+    result = await privacy.patch_values(ctx, "session", "demo", {"three": "secret-3"})
+    assert result.version == 3
+    assert result.values == {"one": "secret-1", "three": "secret-3"}
+    assert await privacy.list_versions(ctx, "session", "demo") == [1, 2, 3]
 
 
 @pytest.mark.asyncio
@@ -153,22 +177,27 @@ async def test_privacy_config_concurrent_patches_do_not_lose_distinct_fields():
 
 
 @pytest.mark.asyncio
-async def test_privacy_config_patch_validates_final_snapshot_and_preserves_current_on_failure():
+@pytest.mark.parametrize(
+    "category,limit", [("credential", PRIVACY_MAX_FIELDS), ("session", SESSION_PRIVACY_MAX_FIELDS)]
+)
+async def test_privacy_config_patch_validates_final_snapshot_and_preserves_current_on_failure(
+    category, limit
+):
     ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_limit"), role=Role.ROOT)
     privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
-    original = {f"key_{index}": index for index in range(PRIVACY_MAX_FIELDS)}
-    await privacy.upsert(ctx, "credential", "full", original, updated_by=ctx.user.user_id)
+    original = {f"key_{index}": index for index in range(limit)}
+    await privacy.upsert(ctx, category, "full", original, updated_by=ctx.user.user_id)
 
-    with pytest.raises(InvalidArgumentError, match="at most 128"):
+    with pytest.raises(InvalidArgumentError, match=f"at most {limit}"):
         await privacy.patch_values(
             ctx,
-            "credential",
+            category,
             "full",
             {"one_more": "value"},
             updated_by=ctx.user.user_id,
         )
 
-    current = await privacy.get_current(ctx, "credential", "full")
+    current = await privacy.get_current(ctx, category, "full")
     assert current is not None
     assert current.version == 1
     assert current.values == original
@@ -253,6 +282,81 @@ async def test_skill_read_restores_placeholder_for_agent_segment_name(service):
 
     assert "secret-abc" in restored
     assert "https://example.com" in restored
+
+
+@pytest.mark.asyncio
+async def test_skill_default_read_preserves_references_and_raw_restores_credentials(
+    client, service, monkeypatch
+):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.initialize_user_directories(ctx)
+    await service.privacy_configs.upsert(ctx, "skill", "read-boundary", {"token": "pin"})
+    await service.privacy_configs.upsert(ctx, "credential", "managed", {"key": 'quote"secret'})
+    reference = build_privacy_field_reference(ctx.user.user_id, "credential", "managed", "key")
+    local = build_privacy_field_reference(ctx.user.user_id, "skill", "read-boundary", "token")
+    content = (
+        f"token={{{{ov_privacy:skill:read-boundary:token}}}}\nlocal={local}\nmanaged={reference}\n"
+    )
+    root = f"{canonical_user_root(ctx)}/skills/read-boundary"
+    await service.viking_fs.mkdir(root, exist_ok=True, ctx=ctx)
+    uri = root + "/SKILL.md"
+    await service.viking_fs.write_file(uri, content, ctx=ctx)
+    visible = await client.get("/api/v1/content/read", params={"uri": uri})
+    assert visible.status_code == 200, visible.text
+    assert visible.json()["result"] == content
+    read = AsyncMock(wraps=service.privacy_configs.get_current)
+    monkeypatch.setattr(service.privacy_configs, "get_current", read)
+    raw = await client.get("/api/v1/content/read", params={"uri": uri, "raw": True})
+    assert raw.status_code == 200, raw.text
+    assert raw.json()["result"] == 'token=pin\nlocal=pin\nmanaged=quote"secret\n'
+    assert read.await_count == 2
+
+
+@pytest.mark.parametrize("entrypoint", ["skill", "session"])
+async def test_read_preserves_empty_privacy_references(client, service, entrypoint):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.initialize_user_directories(ctx)
+    values = {"empty000": "", "null0000": None, "false000": False, "zero0000": 0}
+    references, expected = [], []
+    for category in ["skill", "credential", "session"]:
+        await service.privacy_configs.upsert(ctx, category, "empty-values", values)
+        placeholders = [
+            build_privacy_field_reference(ctx.user.user_id, category, "empty-values", field)
+            for field in values
+        ]
+        references.extend(placeholders)
+        expected.extend([*placeholders[:2], False, 0])
+    if entrypoint == "session":
+        placeholders = [build_session_placeholder("empty-values", field) for field in values]
+        references.extend(placeholders)
+        expected.extend([*placeholders[:2], False, 0])
+    text = "\n".join(references)
+    expected_text = "\n".join(map(str, expected))
+    if entrypoint == "skill":
+        root = f"{canonical_user_root(ctx)}/skills/empty-values"
+        await service.viking_fs.mkdir(root, exist_ok=True, ctx=ctx)
+        uri, content = root + "/SKILL.md", text
+    else:
+        session = await service.sessions.create(ctx, "empty-values")
+        uri = session.uri + "/messages.jsonl"
+        content = json.dumps(
+            {
+                "parts": [
+                    {"type": "text", "text": text},
+                    {"type": "tool", "tool_input": {"rows": references}},
+                ]
+            }
+        )
+    await service.viking_fs.write_file(uri, content, ctx=ctx)
+    response = await client.get("/api/v1/content/read", params={"uri": uri, "raw": True})
+    assert response.status_code == 200, response.text
+    restored = response.json()["result"]
+    if entrypoint == "skill":
+        assert restored == expected_text
+    else:
+        parts = json.loads(restored)["parts"]
+        assert parts[0]["text"] == expected_text
+        assert json.dumps(parts[1]["tool_input"]["rows"]) == json.dumps(expected)
 
 
 @pytest.mark.asyncio
@@ -451,3 +555,41 @@ def test_placeholderization_preserves_quoted_value_matching():
     assert result.sanitized_content == (
         'note: use "{{ov_privacy:skill:quoted-skill:api_key}}" in prose\n'
     )
+
+
+@pytest.mark.asyncio
+async def test_patch_preserves_equal_fields_and_rotates_only_named_field(monkeypatch):
+    category = "credential"
+    from unittest.mock import AsyncMock
+
+    privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await privacy.upsert(ctx, category, "demo", {"a": "old-secret", "b": "new-secret"})
+    read = AsyncMock(wraps=privacy.get_current)
+    monkeypatch.setattr(privacy, "get_current", read)
+    current = await privacy.patch_values(
+        ctx, category, "demo", {"a": "new-secret", "c": "new-secret"}
+    )
+    assert current.values == {"a": "new-secret", "b": "new-secret", "c": "new-secret"}
+    read.assert_awaited_once()
+    rotated = await privacy.patch_values(ctx, category, "demo", {"a": "rotated-secret"})
+    assert rotated.values == {"a": "rotated-secret", "b": "new-secret", "c": "new-secret"}
+    previous = await privacy.get_version(ctx, category, "demo", current.version)
+    assert previous.values == current.values
+
+
+@pytest.mark.asyncio
+async def test_insert_values_rejects_the_entire_batch_even_when_existing_value_is_equal():
+    privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await privacy.upsert(ctx, "session", "demo", {"taken001": "old-secret"})
+    with pytest.raises(AlreadyExistsError):
+        await privacy.insert_values(
+            ctx,
+            "session",
+            "demo",
+            updates={"taken001": "old-secret", "free0002": "new-secret"},
+        )
+    current = await privacy.get_current(ctx, "session", "demo")
+    assert current.values == {"taken001": "old-secret"}
+    assert await privacy.list_versions(ctx, "session", "demo") == [1]

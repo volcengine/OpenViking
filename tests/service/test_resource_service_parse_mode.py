@@ -405,6 +405,7 @@ async def test_native_git_enqueue_persists_internal_no_split_mode(
             source_name="repo",
             source_path="https://github.com/volcengine/OpenViking.git",
             source_format="repository",
+            head_sha=None,
         )
     )
     service._plan_source_job_target = AsyncMock(

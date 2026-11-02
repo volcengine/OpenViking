@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig, PendingResponse
-from vikingbot.channels.openapi_models import ChatResponse
+from vikingbot.channels.openapi_models import ChatRequest, ChatResponse, OpenVikingConnection
 from vikingbot.compile.models import CompileAccepted
 from vikingbot.config.schema import BotChannelConfig, SessionKey
 from vikingbot.session.manager import Session
@@ -565,6 +565,52 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 200
         assert response.json()["message"] == "ok"
+
+    def test_user_chat_disables_exec_tool(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        request = ChatRequest(
+            message="hello",
+            disabled_tools=["read_file"],
+            openviking_connection=OpenVikingConnection(
+                api_key="user-key",
+                account_id="acct",
+                user_id="alice",
+                role="user",
+                api_key_type="user",
+                server_url="http://ov.local",
+            ),
+        )
+
+        metadata = channel._request_metadata(request)
+
+        assert metadata["disabled_tools"] == ["read_file", "message", "exec"]
+
+    def test_admin_chat_keeps_exec_tool_available(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        request = ChatRequest(
+            message="hello",
+            disabled_tools=["read_file"],
+            openviking_connection=OpenVikingConnection(
+                api_key="admin-key",
+                account_id="acct",
+                user_id="admin",
+                role="admin",
+                api_key_type="user",
+                server_url="http://ov.local",
+            ),
+        )
+
+        metadata = channel._request_metadata(request)
+
+        assert metadata["disabled_tools"] == ["read_file", "message"]
 
     def test_chat_accepts_request_with_configured_valid_api_key(
         self, message_bus, temp_workspace, monkeypatch

@@ -86,8 +86,10 @@ export function apply(ctx, input = {}) {
     ]);
     if (signal.aborted) return decision;
     const additions = [profile, recall].filter(Boolean);
+    // Keep the rest of the decision: goal-round-driver marks its entries with
+    // `startsRequestSeries`, and rebuilding the object would drop that flag.
     return additions.length > 0
-      ? { kind: "enter", messages: [...decision.messages, ...additions] }
+      ? { ...decision, messages: [...decision.messages, ...additions] }
       : decision;
   }, { prepend: true });
 

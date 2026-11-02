@@ -2805,3 +2805,91 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
     assert "direct exp content" not in content
     assert exp_uri in uris
     assert direct_exp_uri not in uris
+
+
+@pytest.mark.asyncio
+async def test_repeated_builtin_hook_registration_executes_once_per_event(monkeypatch):
+    from vikingbot.hooks.manager import HookManager
+
+    first = SimpleNamespace(is_sync=False, name="first", execute=AsyncMock())
+    second = SimpleNamespace(is_sync=False, name="second", execute=AsyncMock())
+    manager = HookManager()
+    mapping = {"tool.post_call": [first, second], "message.compact": [first]}
+    monkeypatch.setattr(manager, "import_path", lambda _path: mapping)
+    for _ in range(5):
+        manager.register_path(["builtin.hooks"])
+
+    await manager.execute_hooks(HookContext(event_type="tool.post_call"))
+    assert first.execute.await_count == 1
+    assert second.execute.await_count == 1
+    await manager.execute_hooks(HookContext(event_type="message.compact"))
+    assert first.execute.await_count == 2
+    assert second.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook_type", ["post_call", "compact"])
+@pytest.mark.parametrize("explicit_connection", [False, True])
+@pytest.mark.parametrize("explicit_config", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_builtin_hook_releases_invocation_client(
+    monkeypatch, hook_type, explicit_connection, explicit_config, outcome
+):
+    import asyncio
+
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(server_url="http://localhost:1933", admin_user_id="admin"),
+        agents=SimpleNamespace(session_context_enabled=False),
+    )
+    monkeypatch.setattr(openviking_hooks_module, "load_config", lambda: config)
+    cache = {}
+    monkeypatch.setattr(openviking_hooks_module, "_global_clients", cache)
+    entered = asyncio.Event()
+
+    async def operation(*_args, **_kwargs):
+        entered.set()
+        if outcome == "error":
+            raise ValueError("injected hook failure")
+        if outcome == "cancel":
+            await asyncio.Future()
+        return []
+
+    client = SimpleNamespace(
+        search_experiences=operation,
+        commit=operation,
+        close=AsyncMock(),
+        session_owner_user_id=lambda: "admin",
+    )
+    factory = AsyncMock(return_value=client)
+    monkeypatch.setattr(openviking_hooks_module, "VikingClient", SimpleNamespace(create=factory))
+    context = HookContext(
+        event_type="tool.post_call" if hook_type == "post_call" else "message.compact",
+        workspace_id="workspace",
+        session_key=SessionKey(type="test", channel_id="channel", chat_id="chat"),
+        config=config if explicit_config else None,
+        openviking_connection={"user": "test"} if explicit_connection else None,
+    )
+    if hook_type == "post_call":
+        call = openviking_hooks_module.OpenVikingPostCallHook().execute(
+            context,
+            "read_file",
+            {"path": "skills/example/SKILL.md"},
+            "---\nname: example\ndescription: example skill\n---\n",
+        )
+    else:
+        call = OpenVikingCompactHook().execute(context, session=SimpleNamespace(messages=[]))
+    task = asyncio.create_task(call)
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        if outcome == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await task
+        client.close.assert_awaited_once()
+        assert cache == {}, "completed hooks must not retain clients in the global cache"
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

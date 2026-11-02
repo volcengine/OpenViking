@@ -85,14 +85,15 @@ impl Error {
     }
 
     pub(crate) fn from_reqwest(context: &str, error: reqwest::Error) -> Self {
+        let detail = with_sources(&error);
         if error.is_timeout() {
-            Self::Timeout(format!("{context}: request timed out: {error}"))
+            Self::Timeout(format!("{context}: request timed out: {detail}"))
         } else if error.is_decode() {
-            Self::Parse(format!("{context}: {error}"))
+            Self::Parse(format!("{context}: {detail}"))
         } else if error.is_builder() {
-            Self::Client(format!("{context}: {error}"))
+            Self::Client(format!("{context}: {detail}"))
         } else {
-            Self::Network(format!("{context}: {error}"))
+            Self::Network(format!("{context}: {detail}"))
         }
     }
 
@@ -115,6 +116,21 @@ impl Error {
     }
 }
 
+/// reqwest 0.12 / hyper 1.x: Display omits the cause, which lives in source().
+fn with_sources(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !message.ends_with(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        source = cause.source();
+    }
+    message
+}
+
 fn code_from_http_status(status: Option<u16>) -> &'static str {
     match status {
         Some(400 | 422) => "INVALID_ARGUMENT",
@@ -131,3 +147,56 @@ fn code_from_http_status(status: Option<u16>) -> &'static str {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn source_chain_format_avoids_duplicate_suffixes() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("{message}")]
+        struct ChainedError {
+            message: &'static str,
+            #[source]
+            cause: std::io::Error,
+        }
+        for message in ["outer", "outer: inner"] {
+            let error = ChainedError {
+                message,
+                cause: std::io::Error::other("inner"),
+            };
+            assert_eq!(with_sources(&error), "outer: inner");
+        }
+    }
+
+    #[tokio::test]
+    async fn from_reqwest_reports_the_underlying_cause() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+            .unwrap_err();
+        let mut root_cause = String::new();
+        let mut source = error.source();
+        while let Some(cause) = source {
+            root_cause = cause.to_string();
+            source = cause.source();
+        }
+        assert!(!root_cause.is_empty());
+
+        let message = Error::from_reqwest("HTTP request failed", error).to_string();
+
+        assert!(message.contains(&root_cause), "{message}");
+        assert_eq!(message.matches(root_cause.as_str()).count(), 1);
+    }
+}

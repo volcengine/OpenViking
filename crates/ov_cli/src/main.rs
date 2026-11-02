@@ -840,6 +840,14 @@ enum Commands {
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
         #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
         acl: Option<serde_json::Value>,
+        /// Who made the edit, recorded in Compile output versions
+        #[arg(
+            long = "edit-source",
+            default_value = "manual",
+            value_parser = ["manual", "agent", "compile"],
+            help_heading = "Advanced options"
+        )]
+        edit_source: String,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -1289,7 +1297,7 @@ enum Commands {
         /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]
         instruction: Option<String>,
-        /// Provider arguments as JSON; VikingBot wiki_links defaults to false
+        /// Provider arguments as JSON
         #[arg(long, value_name = "json")]
         args: Option<String>,
     },
@@ -1526,6 +1534,22 @@ pub(crate) enum SnapshotCmd {
         /// Newer commit oid, branch, or tag
         #[arg(long = "to")]
         to_ref: String,
+    },
+    /// List changed source files under directories between two snapshots
+    DiffPaths {
+        /// Directory URIs (comma-separated)
+        #[arg(long, value_delimiter = ',', required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// Older commit oid, branch, or tag; omit to compare an empty tree
+        #[arg(long = "from")]
+        from_ref: Option<String>,
+        /// Newer commit oid, branch, or tag
+        #[arg(long = "to")]
+        to_ref: String,
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=1000))]
+        limit: u32,
     },
     /// Get the account .ovgitignore content
     IgnoreGet,
@@ -2120,12 +2144,6 @@ enum AdminCommands {
         #[arg(value_name = "account-id")]
         account_id: String,
     },
-    /// Migrate legacy agent/session data to user-owned namespaces (ROOT only)
-    Migrate {
-        /// Remove legacy agent/session directories after migration is verified
-        #[arg(long)]
-        cleanup: bool,
-    },
     /// Register a new user in an account
     RegisterUser {
         /// Account ID
@@ -2161,6 +2179,9 @@ enum AdminCommands {
         /// 1-based page number (requires --limit)
         #[arg(long, default_value = "1", value_name = "n")]
         page: u32,
+        /// Show plaintext API keys instead of masked values (ROOT sees all keys; ADMIN/USER only its own)
+        #[arg(long)]
+        reveal_api_keys: bool,
     },
     /// Create an empty account-scoped group
     CreateGroup {
@@ -2215,7 +2236,7 @@ enum AdminCommands {
         #[arg(value_name = "user-id")]
         user_id: String,
     },
-    /// Change a user's role (ROOT only)
+    /// Change a user's role for identity management (ROOT or own-account ADMIN)
     SetRole {
         /// Account ID
         #[arg(value_name = "account-id")]
@@ -2223,11 +2244,11 @@ enum AdminCommands {
         /// User ID
         #[arg(value_name = "user-id")]
         user_id: String,
-        /// New role: admin or user
+        /// New role: admin or user (case-insensitive)
         #[arg(value_name = "role")]
         role: String,
     },
-    /// Regenerate a user's API key (old key immediately invalidated)
+    /// Regenerate a user's API key; self-rotation updates the active ovcli.conf
     RegenerateKey {
         /// Account ID
         #[arg(value_name = "account-id")]
@@ -2827,7 +2848,6 @@ fn is_admin_subcommand(token: &str) -> bool {
         "create-account"
             | "list-accounts"
             | "delete-account"
-            | "migrate"
             | "register-user"
             | "list-users"
             | "create-group"
@@ -3870,6 +3890,7 @@ async fn main() {
             tags,
             tag_mode,
             acl,
+            edit_source,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -3888,6 +3909,7 @@ async fn main() {
                 tags,
                 tag_mode,
                 acl,
+                edit_source,
                 ctx,
             )
             .await
@@ -4017,6 +4039,20 @@ async fn main() {
     };
 
     if let Err(e) = result {
+        if e.code() == "INTERRUPTED" {
+            if matches!(output_format, OutputFormat::Json) {
+                error_ui::print_runtime_error(
+                    &command_display,
+                    &e,
+                    output_format,
+                    compact,
+                    verbose_errors,
+                );
+            } else if let Error::Api { message, .. } = &e {
+                eprintln!("{message}");
+            }
+            std::process::exit(130);
+        }
         if !matches!(e, Error::AlreadyReported) {
             error_ui::print_runtime_error(
                 &command_display,
@@ -4042,8 +4078,8 @@ mod tests {
         render_pre_language_help_request, resolve_output_format,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
+    use crate::handlers;
     use crate::output::OutputFormat;
-    use crate::{AdminCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -4176,31 +4212,6 @@ mod tests {
                 assert_eq!(image.as_deref(), Some("cat.png"));
             }
             _ => panic!("expected find command"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_admin_migrate_cleanup_flag() {
-        let migrate = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate"])
-            .expect("admin migrate should parse");
-        match migrate.command {
-            Commands::Admin { action } => match action {
-                AdminCommands::Migrate { cleanup } => assert!(!cleanup),
-                _ => panic!("expected admin migrate command"),
-            },
-            _ => panic!("expected admin command"),
-        }
-
-        let cleanup = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate", "--cleanup"])
-            .expect("admin migrate cleanup should parse");
-
-        assert!(cleanup.sudo);
-        match cleanup.command {
-            Commands::Admin { action } => match action {
-                AdminCommands::Migrate { cleanup } => assert!(cleanup),
-                _ => panic!("expected admin migrate command"),
-            },
-            _ => panic!("expected admin command"),
         }
     }
 
@@ -4699,7 +4710,6 @@ mod tests {
             &["ov", "admin", "create-account"],
             &["ov", "admin", "list-accounts"],
             &["ov", "admin", "delete-account"],
-            &["ov", "admin", "migrate"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
             &["ov", "admin", "create-group"],
@@ -5027,11 +5037,14 @@ mod tests {
             "content",
             "--tag-mode",
             "clear",
+            "--edit-source",
+            "compile",
         ])
-        .expect("write clear mode should parse");
+        .expect("write clear mode with Compile source should parse");
         assert!(matches!(
             write.command,
-            Commands::Write { tag_mode, tags, .. } if tag_mode == "clear" && tags.is_empty()
+            Commands::Write { tag_mode, tags, edit_source, .. }
+                if tag_mode == "clear" && tags.is_empty() && edit_source == "compile"
         ));
 
         let reindex = Cli::try_parse_from([
@@ -5272,7 +5285,7 @@ mod tests {
             "task",
             "list",
             "--task-type",
-            "legacy_migration",
+            "admin_reindex",
         ])
         .expect("sudo task list should parse");
         assert!(list.sudo);

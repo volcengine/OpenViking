@@ -1,12 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 ProtocolName = Literal["anthropic", "chat", "responses"]
 KEY_PLACEHOLDER = "{api_key}"
+# Largest integer JSON readers, Studio included, hold exactly.
+JSON_INT_MAX = 2**53
 
 # OpenViking MCP tools that change data; new profiles offer only the read-only ones.
 WRITE_TOOLS = (
@@ -21,49 +23,60 @@ WRITE_TOOLS = (
 )
 
 
+def validation_detail(error: ValidationError) -> str:
+    """Each problem with the field it concerns, without echoing submitted values."""
+    return "; ".join(
+        ".".join(map(str, item["loc"])) + ": " + item["msg"] if item["loc"] else item["msg"]
+        for item in error.errors(include_input=False, include_context=False)
+    )
+
+
 class CaptureReset(BaseModel):
     session: str = Field(min_length=1, max_length=128)
     protocol: ProtocolName
 
 
 class Policy(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Session roots keep a copy as JSON, so numbers must be finite and integers exact there.
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     name: str = "Default"
     recall: bool = True
     profile: bool = True
     profile_max_tokens: int = Field(default=4000, ge=0, le=32000)
     capture: bool = True
     context_types: list[str] = Field(default_factory=lambda: ["memory", "resource", "skill"])
-    quotas: dict[str, int] = Field(default_factory=dict)
+    quotas: dict[str, Annotated[int, Field(ge=0, le=JSON_INT_MAX)]] = Field(default_factory=dict)
     max_tokens: int = Field(default=1600, ge=64, le=32000)
-    session_max_tokens: int = Field(default=30000, ge=0)
+    session_max_tokens: int = Field(default=30000, ge=0, le=JSON_INT_MAX)
     score_threshold: float = Field(default=0.35, ge=0, le=1)
     recall_timeout: float = Field(default=2, gt=0, le=30)
     query_max_chars: int = Field(default=8000, ge=3, le=32000)
     # Start each turn's reply with a summary of what OpenViking injected; the model never sees it.
     show_recall: bool = False
-    commit_tokens: int = Field(default=20000, ge=1)
+    commit_tokens: int = Field(default=20000, ge=1, le=JSON_INT_MAX)
     keep_recent_messages: int = Field(default=10, ge=0, le=1000)
     idle_seconds: float = Field(default=600, ge=1)
     compaction: bool = True
     compaction_threshold: float = Field(default=0.9, ge=0.5, le=0.98)
     summary_max_tokens: int = Field(default=8000, ge=1000, le=32000)
     # Fallback when the upstream lists no window for the model; 1M is assumed when unset.
-    context_window: int | None = Field(default=None, ge=1024)
+    context_window: int | None = Field(default=None, ge=1024, le=JSON_INT_MAX)
     gateway_tools: bool = True
     # MCP tool names; tools the server adds later stay enabled.
     disabled_tools: list[str] = Field(default_factory=lambda: list(WRITE_TOOLS))
     # None means no limit, as in an agent harness's own tool loop.
-    tool_max_rounds: int | None = Field(default=None, ge=1)
+    tool_max_rounds: int | None = Field(default=None, ge=1, le=JSON_INT_MAX)
     tool_timeout_seconds: float = Field(default=30, gt=0, le=120)
     tool_result_bytes: int = Field(default=65536, ge=1024, le=1048576)
     tool_total_seconds: float | None = Field(default=None, gt=0)
-    tool_total_tokens: int | None = Field(default=None, ge=1024)
+    tool_total_tokens: int | None = Field(default=None, ge=1024, le=JSON_INT_MAX)
     show_tool_calls: bool = True
     # Experimental: the model starts fresh context windows itself (needs gateway tools).
     agent_windows: bool = False
     window_soft_ratio: float = Field(default=0.7, ge=0.3, le=0.95)
     window_hard_ratio: float = Field(default=0.85, ge=0.4, le=0.97)
+    # Clients may override the other fields per conversation with X-OpenViking-Context.
+    client_overrides: bool = True
 
     @model_validator(mode="before")
     @classmethod

@@ -1,8 +1,6 @@
 # Privacy Configs
 
-Privacy configs manage sensitive values by `category + target_key` (for example, a skill's `api_key` and `base_url`).
-
-Changed values create a version snapshot. You can query history and switch the active version. Submitting the same values as the current version does not create a new version.
+Privacy configs manage sensitive values in Skills and Sessions (such as `api_key` and `token`) by `category + target_key` in the current user's space. Changed values create a version snapshot. You can query history and switch the active version. Submitting the same values as the current version does not create a new version.
 
 These examples use the current user’s API key. In trusted mode, supply the identity headers required by your deployment. Value-reading endpoints and CLI commands return stored values; tree and field-metadata endpoints omit them. `***` below is an example placeholder, not automatic redaction.
 
@@ -33,10 +31,10 @@ Activating a version changes only the values stored in OpenViking. It does not r
 
 ## Common Use Cases
 
-- Store sensitive settings for a skill
+- Store sensitive settings for a Skill or Session
 - Rotate keys by writing a new version
 - Roll back to an old version
-- Restore placeholders in skill content at read time
+- Restore values from placeholders when reading Skill or Session content
 
 ---
 
@@ -104,7 +102,8 @@ The server applies the same validation to HTTP, CLI, Embedded, and internal writ
 | Item | Limit |
 |------|------|
 | `category` / `target_key` | Non-empty, at most 255 ASCII characters; only letters, digits, `_`, `-`, `.`, and `@`; `.` and `..` are forbidden and at most one `@` is allowed |
-| Top-level values fields | At most 128 |
+| Session `target_key` | Use the Session ID when it meets the limits above; otherwise use `_` followed by the first 24 hexadecimal characters of its SHA-256 hash (the original Session ID is automatically recorded in `labels.session_id`) |
+| Top-level values fields | At most 1024 for `category=session`; at most 128 for other categories |
 | Field name | Non-empty, at most 255 UTF-8 bytes, no control characters |
 | Individual string | At most 64 KiB UTF-8 |
 | Serialized values | At most 1 MiB |
@@ -138,9 +137,11 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs \
 ```json
 {
   "status": "ok",
-  "result": ["skill"]
+  "result": ["session", "skill"]
 }
 ```
+
+Only categories with stored configs are returned; a Session with no extracted values does not create a privacy config.
 
 ---
 
@@ -571,6 +572,7 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
 # Categories and targets
 ov privacy categories
 ov privacy list skill
+ov privacy list session
 
 # Tree of current targets and fields, without values
 ov privacy tree
@@ -626,5 +628,7 @@ ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 ## Related Documentation
 
 - [Skills](04-skills.md) - Skill write/read APIs
+- [Sessions](05-sessions.md) - Session creation and privacy config
+- [Privacy Configs](../concepts/13-privacy.md) - Sensitive value extraction and restore
 - [File System](03-filesystem.md) - `read`/`write`/`ls`
 - [System](07-system.md) - System status and observability

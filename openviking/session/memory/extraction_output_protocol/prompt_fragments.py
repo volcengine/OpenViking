@@ -47,8 +47,9 @@ PYTHON_ADD_ONLY_PREAMBLE = (
 )
 PYTHON_UPSERT_PREAMBLE = (
     *PYTHON_FORMAT_RULES,
-    "The SDK is write-only. Use the system-provided existing-object bindings; never emit "
-    "sdk.search(), sdk.read(), or sdk.existing().",
+    "The SDK is write-only. Existing-memory records are input context only. "
+    "Use each object_name as an already-bound variable; do not output the "
+    "records or redeclare the objects.",
     PYTHON_CONTENT_RULE,
     "Existing objects shown by the system may use obj.update(field=value, ...) to set complete "
     "scalar/immutable fields, or obj.delete(replacement=None).",
@@ -63,7 +64,7 @@ PYTHON_PATCH_RULES = (
     "  - obj.content.edit(search=..., replace=...): replace one exact snippet in an editable string (merge_op=patch).",
     "  - obj.content.drop(text=...): delete one exact snippet in an editable string (merge_op=patch).",
     "edit()/drop() may be chained, e.g. obj.content.edit(search='a', replace='b').drop(text='c'); do not mix them with .update() in one chain.",
-    "Each search= (and drop text=) MUST be copied verbatim from the current field value shown in the object's sdk.existing(...) binding, and must occur exactly once. If the snippet appears more than once, include an adjacent unique line just before or after it so the match is unique. Never use text from the conversation or the new facts you intend to add as a search anchor; that text is not in the current content and the edit will fail.",
+    "Each search= (and drop text=) MUST be copied verbatim from the current field value in the object's existing-memory context record, and must occur exactly once. Decode JSON string escapes when copying the text. If the snippet appears more than once, include an adjacent unique line just before or after it so the match is unique. Never use text from the conversation or the new facts you intend to add as a search anchor; that text is not in the current content and the edit will fail.",
     "edit()/drop() only work on an existing memory's editable string field (merge_op=patch); new memories from create/set must be given complete field values.",
     "For existing editable strings (merge_op=patch), prefer the smallest unique edit()/drop(). Do not rewrite the entire field just to add or change a few facts; large full-content rewrites are more likely to be truncated or malformed. Use obj.content.update() only when most of such an editable string changes.",
     'Use triple-quoted strings ("""...""") for every search=/replace=/text= snippet too.',
@@ -73,11 +74,11 @@ PYTHON_UPSERT_FOOTER = (
     "Only keyword arguments are accepted by create, set, and obj.update(); "
     "a field's update() takes one positional string.",
     PYTHON_COMMIT_RULE,
-    "Use the system-provided existing-object variable names exactly as shown. "
+    "Use each system-provided object_name exactly as the variable name shown. "
     "When a newly created memory is the replacement, assign its create call to "
     "a variable first, for example: canonical = sdk.create_<type>(...); "
     "duplicate_1.delete(replacement=canonical). Never recreate or rebind an "
-    "existing object with sdk.existing().",
+    "existing object.",
     *PYTHON_METHODS_HEADER,
 )
 PYTHON_LINK_RULES = (

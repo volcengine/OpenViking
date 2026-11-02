@@ -1,4 +1,4 @@
-"""Task-local embedding candidates and scoped historical recall for Compile Shuffle."""
+"""Task-local candidates with text fallback and scoped historical recall for Compile Shuffle."""
 
 from __future__ import annotations
 
@@ -6,15 +6,71 @@ import asyncio
 import heapq
 import json
 import math
+import re
 from array import array
 from collections.abc import Sequence
 from threading import Event
 
+import httpx
+
 from openviking.core.namespace import relative_uri_path
+from openviking_cli.exceptions import OpenVikingError
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, bounded_jobs
 from vikingbot.compile.plan import Routing
 from vikingbot.compile.results import Group, Record, RouteBatchResponse, RouteDecision
+
+
+class _EmbeddingUnavailable(ValueError):
+    """Optional routing embeddings are unavailable or contain unusable vectors."""
+
+
+def service_unavailable(error: Exception) -> bool:
+    """Identify transport and service outages without treating access errors as outages."""
+    return isinstance(
+        error,
+        (
+            httpx.NetworkError,
+            httpx.TimeoutException,
+            httpx.RemoteProtocolError,
+            httpx.ProxyError,
+            TimeoutError,
+            ConnectionError,
+        ),
+    ) or (
+        isinstance(error, OpenVikingError)
+        and error.code
+        in {"UNAVAILABLE", "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED", "EMBEDDING_FAILED"}
+    )
+
+
+def text_terms(text: str) -> set[str]:
+    """Extract case-folded words and adjacent Chinese characters for candidate ranking."""
+    terms = set()
+    for word in re.findall(r"[a-z0-9_]+|[\u3400-\u9fff]+", text.casefold()):
+        if word.isascii() or len(word) == 1:
+            terms.add(word)
+        else:
+            terms.update(word[i : i + 2] for i in range(len(word) - 1))
+    return terms
+
+
+def text_candidates(records: list[Record], stop: Event) -> list[list[int]]:
+    """Rank positive term overlap, retaining at most five neighbours per input in stable order."""
+    terms = [
+        text_terms((r.routing_text + " " + " ".join(r.scope.values()))[:1024]) for r in records
+    ]
+    result = []
+    for index, row in enumerate(terms):
+        if stop.is_set():
+            raise ValueError("Similarity calculation cancelled")
+        scores = (
+            (len(row & other) / len(row | other), -other_index)
+            for other_index, other in enumerate(terms)
+            if index != other_index and row & other
+        )
+        result.append([-i for _, i in heapq.nlargest(5, scores)])
+    return result
 
 
 def top_candidates(
@@ -36,7 +92,7 @@ def top_candidates(
         for vector in vectors:
             norm = math.sqrt(sum(x * x for x in vector))
             if not norm or not math.isfinite(norm) or len(vector) != len(vectors[0]):
-                raise ValueError("Invalid dense embedding vectors")
+                raise _EmbeddingUnavailable("Invalid dense embedding vectors")
             rows.append([x / norm for x in vector])
         result = []
         for i, row in enumerate(rows):
@@ -49,12 +105,17 @@ def top_candidates(
             )
             result.append([-j for _, j in heapq.nlargest(k, pairs)])
         return result
-    matrix = np.asarray(vectors, dtype=np.float32)
+    try:
+        matrix = np.asarray(vectors, dtype=np.float32)
+    except ValueError as exc:
+        raise _EmbeddingUnavailable("Embedding vectors must have equal dimensions") from exc
     if matrix.ndim != 2 or not np.isfinite(matrix).all():
-        raise ValueError("Embedding vectors must have equal dimensions and finite values")
+        raise _EmbeddingUnavailable(
+            "Embedding vectors must have equal dimensions and finite values"
+        )
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    if np.any(norms == 0):
-        raise ValueError("Zero embeddings cannot supply semantic candidates")
+    if np.any(norms == 0) or not np.isfinite(norms).all():
+        raise _EmbeddingUnavailable("Invalid embedding norms cannot supply semantic candidates")
     matrix /= norms
     size = len(matrix)
     k = min(k, max(0, size - 1))
@@ -79,13 +140,15 @@ def top_candidates(
 
 
 def split_group(keys, vectors):
-    """Partition IDs into disjoint batches of at most 50 using existing nonzero vectors.
+    """Partition IDs into disjoint batches of at most 50, optionally using nonzero vectors.
 
-    Each seed takes its nearest cosine neighbours; ties preserve input order.
+    Each seed takes its nearest cosine neighbours; absent vectors use input order.
     Groups of at most 50 retain their membership and order without recomputation.
     """
     if len(keys) <= 50:
         return [keys]
+    if vectors is None:
+        return [keys[start : start + 50] for start in range(0, len(keys), 50)]
     norms = {key: math.sqrt(sum(x * x for x in vectors[key])) for key in keys}
     remaining, groups = dict.fromkeys(keys), []
     while remaining:
@@ -126,7 +189,7 @@ def group_related_records(keys, links):
 
 
 class Shuffle:
-    """Build joint work sets from global vector candidates and scoped historical recall.
+    """Build joint work sets from task-local candidates and scoped historical recall.
 
     Paths and scope descriptions are evidence, never equality gates or output claims.
     Reduce resolves factual differences and chooses the output files for each work set.
@@ -138,10 +201,27 @@ class Shuffle:
         self.descriptions = {}
         self.model_id = ""
 
+    async def embeddings(self, texts: list[str], *, expected_model: str | None = None) -> dict:
+        """Return transient vectors; outages and rejected dense vectors permit text routing."""
+        try:
+            return await self.r.client.compile_embeddings(
+                texts, target_uri=self.r.target, expected_model=expected_model
+            )
+        except (OpenVikingError, httpx.TransportError, TimeoutError, ConnectionError) as exc:
+            invalid_vectors = (
+                bool(texts)
+                and isinstance(exc, OpenVikingError)
+                and exc.code == "INVALID_ARGUMENT"
+                and exc.message == "Compile requires finite dense embedding vectors"
+            )
+            if not service_unavailable(exc) and not invalid_vectors:
+                raise
+            raise _EmbeddingUnavailable(str(exc)) from exc
+
     async def vectors(self, records: list[Record]) -> list[array]:
         """Return compact vectors in record order using bounded, model-scoped cached batches."""
         r = self.r
-        metadata = await r.client.compile_embeddings([], target_uri=r.target)
+        metadata = await self.embeddings([])
         self.model_id = metadata["model"]
         texts = [
             # Scope contributes semantic context without excluding differently worded records.
@@ -159,11 +239,18 @@ class Shuffle:
             else:
                 missing.append(text)
 
+        unavailable = None
+
         async def embed(batch):
             """Use the shared provider limits and retain compact float32 routing vectors."""
-            result = await r.client.compile_embeddings(
-                batch, target_uri=r.target, expected_model=self.model_id
-            )
+            nonlocal unavailable
+            if unavailable is not None:
+                return
+            try:
+                result = await self.embeddings(batch, expected_model=self.model_id)
+            except _EmbeddingUnavailable as exc:
+                unavailable = exc
+                return
             if result["model"] != self.model_id or len(result["vectors"]) != len(batch):
                 raise ValueError("Embedding batch/model mismatch")
             r.metrics["embedding_batches"] += 1
@@ -177,13 +264,16 @@ class Shuffle:
             concurrency=r.limits.shuffle_concurrency,
             metrics=r.metrics,
         )
+        if unavailable is not None:
+            raise unavailable
         return [vectors[text] for text in texts]
 
     async def candidates(self, text: str, stable_uri=None) -> list[dict]:
         """Recall only inside to; coalesce section/derived hits to visible parent files.
 
         A directory contributes at most four direct children. No recursive listing
-        or full-history body read is performed. Transport failures remain failures.
+        or full-history body read is performed by the Bot. Search outages use scoped grep;
+        failed fallback requests remain failures.
         """
         r = self.r
         key = (text, stable_uri)
@@ -196,13 +286,35 @@ class Shuffle:
                 raise ValueError("Stable target candidate is outside to")
             entries.append({"uri": stable_uri})
         if not stable_uri:
-            result = await r.client.find(text, target_uri=r.target, limit=4)
-            if hasattr(result, "to_dict"):
-                result = result.to_dict()
-            category = "skills" if r.skill_target else "resources"
-            if not isinstance(result, dict) or category not in result:
-                raise ValueError("Malformed historical search response")
-            entries.extend(result[category])
+            try:
+                result = await r.client.find(text, target_uri=r.target, limit=4)
+            except (OpenVikingError, httpx.TransportError, TimeoutError, ConnectionError) as exc:
+                if not service_unavailable(exc):
+                    raise
+                terms = sorted(t for t in text_terms(text[:1024]) if len(t) <= 64)[:8]
+                if not terms:
+                    raise ValueError("No usable terms for historical search fallback") from exc
+                result = await r.client.grep(
+                    r.target,
+                    "|".join(re.escape(t) for t in terms),
+                    case_insensitive=True,
+                    node_limit=4,
+                )
+                if not isinstance(result, dict) or not isinstance(result.get("matches"), list):
+                    raise ValueError("Malformed historical grep response")
+                entries.extend(
+                    {"uri": uri} for uri in dict.fromkeys(m["uri"] for m in result["matches"])
+                )
+                warning = "Shuffle history uses text search; related content may remain unmerged."
+                if warning not in r.warnings:
+                    r.warnings.append(warning)
+            else:
+                if hasattr(result, "to_dict"):
+                    result = result.to_dict()
+                category = "skills" if r.skill_target else "resources"
+                if not isinstance(result, dict) or category not in result:
+                    raise ValueError("Malformed historical search response")
+                entries.extend(result[category])
         seen = {}
         for entry in entries[:4]:
             uri = str(entry.get("uri", "")).split("#", 1)[0].rstrip("/")
@@ -277,13 +389,21 @@ class Shuffle:
                 f"groups/{group.group_id}", {"records": ids, "target_uris": group.target_uris}
             )
             return [group]
-        vectors = await self.vectors(records)
         stop = Event()
         try:
-            neighbours = await asyncio.to_thread(top_candidates, vectors, 5, stop)
+            try:
+                vectors = await self.vectors(records)
+                neighbours = await asyncio.to_thread(top_candidates, vectors, 5, stop)
+            except _EmbeddingUnavailable:
+                vectors = None
+                neighbours = await asyncio.to_thread(text_candidates, records, stop)
+                warning = "Shuffle uses text candidates; related content may remain unmerged."
+                if warning not in r.warnings:
+                    r.warnings.append(warning)
         finally:
             stop.set()
-        vectors = dict(zip((record.record_id for record in records), vectors, strict=True))
+        if vectors is not None:
+            vectors = dict(zip((record.record_id for record in records), vectors, strict=True))
         r.metrics["similarity_records"] += len(records)
         r.metrics["similarity_pairs"] += len(records) * (len(records) - 1)
 
@@ -328,7 +448,11 @@ class Shuffle:
                         if node.against_target
                         else []
                     )
-                except (OSError, ValueError) as exc:
+                except (OSError, ValueError, OpenVikingError, httpx.TransportError) as exc:
+                    if isinstance(
+                        exc, (OpenVikingError, httpx.TransportError)
+                    ) and not service_unavailable(exc):
+                        raise
                     errors[record.record_id] = str(exc)[:800]
                     continue
                 data.append(

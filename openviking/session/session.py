@@ -31,6 +31,9 @@ from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import TextPart, ToolPart
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
+from openviking.privacy.session_extractor import extract_and_store_session_privacy
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
@@ -463,8 +466,12 @@ class Session:
         memory_policy_provider: Optional[MemoryPolicyProvider] = None,
         vlm_resolver: Optional["VLMResolver"] = None,
         expiry_reporter: Optional[SessionExpiryReporter] = None,
+        privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ):
         self._viking_fs = viking_fs
+        self._privacy_config_service = privacy_config_service
+        self._privacy_sanitizer = privacy_sanitizer
         self._vikingdb_manager = vikingdb_manager
         self._session_compressor = session_compressor
         self.user = user or UserIdentifier.the_default_user()
@@ -744,6 +751,10 @@ class Session:
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
+            if not filenames:
+                # Phase 1 writes different child files, each with its own lock.
+                yield session_lease
+                return
             file_lease = await agfs.pathlock_acquire_exact_batch(
                 [f"{session_path}/{name}" for name in filenames],
                 timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
@@ -761,9 +772,10 @@ class Session:
         if not self._viking_fs:
             return
         self._meta.updated_at = get_current_timestamp()
+        # bytes bypass VikingFS PrivacySanitizer, preserving JSON keys and identity fields.
         await self._viking_fs.write_file(
             uri=f"{self._session_uri}/.meta.json",
-            content=json.dumps(self._meta.to_dict(), ensure_ascii=False),
+            content=json.dumps(self._meta.to_dict(), ensure_ascii=False).encode("utf-8"),
             ctx=self.ctx,
             lease_ref=lease_ref,
         )
@@ -843,12 +855,9 @@ class Session:
             content = await self._reload()
             await self._apply_appended_messages_to_state(messages)
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
-            # Preserve existing JSONL verbatim, as append_file did. Existing
-            # content is already stored bytes; only initial creation used the
-            # text-write privacy transformation.
-            persisted_content = (
-                batch_content if content is None else (content + batch_content).encode("utf-8")
-            )
+            # Payloads are already protected. Bytes bypass the generic sanitizer
+            # so it cannot rewrite JSON keys or identity fields.
+            persisted_content = ((content or "") + batch_content).encode("utf-8")
             await self._viking_fs.write_file(
                 f"{self._session_uri}/messages.jsonl",
                 persisted_content,
@@ -983,6 +992,14 @@ class Session:
         messages_spec: List[dict],
     ) -> List[Message]:
         """Asynchronously add multiple messages without blocking the caller loop."""
+        if self._privacy_config_service is not None:
+            messages_spec = await extract_and_store_session_privacy(
+                self.session_id,
+                messages_spec,
+                self.ctx,
+                self._privacy_config_service,
+                self._privacy_sanitizer,
+            )
         message_groups = self._build_message_groups(messages_spec)
         messages = []
         for group in message_groups:
@@ -1127,7 +1144,7 @@ class Session:
             meta.update(updates)
             await self._viking_fs.write_file(
                 uri=f"{archive_uri}/.meta.json",
-                content=json.dumps(meta, ensure_ascii=False),
+                content=json.dumps(meta, ensure_ascii=False).encode("utf-8"),
                 ctx=self.ctx,
                 lease_ref=lease_ref,
             )
@@ -1239,11 +1256,7 @@ class Session:
         if await self._archives.file_exists(archive_uri, ".failed.json"):
             return False
 
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
-        try:
+        async with self._state_lock():
             marker = await self._read_phase1_meta(archive_uri)
             if marker.get("status") == "ready":
                 return True
@@ -1338,8 +1351,6 @@ class Session:
             await self._write_phase1_ready_marker(archive_uri)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
             return True
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     def commit(
         self,
@@ -1489,12 +1500,8 @@ class Session:
         # The exact lock on the Session directory is the mutex for root Session
         # state and archive-number allocation. Child files use their own exact
         # locks, so Phase 2 can keep writing an earlier archive concurrently.
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
         publication_lease: Optional[Any] = None
-        try:
+        async with self._state_lock():
             self._messages = await self._read_live_messages_strict()
             await self._load_meta()
             if (
@@ -1678,7 +1685,7 @@ class Session:
                     archive_persist_tasks.append(
                         self._viking_fs.write_file(
                             uri=f"{archive_uri}/messages.jsonl",
-                            content="\n".join(lines) + "\n",
+                            content=("\n".join(lines) + "\n").encode("utf-8"),
                             ctx=self.ctx,
                         )
                     )
@@ -1779,8 +1786,6 @@ class Session:
                         )
                     publication_lease = None
                 raise
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
         # Lock released; Phase 1 intent, retained root, metadata and ready
         # metadata are durable before Task-store or QueueFS latency.
 
@@ -1883,7 +1888,7 @@ class Session:
         try:
             await self._viking_fs.write_file(
                 f"{archive_uri}/.done",
-                json.dumps({"context_reset": True, "enable_working_memory": False}),
+                json.dumps({"context_reset": True, "enable_working_memory": False}).encode("utf-8"),
                 ctx=self.ctx,
             )
         except Exception as exc:
@@ -2336,9 +2341,8 @@ class Session:
                             base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
                             max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
                             is_retryable=lambda error: (
-                                error.retryable
-                                if isinstance(error, MemoryUpdateError)
-                                else is_retryable_api_error(error)
+                                not isinstance(error, MemoryUpdateError)
+                                and is_retryable_api_error(error)
                             ),
                             logger=logger,
                             operation_name=operation_name,
@@ -2701,7 +2705,7 @@ class Session:
         )
         await self._viking_fs.write_file(
             uri=f"{archive_uri}/.done",
-            content=content,
+            content=content.encode("utf-8"),
             ctx=self.ctx,
         )
 
@@ -2717,6 +2721,9 @@ class Session:
         """Persist a terminal failure marker under the marker file's own lock."""
         if not self._viking_fs:
             return
+        # Sanitize error separately because bytes bypass VikingFS PrivacySanitizer.
+        if self._privacy_sanitizer is not None:
+            error = (await self._privacy_sanitizer.sanitize(error, ctx=self.ctx)).content
         payload = {
             "stage": stage,
             "error": error,
@@ -2728,7 +2735,7 @@ class Session:
             payload["blocked_by"] = blocked_by
         await self._viking_fs.write_file(
             uri=f"{archive_uri}/.failed.json",
-            content=json.dumps(payload, ensure_ascii=False),
+            content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             ctx=self.ctx,
         )
 
@@ -3040,11 +3047,7 @@ class Session:
         record_auto_commit_success: bool = False,
     ) -> Optional[SessionMeta]:
         """Return saved metadata, or None when its read fails and statistics are skipped."""
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
-        try:
+        async with self._state_lock(".meta.json") as lease:
             try:
                 latest_meta = await self._read_commit_meta()
             except Exception as exc:
@@ -3082,10 +3085,8 @@ class Session:
                 # a clean auto-commit even after Phase 2 reloads the latest meta.
                 latest_meta.last_auto_commit_at = get_current_timestamp()
             self._meta = latest_meta
-            await self._save_meta()
+            await self._save_meta(lease_ref=lease)
             return latest_meta
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _read_live_messages_strict(self) -> List[Message]:
         """Read the authoritative root JSONL without silently dropping corrupt rows."""
@@ -3203,7 +3204,6 @@ class Session:
             language_conversation, config=get_openviking_config()
         )
         checkpoint_instructions = wm.checkpoint_prompt_instructions(len(checkpoint_requests))
-
         vlm = await self._get_vlm_config()
         if not (vlm and vlm.is_available()):
             if checkpoint_requests:
@@ -3478,6 +3478,8 @@ class Session:
         abstract = self._generate_abstract()
         overview = self._generate_overview(turn_count)
 
+        # Payloads are already sanitized; bytes bypass VikingFS PrivacySanitizer
+        # to preserve JSON keys and identity fields.
         lines = [m.to_jsonl() for m in messages]
         content = "\n".join(lines) + "\n" if lines else ""
         abstract_content = render_abstract_overview(
@@ -3506,7 +3508,7 @@ class Session:
         root_write_results = await asyncio.gather(
             viking_fs.write_file(
                 uri=f"{self._session_uri}/messages.jsonl",
-                content=content,
+                content=content.encode("utf-8"),
                 ctx=self.ctx,
                 lease_ref=lease_ref,
             ),

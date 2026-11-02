@@ -231,9 +231,12 @@ class VolcEngineVLM(OpenAIVLM):
             raise
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        result = self._build_vlm_response(response, has_tools=bool(tools))
-        if tools:
+        if tools is not None:
+            result = self._build_vlm_response(response, has_tools=True)
+            if not tools:
+                result.content = self._clean_response(result.content or "")
             return result
+        result = self._build_vlm_response(response, has_tools=False)
         return self._clean_response(str(result))
 
     @model_error_boundary
@@ -292,9 +295,12 @@ class VolcEngineVLM(OpenAIVLM):
                 raise
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            result = self._build_vlm_response(response, has_tools=bool(tools))
-            if tools:
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
                 return result
+            result = self._build_vlm_response(response, has_tools=False)
             content = self._clean_response(str(result))
             if content:
                 tracer.info(f"message.content={content}")
@@ -462,9 +468,12 @@ class VolcEngineVLM(OpenAIVLM):
             raise
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        result = self._build_vlm_response(response, has_tools=bool(tools))
-        if tools:
+        if tools is not None:
+            result = self._build_vlm_response(response, has_tools=True)
+            if not tools:
+                result.content = self._clean_response(result.content or "")
             return result
+        result = self._build_vlm_response(response, has_tools=False)
         return self._clean_response(str(result))
 
     @model_error_boundary
@@ -513,7 +522,10 @@ class VolcEngineVLM(OpenAIVLM):
             raise
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        result = self._build_vlm_response(response, has_tools=bool(tools))
-        if tools:
+        if tools is not None:
+            result = self._build_vlm_response(response, has_tools=True)
+            if not tools:
+                result.content = self._clean_response(result.content or "")
             return result
+        result = self._build_vlm_response(response, has_tools=False)
         return self._clean_response(str(result))

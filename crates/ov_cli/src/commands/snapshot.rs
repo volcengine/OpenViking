@@ -85,6 +85,19 @@ pub async fn dispatch(
             print_diff(&value, output_format, compact);
             Ok(())
         }
+        SnapshotCmd::DiffPaths {
+            paths,
+            from_ref,
+            to_ref,
+            offset,
+            limit,
+        } => {
+            let value = client
+                .snapshot_diff_paths(&paths, from_ref.as_deref(), &to_ref, offset, limit)
+                .await?;
+            output_success(&value, output_format, compact);
+            Ok(())
+        }
         SnapshotCmd::IgnoreGet => {
             let value = client.snapshot_ignore_get().await?;
             print_ignore_get(&value, output_format, compact);

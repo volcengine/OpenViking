@@ -54,7 +54,7 @@ func zipDirectory(dir string) (string, error) {
 		if err != nil {
 			return err
 		}
-		if relToRoot, err := filepath.Rel(root, abs); err != nil || strings.HasPrefix(relToRoot, "..") {
+		if relToRoot, err := filepath.Rel(root, abs); err != nil || !filepath.IsLocal(relToRoot) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, path)

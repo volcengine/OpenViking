@@ -788,7 +788,7 @@ class SessionCompressorV3:
         patch_operations = update_result.operations
         _report_extraction_telemetry(result, patch_operations)
         if strict_extract_errors and result.errors:
-            raise MemoryUpdateError(result, has_link_updates=bool(patch_operations.resolved_links))
+            raise MemoryUpdateError(result)
 
         memory_diff = None
         if archive_uri and viking_fs and result is not None:

@@ -386,7 +386,10 @@ class OpenAIVLM(VLMBase):
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
-                return self._build_vlm_response(response, has_tools=True)
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return await self._extract_completion_content_async(response, elapsed)
 
         # 用 tracer.info 打印请求（人类可读格式）

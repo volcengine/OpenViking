@@ -1440,6 +1440,12 @@ class OpenAPIChannel(BaseChannel):
         disabled_tools = list(request.disabled_tools or [])
         if "message" not in disabled_tools:
             disabled_tools.append("message")
+        if (
+            request.openviking_connection
+            and request.openviking_connection.role == "user"
+            and "exec" not in disabled_tools
+        ):
+            disabled_tools.append("exec")
         return {"disabled_tools": disabled_tools}
 
     def _request_media(self, request: ChatRequest) -> list[dict[str, Any]]:

@@ -163,6 +163,7 @@ class VikingFS(
         self._background_tasks: set = set()
         self._deletion_guard: Optional[Callable[[str, str], bool]] = None
         self._privacy_sanitizer: Optional[Any] = None
+        self._post_write_hook: Optional[Callable[[str, Optional[RequestContext], int], Any]] = None
 
     def set_vlm_resolver(self, resolver: "VLMResolver") -> None:
         """Set the VLM resolver supplied by the owning service."""
@@ -171,6 +172,13 @@ class VikingFS(
     def set_privacy_sanitizer(self, sanitizer: Optional[Any]) -> None:
         """Install the account service's text sanitizer for direct writes."""
         self._privacy_sanitizer = sanitizer
+
+    def set_post_write_hook(
+        self,
+        hook: Optional[Callable[[str, Optional[RequestContext], int], Any]],
+    ) -> None:
+        """Install an optional observer called after a file write succeeds."""
+        self._post_write_hook = hook
 
 
 VikingFS.__module__ = __name__

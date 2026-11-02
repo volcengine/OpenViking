@@ -12,8 +12,7 @@ viking://user/{user_id}/sessions/{session_id}
 ```
 
 Session API 按认证用户作用域访问会话，并返回 canonical user session URI。
-基于 URI 的 API 也可以接受向后兼容的 `viking://session/{session_id}` 别名，
-该别名会在同一个用户上下文中解析。
+基于 URI 的 API 可以使用 `viking://~/sessions/{session_id}` 表示当前用户的会话。
 
 ## API 参考
 
@@ -587,7 +586,7 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results \
 
 ### read_tool_result()
 
-按 Unicode 字符范围读取一个外置工具结果。
+按 Unicode 字符范围读取一个外置工具结果。 此 API 返回的内容中可能含有敏感信息的占位符，若需还原，使用[内容 API](12-content.md) 读取对应文件。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -927,7 +926,7 @@ ov session get-session-archive a1b2c3d4 archive_002
 
 #### 1. API 实现介绍
 
-删除该会话目录，包括消息、归档历史和会话内的审计记录。已经抽取到用户或 Peer 记忆目录的长期记忆不会随之删除；需要删除这些记忆时，单独定位并删除对应 URI。此接口不提供自动撤销。
+删除该会话目录，包括消息、归档历史和会话内的审计记录。已经抽取到用户或 Peer 记忆目录的长期记忆不会随之删除；需要删除这些记忆时，单独定位并删除对应 URI。此接口不提供自动撤销。对应的 Privacy 配置（`category=session`、`target_key=session_id`）会保留。
 
 **代码入口**：
 - `openviking/server/routers/sessions.py:delete_session()` - HTTP 路由

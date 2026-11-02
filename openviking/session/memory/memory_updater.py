@@ -50,6 +50,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
 from openviking.utils.ingest_options import IngestOptions
+from openviking.utils.model_retry import retry_async
 from openviking.utils.tags import merge_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import ConflictError, NotFoundError
@@ -196,6 +197,64 @@ def remap_stored_links(links: List[StoredLink], uri_remap: Dict[str, str]) -> Li
             continue
         remapped_links.append(link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri}))
     return remapped_links
+
+
+def fan_out_stored_links(
+    links: List[StoredLink], split_map: Dict[str, List[str]]
+) -> List[StoredLink]:
+    """Fan link endpoints out over N-way split replacements (1→N migration).
+
+    ``delete_replacements`` can only express 1:1 delete→replacement mappings, so
+    a split (one deleted source, several derived files) has no entry there and
+    its links would silently keep pointing at the removed URI. Each endpoint
+    that references a split source is replicated once per derived file; copies
+    that collapse onto themselves are dropped, mirroring remap_stored_links.
+    """
+    if not links or not split_map:
+        return list(links or [])
+    fanned_links: List[StoredLink] = []
+    for link in links:
+        from_targets = split_map.get(link.from_uri) or [link.from_uri]
+        to_targets = split_map.get(link.to_uri) or [link.to_uri]
+        for from_uri in from_targets:
+            for to_uri in to_targets:
+                if from_uri == to_uri:
+                    continue
+                fanned_links.append(
+                    link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri})
+                )
+    return fanned_links
+
+
+def detect_split_replacements(operations: ResolvedOperations) -> Dict[str, List[str]]:
+    """Detect N-way splits among the batch's scheduled deletes.
+
+    A delete without an explicit ``delete_replacements`` entry whose URI
+    receives ``derived_from`` links from upserts in the same batch is a split:
+    those upsert URIs are the derived replacement files. Returns a map of
+    deleted URI -> derived replacement URIs.
+    """
+    delete_uris = {file.uri for file in (operations.delete_file_contents or []) if file.uri}
+    if not delete_uris:
+        return {}
+    upsert_uris = {uri for op in (operations.upsert_operations or []) for uri in (op.uris or [])}
+    if not upsert_uris:
+        return {}
+    explicit_replacements = dict(operations.delete_replacements or {})
+    split_map: Dict[str, set] = {}
+    for link in operations.resolved_links or []:
+        if (link.link_type or "") != "derived_from":
+            continue
+        source_uri = link.to_uri
+        derived_uri = link.from_uri
+        if (
+            source_uri in delete_uris
+            and source_uri not in explicit_replacements
+            and derived_uri in upsert_uris
+            and derived_uri != source_uri
+        ):
+            split_map.setdefault(source_uri, set()).add(derived_uri)
+    return {source_uri: sorted(targets) for source_uri, targets in split_map.items()}
 
 
 def _operation_trace_id(op: ResolvedOperation) -> str | None:
@@ -659,14 +718,19 @@ class MessageRange:
 
     @staticmethod
     def _speaker_for(message: Message) -> str:
-        return getattr(message, "peer_id", None) or message.role
+        peer_id = getattr(message, "peer_id", None)
+        return f"{message.role} [peer={peer_id}]" if peer_id else message.role
 
     def _can_merge_messages(self, previous: Message, current: Message) -> bool:
         previous_meta = self._chunk_meta_for(previous)
         current_meta = self._chunk_meta_for(current)
         if previous_meta is None or current_meta is None:
             return False
-        if self._speaker_for(previous) != self._speaker_for(current):
+        # 身份比较独立于展示格式，避免同一 peer 的不同角色被合并。
+        if (previous.role, getattr(previous, "peer_id", None)) != (
+            current.role,
+            getattr(current, "peer_id", None),
+        ):
             return False
         return (
             previous_meta.source_message_id == current_meta.source_message_id
@@ -767,37 +831,24 @@ class MemoryUpdateResult:
 class MemoryReadError(Exception):
     """A fresh upsert read failed before this target could be written."""
 
-    def __init__(self, uri: str, cause: Exception, *, write_started: bool = False):
+    def __init__(self, uri: str, cause: Exception):
         super().__init__(f"Failed to refresh memory {uri}: {cause}")
-        self.retryable = not write_started and (
-            isinstance(
-                cause,
-                (TimeoutError, ConnectionError, AGFSConnectionError, AGFSTimeoutError, AGFSIoError),
-            )
-            or (
-                isinstance(cause, OSError)
-                and cause.errno in {errno.EAGAIN, errno.EBUSY, errno.EINTR, errno.EIO}
-            )
+        self.retryable = isinstance(
+            cause,
+            (TimeoutError, ConnectionError, AGFSConnectionError, AGFSTimeoutError, AGFSIoError),
+        ) or (
+            isinstance(cause, OSError)
+            and cause.errno in {errno.EAGAIN, errno.EBUSY, errno.EINTR, errno.EIO}
         )
 
 
 class MemoryUpdateError(Exception):
     """Report apply failures without treating a partial write as safe to replay."""
 
-    def __init__(self, result: MemoryUpdateResult, *, has_link_updates: bool = False):
+    def __init__(self, result: MemoryUpdateResult):
         super().__init__(
             f"Memory update failed ({result.summary()}): "
             + "; ".join(f"{uri}: {error}" for uri, error in result.errors)
-        )
-        self.retryable = (
-            bool(result.errors)
-            and not (result.written_uris or result.edited_uris or result.deleted_uris)
-            # Link writes are best-effort and absent from the URI result lists.
-            and not has_link_updates
-            and all(
-                isinstance(error, MemoryReadError) and error.retryable
-                for _uri, error in result.errors
-            )
         )
 
 
@@ -994,10 +1045,11 @@ class MemoryUpdater:
             )
 
         uri_remap = dict(getattr(operations, "delete_replacements", {}) or {})
+        split_replacements = detect_split_replacements(operations)
         original_links = list(getattr(operations, "resolved_links", []) or [])
-        operations.resolved_links = remap_stored_links(
-            original_links,
-            uri_remap,
+        operations.resolved_links = fan_out_stored_links(
+            remap_stored_links(original_links, uri_remap),
+            split_replacements,
         )
 
         # Distribute resolved_links to corresponding upsert operations
@@ -1052,16 +1104,39 @@ class MemoryUpdater:
             if source_uri not in invalid_replacement_sources
         }
         operations.delete_replacements = active_uri_remap
-        operations.resolved_links = remap_stored_links(original_links, active_uri_remap)
+        active_split_replacements = {
+            source_uri: [target for target in targets if target not in failed_upsert_uris]
+            for source_uri, targets in split_replacements.items()
+        }
+        active_split_replacements = {
+            source_uri: targets
+            for source_uri, targets in active_split_replacements.items()
+            if targets
+        }
+        # A detected split whose derived files all failed to write must not lose
+        # its source: without any live replacement, deleting it would dangle.
+        failed_split_sources = set(split_replacements) - set(active_split_replacements)
+        operations.resolved_links = fan_out_stored_links(
+            remap_stored_links(original_links, active_uri_remap),
+            active_split_replacements,
+        )
         link_migration_failed = not await self._inherit_deleted_link_relations(
             operations,
             result,
             ctx,
             lease_ref=self._transaction_handle,
+            split_replacements=active_split_replacements,
         )
-        failed_link_migration_sources = set(active_uri_remap) if link_migration_failed else set()
+        # Computed before the reset below: on failure every source whose
+        # migration was scheduled must skip its delete.
+        failed_link_migration_sources = (
+            set(active_uri_remap) | set(active_split_replacements) | failed_split_sources
+            if link_migration_failed
+            else failed_split_sources
+        )
         if link_migration_failed:
             active_uri_remap = {}
+            active_split_replacements = {}
             operations.delete_replacements = {}
             operations.resolved_links = original_links
 
@@ -1142,6 +1217,28 @@ class MemoryUpdater:
                 ctx,
                 deleted_uris=set(result.deleted_uris),
                 lease_ref=self._transaction_handle,
+            )
+
+        # Referential-integrity guard (issue #5904): after apply, no in-batch
+        # link may still reference a URI this batch deleted. 1:1 replacements
+        # and N-way splits are migrated above; anything left over is surfaced
+        # to the caller instead of silently returning errors=[].
+        deleted_uris = set(result.deleted_uris)
+        dangling_uris = sorted(
+            {
+                uri
+                for link in operations.resolved_links
+                for uri in (link.from_uri, link.to_uri)
+                if uri in deleted_uris
+            }
+        )
+        for uri in dangling_uris:
+            result.add_error(
+                uri,
+                ValueError(
+                    "Deleted memory is still referenced by in-batch links after apply; "
+                    "its links/backlinks were not fully migrated"
+                ),
             )
 
         tracer.info(f"Memory operations applied: {result.summary()}")
@@ -1420,9 +1517,16 @@ class MemoryUpdater:
         """Apply upsert operation from a flat model."""
         viking_fs = self._get_viking_fs()
 
+        async def read_fresh_memory(uri: str):
+            try:
+                return await viking_fs.read_file(uri, ctx=ctx)
+            except (ConflictError, NotFoundError, FileNotFoundError):
+                raise
+            except Exception as exc:
+                raise MemoryReadError(uri, exc) from exc
+
         memory_type = resolved_op.memory_type
         schema = self._registry.get(memory_type)
-        write_started = False
         # Process each URI independently
         for uri in resolved_op.uris:
             source_content = resolved_op.old_memory_file_content
@@ -1433,7 +1537,18 @@ class MemoryUpdater:
             # so consecutive patches to the same URI see each other's changes.
             old_content: Optional[MemoryFile] = None
             try:
-                content = await viking_fs.read_file(uri, ctx=ctx)
+                content = await retry_async(
+                    lambda uri=uri: read_fresh_memory(uri),
+                    max_retries=1,
+                    base_delay=0.1,
+                    max_delay=0.3,
+                    jitter=False,
+                    is_retryable=lambda error: (
+                        isinstance(error, MemoryReadError) and error.retryable
+                    ),
+                    logger=logger,
+                    operation_name=f"fresh memory read {uri}",
+                )
                 if is_uri_migration:
                     raise ConflictError(
                         f"Memory rename target already exists: {uri}",
@@ -1441,15 +1556,9 @@ class MemoryUpdater:
                     )
                 if content:
                     old_content = MemoryFileUtils.read(content, uri=uri)
-            except ConflictError:
-                raise
             except (NotFoundError, FileNotFoundError):
                 # File doesn't exist yet, that's okay
                 pass
-            except Exception as exc:
-                # Preserve the read stage so callers can regenerate from fresh
-                # inputs, but never replay an operation that already wrote a URI.
-                raise MemoryReadError(uri, exc, write_started=write_started) from exc
             if is_uri_migration:
                 try:
                     source_raw = await viking_fs.read_file(source_content.uri, ctx=ctx)
@@ -1459,7 +1568,7 @@ class MemoryUpdater:
                         f"Memory rename source no longer exists: {source_content.uri}",
                         resource=source_content.uri,
                     ) from None
-            # Fall back to pre-fetched content if disk read failed
+            # Reuse the prefetched source only when no content was found.
             if old_content is None:
                 old_content = source_content
 
@@ -1573,7 +1682,6 @@ class MemoryUpdater:
                 ),
                 extract_context=extract_context,
             )
-            write_started = True
             await viking_fs.write_file(
                 uri,
                 new_full_content,
@@ -1645,9 +1753,11 @@ class MemoryUpdater:
         result: MemoryUpdateResult,
         ctx: RequestContext,
         lease_ref: Any = None,
+        split_replacements: Optional[Dict[str, List[str]]] = None,
     ) -> bool:
         uri_remap = dict(getattr(operations, "delete_replacements", {}) or {})
-        if not uri_remap:
+        split_map = dict(split_replacements or {})
+        if not uri_remap and not split_map:
             return True
         viking_fs = self._get_viking_fs()
         if not viking_fs:
@@ -1660,8 +1770,60 @@ class MemoryUpdater:
         # the migration source of an implicit rename).
         inherited_by_uri: Dict[str, Dict[str, List[Tuple[str, Dict[str, Any]]]]] = {}
         completed = True
-        for deleted_uri, replacement_uri in uri_remap.items():
-            if not deleted_uri or not replacement_uri or deleted_uri == replacement_uri:
+        # Deleted sources that are themselves being replaced or deleted must not
+        # receive inherited records.
+        stale_uris = set(uri_remap) | set(split_map)
+        # Unified per-source replacement targets: exactly one for an explicit
+        # replacement, one per derived file for an N-way split.
+        targets_by_source: Dict[str, List[str]] = {
+            source_uri: [target for target in targets if target and target != source_uri]
+            for source_uri, targets in split_map.items()
+        }
+        for source_uri, replacement_uri in uri_remap.items():
+            if (
+                source_uri not in targets_by_source
+                and replacement_uri
+                and replacement_uri != source_uri
+            ):
+                # Group under the terminal resolution of the replacement chain:
+                # with a chained 1:1 remap (S -> M -> F) the immediate target M
+                # is itself stale, so inheriting under it would lose the links.
+                terminal_uri = _resolve_replacement_uri(source_uri, uri_remap)
+                if terminal_uri and terminal_uri != source_uri:
+                    targets_by_source[source_uri] = [terminal_uri]
+
+        def _fold_inherited_link(
+            remapped: Dict[str, Any],
+            deleted_uri: str,
+            targets: List[str],
+            neighbor_uri: Optional[str],
+            record_kind: str,
+        ) -> None:
+            """Broadcast one inherited record to every replacement target.
+
+            ``record_kind`` is the deleted file's own record kind ("links" for
+            forward links, "backlinks" for backlinks): each replacement target
+            receives that kind, and the far endpoint receives the reverse kind,
+            mirroring the 1:1 inheritance behavior.
+            """
+            for target_uri in targets:
+                record = dict(remapped)
+                if record.get("from_uri") == deleted_uri:
+                    record["from_uri"] = target_uri
+                if record.get("to_uri") == deleted_uri:
+                    record["to_uri"] = target_uri
+                if record.get("from_uri") == record.get("to_uri"):
+                    continue
+                inherited_by_uri.setdefault(target_uri, {"links": [], "backlinks": []})[
+                    record_kind
+                ].append((deleted_uri, record))
+                if neighbor_uri and neighbor_uri not in stale_uris:
+                    inherited_by_uri.setdefault(neighbor_uri, {"links": [], "backlinks": []})[
+                        "backlinks" if record_kind == "links" else "links"
+                    ].append((deleted_uri, record))
+
+        for deleted_uri, targets in targets_by_source.items():
+            if not deleted_uri or not targets:
                 continue
             try:
                 content = await viking_fs.read_file(deleted_uri, ctx=ctx)
@@ -1683,30 +1845,24 @@ class MemoryUpdater:
                 remapped = _remap_link_dict(link, uri_remap)
                 if remapped.get("from_uri") == remapped.get("to_uri"):
                     continue
-                target_uri = remapped.get("from_uri")
-                if target_uri:
-                    inherited_by_uri.setdefault(target_uri, {"links": [], "backlinks": []})[
-                        "links"
-                    ].append((deleted_uri, remapped))
-                neighbor_uri = remapped.get("to_uri")
-                if neighbor_uri and neighbor_uri not in uri_remap:
-                    inherited_by_uri.setdefault(neighbor_uri, {"links": [], "backlinks": []})[
-                        "backlinks"
-                    ].append((deleted_uri, remapped))
+                _fold_inherited_link(
+                    remapped,
+                    deleted_uri,
+                    targets,
+                    remapped.get("to_uri"),
+                    "links",
+                )
             for link in list(deleted_file.backlinks or []):
                 remapped = _remap_link_dict(link, uri_remap)
                 if remapped.get("from_uri") == remapped.get("to_uri"):
                     continue
-                target_uri = remapped.get("to_uri")
-                if target_uri:
-                    inherited_by_uri.setdefault(target_uri, {"links": [], "backlinks": []})[
-                        "backlinks"
-                    ].append((deleted_uri, remapped))
-                neighbor_uri = remapped.get("from_uri")
-                if neighbor_uri and neighbor_uri not in uri_remap:
-                    inherited_by_uri.setdefault(neighbor_uri, {"links": [], "backlinks": []})[
-                        "links"
-                    ].append((deleted_uri, remapped))
+                _fold_inherited_link(
+                    remapped,
+                    deleted_uri,
+                    targets,
+                    remapped.get("from_uri"),
+                    "backlinks",
+                )
 
         written_or_edited = set(result.written_uris + result.edited_uris)
         implicit_migration_source_by_target = {
@@ -1717,9 +1873,8 @@ class MemoryUpdater:
             and operation.old_memory_file_content
             and operation.old_memory_file_content.uri
         }
-        stale_uris = set(uri_remap)
         for uri, link_groups in inherited_by_uri.items():
-            if uri in uri_remap:
+            if uri in stale_uris:
                 continue
             # Implicit renames already copied and remapped the source's links
             # while writing the new file; drop that source's contribution to

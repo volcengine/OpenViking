@@ -147,9 +147,11 @@ class SchemaModelGenerator:
 
         page_id_json_schema = {"type": "integer"}
         page_id_description = "Temporary page_id for identifying the target memory item."
-        if memory_type.memory_type == "events" and memory_type.operation_mode == "add_only":
+        if memory_type.operation_mode == "add_only":
             page_id_json_schema["minimum"] = 100
-            page_id_description = "Unique page_id for this new event; it MUST be at least 100."
+            page_id_description = (
+                "Unique page_id for this new memory item; it MUST be at least 100."
+            )
 
         field_definitions["page_id"] = (
             Annotated[int, WithJsonSchema(page_id_json_schema)],
@@ -189,19 +191,36 @@ class SchemaModelGenerator:
                     Field(None, description=desc),
                 )
 
-        # Create the model
+        replace_string_fields = [
+            field.name
+            for field in memory_type.fields
+            if field.merge_op == MergeOp.REPLACE and field.field_type == FieldType.STRING
+        ]
+
+        # New objects have no stored value on which to apply a string patch.
         @model_validator(mode="before")
-        def require_new_object_identity(cls, data):
+        def validate_new_object_fields(cls, data):
             del cls
             if not isinstance(data, dict):
                 return data
             try:
-                is_new = int(data.get("page_id")) >= 100
+                is_new = memory_type.operation_mode == "add_only" or int(data.get("page_id")) >= 100
             except (TypeError, ValueError):
                 return data
             missing = [name for name in required_on_create if data.get(name) is None]
             if is_new and missing:
                 raise ValueError("new memory item requires fields: " + ", ".join(missing))
+            if is_new:
+                invalid = [
+                    name
+                    for name in replace_string_fields
+                    if data.get(name) is not None and not isinstance(data[name], str)
+                ]
+                if invalid:
+                    raise ValueError(
+                        "new memory item requires a complete string for replace fields: "
+                        + ", ".join(invalid)
+                    )
             return data
 
         json_schema_extra = None
@@ -221,7 +240,7 @@ class SchemaModelGenerator:
         model = create_model(
             model_name,
             __config__=ConfigDict(extra="ignore", json_schema_extra=json_schema_extra),
-            __validators__={"require_new_object_identity": require_new_object_identity},
+            __validators__={"validate_new_object_fields": validate_new_object_fields},
             **field_definitions,
         )
 

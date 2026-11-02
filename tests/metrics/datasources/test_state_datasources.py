@@ -293,6 +293,7 @@ def test_ragfs_datasource_validates_records(changes):
         {},
         {"bucket_counts": [1]},
         {"bucket_counts": [True, 0]},
+        {"labels": {"bucket_schema": "caller-supplied"}},
         {"count": 3},
         {"bucket_bounds": [2, 1]},
         {"sum": -1},

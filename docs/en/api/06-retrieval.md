@@ -9,9 +9,17 @@ OpenViking provides multiple retrieval methods, including simple vector similari
 | Intent Analysis | No | Requires session content and `retrieval.enable_intent=true` |
 | Session Context | No | Optional |
 | Query Expansion | No | When session content exists and intent analysis is enabled |
-| Reranking | No | Used for text queries when a reranker is configured |
+| Reranking | Never | `mode="list"`: text queries when a reranker is configured. `mode="context"`: only when `retrieval.apply_rerank_to_context` is on |
 | Default Limit | 10 | 10 per planned query |
 | Use Case | Simple queries | Conversational search |
+
+Reranking applies per path:
+
+- `find()` never reranks; it always uses vector scores.
+- `search(mode="list")` reranks text queries when a usable `rerank` config exists.
+- `search(mode="context")` reranks only when the server sets `retrieval.apply_rerank_to_context=true` (default `false`) and a usable `rerank` config exists. It reranks once per assembly, over the merged candidate pool before quotas and the token budget apply, for text queries only, and falls back to vector scores if the rerank call fails.
+
+Score thresholds follow one rule: a request `score_threshold` overrides everything and filters whatever scores the path produces. Without it, `rerank.threshold` (default `0.1`) filters only scores the reranker produced; vector-only paths, including `find()` and a failed rerank fallback, default to `0`.
 
 ## Retrieval Pipeline
 
@@ -417,7 +425,7 @@ Semantic retrieval with optional session-aware query planning.
 
 `search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query, does not support images, and requires a remote VikingDB backend with a full-text index.
 
-Event time decay applies to results tagged `memory_type=events` in semantic `find()` and both `search(mode="list")` and `search(mode="context")`. Memory extraction writes this tag on user/peer event L2 records; retrieval identifies events by the tag rather than inferring the type from a URI or level. Untagged/non-event results, query-less filter-only `find()`, `recall`, `grep`, and `glob` are unaffected. During event recall, the vector engine multiplies the original vector score by `time_score`. List responses expose this recall-stage vector score as `origin_score` and the factor as `time_score`; `score` is the final retrieval score, which may come from model rerank. Context mode uses that final score while assembling its candidates. The CLI labels list-result scores as semantic, time, and final scores. Inside the protection period `time_score` is 1, so the original score is unchanged. Time distance follows the VikingDB exponential decay operator, using the absolute difference from the request time. Time is read from the existing indexed `updated_at` field; no reindex or timestamp rewrite is required. Local fusion preserves the original score for missing or invalid timestamps; cloud fusion uses the indexed date-time field and the backend operator. The curve is owned by the server; callers only provide the per-request protection period. No `ov.conf` or `ovcli.conf` change is required.
+Event time decay applies to results tagged `memory_type=events` in semantic `find()` and both `search(mode="list")` and `search(mode="context")`. Memory extraction writes this tag on user/peer event L2 records; retrieval identifies events by the tag rather than inferring the type from a URI or level. Untagged/non-event results, query-less filter-only `find()`, `recall`, `grep`, and `glob` are unaffected. During event recall, the vector engine multiplies the original vector score by `time_score`. List responses expose this recall-stage vector score as `origin_score` and the factor as `time_score`; `score` is the final retrieval score, which may come from model rerank. Context mode assembles its candidates with vector scores, or with the model score when `retrieval.apply_rerank_to_context` is on. The CLI labels list-result scores as semantic, time, and final scores. Inside the protection period `time_score` is 1, so the original score is unchanged. Time distance follows the VikingDB exponential decay operator, using the absolute difference from the request time. Time is read from the existing indexed `updated_at` field; no reindex or timestamp rewrite is required. Local fusion preserves the original score for missing or invalid timestamps; cloud fusion uses the indexed date-time field and the backend operator. The curve is owned by the server; callers only provide the per-request protection period. No `ov.conf` or `ovcli.conf` change is required.
 
 New and updated memories produced by memory extraction automatically receive a `memory_type=<type>` search tag. With decay enabled, both local and cloud backends recall records tagged `memory_type=events` separately and merge them with the complementary untagged/non-event branch; both branches preserve the original scope, permission and level filters, without requiring a peer ID. Existing data is not backfilled; untagged memories keep their original scores. Direct content refreshes and ordinary tag updates preserve the existing memory type without inferring it from the URI.
 
@@ -659,7 +667,7 @@ Injecting context every turn used to mean searching per type, reading each hit b
 
 **Pipeline**:
 1. **L1 query understanding**: optional bounded intent expansion from the session's recent messages (at most 3 queries, timeout fuse, falls back to the original query)
-2. **L0 retrieval**: bucketed per `quotas`, or a single whole-scope search when quotas are off
+2. **L0 retrieval**: bucketed per `quotas`, or a single whole-scope search when quotas are off. Hits carry vector scores, as in `find()`; when the server enables `retrieval.apply_rerank_to_context` and has a usable `rerank` config, the merged candidates are reranked once against the original query and its expansions before quotas and the budget apply (see below)
 3. **L2 assembly**: tier filling inside the token budget (everyone at their category's default tier first, then leftover budget deepens in score order); an oversized tier falls back instead of being truncated
 4. **L3 rewrite**: optional digest with URI citations (timeout fuse; on failure the unrewritten `rendered` is still returned; an exact `NO_RELEVANT_MEMORY` result is reported as `stats.rewrite="no_relevant"` so Coding Agent clients inject nothing instead of falling back to `rendered`)
 
@@ -672,6 +680,8 @@ Injecting context every turn used to mean searching per type, reading each hit b
 #### 2. Parameters
 
 **L0 retrieval domain**: `query`, `image_url`, `context_type`, `limit`, `score_threshold`, `filter`, `tags`, `since`/`until`, and the optional `events_time_decay_protection` behave as in list mode. `limit` applies only to quota-free retrieval. Once `purpose` or explicit `quotas` enables bucketed retrieval, the sum of the per-category quotas is the candidate ceiling. `target_uri` is not supported in context mode yet (returns 400); `level` is ignored because `detail` governs tiers.
+
+**Optional rerank**: with `retrieval.apply_rerank_to_context` on and a usable `rerank` config, text queries make one rerank call per request over the merged, deduplicated candidates, scored against the original `query` joined with its expanded queries, so a hit only an expansion recalled is judged on the topic that expansion named. Quota-free retrieval recalls `2 × limit` candidates for it; bucketed retrieval reranks up to `2 × quota` per bucket, giving room a short bucket leaves to the others. A Skill is scored on its package abstract. A reranked candidate's `score` becomes its rerank score, and `other_peer_penalty` still applies on top. `score_threshold` then filters the final scores instead of recall; without it, `rerank.threshold` filters only model scores. Candidates the model did not score (empty text, or a failed rerank call) keep their vector scores. Image queries skip rerank. `stats.rerank` reports `used`, `candidates` (sent to the model) and `capped` (left out by the per-bucket cap)
 
 **L1 query understanding**
 
@@ -809,7 +819,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | `entries[].text` | string | Body for that tier; empty at the `uri` tier |
 | `rendered` | string | Flat XML context block, ready to inject; empty when rewrite reports `no_relevant` |
 | `digest` | string | Digest when the rewrite succeeded, empty string on failure or when the compressor reports no relevant memory |
-| `stats` | object | Budget usage, tier distribution, expansion and rewrite status (`off`, `ok`, `no_relevant`, `failed` or `timeout`), dedup ledger state; carries `retrieval_errors` when a retrieval scope failed, so a broken index is distinguishable from having no relevant memories |
+| `stats` | object | Budget usage, tier distribution, expansion and rewrite status (`off`, `ok`, `no_relevant`, `failed` or `timeout`), dedup ledger state; carries `retrieval_errors` when a retrieval scope failed, so a broken index is distinguishable from having no relevant memories, and `rerank` when context rerank applied to the request |
 
 When `stats.rewrite` is `no_relevant`, the response keeps `entries` for
 inspection but returns both `digest` and `rendered` as empty strings. This makes
