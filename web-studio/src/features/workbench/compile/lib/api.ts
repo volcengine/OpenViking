@@ -16,6 +16,62 @@ export type CompileRequest = {
   instruction?: string
   args?: Record<string, unknown>
 }
+export type UpdateSchedule =
+  | { frequency: 'daily'; hour: number; minute: number }
+  | { frequency: 'weekly'; weekday: number; hour: number; minute: number }
+export type CompileConfigSummary = {
+  status: string
+  to: string
+  initialized: boolean
+  running: boolean
+  auto_update: boolean
+  update_schedule: UpdateSchedule | null
+  next_run_at: string | null
+}
+export type CompileConfig = Omit<CompileConfigSummary, 'running'> & {
+  from: string[]
+  skill: string
+  instruction: string | null
+  last_error: string | null
+  last_run: unknown
+}
+export type CompileConfigUpdate = {
+  to: string
+  from: string[]
+  skill: string
+  instruction?: string | null
+  auto_update: boolean
+  update_schedule: UpdateSchedule | null
+}
+export function fetchCompileConfigs(cursor?: string, signal?: AbortSignal) {
+  return getOvResult<{
+    targets: CompileConfigSummary[]
+    next_cursor: string | null
+  }>(
+    ovClient.client.get({
+      url: '/api/v1/compile/configs',
+      signal,
+      query: { limit: 30, ...(cursor ? { cursor } : {}) },
+    }),
+  )
+}
+export function fetchCompileConfig(to: string, signal?: AbortSignal) {
+  return getOvResult<CompileConfig>(
+    ovClient.client.get({
+      url: '/api/v1/compile/config',
+      signal,
+      query: { to },
+    }),
+  )
+}
+export function updateCompileConfig(body: CompileConfigUpdate) {
+  return getOvResult<CompileConfig>(
+    ovClient.client.post({
+      url: '/api/v1/compile/config/update',
+      body,
+    }),
+  )
+}
 export type CompileTask = TaskRecord & {
   task_id: string
   meta?: { request?: CompileRequest }
@@ -88,16 +144,18 @@ export async function fetchCompileTask(id: string, signal?: AbortSignal) {
     ),
   )
 }
-export async function createCompile(body: CompileRequest, key: string) {
-  return normalizeCompileTask(
-    await getOvResult<CompileTaskPayload>(
-      ovClient.client.post({
-        url: '/api/v1/compile',
-        body,
-        headers: { 'Idempotency-Key': key },
-      }),
-    ),
+export async function createCompile(
+  body: CompileRequest,
+  key: string,
+): Promise<CompileTask | CompileConfig> {
+  const result = await getOvResult<CompileTaskPayload | CompileConfig>(
+    ovClient.client.post({
+      url: '/api/v1/compile',
+      body,
+      headers: { 'Idempotency-Key': key },
+    }),
   )
+  return 'task_id' in result ? normalizeCompileTask(result) : result
 }
 export async function cancelCompile(id: string) {
   return normalizeCompileTask(
