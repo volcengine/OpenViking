@@ -277,6 +277,7 @@ describe('formatting helpers', () => {
     assert.match(rendered, /features\.apps=false/);
     assert.equal(spawnOptions[0].env.LARKSUITE_CLI_PROFILE, 'test-profile');
     assert.ok(spawnOptions[0].env.PATH.startsWith('/fake:/fake-slack:'));
+    assert.equal(spawnOptions[0].env.OPENVIKING_USAGE_VIEW, 'off');
     assert.equal(spawnOptions[0].env.PERSONAL_AGENT_SOCKET, '/data/actions.sock');
     assert.equal(spawnOptions[0].env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);
   });
@@ -286,6 +287,8 @@ describe('formatting helpers', () => {
       PATH: '/bin',
       OPENAI_API_KEY: 'codex-needs-it',
       OPENVIKING_CLI_CONFIG_FILE: '/tmp/ov.conf',
+      OPENVIKING_AUTO_RECALL: '1',
+      OPENVIKING_USAGE_VIEW: 'expanded',
       LARK_APP_SECRET: 'must-never-leak',
       FEISHU_TOKEN: 'must-never-leak',
       LARKSUITE_CLI_PROFILE: 'wrong-profile',
@@ -300,6 +303,8 @@ describe('formatting helpers', () => {
     assert.equal(env.SESSION_ID, undefined);
     assert.equal(env.OPENAI_API_KEY, 'codex-needs-it');
     assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/tmp/ov.conf');
+    assert.equal(env.OPENVIKING_AUTO_RECALL, '1');
+    assert.equal(env.OPENVIKING_USAGE_VIEW, 'off');
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'fixed-profile');
     assert.equal(env.FORCE_COLOR, '0');
     assert.equal(env.NO_COLOR, '1');
