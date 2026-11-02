@@ -778,6 +778,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `forward_api_key` | bool | LiteLLM only. Overrides whether `api_key` is forwarded to LiteLLM. By default, OpenViking does not forward placeholder keys for native AWS/GCP routes such as `bedrock/`, `sagemaker/`, and `vertex_ai/`; set to `true` when intentionally using a LiteLLM API-key route such as Bedrock bearer-token auth |
 | `model` | str | Model name |
 | `api_base` | str | API endpoint (optional) |
+| `temperature` | float or null | Sampling temperature (default: `null`). Omit or set to `null` to leave it out of requests and use the provider default |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
@@ -796,6 +797,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `media.file_processing_timeout` | float | Maximum provider-side preprocessing wait in seconds (default: `1800`) |
 | `media.file_poll_interval` | float | Provider-side preprocessing poll interval in seconds (default: `3`) |
 | `media.video_fps` | float | Video frame sampling rate when supported by the provider, from `0.2` through `5.0` (default: `1.0`) |
+
+The `vlm` and any dedicated `query_planner` configuration leave temperature unspecified by default. Omitting `temperature` or setting `"temperature": null` uses provider-default sampling for both fixed and routed models. The setting is shared by all credentials in that configuration; standalone VikingBot configuration and call interfaces also leave temperature unspecified by default. Explicit numeric settings retain each backend's existing behavior. To retain the previous VLM default, explicitly set `"temperature": 0.0` if the model supports it. Switching to provider defaults may change output randomness; the endpoint must support omitting temperature. Thinking mode and its supported settings remain model-specific.
 
 `vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
 

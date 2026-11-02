@@ -291,7 +291,7 @@ class LiteLLMVLMProvider(VLMBase):
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": sanitize_openai_messages(messages),
-            "temperature": self.temperature,
+            **({"temperature": self.temperature} if self.temperature is not None else {}),
             "timeout": self.timeout,
             "num_retries": 0,
         }
@@ -409,6 +409,9 @@ class LiteLLMVLMProvider(VLMBase):
                     "completion_tokens": response.usage.completion_tokens,
                     "total_tokens": response.usage.total_tokens,
                     "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+                    "completion_tokens_details": getattr(
+                        response.usage, "completion_tokens_details", None
+                    ),
                 }
 
             return VLMResponse(
@@ -580,10 +583,14 @@ class LiteLLMVLMProvider(VLMBase):
         if hasattr(response, "usage") and response.usage:
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
+            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+            completion_details = getattr(response.usage, "completion_tokens_details", None)
             self.update_token_usage(
                 model_name=self.model or "unknown",
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 duration_seconds=duration_seconds,
+                prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
+                completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) or 0,
             )
