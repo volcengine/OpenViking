@@ -13,6 +13,7 @@ use crate::core::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use rand::Rng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -20,13 +21,15 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::warn;
 use uuid::Uuid;
 use xxhash_rust::xxh3::xxh3_128;
 
 const QUERY_INDEX_GC_TRIGGER_THRESHOLD: u64 = 64;
+const UNLINK_MAX_RETRIES: u32 = 3;
+const UNLINK_RETRY_BASE_MS: u64 = 10;
 const PENDING_EPOCH_TTL_MS: u64 = 300_000;
 const BEGIN_FILL_SCRIPT_ID: &str = "ragfs.cache.query.begin_fill.v1";
 const FILL_SCRIPT_ID: &str = "ragfs.cache.query.fill_if_epoch.v1";
@@ -261,16 +264,29 @@ impl CachedFileSystem {
         let started = Instant::now();
         let mut unlinked_keys = Vec::with_capacity(keys.len());
         for (index, key) in keys.iter().enumerate() {
-            match runtime.unlink(std::slice::from_ref(key)).await {
-                Ok(_) => unlinked_keys.push(key.clone()),
-                Err(error) => {
-                    metrics.error();
-                    warn!(
-                        path = %affected_path,
-                        bucket_index = index,
-                        error = %error,
-                        "query cache invalidation unlink failed"
-                    );
+            for attempt in 0..=UNLINK_MAX_RETRIES {
+                match runtime.unlink(std::slice::from_ref(key)).await {
+                    Ok(_) => {
+                        unlinked_keys.push(key.clone());
+                        break;
+                    }
+                    Err(_) if attempt < UNLINK_MAX_RETRIES => {
+                        metrics.error();
+                        let delay_ms = (UNLINK_RETRY_BASE_MS << attempt)
+                            + rand::thread_rng().gen_range(0..=UNLINK_RETRY_BASE_MS);
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    }
+                    Err(error) => {
+                        metrics.error();
+                        warn!(
+                            path = %affected_path,
+                            bucket_index = index,
+                            retry_count = UNLINK_MAX_RETRIES,
+                            error = %error,
+                            "query cache invalidation unlink failed"
+                        );
+                        break;
+                    }
                 }
             }
         }
