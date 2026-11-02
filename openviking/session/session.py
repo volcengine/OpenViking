@@ -119,6 +119,20 @@ def _load_render_prompt() -> Callable[..., str]:
     return render_prompt
 
 
+def _limit_summary_output_tokens(vlm: Any, output_budget: int) -> int:
+    from openviking.models.vlm.base import FailoverVLM
+
+    if isinstance(vlm, FailoverVLM):
+        return min(
+            _limit_summary_output_tokens(vlm.primary, output_budget),
+            _limit_summary_output_tokens(vlm.backup, output_budget),
+        )
+    configured_limit = getattr(vlm, "max_tokens", None)
+    if configured_limit is not None:
+        return min(output_budget, int(configured_limit))
+    return output_budget
+
+
 def _publish_telemetry_summary_best_effort(snapshot: Any) -> None:
     """Publish a completed session telemetry summary without affecting the task outcome."""
     if snapshot is None:
@@ -3365,6 +3379,7 @@ class Session:
             output_budget = session_window_context - used_tokens
             if output_budget <= 0:
                 raise ValueError("Working Memory prompt exceeds session_window_context")
+            output_budget = _limit_summary_output_tokens(vlm, output_budget)
             return await vlm.get_completion_async(
                 prompt=prompt,
                 messages=messages,
@@ -3454,7 +3469,9 @@ class Session:
                 f"{input_material}\n"
                 "</source_material>"
             )
-            third_limit = min(session_window_context, summary_budget_tokens)
+            third_limit = _limit_summary_output_tokens(
+                vlm, min(session_window_context, summary_budget_tokens)
+            )
             material_budget = (
                 session_window_context - third_limit - estimate_text_tokens(third_system) - 8
             )
@@ -3772,6 +3789,7 @@ class Session:
         output_budget = int(session_window_context or 128_000) - estimate_text_tokens(prompt) - 4
         if output_budget <= 0:
             raise ValueError("Working Memory prompt exceeds session_window_context")
+        output_budget = _limit_summary_output_tokens(vlm, output_budget)
         kwargs: Dict[str, Any] = {
             "prompt": prompt,
             "max_tokens": output_budget,

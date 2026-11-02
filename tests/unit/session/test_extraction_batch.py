@@ -23,6 +23,81 @@ def _message(message_id: str, role: str = "user", text: str = "content") -> Mess
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failover", [False, True])
+@pytest.mark.parametrize("configured_limit", [None, 128, 20000])
+@pytest.mark.parametrize("path", ["create", "update", "fallback", "retry"])
+async def test_summary_output_budget_respects_configured_limit(
+    monkeypatch, configured_limit, path, failover
+):
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(
+            output_language_override="en",
+            memory=SimpleNamespace(summary_budget_retry_enabled=True),
+        ),
+    )
+    update = VLMResponse(
+        tool_calls=[
+            ToolCall(
+                id="1",
+                name="update_working_memory",
+                arguments={"sections": {"Current State": {"op": "UPDATE", "content": "compact"}}},
+            )
+        ]
+    )
+    responses = {
+        "create": ["compact"],
+        "update": [update],
+        "fallback": ["no tool call", "compact"],
+        "retry": ["x" * 12000, "x" * 12000, "compact"],
+    }
+    completion = AsyncMock(side_effect=responses[path])
+    vlm = SimpleNamespace(
+        is_available=lambda: True,
+        get_completion_async=completion,
+        max_tokens=configured_limit,
+    )
+    if failover:
+        from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+        from openviking.models.vlm.base import FailoverVLM
+
+        primary = OpenAIVLM({"model": "gpt-4o", "api_key": "test", "max_tokens": configured_limit})
+        backup = OpenAIVLM({"model": "gpt-4o", "api_key": "test", "max_tokens": configured_limit})
+        vlm = FailoverVLM(primary, backup)
+        vlm.is_available = lambda: True
+        vlm.get_completion_async = completion
+    session = Session(viking_fs=None)
+    session._get_vlm_config = AsyncMock(return_value=vlm)
+
+    await session._generate_archive_summary_async(
+        [_message("u1")],
+        latest_archive_overview="## Current State\nPrevious work"
+        if path in ("update", "fallback")
+        else "",
+        session_window_context=10000,
+    )
+
+    assert completion.await_count == len(responses[path])
+    for index, call in enumerate(completion.await_args_list):
+        kwargs = call.kwargs
+        input_tokens = estimate_text_tokens(kwargs.get("prompt")) + sum(
+            estimate_text_tokens(message["content"]) + 4 for message in kwargs.get("messages") or []
+        )
+        if kwargs.get("prompt"):
+            input_tokens += 4
+        if kwargs.get("tools"):
+            import json
+
+            input_tokens += estimate_text_tokens(json.dumps(kwargs["tools"], ensure_ascii=False))
+        automatic_limit = 2500 if path == "retry" and index == 2 else 10000 - input_tokens
+        expected_limit = (
+            automatic_limit if configured_limit is None else min(automatic_limit, configured_limit)
+        )
+        assert kwargs["max_tokens"] == expected_limit
+        assert input_tokens + kwargs["max_tokens"] <= 10000
+
+
+@pytest.mark.asyncio
 async def test_session_context_reserves_summary_before_active_messages():
     session = Session(viking_fs=None)
     summary = "Earlier decisions " * 10
