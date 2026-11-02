@@ -190,6 +190,7 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
         return {"uri": uri, "isDir": existing[uri]}
 
     fs = SimpleNamespace(
+        commit=AsyncMock(return_value={"commit_oid": "snapshot"}),
         stat=AsyncMock(side_effect=stat),
         glob=AsyncMock(
             return_value={
@@ -214,7 +215,7 @@ async def test_root_compile_creates_one_task_and_one_loop(monkeypatch, language_
     await asyncio.gather(*list(runner._running))
     final = await tracker.get(accepted.task_id, account_id="acc", user_id="u1")
 
-    service.finalize_compile_directories.assert_awaited_once_with(target, _ctx())
+    service.finalize_compile_directories.assert_not_awaited()
 
     vlm.get_completion_async.assert_awaited_once()
     fs.glob.assert_awaited_once()
@@ -712,6 +713,7 @@ async def test_provider_binds_isolation_before_prefetch(peer_id):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot_failure", [None, "start", "finish"])
 @pytest.mark.parametrize(
     "change, has_error, has_operations, expected_status",
     [
@@ -734,7 +736,13 @@ async def test_provider_binds_isolation_before_prefetch(peer_id):
     ],
 )
 async def test_compile_task_apply_outcomes(
-    monkeypatch, language_config, change, has_error, has_operations, expected_status
+    monkeypatch,
+    language_config,
+    change,
+    has_error,
+    has_operations,
+    expected_status,
+    snapshot_failure,
 ):
     language_config.output_language_override = "en"
     language_config.vlm = SimpleNamespace(get_vlm_instance=lambda: SimpleNamespace(model="test"))
@@ -750,12 +758,21 @@ async def test_compile_task_apply_outcomes(
     directory = "viking://user/u1/memories/entities"
     uri = f"{directory}/person/alice.md"
     operations = ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
+    extract = AsyncMock(return_value=(operations if has_operations else None, []))
     monkeypatch.setattr(
         "openviking.service.memory_compile.ExtractLoop.run",
-        AsyncMock(return_value=(operations if has_operations else None, [])),
+        extract,
     )
     lease = {"lease_ref": "test-lease"}
-    viking_fs = SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock()))
+    commit = AsyncMock(
+        side_effect=[
+            RuntimeError("snapshot failed") if phase == snapshot_failure else {"commit_oid": phase}
+            for phase in ("start", "finish")
+        ]
+    )
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()), commit=commit
+    )
     monkeypatch.setattr(
         "openviking.service.memory_compile.acquire_memory_operation_lease",
         AsyncMock(return_value=lease),
@@ -768,6 +785,9 @@ async def test_compile_task_apply_outcomes(
     apply = AsyncMock(return_value=apply_result)
     monkeypatch.setattr("openviking.service.memory_compile.MemoryUpdater.apply_operations", apply)
     finalize = AsyncMock()
+    calls = Mock()
+    calls.attach_mock(commit, "snapshot")
+    calls.attach_mock(extract, "extract")
     runner = MemoryCompileRunner(
         SimpleNamespace(
             _ensure_initialized=lambda: viking_fs,
@@ -803,10 +823,12 @@ async def test_compile_task_apply_outcomes(
     }
     if expected_status == TaskStatus.FAILED:
         assert final.error.startswith("MEMORY_CONSOLIDATION_FAILED:")
-        finalize.assert_not_awaited()
+        assert [call[0] for call in calls.mock_calls] == ["snapshot", "extract"]
     else:
         assert final.error is None
-        finalize.assert_awaited_once_with(directory, ctx)
+        assert [call[0] for call in calls.mock_calls] == ["snapshot", "extract", "snapshot"]
+    finalize.assert_not_awaited()
+    assert all(call.kwargs["paths"] == [directory] for call in commit.await_args_list)
     assert not await tracker.has_work(
         task.task_id,
         account_id=ctx.account_id,
@@ -819,11 +841,11 @@ async def test_compile_task_apply_outcomes(
         apply.assert_not_awaited()
         viking_fs._async_agfs.pathlock_release.assert_not_awaited()
     if change and has_error:
-        warning.assert_called_once_with(
+        warning.assert_any_call(
             "Memory-mode compile %s partially succeeded: %s", task.task_id, ["write failed"]
         )
     else:
-        warning.assert_not_called()
+        assert not any("partially succeeded" in call.args[0] for call in warning.call_args_list)
 
 
 @pytest.mark.asyncio

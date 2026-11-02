@@ -1108,19 +1108,18 @@ class FileStore(AccountStore):
             await self._replace_groups(account_id, account, groups)
             return True
 
-    async def _remove_group_member(
-        self, account_id: str, group_id: str, user_id: str
+    async def _remove_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
     ) -> bool:
         async with self._reload_lock:
             account = self._require_account(account_id)
             await self._load_account_groups_if_needed(account_id, account)
             group = self._require_group(account_id, group_id)
-            if user_id not in group.get("members", []):
+            members = set(group.get("members", []))
+            if members.isdisjoint(user_ids):
                 return False
             groups = copy.deepcopy(account.groups)
-            groups[group_id]["members"] = [
-                member for member in groups[group_id].get("members", []) if member != user_id
-            ]
+            groups[group_id]["members"] = sorted(members.difference(user_ids))
             await self._replace_groups(account_id, account, groups)
             return True
 
@@ -1696,11 +1695,12 @@ class FileStore(AccountStore):
             await self._refresh_users_for_management_read_unlocked(account_id)
             return await self._add_group_members(account_id, group_id, user_ids)
 
-    async def remove_group_member(
-        self, account_id: str, group_id: str, user_id: str
+    async def remove_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
     ) -> bool:
-        await self._refresh_accounts_for_management_read()
-        return await self._remove_group_member(account_id, group_id, user_id)
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+            return await self._remove_group_members(account_id, group_id, user_ids)
 
     async def delete_group(self, account_id: str, group_id: str) -> None:
         await self._refresh_accounts_for_management_read()

@@ -49,7 +49,7 @@ environment; editing the file applies to the next operation without restarting.
     "magpie": {
       "enabled": true,
       "autoRecall": true,
-      "autoCapture": false,
+      "autoCapture": true,
       "recallContextTimeoutMs": 700,
       "recallMaxTokens": 1600,
       "recallPeerScope": "all",
@@ -80,9 +80,9 @@ own adapter applies its file-only policy, hook timeout and opt-in tools without
 changing other plugins. Behavior keys use the
 existing shared plugin names. `plugin.magpie` overrides
 the corresponding `plugin` values; global `plugin.enabled: false` disables the
-plugin. Tools and capture require explicit `plugin.magpie.mcpEnabled: true` and
-`plugin.magpie.autoCapture: true`, respectively; shared settings alone do not
-enable either gateway capability.
+plugin. Tools require explicit `plugin.magpie.mcpEnabled: true`. Capture defaults
+to enabled; explicit `autoCapture: false` in host options or client settings is
+preserved. Host options override scoped settings, which override shared settings.
 
 Magpie's **Options** editor now accepts `autoRecall`, `autoCapture`, `mcpEnabled`,
 `recallMaxTokens`, `recallContextTimeoutMs` and `nativeAgents`. These behavior
@@ -90,7 +90,9 @@ options override the corresponding file settings for this plugin; connection
 credentials and identity always remain file-owned. `gatewayTimeoutMs` controls
 the host's hook budget. The package supplies an example, not saved defaults;
 omitted keys retain the file/default behavior. Hooks and tools use the same
-options. Enabling tools or capture requires the literal boolean `true`.
+options. Memory tools are disabled by default; set `mcpEnabled: true` to enable
+them. Automatic capture is enabled by default and needs no additional setting;
+set `autoCapture: false` to disable it.
 
 File settings `plugin.magpie.bypassSession: true` or `bypassSessionPatterns`
 matching the Magpie session ID or working directory skip automatic recall and
@@ -109,9 +111,11 @@ controlled by `mcpEnabled`.
   `recallMaxTokens`, using the shared CJK-aware token estimate. Combined profile
   and search context stays within `recallMaxTokens` and is persisted with that
   turn. Retries and later turns replay the original snapshot.
-- Only host-classified `local` and `magpie-key` origins with a nonempty Magpie
-  session ID receive memory. Shared gateway keys, forwarded traffic and missing
-  identities are skipped. The file's OV credentials remain the authority.
+- Only host-classified `local` and `magpie-key` origins receive memory. Shared
+  gateway keys, forwarded traffic and unknown origins are skipped. Without a
+  session ID, new user requests use stateless recall: no persisted ledger, profile
+  replay or conversation capture. Repeated requests may retrieve different context.
+  The file's OV credentials remain the authority.
 - Only a new textual user message triggers retrieval. Tool continuations replay
   known context without retrieving. Magpie skips its own internal title/classifier
   calls; explicit auxiliary/compaction/title/subagent request kinds are also skipped.
@@ -177,8 +181,11 @@ them. A successful completion callback for a retry can resolve the rejection;
 tool-call continuations and genuinely lost callbacks retain their recovery path.
 Revisions invalidate stale worker snapshots after a known rejection.
 
-Capture is **off by default**. Set `plugin.magpie.autoCapture: true` in
-`ovcli.conf`, or save `"autoCapture": true` in Magpie's plugin Options.
+Capture is **on by default** for requests with a reliable session ID. Set
+`plugin.magpie.autoCapture: false` in `ovcli.conf`, or save `"autoCapture": false`
+in Magpie's plugin Options to disable it. Existing explicit opt-outs remain off.
+Installing/upgrading without an explicit capture setting now enables capture;
+completed conversations are sent to your configured OpenViking service.
 Start a new chat after enabling it. The first request binds capture to that
 connection and first user message; unknown existing history is skipped,
 including after credentials change, instead of copying earlier private text

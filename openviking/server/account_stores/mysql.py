@@ -1138,7 +1138,10 @@ class MySQLAccountStore(AccountStore):
             )
         return True
 
-    async def remove_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+    async def remove_group_members(
+        self, account_id: str, group_id: str, user_ids: list[str]
+    ) -> bool:
+        user_ids = list(dict.fromkeys(user_ids))
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
             self._require_active(account)
@@ -1153,27 +1156,35 @@ class MySQLAccountStore(AccountStore):
             )
             if group is None:
                 raise NotFoundError(group_id, "group")
-            membership = await session.scalar(
-                select(GroupMember)
-                .join(
-                    User,
-                    and_(
-                        User.service_name == GroupMember.service_name,
-                        User.account_pk == GroupMember.account_pk,
-                        User.user_pk == GroupMember.user_pk,
-                    ),
+            user_pks = (
+                await session.scalars(
+                    select(GroupMember.user_pk)
+                    .join(
+                        User,
+                        and_(
+                            User.service_name == GroupMember.service_name,
+                            User.account_pk == GroupMember.account_pk,
+                            User.user_pk == GroupMember.user_pk,
+                        ),
+                    )
+                    .where(
+                        GroupMember.service_name == self._service_name,
+                        GroupMember.account_pk == account.account_pk,
+                        GroupMember.group_pk == group.group_pk,
+                        User.user_id.in_(user_ids),
+                    )
                 )
-                .where(
+            ).all()
+            if not user_pks:
+                return False
+            await session.execute(
+                delete(GroupMember).where(
                     GroupMember.service_name == self._service_name,
                     GroupMember.account_pk == account.account_pk,
                     GroupMember.group_pk == group.group_pk,
-                    User.account_pk == account.account_pk,
-                    User.user_id == user_id,
+                    GroupMember.user_pk.in_(user_pks),
                 )
             )
-            if membership is None:
-                return False
-            await session.delete(membership)
             return True
 
     async def delete_group(self, account_id: str, group_id: str) -> None:

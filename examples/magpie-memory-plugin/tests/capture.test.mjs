@@ -247,10 +247,10 @@ test("a transport retry with a different generated answer does not duplicate or 
   await f.drain(); assert.equal(f.writes.length, 2);
 });
 
-test("global capture settings do not opt a newly installed gateway into capture", async (t) => {
+test("global capture preferences apply unless explicitly overridden", async (t) => {
   const f = await fixture(t);
   await writeFile(f.configPath, JSON.stringify({ ...f.file, plugin: { autoCapture: true, magpie: { dataDir: f.cfg.dataDir } } }));
-  assert.equal((await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath })).autoCapture, false);
+  assert.equal((await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath })).autoCapture, true);
   assert.equal((await loadConfig({ OPENVIKING_CLI_CONFIG_FILE: f.configPath }, { autoCapture: true })).autoCapture, true);
 });
 
@@ -594,4 +594,18 @@ test("bypass pauses existing snapshots until removed, without affecting other se
   assert.equal(f.writes.length, 2);
   assert.equal(f.commits.length, 2);
   assert.deepEqual(await readdir(join(captureDirectory(f.cfg, f.ctx), "pending")), []);
+});
+
+
+test("sessionless hooks never queue capture even when enabled", async (t) => {
+  const f = await fixture(t);
+  const previous = process.env.OPENVIKING_CLI_CONFIG_FILE;
+  process.env.OPENVIKING_CLI_CONFIG_FILE = f.configPath;
+  t.after(() => { if (previous === undefined) delete process.env.OPENVIKING_CLI_CONFIG_FILE; else process.env.OPENVIKING_CLI_CONFIG_FILE = previous; });
+  const ctx = { ...f.ctx, session: "", query: "Latest question", state: {} };
+  await onRequest({ model: "m", messages: [f.messages[0]] }, ctx);
+  assert.equal(ctx.state.capture, undefined);
+  await onResponse({ choices: [{ message: { role: "assistant", content: "Reply" }, finish_reason: "stop" }] }, ctx);
+  assert.equal(f.writes.length, 0);
+  await assert.rejects(readdir(f.cfg.dataDir), { code: "ENOENT" });
 });

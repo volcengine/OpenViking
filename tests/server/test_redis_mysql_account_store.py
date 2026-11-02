@@ -364,6 +364,9 @@ async def test_main_batch_membership_and_conditional_key_rotation_invalidate_sna
     assert await writer.add_group_members("acme", "team", ["alice", "bob", "alice"])
     assert (await snapshot(reader))["group_ids"] == ("team",)
     assert (await reader.get_auth_snapshot("bob-key"))["group_ids"] == ("team",)
+    assert await writer.remove_group_members("acme", "team", ["alice", "bob", "alice"])
+    assert (await snapshot(reader))["group_ids"] == ()
+    assert (await reader.get_auth_snapshot("bob-key"))["group_ids"] == ()
     await writer.replace_active_user_api_key("acme", "alice", "new-key", expected_api_key="old-key")
     assert await snapshot(reader) is None
     assert (await snapshot(reader, "new-key"))["user_id"] == "alice"
