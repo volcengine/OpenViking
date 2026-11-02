@@ -174,7 +174,18 @@ function tomlString(value) {
 }
 
 export function sanitizeCodexEnv(environment, profile = '', actions = null, config = {}) {
-  return sanitizeAgentChildEnv(environment, { profile, actions, cliBins: agentCliCommands(config).map(({ bin }) => bin) });
+  const env = sanitizeAgentChildEnv(environment, {
+    profile,
+    actions,
+    cliBins: agentCliCommands(config).map(({ bin }) => bin),
+  });
+  // Codex's OV plugin treats an app-server without a terminal as a desktop
+  // client and asks the model to append its recall report to the final answer.
+  // In Vika, the model's final answer is the payload of an external message, so
+  // that UI-only footer would leak into chat. Keep recall enabled, but suppress
+  // the report for this unattended transport.
+  env.OPENVIKING_USAGE_VIEW = 'off';
+  return env;
 }
 
 // The daemon is a thin pipe: inbound lines are fed to one persistent native
