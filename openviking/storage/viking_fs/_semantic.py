@@ -26,8 +26,7 @@ from openviking.storage.viking_fs._base import (
 )
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
-from openviking.utils.time_decay import parse_duration_ms
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking.utils.time_decay import DEFAULT_EVENT_TIME_DECAY_PROTECTION, parse_duration_ms
 from openviking_cli.retrieve import ContextType
 from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
@@ -127,7 +126,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: str | list[str] | None = None,
-        events_time_decay_protection: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION,
         search_type: SearchType = "semantic",
     ):
         """Semantic search.
@@ -153,10 +152,6 @@ class _SemanticMixin:
         filter_only = is_filter_only_query(query, image_url)
         if filter_only:
             _ensure_filter_present(filter)
-            if events_time_decay_protection is not None:
-                raise InvalidArgumentError(
-                    "events_time_decay_protection requires a semantic query or image"
-                )
         else:
             _ensure_non_empty_search_query(query, image_url)
         if events_time_decay_protection is not None:
@@ -326,7 +321,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: str | list[str] | None = None,
-        events_time_decay_protection: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
     ):

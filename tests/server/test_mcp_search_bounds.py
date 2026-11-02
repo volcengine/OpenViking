@@ -97,7 +97,19 @@ async def test_rest_and_mcp_reject_invalid_search_requests():
     assert result.isError is True
     assert result.structuredContent["error"]["code"] == "INVALID_ARGUMENT"
     assert "events_time_decay_protection" in result.structuredContent["error"]["message"]
-    with pytest.raises(ValidationError, match="semantic query or image"):
-        FindRequest(
-            filter={"op": "must", "field": "level", "conds": [2]}, events_time_decay_protection="0"
+    for request_model in (FindRequest, SearchRequest):
+        assert request_model(query="q").events_time_decay_protection == "7d"
+        assert (
+            request_model(query="q", events_time_decay_protection=None).events_time_decay_protection
+            is None
         )
+    for tool in await mcp_endpoint.mcp.list_tools():
+        if tool.name in ("find", "search"):
+            assert tool.inputSchema["properties"]["events_time_decay_protection"]["default"] == "7d"
+    # Filter-only lookup does not rank by time, even with the new default.
+    assert (
+        FindRequest(
+            filter={"op": "must", "field": "level", "conds": [2]}
+        ).events_time_decay_protection
+        == "7d"
+    )

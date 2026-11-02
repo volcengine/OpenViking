@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 from openviking.core.retrieval_types import SearchType
+from openviking.utils.time_decay import DEFAULT_EVENT_TIME_DECAY_PROTECTION
 
 Detail = Literal["abstract", "overview", "full"]
 # "auto" no longer selects a strategy; it is accepted as a synonym for "unset".
@@ -130,7 +131,7 @@ class AssembleParams:
     limit: int = DEFAULT_LIMIT
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
-    events_time_decay_protection: Optional[str] = None
+    events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION
 
     session_id: Optional[str] = None
     query_expansion: Literal["off", "auto"] = "auto"

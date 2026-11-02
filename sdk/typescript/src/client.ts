@@ -55,7 +55,9 @@ import type {
 const compact = (value: JsonObject): JsonObject =>
   Object.fromEntries(
     Object.entries(value).filter(
-      ([, item]) => item !== undefined && item !== null,
+      ([key, item]) =>
+        item !== undefined &&
+        (item !== null || key === "events_time_decay_protection"),
     ),
   );
 const mergeExtra = (

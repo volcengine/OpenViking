@@ -45,7 +45,10 @@ from openviking.utils.search_filters import (
     resolve_context_types,
 )
 from openviking.utils.tags import build_search_tags_filter
-from openviking.utils.time_decay import validate_event_time_decay_request
+from openviking.utils.time_decay import (
+    DEFAULT_EVENT_TIME_DECAY_PROTECTION,
+    validate_event_time_decay_request,
+)
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.retrieve import ContextType
 
@@ -146,14 +149,11 @@ class FindRequest(BaseModel):
     level: Optional[Union[int, str, List[int]]] = None
     read_content: bool = False
     telemetry: TelemetryRequest = False
-    events_time_decay_protection: Optional[str] = None
+    events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION
 
     @model_validator(mode="after")
     def _validate_time_decay(self) -> "FindRequest":
         validate_event_time_decay_request(self.events_time_decay_protection)
-        if self.events_time_decay_protection is not None:
-            if not self.query.strip() and not self.image_url:
-                raise ValueError("events_time_decay_protection requires a semantic query or image")
         return self
 
 
@@ -241,7 +241,7 @@ class SearchRequest(BaseModel):
     level: Optional[Union[int, str, List[int]]] = None
     read_content: bool = False
     telemetry: TelemetryRequest = False
-    events_time_decay_protection: Optional[str] = None
+    events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION
 
     mode: Literal["list", "context"] = "list"
 

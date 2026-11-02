@@ -96,7 +96,10 @@ from openviking.utils.search_filters import (
     resolve_context_types,
 )
 from openviking.utils.skill_processor import SkillProcessor
-from openviking.utils.time_decay import validate_event_time_decay_request
+from openviking.utils.time_decay import (
+    DEFAULT_EVENT_TIME_DECAY_PROTECTION,
+    validate_event_time_decay_request,
+)
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -552,7 +555,7 @@ async def find(
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     read_content: bool = False,
-    events_time_decay_protection: Optional[str] = None,
+    events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills."""
     try:
@@ -628,7 +631,7 @@ async def search(
     rewrite: Literal["off", "auto"] = "off",
     rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
-    events_time_decay_protection: Optional[str] = None,
+    events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION,
 ) -> str:
     """Retrieval with optional session context and intent analysis.
 

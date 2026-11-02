@@ -960,6 +960,11 @@ async def test_search_forwards_level_zero_and_omits_unset_time_filters():
     for key in ("search_type", "since", "until", "time_field"):
         assert key not in payload
 
+    await client.search("hello", options={"events_time_decay_protection": None})
+    payload = client._request.await_args.kwargs["json"]
+    assert "events_time_decay_protection" in payload
+    assert payload["events_time_decay_protection"] is None
+
 
 @pytest.mark.asyncio
 async def test_search_and_search_context_forward_search_type():

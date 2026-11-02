@@ -25,7 +25,7 @@ from openviking.storage.expr import FilterExpr
 from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.tags import normalize_search_tags
-from openviking.utils.time_decay import parse_duration_ms
+from openviking.utils.time_decay import DEFAULT_EVENT_TIME_DECAY_PROTECTION, parse_duration_ms
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -109,7 +109,7 @@ class HierarchicalRetriever:
         score_gte: bool = False,
         scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         level: Optional[List[int]] = None,
-        events_time_decay_protection: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION,
         request_now: Optional[datetime] = None,
         search_type: SearchType = "semantic",
         has_explicit_target: Optional[bool] = None,

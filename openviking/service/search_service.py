@@ -21,6 +21,7 @@ from openviking.utils.image_search import (
     is_viking_uri,
 )
 from openviking.utils.model_retry import model_retry_scope
+from openviking.utils.time_decay import DEFAULT_EVENT_TIME_DECAY_PROTECTION
 from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.retrieve import ContextType
 from openviking_cli.utils import get_logger
@@ -157,7 +158,7 @@ class SearchService:
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
         image_url: str | list[str] | None = None,
-        events_time_decay_protection: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
     ) -> Any:
@@ -216,7 +217,7 @@ class SearchService:
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
         image_url: str | list[str] | None = None,
-        events_time_decay_protection: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION,
         search_type: SearchType = "semantic",
     ) -> Any:
         """Search without session context.

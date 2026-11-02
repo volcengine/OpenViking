@@ -69,6 +69,8 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
             captured["scope_dsl"] = scope_dsl
             captured["level"] = level
             captured["search_type"] = search_type
+            captured["events_time_decay_protection"] = events_time_decay_protection
+            captured["request_now"] = request_now
             return QueryResult(
                 query=typed_query,
                 matched_contexts=[
@@ -110,6 +112,8 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert captured["scope_dsl"] == {"category": "doc"}
     assert captured["level"] is None
     assert captured["search_type"] == "semantic"
+    assert captured["events_time_decay_protection"] == "7d"
+    assert captured["request_now"] is not None
     fs._ensure_access.assert_called_once_with("viking://resources/docs", request_ctx)
 
 

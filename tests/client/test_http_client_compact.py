@@ -41,6 +41,7 @@ def test_compact_request_body_drops_null_and_empty_args():
         "wait": False,
         "create_parent": True,
         "filter": {"k": "v"},
+        "events_time_decay_protection": None,
     }
     compacted = AsyncHTTPClient._compact_request_body(body)
     # Non-null values are kept, including `False` and non-empty objects.
@@ -48,6 +49,8 @@ def test_compact_request_body_drops_null_and_empty_args():
     assert compacted["wait"] is False
     assert compacted["create_parent"] is True
     assert compacted["filter"] == {"k": "v"}
+    assert "events_time_decay_protection" in compacted
+    assert compacted["events_time_decay_protection"] is None
     # Null fields and an empty `args` are dropped so pre-field servers accept it.
     assert "score_threshold" not in compacted
     assert "tags" not in compacted

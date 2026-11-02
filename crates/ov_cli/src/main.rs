@@ -941,7 +941,7 @@ enum Commands {
         /// Include the full visible content for every matched URI
         #[arg(long, help_heading = "Advanced options")]
         read_content: bool,
-        /// Enable event decay with protection duration: 0 (immediate) or Xm/Xh/Xd
+        /// Event decay protection duration (server default: 7d): 0 (immediate) or Xm/Xh/Xd
         #[arg(
             long,
             alias = "events_time_decay_protection",
@@ -1038,7 +1038,7 @@ enum Commands {
         /// Include the full visible content for every matched URI (list mode only)
         #[arg(long, help_heading = "Advanced options")]
         read_content: bool,
-        /// Enable event decay with protection duration: 0 (immediate) or Xm/Xh/Xd
+        /// Event decay protection duration (server default: 7d): 0 (immediate) or Xm/Xh/Xd
         #[arg(
             long,
             alias = "events_time_decay_protection",

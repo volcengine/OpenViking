@@ -64,7 +64,7 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 | query | str | No | "" | Search query string. May be omitted for an image query or a filter-only lookup |
 | image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
-| events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
+| events_time_decay_protection | str \| null | No | `"7d"` | Decay is enabled by default with a 7-day protection period. Pass `null` to disable, `"0"` to decay immediately, or another duration to change the protection period. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
 | limit | int | No | 10 | Maximum returned results |
@@ -408,7 +408,7 @@ Semantic retrieval with optional session-aware query planning.
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
-| events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
+| events_time_decay_protection | str \| null | No | `"7d"` | Decay is enabled by default with a 7-day protection period. Pass `null` to disable, `"0"` to decay immediately, or another duration to change the protection period. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
 | limit | int | No | 10 | Maximum results per planned query; list mode concatenates the results, so its total may exceed this value |

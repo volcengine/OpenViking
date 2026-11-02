@@ -39,7 +39,7 @@ describe("OpenVikingClient", () => {
   it("sends identity headers and the Python/Go compatible search body", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(ok({ resources: [] }));
+      .mockImplementation(async () => ok({ resources: [] }));
     const client = new OpenVikingClient({
       baseUrl: "https://example.com/",
       apiKey: "key",
@@ -63,6 +63,10 @@ describe("OpenVikingClient", () => {
       target_uri: "viking://resources",
       limit: 5,
       events_time_decay_protection: "2d",
+    });
+    await client.find("hello", { eventsTimeDecayProtection: null });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({
+      events_time_decay_protection: null,
     });
   });
 

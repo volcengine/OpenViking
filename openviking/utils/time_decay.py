@@ -15,6 +15,7 @@ from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 # This curve is an internal ranking contract; it is intentionally not part of
 # ov.conf or ovcli.conf.
+DEFAULT_EVENT_TIME_DECAY_PROTECTION = "7d"
 EVENT_TIME_DECAY_SCALE = "7d"
 EVENT_TIME_DECAY_DECAY = 0.5
 # Match VikingDB's date_time duration limit: 3000 years of 365 days.

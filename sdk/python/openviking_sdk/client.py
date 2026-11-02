@@ -525,7 +525,7 @@ class AsyncHTTPClient:
 
     @staticmethod
     def _compact_request_body(body: Dict[str, Any]) -> Dict[str, Any]:
-        """Drop None-valued keys (and an empty ``args`` object) from a request body.
+        """Drop unset values, preserving an explicit event-decay opt-out.
 
         Older, stricter servers use ``model_config = ConfigDict(extra="forbid")`` and
         reject any field they do not yet define, so unconditionally attaching optional
@@ -533,12 +533,13 @@ class AsyncHTTPClient:
         field — e.g. ``body.tags`` against a pre-#2706 ``find`` route, or ``body.args``
         against a pre-#2549 ``resources`` route. Omitting them is safe for read/create
         routes where a missing optional field and an explicit ``null`` are equivalent.
+        Event decay is the exception: an explicit ``null`` disables the server default.
         Do NOT use this for update/PATCH bodies where ``null`` may mean "clear this
         field". Mirrors the CLI's ``compact_request_body`` (see PR #2799).
         """
         compacted: Dict[str, Any] = {}
         for key, value in body.items():
-            if value is None:
+            if value is None and key != "events_time_decay_protection":
                 continue
             # `args` is always attached by callers but absent from pre-#2549 models;
             # only forward it when arguments were actually provided.

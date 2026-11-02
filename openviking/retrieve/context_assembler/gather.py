@@ -29,6 +29,7 @@ from openviking.retrieve.rerank_scoring import Reranker, RerankScores
 from openviking.retrieve.skill_results import package_abstract, skill_root_uri
 from openviking.server.identity import RequestContext
 from openviking.utils.search_filters import merge_context_type_filter
+from openviking.utils.time_decay import DEFAULT_EVENT_TIME_DECAY_PROTECTION
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
 from openviking_cli.utils.logger import get_logger
@@ -217,7 +218,7 @@ async def gather_candidates(
     score_threshold: Optional[float],
     filter: Optional[Dict[str, Any]] = None,
     image_url: str | list[str] | None = None,
-    events_time_decay_protection: Optional[str] = None,
+    events_time_decay_protection: Optional[str] = DEFAULT_EVENT_TIME_DECAY_PROTECTION,
     search_type: SearchType = "semantic",
     peer_scope: str = "all",
     penalties: Optional[Mapping[str, float]] = None,

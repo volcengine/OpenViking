@@ -445,6 +445,7 @@ async def test_retrieve_without_rerank_does_not_expand_candidates(monkeypatch, r
     assert len(storage.search_calls) == 1
     assert storage.search_calls[0]["limit"] == 3
     assert storage.search_calls[0]["level"] is None
+    assert storage.search_calls[0]["events_time_decay_protection"] == "7d"
 
 
 @pytest.mark.asyncio
