@@ -315,7 +315,6 @@ async def create_session(
     event_tags = _event_tags_from_extraction_config(request.memory_extraction_config)
 
     async def _create() -> dict[str, Any]:
-        await service.initialize_user_directories(_ctx)
         session = await service.sessions.create(
             _ctx,
             request.session_id,

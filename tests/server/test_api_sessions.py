@@ -139,12 +139,27 @@ async def _call_add_message_route(
     )
 
 
-async def test_create_session(client: httpx.AsyncClient):
-    resp = await client.post("/api/v1/sessions", json={})
+async def test_create_session(client: httpx.AsyncClient, service):
+    headers = {"X-OpenViking-Account": "session-only", "X-OpenViking-User": "alice"}
+    ctx = RequestContext(user=UserIdentifier("session-only", "alice"), role=Role.ROOT)
+    resp = await client.post("/api/v1/sessions", json={}, headers=headers)
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     assert "session_id" in body["result"]
+    assert {
+        entry["name"] for entry in await service.viking_fs.ls("viking://user/alice", ctx=ctx)
+    } == {"sessions"}
+    session_id = body["result"]["session_id"]
+    assert (
+        await service.viking_fs.read_file(
+            f"viking://user/alice/sessions/{session_id}/messages.jsonl", ctx=ctx
+        )
+        == ""
+    )
+    retrieved = await client.get(f"/api/v1/sessions/{session_id}", headers=headers)
+    assert retrieved.status_code == 200
+    assert retrieved.json()["result"]["session_id"] == session_id
 
 
 async def test_list_sessions(client: httpx.AsyncClient):

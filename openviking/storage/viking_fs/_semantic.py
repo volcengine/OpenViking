@@ -509,9 +509,21 @@ class _SemanticMixin:
         *,
         lease_ref: Any = None,
     ) -> None:
-        """Write context to AGFS (L0/L1/L2)."""
+        """Write context, preparing and authorizing its directory summaries together."""
 
-        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
+        summaries = [
+            (level, f"{uri}/{filename}", text)
+            for level, filename, text in (
+                (ContextLevel.ABSTRACT, ".abstract.md", abstract),
+                (ContextLevel.OVERVIEW, ".overview.md", overview),
+            )
+            if text
+        ]
+        await self._ensure_access_many(
+            [uri, *(summary_uri for _, summary_uri, _ in summaries)],
+            ctx,
+            action=AclAction.WRITE,
+        )
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
@@ -528,33 +540,16 @@ class _SemanticMixin:
                 content_uri = f"{uri}/{content_filename}"
                 await self.write_file(content_uri, content, ctx=ctx, lease_ref=lease_ref)
 
-            if abstract:
-                abstract_uri = f"{uri}/.abstract.md"
-                await self.write_file(
-                    abstract_uri,
+            # Both summary files have already been authorized, and mkdir above
+            # prepared their shared parent. Keep sanitization and write observers
+            # in the same storage path used by ordinary file writes.
+            for level, summary_uri, text in summaries:
+                await self._write_file_content(
+                    summary_uri,
                     render_abstract_overview(
-                        ContextLevel.ABSTRACT,
+                        level,
                         uri,
-                        abstract,
-                        {
-                            "generated_by": {
-                                "component": "VikingFS.write_context",
-                                "trigger": "context_write",
-                            }
-                        },
-                    ),
-                    ctx=ctx,
-                    lease_ref=lease_ref,
-                )
-
-            if overview:
-                overview_uri = f"{uri}/.overview.md"
-                await self.write_file(
-                    overview_uri,
-                    render_abstract_overview(
-                        ContextLevel.OVERVIEW,
-                        uri,
-                        overview,
+                        text,
                         {
                             "generated_by": {
                                 "component": "VikingFS.write_context",
