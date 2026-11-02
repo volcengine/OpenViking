@@ -164,10 +164,13 @@ Redis 配置：
 | `username` | `""` | Redis ACL 用户名 |
 | `password_env` | `""` | 存放 Redis 密码的环境变量名 |
 | `pool_size` | `32` | 命令并发数 |
-| `connect_timeout_ms` | `1000` | 连接超时 |
-| `command_timeout_ms` | `20` | 命令超时 |
+| `connect_timeout_ms` | `10000` | 连接超时，单位为毫秒 |
+| `command_timeout_ms` | `0` | 命令超时，单位为毫秒；`0` 表示不设置命令超时 |
 | `default_ttl_seconds` | `300` | CacheFS query bucket 使用的 runtime 默认 TTL；`0` 表示不设置 TTL |
 | `tls_insecure_skip_verify` | `false` | 跳过 `rediss://` 证书校验，仅用于受控测试环境 |
+
+当 `command_timeout_ms=0` 时，CacheRuntime 不会主动中断慢 Redis 命令。
+它也不会在固定时长后自动回源。
 
 所有 Redis 读命令均发送到主节点，避免 QueueFS 读取到延迟的队列状态。需要传输加密时使用 Redis TLS，CacheRuntime 不额外增加应用层数据加密格式。
 
