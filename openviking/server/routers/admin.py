@@ -91,7 +91,7 @@ class CreateGroupRequest(BaseModel):
     group_id: str
 
 
-class AddGroupMembersRequest(BaseModel):
+class GroupMembersRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     user_ids: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1, max_length=1000)
@@ -1288,7 +1288,7 @@ async def list_group_members(
 @router.put("/accounts/{account_id}/groups/{group_id}/members")
 @require_auth_root_or_admin
 async def add_group_members(
-    body: AddGroupMembersRequest,
+    body: GroupMembersRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     group_id: str = Path(..., description="Group ID"),
@@ -1302,17 +1302,18 @@ async def add_group_members(
     return Response(status="ok", result={"added": added})
 
 
-@router.delete("/accounts/{account_id}/groups/{group_id}/members/{user_id}")
+@router.delete("/accounts/{account_id}/groups/{group_id}/members")
 @require_auth_root_or_admin
-async def remove_group_member(
+async def remove_group_members(
+    body: GroupMembersRequest,
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     group_id: str = Path(..., description="Group ID"),
-    user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
+    """Remove users atomically; return whether any membership was removed."""
     _check_account_access(ctx, account_id)
-    removed = await _get_api_key_manager(request).remove_group_member(
-        account_id, group_id, user_id
+    removed = await _get_api_key_manager(request).remove_group_members(
+        account_id, group_id, body.user_ids
     )
     return Response(status="ok", result={"removed": removed})

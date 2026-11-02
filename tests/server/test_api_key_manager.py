@@ -771,7 +771,8 @@ async def test_user_and_group_persistence_across_reload(manager_service):
         owner_account_id=acct,
         owner_user_id="alice",
     )
-    assert await mgr2.remove_group_member(acct, group_id, "alice") is True
+    assert await mgr2.remove_group_members(acct, group_id, ["alice", "missing", "alice"]) is True
+    assert await mgr2.remove_group_members(acct, group_id, ["alice", "missing"]) is False
     with pytest.raises(FailedPreconditionError):
         await mgr2.add_group_members(acct, group_id, ["alice", "bob"])
     assert await mgr2.get_group_members(acct, group_id) == ["bob"]
