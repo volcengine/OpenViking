@@ -151,6 +151,7 @@ test('runtimes: installed and logged-in CLIs are offered, the rest say what is m
     if (command === process.execPath && args.includes('--list-models')) {
       return { stdout: 'provider        model    context\nvolcengine-ark  ep-1     1M\n' };
     }
+    if (command === process.execPath && args.includes('-e')) return { stdout: '[]' };
     throw new Error(`unexpected ${command}`);
   };
   const runtimes = await detectRuntimes({ env: { PATH: bin }, execFileImpl, piBin: '/managed/pi.js' });
@@ -158,11 +159,40 @@ test('runtimes: installed and logged-in CLIs are offered, the rest say what is m
     { id: 'codex', available: true, model: 'codex:' },
     { id: 'claude', available: false, model: 'claude:' },
     { id: 'pi', available: true, model: 'pi' },
+    { id: 'durable', available: false, model: 'durable' },
     { id: 'opencode', available: false, model: 'opencode' },
   ]);
   assert.equal(runtimes[0].bin, path.join(bin, 'codex'));
   assert.match(runtimes[1].note, /claude auth login/);
   assert.match(runtimes[2].note, /volcengine-ark\/ep-1/);
+  assert.match(runtimes[3].note, /OPENAI_API_KEY/);
+});
+
+test('runtimes: durable is offered when a provider has credentials', async () => {
+  const execFileImpl = async (command, args) => {
+    if (args.includes('-e')) return { stdout: '["openai/gpt-4o"]' };
+    return { stdout: '' };
+  };
+  const runtimes = await detectRuntimes({ env: { PATH: '' }, execFileImpl, piBin: '/managed/pi.js' });
+  const durable = runtimes.find(({ id }) => id === 'durable');
+  assert.equal(durable.available, true);
+  assert.match(durable.note, /openai\/gpt-4o/);
+});
+
+test('runtimes: the durable probe sees provider keys from ~/.vika/secrets.env', async (t) => {
+  const home = tempDir(t, 'vika-home-');
+  fs.mkdirSync(path.join(home, '.vika'));
+  fs.writeFileSync(path.join(home, '.vika', 'secrets.env'), '# comment\nOPENAI_API_KEY=sk-test\nOTHER=ignored\n');
+  let probeEnv = null;
+  const execFileImpl = async (command, args, options) => {
+    if (args.includes('-e')) { probeEnv = options.env; return { stdout: '["openai/gpt-4o"]' }; }
+    return { stdout: '' };
+  };
+  const runtimes = await detectRuntimes({ env: { HOME: home }, execFileImpl, piBin: '/managed/pi.js' });
+  const durable = runtimes.find(({ id }) => id === 'durable');
+  assert.equal(durable.available, true);
+  assert.equal(probeEnv.OPENAI_API_KEY, 'sk-test');
+  assert.equal(probeEnv.OTHER, undefined);
 });
 
 test('runtimes: a Pi with no model points the user at vika pi', async () => {
@@ -170,7 +200,9 @@ test('runtimes: a Pi with no model points the user at vika pi', async () => {
     env: { PATH: '' }, piBin: '/managed/pi.js',
     execFileImpl: async () => ({ stdout: 'No models available.\n' }),
   });
-  assert.deepEqual(runtimes.map(({ id, available }) => [id, available]), [['codex', false], ['claude', false], ['pi', false], ['opencode', false]]);
+  assert.deepEqual(runtimes.map(({ id, available }) => [id, available]), [
+    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['opencode', false],
+  ]);
   assert.match(runtimes[2].note, /vika pi/);
 });
 

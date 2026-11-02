@@ -17,7 +17,8 @@ use super::codec::LockTokenCodec;
 use super::types::{LockToken, PathLockError, PathLockRequest, PathLockResult};
 
 /// Representation used for handles stored in a PathLock lease.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PathLockHandleMode {
     /// Handles are resolver-generated lock-file paths.
     LockPath,

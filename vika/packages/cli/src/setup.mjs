@@ -12,7 +12,8 @@ import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
 import { resolveRolePromptPath } from '../../daemon/src/conversation-policy.mjs';
 import { LarkCli } from './lark-cli.mjs';
 import {
-  LarkCredentialsError, LarkPolicyError, LarkRegistrationError, grantedUserScopes, inspectApp, lacksAny, missingConfig, readApp, scanApp, tenantToken,
+  LarkCredentialsError, LarkPolicyError, LarkRegistrationError, MESSAGE_EVENT, grantedUserScopes, inspectApp, lacksAny, missingConfig, readApp,
+  scanApp, tenantToken,
 } from './lark-app.mjs';
 import {
   ROLE_PRESETS, WEB_PORT, allocatePort, availableInstanceOvConfig, instanceIdProblem, readManifest, suggestInstanceId, validateManifest, vikaCommand,
@@ -119,7 +120,8 @@ function needsShown({ missing, login }) {
   const scopes = missing.scopes.tenant.length + missing.scopes.user.length;
   return list([
     ...(scopes ? [t(`${scopes} 个权限`, `${scopes} ${scopes === 1 ? 'permission' : 'permissions'}`)] : []),
-    ...(missing.events?.length ? [t('接收消息事件', 'the message event')] : []),
+    ...(missing.events?.includes(MESSAGE_EVENT) ? [t('接收消息事件', 'the message event')] : []),
+    ...(missing.events?.some((event) => event !== MESSAGE_EVENT) ? [t('文档评论事件', 'the document comment event')] : []),
     ...(missing.callbacks.length ? [t('卡片回调', 'the card callback')] : []),
     ...(login.length ? [t('你的授权', 'your authorization')] : []),
   ]);
@@ -866,9 +868,14 @@ export function reportApp(prompter, scopes, inspected, { manual = false } = {}) 
     prompter.success(t(`权限核对通过：${scopes.tenant.length} 个机器人权限、${scopes.user.length} 个用户权限`,
       `Permissions check out: ${scopes.tenant.length} bot and ${scopes.user.length} user scopes`));
   }
-  if (missing.events?.length) {
-    prompter.warn(t(`没有订阅接收消息事件（${list(missing.events)}）：机器人收不到消息`,
-      `The message event (${list(missing.events)}) is not subscribed: the bot gets no messages`));
+  if (missing.events?.includes(MESSAGE_EVENT)) {
+    prompter.warn(t(`没有订阅接收消息事件（${MESSAGE_EVENT}）：机器人收不到消息`,
+      `The message event (${MESSAGE_EVENT}) is not subscribed: the bot gets no messages`));
+  }
+  const comments = missing.events?.filter((event) => event !== MESSAGE_EVENT) ?? [];
+  if (comments.length) {
+    prompter.warn(t(`没有订阅文档评论事件（${list(comments)}）：在飞书文档的评论里 @ 机器人，它收不到`,
+      `The document comment event (${list(comments)}) is not subscribed: the bot misses @mentions in document comments`));
   }
   // No API tells how events arrive; callbacks on a webhook say the app has one.
   if (inspected.callbacks.type === 'webhook') {

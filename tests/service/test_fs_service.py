@@ -6,7 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -18,7 +18,7 @@ from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -324,8 +324,18 @@ async def test_read_visible_strips_supported_memory_metadata_trailers(
 @pytest.mark.asyncio
 async def test_read_visible_preserves_non_memory_content(request_context):
     raw = 'visible\n<!-- MEMORY_FIELDS {"example":true} -->'
-    viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=raw))
-    service = FSService(viking_fs=viking_fs)
+    viking_fs = VikingFS(agfs=SimpleNamespace())
+    viking_fs._async_agfs = SimpleNamespace(
+        stat=AsyncMock(return_value={"isDir": False, "size": len(raw.encode())}),
+        read=AsyncMock(return_value=raw.encode()),
+    )
+    service = FSService(
+        viking_fs=viking_fs,
+        privacy_sanitizer=SimpleNamespace(
+            max_content_bytes=len(raw.encode()),
+            sanitize=AsyncMock(return_value=SimpleNamespace(content=raw)),
+        ),
+    )
 
     assert (
         await service.read_visible(
@@ -336,6 +346,13 @@ async def test_read_visible_preserves_non_memory_content(request_context):
         )
         == '<!-- MEMORY_FIELDS {"example":true} -->'
     )
+
+    # A file that grows after stat must still be rejected by the bounded read.
+    viking_fs._async_agfs.read.return_value = raw.encode() + b"extra"
+    with pytest.raises(ResourceExhaustedError) as exc:
+        await service.read_visible("viking://resources/example.md", ctx=request_context)
+    assert exc.value.details["reason"] == "privacy_visible_read_limit_exceeded"
+    service._privacy_sanitizer.sanitize.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -476,10 +493,10 @@ async def test_plain_listing_reads_only_requested_page_summaries(request_context
         viking_fs, "_ls_original", AsyncMock(return_value=[dict(e) for e in entries])
     )
     monkeypatch.setattr(viking_fs, "_tree_original", AsyncMock(return_value=entries))
-    abstract = AsyncMock(return_value="L0 summary")
-    overview = AsyncMock(return_value="L1 overview")
-    monkeypatch.setattr(viking_fs, "_read_abstract_for_known_dir", abstract)
-    monkeypatch.setattr(viking_fs, "overview", overview)
+    summary = AsyncMock(
+        side_effect=lambda uri, field, ctx: "L0 summary" if field == "abstract" else "L1 overview"
+    )
+    monkeypatch.setattr(viking_fs, "_read_directory_summary", summary)
 
     class FakeVikingDB:
         async def filter(self, **_kwargs):
@@ -500,8 +517,14 @@ async def test_plain_listing_reads_only_requested_page_summaries(request_context
     assert await service.tree("viking://resources", ctx=request_context) == ListingPage(
         entries=entries, has_more=False
     )
-    abstract.assert_awaited_once_with(selected["uri"], ctx=request_context)
-    overview.assert_awaited_once_with(selected["uri"], ctx=request_context)
+    summary.assert_has_awaits(
+        [
+            call(selected["uri"], "abstract", ctx=request_context),
+            call(selected["uri"], "overview", ctx=request_context),
+        ],
+        any_order=True,
+    )
+    assert summary.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -705,10 +728,10 @@ async def test_ls_filters_and_paginates_before_reading_summaries(request_context
     viking_fs = VikingFS(agfs=SimpleNamespace())
     monkeypatch.setattr(viking_fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(viking_fs, "_ls_original", AsyncMock(side_effect=fake_ls))
-    abstract = AsyncMock(return_value="L0 summary")
-    overview = AsyncMock(return_value="L1 overview")
-    monkeypatch.setattr(viking_fs, "_read_abstract_for_known_dir", abstract)
-    monkeypatch.setattr(viking_fs, "overview", overview)
+    summary = AsyncMock(
+        side_effect=lambda uri, field, ctx: "L0 summary" if field == "abstract" else "L1 overview"
+    )
+    monkeypatch.setattr(viking_fs, "_read_directory_summary", summary)
 
     class FakeVikingDB:
         async def filter(self, **_kwargs):
@@ -758,8 +781,14 @@ async def test_ls_filters_and_paginates_before_reading_summaries(request_context
         ],
         has_more=True,
     )
-    abstract.assert_awaited_once_with("viking://resources/docs", ctx=request_context)
-    overview.assert_awaited_once_with("viking://resources/docs", ctx=request_context)
+    summary.assert_has_awaits(
+        [
+            call("viking://resources/docs", "abstract", ctx=request_context),
+            call("viking://resources/docs", "overview", ctx=request_context),
+        ],
+        any_order=True,
+    )
+    assert summary.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -816,10 +845,10 @@ async def test_tree_projects_directory_tags_before_pagination_and_summaries(
     ]
     viking_fs = VikingFS(agfs=SimpleNamespace())
     monkeypatch.setattr(viking_fs, "tree", AsyncMock(return_value=entries))
-    abstract = AsyncMock(return_value="L0 summary")
-    overview = AsyncMock(return_value="L1 overview")
-    monkeypatch.setattr(viking_fs, "_read_abstract_for_known_dir", abstract)
-    monkeypatch.setattr(viking_fs, "overview", overview)
+    summary = AsyncMock(
+        side_effect=lambda uri, field, ctx: "L0 summary" if field == "abstract" else "L1 overview"
+    )
+    monkeypatch.setattr(viking_fs, "_read_directory_summary", summary)
 
     class FakeVikingDB:
         async def filter(self, **_kwargs):
@@ -865,8 +894,14 @@ async def test_tree_projects_directory_tags_before_pagination_and_summaries(
     assert fetch_options["output"] == "original"
     assert fetch_options["include_abstract"] is None
     assert fetch_options["include_overview"] is False
-    abstract.assert_awaited_once_with(directory["uri"], ctx=request_context)
-    overview.assert_awaited_once_with(directory["uri"], ctx=request_context)
+    summary.assert_has_awaits(
+        [
+            call(directory["uri"], "abstract", ctx=request_context),
+            call(directory["uri"], "overview", ctx=request_context),
+        ],
+        any_order=True,
+    )
+    assert summary.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -1033,9 +1068,7 @@ async def test_resource_rm_does_not_deactivate_watch_task_control_uri(request_co
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["/", "//"])
-async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(
-    request_context, separator
-):
+async def test_resource_mv_commits_watch_state_or_reverses_content_move(request_context, separator):
     events = []
     viking_fs = _FakeVikingFS(events=events)
     watch_manager = _FakeWatchManager(events=events)
@@ -1081,6 +1114,27 @@ async def test_resource_mv_validates_then_moves_then_rewrites_watch_tasks(
         }
     ]
     assert [event[0] for event in events] == ["validate", "mv", "rewrite", "refresh"]
+
+    source_acl = {"": {"owner": "ryoma", "mode": "private"}}
+    viking_fs.mv = AsyncMock(side_effect=[{"source_acl": source_acl}, None])
+    watch_manager.rewrite_target_prefix_internal = AsyncMock(
+        side_effect=RuntimeError("watch commit failed")
+    )
+    source, destination = (
+        "viking://resources/codeask/wiki",
+        "viking://resources/codeask/wiki-renamed",
+    )
+    with pytest.raises(RuntimeError, match="watch commit failed"):
+        await service.mv(source, destination, ctx=request_context)
+    assert viking_fs.mv.await_args_list == [
+        call(source, destination, ctx=replace(request_context, bypass_acl=True)),
+        call(
+            destination,
+            source,
+            ctx=replace(request_context, bypass_acl=True),
+            restore_acl=source_acl,
+        ),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1708,6 +1762,7 @@ async def test_indexed_move_preserves_native_vector_transfer(request_context):
         _ensure_access=AsyncMock(), _ensure_destination_access=AsyncMock(), mv=AsyncMock()
     )
     service = FSService(viking_fs=viking_fs)
+    service.compile_lifecycle = SimpleNamespace(move_target=AsyncMock())
     service._refresh_move_parents = AsyncMock()
 
     await service.mv(source, target, ctx=request_context)
@@ -1719,6 +1774,7 @@ async def test_indexed_move_preserves_native_vector_transfer(request_context):
     viking_fs.mv.assert_awaited_once_with(
         source, target, ctx=replace(request_context, bypass_acl=True)
     )
+    service.compile_lifecycle.move_target.assert_awaited_once_with(source, target, request_context)
     service._refresh_move_parents.assert_awaited_once_with(
         from_uri=source,
         to_uri=target,

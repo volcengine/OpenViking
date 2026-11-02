@@ -307,6 +307,48 @@ describe('Store', () => {
     assert.equal(store.getGlobalSession().sessionId, 'sesn-new123456');
   });
 
+  it('publishes a runtime session handle only for the session it belongs to', () => {
+    const before = store.initializeCognition('durable', 'durable-authority');
+    store.setGlobalSession('sesn-first', 'first-policy', {
+      runtime: 'durable',
+      epoch: before.epoch,
+      nativeSessionId: 41,
+    });
+    assert.equal(store.getNativeSessionId(), 41);
+
+    store.commitCognitionSessionRotation({
+      runtime: 'durable',
+      authorityToken: 'durable-authority',
+      sessionId: 'sesn-second',
+      policyHash: 'second-policy',
+      expectedEpoch: before.epoch,
+      nativeSessionId: 42,
+    });
+    assert.equal(store.getGlobalSession().sessionId, 'sesn-second');
+    assert.equal(store.getNativeSessionId(), 42);
+
+    // A handle cannot outlive the session it was stored with: a payload naming
+    // another session is ignored rather than handed to the current one.
+    store.setGlobalSession('sesn-third', 'third-policy', { runtime: 'durable' });
+    assert.equal(store.getNativeSessionId(), null);
+    store.setGlobalSession('sesn-second', 'second-policy', { runtime: 'durable' });
+    assert.equal(store.getNativeSessionId(), null);
+
+    // A rejected rotation publishes neither half of the pair.
+    assert.throws(() => store.commitCognitionSessionRotation({
+      runtime: 'durable',
+      authorityToken: 'stale-authority',
+      sessionId: 'sesn-phantom',
+      policyHash: 'phantom-policy',
+      expectedEpoch: store.getCognitionState().epoch,
+      nativeSessionId: 43,
+    }), /authority changed/);
+    assert.equal(store.getNativeSessionId(), null);
+
+    store.clearGlobalSession();
+    assert.equal(store.getNativeSessionId(), null);
+  });
+
   it('advances accepted session context only for the current cognition owner', () => {
     const cognition = store.initializeCognition('codex', 'codex-authority');
     assert.equal(store.publishOwnedSession({

@@ -397,6 +397,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
 | POST | `/api/v1/content/batch-write` | Write multiple files and refresh their indexes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |
+| POST | `/api/v1/content/ensure_directory_index` | Ensure indexes for one existing directory, seeding L0 only when both summaries are absent |
 | POST | `/api/v1/content/reindex` | Rebuild semantic or vector indexes |
 
 ### [Skills](04-skills.md)
@@ -429,6 +430,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/sessions/{session_id}/messages` | Add one message |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | Add messages in a batch |
 | POST | `/api/v1/search/recall` | Deprecated: thin preset over the search endpoint with `mode="context"` |
+| POST | `/api/v1/rules/compile` | Compile user rules asynchronously |
+| POST | `/api/v1/rules/search` | Retrieve complete rules applicable to a task |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
 
@@ -529,7 +532,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List group members |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a group member |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add group members |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a group member |
 | GET | `/api/v1/privacy-configs` | List privacy configuration categories |
 | GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
@@ -592,6 +595,7 @@ When the gateway runs inside the server, use the server's port; when it runs sta
 | POST | `/api/v1/compile/config/update` | Update target settings |
 | GET | `/api/v1/compile/configs` | List visible targets |
 | GET | `/api/v1/compile/operations` | List target operations |
+| GET | `/api/v1/compile/operations/{operation_id}` | Read one operation |
 | GET | `/api/v1/compile/operations/{operation_id}/outputs` | List operation outputs and version references |
 | POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |

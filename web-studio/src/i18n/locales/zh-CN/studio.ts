@@ -1,6 +1,51 @@
 const studio = {
+  credentialStorage: {
+    plaintext:
+      '当前环境无法加密保存凭据。连接将以明文保存在此浏览器中，刷新后仍可使用。使用 HTTPS 并允许浏览器存储可启用自动加密。',
+    sessionOnly:
+      '当前环境无法安全保存凭据，连接仅在本页有效，刷新或关闭后需重新配置。已有本地记录保留；使用 HTTPS 可自动加密保存。',
+    startError:
+      '无法读取本地加密凭据。请使用 HTTPS 或 localhost，并允许此站点使用浏览器存储后刷新。已有凭据未被清除。',
+    saveError:
+      '凭据尚未保存到本机，请勿关闭或刷新页面。请检查浏览器存储权限后重试保存。',
+  },
+  managementKey: {
+    title: '配置管理权限',
+    description:
+      '为当前服务添加 Root API Key 或 Account Admin API Key。现有 User API Key 和工作台身份会保留。',
+    label: '管理 API Key',
+    scopeHint:
+      'Root 可管理所有 Account；Account Admin 仅管理该 Key 所属的 Account。',
+    submit: '验证并进入管理后台',
+    verifying: '正在验证…',
+    notAdmin: '这是普通 User API Key，请填写 Root 或 Account Admin API Key。',
+    identityMissing: '服务未返回该管理员所属的 Account，无法确认管理范围。',
+    invalidService: '此地址未返回有效的 OpenViking 服务响应。',
+  },
+  userKey: {
+    title: '配置 User API Key',
+    description: '为当前连接和 Account 添加一个 User，无需重复配置服务。',
+    hint: 'User ID 将自动识别。已有 User API Key 会保留在本机，供之后切换使用。',
+    rootKey: '这里需要 User API Key，请勿填写 Root API Key。',
+    accountMismatch: '此 API Key 不属于当前 Account，请在对应连接下配置。',
+    identityMissing:
+      '服务未返回有效的 Account 和 User ID，无法确认此用户身份。',
+    saved: '已保存并切换为 {{user}}',
+  },
   duration: { milliseconds: '{{value}} 毫秒', seconds: '{{value}} 秒' },
   errors: {
+    requestInvalid: '请求参数无效，请检查填写内容后重试。',
+    authenticationFailed: 'API Key 缺失或无效，请检查连接凭据。',
+    permissionDenied: '当前身份没有执行此操作的权限。',
+    resourceNotFound: '请求的资源不存在，请刷新后重试。',
+    requestConflict: '资源已发生变化或已存在，请刷新后重试。',
+    payloadTooLarge: '上传内容过大，请缩小后重试。',
+    rateLimited: '请求过于频繁，请稍后重试。',
+    serviceUnavailable: '服务暂时无法完成请求，请稍后重试。',
+    requestTimedOut: '请求超时，请检查连接后重试。',
+    networkFailed: '无法连接服务，请检查服务地址和网络。',
+    details: '技术详情',
+
     botHealth: 'Bot 健康检查失败（{{status}}）',
     botSteer: '追加 Bot 输入失败（{{status}}）',
     botInterrupt: '中断 Bot 失败（{{status}}）',
@@ -71,6 +116,12 @@ const studio = {
   oauthClient: 'MCP 客户端',
   localConnection: '本地 OpenViking',
   profiles: {
+    managementHint:
+      '支持 Root 或 Account Admin API Key。Root 可管理所有 Account；Account Admin 仅管理所属 Account。',
+    back: '返回连接设置',
+    editorHint: '配置服务地址和访问凭据，新增或更改的凭据会在保存前校验。',
+    saveActivate: '保存并启用',
+    notFound: '此连接配置不存在或已被删除。',
     connectionChanged: '连接已切换，请在当前连接上重新选择身份。',
     identityPending: '身份待确认',
     typeHint: '为这份配置选择服务类型。保存后应用到当前连接。',
@@ -145,6 +196,11 @@ const studio = {
   directoryDescription: '浏览自己的上下文，以及获得授权的共享资源。',
   directoryError: '无法打开目录：目录可能不存在，或当前身份没有访问权限。',
   states: {
+    trustedCredentialRequired: {
+      title: '请配置 Trusted 认证凭据',
+      description:
+        '此服务使用 trusted 认证。请在连接设置中配置服务的 Root API Key，之后可通过 Account 和 User ID 切换访问身份，无需 User API Key。',
+    },
     gatewayAuthMode: {
       title: 'Gateway 需要 API Key 认证模式',
       description:

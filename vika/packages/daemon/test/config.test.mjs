@@ -26,6 +26,19 @@ afterEach(() => {
 });
 
 describe('configuration safety', { concurrency: false }, () => {
+  it('resolves relative CLI overrides against the connector cwd while preserving names and absolute paths', () => {
+    for (const [envKey, configKey] of [['LARK_CLI_BIN', 'larkCliBin'], ['SLACK_CLI_BIN', 'slackCliBin']]) {
+      for (const [value, expected] of [
+        ['custom-cli', 'custom-cli'],
+        ['/opt/custom tools/renamed-cli', '/opt/custom tools/renamed-cli'],
+        ['./custom tools/renamed-cli', path.join(projectDir, 'custom tools', 'renamed-cli')],
+      ]) {
+        setEnv(envKey, value);
+        assert.equal(getConfig()[configKey], expected);
+      }
+    }
+  });
+
   it('accepts QQ as the primary channel without putting credentials in config', () => {
     setEnv('VIKA_CHANNEL', 'qq');
     setEnv('VIKA_CONNECTORS_JSON', '["qq","telegram"]');
@@ -202,6 +215,16 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.equal(config.piEffort, 'xhigh');
     setEnv('VIKA_PI_EFFORT', 'turbo');
     assert.throws(() => getConfig(), /VIKA_PI_EFFORT/);
+  });
+
+  it('accepts the durable runtime model and thinking-level effort', () => {
+    setEnv('VIKA_DURABLE_MODEL', 'anthropic/claude-sonnet-4');
+    setEnv('VIKA_DURABLE_EFFORT', 'low');
+    const config = getConfig();
+    assert.equal(config.durableModel, 'anthropic/claude-sonnet-4');
+    assert.equal(config.durableEffort, 'low');
+    setEnv('VIKA_DURABLE_EFFORT', 'turbo');
+    assert.throws(() => getConfig(), /VIKA_DURABLE_EFFORT/);
   });
 
   it('loads the managed-agent seed session without exposing the API key publicly', () => {

@@ -422,7 +422,7 @@ export class Store {
       `DELETE FROM meta WHERE key IN (
         'global_session_id', 'global_policy_hash', 'global_session_runtime',
         'global_session_epoch', 'global_session_synced_through_seq',
-        'global_session_ready'
+        'global_session_ready', 'global_session_native'
       )`,
     );
     this.insertJournalStatement = this.db.prepare(`
@@ -984,6 +984,7 @@ export class Store {
     sessionReady = true,
     settings = {},
     preserveContext = false,
+    nativeSessionId = null,
   }) {
     return this.transaction(() => {
       const current = this.getCognitionState();
@@ -1002,6 +1003,7 @@ export class Store {
       this.setMetaStatement.run('global_session_epoch', String(epoch));
       this.setMetaStatement.run('global_session_synced_through_seq', String(syncedThroughSeq));
       this.setMetaStatement.run('global_session_ready', sessionReady ? '1' : '0');
+      this.setNativeSessionId(sessionId, runtime, nativeSessionId);
       for (const [key, value] of Object.entries(settings)) {
         this.setMetaStatement.run(`setting:${key}`, String(value));
       }
@@ -1023,6 +1025,7 @@ export class Store {
     sessionReady = true,
     model = '',
     effort,
+    nativeSessionId = null,
     expectedRuntime,
     expectedAuthorityToken,
   }) {
@@ -1041,6 +1044,7 @@ export class Store {
       this.setMetaStatement.run('global_session_epoch', String(epoch));
       this.setMetaStatement.run('global_session_synced_through_seq', String(syncedThroughSeq));
       this.setMetaStatement.run('global_session_ready', sessionReady ? '1' : '0');
+      this.setNativeSessionId(sessionId, runtime, nativeSessionId);
       this.setMetaStatement.run(`setting:${runtime}_model`, String(model));
       if (effort !== undefined) this.setSetting(`${runtime}_effort`, effort);
       return { runtime, epoch, authorityToken };
@@ -1156,11 +1160,38 @@ export class Store {
     };
   }
 
+  // The runtime's own handle for the live session — pi-durable's conversation
+  // id, a provider-side session id — as opposed to the logical session id Vika
+  // mints and every runtime is told. It is stored together with the session it
+  // belongs to and read back only while that session is still the global one,
+  // so a leftover handle can never be handed to a different session.
+  getNativeSessionId() {
+    const raw = this.getMetaStatement.get('global_session_native')?.value;
+    const sessionId = this.getMetaStatement.get('global_session_id')?.value;
+    if (!raw || !sessionId) return null;
+    try {
+      const payload = JSON.parse(raw);
+      if (!payload || payload.sessionId !== sessionId) return null;
+      return payload.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  setNativeSessionId(sessionId, runtime, nativeSessionId = null) {
+    this.setMetaStatement.run('global_session_native', JSON.stringify({
+      sessionId,
+      runtime,
+      id: nativeSessionId ?? null,
+    }));
+  }
+
   setGlobalSession(sessionId, policyHash, {
     runtime = this.getCognitionState().runtime,
     epoch = this.getCognitionState().epoch,
     syncedThroughSeq = this.getGlobalSession().syncedThroughSeq,
     sessionReady = true,
+    nativeSessionId = null,
   } = {}) {
     return this.transaction(() => {
       this.setMetaStatement.run('global_session_id', sessionId);
@@ -1169,6 +1200,7 @@ export class Store {
       this.setMetaStatement.run('global_session_epoch', String(epoch));
       this.setMetaStatement.run('global_session_synced_through_seq', String(syncedThroughSeq));
       this.setMetaStatement.run('global_session_ready', sessionReady ? '1' : '0');
+      this.setNativeSessionId(sessionId, runtime, nativeSessionId);
     });
   }
 
@@ -1183,6 +1215,7 @@ export class Store {
     epoch,
     acceptedThroughSeq = 0,
     sessionReady = true,
+    nativeSessionId = null,
   }) {
     return this.transaction(() => {
       const cognition = this.getCognitionState();
@@ -1206,6 +1239,7 @@ export class Store {
       this.setMetaStatement.run('global_session_epoch', String(epoch));
       this.setMetaStatement.run('global_session_synced_through_seq', String(cursor));
       this.setMetaStatement.run('global_session_ready', ready ? '1' : '0');
+      this.setNativeSessionId(sessionId, runtime, nativeSessionId);
       return true;
     });
   }
@@ -1417,6 +1451,8 @@ export class Store {
       this.setMetaStatement.run('global_session_epoch', String(epoch));
       this.setMetaStatement.run('global_session_synced_through_seq', '0');
       this.setMetaStatement.run('global_session_ready', '1');
+      // Managed runtimes are told their session id; they have no separate handle.
+      this.setNativeSessionId(sessionId, runtime, null);
       this.clearManagedMeta(runtime);
       return { runtime, epoch, authorityToken: nextAuthorityToken };
     });

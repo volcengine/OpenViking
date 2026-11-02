@@ -74,11 +74,71 @@ export async function detectRuntimes({
       : t('没有可用模型：运行 vika pi 后 /login，或编辑 ~/.pi/agent/models.json', 'no model yet: run vika pi and /login, or edit ~/.pi/agent/models.json'),
   });
 
+  const durable = await detectDurable({ env, execFileImpl });
+  if (durable) runtimes.push(durable);
+
   const traex = await detectTraex({ env, execFileImpl, probe });
   if (traex) runtimes.push(traex);
   const opencode = await detectOpencode({ env, execFileImpl, probe: acpProbe });
   if (opencode) runtimes.push(opencode);
   return runtimes;
+}
+
+// The durable runtime ships with Vika (like Pi) and talks to provider APIs
+// directly, so availability is "the bundled host loads and one provider has
+// credentials", not a login on PATH. It reads the same models as the host:
+// pi-ai's built-in providers plus Pi's ~/.pi/agent, Pi's default model first.
+const DURABLE_PROBE = `
+import { availableChatModels, loadDurableModels } from ${JSON.stringify(new URL('../../daemon/src/durable-models.mjs', import.meta.url).href)};
+const { models } = await loadDurableModels();
+const chat = await availableChatModels(models);
+process.stdout.write(JSON.stringify(chat.map((model) => \`\${model.provider}/\${model.id}\`)));
+`;
+
+// The daemon may get provider keys from ~/.vika/secrets.env (see
+// deployment-config.cjs); the setup probe must see the same credentials or it
+// would offer a runtime that only looks unusable here.
+const DURABLE_PROVIDER_KEYS = [
+  'ANTHROPIC_API_KEY', 'ARK_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY',
+  'GROQ_API_KEY', 'MISTRAL_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY',
+];
+
+function providerSecrets(env) {
+  const file = String(env.VIKA_SECRETS_FILE || '').trim()
+    || (env.HOME ? path.join(env.HOME, '.vika', 'secrets.env') : '');
+  if (!file) return {};
+  let raw = '';
+  try { raw = fs.readFileSync(file, 'utf8'); } catch { return {}; }
+  const found = {};
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    if (DURABLE_PROVIDER_KEYS.includes(key)) found[key] = trimmed.slice(eq + 1).trim();
+  }
+  return found;
+}
+
+async function detectDurable({ env, execFileImpl }) {
+  const secrets = providerSecrets(env);
+  const probe = await run(execFileImpl, process.execPath, ['--input-type=module', '-e', DURABLE_PROBE], {
+    ...env,
+    ...Object.fromEntries(Object.entries(secrets).filter(([key]) => !env[key])),
+    PI_OFFLINE: '1',
+  });
+  let models = [];
+  if (probe.ok) {
+    try { models = JSON.parse(probe.stdout || '[]'); } catch { models = []; }
+  }
+  return {
+    id: 'durable', label: t('Durable（内置）', 'Durable (built in)'), model: 'durable', bin: null, binEnv: null,
+    available: models.length > 0,
+    note: models.length > 0 ? t(`自托管 durable harness，用 ${models[0]}（和 Pi 共用 ~/.pi/agent 的模型）`, `self-hosted durable harness, uses ${models[0]} (models shared with Pi in ~/.pi/agent)`)
+      : t('有可用模型才可选：运行 vika pi 后 /login 或编辑 ~/.pi/agent/models.json，或配置 OPENAI_API_KEY 等 provider 密钥',
+        'needs a model: run vika pi and /login, edit ~/.pi/agent/models.json, or set a provider key such as OPENAI_API_KEY'),
+  };
 }
 
 // TraeX installs under any of these names; the first one that passes is used.

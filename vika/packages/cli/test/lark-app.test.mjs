@@ -78,7 +78,9 @@ function platform({ app = {}, version = null, token = { code: 0, tenant_access_t
       } } }) };
     }
     if (url.includes('/app_versions/oav_1?')) {
-      return { json: async () => (version ?? { code: 0, data: { app_version: { event_infos: [{ event_type: 'im.message.receive_v1' }] } } }) };
+      return { json: async () => (version ?? { code: 0, data: { app_version: { event_infos: [
+        { event_type: 'im.message.receive_v1' }, { event_type: 'drive.notice.comment_add_v1' },
+      ] } } }) };
     }
     return { json: async () => ({ code: 0, bot: { activate_status: 2, app_name: '小助手' } }) };
   };
@@ -93,7 +95,7 @@ test('reads back what the app has and names what is missing', async () => {
   assert.equal(inspected.pendingReview, false);
   assert.equal(inspected.botActive, true);
   assert.equal(inspected.botName, '小助手');
-  assert.deepEqual(inspected.events, ['im.message.receive_v1']);
+  assert.deepEqual(inspected.events, ['im.message.receive_v1', 'drive.notice.comment_add_v1']);
   assert.ok(calls.slice(1).every(({ auth }) => auth === 'Bearer t-1'));
   assert.ok(calls.some(({ url }) => url === 'https://open.feishu.cn/open-apis/application/v6/applications/me?lang=zh_cn'));
   assert.deepEqual(missingScopes(SCOPES, inspected.granted), { tenant: ['im:message.group_msg'], user: [] });
@@ -110,7 +112,8 @@ test('an app made by hand may lack the message event or have its callbacks on a 
   });
   const inspected = await inspectApp({ appId: 'cli_1', appSecret: 's', brand: 'feishu' }, { fetchImpl });
   assert.deepEqual(missingConfig(SCOPES, inspected), {
-    scopes: { tenant: ['im:message.group_msg'], user: [] }, events: ['im.message.receive_v1'], callbacks: ['card.action.trigger'],
+    scopes: { tenant: ['im:message.group_msg'], user: [] }, events: ['im.message.receive_v1', 'drive.notice.comment_add_v1'],
+    callbacks: ['card.action.trigger'],
   });
   // No callbacks at all, and no online version to read the events of.
   const bare = platform({ app: { callback_info: undefined, online_version_id: '' } });

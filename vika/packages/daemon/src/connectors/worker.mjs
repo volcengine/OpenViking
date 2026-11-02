@@ -13,6 +13,7 @@ import { EmailClient } from '../email/client.mjs';
 import { MeetingNoteSync } from '../meeting/note-sync.mjs';
 import { getConnectorManifest } from './catalog.mjs';
 import { normalizeLarkEvent } from './lark-events.mjs';
+import { isDocCommentEvent, parseCommentNotice } from '../lark-doc-comments.mjs';
 import { invokeOperation } from './operations.mjs';
 import {
   parseProtocolLine,
@@ -83,6 +84,22 @@ let checked = false;
 let started = false;
 let stopping = false;
 let inputBuffer = '';
+// Comment events of one comment thread, written in arrival order.
+const commentWrites = new Map();
+
+// A document comment carries ids only. The Lark client reads it first (in
+// parallel with others), then it is written after the earlier ones of the
+// same thread.
+function emitDocComment(raw) {
+  const { fileToken, commentId } = parseCommentNotice(raw);
+  const key = `${fileToken}:${commentId}`;
+  const read = client.docCommentEvent(raw);
+  const written = (commentWrites.get(key) ?? Promise.resolve()).then(() => read).then((envelope) => {
+    if (envelope && !stopping) write(envelope);
+  }, (error) => logger.warn('connector_event_rejected', { error: safeError(error) }));
+  commentWrites.set(key, written);
+  void written.finally(() => { if (commentWrites.get(key) === written) commentWrites.delete(key); });
+}
 
 async function handleRequest(message) {
   try {
@@ -99,7 +116,8 @@ async function handleRequest(message) {
       client.startSubscription((line) => {
         try {
           const raw = JSON.parse(line);
-          write(connectorId === 'lark' ? normalizeLarkEvent(raw) : parseProtocolLine(line));
+          if (connectorId === 'lark' && isDocCommentEvent(raw)) emitDocComment(raw);
+          else write(connectorId === 'lark' ? normalizeLarkEvent(raw) : parseProtocolLine(line));
         } catch (error) {
           logger.warn('connector_event_rejected', { error: safeError(error) });
         }

@@ -37,6 +37,9 @@ class ChildProvider(LLMProvider):
     def get_default_model(self):
         return self.model.model
 
+    def supports_tool_result_media(self, model=None):
+        return self.model.provider.supports_tool_result_media(model or self.model.model)
+
     async def chat(self, messages, tools=None, **kwargs):
         """Retry truncated output without executing incomplete tool calls."""
         while True:

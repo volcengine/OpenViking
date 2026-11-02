@@ -13,5 +13,6 @@ third-party software below. Each part stays under its own license.
 | Slack CLI ([slackapi/slack-cli](https://github.com/slackapi/slack-cli)) | release: `bin/slack`, license in `bin/slack.LICENSE` | Apache-2.0 |
 | Weixin protocol code derived from [Tencent/openclaw-weixin](https://github.com/Tencent/openclaw-weixin) | source: `packages/daemon/src/weixin/` | MIT; see `NOTICE.md` and `LICENSE.openclaw-weixin` there |
 | Claude Code stream-json adapter derived from [ZaynJarvis/zouk-daemon](https://github.com/ZaynJarvis/zouk-daemon) 0.6.0 | source: `packages/daemon/src/claude.mjs` | MIT |
+| Pi durable harness ([earendil-works/pi](https://github.com/earendil-works/pi), `@earendil-works/pi-durable`, `pi-ai`, `chord`) | release: `node_modules/@earendil-works/` | MIT |
 
 `npm ls --omit=dev --all` lists the exact npm dependency tree of a checkout.

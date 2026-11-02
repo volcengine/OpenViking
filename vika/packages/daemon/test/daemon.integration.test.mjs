@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 import { createLogger } from '../src/logger.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
 import { Harness } from '../src/harness.mjs';
-import { startMockEnv, textMessage } from './mock-env.mjs';
+import { docComment, startMockEnv, textMessage } from './mock-env.mjs';
 import { OVUnavailableError } from '../src/ov-connection.mjs';
 
 describe('daemon event path (mock env)', { concurrency: false }, () => {
@@ -270,6 +270,28 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
       const turns = env.codexInput();
       assert.match(turns[1].text, /chat=oc-group [^\]]*msg=om-group-undecided [^\]]* undecided=1\] 大家早/);
       assert.deepEqual(env.replies(), []);
+    } finally {
+      await env.stop();
+    }
+  });
+
+  it('wakes on an @mention in a document comment and answers in that comment', async () => {
+    const env = await startMockEnv({ codex: { behavior: 'reply' } });
+    try {
+      env.receive(docComment());
+      await env.waitForReply(/^\+add-reply$/);
+      const [turn] = env.codexInput();
+      assert.match(turn.text, new RegExp('^\\[chat=doc:docx:doxE2eToken thread=c-e2e source=lark msg=comment:docx:doxE2eToken:c-e2e:r-e2e '
+        + 'event=evt-c-e2e-r-e2e time=\\S+ from=Commenter mention=me\\] \\[document "E2E 文档" https://example.feishu.cn/docx/doxE2eToken\\] '
+        + '⏎ \\[on the text: "第二季度目标"\\] ⏎ @TestBot 帮我看下这段$', 'm'));
+      const reply = env.replies().find((args) => args.includes('+add-reply'));
+      assert.deepEqual(reply.slice(reply.indexOf('drive')), ['drive', '+add-reply', '--as', 'bot', '--token', 'doxE2eToken', '--type', 'docx',
+        '--comment-id', 'c-e2e', '--content', JSON.stringify([{ type: 'text', text: 'mock reply' }]), '--format', 'json']);
+      assert.ok(!env.larkCalls().some((args) => args.includes('+chat-members-list')), 'a document has no roster to fetch');
+      // lark-cli answered; the Core settles the outbox right after.
+      const outbox = () => env.daemon.store.db.prepare("SELECT status, remote_message_id FROM outbox WHERE action = 'message.reply'").get();
+      await env.waitFor(() => outbox()?.status === 'SENT');
+      assert.equal(outbox().remote_message_id, 'comment:docx:doxE2eToken:c-e2e:r-e2e-out');
     } finally {
       await env.stop();
     }

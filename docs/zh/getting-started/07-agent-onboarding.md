@@ -1,13 +1,17 @@
-# 一条提示词接入 Agent
+<a id="一条提示词接入-agent"></a>
 
-把一条提示词粘贴给你正在用的编程 Agent。Agent 会在本机检测到的各个 Agent 里安装 OpenViking 记忆插件，检查连接，问你要不要导入近期工作，再告诉你怎么重启。重启后，你问的第一个问题就能用上 OpenViking。
+<a id="一键集成-agent"></a>
+
+# 一键接入
+
+通过一条提示词，将 OpenViking 接入你正在使用的编程 Agent。Agent 会在本机检测到的各个 Agent 里安装 OpenViking 记忆插件，检查连接，问你要不要导入近期工作，再告诉你怎么重启。重启后，你问的第一个问题就能用上 OpenViking。
 
 Agent 按一份简短的指南执行。指南以纯 Markdown 发布，任何 Agent 都能直接获取：
 
-- 中文：`https://docs.openviking.net/agents/zh/onboarding.md`
-- 英文：`https://docs.openviking.net/agents/en/onboarding.md`
+- 中文：`https://docs.openviking.ai/agents/zh/onboarding.md`
+- 英文：`https://docs.openviking.ai/agents/en/onboarding.md`
 
-两份也都可以从 `docs.openviking.ai` 访问。中国大陆访问 `docs.openviking.net` 通常更快。
+两份也都可以从 `docs.openviking.net` 访问，中国大陆访问通常更快。
 
 ## 提示词
 
@@ -16,12 +20,12 @@ Agent 按一份简短的指南执行。指南以纯 Markdown 发布，任何 Age
 <AgentPrompt>
 
 ```text
-帮我安装 OpenViking 记忆插件，并带我开始使用。OpenViking 是火山引擎开源的 Agent 上下文数据库（https://github.com/volcengine/OpenViking，AGPL-3.0），下面的命令和链接来自它的官方文档。
+帮我安装 OpenViking 记忆插件，并带我开始使用。OpenViking 是为 Agent 提供的上下文数据库（https://github.com/volcengine/OpenViking），下面的命令和链接来自它的官方文档。
 
 1. 运行官方安装器。它需要联网并写入我的主目录，如果被你的沙箱拦住，请向我申请批准：
    curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang zh --url https://api.vikingdb.cn-beijing.volces.com/openviking --api-key <API_KEY>
-2. 装好后读 OpenViking 的接入引导，按它带我完成设置。导入历史、写协作规则这类选择，引导会让你先问我。docs.openviking.net 和 docs.openviking.ai 是同一个文档站，哪个打得开用哪个：
-   https://docs.openviking.net/agents/zh/onboarding.md
+2. 装好后读 OpenViking 的接入引导，按它带我完成设置。导入历史、写协作规则这类选择，引导会让你先问我。docs.openviking.ai 和 docs.openviking.net 是同一个文档站，哪个打得开用哪个：
+   https://docs.openviking.ai/agents/zh/onboarding.md
 
 API key 是我在 OpenViking 控制台给自己生成的，安装器会把它存到本机的 ~/.openviking/ovcli.conf。命令里原样使用就行，回复里不用再显示它，也不要写进别的文件或规则。全程用中文和我交流。
 ```
@@ -39,7 +43,7 @@ API key 是我在 OpenViking 控制台给自己生成的，安装器会把它存
 如果插件已经装好，在 Agent 里开一个新会话，发送：
 
 ```text
-按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+按 https://docs.openviking.ai/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
 ```
 
 ## Agent 会做什么

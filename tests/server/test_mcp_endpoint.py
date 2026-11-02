@@ -2556,6 +2556,9 @@ async def test_write_tool_schema_is_portable():
     assert props["uri"]["type"] == "string"
     assert props["content"]["type"] == "string"
     assert props["mode"]["enum"] == ["replace", "append", "create"]
+    assert props["resolve_conflicts"]["type"] == "boolean"
+    assert props["resolve_conflicts"]["default"] is False
+    assert "resolve_conflicts" not in tools["write"].inputSchema.get("required", [])
     assert {"uri", "content"} <= set(tools["write"].inputSchema.get("required", []))
 
 

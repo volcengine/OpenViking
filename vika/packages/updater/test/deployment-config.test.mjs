@@ -184,6 +184,27 @@ test('falls back to a secrets file for daemon-wide secrets missing from the envi
   });
 });
 
+test('the secrets file can carry a durable runtime provider key', () => {
+  withManifest(validManifest(), (manifestPath) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-secrets-'));
+    const secretsPath = path.join(directory, 'secrets.env');
+    fs.writeFileSync(secretsPath, 'OPENAI_API_KEY=sk-test\nANTHROPIC_API_KEY=ak-test\n');
+    try {
+      const env = {
+        HOME: '/Users/test',
+        VIKA_CONFIG: manifestPath,
+        VIKA_SECRETS_FILE: secretsPath,
+      };
+      const deployment = loadDeploymentManifest(env);
+      applyDeploymentDaemonEnv(env, deployment);
+      assert.equal(env.OPENAI_API_KEY, 'sk-test');
+      assert.equal(env.ANTHROPIC_API_KEY, 'ak-test');
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 test('the environment still wins over the secrets file', () => {
   withManifest(validManifest(), (manifestPath) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-secrets-'));

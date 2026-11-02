@@ -10,6 +10,7 @@ import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
+import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds } from './runtime-input.mjs';
@@ -35,8 +36,8 @@ function appendBounded(current, chunk, label) {
   return next;
 }
 
-export function sanitizeOpencodeEnv(environment, profile = '', actions = null) {
-  return sanitizeAgentChildEnv(environment, { profile, actions });
+export function sanitizeOpencodeEnv(environment, profile = '', actions = null, config = {}) {
+  return sanitizeAgentChildEnv(environment, { profile, actions, cliBins: agentCliCommands(config).map(({ bin }) => bin) });
 }
 
 // Persistent Agent Client Protocol (ACP, nd-JSON over stdio) adapter for
@@ -198,7 +199,7 @@ export class OpencodeAgent {
       const args = ['acp', '--cwd', this.config.workspace];
       const env = {
         ...sanitizeOpencodeEnv(process.env, this._larkProfile(),
-          agentToolEnv(this.config, this.authorityToken)),
+          agentToolEnv(this.config, this.authorityToken), this.config),
         // Pins the conversation policy instruction and the personal_agent MCP
         // server without editing the user's own opencode.json.
         OPENCODE_CONFIG: configPath,

@@ -181,6 +181,9 @@ export function getConfig() {
   if (daemonProfile && cliProfile && daemonProfile !== cliProfile) {
     throw new Error('VIKA_LARK_PROFILE must match LARKSUITE_CLI_PROFILE');
   }
+  // Connector commands run from projectDir; make relative overrides independent
+  // of the agent workspace too. Bare command names keep their PATH semantics.
+  const cliBin = (value) => value?.includes(path.sep) ? path.resolve(projectDir, value) : value;
   const volcBaseUrl = (process.env.VIKA_VOLC_BASE_URL
     || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/+$/, '');
   let parsedVolcBaseUrl;
@@ -211,8 +214,8 @@ export function getConfig() {
     connectorWorkerPath: path.join(sourceDir, 'connectors', 'worker.mjs'),
     actionSocketPath: path.join(dataDir, 'actions.sock'),
     actionMcpPath: path.join(sourceDir, 'actions', 'mcp.mjs'),
-    larkCliBin: process.env.LARK_CLI_BIN || bundledLarkCli(),
-    slackCliBin: process.env.SLACK_CLI_BIN || undefined,
+    larkCliBin: cliBin(process.env.LARK_CLI_BIN || bundledLarkCli()),
+    slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),
     emailAccounts,
     weixinLongPollTimeoutMs: intEnv('VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS', 35_000, {
       min: 5_000,
@@ -231,6 +234,15 @@ export function getConfig() {
     piModel: process.env.VIKA_PI_MODEL || '',
     piEffort: enumEnv(
       'VIKA_PI_EFFORT',
+      'medium',
+      ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    ),
+    // Durable harness (built-in @earendil-works/pi-durable host). The model is
+    // spoken as provider/modelId; the effort set matches pi-durable thinking
+    // levels.
+    durableModel: process.env.VIKA_DURABLE_MODEL || '',
+    durableEffort: enumEnv(
+      'VIKA_DURABLE_EFFORT',
       'medium',
       ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     ),

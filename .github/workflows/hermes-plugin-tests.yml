@@ -155,6 +155,13 @@ jobs:
         run: |
           scripts/run_tests.sh "$GITHUB_WORKSPACE/examples/hermes-plugin/tests" \
             --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
+      - name: Check real plugin installation on Windows
+        if: ${{ !cancelled() && runner.os == 'Windows' && env.HERMES_PYTHON != '' }}
+        run: |
+          "$HERMES_PYTHON" "$GITHUB_WORKSPACE/scripts/check-hermes-plugin-install.py" \
+            --hermes-root "$PWD" \
+            --output-dir "$RUNNER_TEMP/hermes-plugin-install" \
+            --install-only
       - name: Install and run real Quick Local services
         run: |
           ARGS=()
@@ -168,4 +175,6 @@ jobs:
           path: |
             ${{ runner.temp }}/quick-local/evidence.json
             ${{ runner.temp }}/quick-local/*/logs/openviking-server.log
+            ${{ runner.temp }}/hermes-plugin-install/*.log
+            ${{ runner.temp }}/hermes-plugin-install/evidence.json
           if-no-files-found: ignore

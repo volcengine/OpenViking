@@ -1,6 +1,7 @@
 """Exercise the external provider through Hermes, with no bundled provider."""
 
 import json
+import os
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -1353,3 +1354,83 @@ def test_runtime_spawn_uses_provider_home_under_another_profile(external_provide
     assert spawned[0]["OPENAI_API_KEY"] == "owner-key"
     assert (home_a / "logs/openviking-server.log").exists()
     assert not (home_b / "logs/openviking-server.log").exists()
+
+
+def test_recovery_lock_handoff_keeps_one_inode(external_provider):
+    home, provider, module, _ = external_provider("lock-handoff")
+    provider._hermes_home = str(home)
+    if module.fcntl is None:
+        pytest.skip("POSIX flock required")
+    owner = "dead-owner"
+    path = provider._state_path("lock", owner)
+    acquired, first = provider._claim_owner_run_for_recovery(owner)
+    assert acquired
+    second = None
+    third = None
+    handoff_acquired = False
+
+    class Handoff:
+        def fileno(self):
+            return first.fileno()
+
+        def close(self):
+            nonlocal second, handoff_acquired
+            # This is the legal schedule after A unlocks and before A removes
+            # the pathname. B acquires the existing inode during that gap.
+            handoff_acquired, second = provider._claim_owner_run_for_recovery(owner)
+            first.close()
+
+    try:
+        provider._flock_close(Handoff(), path, "owner run lock")
+        assert handoff_acquired, "second recovery could not claim the released owner lock"
+        # B still holds its lock. C must not obtain a second lock for this owner.
+        acquired, third = provider._claim_owner_run_for_recovery(owner)
+        old_inode = os.fstat(second.fileno()).st_ino
+        new_inode = os.fstat(third.fileno()).st_ino if acquired else None
+        assert not acquired, ("concurrent owner lock", old_inode, new_inode)
+        assert path.stat().st_ino == old_inode
+    finally:
+        for handle in (first, second, third):
+            if handle is not None and not handle.closed:
+                module.fcntl.flock(handle.fileno(), module.fcntl.LOCK_UN)
+                handle.close()
+
+
+def test_live_owner_still_blocks_recovery(external_provider):
+    home, provider, module, _ = external_provider("lock-control")
+    provider._hermes_home = str(home)
+    if module.fcntl is None:
+        pytest.skip("POSIX flock required")
+    owner = "dead-owner"
+    acquired, held = provider._claim_owner_run_for_recovery(owner)
+    assert acquired
+    try:
+        for _ in range(3):
+            acquired, other = provider._claim_owner_run_for_recovery(owner)
+            assert not acquired and other is None
+    finally:
+        module.fcntl.flock(held.fileno(), module.fcntl.LOCK_UN)
+        held.close()
+
+
+def test_failed_run_lock_claim_preserves_other_holder(external_provider):
+    home, provider, module, _ = external_provider("lock-failed-claim")
+    provider._hermes_home = str(home)
+    if module.fcntl is None:
+        pytest.skip("POSIX flock required")
+    path = provider._state_path("lock", provider._run_id)
+    held = provider._flock_open(path)
+    other = None
+    try:
+        provider._acquire_run_lock()
+        assert provider._run_lock_file is None
+        assert path.exists(), "failed acquisition removed another holder's lock file"
+        acquired, other = provider._claim_owner_run_for_recovery("control")
+        assert acquired
+        with pytest.raises(BlockingIOError):
+            provider._flock_open(path)
+    finally:
+        for handle in (held, other):
+            if handle is not None and not handle.closed:
+                module.fcntl.flock(handle.fileno(), module.fcntl.LOCK_UN)
+                handle.close()

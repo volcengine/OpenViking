@@ -65,6 +65,30 @@ export function textMessage({
   };
 }
 
+// Raw Lark drive.notice.comment_add_v1 notice: ids only, as the platform
+// sends it. The fake lark-cli answers the comment lookups for it (see
+// fakeLarkSource): the reply `r-e2e` by ou_e2eCommenter1 reads 帮我看下这段.
+export function docComment({
+  commentId = 'c-e2e',
+  replyId = 'r-e2e',
+  fileToken = 'doxE2eToken',
+  fromId = 'ou_e2eCommenter1',
+  mentioned = true,
+  eventId = `evt-${commentId}-${replyId}`,
+  createTimeMs = Date.now(),
+} = {}) {
+  return {
+    schema: '2.0',
+    header: { event_id: eventId, event_type: 'drive.notice.comment_add_v1', tenant_key: 'tenant-e2e',
+      create_time: String(createTimeMs) },
+    event: {
+      notice_meta: { file_type: 'docx', file_token: fileToken, from_user_id: { open_id: fromId },
+        to_user_id: { open_id: 'ou_mockSelf123456' }, notice_type: 'add_comment' },
+      comment_id: commentId, reply_id: replyId, is_mentioned: mentioned,
+    },
+  };
+}
+
 function writeExecutable(file, source) {
   fs.writeFileSync(file, `#!/usr/bin/env node\n${source}`, { mode: 0o700 });
 }
@@ -72,8 +96,10 @@ function writeExecutable(file, source) {
 // Fake lark-cli: --version/--help/doctor/auth status/bot info answer preflight
 // (the bot is TestBot, ou_mockSelf123456); `event +subscribe`
 // records its pid in SUBSCRIBER and tails EVENTS (NDJSON, appended by
-// env.receive) from the start until SIGTERM; +messages-reply
-// and +messages-send append their argv to REPLIES. Everything else gets a
+// env.receive) from the start until SIGTERM; +messages-reply,
+// +messages-send and drive +add-reply append their argv to REPLIES. A
+// document comment reads as one open comment whose reply r-e2e asks
+// 帮我看下这段, in a document titled E2E 文档. Everything else gets a
 // generic ok JSON so best-effort lookups (roster, chat names) degrade quietly.
 // Every call's argv goes to CALLS.
 function fakeLarkSource(dir) {
@@ -102,6 +128,28 @@ function fakeLarkSource(dir) {
     if (args.includes('+messages-reply') || args.includes('+messages-send')) {
       fs.appendFileSync(REPLIES, JSON.stringify(args) + '\\n');
       console.log(JSON.stringify({ ok: true, data: { message_id: 'om-mock-out' } }));
+      process.exit(0);
+    }
+    if (args.includes('+batch-query-comments')) {
+      const commentId = args[args.indexOf('--comment-ids') + 1];
+      console.log(JSON.stringify({ ok: true, data: { items: [{ comment_id: commentId, is_whole: false, is_solved: false,
+        quote: '第二季度目标', reply_list: { replies: [{ reply_id: 'r-e2e', user_id: 'ou_e2eCommenter1', content: { elements: [
+          { type: 'person', person: { user_id: 'ou_mockSelf123456' } }, { type: 'text_run', text_run: { text: ' 帮我看下这段' } },
+        ] } }] } }] } }));
+      process.exit(0);
+    }
+    if (args.includes('metas')) {
+      console.log(JSON.stringify({ ok: true, data: { metas: [{ doc_token: 'doxE2eToken', title: 'E2E 文档',
+        url: 'https://example.feishu.cn/docx/doxE2eToken' }] } }));
+      process.exit(0);
+    }
+    if (args.includes('+get-user')) {
+      console.log(JSON.stringify({ ok: true, data: { user: { name: 'Commenter' } } }));
+      process.exit(0);
+    }
+    if (args.includes('+add-reply')) {
+      fs.appendFileSync(REPLIES, JSON.stringify(args) + '\\n');
+      console.log(JSON.stringify({ ok: true, data: { comment_id: 'c-e2e', reply_id: 'r-e2e-out' } }));
       process.exit(0);
     }
     if (args.includes('+chat-members-list')) {
@@ -136,7 +184,8 @@ function fakeLarkSource(dir) {
 // to INPUT_LOG and its own argv to SPAWN_LOG; turn outcome is fixed per env:
 // 'complete' | 'fail' (with FAIL_BLOB) | 'ack-only' | 'silent' (calls
 // stay_silent on the newest event= of the turn input over the daemon's agent
-// tool socket, as a real runtime's MCP adapter would, then completes).
+// tool socket, as a real runtime's MCP adapter would, then completes) |
+// 'reply' (likewise answers the newest msg= with reply_message "mock reply").
 const ACTION_CLIENT = fileURLToPath(new URL('../src/actions/client.mjs', import.meta.url));
 
 function fakeCodexSource(dir, { behavior, failBlob }) {
@@ -176,11 +225,14 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
         send({ method: 'turn/started', params: { turn: { id: turnId } } });
         if (BEHAVIOR === 'complete') {
           send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
-        } else if (BEHAVIOR === 'silent') {
+        } else if (BEHAVIOR === 'silent' || BEHAVIOR === 'reply') {
           const decision = [...text.matchAll(/ event=(\\S+)/g)].at(-1)?.[1];
+          const target = [...text.matchAll(/ msg=(\\S+)/g)].at(-1)?.[1];
           const done = () => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
           if (!decision) { done(); return; }
-          callTool(actionEndpoint('fake-codex'), 'stay_silent', { decision_id: decision, reason: 'mock' })
+          const [tool, input] = BEHAVIOR === 'silent' ? ['stay_silent', { decision_id: decision, reason: 'mock' }]
+            : ['reply_message', { decision_id: decision, message_id: target, markdown: 'mock reply' }];
+          callTool(actionEndpoint('fake-codex'), tool, input)
             .then(done, (error) => {
               fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n');
               done();

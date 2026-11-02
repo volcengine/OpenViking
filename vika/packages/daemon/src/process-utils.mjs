@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { agentCliCommands } from './agent-clis.mjs';
 import { applyOpenVikingChildEnv } from './openviking.mjs';
 
 export function sanitizeNonArkChildEnv(environment) {
@@ -21,6 +23,7 @@ export function sanitizeAgentChildEnv(environment, {
   profile = '',
   stripClaudeCode = false,
   actions = null,
+  cliBins = agentCliCommands().map(({ bin }) => bin),
 } = {}) {
   const safeEnv = {
     ...sanitizeNonArkChildEnv(environment),
@@ -35,6 +38,16 @@ export function sanitizeAgentChildEnv(environment, {
   if (actions) {
     safeEnv.PERSONAL_AGENT_SOCKET = actions.socketPath;
     safeEnv.PERSONAL_AGENT_AUTHORITY = actions.authority ?? '';
+  }
+  // Runtimes launch in the user's workspace, outside the release/checkout.
+  // Prefer configured binaries to global installs without exposing credentials.
+  const directories = [...new Set(cliBins.filter(bin => path.isAbsolute(bin)).map(bin => path.dirname(bin)))];
+  // A PATH entry cannot contain its delimiter; the prompt still provides the
+  // exact shell-quoted command for these paths and for renamed overrides.
+  const prefixes = directories.filter(directory => !directory.includes(path.delimiter));
+  if (prefixes.length) {
+    const inherited = (safeEnv.PATH || '/usr/bin:/bin').split(path.delimiter);
+    safeEnv.PATH = [...prefixes, ...inherited.filter(directory => !prefixes.includes(directory))].join(path.delimiter);
   }
   return applyOpenVikingChildEnv(safeEnv, environment);
 }

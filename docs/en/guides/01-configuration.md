@@ -1138,7 +1138,7 @@ OpenAI-compatible APIs, LiteLLM, and Jev.
     "api_key": "your-typesafe-api-key",
     "model": "jev-latest",
     "mode": "noul",
-    "candidates_visible": true,
+    "candidates_visible": false,
     "timeout": 120,
     "log_payloads": false,
     "threshold": 0.1
@@ -1181,18 +1181,21 @@ The Jev adapter supports two scoring modes:
 - `choice`: one question compares all candidate documents, with `candidate_{index}`
   mapped to input indices. Scores come from `probabilities` in document order.
 
-Candidate visibility is controlled separately by `rerank.candidates_visible`:
+For Noul, candidate visibility is controlled by `rerank.candidates_visible`:
 
-- `true` (default): the query and all candidate documents are in shared `state`.
+- `false` (default, Noul only): shared `state` contains only the query; each question
+  carries its own document in `instructions.candidate_document`. Other candidates are
+  not included in that question or in shared state. All questions still use one HTTP
+  request, and scores retain the original document order.
+- `true`: the query and all candidate documents are in shared `state`.
   Independent Noul answers do not mean the candidates are hidden from each other.
-- `false` (Noul only): shared `state` contains only the query; each question carries
-  its own document in `instructions.candidate_document`. Other candidates are not
-  included in that question or in shared state. All questions still use one HTTP request,
-  and scores retain the original document order.
 
-To enable isolation, set `"mode": "noul", "candidates_visible": false`.
-Combining `"mode": "choice"` with `"candidates_visible": false` is rejected at
-configuration/client creation: Choice must compare the candidates in one question.
+For Noul, omitting `candidates_visible` now enables isolation. To retain shared
+candidate context, set `"candidates_visible": true` explicitly.
+
+Choice ignores this Noul-only option and always compares the full candidate set in
+shared `state`. With `"mode": "choice"`, omitting `candidates_visible` or setting it
+to either `false` or `true` produces the same request and scoring behavior.
 
 Select the mode with `rerank.mode`; omitting it or setting it to `null` keeps the
 default `noul` behavior. Choice scores are relative probabilities summing to 1 within
@@ -1213,7 +1216,7 @@ using Choice through MCP.
 | `api_base` | str | Complete endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai/v1/systemone`, Vercel uses `https://ai-gateway.vercel.sh/typesafe/v1/systemone`; custom Jev URLs are used unchanged) |
 | `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
 | `mode` | `"noul"`, `"choice"`, or `null` | Jev rerank mode. `null` and omission use `"noul"` |
-| `candidates_visible` | bool | Jev only. Share all candidates in state when `true` (default); isolate each candidate in its own Noul question when `false`. Choice requires `true`. |
+| `candidates_visible` | bool | Jev Noul only. Default: `false`, isolating each candidate in its own question. Explicit `true` shares candidates in state. Choice ignores this option. |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
 | `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |

@@ -6,6 +6,7 @@ import { TraexAgent } from './traex.mjs';
 import { ClaudeAgent } from './claude.mjs';
 import { VolcAgent } from './volc.mjs';
 import { PiAgent } from './pi.mjs';
+import { DurableAgent } from './durable.mjs';
 import { OpencodeAgent } from './opencode.mjs';
 import { RUNTIME_IDS, getRuntimeDefinition } from './runtime-catalog.mjs';
 
@@ -19,6 +20,7 @@ export function createRuntimeFactories(config, store, logger, overrides = {}) {
     claude: ClaudeAgent,
     volc: VolcAgent,
     pi: PiAgent,
+    durable: DurableAgent,
     opencode: OpencodeAgent,
   };
   return Object.fromEntries(definitions.map((definition) => {

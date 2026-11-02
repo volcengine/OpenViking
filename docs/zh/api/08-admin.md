@@ -67,7 +67,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除组及其全部成员关系，允许组内仍有成员 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 幂等添加成员；重复调用返回 `added=true` |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 按 JSON 请求体 `{"user_ids": [...]}`（1–1000 个已有用户）原子地添加成员；已是成员的用户会跳过，结果为 `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
 
 ```bash

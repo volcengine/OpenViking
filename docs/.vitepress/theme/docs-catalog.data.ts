@@ -1,6 +1,7 @@
 import path from 'node:path'
 import type { DefaultTheme } from 'vitepress'
 import { documentationSections } from '../docs-navigation.ts'
+import { sectionForPage } from './docs-sections.ts'
 
 type CatalogPage = { title: string; href: string; file: string; group: string }
 
@@ -22,6 +23,7 @@ export default {
     return Object.fromEntries(['en', 'zh'].map((locale: 'en' | 'zh') => [locale,
       documentationSections(locale).map(section => {
         const pages = collectPages(section.items || [])
+          .filter(page => sectionForPage(`${page.href.slice(1)}.md`)?.id === section.id)
         const { items, text, groups, nextSteps, ...metadata } = section
         return { ...metadata, pages }
       })

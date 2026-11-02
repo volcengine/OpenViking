@@ -20,6 +20,8 @@ const baseConfig = {
   databasePath: '/tmp/vika-test.sqlite3',
   profile: 'test-profile',
   connectors: ['lark'],
+  larkCliBin: '/fake/lark-cli',
+  slackCliBin: '/fake-slack/slack',
   actionSocketPath: '/tmp/vika-opencode-data/actions.sock',
   actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
   sendTimeoutMs: 5_000,
@@ -206,6 +208,7 @@ describe('OpencodeAgent ACP backend', () => {
     assert.deepEqual(call.args, ['acp', '--cwd', '/tmp/vika-workspace']);
     const env = call.options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
+    assert.ok(env.PATH.startsWith('/fake:/fake-slack:'));
     assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/vika-opencode-data/actions.sock');
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, 'oc-token');
     const configPath = env.OPENCODE_CONFIG;

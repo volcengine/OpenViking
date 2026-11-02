@@ -1287,6 +1287,7 @@ test('connecting a picked app: another instance on it is a warning, what it lack
   assert.match(output, /实例 Other（other）也在用应用 cli_old：同时运行时，每条消息只会随机推给其中一个实例。/);
   assert.match(output, /应用有一个新版本在等管理员审核：下面缺的可能就在里面，审核通过后生效。\n.*有 \d+ 个权限没开通/);
   assert.match(output, /没有订阅接收消息事件（im\.message\.receive_v1）：机器人收不到消息/);
+  assert.match(output, /没有订阅文档评论事件（drive\.notice\.comment_add_v1）：在飞书文档的评论里 @ 机器人，它收不到/);
   assert.match(output, /卡片回调（card\.action\.trigger）没有用长连接订阅/);
   assert.match(output, /之后运行 vika setup 可以扫码补齐/);
   assert.doesNotMatch(output, /事件走长连接还是 webhook 读不到/, 'a scanned app had its events set by the platform');
@@ -1549,15 +1550,15 @@ test('an instance whose Feishu app lacks what this release needs says so; its �
   //                   change asd  feishu app  add what is missing  save
   const h = harness(t, ['2',        '6',        '1',                 '11']);
   const before = existing(h, {});
-  const needs = (agent) => ({ agent, count: 2, missing: { scopes: { tenant: ['im:message'], user: [] }, events: ['im.message.receive_v1'], callbacks: [] }, login: [] });
+  const needs = (agent) => ({ agent, count: 3, missing: { scopes: { tenant: ['im:message'], user: [] }, events: ['im.message.receive_v1', 'drive.notice.comment_add_v1'], callbacks: [] }, login: [] });
   h.options.detect.larkApps = async ({ manifest }) => [needs(manifest.agents[0])];
   h.options.connect.larkApp = async ({ agent }) => { h.calls.push(['larkApp', agent.id]); return true; };
   assert.equal(await setupCommand(h.options), 0);
   const text = h.written();
-  assert.match(text, /1\) 新建一个实例\n  2\) 修改 ASD（asd）\s+飞书 · 飞书应用缺 2 项\n/);
-  assert.match(text, /6\) 飞书应用\s+现在的应用（缺 2 项：1 个权限、接收消息事件）\n/);
-  assert.match(text, /1\) 扫码补齐缺的 2 项\s+1 个权限、接收消息事件；保存时扫码，你要是这个应用的所有者或管理员\n  2\) 不换，用现在的应用/);
-  assert.match(text, /6\) 飞书应用\s+现在的应用，保存时扫码补齐缺的 2 项（已改）/);
+  assert.match(text, /1\) 新建一个实例\n  2\) 修改 ASD（asd）\s+飞书 · 飞书应用缺 3 项\n/);
+  assert.match(text, /6\) 飞书应用\s+现在的应用（缺 3 项：1 个权限、接收消息事件、文档评论事件）\n/);
+  assert.match(text, /1\) 扫码补齐缺的 3 项\s+1 个权限、接收消息事件、文档评论事件；保存时扫码，你要是这个应用的所有者或管理员\n  2\) 不换，用现在的应用/);
+  assert.match(text, /6\) 飞书应用\s+现在的应用，保存时扫码补齐缺的 3 项（已改）/);
   assert.match(text, /将修改 ASD（asd）：\n  补齐飞书应用缺的权限和事件（需要扫码）\n/);
   assert.deepEqual(h.calls, [['larkApp', 'asd'], ['restart', 'asd']], 'completed before the instance restarts');
   assert.deepEqual(h.manifest().agents, [before], 'the manifest is as it was');
@@ -1574,7 +1575,11 @@ test('what an instance lacks: the app\'s scopes, events and callback, and scopes
           scopes: [...tenant.map((scope) => ({ scope, token_types: ['tenant'] })), ...scopes.user.map((scope) => ({ scope, token_types: ['user'] }))],
           callback_info: { callback_type: 'websocket', subscribed_callbacks: ['card.action.trigger'] } } } };
       }
-      if (pathname.includes('/app_versions/')) return { code: 0, data: { app_version: { event_infos: [{ event_type: 'im.message.receive_v1' }] } } };
+      if (pathname.includes('/app_versions/')) {
+        return { code: 0, data: { app_version: { event_infos: [
+          { event_type: 'im.message.receive_v1' }, { event_type: 'drive.notice.comment_add_v1' },
+        ] } } };
+      }
       return { code: 0, data: { activate_status: 2 } };
     },
     async userScopes() { return login; },

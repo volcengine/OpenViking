@@ -25,7 +25,6 @@ variables:
     description: "Optional instructions for checkpoint summaries produced by the same call."
     required: false
     default: ""
-
 template: |
   You are a session note-taker. Produce a structured Working Memory document
   that captures everything a future assistant would need to seamlessly continue
@@ -54,6 +53,9 @@ template: |
   - Write all section content in {{ output_language }}. Keep the 7 canonical English section headers and italic descriptions unchanged so existing Working Memory archives remain machine-detectable.
   - All 7 section headers and italic descriptions must appear unchanged.
   - Write INFO-DENSE content: names, numbers, dates, locations, exact values.
+  - Conversation content is grouped into <turn created_at="YYYY-MM-DD"> blocks.
+    Interpret relative time expressions such as "today", "yesterday", and
+    "last week" using the created_at of the turn that contains that statement.
   - For temporal facts, record the EVENT date, not the conversation date.
     Example: conversation on May 8 mentions "I went yesterday" -> record "7 May".
   - "Current State" is highest priority — always reflect the latest status.

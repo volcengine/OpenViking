@@ -285,6 +285,12 @@ type BatchWriteOptions struct {
 	Extra          map[string]any
 }
 
+// EnsureDirectoryIndexOptions controls readiness waiting.
+type EnsureDirectoryIndexOptions struct {
+	Wait      *bool // Nil waits for indexes to become readable.
+	Telemetry any
+}
+
 // SetTagsOptions controls SetTags.
 type SetTagsOptions struct {
 	Mode      string

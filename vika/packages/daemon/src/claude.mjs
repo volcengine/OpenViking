@@ -10,6 +10,7 @@ import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
+import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds } from './runtime-input.mjs';
@@ -35,8 +36,8 @@ function appendBounded(current, chunk, label) {
   return next;
 }
 
-export function sanitizeClaudeEnv(environment, profile = '', actions = null) {
-  return sanitizeAgentChildEnv(environment, { profile, stripClaudeCode: true, actions });
+export function sanitizeClaudeEnv(environment, profile = '', actions = null, config = {}) {
+  return sanitizeAgentChildEnv(environment, { profile, stripClaudeCode: true, actions, cliBins: agentCliCommands(config).map(({ bin }) => bin) });
 }
 
 // Persistent Anthropic stream-json adapter, adapted from zouk-daemon v0.6.0's
@@ -213,7 +214,7 @@ export class ClaudeAgent {
       try {
         child = this._spawn(this.config.claudeBin, args, {
           cwd: this.config.workspace,
-          env: sanitizeClaudeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken)),
+          env: sanitizeClaudeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
           detached: process.platform !== 'win32',
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -308,7 +309,7 @@ export class ClaudeAgent {
       try {
         child = this._spawn(this.config.claudeBin, args, {
           cwd: this.config.workspace,
-          env: sanitizeClaudeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken)),
+          env: sanitizeClaudeEnv(process.env, this.config.profile, agentToolEnv(this.config, this.authorityToken), this.config),
           shell: false,
           detached: process.platform !== 'win32',
           stdio: ['pipe', 'pipe', 'pipe'],

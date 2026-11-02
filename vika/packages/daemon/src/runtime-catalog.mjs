@@ -110,6 +110,25 @@ export const RUNTIME_CATALOG = Object.freeze({
       agentTools: 'core',
     },
   }),
+  // Durable agent harness on @earendil-works/pi-durable. A host child process
+  // owns one SQLite storage; sessions are durable conversations and the host
+  // resumes a run the previous daemon generation left unfinished.
+  durable: runtimeDefinition({
+    id: 'durable',
+    aliases: ['durable', 'pi-durable', 'pidurable'],
+    directAliases: ['durable', 'pi-durable', 'pidurable'],
+    canonicalDefault: 'durable',
+    efforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    capabilities: {
+      modelCatalog: 'dynamic',
+      effortControl: 'selectable',
+      activeInput: 'steer',
+      scopePolicy: 'any',
+      outputOwnership: 'runtime',
+      sessionAuthority: 'preserve-process',
+      agentTools: 'core',
+    },
+  }),
   opencode: runtimeDefinition({
     id: 'opencode',
     aliases: ['opencode'],

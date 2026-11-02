@@ -39,6 +39,8 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'VIKA_CLAUDE_MODEL',
   'VIKA_PI_EFFORT',
   'VIKA_PI_MODEL',
+  'VIKA_DURABLE_EFFORT',
+  'VIKA_DURABLE_MODEL',
   'VIKA_OPENCODE_MODEL',
   'VIKA_VOLC_SESSION_ID',
   'VIKA_VOLC_ENVIRONMENT_ID',
@@ -52,6 +54,18 @@ const DAEMON_ENV_FIELDS = Object.freeze([
 // processes, but are deliberately excluded from the deployment manifest.
 const DAEMON_SECRET_ENV_FIELDS = Object.freeze([
   'ARK_API_KEY',
+  // Providers of the durable runtime (pi-ai) read their key from the child
+  // environment. They may come from the operator environment or ~/.vika/secrets
+  // but never from the deployment manifest.
+  'ANTHROPIC_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_GENERATIVE_AI_API_KEY',
+  'GROQ_API_KEY',
+  'MISTRAL_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'XAI_API_KEY',
 ]);
 const DAEMON_PROCESS_ENV_FIELDS = Object.freeze([
   ...DAEMON_ENV_FIELDS,
