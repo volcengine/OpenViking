@@ -308,6 +308,7 @@ export class PersonalAgentDaemon {
         repository: this.timers,
         submitEvent: (event) => this.harness.handleConnectorEvent(event),
         logger: this.logger.child({ component: 'timer' }),
+        occurrenceCheckDelayMs: this.config.timerOccurrenceCheckDelayMs,
       });
       void this.meeting.start().catch((error) => {
         this.logger.warn('meeting_plugin_start_failed', { error: safeError(error) });
