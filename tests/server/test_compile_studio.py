@@ -810,6 +810,34 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
 
 
 @pytest.mark.asyncio
+async def test_nested_targets_advance_all_graph_heads_but_version_the_nearest(service):
+    ctx = RequestContext(user=service.user, role=Role.ADMIN)
+    store = service.compile.lifecycle.store
+    parent = "viking://resources/nested-graph"
+    child = f"{parent}/sub"
+    uri = f"{child}/page.md"
+    for target, head in ((parent, "parent-head"), (child, "child-head")):
+        async with store.edit(ctx.account_id, target, create=True) as record:
+            record["initialized"] = True
+            record["wiki_head"] = head
+
+    await service.fs.write(uri, "new page", ctx=ctx, mode="create")
+
+    parent_record = await store.get(ctx.account_id, parent)
+    child_record = await store.get(ctx.account_id, child)
+    assert parent_record["wiki_head"] == child_record["wiki_head"]
+    assert parent_record["wiki_head"] not in {"parent-head", "child-head"}
+    assert await store.get_version_index(ctx.account_id, child, uri) is not None
+    assert await store.get_version_index(ctx.account_id, parent, uri) is None
+
+    await service.compile.lifecycle._advance_wiki_heads(
+        ctx.account_id, child, "compile-finish-head"
+    )
+    assert (await store.get(ctx.account_id, parent))["wiki_head"] == "compile-finish-head"
+    assert (await store.get(ctx.account_id, child))["wiki_head"] == "compile-finish-head"
+
+
+@pytest.mark.asyncio
 async def test_schedule_retries_initial_failure_and_disables_deleted_targets(service, monkeypatch):
     """Initial failure remains retryable; invalid credentials and deletion disable scheduling."""
     from datetime import datetime, timedelta

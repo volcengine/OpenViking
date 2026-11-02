@@ -1459,7 +1459,7 @@ class CompileLifecycle:
                                 await self.versions.record_compile(
                                     account_id, record, run, head, changes, ctx
                                 )
-                                await self._set_wiki_head(account_id, target_to, head)
+                                await self._advance_wiki_heads(account_id, target_to, head)
                                 await self._build_artifact_graph(record, ctx, head)
                                 if (
                                     any(is_versioned(change["uri"]) for change in changes)
@@ -1715,7 +1715,7 @@ class CompileLifecycle:
                 run_meta["rollback_skipped"] = sorted(skipped)  # Paths retained by ACL.
                 run_meta["rollback_complete"] = not skipped  # False for partial rollback.
                 await self._store.put_operation(ctx.account_id, to, run)
-                await self._set_wiki_head(ctx.account_id, to, rollback_head)
+                await self._advance_wiki_heads(ctx.account_id, to, rollback_head)
                 record = await self._store.get(ctx.account_id, to)
                 if record is not None:
                     await self._build_artifact_graph(record, ctx, rollback_head)
@@ -1747,6 +1747,12 @@ class CompileLifecycle:
     async def _set_wiki_head(self, account_id: str, to: str, head: str) -> None:
         async with self._store.edit(account_id, to) as record:
             record["wiki_head"] = head
+
+    async def _advance_wiki_heads(self, account_id: str, to: str, head: str) -> None:
+        """Advance the target and invalidate non-running ancestor graphs."""
+        for record in await self.versions.containing_targets(account_id, to):
+            if record["to"] == to or not await self.versions._running(account_id, record):
+                await self._set_wiki_head(account_id, record["to"], head)
 
     async def _build_artifact_graph(
         self, record: Dict[str, Any], ctx: RequestContext, head: str
@@ -1935,13 +1941,13 @@ class CompileVersions:
 
     # ---------- target resolution ----------
 
-    async def owning_target(
+    async def containing_targets(
         self, account_id: str, uri: str, *, metadata_lease: Any = None
-    ) -> Optional[Dict[str, Any]]:
-        """Find an active target by URI ancestry; return None when none contains ``uri``."""
+    ) -> List[Dict[str, Any]]:
+        """Return active targets containing ``uri``, ordered nearest first."""
         # Mutation hooks strip trailing slashes from the root URI.
         if not uri.startswith("viking://"):
-            return None
+            return []
         classification = classify_uri(uri)
         content_index = classification.content_index
         # System assets and rule memories are outside Compile target ownership.
@@ -1949,14 +1955,22 @@ class CompileVersions:
             content_index is not None
             and classification.parts[content_index : content_index + 2] == ("memories", "rules")
         ):
-            return None
+            return []
+        records = []
         candidate: Optional[VikingURI] = VikingURI(uri)
         while candidate is not None and candidate.scope:
             record = await self._store.get_by_to(account_id, str(candidate))
             if record is not None:
-                return record
+                records.append(record)
             candidate = candidate.parent
-        return None
+        return records
+
+    async def owning_target(
+        self, account_id: str, uri: str, *, metadata_lease: Any = None
+    ) -> Optional[Dict[str, Any]]:
+        """Find the nearest active target containing ``uri``."""
+        targets = await self.containing_targets(account_id, uri, metadata_lease=metadata_lease)
+        return targets[0] if targets else None
 
     async def record_operation(
         self,
@@ -2441,11 +2455,14 @@ class CompileVersions:
         """
         grouped: Dict[str, List[str]] = {}
         records = {}
+        containing = {}
         previous = {}
         for uri in uris:
-            record = await self.owning_target(ctx.account_id, uri)
+            targets = await self.containing_targets(ctx.account_id, uri)
+            record = targets[0] if targets else None
             if record is None or not is_versioned(uri):
                 continue
+            containing[uri] = targets
             grouped.setdefault(record["to"], []).append(uri)
             records[record["to"]] = record
             # Working bytes can differ from the latest version during Compile.
@@ -2516,6 +2533,12 @@ class CompileVersions:
             return written
         if not changed:
             return written
+        affected_targets = {
+            record["to"]
+            for targets in changed.values()
+            for uri in targets
+            for record in containing[uri]
+        }
         snapshot = await self._commit(
             [uri for targets in changed.values() for uri in targets],
             f"{edit_source} edit",
@@ -2545,7 +2568,7 @@ class CompileVersions:
                         },
                     )
         if snapshot:
-            for target_to in changed:
+            for target_to in sorted(affected_targets):
                 record = await self._store.get(ctx.account_id, target_to)
                 if record is not None and not await self._running(ctx.account_id, record):
                     await self._set_wiki_head(ctx.account_id, target_to, snapshot)
@@ -2600,9 +2623,23 @@ class CompileVersions:
             return
         snapshot = result.get("new_commit_oid")
         files = []
+        affected_targets = set()
+        targets_by_path = {}
+        changed_paths = [
+            *result.get("written_paths", []),
+            *result.get("deleted_paths", []),
+        ]
+        for path in dict.fromkeys(changed_paths):
+            uri = self._fs._tree_path_to_uri(path)
+            targets = await self.containing_targets(
+                ctx.account_id, uri, metadata_lease=metadata_lease
+            )
+            targets_by_path[path] = targets
+            affected_targets.update(record["to"] for record in targets)
         for path in result.get("written_paths", []):
             uri = self._fs._tree_path_to_uri(path)
-            record = await self.owning_target(ctx.account_id, uri, metadata_lease=metadata_lease)
+            targets = targets_by_path[path]
+            record = targets[0] if targets else None
             if record is not None and is_versioned(uri):
                 if record["to"] in context["outputs"]:
                     context["outputs"][record["to"]][uri] = {
@@ -2628,7 +2665,7 @@ class CompileVersions:
                 metadata_lease=metadata_lease,
             )
         if snapshot:
-            for target_to in {record["to"] for record, _ in files}:
+            for target_to in sorted(affected_targets):
                 record = await self._store.get(ctx.account_id, target_to)
                 if record is not None and not await self._running(ctx.account_id, record):
                     await self._set_wiki_head(
@@ -2681,16 +2718,16 @@ class CompileVersions:
         message: str,
     ) -> None:
         """Advance graph snapshots for successful directory or transfer changes."""
-        records = {}
+        targets = set()
         for uri in uris:
-            record = await self.owning_target(ctx.account_id, uri)
-            if record is not None and not await self._running(ctx.account_id, record):
-                records[record["to"]] = record
-        if not records:
+            for record in await self.containing_targets(ctx.account_id, uri):
+                if not await self._running(ctx.account_id, record):
+                    targets.add(record["to"])
+        if not targets:
             return
         snapshot = await self._commit(uris, message, ctx, lease_ref=lease_ref)
         if snapshot:
-            for target_to in records:
+            for target_to in sorted(targets):
                 await self._set_wiki_head(ctx.account_id, target_to, snapshot)
 
     async def _set_wiki_head(

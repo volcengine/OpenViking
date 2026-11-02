@@ -663,6 +663,47 @@ async def test_restore_without_project_dir_restores_full_account_tree(
     assert missing_resp.status_code == 404
 
 
+async def test_delete_only_restore_advances_compile_graph_head(
+    client_with_resource_and_blob, service
+):
+    client, _c1_oid, _blob_uri, _v1_bytes = client_with_resource_and_blob
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    target = "viking://resources/delete_only_restore"
+    kept_uri = f"{target}/a.md"
+    deleted_uri = f"{target}/b.md"
+    store = service.compile.lifecycle.store
+    async with store.edit(ctx.account_id, target, create=True) as record:
+        record["initialized"] = True
+
+    await service.viking_fs.write_file(kept_uri, b"keep me", ctx=ctx)
+    baseline_resp = await client.post(
+        "/api/v1/snapshot/commit", json={"message": "delete-only restore baseline"}
+    )
+    assert baseline_resp.status_code == 200, baseline_resp.text
+    baseline_oid = baseline_resp.json()["result"]["commit_oid"]
+    async with store.edit(ctx.account_id, target) as record:
+        record["wiki_head"] = baseline_oid
+
+    await service.viking_fs.write_file(deleted_uri, b"delete me", ctx=ctx)
+    c2_resp = await client.post(
+        "/api/v1/snapshot/commit", json={"message": "delete-only restore setup"}
+    )
+    assert c2_resp.status_code == 200, c2_resp.text
+    c2_oid = c2_resp.json()["result"]["commit_oid"]
+    async with store.edit(ctx.account_id, target) as record:
+        record["wiki_head"] = c2_oid
+
+    restore_resp = await client.post(
+        "/api/v1/snapshot/restore",
+        json={"project_dir": target, "source_commit": baseline_oid},
+    )
+    assert restore_resp.status_code == 200, restore_resp.text
+    result = restore_resp.json()["result"]
+    assert result["written_paths"] == []
+    assert deleted_uri.removeprefix("viking://") in result["deleted_paths"]
+    assert (await store.get(ctx.account_id, target))["wiki_head"] == result["new_commit_oid"]
+
+
 async def test_restore_apply_triggers_reindex_hook(
     client_with_resource_and_blob, service, monkeypatch
 ):
