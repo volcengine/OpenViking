@@ -20,12 +20,12 @@ use crate::metrics::{RagfsMetric, RagfsMetricValue};
 use crate::multibackend::catch_up::CatchUpTarget;
 use crate::multibackend::meta::{
     current_required_ctx, DefaultFsContextResolver, FsContextResolver, MetadataStore,
-    MultiWriteWorker,
+    MultiWriteMetricsSnapshot, MultiWriteWorker,
 };
 use crate::multibackend::migration::{FullDataImporter, ProtocolDetector};
 use crate::multibackend::model::{
-    PartitionState, PartitionsManifest, PendingEvent, PendingEventKind, ProtocolState,
-    ProtocolStatus, ProtocolVersion, SegmentEventType, SegmentManifest,
+    PartitionsManifest, PendingEvent, PendingEventKind, ProtocolStatus, ScopeKey, SegmentEventType,
+    SegmentManifest,
 };
 use crate::multibackend::provider::{bootstrap_account, MultiWriteProvider};
 use crate::multibackend::runtime::MultiWriteRuntime;
@@ -47,6 +47,7 @@ pub struct BackendEntry {
 pub(crate) struct Inner {
     primary: BackendEntry,
     runtime: MultiWriteRuntime,
+    metrics: Arc<MultiWriteMetricsSnapshot>,
     ctx_resolver: Arc<dyn FsContextResolver>,
 }
 
@@ -55,7 +56,6 @@ pub(crate) struct Inner {
 pub struct MultiWriteWrappedFS {
     pub(crate) inner: Arc<Inner>,
     metadata_store: Arc<MetadataStore>,
-    metadata_provider: Arc<dyn MultiWriteProvider>,
 }
 
 /// Builder for one V2 multi-write wrapper and its flush runtime.
@@ -143,6 +143,7 @@ impl MultiWriteWrappedFSBuilder {
             .iter()
             .map(|entry| entry.name.clone())
             .collect();
+        let metrics = Arc::new(MultiWriteMetricsSnapshot::default());
         let catch_up_targets = self
             .backup_entries
             .iter()
@@ -154,6 +155,7 @@ impl MultiWriteWrappedFSBuilder {
         let protocol = ProtocolDetector::new(metadata_store.clone())
             .detect()
             .await?;
+        metrics.set_protocol_status(protocol.status);
         let configured_backups = backup_names.iter().collect::<BTreeSet<_>>();
         for account in metadata_store.initialized_accounts().await? {
             let path = metadata_store.paths().account_manifest(&account)?.0;
@@ -169,6 +171,12 @@ impl MultiWriteWrappedFSBuilder {
                     .0;
                 let segments: SegmentManifest = metadata_store.read_json(&path).await?;
                 segments.validate()?;
+                let scope = ScopeKey {
+                    account_id: account.clone(),
+                    partition_id,
+                    epoch: manifest.epoch,
+                };
+                metrics.replace_scope(&scope, &segments);
                 let persisted = segments.backend_states.keys().collect::<BTreeSet<_>>();
                 if persisted != configured_backups {
                     return Err(Error::not_supported(format!(
@@ -192,6 +200,7 @@ impl MultiWriteWrappedFSBuilder {
             Some(self.primary_backend.clone()),
             catch_up_targets,
             self.checkpoint_interval,
+            metrics.clone(),
         )
         .await;
         let primary = BackendEntry {
@@ -204,13 +213,14 @@ impl MultiWriteWrappedFSBuilder {
             inner: Arc::new(Inner {
                 primary,
                 runtime,
+                metrics: metrics.clone(),
                 ctx_resolver: self.ctx_resolver,
             }),
             metadata_store: metadata_store.clone(),
-            metadata_provider: metadata_provider.clone(),
         };
         if protocol.status != ProtocolStatus::Stable {
             let importer_primary: Arc<dyn FileSystem> = Arc::new(fs.clone());
+            let import_metrics = metrics.clone();
             let importer = FullDataImporter::new(
                 importer_primary,
                 metadata_store,
@@ -223,6 +233,8 @@ impl MultiWriteWrappedFSBuilder {
                 let result = importer.run().await;
                 if let Err(error) = &result {
                     tracing::error!(error = %error, "multi-write full-data import failed");
+                } else {
+                    import_metrics.set_protocol_status(ProtocolStatus::Stable);
                 }
                 result
             });
@@ -268,33 +280,14 @@ impl MultiWriteWrappedFS {
         usize::from(self.inner.runtime.is_running())
     }
 
-    /// Read and validate one complete V2 multi-write metrics snapshot.
+    /// Return one V2 multi-write metrics snapshot without filesystem scans.
     pub(crate) async fn metrics(&self) -> Result<Vec<RagfsMetric>> {
-        let protocol_path = self.metadata_store.paths().mount_protocol().0;
-        let protocol: ProtocolState = self.metadata_store.read_json(&protocol_path).await?;
-        protocol.validate()?;
-        let mut lag = BTreeMap::<(String, u32), u64>::new();
-        for account in self.metadata_store.initialized_accounts().await? {
-            let path = self.metadata_store.paths().account_manifest(&account)?.0;
-            let manifest: PartitionsManifest = self.metadata_store.read_json(&path).await?;
-            manifest.validate()?;
-            for (&partition_id, entry) in &manifest.partitions {
-                if entry.state != PartitionState::Stable {
-                    continue;
-                }
-                let scope = crate::multibackend::model::ScopeKey {
-                    account_id: account.clone(),
-                    partition_id,
-                    epoch: manifest.epoch,
-                };
-                let segments = self.metadata_provider.read_manifest(&scope).await?;
-                segments.validate()?;
-                let tail = segments.next_seq - 1;
-                for (backend, state) in segments.backend_states {
-                    *lag.entry((backend, partition_id)).or_default() += tail - state.synced_seq;
-                }
-            }
-        }
+        let protocol_status = self
+            .inner
+            .metrics
+            .protocol_status()
+            .unwrap_or(ProtocolStatus::Migrating);
+        let lag = self.inner.metrics.backend_lag();
         let mut metrics = vec![
             RagfsMetric {
                 name: "ragfs_multiwrite_background_tasks".into(),
@@ -323,18 +316,16 @@ impl MultiWriteWrappedFS {
         metrics.push(RagfsMetric {
             name: "ragfs_multiwrite_protocol_version".into(),
             labels: BTreeMap::from([("version".into(), "v2".into())]),
-            value: RagfsMetricValue::Gauge(u64::from(
-                protocol.protocol_version == ProtocolVersion::V2,
-            ) as f64),
+            value: RagfsMetricValue::Gauge(1.0),
         });
         for (status, value) in [
             (
                 "migrating",
-                u64::from(protocol.status == ProtocolStatus::Migrating),
+                u64::from(protocol_status == ProtocolStatus::Migrating),
             ),
             (
                 "stable",
-                u64::from(protocol.status == ProtocolStatus::Stable),
+                u64::from(protocol_status == ProtocolStatus::Stable),
             ),
         ] {
             metrics.push(RagfsMetric {

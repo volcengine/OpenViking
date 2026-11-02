@@ -44,6 +44,7 @@ from vikingbot.config.schema import (
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.observability.outcome import evaluate_response_outcome, should_update_outcome
 from vikingbot.session.manager import SessionManager
+from vikingbot.utils.helpers import cal_str_tokens
 
 DEFAULT_OPENVIKING_AGENT_ID = "web-playground"
 OPENVIKING_AUTH_TIMEOUT_SECONDS = 5.0
@@ -519,7 +520,13 @@ class OpenAPIChannel(BaseChannel):
             )
             # Get messages from session manager if available
             messages = session_data.get("messages", [])
-            return SessionDetailResponse(session=info, messages=messages)
+            return SessionDetailResponse(
+                session=info,
+                messages=messages,
+                estimated_tokens=sum(
+                    cal_str_tokens(str(message.get("content") or "")) for message in messages
+                ),
+            )
 
         @router.delete("/sessions/{session_id}")
         async def delete_session(
@@ -933,8 +940,7 @@ class OpenAPIChannel(BaseChannel):
                     raise HTTPException(
                         status_code=401,
                         detail=(
-                            "OpenViking credentials did not resolve to a usable "
-                            "User/Admin identity"
+                            "OpenViking credentials did not resolve to a usable User/Admin identity"
                         ),
                     )
                 api_key_type = "user"
