@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 
 const TIMER_ID_PREFIX = 'tm_';
 export const DEFAULT_OCCURRENCE_CHECK_DELAY_MS = 5 * 60 * 1000;
+const MAX_OCCURRENCE_CHECK_ATTEMPTS = 5;
 
 function number(value) {
   return typeof value === 'bigint' ? Number(value) : value;
@@ -260,7 +261,7 @@ export class TimerRepository {
     this.deleteTimer = this.db.prepare('DELETE FROM timers WHERE timer_id = ?');
     this.deletePendingOccurrenceChecksForTimer = this.db.prepare(`
       DELETE FROM timer_occurrence_checks
-      WHERE status = 'pending'
+      WHERE status IN ('pending', 'exhausted')
         AND json_extract(event_json, '$.data.timer.id') = ?
     `);
     this.advanceTimer = this.db.prepare(`
@@ -277,10 +278,11 @@ export class TimerRepository {
       SELECT * FROM timer_occurrence_checks WHERE occurrence_id = ?
     `);
     this.nextOccurrenceCheckStatement = this.db.prepare(`
-      SELECT * FROM timer_occurrence_checks ORDER BY next_check_at_ms LIMIT 1
+      SELECT * FROM timer_occurrence_checks WHERE status != 'exhausted'
+      ORDER BY next_check_at_ms LIMIT 1
     `);
     this.nextDueOccurrenceCheckStatement = this.db.prepare(`
-      SELECT * FROM timer_occurrence_checks WHERE next_check_at_ms <= ?
+      SELECT * FROM timer_occurrence_checks WHERE status != 'exhausted' AND next_check_at_ms <= ?
       ORDER BY next_check_at_ms LIMIT 1
     `);
     this.markOccurrenceCompletedStatement = this.db.prepare(`
@@ -291,7 +293,9 @@ export class TimerRepository {
     `);
     this.rescheduleOccurrenceCheckStatement = this.db.prepare(`
       UPDATE timer_occurrence_checks
-      SET status = 'pending', attempt = ?, next_check_at_ms = ?
+      SET status = CASE WHEN status = 'completed' THEN status
+        WHEN ? >= ${MAX_OCCURRENCE_CHECK_ATTEMPTS} THEN 'exhausted' ELSE 'pending' END,
+        attempt = ?, next_check_at_ms = ?
       WHERE occurrence_id = ?
     `);
   }
@@ -402,7 +406,7 @@ export class TimerRepository {
   }
 
   rescheduleOccurrenceCheck(occurrenceId, { attempt, nextCheckAtMs }) {
-    this.rescheduleOccurrenceCheckStatement.run(attempt, nextCheckAtMs, occurrenceId);
+    this.rescheduleOccurrenceCheckStatement.run(attempt, attempt, nextCheckAtMs, occurrenceId);
     return this.getOccurrenceCheck(occurrenceId);
   }
 }
@@ -572,6 +576,12 @@ export class TimerConnector {
       this.repository.deleteOccurrenceCheck(check.occurrenceId);
       return true;
     }
+    if (check.attempt >= MAX_OCCURRENCE_CHECK_ATTEMPTS) {
+      this.repository.rescheduleOccurrenceCheck(check.occurrenceId, {
+        attempt: check.attempt, nextCheckAtMs: nowMs,
+      });
+      return true;
+    }
     const event = eventForOccurrenceCheck(check, nowMs);
     const attempt = check.attempt + 1;
     try {
@@ -586,6 +596,9 @@ export class TimerConnector {
         attempt,
         nextCheckAtMs: nowMs + this.occurrenceCheckDelayMs,
       });
+      if (attempt >= MAX_OCCURRENCE_CHECK_ATTEMPTS) {
+        this.logger?.warn?.('timer_occurrence_checks_exhausted', { occurrenceId: check.occurrenceId, attempt });
+      }
     }
     return true;
   }

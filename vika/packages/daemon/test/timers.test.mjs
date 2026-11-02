@@ -255,6 +255,40 @@ describe('timer MCP tools', () => {
     assert.equal(check.nextCheckAtMs, 1_790_000_600_000);
   });
 
+  for (const submitFails of [false, true]) {
+    it(`stops after five completion checks${submitFails ? ' even when submission fails' : ''}`, async (t) => {
+      let nowMs = 1_790_000_000_000;
+      const { repository, call } = setup(t);
+      let submitted = 0;
+      const occurrenceId = 'tm_limit:1790000000000';
+      repository.createOccurrenceCheck({
+        occurrenceId, eventId: `timer:${occurrenceId}`, nextCheckAtMs: nowMs,
+        event: {
+          id: `timer:${occurrenceId}`, content: { text: 'report' },
+          data: { timer: { id: 'tm_limit', occurrence_id: occurrenceId } },
+        },
+      });
+      const connector = new TimerConnector({
+        repository, now: () => nowMs, logger, autoStart: false,
+        submitEvent: () => {
+          submitted += 1;
+          if (submitFails) throw new Error('submission failed');
+        },
+      });
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        assert.equal(await connector.fireDueOnce(), true);
+        nowMs += 300_000;
+      }
+      assert.equal(submitted, 5);
+      assert.equal(repository.getOccurrenceCheck(occurrenceId).attempt, 5);
+      assert.equal(repository.getOccurrenceCheck(occurrenceId).status, 'exhausted');
+      assert.equal(repository.nextWakeAtMs(), null);
+      assert.equal(await connector.fireDueOnce(), false);
+      assert.equal((await call('cancel_timer', { timer_id: 'tm_limit' })).data.cancelled, true);
+      assert.equal(repository.getOccurrenceCheck(occurrenceId), null);
+    });
+  }
+
   it('does not resend pending occurrence checks after the timer is cancelled', async (t) => {
     let nowMs = 1_790_000_000_000;
     const { call, repository } = setup(t, { now: () => nowMs });
