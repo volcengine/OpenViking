@@ -571,6 +571,19 @@ async def test_file_user_deletion_fence_survives_concurrent_role_update():
     assert (await store.get_deletion("acme", "bob"))["task_id"] == "delete"
 
 
+async def test_file_store_keeps_global_role_immutable():
+    """GLOBAL is creation-only: it can be neither a role-change source nor target."""
+    store = _file_store()
+    await store.load()
+    await store.create_account_with_api_key("acme", "alice", "alice-key")
+    await store.create_user("acme", "agent", "global")
+
+    with pytest.raises(InvalidArgumentError, match="GLOBAL identities cannot change roles"):
+        await store.set_role("acme", "agent", "user")
+    with pytest.raises(InvalidArgumentError, match="user or admin"):
+        await store.set_role("acme", "alice", "global")
+
+
 async def test_group_deletion_preserves_users_and_persists_membership_removal():
     fs = SimpleNamespace(agfs=InMemoryAGFS())
     manager = build_api_key_manager("root", fs)

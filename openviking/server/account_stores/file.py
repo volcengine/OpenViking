@@ -30,6 +30,7 @@ from openviking.server.account_stores.models import (
 from openviking.server.api_keys.models import (
     AccountInfo,
     UserKeyEntry,
+    validate_account_user_creation_role,
     validate_account_user_role,
 )
 from openviking.server.identity import Role
@@ -515,7 +516,7 @@ class FileStore(AccountStore):
         api_key: str | None = None,
     ) -> None:
         """Create a user, optionally including its initial API key."""
-        resolved_role = validate_account_user_role(role)
+        resolved_role = validate_account_user_creation_role(role)
         if error := validate_user_id(user_id):
             raise InvalidArgumentError(error)
         if error := validate_identifier_length(user_id, "user_id"):
@@ -921,6 +922,10 @@ class FileStore(AccountStore):
             raise NotFoundError(user_id, "user")
         if account.users[user_id].get("deletion"):
             raise FailedPreconditionError("User deletion is in progress")
+        if account.users[user_id].get("role") == Role.GLOBAL:
+            raise InvalidArgumentError(
+                "GLOBAL identities cannot change roles; delete and recreate instead."
+            )
 
         account.users[user_id]["role"] = resolved_role
 

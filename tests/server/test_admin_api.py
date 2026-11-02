@@ -2908,6 +2908,99 @@ async def test_admin_cannot_register_user_in_other_account(admin_client: httpx.A
     assert resp.status_code == 403
 
 
+async def test_global_identity_is_created_and_managed_by_root_only(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app,
+):
+    """GLOBAL is created and maintained by ROOT; others only observe existence."""
+    manager = lightweight_admin_app.state.api_key_manager
+    acct = _uid()
+    alice_key = await manager.create_account(acct, "alice")
+
+    created = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "agent", "role": "global"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200, created.text
+    global_key = created.json()["result"]["user_key"]
+    identity = await manager.resolve_identity(global_key)
+    assert identity.role == Role.GLOBAL
+    assert (identity.account_id, identity.user_id) == (acct, "agent")
+
+    denied = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "agent-2", "role": "global"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert denied.status_code == 403
+
+    listed = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={"X-API-Key": alice_key},
+    )
+    assert listed.status_code == 200
+    row = {user["user_id"]: user for user in listed.json()["result"]}["agent"]
+    assert row["role"] == Role.GLOBAL
+    assert "api_key" not in row and "key_prefix" not in row
+    assert row["api_key_available"] is True
+
+    root_listed = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users", headers=root_headers()
+    )
+    root_row = {user["user_id"]: user for user in root_listed.json()["result"]}["agent"]
+    assert root_row["api_key"] == global_key
+
+    bob_key = await manager.register_user(acct, "bob")
+    user_listed = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users", headers={"X-API-Key": bob_key}
+    )
+    bob_row = {user["user_id"]: user for user in user_listed.json()["result"]}["agent"]
+    assert bob_row == {"user_id": "agent", "role": Role.GLOBAL}
+
+    maintenance = [
+        ("delete", f"/api/v1/admin/accounts/{acct}/users/agent", None),
+        ("put", f"/api/v1/admin/accounts/{acct}/users/agent/role", {"role": "user"}),
+        ("post", f"/api/v1/admin/accounts/{acct}/users/agent/key", {}),
+    ]
+    for method, url, payload in maintenance:
+        response = await lightweight_admin_client.request(
+            method, url, json=payload, headers={"X-API-Key": alice_key}
+        )
+        assert response.status_code == 403, response.text
+
+    # ROOT cannot promote or demote a GLOBAL identity either; recreate instead.
+    root_role_change = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/agent/role",
+        json={"role": "user"},
+        headers=root_headers(),
+    )
+    assert root_role_change.status_code == 400
+    assert (await manager.get_user_membership(acct, "agent"))["role"] == Role.GLOBAL
+
+    await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/groups",
+        json={"group_id": "engineering"},
+        headers=root_headers(),
+    )
+    add_member = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/groups/engineering/members",
+        json={"user_ids": ["agent"]},
+        headers={"X-API-Key": alice_key},
+    )
+    assert add_member.status_code == 403
+
+    rotated = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users/agent/key",
+        json={},
+        headers=root_headers(),
+    )
+    assert rotated.status_code == 200
+    rotated_key = rotated.json()["result"]["user_key"]
+    assert rotated_key != global_key
+    assert (await manager.resolve_identity(rotated_key)).role == Role.GLOBAL
+
+
 async def test_list_users(admin_client: httpx.AsyncClient):
     """ROOT can list users in an account."""
     acct = _uid()
