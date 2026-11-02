@@ -28,7 +28,6 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | 销毁/轮换 GLOBAL、变更其用户组 | Y | N | N | N |
 | 将现有角色与 GLOBAL 相互转换 | N | N | N | N |
 | 管理用户组和成员 | Y | Y（本 account） | N | N |
-| 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N | N |
 | 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | Y（自身密钥） | N |
 | 在 USER 与 ADMIN 之间变更用户角色 | Y | Y（本 account） | N | N |
 

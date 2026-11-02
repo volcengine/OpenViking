@@ -28,7 +28,6 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Destroy/rotate GLOBAL or change its group membership | Y | N | N | N |
 | Change an existing role to or from GLOBAL | N | N | N | N |
 | Manage groups and membership | Y | Y (own account) | N | N |
-| List agents (deprecated, returns empty list) | Y | Y (own account) | N | N |
 | Regenerate user key (API Key mode only) | Y | Y (own account) | Y (own key) | N |
 | Change user role between USER and ADMIN | Y | Y (own account) | N | N |
 
