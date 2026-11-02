@@ -52,6 +52,26 @@ PRIMARY_PATH = {
 }
 
 
+class _ClosingStreamingResponse(StreamingResponse):
+    def __init__(self, content, *, close_upstream, cleanup, **kwargs):
+        super().__init__(content, **kwargs)
+        self._close_upstream = close_upstream
+        self._cleanup = cleanup
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            try:
+                self._close_upstream()
+            finally:
+                try:
+                    if close := getattr(self.body_iterator, "aclose", None):
+                        await close()
+                finally:
+                    await self._cleanup()
+
+
 def filtered_headers(headers, request=False):
     blocked = HOP_HEADERS | {
         part.strip().lower() for part in headers.get("connection", "").split(",")
@@ -496,7 +516,10 @@ class ProxyRequest:
                 allow_redirects=False,
             )
 
+        completed = False
+
         async def stream():
+            nonlocal completed
             finished = False
             chunks = heartbeat(loop.run(response, send), HEARTBEAT_SECONDS)
             try:
@@ -507,6 +530,7 @@ class ProxyRequest:
                     await self.relay()
                     yield chunk
                 finished = True
+                completed = True
             except (ToolLoopError, aiohttp.ClientError) as error:
                 self.metrics["degradation"] = "hidden_tool_loop_failed"
                 yield loop.error(str(error))
@@ -516,10 +540,15 @@ class ProxyRequest:
                     capture.complete = False
                 self.metrics.update(prepared.metrics)
 
+        async def cleanup():
+            if not completed:
+                capture.complete = False
+            await self.finish()
+
         if self.body.get("stream"):
             headers["content-type"] = "text/event-stream"
-            return StreamingResponse(
-                stream(), headers=headers, background=BackgroundTask(self.finish)
+            return _ClosingStreamingResponse(
+                stream(), headers=headers, close_upstream=response.close, cleanup=cleanup
             )
         try:
             async for _ in loop.run(response, send):

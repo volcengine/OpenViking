@@ -173,6 +173,7 @@ class TestCommit:
             messages,
             latest_archive_overview="",
             checkpoint_requests=None,
+            **kwargs,
         ):
             del checkpoint_requests
             working_memory_batches.append([message.id for message in messages])
@@ -193,8 +194,7 @@ class TestCommit:
         assert task_result["status"] == "completed"
         phase1 = await wm_session_with_messages._read_phase1_meta(result["archive_uri"])
         assert phase1["queue_message"]["auto_commit_policy"]["message_count_threshold"] == 1
-        assert len(working_memory_batches) == 4
-        assert all(len(batch) == 1 for batch in working_memory_batches)
+        assert len(working_memory_batches) == 1
         assert extract_long_term.await_count == 4
         assert all(len(call.kwargs["messages"]) == 1 for call in extract_long_term.await_args_list)
 

@@ -1299,3 +1299,36 @@ if __name__ == "__main__":
 
         traceback.print_exc()
         sys.exit(1)
+
+
+def _mysql_watch_store_config(watch_params):
+    mysql = {"user": "u", "password": "p", "database": "d"}
+    return {
+        "storage": {
+            "watch_store": {"provider": "mysql", "params": {**mysql, **watch_params}},
+        },
+    }
+
+
+def test_watch_store_defaults_to_file_and_rejects_unknown_providers():
+    assert OpenVikingConfig.from_dict({}).storage.watch_store.provider == "file"
+    with pytest.raises(ValueError, match="'file' or 'mysql'"):
+        OpenVikingConfig.from_dict({"storage": {"watch_store": {"provider": "sqlite"}}})
+
+
+def test_mysql_watch_store_requires_credential_encryption_key():
+    with pytest.raises(ValueError, match="credential_encryption_key"):
+        OpenVikingConfig.from_dict(_mysql_watch_store_config({}))
+    config = OpenVikingConfig.from_dict(
+        _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
+    )
+    assert config.storage.watch_store.provider == "mysql"
+    assert config.storage.task_store.provider == "file"
+    assert config.storage.agfs.pathlock.provider == "filesystem"
+
+
+def test_watch_leader_provider_config():
+    assert OpenVikingConfig.from_dict({}).watch_leader_provider == "auto"
+    assert OpenVikingConfig.from_dict({"watch_leader_provider": "local"}).watch_leader_provider == "local"
+    with pytest.raises(ValueError, match="watch_leader_provider"):
+        OpenVikingConfig.from_dict({"watch_leader_provider": "redis"})

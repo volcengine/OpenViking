@@ -13,9 +13,12 @@ import {
   CompileShell,
   CompileStatus,
 } from '#/features/workbench/compile/components/shared'
+import { CompileSelect } from '#/features/workbench/compile/components/compile-select'
+import { CompileScheduleList } from '#/features/workbench/compile/components/schedule-list'
 import { fetchCompileTasks } from '#/features/workbench/compile/lib/api'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/shared/ui/tabs'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import {
   getRouteApi,
@@ -47,6 +50,52 @@ const STATUSES = [
 ] as const
 
 export function CompileList() {
+  const { t } = useTranslation('compile')
+  const navigate = useNavigate()
+  const search = routeApi.useSearch()
+  const capability = useCompileCapability()
+
+  return (
+    <CompileShell
+      back={false}
+      title={t('title')}
+      actions={
+        <Button onClick={() => void navigate({ to: '/compile/new' })}>
+          <PlusIcon />
+          {t('new')}
+        </Button>
+      }
+    >
+      <CapabilityNotice capability={capability} />
+      <Tabs
+        value={search.tab || 'tasks'}
+        onValueChange={(value) =>
+          void navigate({
+            to: '/compile',
+            search: {
+              ...search,
+              tab: value === 'schedules' ? 'schedules' : undefined,
+            },
+          })
+        }
+        className="gap-6"
+      >
+        <TabsList>
+          <TabsTrigger value="tasks">{t('schedule.tasksTab')}</TabsTrigger>
+          <TabsTrigger value="schedules">{t('schedule.plansTab')}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="tasks" className="flex flex-col gap-6">
+          <CompileTaskList />
+        </TabsContent>
+        <TabsContent value="schedules">
+          <CompileScheduleList />
+        </TabsContent>
+      </Tabs>
+    </CompileShell>
+  )
+}
+
+function CompileTaskList() {
   const { t, i18n } = useTranslation('compile')
   const { identityScopeKey } = useAppConnection()
   const skillName = useCompileSkillName()
@@ -75,7 +124,6 @@ export function CompileList() {
       fetchCompileTasks(search.status, search.q, pageParam, signal),
     getNextPageParam: (page) => page.next_cursor || undefined,
   })
-  const capability = useCompileCapability()
   const latest = useQuery({
     queryKey: ['compile-latest', identityScopeKey, search],
     queryFn: ({ signal }) =>
@@ -98,17 +146,7 @@ export function CompileList() {
     ).values(),
   ]
   return (
-    <CompileShell
-      back={false}
-      title={t('title')}
-      actions={
-        <Button onClick={() => void navigate({ to: '/compile/new' })}>
-          <PlusIcon />
-          {t('new')}
-        </Button>
-      }
-    >
-      <CapabilityNotice capability={capability} />
+    <>
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative w-full sm:max-w-md">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -120,24 +158,24 @@ export function CompileList() {
             className="pl-9"
           />
         </div>
-        <select
-          aria-label={t('status')}
-          className="h-9 rounded-md border bg-background px-3 text-sm"
-          value={search.status}
-          onChange={(e) =>
+        <CompileSelect
+          label={t('status')}
+          className="min-w-36"
+          value={search.status || 'all'}
+          onValueChange={(value) =>
             void navigate({
               to: '/compile',
-              search: { ...search, status: e.target.value },
+              search: { ...search, status: value === 'all' ? '' : value },
             })
           }
-        >
-          <option value="">{t('all')}</option>
-          {STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {t(`statuses.${status}`)}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: 'all', label: t('all') },
+            ...STATUSES.map((status) => ({
+              value: status,
+              label: t(`statuses.${status}`),
+            })),
+          ]}
+        />
         <Button
           variant="outline"
           disabled={query.isFetching}
@@ -306,6 +344,6 @@ export function CompileList() {
           {t(query.isFetchingNextPage ? 'loading' : 'more')}
         </Button>
       )}
-    </CompileShell>
+    </>
   )
 }

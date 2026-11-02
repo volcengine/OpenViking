@@ -807,7 +807,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 
 #### 1. API Implementation Introduction
 
-Get the full contents of one completed archive for a session. A normal WM-disabled archive returns its raw `messages` with empty `abstract` and `overview`; no summary is generated on read. Pending, failed, missing, or corrupt archives retain their existing error behavior. This explicit history read is independent of the bounded `get_session_context()` prompt view.
+Get the full contents of one archive for a session. `status` is `completed`, `failed`, or `pending`. A normal WM-disabled archive returns its raw `messages` with empty `abstract` and `overview`; no summary is generated on read. Failed and pending archives also return their raw `messages` (plus `failure` when a failure marker exists) so they can be inspected before `retry_archive()`. `messages_sha256` is the SHA-256 the server recorded for `messages.jsonl` when the archive was written (computed from the current bytes for older archives); pass it unchanged as `expected_messages_sha256`. A completed archive whose required overview is missing, and missing or corrupt archives, keep their existing error behavior. This explicit history read is independent of the bounded `get_session_context()` prompt view.
 
 **Code Entries:**
 - `openviking/session/session.py:Session.get_session_archive()` - Core implementation
@@ -883,8 +883,10 @@ ov session get-session-archive a1b2c3d4 archive_002
   "status": "ok",
   "result": {
     "archive_id": "archive_002",
+    "status": "completed",
     "abstract": "User discussed deployment and authentication setup.",
     "overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
+    "messages_sha256": "3f9a...",
     "messages": [
       {
         "id": "msg_archive_1",
@@ -1510,6 +1512,69 @@ viking://user/{user_id}/sessions/{session_id}/
     |   +-- .failed.json      # Phase 2 failure marker
     +-- archive_002/
 ```
+
+### retry_archive()
+
+Re-enqueue Phase 2 for one archive that failed, or whose Phase 1 finished but no
+queued or running work owns it. HTTP only. The request must carry the SHA-256 of the
+archive's raw `messages.jsonl` bytes, so an audit cannot be replayed after the archive changes.
+Read it from `get_session_archive()` (`messages_sha256`) and pass it back unchanged; the server
+recomputes the hash and also checks it against the value recorded when the archive was written.
+
+Retry is a manual recovery tool with two known trade-offs:
+
+- Working Memory is not rebuilt for later archives. Retrying `archive_002` after `archive_003`
+  completed does not regenerate `archive_003`'s overview, so the latest summary can still miss
+  `archive_002`'s context.
+- Long-term memory extraction runs the older messages against the *current* memory state, so
+  older facts can overwrite newer ones. Review the archive's `memory_diff.json` afterwards.
+
+The server refuses (`FAILED_PRECONDITION`) completed archives, hash mismatches, cancelled
+failures without `allow_cancelled_failure`, and archives whose `memory_diff.json` exists without
+durable long-term progress. It returns `skipped` while QueueFS or an active worker still owns
+the archive or session. Long-term memory steps already recorded in `completed_memory_steps`
+are not applied twice.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session_id` | string | Yes | - | Session ID |
+| `archive_id` | string | Yes | - | `archive_NNN` |
+| `expected_messages_sha256` | string | Yes | - | `messages_sha256` from `get_session_archive()` |
+| `allow_ownerless_ready` | boolean | No | `false` | Allow a Phase 1 ready archive with no owner |
+| `allow_cancelled_failure` | boolean | No | `false` | Allow an archive whose failure was a cancellation |
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/archives/{archive_id}/retry
+```
+
+```bash
+HASH=$(curl -s http://localhost:1933/api/v1/sessions/session-id/archives/archive_003 \
+  -H "X-API-Key: your-key" | jq -r .result.messages_sha256)
+curl -X POST http://localhost:1933/api/v1/sessions/session-id/archives/archive_003/retry \
+  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
+  -d "{\"expected_messages_sha256\": \"$HASH\"}"
+```
+
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "accepted",
+    "task_id": "0b6c...",
+    "archive_uri": "viking://user/default/sessions/session-id/history/archive_003",
+    "previous_task_id": "9f1e...",
+    "recovery_kind": "failed",
+    "completed_memory_steps": {}
+  }
+}
+```
+
+Track `task_id` with the task API. `status: "skipped"` carries `reason`
+(`already_covered`, `archive_owned`, or `session_busy`).
 
 ### memory_diff.json Structure
 

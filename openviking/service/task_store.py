@@ -36,6 +36,7 @@ from openviking.service.task_domain import (
     finalize_task,
     processing_seconds,
     sanitize_error,
+    serialize_work_errors,
     summarize_works,
 )
 from openviking.service.task_events import append_task_event
@@ -303,7 +304,7 @@ class TaskWorkStore(Protocol):
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
@@ -782,7 +783,7 @@ class PersistentTaskStore(TaskWorkStore):
         state: WorkState,
         *,
         error: Optional[str],
-        errors: Optional[Collection[str]],
+        errors: Optional[Collection[Any]],
         context_count_delta: int,
         account_id: str,
         user_id: str,
@@ -807,7 +808,7 @@ class PersistentTaskStore(TaskWorkStore):
             if error:
                 work.error = sanitize_error(error)
             if state == WorkState.FAILED:
-                details = [sanitize_error(str(value)) for value in errors or () if str(value)]
+                details = serialize_work_errors(errors)
                 work.errors = details or ([work.error] if work.error else [])
             if context_count_delta > 0:
                 work.context_count += context_count_delta

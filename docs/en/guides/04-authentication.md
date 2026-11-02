@@ -624,6 +624,7 @@ Or explicitly:
 | ROOT | Deployment administration | Admin API and selected system operations; a root API key cannot access tenant data in API key mode |
 | ADMIN | Own account | Regular operations + manage users in own account |
 | USER | Own account | Regular operations (ls, read, find, sessions, etc.) |
+| GLOBAL | Own account (agent identity) | Account-scoped data-plane identity created and managed only by ROOT; other roles may observe its existence but cannot manage it |
 
 Regular resource operations in this table are still subject to resource ACLs. Account roles determine identity administration and implicit management of public resources; [Resource Access Control (ACL)](../concepts/15-acl.md) determines `read/write/manage` permissions on individual directories and files.
 
@@ -690,15 +691,19 @@ Then set `server.auth_mode = "custom"` in `ov.conf`.
 
 ### Custom Roles
 
-The built-in `Role` class supports dynamic registration of custom roles with privilege ranks:
+The built-in `Role` class supports dynamic registration of custom roles, with token downgrade checks maintained through an explicit allowlist:
 
 ```python
 from openviking.server.identity import Role
 
-Role.register("operator", rank=1)  # Same rank as ADMIN for downgrade checks
+# This role accepts only tokens authorized as its own role
+Role.register("reviewer")
+
+# Declare a wider allowlist explicitly when the custom role must accept lower roles
+Role.register("operator", allowed_token_roles={Role.ADMIN, Role.USER})
 ```
 
-The rank is used for downgrade checks; it does not inherit ADMIN permissions. `require_role()` and `require_auth_role()` check explicit role names, so a route must list the custom role to accept it.
+A registered role is always allowed to present its own token; `allowed_token_roles` only widens that set. Downgrade checks use the allowlist and no longer compare numeric ranks, so a custom role does not inherit ADMIN permissions. `require_role()` and `require_auth_role()` check explicit role names, so a route must list the custom role to accept it. The `rank` parameter remains only for call compatibility and no longer participates in authorization.
 
 ---
 

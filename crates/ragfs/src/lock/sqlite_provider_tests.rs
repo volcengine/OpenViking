@@ -349,6 +349,7 @@ async fn run_retries_busy_from_clean_transactions_without_duplicate_mutations() 
                     owner_id: "new".into(),
                     time_ns: 2,
                     lock_type: PathLockKind::Tree,
+                    holders: Vec::new(),
                 },
             )?;
             if attempts < SQLITE_BUSY_ATTEMPTS {
@@ -454,7 +455,14 @@ async fn busy_retries_cover_zero_timeout_acquire_refresh_release_and_rollback() 
     );
     assert!(with_transient_writer(
         &mut blocker,
-        locks.refresh_token("/a", &lease.lease.owner_id, u128::MAX),
+        locks.mutate_holder(
+            "/a",
+            &lease.lease.owner_id,
+            &lease.lease.lease_ref,
+            u128::MAX,
+            0,
+            false,
+        ),
     )
     .await
     .unwrap());
@@ -643,12 +651,28 @@ async fn stale_cleanup_is_bounded_and_keeps_this_owners_tokens() {
     acquire(&locks, "/own", PathLockKind::Exact, "new", 1, 0)
         .await
         .unwrap();
-    acquire(&locks, "/new", PathLockKind::Exact, "new", 2, 2)
+    locks
+        .try_acquire_holders_atomic(
+            &[request("/new", PathLockKind::Exact)],
+            "new",
+            "new-holder",
+            2,
+            2,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(locks.scan_descendant_locks("/old").await.unwrap().len(), 44);
     assert!(locks.read_token("/own").await.unwrap().is_some());
-    acquire(&locks, "/new", PathLockKind::Exact, "new", 3, 2)
+    locks
+        .try_acquire_holders_atomic(
+            &[request("/new", PathLockKind::Exact)],
+            "new",
+            "next-holder",
+            3,
+            2,
+            None,
+        )
         .await
         .unwrap();
     assert!(locks
@@ -680,7 +704,14 @@ async fn stale_conflicting_descendants_cannot_be_revived_after_tree_takeover() {
             .await
             .unwrap();
         let result = new
-            .try_acquire_batch_atomic_with_stats(&[request(root, PathLockKind::Tree)], "new", 10, 2)
+            .try_acquire_holders_atomic(
+                &[request(root, PathLockKind::Tree)],
+                "new",
+                "holder",
+                10,
+                2,
+                None,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -735,16 +766,18 @@ async fn stale_target_and_ancestor_trees_are_cleaned_beyond_unrelated_budget() {
         .await
         .unwrap();
     let result = new
-        .try_acquire_batch_atomic_with_stats(
+        .try_acquire_holders_atomic(
             &[request("/a/b/c", PathLockKind::Exact)],
             "new",
+            "holder",
             10,
             2,
+            None,
         )
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(result.stale_tokens_removed, 259);
+    assert_eq!(result.stale_tokens_removed, 260);
     let paths: Vec<_> = conflicting
         .iter()
         .map(|request| request.path.clone())
@@ -758,7 +791,7 @@ async fn stale_target_and_ancestor_trees_are_cleaned_beyond_unrelated_budget() {
         old.scan_descendant_locks("/unrelated").await.unwrap().len(),
         44
     );
-    assert!(old.refresh_token("/a/b", "old", 11).await.unwrap());
+    assert!(!old.refresh_token("/a/b", "old", 11).await.unwrap());
     assert!(other.refresh_token("/", "old", 11).await.unwrap());
 }
 
@@ -800,6 +833,108 @@ async fn failed_batch_restores_stale_conflicts_beyond_cleanup_budget() {
         .await
         .iter()
         .all(|result| matches!(result, Ok(true))));
+}
+
+#[tokio::test]
+async fn handoff_release_preserves_outer_exact_holder() {
+    let dir = TempDir::new().unwrap();
+    let first = PathLockManager::new(
+        Arc::new(MemFileSystem::new()),
+        Arc::new(provider(&dir, "test")),
+        PathLockConfig::default(),
+    );
+    let second = PathLockManager::new(
+        Arc::new(MemFileSystem::new()),
+        Arc::new(provider(&dir, "test")),
+        PathLockConfig::default(),
+    );
+    let outer = first
+        .acquire_exact("/a", Duration::ZERO, None)
+        .await
+        .unwrap();
+    let tree = first
+        .acquire_tree(
+            "/a",
+            Duration::ZERO,
+            Some((&outer.lease.lease_ref, &outer.ownership_ref)),
+        )
+        .await
+        .unwrap();
+    let handoff = first.to_handoff(&tree);
+    first.handoff(&tree).await.unwrap();
+    let worker = second.adopt(&handoff).await.unwrap();
+    second.release(&worker).await.unwrap();
+    assert_eq!(first.refresh(&outer).await.unwrap(), "refreshed");
+    assert!(second
+        .acquire_exact("/a", Duration::ZERO, None)
+        .await
+        .is_err());
+    let child = second
+        .acquire_exact("/a/child", Duration::ZERO, None)
+        .await
+        .unwrap();
+    second.release(&child).await.unwrap();
+    first.release(&outer).await.unwrap();
+}
+
+#[tokio::test]
+async fn expired_tree_cannot_be_refreshed_by_its_exact_sibling() {
+    let dir = TempDir::new().unwrap();
+    let locks = provider(&dir, "expiry");
+    let mut token = LockToken::held("owner", "tree", PathLockKind::Tree, 1);
+    token.add_holder("exact", PathLockKind::Exact, 100, 0, None);
+    locks.try_create_token("/a", &token).await.unwrap();
+    assert!(!locks
+        .mutate_holder("/a", "owner", "tree", 200, 50, false)
+        .await
+        .unwrap());
+    assert!(locks
+        .mutate_holder("/a", "owner", "exact", 200, 50, false)
+        .await
+        .unwrap());
+    acquire(&locks, "/a/child", PathLockKind::Exact, "other", 200, 50)
+        .await
+        .unwrap();
+    assert!(acquire(&locks, "/a", PathLockKind::Exact, "other", 200, 50)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn holder_batch_refresh_preserves_order_and_rejects_other_owners() {
+    let dir = TempDir::new().unwrap();
+    let locks = provider(&dir, "refresh");
+    let paths: Vec<_> = (0..300).map(|i| format!("/batch/{i}")).collect();
+    for path in &paths {
+        locks
+            .try_create_token(
+                path,
+                &LockToken::held("owner", "holder", PathLockKind::Exact, 100),
+            )
+            .await
+            .unwrap();
+    }
+    locks
+        .try_create_token(
+            "/foreign",
+            &LockToken::held("other", "holder", PathLockKind::Tree, 100),
+        )
+        .await
+        .unwrap();
+    let mut requests = paths.clone();
+    requests.extend(["/missing".into(), "/foreign".into()]);
+    let results = locks
+        .refresh_holders(&requests, "owner", "holder", u128::MAX, 0)
+        .await;
+    assert_eq!(results.len(), requests.len());
+    assert!(results[..300].iter().all(|r| matches!(r, Ok(true))));
+    assert!(matches!(results[300], Ok(false)));
+    assert!(matches!(results[301], Ok(false)));
+    assert!(locks
+        .refresh_holders(&paths, "other", "holder", u128::MAX, 0)
+        .await
+        .iter()
+        .all(|r| matches!(r, Ok(false))));
 }
 
 fn wait_for_file(path: &Path) {

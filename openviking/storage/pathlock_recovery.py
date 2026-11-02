@@ -12,6 +12,7 @@ from openviking.storage.errors import (
     HandoffRecoveryBlocked,
     HandoffRecoveryRequired,
     InvalidPathLockRequestError,
+    LockAcquisitionError,
 )
 from openviking.storage.internal_names import MULTIWRITE_PATH_LOCK_FILE
 from openviking_cli.utils.logger import get_logger
@@ -101,7 +102,7 @@ async def adopt_or_reacquire(
     ctx: Any,
     fallback_requests: Callable[[], Awaitable[Requests]] | None = None,
 ) -> Any:
-    """Recover only typed adoption failures; acquire under a new owner.
+    """Recover complete coverage, retaining the durable handoff's logical owner.
 
     Callers must supply the complete operation scope for historic handles that
     cannot be inverted, and retain the result using a cancellation-safe guard.
@@ -116,6 +117,13 @@ async def adopt_or_reacquire(
     ):
         raise InvalidPathLockRequestError("handoff recovery requires an account context")
     kwargs = {"fs_ctx": {"account_id": account_id}}
+    owner = handoff.get("owner_id") or handoff.get("handle_id")
+    if owner is not None and (
+        not isinstance(owner, str) or not owner or any(char in owner for char in "|:,\x00")
+    ):
+        raise InvalidPathLockRequestError("invalid handoff recovery owner")
+    if handoff.get("covered_paths"):
+        _validate_requests(handoff["covered_paths"], account_id)
     try:
         return await agfs.pathlock_adopt(handoff, **kwargs)
     except HandoffRecoveryRequired as error:
@@ -141,7 +149,10 @@ async def adopt_or_reacquire(
                 "handoff coverage does not cover the queued operation"
             )
         try:
-            lease = await agfs.pathlock_acquire_batch(requests, **kwargs)
+            if owner:
+                lease = await agfs.pathlock_reacquire_batch(requests, owner, **kwargs)
+            else:
+                lease = await agfs.pathlock_acquire_batch(requests, **kwargs)
         except ValueError:
             raise
         except Exception as blocked:
@@ -153,3 +164,9 @@ async def adopt_or_reacquire(
             requests,
         )
         return lease
+    except LockAcquisitionError as blocked:
+        if not handoff.get("holder_id"):
+            raise
+        # A live-source transfer can also contend with concurrent storage work.
+        # Keep it bounded without switching to recovery or a different owner.
+        raise HandoffRecoveryBlocked(str(blocked)) from blocked
