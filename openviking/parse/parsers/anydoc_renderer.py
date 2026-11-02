@@ -768,7 +768,9 @@ class _AnyDocMarkdownRenderer:
         in_label: bool = False,
         at_line_start: bool = False,
     ) -> str:
-        characters = list(text)
+        characters = text
+        # The final position answers every suffix-membership check without copying it.
+        last_delimiter = {char: text.rfind(char) for char in "`*_~]"}
         output: list[str] = []
         line_has_content = not at_line_start
         for index, char in enumerate(characters):
@@ -782,26 +784,27 @@ class _AnyDocMarkdownRenderer:
                 line_has_content = True
             next_char = characters[index + 1] if index + 1 < len(characters) else None
             next_nonspace = trailing_active if next_char is None else not next_char.isspace()
-            later = characters[index + 1 :]
             escape = False
             if char == "\\":
                 escape = True
             elif char == "]" and in_label:
                 escape = True
             elif char == "`":
-                escape = styled or "`" in later
+                escape = styled or index < last_delimiter["`"]
             elif char == "*":
-                escape = styled or start_of_line or (next_nonspace and "*" in later)
+                escape = styled or start_of_line or (next_nonspace and index < last_delimiter["*"])
             elif char == "_":
                 previous_alnum = index > 0 and characters[index - 1].isalnum()
                 next_alnum = bool(next_char and next_char.isalnum())
                 escape = styled or (
-                    next_nonspace and not (previous_alnum and next_alnum) and "_" in later
+                    next_nonspace
+                    and not (previous_alnum and next_alnum)
+                    and index < last_delimiter["_"]
                 )
             elif char == "~":
-                escape = styled or (next_nonspace and "~" in later)
+                escape = styled or (next_nonspace and index < last_delimiter["~"])
             elif char == "[":
-                escape = in_label or "]" in later
+                escape = in_label or index < last_delimiter["]"]
             elif char == "<":
                 escape = bool(next_char and (next_char.isalpha() or next_char in "/!?"))
             elif char == "!":

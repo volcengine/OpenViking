@@ -124,3 +124,55 @@ async def test_markdown_delegate_parsers_write_local_artifacts(tmp_path: Path, p
 
     assert result.artifact_ref is not None
     assert result.artifact_ref.backend == "local"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("plain 中文" * 8000, "plain 中文" * 8000),
+        ("`code` and *emphasis*", r"\`code` and \*emphasis*"),
+        ("_under_score_ ~~strike~~ [label]", r"\_under_score_ \~\~strike\~~ \[label]"),
+        ("a` lone * and _ and ~ and [x]", r"a` lone * and _ and ~ and \[x]"),
+        ("prefix *a* then trailing *", r"prefix \*a* then trailing *"),
+        ("a\\b <tag> | pipe", r"a\\b \<tag> | pipe"),
+    ],
+    ids=[
+        "long-unformatted-run",
+        "paired-markers",
+        "mixed-markers",
+        "unpaired-markers",
+        "last-marker",
+        "literal-text",
+    ],
+)
+def test_anydoc_converter_preserves_docx_text(tmp_path: Path, text: str, expected: str):
+    """Exercise real Office decoding and escaping, including long single text runs."""
+    from xml.sax.saxutils import escape
+    from zipfile import ZipFile
+
+    source = tmp_path / "text.docx"
+    with ZipFile(source, "w") as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Override PartName="/word/document.xml" ContentType="application/vnd.'
+            'openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+        )
+        archive.writestr(
+            "_rels/.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+        )
+        archive.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f'<w:body><w:p><w:r><w:t xml:space="preserve">{escape(text)}</w:t></w:r></w:p>'
+            "</w:body></w:document>",
+        )
+
+    result = anydoc_converter.AnyDocConverter().convert(source, resource_name="text", storage=None)
+
+    assert result.markdown == expected + "\n"
+    assert result.source_format == "docx"
+    assert result.warnings == ()
