@@ -94,6 +94,9 @@ async fn query_cache_hits_and_invalidates_after_write() {
     assert_eq!(cached.metrics().snapshot().query_misses, 2);
 }
 
+/// Verifies PathLock sidecar files are filtered before query results are cached.
+#[tokio::test]
+async fn pathlock_files_are_not_stored_in_query_cache() {
     let backend = MemFileSystem::new();
     backend.mkdir("/docs", 0o755).await.unwrap();
     backend
@@ -121,7 +124,12 @@ async fn query_cache_hits_and_invalidates_after_write() {
         sorted_names(
             cached
                 .read_dir("/docs", None, None, None, None)
-        sorted_names(cached.read_dir("/docs", None, None, None, None).await.unwrap()),
+                .await
+                .unwrap()
+        ),
+        vec!["visible.txt"]
+    );
+    assert_eq!(
         sorted_names(cached.read_internal_dir("/docs").await.unwrap()),
         vec![
             ".exact.ovlock.visible.txt.1234",
@@ -157,7 +165,13 @@ async fn query_cache_hits_and_invalidates_after_write() {
     assert_eq!(
         runtime
             .hget(&internal_bucket, &internal_hash)
-    assert_eq!(runtime.hget(&internal_bucket, &internal_hash).await.unwrap(), None);
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+/// Verifies repeated changes trigger bounded cleanup for expired query index members.
 #[tokio::test]
 async fn query_index_gc_removes_expired_members_after_change_threshold() {
     let backend = MemFileSystem::new();
@@ -166,12 +180,16 @@ async fn query_index_gc_removes_expired_members_after_change_threshold() {
     let cached =
         CachedFileSystem::with_runtime(Box::new(backend), Arc::clone(&runtime), SERVICE_NAME);
     let index_key = cached.query_index_key();
-    let cached = CachedFileSystem::with_runtime(Box::new(backend), Arc::clone(&runtime), SERVICE_NAME);
+    let expired_bucket = query_bucket_key(SERVICE_NAME, "/expired", "read_dir");
+    let fresh_bucket = query_bucket_key(SERVICE_NAME, "/fresh", "read_dir");
 
     runtime
         .zadd(&index_key, 0.0, &expired_bucket)
         .await
-    runtime.zadd(&index_key, 0.0, &expired_bucket).await.unwrap();
+        .unwrap();
+    runtime
+        .zadd(&index_key, u64::MAX as f64, &fresh_bucket)
+        .await
         .unwrap();
 
     for index in 0..QUERY_INDEX_GC_TRIGGER_THRESHOLD {
@@ -179,12 +197,7 @@ async fn query_index_gc_removes_expired_members_after_change_threshold() {
             .write(&format!("/docs/{index}.txt"), b"x", 0, WriteFlag::Create)
             .await
             .unwrap();
-            .write(
-                &format!("/docs/{index}.txt"),
-                b"x",
-                0,
-                WriteFlag::Create,
-            )
+    }
 
     wait_for_index_member_removed(&runtime, &index_key, &expired_bucket).await;
     assert_eq!(
