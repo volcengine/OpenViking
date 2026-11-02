@@ -47,7 +47,7 @@ description: 把 Claude Code、Codex、聊天应用、SDK 等客户端接入 Ope
 - 按这个 Peer 的视图检索：召回和 OpenViking 工具能看到用户自己的记忆和这个 Peer 的记忆，看不到其他 Peer 的记忆；
 - 保存时给这个请求的用户消息标上这个 `peer_id`，OpenViking 提交会话时就能提取关于这个 Peer 的记忆。助手回复保存时不带 Peer。
 
-Peer 属于每个请求，不属于对话；带不带 Peer，网关[识别对话](#how-conversations-are-recognized)的方式都一样。同一段对话（例如机器人所在的群聊）可以包含来自多个 Peer 的用户消息：每条消息沿用第一次把它发到网关的那个请求的 Peer，每个请求按自己的 Peer 检索。
+Peer 属于每个请求，不属于对话；带不带 Peer，网关[识别对话](#how-conversations-are-recognized)的方式都一样。同一段对话（例如机器人所在的群聊）可以包含来自多个 Peer 的用户消息：每条消息沿用第一次把它发到网关的那个请求的 Peer，客户端之后修改或删掉更早的消息也不变；每个请求按自己的 Peer 检索。
 
 请求不带这个请求头时，使用密钥的[默认 Peer](09-gateway-keys.md#default-peer)（如果签发时设置了）；两者都没有时，行为不变。请求头的值为空白时，同样回退到默认 Peer。值必须是单个路径段，只能包含字母、数字、`_`、`.`、`-`，最多一个 `@`。其他值在请求到达服务商之前返回 400 `peer_invalid`。与所有 `X-OpenViking-*` 请求头一样，它不会转发给服务商。
 

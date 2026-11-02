@@ -47,7 +47,7 @@ When one key serves several counterparts, such as a bot that talks to many peopl
 - searches with that peer's view: recall and OpenViking tools see the user's own memories and that peer's, but not other peers' memories;
 - saves the request's user message with that `peer_id`, so OpenViking can extract memories about the peer when it commits the session. Assistant replies are saved without a peer.
 
-The peer belongs to each request, not to the conversation, and conversations are [recognized](#how-conversations-are-recognized) the same way with or without one. One conversation, such as a group chat a bot takes part in, can hold user messages from several peers: each message keeps the peer of the request that first sent it to the gateway, and each request searches with its own peer.
+The peer belongs to each request, not to the conversation, and conversations are [recognized](#how-conversations-are-recognized) the same way with or without one. One conversation, such as a group chat a bot takes part in, can hold user messages from several peers: each message keeps the peer of the request that first sent it to the gateway, even after the client edits or drops earlier messages, and each request searches with its own peer.
 
 A request without the header uses the key's [default peer](09-gateway-keys.md#default-peer), if the key has one; with neither, nothing changes. A blank header also falls back to the default. The value must be one path segment of letters, digits, `_`, `.` and `-`, with at most one `@`. Any other value gets 400 `peer_invalid` before the request reaches the provider. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
 

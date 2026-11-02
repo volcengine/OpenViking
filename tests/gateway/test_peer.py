@@ -172,11 +172,12 @@ async def test_one_session_holds_user_messages_from_several_peers(running_gatewa
     app, client, admin, key, _, writes = running_gateway
     calls = observe(app)
     history = []
-    for text, peer in (("I am Alice", "alice-bot"), ("I am Bob", "bob-bot"), ("Anyone?", None)):
+    turns = [("I am Alice", "alice-bot"), ("I am Bob", "bob-bot")]
+    for text, peer in [*turns, ("Anyone?", None), ("Carol here", "c")]:
         history = [*history, *([REPLY] if history else []), user(text)]
         await chat(client, key["key"], history, peer)
     # Each request recalls with its own peer.
-    assert [header(h) for h in calls["search"]] == ["alice-bot", "bob-bot", None]
+    assert [header(h) for h in calls["search"]] == ["alice-bot", "bob-bot", None, "c"]
     logs = (await client.get("/admin/logs", headers=admin)).json()
     requests = [log for log in logs if log.get("kind") != "capture"]
     # Session IDs are the header's digest whatever the peer.
@@ -184,7 +185,7 @@ async def test_one_session_holds_user_messages_from_several_peers(running_gatewa
     messages = await delivered(app, writes)
     peers = {m["parts"][0]["text"]: m.get("peer_id") for m in messages if m["role"] == "user"}
     assert peers["I am Alice"] == "alice-bot" and peers["I am Bob"] == "bob-bot"
-    assert peers.get("Anyone?") is None
+    assert "Anyone?" in peers and peers["Anyone?"] is None
     assert all("peer_id" not in m for m in messages if m["role"] != "user")
     # Capture reset takes the session alone.
     path = "/admin/keys/" + requests[0]["credential_id"] + "/capture/reset"
@@ -207,6 +208,64 @@ async def test_a_message_keeps_the_peer_of_the_request_that_first_sent_it(runnin
         ("I am Alice", "alice-bot"),
         ("No peer here", None),
     ]
+
+
+async def test_a_peerless_first_turn_stays_peerless(running_gateway):
+    app, client, _, key, _, writes = running_gateway
+    await chat(client, key["key"], [user("No peer here")])
+    await chat(client, key["key"], [user("No peer here"), REPLY, user("I am Bob")], "bob")
+    later = [user("No peer here"), REPLY, user("I am Bob"), REPLY, user("Carol")]
+    await chat(client, key["key"], later, "carol")
+    messages = await delivered(app, writes)
+    peers = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
+    assert peers[:2] == [("No peer here", None), ("I am Bob", "bob")]
+
+
+async def group_chat(client, key):
+    """Alice, Bob and Carol each send a turn of one shared session."""
+    history = []
+    for text, peer in (("I am Alice", "alice"), ("I am Bob", "bob"), ("I am Carol", "carol")):
+        history = [*history, *([REPLY] if history else []), user(text)]
+        await chat(client, key, history, peer)
+    return history
+
+
+@pytest.mark.parametrize("change", ["edit_before_bob", "sliding_window"])
+async def test_a_changed_prefix_keeps_later_messages_peers(running_gateway, change):
+    """A new OpenViking session after an edit or a dropped exchange keeps every peer."""
+    app, client, _, key, _, writes = running_gateway
+    sessions = []
+
+    async def handler(request):
+        if request.path.endswith("/messages/batch"):
+            sessions.append(request.path.split("/")[4])
+
+    app.state.test_backend["handler"] = handler
+    history = await group_chat(client, key["key"])
+    await delivered(app, writes)
+    if change == "edit_before_bob":
+        history = [history[0], {"role": "assistant", "content": "edited"}, *history[2:]]
+    else:
+        history = history[2:]
+    await chat(client, key["key"], [*history, REPLY, user("I am Dave")], "dave")
+    first = sessions[0]
+    writes.clear()
+    sessions.clear()
+    messages = await delivered(app, writes)
+    assert sessions and first not in sessions
+    users = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
+    expected = [("I am Alice", "alice"), ("I am Bob", "bob"), ("I am Carol", "carol")]
+    assert users == expected[2 - len(history) // 2 :]
+
+
+async def test_repeated_text_keeps_each_senders_peer(running_gateway):
+    app, client, _, key, _, writes = running_gateway
+    history = []
+    for peer in ("alice", "bob", "carol"):
+        history = [*history, *([REPLY] if history else []), user("+1")]
+        await chat(client, key["key"], history, peer)
+    messages = await delivered(app, writes)
+    assert [m.get("peer_id") for m in messages if m["role"] == "user"] == ["alice", "bob"]
 
 
 @pytest.mark.parametrize("cause", ["edit", "reset"])
