@@ -1117,6 +1117,7 @@ class AsyncHTTPClient:
         *,
         wait: bool = False,
     ) -> Dict[str, Any]:
+        """Mount in order; inspect failed/not_attempted even after HTTP success."""
         payloads = []
         for mount in mounts:
             payload: Dict[str, Any] = {
@@ -1159,6 +1160,7 @@ class AsyncHTTPClient:
         *,
         wait: bool = False,
     ) -> Dict[str, Any]:
+        """Unmount in order, retaining completed changes on partial failure."""
         response = await self._request(
             "POST",
             "/api/v1/mcps/batch-unmount",

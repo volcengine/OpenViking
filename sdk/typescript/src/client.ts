@@ -33,6 +33,8 @@ import type {
   GrepOptions,
   GlobOptions,
   ImportPackOptions,
+  MCPBatchMountResult,
+  MCPBatchUnmountResult,
   MCPSyncResult,
   MCPToolMount,
   Message,
@@ -407,7 +409,7 @@ export class OpenVikingClient {
   batchMountMCPTools(
     mounts: MCPToolMount[],
     options: Pick<WaitOptions, "wait"> = {},
-  ): Promise<JsonObject> {
+  ): Promise<MCPBatchMountResult> {
     return this.request("POST", "/api/v1/mcps/batch-mount", {
       body: {
         mounts: mounts.map((mount) =>
@@ -441,7 +443,7 @@ export class OpenVikingClient {
   batchUnmountMCPTools(
     nodeUris: string[],
     options: Pick<WaitOptions, "wait"> = {},
-  ): Promise<JsonObject> {
+  ): Promise<MCPBatchUnmountResult> {
     return this.request("POST", "/api/v1/mcps/batch-unmount", {
       body: {
         node_uris: nodeUris.map(normalizeURI),

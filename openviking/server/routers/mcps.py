@@ -64,10 +64,16 @@ class MountMCPToolRequest(MCPToolMountRequest):
     wait: bool = False
 
 
+class BatchMCPToolMountRequest(MCPToolMountRequest):
+    # Validate item constraints in the service so other mounts can continue.
+    title: str
+    timeout_seconds: int = 60
+
+
 class BatchMountMCPToolsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mounts: list[MCPToolMountRequest] = Field(min_length=1)
+    mounts: list[BatchMCPToolMountRequest] = Field(min_length=1)
     wait: bool = False
 
 

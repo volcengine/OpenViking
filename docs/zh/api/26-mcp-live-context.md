@@ -429,7 +429,7 @@ ov mcps invoke viking://agent/tools/weather/current.json \
 
 ### 创建或替换挂载
 
-`POST /api/v1/mcps/mount` 创建或替换一个 Markdown 实时上下文节点。`POST /api/v1/mcps/batch-mount` 原子校验整批请求后批量写入；同一批次不能包含重复 `node_uri`。
+`POST /api/v1/mcps/mount` 创建或替换一个 Markdown 实时上下文节点。`POST /api/v1/mcps/batch-mount` 逐项校验参数和目标写权限，跳过不合格的节点，按请求顺序写入有效节点并立即保存挂载记录。空批次和重复 `node_uri` 会在任何修改前拒绝整批请求。
 
 任何工具都可以挂载。为兼容未提供 annotations 的工具，annotations 缺失或为空时默认按只读处理。完整读取会拒绝执行 `annotations.readOnlyHint: false` 或 `destructiveHint: true` 的工具；错误会返回当前集成执行显式调用所需的 `tool_uri` 和已保存参数。
 
@@ -533,12 +533,18 @@ ov mcps mount \
   "status": "ok",
   "result": {
     "mounts": [{"node_uri": "viking://resources/live/weather-beijing.md", "mounted": true}],
-    "total": 1
+    "total": 1,
+    "succeeded": ["viking://resources/live/weather-beijing.md"],
+    "failed": [],
+    "not_attempted": []
   }
 }
 ```
 
 每个 `mounts` 项的完整字段与单项挂载响应一致。
+两个批量接口均跳过失败项并继续处理独立节点，保留已完成的文件操作和挂载记录。响应仍为 HTTP 200；调用方必须检查 `failed`，其中也包含单节点参数和权限检查错误。`succeeded` 为成功节点 URI，`failed` 为错误项（`node_uri`、`code`、`message`、`applied`），两者均保持请求顺序。正常完成时 `not_attempted` 为空。空批次和重复 URI 返回 `INVALID_ARGUMENT`，且不会修改文件。
+
+`failed[].applied=true` 表示文件修改已经生效并已保存对应挂载记录，但后续处理失败；该节点也出现在 `mounts` 或 `unmounts` 中，`total` 为实际生效的项数，后续节点仍会执行。批量卸载不会重建已删除节点，避免正文补偿改变原有 ACL。挂载记录保存失败时只重试当前数据库快照一次，不重新执行文件操作；如果仍失败，则停止整批并返回 `PROCESSING_ERROR`，错误详情包含 `node_uri`、`reconciliation_required=true`，以及 `succeeded`、`failed` 和 `not_attempted`。需要核对该节点与记录；`not_attempted` 列出后续尚未开始文件操作的有效节点。
 挂载响应不返回 `tags`，因为向量索引处理可能仍在异步进行。需要当前标签时应调用查询挂载接口，以向量索引中的标签为准。
 
 ### 查询挂载
@@ -588,7 +594,7 @@ ov read viking://resources/live/weather-beijing.md
 
 ### 删除挂载
 
-`DELETE /api/v1/mcps/mount` 删除一个挂载记录和对应 Markdown 节点。批量接口 `POST /api/v1/mcps/batch-unmount` 接收至少一个且不重复的 `node_uris`；任一挂载不存在时整批失败。
+`DELETE /api/v1/mcps/mount` 删除一个挂载记录和对应 Markdown 节点。批量接口 `POST /api/v1/mcps/batch-unmount` 接收至少一个且不重复的 `node_uris`；挂载不存在或删除权限不足时，将该节点记入 `failed`，其他节点继续执行。每删除一个节点立即保存记录，部分失败使用上文的 `succeeded`、`failed` 和 `not_attempted` 契约，实际完成项位于 `unmounts`。
 
 ```python
 client.unmount_mcp_tool(

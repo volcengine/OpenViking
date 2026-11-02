@@ -430,7 +430,7 @@ ov mcps invoke viking://agent/tools/weather/current.json \
 
 ### Create or replace mounts
 
-`POST /api/v1/mcps/mount` creates or replaces one Markdown live context node. `POST /api/v1/mcps/batch-mount` validates the full batch before writing it. A batch cannot contain duplicate `node_uri` values.
+`POST /api/v1/mcps/mount` creates or replaces one Markdown live context node. `POST /api/v1/mcps/batch-mount` validates each item's arguments and target write permissions, skips invalid items, then writes valid nodes in request order and immediately persists each mount record. Empty batches and duplicate `node_uri` values reject the entire request before any mutation.
 
 Any tool can be mounted. Missing or empty annotations are treated as read-only for compatibility. A complete read refuses to execute tools with `annotations.readOnlyHint: false` or `destructiveHint: true`; the error returns the `tool_uri` and stored arguments needed by the integration's explicit invocation mechanism.
 
@@ -534,7 +534,10 @@ A batch body is `{"mounts":[<single-item parameters without wait>],"wait":false}
   "status": "ok",
   "result": {
     "mounts": [{"node_uri": "viking://resources/live/weather-beijing.md", "mounted": true}],
-    "total": 1
+    "total": 1,
+    "succeeded": ["viking://resources/live/weather-beijing.md"],
+    "failed": [],
+    "not_attempted": []
   }
 }
 ```
@@ -589,7 +592,11 @@ Live reads support MCP text results and `structuredContent`. Multiple text block
 
 ### Remove mounts
 
-`DELETE /api/v1/mcps/mount` removes one mount record and its Markdown node. The batch endpoint `POST /api/v1/mcps/batch-unmount` takes at least one unique `node_uris` value. The entire batch fails if any mount does not exist.
+`DELETE /api/v1/mcps/mount` removes one mount record and its Markdown node. The batch endpoint `POST /api/v1/mcps/batch-unmount` takes at least one unique `node_uris` value. Missing mounts or denied deletion permissions are reported per item; other nodes continue. Each completed deletion immediately persists its record removal.
+
+Both batch endpoints skip failed items and continue processing independent nodes, retaining completed changes. Results use HTTP 200: callers must inspect `failed`, including item validation and permission errors. `succeeded` lists successful node URIs and `failed` contains `node_uri`, `code`, `message`, and `applied`; both lists follow request order. `not_attempted` is empty after normal completion. Empty batches and duplicate URIs return `INVALID_ARGUMENT` without modifying files.
+
+`failed[].applied=true` means the file mutation and corresponding record update completed but downstream processing failed. These items also appear in `mounts` or `unmounts`; `total` counts applied mutations. Later nodes still execute. Batch unmount never recreates deleted content, preserving the access boundaries of remaining nodes. A failed record save retries only the current database snapshot once, without repeating file mutations. A second failure stops the batch and returns `PROCESSING_ERROR` with `node_uri`, `reconciliation_required=true`, and `succeeded`, `failed`, and `not_attempted` in the error details. That node and its record require reconciliation; `not_attempted` lists remaining valid nodes whose file operations never started.
 
 ```python
 client.unmount_mcp_tool(

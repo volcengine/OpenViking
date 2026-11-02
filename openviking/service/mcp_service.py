@@ -11,7 +11,7 @@ import re
 import sqlite3
 import tempfile
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -33,6 +33,7 @@ from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
     NotFoundError,
+    OpenVikingError,
     ProcessingError,
     UnavailableError,
 )
@@ -535,6 +536,16 @@ class MCPService:
     async def _tool(self, uri: str, ctx: RequestContext) -> dict[str, Any]:
         uri, tools_root, server_name, tool_name = self._parse_tool_uri(uri, ctx)
         await self._registered(server_name, ctx, target_uri=tools_root)
+        return await self._read_tool_document(uri, server_name, tool_name, ctx)
+
+    async def _read_tool_document(
+        self,
+        uri: str,
+        server_name: str,
+        tool_name: str,
+        ctx: RequestContext,
+    ) -> dict[str, Any]:
+        """Read and validate a tool definition after checking its server registration."""
         try:
             content = await self._service.fs.read(uri, ctx=ctx)
             document = json.loads(content)
@@ -675,17 +686,6 @@ class MCPService:
         if not normalized.endswith(".md"):
             raise InvalidArgumentError("Live context node URI must end with .md")
         return normalized
-
-    @staticmethod
-    def _batch_mount_root(node_uri: str) -> str | None:
-        prefix = "viking://resources/"
-        if not node_uri.startswith(prefix):
-            return None
-        relative = node_uri[len(prefix) :]
-        top_level, separator, _ = relative.partition("/")
-        if not separator or not top_level:
-            return None
-        return f"{prefix}{top_level}"
 
     @staticmethod
     def _render_live_context_node(
@@ -1192,53 +1192,20 @@ class MCPService:
     ) -> dict[str, Any]:
         if not mounts:
             raise InvalidArgumentError("Batch mount must contain at least one mount")
+        node_uris = self._batch_node_uris([mount.node_uri for mount in mounts], ctx)
 
         async with self._lock(ctx.account_id):
             prepared: list[dict[str, Any]] = []
-            seen_node_uris: set[str] = set()
+            failed: list[dict[str, Any]] = []
             tool_documents: dict[str, dict[str, Any]] = {}
-            for mount in mounts:
-                title = mount.title
-                timeout_seconds = mount.timeout_seconds
-                arguments = mount.arguments
-                if not title.strip():
-                    raise InvalidArgumentError("Live context node title must not be empty")
-                if timeout_seconds <= 0:
-                    raise InvalidArgumentError("Live context node timeout_seconds must be positive")
-                node_uri = self._validate_node_uri(mount.node_uri, ctx)
-                if node_uri in seen_node_uris:
-                    raise InvalidArgumentError(f"Duplicate batch mount node URI: {node_uri}")
-                seen_node_uris.add(node_uri)
-
-                tool_uri = mount.tool_uri
-                tool_document = tool_documents.get(tool_uri)
-                if tool_document is None:
-                    tool_document = await self._tool(tool_uri, ctx)
-                    tool_documents[tool_uri] = tool_document
-                self._validate_tool_arguments(tool_document, arguments)
-                tool_uri, _, server_name, tool_name = self._parse_tool_uri(tool_uri, ctx)
-                prepared.append(
-                    {
-                        "tool_uri": tool_uri,
-                        "node_uri": node_uri,
-                        "title": mount.title,
-                        "description": mount.description,
-                        "timeout_seconds": mount.timeout_seconds,
-                        "arguments": mount.arguments,
-                        "tags": mount.tags,
-                        "tool_document": tool_document,
-                        "server_name": server_name,
-                        "tool_name": tool_name,
-                        "content": self._render_live_context_node(
-                            tool_uri,
-                            tool_document,
-                            title,
-                            mount.description,
-                            timeout_seconds,
-                            arguments,
-                        ),
-                    }
-                )
+            for mount, node_uri in zip(mounts, node_uris, strict=True):
+                try:
+                    item = await self._prepare_batch_mount(mount, ctx, tool_documents)
+                    await self._service.fs.ensure_write_access(node_uri, ctx)
+                except Exception as exc:
+                    failed.append(self._batch_item_failure(node_uri, exc))
+                    continue
+                prepared.append(item)
 
             connection = await self._open_mount_database(ctx)
             try:
@@ -1254,41 +1221,34 @@ class MCPService:
                         "timeout_seconds": item["timeout_seconds"],
                     }
 
-                operations_by_root: dict[str, list[dict[str, Any]]] = {}
-                direct_writes: list[dict[str, Any]] = []
-                for item in prepared:
-                    root_uri = self._batch_mount_root(item["node_uri"])
-                    if root_uri is None:
-                        direct_writes.append(item)
-                        continue
-                    operation = {
-                        "uri": item["node_uri"],
-                        "content": item["content"],
-                        "mode": "replace",
-                    }
-                    if item.get("tags") is not None:
-                        operation["tags"] = item["tags"]
-                    operations_by_root.setdefault(root_uri, []).append(operation)
-
-                for root_uri, operations in operations_by_root.items():
-                    await self._ensure_directory(root_uri, ctx)
-                    await self._service.fs.batch_write(
-                        root_uri=root_uri,
-                        operations=operations,
-                        ctx=ctx,
-                        wait=wait,
-                    )
-                for item in direct_writes:
-                    await self._service.fs.write(
-                        item["node_uri"],
-                        item["content"],
-                        ctx=ctx,
-                        mode="replace",
-                        wait=wait,
-                        tags=item.get("tags"),
-                    )
-
-                for item in prepared:
+                completed: list[dict[str, Any]] = []
+                for index, item in enumerate(prepared):
+                    write_error = None
+                    try:
+                        await self._service.fs.write(
+                            item["node_uri"],
+                            item["content"],
+                            ctx=ctx,
+                            mode="replace",
+                            wait=wait,
+                            tags=item.get("tags"),
+                        )
+                    except Exception as exc:
+                        write_error = exc
+                        # Refresh/wait can fail after the content was persisted.
+                        # Register that node without rewriting its content or ACL.
+                        try:
+                            persisted = (
+                                await self._service.fs.read(
+                                    item["node_uri"], ctx=replace(ctx, bypass_acl=True)
+                                )
+                                == item["content"]
+                            )
+                        except Exception:
+                            persisted = False
+                        if not persisted:
+                            failed.append(self._batch_item_failure(item["node_uri"], exc))
+                            continue
                     connection.execute(
                         """
                         INSERT INTO live_context_nodes (
@@ -1309,16 +1269,27 @@ class MCPService:
                             item["tool_name"],
                             item["tool_uri"],
                             item["tool_document"]["input_revision"],
-                            json.dumps(
-                                item["arguments"],
-                                ensure_ascii=False,
-                                sort_keys=True,
-                            ),
+                            item["arguments_json"],
                             json.dumps(item["data"], ensure_ascii=False, sort_keys=True),
                             item["created_at"],
                         ),
                     )
-                await self._write_mount_database(connection, ctx)
+                    try:
+                        await self._persist_batch_mount_database(connection, ctx, item["node_uri"])
+                    except OpenVikingError as exc:
+                        self._annotate_batch_failure(
+                            exc,
+                            completed,
+                            failed,
+                            node_uris,
+                            [remaining["node_uri"] for remaining in prepared[index + 1 :]],
+                        )
+                        raise
+                    completed.append(item)
+                    if write_error is not None:
+                        failed.append(
+                            self._batch_item_failure(item["node_uri"], write_error, applied=True)
+                        )
             finally:
                 self._close_mount_database(connection)
 
@@ -1336,9 +1307,127 @@ class MCPService:
                 "created_at": item["created_at"],
                 "mounted": True,
             }
-            for item in prepared
+            for item in completed
         ]
-        return {"mounts": results, "total": len(results)}
+        return {
+            "mounts": results,
+            "total": len(results),
+            "succeeded": self._batch_succeeded(completed, failed),
+            "failed": self._batch_failures_in_order(failed, node_uris),
+            "not_attempted": [],
+        }
+
+    def _batch_node_uris(self, node_uris: list[str], ctx: RequestContext) -> list[str]:
+        """Reject duplicates before mutations, leaving invalid targets to item validation."""
+        normalized = []
+        seen = set()
+        for raw_uri in node_uris:
+            try:
+                uri = validate_request_viking_uri(raw_uri, ctx, field_name="live context node URI")
+            except OpenVikingError:
+                uri = raw_uri
+            if uri in seen:
+                raise InvalidArgumentError(f"Duplicate batch node URI: {uri}")
+            seen.add(uri)
+            normalized.append(uri)
+        return normalized
+
+    async def _prepare_batch_mount(
+        self,
+        mount: MCPToolMount,
+        ctx: RequestContext,
+        tool_documents: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        node_uri = self._validate_node_uri(mount.node_uri, ctx)
+        if not mount.title.strip():
+            raise InvalidArgumentError("Live context node title must not be empty")
+        if mount.timeout_seconds <= 0:
+            raise InvalidArgumentError("Live context node timeout_seconds must be positive")
+        tool_document = tool_documents.get(mount.tool_uri)
+        if tool_document is None:
+            tool_document = await self._tool(mount.tool_uri, ctx)
+            tool_documents[mount.tool_uri] = tool_document
+        self._validate_tool_arguments(tool_document, mount.arguments)
+        tool_uri, _, server_name, tool_name = self._parse_tool_uri(mount.tool_uri, ctx)
+        return {
+            "tool_uri": tool_uri,
+            "node_uri": node_uri,
+            "title": mount.title,
+            "description": mount.description,
+            "timeout_seconds": mount.timeout_seconds,
+            "arguments": mount.arguments,
+            "arguments_json": json.dumps(mount.arguments, ensure_ascii=False, sort_keys=True),
+            "tags": mount.tags,
+            "tool_document": tool_document,
+            "server_name": server_name,
+            "tool_name": tool_name,
+            "content": self._render_live_context_node(
+                tool_uri,
+                tool_document,
+                mount.title,
+                mount.description,
+                mount.timeout_seconds,
+                mount.arguments,
+            ),
+        }
+
+    @staticmethod
+    def _batch_succeeded(
+        completed: list[dict[str, Any]] | list[sqlite3.Row], failed: list[dict[str, Any]]
+    ) -> list[str]:
+        failed_uris = {item["node_uri"] for item in failed}
+        return [item["node_uri"] for item in completed if item["node_uri"] not in failed_uris]
+
+    @staticmethod
+    def _batch_failures_in_order(
+        failed: list[dict[str, Any]], node_uris: list[str]
+    ) -> list[dict[str, Any]]:
+        by_uri = {item["node_uri"]: item for item in failed}
+        return [by_uri[uri] for uri in node_uris if uri in by_uri]
+
+    def _annotate_batch_failure(
+        self,
+        error: OpenVikingError,
+        completed: list[dict[str, Any]] | list[sqlite3.Row],
+        failed: list[dict[str, Any]],
+        node_uris: list[str],
+        not_attempted: list[str],
+    ) -> None:
+        failures = [*failed, self._batch_item_failure(error.details["node_uri"], error)]
+        error.details.update(
+            {
+                "succeeded": self._batch_succeeded(completed, failures),
+                "failed": self._batch_failures_in_order(failures, node_uris),
+                "not_attempted": not_attempted,
+            }
+        )
+
+    @staticmethod
+    def _batch_item_failure(
+        node_uri: str, error: Exception, *, applied: bool = False
+    ) -> dict[str, Any]:
+        return {
+            "node_uri": node_uri,
+            "code": getattr(error, "code", "UNKNOWN"),
+            "message": str(error),
+            "applied": applied,
+        }
+
+    async def _persist_batch_mount_database(
+        self, connection: sqlite3.Connection, ctx: RequestContext, node_uri: str
+    ) -> None:
+        """Retry only the current record snapshot, never the filesystem mutation."""
+        try:
+            await self._write_mount_database(connection, ctx)
+        except Exception:
+            try:
+                await self._write_mount_database(connection, ctx)
+            except Exception as exc:
+                raise OpenVikingError(
+                    "Could not persist live context mount records; filesystem changes were retained",
+                    code="PROCESSING_ERROR",
+                    details={"node_uri": node_uri, "reconciliation_required": True},
+                ) from exc
 
     async def unmount(
         self,
@@ -1398,72 +1487,71 @@ class MCPService:
         if not node_uris:
             raise InvalidArgumentError("Batch unmount must contain at least one node URI")
 
-        normalized_node_uris: list[str] = []
-        seen_node_uris: set[str] = set()
-        for raw_node_uri in node_uris:
-            node_uri = self._validate_node_uri(raw_node_uri, ctx)
-            if node_uri in seen_node_uris:
-                raise InvalidArgumentError(f"Duplicate batch unmount node URI: {node_uri}")
-            seen_node_uris.add(node_uri)
-            normalized_node_uris.append(node_uri)
+        normalized_node_uris = self._batch_node_uris(node_uris, ctx)
 
         async with self._lock(ctx.account_id):
             connection = await self._open_mount_database(ctx)
             try:
                 rows = []
-                contents: dict[str, str | None] = {}
+                failed = []
                 for node_uri in normalized_node_uris:
+                    try:
+                        self._validate_node_uri(node_uri, ctx)
+                        await self._service.fs.ensure_remove_access(node_uri, ctx)
+                    except Exception as exc:
+                        failed.append(self._batch_item_failure(node_uri, exc))
+                        continue
                     row = connection.execute(
-                        "SELECT * FROM live_context_nodes WHERE node_uri = ?",
-                        (node_uri,),
+                        "SELECT * FROM live_context_nodes WHERE node_uri = ?", (node_uri,)
                     ).fetchone()
                     if row is None:
-                        raise NotFoundError(node_uri, "live context mount")
+                        failed.append(
+                            self._batch_item_failure(
+                                node_uri, NotFoundError(node_uri, "live context mount")
+                            )
+                        )
+                        continue
                     rows.append(row)
-                    try:
-                        contents[node_uri] = await self._service.fs.read(node_uri, ctx=ctx)
-                    except (AGFSNotFoundError, NotFoundError, FileNotFoundError):
-                        contents[node_uri] = None
 
-                deleted_node_uris: list[str] = []
-                try:
-                    for node_uri in normalized_node_uris:
+                completed = []
+                for index, row in enumerate(rows):
+                    node_uri = row["node_uri"]
+                    remove_error = None
+                    try:
                         await self._service.fs.rm(
                             node_uri,
                             ctx=ctx,
                             recursive=False,
                             wait=wait,
                         )
-                        deleted_node_uris.append(node_uri)
-                except Exception:
-                    for node_uri in deleted_node_uris:
-                        content = contents[node_uri]
-                        if content is not None:
-                            await self._service.fs.write(
-                                node_uri,
-                                content,
-                                ctx=ctx,
-                                mode="create",
-                                wait=True,
-                            )
-                    raise
-                connection.executemany(
-                    "DELETE FROM live_context_nodes WHERE node_uri = ?",
-                    [(node_uri,) for node_uri in normalized_node_uris],
-                )
-                try:
-                    await self._write_mount_database(connection, ctx)
-                except Exception:
-                    for node_uri, content in contents.items():
-                        if content is not None:
-                            await self._service.fs.write(
-                                node_uri,
-                                content,
-                                ctx=ctx,
-                                mode="create",
-                                wait=True,
-                            )
-                    raise
+                    except Exception as exc:
+                        remove_error = exc
+                        try:
+                            removed = not await self._service.viking_fs.exists(node_uri, ctx=ctx)
+                        except Exception:
+                            removed = False
+                        if not removed:
+                            failed.append(self._batch_item_failure(node_uri, exc))
+                            continue
+                    connection.execute(
+                        "DELETE FROM live_context_nodes WHERE node_uri = ?", (node_uri,)
+                    )
+                    try:
+                        await self._persist_batch_mount_database(connection, ctx, node_uri)
+                    except OpenVikingError as exc:
+                        self._annotate_batch_failure(
+                            exc,
+                            completed,
+                            failed,
+                            normalized_node_uris,
+                            [remaining["node_uri"] for remaining in rows[index + 1 :]],
+                        )
+                        raise
+                    completed.append(row)
+                    if remove_error is not None:
+                        failed.append(
+                            self._batch_item_failure(node_uri, remove_error, applied=True)
+                        )
             finally:
                 self._close_mount_database(connection)
 
@@ -1475,9 +1563,15 @@ class MCPService:
                 "tool_uri": row["tool_uri"],
                 "unmounted": True,
             }
-            for row in rows
+            for row in completed
         ]
-        return {"unmounts": results, "total": len(results)}
+        return {
+            "unmounts": results,
+            "total": len(results),
+            "succeeded": self._batch_succeeded(completed, failed),
+            "failed": self._batch_failures_in_order(failed, normalized_node_uris),
+            "not_attempted": [],
+        }
 
     async def mounts(
         self,
@@ -1664,9 +1758,7 @@ class MCPService:
             ctx,
             target_uri=tools_root,
         )
-        if tool_name not in await self._catalog_names(server_name, ctx, tools_root):
-            raise NotFoundError(uri, "MCP tool")
-        tool_document = await self._tool(uri, ctx)
+        tool_document = await self._read_tool_document(uri, server_name, tool_name, ctx)
         if require_read_only and not self._tool_is_read_only(tool_document):
             invocation = json.dumps(
                 {"tool_uri": uri, "arguments": arguments},

@@ -479,8 +479,10 @@ export async function mountLiveContext(input: MountInput): Promise<void> {
 
 export async function batchMountLiveContexts(
   mounts: MountInput[],
-): Promise<void> {
-  await getOvClient().instance.post(
+): Promise<BatchLiveContextResult> {
+  const response = await getOvClient().instance.post<
+    Envelope<BatchLiveContextResult>
+  >(
     '/api/v1/mcps/batch-mount',
     {
       mounts: mounts.map((mount) => ({
@@ -491,6 +493,7 @@ export async function batchMountLiveContexts(
     },
     { baseURL: apiBaseUrl() },
   )
+  return response.data.result
 }
 
 export async function unmountLiveContext(nodeUri: string): Promise<void> {
@@ -502,8 +505,10 @@ export async function unmountLiveContext(nodeUri: string): Promise<void> {
 
 export async function batchUnmountLiveContexts(
   nodeUris: string[],
-): Promise<void> {
-  await getOvClient().instance.post(
+): Promise<BatchLiveContextResult> {
+  const response = await getOvClient().instance.post<
+    Envelope<BatchLiveContextResult>
+  >(
     '/api/v1/mcps/batch-unmount',
     {
       node_uris: nodeUris.map(normalizeVikingUri),
@@ -511,6 +516,19 @@ export async function batchUnmountLiveContexts(
     },
     { baseURL: apiBaseUrl() },
   )
+  return response.data.result
+}
+
+export type BatchLiveContextResult = {
+  total: number
+  succeeded: string[]
+  failed: Array<{
+    node_uri: string
+    code: string
+    message: string
+    applied: boolean
+  }>
+  not_attempted: string[]
 }
 
 export async function moveLiveContext(

@@ -436,7 +436,8 @@ class _ContextArrangerBase:
             mounts.append(mount)
             mount_changes.append(change)
         if mounts:
-            await self._client.batch_mount_mcp_tools(mounts, wait=wait)
+            result = await self._client.batch_mount_mcp_tools(mounts, wait=wait)
+            self._check_batch_result(result, mount_changes, applied)
             applied.extend(mount_changes)
 
         delete_changes = []
@@ -448,10 +449,11 @@ class _ContextArrangerBase:
             delete_changes.append(change)
         if delete_changes:
             try:
-                await self._client.batch_unmount_mcp_tools(
+                result = await self._client.batch_unmount_mcp_tools(
                     [change.uri for change in delete_changes],
                     wait=wait,
                 )
+                self._check_batch_result(result, delete_changes, applied)
             except NotFoundError:
                 for change in delete_changes:
                     try:
@@ -465,6 +467,27 @@ class _ContextArrangerBase:
             prune=prune,
             dry_run=False,
             applied=tuple(applied),
+        )
+
+    @staticmethod
+    def _check_batch_result(
+        result: Mapping[str, Any],
+        changes: Sequence[ContextChange],
+        applied: Sequence[ContextChange],
+    ) -> None:
+        if not result.get("failed") and not result.get("not_attempted"):
+            return
+        completed = set(result.get("succeeded", []))
+        completed.update(
+            item["node_uri"] for item in result.get("failed", []) if item.get("applied")
+        )
+        completed_changes = [*applied, *[change for change in changes if change.uri in completed]]
+        raise FailedPreconditionError(
+            "Context batch partially applied",
+            details={
+                "batch_result": dict(result),
+                "applied": [change.to_dict() for change in completed_changes],
+            },
         )
 
 

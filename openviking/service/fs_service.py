@@ -9,7 +9,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 import asyncio
 from collections.abc import Coroutine
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
@@ -1459,6 +1459,12 @@ class FSService:
     async def ensure_write_access(self, uri: str, ctx: RequestContext) -> None:
         """Validate write access without mutating the target."""
         viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+
+    async def ensure_remove_access(self, uri: str, ctx: RequestContext) -> None:
+        """Validate the namespace and ACL checks used when removing a file."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, replace(ctx, bypass_acl=True), action=AclAction.MANAGE)
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
     async def can_read_many(

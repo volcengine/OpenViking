@@ -94,6 +94,24 @@ export interface MCPToolMount {
   arguments?: JsonObject;
   tags?: string[];
 }
+/** A batch skips failed items, retaining completed changes and processing later nodes. */
+export interface MCPBatchResult {
+  total: number;
+  succeeded: string[];
+  failed: {
+    node_uri: string;
+    code: string;
+    message: string;
+    applied: boolean;
+  }[];
+  not_attempted: string[];
+}
+export interface MCPBatchMountResult extends MCPBatchResult {
+  mounts: JsonObject[];
+}
+export interface MCPBatchUnmountResult extends MCPBatchResult {
+  unmounts: JsonObject[];
+}
 /** One live context mount affected by an MCP catalog sync. */
 export interface MCPAffectedMount {
   node_uri: string;
