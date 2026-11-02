@@ -283,6 +283,9 @@ impl CachedFileSystem {
 
     /// Schedule asynchronous invalidation for one changed path.
     fn spawn_path_invalidation(&self, path: &str) {
+        if is_encryption_temp_path(path) {
+            return;
+        }
         self.note_query_index_change();
         let mut keys = Vec::new();
         self.collect_path_change_buckets(path, &mut keys);
@@ -291,6 +294,9 @@ impl CachedFileSystem {
 
     /// Schedule asynchronous invalidation for one changed path and its descendants.
     fn spawn_descendant_invalidation(&self, path: &str) {
+        if is_encryption_temp_path(path) {
+            return;
+        }
         self.note_query_index_change();
         let path = normalize_path(path);
         let runtime = Arc::clone(&self.runtime);
@@ -564,8 +570,8 @@ impl FileSystem for CachedFileSystem {
 
     async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
         self.backend.replace(src_path, dst_path).await?;
-        self.spawn_descendant_invalidation(src_path);
-        self.spawn_descendant_invalidation(dst_path);
+        self.spawn_path_invalidation(src_path);
+        self.spawn_path_invalidation(dst_path);
         Ok(())
     }
 
@@ -844,10 +850,18 @@ fn encode_path_key(path: &str) -> String {
 
 /// Return true when a normalized query path names a runtime-internal file.
 fn is_internal_cache_path(path: &str) -> bool {
-    normalize_path(path)
-        .rsplit('/')
-        .next()
-        .is_some_and(is_hidden_internal_name)
+    let normalized = normalize_path(path);
+    is_encryption_temp_path(&normalized)
+        || normalized
+            .rsplit('/')
+            .next()
+            .is_some_and(is_hidden_internal_name)
+}
+
+/// Return true when a path names the encryption staging directory or one of its descendants.
+fn is_encryption_temp_path(path: &str) -> bool {
+    let normalized = normalize_path(path);
+    normalized.ends_with("/temp/.encrypt_stage") || normalized.contains("/temp/.encrypt_stage/")
 }
 
 /// Return true when a result path names a runtime-internal file.

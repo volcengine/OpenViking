@@ -827,6 +827,11 @@ impl FileSystem for ArcFileSystem {
             .await
     }
 
+    /// List internal directory entries without changing inner filesystem semantics.
+    async fn read_internal_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+        self.0.read_internal_dir(path).await
+    }
+
     async fn stat(&self, path: &str) -> Result<FileInfo> {
         self.0.stat(path).await
     }
@@ -975,7 +980,11 @@ impl FileSystem for MountableFS {
         sort_by: Option<crate::core::ListSortBy>,
         sort_order: Option<crate::core::SortOrder>,
     ) -> Result<Vec<FileInfo>> {
-        let mut entries = self.read_internal_dir(path).await?;
+        let (mount_info, rel_path) = self.find_mount(path).await?;
+        let mut entries = mount_info
+            .fs
+            .read_dir(&rel_path, None, None, None, None)
+            .await?;
         entries.retain(|entry| !is_hidden_internal_name(&entry.name));
         sort_directory_entries(&mut entries);
         Ok(apply_read_dir_options(
