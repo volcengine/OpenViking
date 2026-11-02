@@ -419,10 +419,6 @@ def classify(body: dict, headers: dict, messages: list[dict]) -> tuple[str, int]
     return "user", anchor
 
 
-# Session IDs are otherwise SHA-256 hex digests or "anonymous-" names.
-PEER_SESSION = "peer-"
-
-
 def session_id(headers: dict) -> str | None:
     for key in (
         "x-openviking-session",
@@ -437,22 +433,6 @@ def session_id(headers: dict) -> str | None:
     # The kernel continues the session whose reply the history contains, or
     # allocates an isolated anonymous one. Opening user text alone is not an identity.
     return None
-
-
-def peer_session(sid: str, peer: str | None) -> str:
-    """The gateway session of a peer's conversation; without a peer, ``sid`` itself.
-
-    A peer's sessions are apart from the user's others: the same session header from
-    two peers names two conversations, and history never inherits across peers.
-    """
-    return (
-        PEER_SESSION + hashlib.sha256(peer.encode()).hexdigest()[:16] + "-" + sid if peer else sid
-    )
-
-
-def session_peer_tag(sid: str) -> str:
-    """The peer prefix of a gateway session, empty for a session without a peer."""
-    return sid[: len(PEER_SESSION) + 17] if sid.startswith(PEER_SESSION) else ""
 
 
 def strip_thinking(messages: list[dict]) -> list[dict]:

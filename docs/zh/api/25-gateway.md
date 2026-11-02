@@ -225,7 +225,7 @@ curl -X POST "$SERVER_URL/gateway/admin/keys?account_id=team" \
 
 用户的 OpenViking API 密钥重新生成或用户被删除后，绑定它的网关密钥会失效并被删除，用户数据保留，见[网关密钥](../gateway/09-gateway-keys.md#gateway-keys)。
 
-**重置保存。** 请求体为 `{"session":"<会话请求头的值或日志中的 session>","protocol":"chat"}`，`protocol` 取 `chat`、`anthropic` 或 `responses`。成功返回 `{"status":"ready","message":"…"}`，网关会在这段对话的下一个请求里，把完整历史写入一个新的 OpenViking 会话。找不到这段对话时返回 404 `not_found`。对话带有 [Peer](../gateway/03-connect-clients.md#peer) 时，如果 `session` 填的是会话请求头的值，还要加上 `"peer_id":"<peer>"`；日志中的 `session` 已经包含 Peer，不用再加。
+**重置保存。** 请求体为 `{"session":"<会话请求头的值或日志中的 session>","protocol":"chat"}`，`protocol` 取 `chat`、`anthropic` 或 `responses`。成功返回 `{"status":"ready","message":"…"}`，网关会在这段对话的下一个请求里，把完整历史写入一个新的 OpenViking 会话。找不到这段对话时返回 404 `not_found`。
 
 **删除数据。** 两个删除接口会清掉网关里尚未保存的对话内容和日志，不影响已经存入 OpenViking 的会话和记忆。保留期和其他删除途径见[安全与数据](../gateway/11-security-and-data.md)。
 

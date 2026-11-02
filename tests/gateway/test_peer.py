@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking_gateway.protocols import peer_session
 from openviking_gateway.storage import digest
 from openviking_gateway.tool_executor import ToolExecutor
 from openviking_gateway.tool_protocols import ResponseCapture
@@ -151,59 +150,108 @@ async def test_no_peer_leaves_requests_unchanged(running_gateway):
     assert {log["session"] for log in requests} == {digest("s1")}
 
 
-async def test_peers_sharing_a_session_header_get_their_own_sessions(running_gateway):
-    app, client, admin, key, _, _ = running_gateway
+async def chat(client, key, messages, peer=None, session="shared"):
+    headers = {"Authorization": "Bearer " + key, **({PEER: peer} if peer else {})}
+    if session:
+        headers["x-openviking-session"] = session
+    response = await client.post(
+        "/v1/chat/completions", headers=headers, json={"model": "model", "messages": messages}
+    )
+    assert response.status_code == 200, response.text
+
+
+def user(text):
+    return {"role": "user", "content": text}
+
+
+REPLY = {"role": "assistant", "content": "hello"}
+
+
+async def test_one_session_holds_user_messages_from_several_peers(running_gateway):
+    """A group chat: one session header, a different peer for each user message."""
+    app, client, admin, key, _, writes = running_gateway
     calls = observe(app)
-    for peer in ("alice-bot", "bob-bot", None):
-        response = await client.post(
-            "/v1/chat/completions",
-            headers={
-                "Authorization": "Bearer " + key["key"],
-                "x-openviking-session": "shared",
-                **({PEER: peer} if peer else {}),
-            },
-            json={"model": "model", "messages": [{"role": "user", "content": "How do we deploy?"}]},
-        )
-        assert response.status_code == 200, response.text
-    # Each conversation recalls once: none replays another peer's injection.
+    history = []
+    for text, peer in (("I am Alice", "alice-bot"), ("I am Bob", "bob-bot"), ("Anyone?", None)):
+        history = [*history, *([REPLY] if history else []), user(text)]
+        await chat(client, key["key"], history, peer)
+    # Each request recalls with its own peer.
     assert [header(h) for h in calls["search"]] == ["alice-bot", "bob-bot", None]
     logs = (await client.get("/admin/logs", headers=admin)).json()
-    sessions = {log.get("peer"): log["session"] for log in logs}
-    assert sessions == {
-        "alice-bot": peer_session(digest("shared"), "alice-bot"),
-        "bob-bot": peer_session(digest("shared"), "bob-bot"),
-        None: digest("shared"),
-    }
-    path = "/admin/keys/" + logs[0]["credential_id"] + "/capture/reset"
-    for body in (
-        {"session": "shared", "protocol": "chat", "peer_id": "alice-bot"},
-        {"session": sessions["bob-bot"], "protocol": "chat"},
-        {"session": "shared", "protocol": "chat"},
-    ):
+    requests = [log for log in logs if log.get("kind") != "capture"]
+    # Session IDs are the header's digest whatever the peer.
+    assert {log["session"] for log in requests} == {digest("shared")}
+    messages = await delivered(app, writes)
+    peers = {m["parts"][0]["text"]: m.get("peer_id") for m in messages if m["role"] == "user"}
+    assert peers["I am Alice"] == "alice-bot" and peers["I am Bob"] == "bob-bot"
+    assert peers.get("Anyone?") is None
+    assert all("peer_id" not in m for m in messages if m["role"] != "user")
+    # Capture reset takes the session alone.
+    path = "/admin/keys/" + requests[0]["credential_id"] + "/capture/reset"
+    body = {"session": "shared", "protocol": "chat"}
+    assert (await client.post(path, headers=admin, json=body)).status_code == 200
+
+
+async def test_a_message_keeps_the_peer_of_the_request_that_first_sent_it(running_gateway):
+    app, client, _, key, _, writes = running_gateway
+    # History the gateway sees for the first time takes the peer of that request.
+    first = [user("Earlier, unseen"), REPLY, user("I am Alice")]
+    await chat(client, key["key"], first, "alice-bot")
+    # A peerless message stays peerless when a peer's request carries it later.
+    await chat(client, key["key"], [*first, REPLY, user("No peer here")])
+    await chat(client, key["key"], [*first, REPLY, user("No peer here"), REPLY, user("Bob")], "bob")
+    messages = await delivered(app, writes)
+    peers = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
+    assert peers[:3] == [
+        ("Earlier, unseen", "alice-bot"),
+        ("I am Alice", "alice-bot"),
+        ("No peer here", None),
+    ]
+
+
+@pytest.mark.parametrize("cause", ["edit", "reset"])
+async def test_saving_again_keeps_each_messages_peer(running_gateway, cause):
+    """Saving the history to a new OpenViking session keeps each message's peer."""
+    app, client, admin, key, _, writes = running_gateway
+    sessions = []
+
+    async def handler(request):
+        if request.path.endswith("/messages/batch"):
+            sessions.append(request.path.split("/")[4])
+
+    app.state.test_backend["handler"] = handler
+    await chat(client, key["key"], [user("I am Alice")], "alice-bot")
+    await chat(client, key["key"], [user("I am Alice"), REPLY, user("I am Bob")], "bob-bot")
+    await delivered(app, writes)
+    reply = REPLY
+    if cause == "edit":
+        reply = {"role": "assistant", "content": "edited"}
+    else:
+        logs = (await client.get("/admin/logs", headers=admin)).json()
+        path = "/admin/keys/" + logs[0]["credential_id"] + "/capture/reset"
+        body = {"session": "shared", "protocol": "chat"}
         assert (await client.post(path, headers=admin, json=body)).status_code == 200
-    unknown = {"session": "shared", "protocol": "chat", "peer_id": "carol-bot"}
-    assert (await client.post(path, headers=admin, json=unknown)).status_code == 404
+    await chat(client, key["key"], [user("I am Alice"), reply, user("Carol")], "carol-bot")
+    writes.clear()
+    messages = await delivered(app, writes)
+    assert len(set(sessions)) == 2
+    users = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
+    assert users[0] == ("I am Alice", "alice-bot")
 
 
-async def test_anonymous_history_does_not_continue_another_peers_session(
-    setup_kernel, credential, policy
-):
+async def test_anonymous_history_continues_across_peers(setup_kernel, credential, policy):
     kernel, _, _, _ = setup_kernel
-    first = [{"role": "user", "content": "How do we deploy?"}]
+    first = [user("How do we deploy?")]
     alice = await kernel.prepare(
         {"messages": first}, "chat", {}, credential, {"id": "u"}, policy, peer="alice-bot"
     )
     reply = {"role": "assistant", "content": "Use the blue cluster."}
     await kernel.completed(alice, credential, ResponseCapture("chat", reply, complete=True))
-    later = [*first, reply, {"role": "user", "content": "And roll back?"}]
-    same = await kernel.prepare(
-        {"messages": later}, "chat", {}, credential, {"id": "u"}, policy, peer="alice-bot"
-    )
-    other = await kernel.prepare(
+    later = [*first, reply, user("And roll back?")]
+    bob = await kernel.prepare(
         {"messages": later}, "chat", {}, credential, {"id": "u"}, policy, peer="bob-bot"
     )
-    assert alice.anonymous and same.session == alice.session
-    assert other.session != alice.session and other.session.startswith(peer_session("", "bob-bot"))
+    assert alice.anonymous and bob.session == alice.session
 
 
 async def test_gateway_tool_calls_carry_the_peer(setup_kernel, credential, policy):

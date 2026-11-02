@@ -225,7 +225,7 @@ Save the `key` from the response right away; the gateway keeps only its hash. `G
 
 When the user's OpenViking API key is regenerated or the user is deleted, the gateway keys bound to it stop working and are deleted; the user's data stays. See [Gateway keys](../gateway/09-gateway-keys.md#gateway-keys).
 
-**Resetting saving.** The body is `{"session":"<session header value or the session from the log>","protocol":"chat"}`, where `protocol` is `chat`, `anthropic` or `responses`. On success the response is `{"status":"ready","message":"…"}`, and on the conversation's next request the gateway writes the full history to a new OpenViking session. If the conversation is not found, the response is 404 `not_found`. For a conversation with a [peer](../gateway/03-connect-clients.md#peer), add `"peer_id":"<peer>"` when `session` is the session header value; a `session` from the log already includes the peer.
+**Resetting saving.** The body is `{"session":"<session header value or the session from the log>","protocol":"chat"}`, where `protocol` is `chat`, `anthropic` or `responses`. On success the response is `{"status":"ready","message":"…"}`, and on the conversation's next request the gateway writes the full history to a new OpenViking session. If the conversation is not found, the response is 404 `not_found`.
 
 **Deleting data.** Both delete endpoints remove conversation content the gateway has not yet saved, and logs. Sessions and memories already stored in OpenViking are not affected. Retention and the other ways data is deleted are described in [Security and data](../gateway/11-security-and-data.md).
 

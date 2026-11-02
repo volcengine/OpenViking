@@ -34,12 +34,10 @@ from .protocols import (
     clean_text,
     client_openviking_tools,
     is_user,
-    peer_session,
     plugin_present,
     prefix_chain,
     replays_reasoning,
     session_id,
-    session_peer_tag,
     strip_thinking,
     text_content,
     unwrap_client,
@@ -145,7 +143,7 @@ class MemoryKernel:
             for m in messages
         ], sorted(known)
 
-    async def identity(self, scope, messages, protocol, headers, peer=None):
+    async def identity(self, scope, messages, protocol, headers):
         """Resolve the session and the sessions whose replies the history contains.
 
         Replies are matched in the chain flavour ``completed`` records them in. A
@@ -153,8 +151,6 @@ class MemoryKernel:
         latest reply it contains, or starts a new one when two sessions produced it.
         """
         sid = session_id(headers)
-        if sid is not None:
-            sid = peer_session(sid, peer)
         adapter = tool_protocol(protocol)
 
         def chains():
@@ -172,21 +168,10 @@ class MemoryKernel:
             a for a, m in zip(body_chain, messages, strict=True) if a and adapter.is_reply(m)
         ]
         owners = await self.store.replay.replies(scope, endpoints) if endpoints else {}
-        # A reply another peer's session produced proves nothing about this peer's.
-        tag = peer_session("", peer)
-        owners = {
-            a: mine
-            for a, o in owners.items()
-            if (mine := {s for s in o if session_peer_tag(s) == tag})
-        }
         anonymous = sid is None
         if anonymous:
             latest = next((owners[a] for a in reversed(endpoints) if a in owners), set())
-            sid = (
-                next(iter(latest))
-                if len(latest) == 1
-                else peer_session("anonymous-" + uuid.uuid4().hex, peer)
-            )
+            sid = next(iter(latest)) if len(latest) == 1 else "anonymous-" + uuid.uuid4().hex
         # A reply two sessions produced, such as a greeting, proves no inheritance.
         ancestors = sorted({next(iter(o)) for o in owners.values() if len(o) == 1} - {sid})
         return sid, anonymous, chain, body_chain, ancestors
@@ -217,7 +202,7 @@ class MemoryKernel:
         # the upstream still gets exactly what the client sent.
         messages, thinking = await self.sent_history(scope, sent, protocol)
         sid, anonymous, chain, body_chain, ancestors = await self.identity(
-            scope, messages, protocol, headers, peer
+            scope, messages, protocol, headers
         )
         as_text = (
             {a for a, m, s in zip(body_chain, messages, sent, strict=True) if m != s}

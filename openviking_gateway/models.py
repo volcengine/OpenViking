@@ -36,13 +36,6 @@ def validation_detail(error: ValidationError) -> str:
 class CaptureReset(BaseModel):
     session: str = Field(min_length=1, max_length=128)
     protocol: ProtocolName
-    # The X-OpenViking-Actor-Peer of a conversation named by its session header.
-    peer_id: str | None = None
-
-    @field_validator("peer_id")
-    @classmethod
-    def validate_peer_id(cls, value: str | None) -> str | None:
-        return normalize_peer_id(value)
 
 
 class Policy(BaseModel):

@@ -37,7 +37,7 @@ SOURCE = "gateway:"
 
 
 def new_capture(reason="", old=None):
-    return {
+    value = {
         "ov_session": "gateway-" + uuid.uuid4().hex,
         "delivered": "",
         "pending": [],
@@ -49,6 +49,10 @@ def new_capture(reason="", old=None):
         "reason": reason,
         "previous": lineage(old or {})[:MAX_PREVIOUS],
     }
+    # A new OpenViking session receives the history again, from the same peers.
+    if (old or {}).get("peers"):
+        value["peers"] = old["peers"]
+    return value
 
 
 def lineage(value):
@@ -80,7 +84,7 @@ class CapturePipeline:
         self.queue = queue
 
     @staticmethod
-    def turns(messages, chain, start, stop, confirmed, idle_seconds):
+    def turns(messages, chain, start, stop, confirmed, idle_seconds, peers=None):
         """Split messages[start:stop] at real user messages into delivery segments.
 
         A segment that does not start at a user message continues the turn
@@ -90,7 +94,7 @@ class CapturePipeline:
         bounds = [start, *(i for i in range(start + 1, stop) if is_user(messages[i])), stop]
         turns = []
         for begin, end in pairwise(bounds):
-            captured = capture_messages(messages[begin:end], chain[begin:end])
+            captured = with_peers(capture_messages(messages[begin:end], chain[begin:end]), peers)
             if captured:
                 turns.append(
                     {
@@ -125,9 +129,10 @@ class CapturePipeline:
             value, held, ends = {**value, **new_capture(reason, value)}, [], []
         start = 1 + max((positions[a] for a in ends), default=-1)
         split = min(max(start, user), stop)
+        peers = value.get("peers")
         added = [
-            *cls.turns(messages, chain, start, split, True, 0),
-            *cls.turns(messages, chain, split, stop, confirmed, idle_seconds),
+            *cls.turns(messages, chain, start, split, True, 0, peers),
+            *cls.turns(messages, chain, split, stop, confirmed, idle_seconds, peers),
         ]
         return {**value, "pending": [*held, *added]}, added
 
@@ -142,6 +147,7 @@ class CapturePipeline:
             now = time.time()
             if any(t["anchor"] not in positions for t in value["pending"] if t["ready"] <= now):
                 value = new_capture("history_changed", value)
+            value = record_peers(value, request)
             value, _ = await asyncio.to_thread(
                 self.advance,
                 value,
@@ -163,9 +169,6 @@ class CapturePipeline:
                 protocol=request.protocol,
                 policy=policy.model_dump(),
             )
-            # The session is the peer's alone (see peer_session), so its peer never changes.
-            if request.peer:
-                value["peer"] = request.peer
             if value == old.value or await self.queue.swap(
                 request.scope, request.session, old, value, ready_at(value)
             ):
@@ -410,9 +413,8 @@ class CaptureWorker:
         # duplicate in OpenViking is accepted.
         while state["pending"] and state["pending"][0]["ready"] <= time.time():
             turn = state["pending"][0]
-            outgoing = with_peer(turn["messages"], state.get("peer"))
-            for offset in range(0, len(outgoing), 100):
-                await self.viking.write(token, session, outgoing[offset : offset + 100])
+            for offset in range(0, len(turn["messages"]), 100):
+                await self.viking.write(token, session, turn["messages"][offset : offset + 100])
             count = len(turn["messages"])
             if turn.get("continued") and state["retained"]:
                 # Commits keep whole turns, so a continuation joins its turn.
@@ -458,14 +460,43 @@ class CaptureWorker:
         await self.save(item, doc, state)
 
 
-def with_peer(messages, peer):
-    """Copies naming ``peer`` as the counterpart of the user's messages.
+def record_peers(value, request):
+    """Name the peer of each user message in the history the first time it is seen.
 
-    The queue keeps the messages as captured: delivery compares them to find its place.
+    A session may hold several peers' messages, as a group chat does: a message keeps
+    the peer of the request that first brought it, later requests leave it unchanged.
+    The map follows the history, so it holds only messages that can still be queued.
+    Without any peer the capture carries no map.
     """
-    if not peer:
-        return messages
-    return [{**m, "peer_id": peer} if m["role"] == "user" else m for m in messages]
+    peers = value.get("peers") or {}
+    if not request.peer and not peers:
+        return value
+    recorded = {}
+    for message, anchor in zip(
+        request.messages[: request.anchor + 1],
+        request.capture_chain[: request.anchor + 1],
+        strict=True,
+    ):
+        if anchor and message.get("role") == "user":
+            recorded[anchor] = peers.get(anchor, request.peer)
+    return {**value, "peers": recorded}
+
+
+def with_peers(captured, peers):
+    """Captured messages with the user's naming their peer; an assistant has none.
+
+    The queue holds these copies, so a delivered message compares equal to the same
+    message queued again.
+    """
+    if not peers:
+        return captured
+    return [
+        {**m, "peer_id": peer}
+        if m["role"] == "user"
+        and (peer := peers.get(m["source_message_ids"][0].removeprefix(SOURCE)))
+        else m
+        for m in captured
+    ]
 
 
 def remaining(pending, written):

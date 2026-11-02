@@ -28,7 +28,7 @@ from .models import (
     validation_detail,
 )
 from .overview import overview_summary
-from .protocols import peer_session, text_content
+from .protocols import text_content
 from .proxy import default_policy, fill_key, upstream_headers, upstream_key, upstream_url
 from .records import RecordKind as K
 from .storage import delete_account_data, delete_user_data, digest
@@ -483,8 +483,7 @@ def register_management(app):
         if not key or hidden(who, key):
             fail(404, "not_found")
         scope = digest(who.account_id + "\0" + key["user_id"] + "\0" + data.protocol)
-        # A session from the log already names its peer.
-        for session in (peer_session(digest(data.session), data.peer_id), data.session):
+        for session in (digest(data.session), data.session):
             if (K.ROOT, "") in await store.replay.read(scope, session, [""]):
                 break
         else:
