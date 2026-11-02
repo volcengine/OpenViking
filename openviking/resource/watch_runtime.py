@@ -280,11 +280,14 @@ class WatchRuntime:
                 return False
             try:
                 await tracker.cancel(run_id, **owner)
-            except ValueError:
-                # Remote non-cancellable execution remains occupied until terminal.
-                return False
+            except ValueError as exc:
+                logger.warning("Failed to cancel timed-out Watch Task %s: %s", run_id, exc)
             status = await tracker.get_task_status(run_id, **owner)
             if status not in TERMINAL_TASK_STATUSES:
-                return False
+                await tracker.fail(
+                    run_id,
+                    f"Watch run Task timed out after {self._run_timeout:g}s",
+                    **owner,
+                )
         record = await tracker.get(run_id, **owner)
         return await self.watch_manager.settle_running(state, record)

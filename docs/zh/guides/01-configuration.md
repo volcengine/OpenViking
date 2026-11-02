@@ -1431,8 +1431,10 @@ leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File 和 MySQL
 对应的 ingestion Task：运行占用目标期间，Watch 行记录该 Task ID，且只有在持有
 目标 Tree PathLock 时才能开始运行。提交在创建 Task 前停止（服务停机、身份删除、
 失败）时立即结算；Task 超过 1 小时仍不存在时，阻止后续提交并按 error 结算。
-运行超过 3 小时会请求取消，在 Task 停止前仍占用目标；若再过 30 分钟仍无法停止，
-则释放运行并按 failed 结算。
+运行超过 3 小时会请求取消；若 Task 仍非终态，则通过 TaskTracker 记录超时错误。
+Connector 导入没有本地 Work，其 Task 会成为 failed，再结算 Watch 并释放占用。
+仍有未结束本地 Work 的 Task 保持占用，直到 Work 结算。已有终态保持不变。
+该超时表示结束本轮本地跟踪，不保证远端执行已经停止。
 
 对与被占用 Watch 目标重叠的路径执行 `mv`、`cp`、`rm`、`mkdir` 时，最多等待
 10 秒，之后返回可重试的 busy 错误。

@@ -211,8 +211,12 @@ class FileWatchStore(WatchStore):
         await self._fs.write_file(tmp_uri, content, ctx=ctx, auto_pathlock=False)
         try:
             if await self._fs.exists(uri, ctx=ctx):
-                if await self._fs.exists(bak_uri, ctx=ctx):
-                    await self._fs.rm(bak_uri, ctx=ctx, auto_pathlock=False)
+                try:
+                    if await self._fs.exists(bak_uri, ctx=ctx):
+                        await self._fs.rm(bak_uri, ctx=ctx, auto_pathlock=False)
+                except Exception as exc:
+                    # Rename can replace the backup even if its removal failed.
+                    logger.warning("[FileWatchStore] Failed to remove %s backup: %s", bak_uri, exc)
                 await self._rename(uri, bak_uri)
         except Exception as exc:
             logger.warning("[FileWatchStore] Failed to rotate %s backup: %s", uri, exc)

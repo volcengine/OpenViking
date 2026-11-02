@@ -1464,8 +1464,11 @@ starts only while the target's Tree PathLock is held. A submission that stops
 before creating its Task (server shutdown, identity deletion, failure) settles
 the run at once; if its Task is still missing after 1 hour, further submission
 is fenced and the run is settled as an error. After 3 hours, cancellation is
-requested and the run stays occupied until its Task stops. If cancellation
-cannot stop the Task within another 30 minutes, the run is released as failed.
+requested. If the Task remains nonterminal, TaskTracker records a timeout error.
+Connector imports have no local Work, so their Tasks become failed and the
+Watch is settled with its occupancy released. Tasks with open local Work keep
+their occupancy until that Work settles. Existing terminal states are preserved.
+This timeout ends local tracking; it does not guarantee that remote execution stops.
 
 `mv`, `cp`, `rm`, and `mkdir` on a path overlapping an occupied Watch target
 wait up to 10 seconds and then fail with a retryable busy error.

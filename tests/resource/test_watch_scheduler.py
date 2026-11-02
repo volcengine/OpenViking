@@ -269,9 +269,7 @@ async def test_missing_task_is_settled_after_grace(make_runtime, watch_tracker):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failure", [None, ConnectionError("store unavailable"), ValueError("remote")]
-)
+@pytest.mark.parametrize("failure", [None, ConnectionError("store unavailable")])
 async def test_overdue_run_stays_occupied_until_its_task_stops(
     make_runtime, watch_tracker, monkeypatch, failure
 ):
@@ -290,6 +288,66 @@ async def test_overdue_run_stays_occupied_until_its_task_stops(
     await runtime.sweep()
     assert not await runtime.watch_manager.has_running_overlap("default", [TARGET])
     assert (await runtime.watch_manager.get_task(task.task_id)).last_status == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("started", [False, True])
+@pytest.mark.parametrize("active", [False, True])
+async def test_overdue_connector_task_is_failed_and_watch_is_settled(
+    make_runtime, watch_tracker, started, active
+):
+    runtime = await make_runtime()
+    task, record = await running_watch(runtime, watch_tracker, task_type="connector_import")
+    await runtime.watch_manager.update_task(task.task_id, **OWNER, role="root", is_active=active)
+    if started:
+        await watch_tracker.start(record.task_id, **OWNER)
+    await runtime.sweep()
+    assert await runtime.watch_manager.has_running_overlap("default", [TARGET])
+    assert (await watch_tracker.get(record.task_id, **OWNER)).error is None
+
+    await shape_watch(runtime.watch_manager.store, task.task_id, run_started_at=1.0)
+    await runtime.sweep()
+    failed = await watch_tracker.get(record.task_id, **OWNER)
+    assert failed.status.value == "failed"
+    assert failed.error == "Watch run Task timed out after 10800s"
+    state = await runtime.watch_manager.store.get_state(task.task_id)
+    assert state.current_run_id is None and state.run_started_at is None
+    assert state.task.last_task_id == record.task_id
+    assert state.task.last_status == "failed" and state.task.last_error == failed.error
+    assert state.task.is_active is active
+    assert (state.task.next_execution_time is not None) is active
+    assert not await runtime.watch_manager.has_running_overlap("default", [TARGET])
+    assert task.task_id not in runtime._active_runs
+
+    saved = state.task.to_dict()
+    await runtime.sweep()
+    await watch_tracker.complete(record.task_id, {"late": "result"}, **OWNER)
+    assert (await watch_tracker.get(record.task_id, **OWNER)).status.value == "failed"
+    assert (await runtime.watch_manager.get_task(task.task_id)).to_dict() == saved
+
+
+@pytest.mark.asyncio
+async def test_timeout_failure_does_not_overwrite_concurrent_completion(
+    make_runtime, watch_tracker, monkeypatch
+):
+    runtime = await make_runtime()
+    task, record = await running_watch(runtime, watch_tracker, task_type="connector_import")
+    await shape_watch(runtime.watch_manager.store, task.task_id, run_started_at=1.0)
+    fail = watch_tracker.fail
+
+    async def complete_before_fail(task_id, error, **owner):
+        await watch_tracker.complete(task_id, {"completed": True}, **owner)
+        await fail(task_id, error, **owner)
+
+    monkeypatch.setattr(watch_tracker, "fail", complete_before_fail)
+    await runtime.sweep()
+    completed = await watch_tracker.get(record.task_id, **OWNER)
+    assert completed.status.value == "completed" and completed.error is None
+    assert completed.result == {"completed": True}
+    state = await runtime.watch_manager.store.get_state(task.task_id)
+    assert state.current_run_id is None
+    assert state.task.last_status == "completed" and state.task.last_error is None
+    assert not await runtime.watch_manager.has_running_overlap("default", [TARGET])
 
 
 @pytest.mark.asyncio
