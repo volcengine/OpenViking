@@ -8,7 +8,8 @@
 @source "../node_modules/streamdown/dist/*.js";
 @source "../node_modules/@streamdown/code/dist/*.js";
 
-@custom-variant dark (&:is(.dark *));
+/* UX pages use the Figma light palette; native Studio retains its saved theme. */
+@custom-variant dark (&:is(.dark:not(:has([data-studio-ux='workbench'])) *));
 @plugin "@tailwindcss/typography";
 
 :root {

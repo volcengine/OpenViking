@@ -2,7 +2,7 @@ import { StudioEntry } from '#/platform/entry/paths'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { EyeIcon, EyeOffIcon } from 'lucide-react'
+import { EyeOffIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { AuthPage } from '#/features/auth/lib/auth-routes'
 import type { ApiKeyLoginConfig } from '#/platform/deployment/types'
@@ -12,6 +12,7 @@ import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
 import { ApiKeyLogin } from './api-key-login'
 import { AuthLayout } from './auth-layout'
+import eyeIcon from '#/assets/workbench/eye.svg'
 import styles from './auth-layout.module.css'
 
 // The hosted account service is not integrated yet. These pages deliberately
@@ -132,7 +133,11 @@ function PasswordField({
           )}
           onClick={() => setVisible(!visible)}
         >
-          {visible ? <EyeOffIcon /> : <EyeIcon />}
+          {visible ? (
+            <EyeOffIcon />
+          ) : (
+            <img src={eyeIcon} alt="" width={16} height={16} />
+          )}
         </Button>
       </div>
       <FieldError id={`${id}-error`} message={error} />

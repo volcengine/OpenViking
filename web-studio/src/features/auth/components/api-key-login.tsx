@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { EyeIcon, EyeOffIcon, Loader2Icon } from 'lucide-react'
+import { EyeOffIcon, Loader2Icon } from 'lucide-react'
 import { StudioSetupError, loginAndActivate } from '#/features/connection/login'
 import type { ConnectionLoginResult } from '#/features/connection/login'
 import { isValidConnectionUrl } from '#/platform/connection/configuration'
@@ -10,6 +10,7 @@ import { ErrorMessage } from '#/shared/components/error-message'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
 import { AuthLayout } from './auth-layout'
+import eyeIcon from '#/assets/workbench/eye.svg'
 import styles from './auth-layout.module.css'
 
 export function ApiKeyLogin({
@@ -146,7 +147,11 @@ export function ApiKeyLogin({
                 )}
                 onClick={() => setVisible(!visible)}
               >
-                {visible ? <EyeOffIcon /> : <EyeIcon />}
+                {visible ? (
+                  <EyeOffIcon />
+                ) : (
+                  <img src={eyeIcon} alt="" width={16} height={16} />
+                )}
               </Button>
             </div>
             <p id="login-key-help" className={styles.help}>

@@ -11,7 +11,9 @@
   --popover: #ffffff;
   --popover-foreground: #0b0b0f;
   --muted: #f3f4f7;
-  --muted-foreground: #6e718c;
+  --muted-foreground: #787c91;
+  --wb-label: #3f3f51;
+  --wb-brand: #1c2633;
   --secondary: #edeffc;
   --secondary-foreground: #3833d2;
   --accent: #f5f7ff;
@@ -36,40 +38,8 @@
     'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
-:root.dark:has([data-studio-ux='workbench']) {
-  --primary: #9292ff;
-  --primary-foreground: #17172e;
-  --ring: #9292ff;
-  --background: #1d1d29;
-  --foreground: #f1f1f7;
-  --card: #22222f;
-  --card-foreground: #f1f1f7;
-  --popover: #292938;
-  --popover-foreground: #f1f1f7;
-  --muted: #2a2a3b;
-  --muted-foreground: #b0b1c7;
-  --secondary: #31314a;
-  --secondary-foreground: #d0d0ff;
-  --accent: #292940;
-  --accent-foreground: #d0d0ff;
-  --border: #3b3b50;
-  --input: #4a4a61;
-  --sidebar: #171721;
-  --sidebar-foreground: #c4c4d5;
-  --sidebar-primary: #9292ff;
-  --sidebar-primary-foreground: #17172e;
-  --sidebar-accent: #31314a;
-  --sidebar-accent-foreground: #d0d0ff;
-  --sidebar-border: #343448;
-  --sidebar-ring: #9292ff;
-  --wb-canvas: #171721;
-  --wb-subtle: #20202e;
-  --wb-visual: #252535;
-  --wb-hover: #b4b4ff;
-  --wb-divider: #343448;
-}
-
 [data-studio-ux='workbench'] {
+  color-scheme: light;
   font-family: var(--wb-font);
 }
 :root:has([data-studio-ux='workbench']) ::selection {

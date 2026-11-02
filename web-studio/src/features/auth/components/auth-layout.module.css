@@ -21,6 +21,7 @@
   gap: 6px;
   font-size: 18px;
   font-weight: 700;
+  color: var(--wb-brand);
 }
 .brand:focus-visible {
   outline: 2px solid var(--ring);
@@ -37,18 +38,17 @@
   min-width: 0;
   align-items: center;
   justify-content: center;
-  padding: 96px clamp(32px, 8.333vw, 120px) 64px;
+  padding: 40px clamp(32px, 8.333vw, 120px);
 }
 .form {
   width: 100%;
   max-width: 480px;
 }
 .visual {
+  position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 40px;
   background: var(--wb-visual);
   padding: 80px 0;
 }
@@ -58,14 +58,16 @@
   object-fit: contain;
 }
 .visual p {
-  margin: 0 24px;
+  position: absolute;
+  top: calc(50% + min(16.4vw, 236px));
+  margin: -11px 24px 0;
   color: var(--muted-foreground);
   text-align: center;
   font-size: 13px;
   line-height: 22px;
 }
 .heading {
-  margin-bottom: 32px;
+  margin-bottom: 24px;
 }
 .heading h1 {
   font-size: 24px;
@@ -82,7 +84,7 @@
 .fields {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 .field {
   display: flex;
@@ -94,11 +96,13 @@
   font-size: 13px;
   line-height: 22px;
   font-weight: 400;
+  color: var(--wb-label);
 }
 .field input {
   height: 44px;
   border-radius: 8px;
   font-size: 14px;
+  padding-inline: 12px;
   background: var(--background);
 }
 .field input:not(:focus-visible) {
@@ -161,7 +165,7 @@
   line-height: 20px;
 }
 .submit {
-  margin-top: 40px;
+  margin-top: 48px;
   height: 44px;
   min-width: 120px;
   padding-inline: 24px;
@@ -188,6 +192,9 @@
   line-height: 22px;
   border-radius: 4px;
   text-underline-offset: 4px;
+}
+.labelRow .link {
+  min-height: 22px;
 }
 .link:hover {
   text-decoration: underline;
@@ -218,9 +225,6 @@
   .content {
     padding-inline: 32px;
   }
-  .visual {
-    gap: 24px;
-  }
   .illustration {
     width: 90%;
   }
@@ -245,7 +249,8 @@
   .field input {
     font-size: 16px;
   }
-  .link {
+  .link,
+  .labelRow .link {
     min-height: 44px;
   }
 }

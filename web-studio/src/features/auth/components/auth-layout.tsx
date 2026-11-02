@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getRouterBasePath } from '#/shared/lib/public-path'
-import { OpenVikingMark } from '#/shared/components/openviking-mark'
+import logoMark from '#/assets/workbench/logo-mark.svg'
 import { Button } from '#/shared/ui/button'
 import teamIllustration from '#/assets/workbench/team.png'
 import styles from './auth-layout.module.css'
@@ -12,7 +12,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
     <div className={styles.layout}>
       <header className={styles.header}>
         <a href={getRouterBasePath()} className={styles.brand}>
-          <OpenVikingMark className="size-8" />
+          <img src={logoMark} alt="" width={32} height={32} />
           <span>{t('appShell:studioSettings.brand')}</span>
         </a>
         <Button
