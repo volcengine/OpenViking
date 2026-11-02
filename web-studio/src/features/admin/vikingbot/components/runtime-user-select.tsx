@@ -1,12 +1,12 @@
 import { getBotUsers } from '#/features/admin/vikingbot/api'
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { Button } from '#/shared/ui/button'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 export function useRuntimeUserSelection(enabled: boolean) {
-  const { identityScopeKey, serverMode } = useAppConnection()
+  const { identityScopeKey, serverMode } = useConnectionAccess()
   const [userId, setUserId] = useState('')
   const users = useQuery({
     queryKey: ['vikingbot', identityScopeKey, serverMode, 'users'],

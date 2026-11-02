@@ -3,6 +3,7 @@ import { FilesystemRoute } from '#/features/workbench/filesystem/page'
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/filesystem')({
+  staticData: { studioTheme: 'workbench' },
   validateSearch: (search: Record<string, unknown>): FilesystemSearch => ({
     file: typeof search.file === 'string' ? search.file : undefined,
     panel:

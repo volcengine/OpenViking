@@ -101,7 +101,11 @@ it.each([
       await waitFor(() => expect(api.serverMode).toBe('api_key'))
       await waitFor(() => expect(api.isConnectionRoleLoading).toBe(false))
       expect(api.connectionRole).toBe(userKey ? 'user' : 'unknown')
-      expect(canEnterManagement).toBe(true)
+      expect(api.accessContext.data.status).toBe(
+        userKey ? 'verified' : 'unchecked',
+      )
+      expect(api.accessContext.control.status).toBe('unchecked')
+      expect(canEnterManagement).toBe(false)
       expect(observed.some((r) => r.key === controlKey)).toBe(false)
       expect(ovClient.getConnection().adminApiKey).toBe('')
       await ovClient.client.get({ url: '/api/v1/console/dashboard/summary' })
@@ -116,6 +120,10 @@ it.each([
       routing.pathname = '/admin/users'
       view.rerender(tree())
       await waitFor(() => expect(api.connectionRole).toBe(controlRole))
+      expect(api.accessContext.control).toEqual({
+        status: 'verified',
+        principal: { accountId: 'team', userId: 'manager', role: controlRole },
+      })
       expect(ovClient.getConnection().adminApiKey).toBe(controlKey)
       const managementPath =
         controlRole === 'root'

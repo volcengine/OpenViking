@@ -8,11 +8,11 @@ import { isRedirect } from '@tanstack/react-router'
 import { expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({ needsSetup: true }))
-vi.mock('#/features/connection/lib/onboarding', () => ({
+vi.mock('#/features/connection/lib/profile-bootstrap', () => ({
   needsStudioSetup: () => state.needsSetup,
 }))
 it.each([
-  [true, '/onboarding'],
+  [true, '/login'],
   [false, '/settings'],
 ] as const)(
   'keeps /config as a compatibility redirect for setup=%s',

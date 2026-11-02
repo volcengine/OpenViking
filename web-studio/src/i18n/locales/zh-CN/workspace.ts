@@ -19,6 +19,7 @@ const workspace = {
       connections: '已保存的连接',
       addConnection: '添加连接',
       manageConnections: '管理连接',
+      signIn: '使用其他 Key 登录',
       root: 'Root',
       accountAdmin: 'Account Admin',
       dualCredential: '管理 + User',

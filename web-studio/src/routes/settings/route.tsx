@@ -2,5 +2,6 @@ import { ConnectionSettingsRoute } from '#/features/connection/pages/settings-pa
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/settings')({
+  staticData: { studioTheme: 'workbench' },
   component: ConnectionSettingsRoute,
 })

@@ -1,4 +1,5 @@
 import { showErrorToast } from '#/shared/lib/error-toast'
+import styles from './filesystem.module.css'
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
 import {
   ArrowLeftIcon,
@@ -16,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
 import { FindPalette } from '#/features/workbench/resources/components/find-palette'
@@ -101,7 +102,7 @@ function FilesystemWorkbench() {
   const { provider } = useStudioService()
   const canUseLocalTools = provider === 'opensource'
   const canUseCliPanel = canUseLocalTools || provider === 'volcengine'
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const search = routeApi.useSearch()
   const navigate = useNavigate({ from: '/filesystem' })
   const initialCurrentUri = useMemo(
@@ -564,13 +565,9 @@ function FilesystemWorkbench() {
   }, [])
 
   return (
-    <div className="-mx-4 -my-6 flex h-[calc(100svh-3rem)] min-h-0 flex-col bg-background md:-mx-6">
-      <div
-        ref={layoutRef}
-        className="flex min-h-0 flex-1 flex-col bg-background lg:flex-row"
-        style={layoutStyle}
-      >
-        <aside className="flex min-h-[180px] min-w-0 shrink-0 basis-[36%] flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--filesystem-left-width)] lg:min-w-[var(--filesystem-left-width)] lg:basis-auto lg:border-b-0">
+    <div className={styles.workspace}>
+      <div ref={layoutRef} className={styles.panels} style={layoutStyle}>
+        <aside className={styles.explorer}>
           <ContextExplorerHeader
             activeTaskCount={activeTaskCount}
             hasActiveTasks={hasActiveTasks}
@@ -603,8 +600,8 @@ function FilesystemWorkbench() {
           onPointerDown={(event) => handleResizeStart('context', event)}
         />
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col lg:border-b-0">
-          <div className="flex min-h-14 items-center gap-3 border-b px-4">
+        <main className={styles.document}>
+          <div className={styles.toolbar}>
             <button
               type="button"
               className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
@@ -681,7 +678,7 @@ function FilesystemWorkbench() {
               </Button>
             ) : null}
             {canUseCliPanel ? (
-              <div className="flex shrink-0 items-center gap-1 lg:hidden">
+              <div className="flex shrink-0 items-center gap-1 xl:hidden">
                 <Button
                   type="button"
                   size="icon-sm"
@@ -711,7 +708,7 @@ function FilesystemWorkbench() {
                 type="button"
                 size="icon-sm"
                 variant="ghost"
-                className="hidden shrink-0 lg:inline-flex"
+                className="hidden shrink-0 xl:inline-flex"
                 title={t('actionPanel.expand')}
                 aria-label={t('actionPanel.expand')}
                 onClick={toggleRightCollapsed}
@@ -740,7 +737,7 @@ function FilesystemWorkbench() {
         ) : null}
 
         {!isCompactLayout && canUseCliPanel && !rightCollapsed ? (
-          <aside className="hidden min-h-0 min-w-0 flex-col bg-muted/15 lg:flex lg:w-[var(--filesystem-right-width)] lg:min-w-[var(--filesystem-right-width)]">
+          <aside className={styles.assistant}>
             <FilesystemActionPanel
               activePanel={activePanel}
               currentUri={currentUri}
@@ -839,7 +836,7 @@ function FilesystemWorkbench() {
 function useIsCompactFilesystemLayout() {
   const [isCompact, setIsCompact] = useState(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(max-width: 1023px)').matches
+      ? window.matchMedia('(max-width: 1279px)').matches
       : false,
   )
 
@@ -847,7 +844,7 @@ function useIsCompactFilesystemLayout() {
     if (typeof window.matchMedia !== 'function') {
       return
     }
-    const mql = window.matchMedia('(max-width: 1023px)')
+    const mql = window.matchMedia('(max-width: 1279px)')
     const onChange = () => setIsCompact(mql.matches)
     onChange()
     mql.addEventListener('change', onChange)
@@ -958,7 +955,7 @@ function FilesystemMobileActionScreen({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background lg:hidden">
+    <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background xl:hidden">
       <div className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
         <Button
           type="button"

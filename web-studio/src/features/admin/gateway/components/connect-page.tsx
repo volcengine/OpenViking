@@ -8,7 +8,7 @@ import {
 import type * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { Button } from '#/shared/ui/button'
 import {
   Card,
@@ -100,7 +100,7 @@ export function ConnectPage() {
 
 function AddressCard({ info }: { info: ConnectionInfo }) {
   const { t } = useTranslation('gateway')
-  const { isGatewayHost } = useAppConnection()
+  const { isGatewayHost } = useConnectionAccess()
   const base = info.base_url.replace(/\/+$/, '')
   const warning = isLoopbackUrl(base)
     ? 'loopback'

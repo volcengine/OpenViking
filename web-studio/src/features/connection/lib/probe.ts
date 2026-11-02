@@ -5,7 +5,7 @@ import {
 import type { ConnectionDraft } from '#/features/connection/lib/types'
 import { probeStudioConnection } from '#/shared/api/admin'
 import { resolveApiKeyAuth } from '#/shared/api/auth'
-import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
+import { resolveConfiguredServiceProvider } from '#/platform/connection/service-provider'
 import type { ServerMode } from '#/shared/types/auth'
 
 export function resolveConnectionDataRoot(

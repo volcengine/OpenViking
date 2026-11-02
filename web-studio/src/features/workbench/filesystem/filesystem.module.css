@@ -1,0 +1,114 @@
+.workspace {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.panels {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+}
+.explorer {
+  display: flex;
+  flex-direction: column;
+  width: clamp(220px, var(--filesystem-left-width), 30%);
+  min-width: 220px;
+  flex-shrink: 0;
+  background: var(--wb-subtle);
+  border: 1px solid var(--wb-divider);
+  border-right: 0;
+  border-radius: 16px 0 0 16px;
+  overflow: hidden;
+}
+.document {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  background: var(--background);
+  border: 1px solid var(--wb-divider);
+  border-left: 0;
+  border-radius: 0 16px 16px 0;
+  overflow: hidden;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-height: 56px;
+  gap: 8px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--wb-divider);
+}
+.assistant {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  width: min(var(--filesystem-right-width), 32%);
+  min-height: 0;
+  background: var(--background);
+  border: 1px solid var(--wb-divider);
+  border-radius: 16px;
+  overflow: hidden;
+}
+.panels > [role='separator'] {
+  width: 8px;
+}
+.explorer + [role='separator'] {
+  background: var(--wb-subtle);
+  border-block: 1px solid var(--wb-divider);
+}
+.document + [role='separator'] {
+  width: 12px;
+}
+.document + [role='separator'] > span {
+  height: 32px;
+  border-radius: 2px;
+}
+@media (min-width: 1280px) {
+  .panels > [role='separator'] {
+    display: flex;
+  }
+}
+@media (max-width: 1279px) {
+  .assistant {
+    display: none;
+  }
+  .document + [role='separator'] {
+    display: none;
+  }
+  .explorer {
+    width: min(var(--filesystem-left-width), 34%);
+  }
+}
+@media (min-width: 768px) and (max-width: 1023px) {
+  .explorer {
+    border-right: 1px solid var(--wb-divider);
+  }
+}
+@media (max-width: 767px) {
+  .panels {
+    flex-direction: column;
+  }
+  .explorer {
+    flex: 0 1 34%;
+    min-height: 154px;
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--wb-divider);
+    border-bottom: 0;
+    border-radius: 16px 16px 0 0;
+  }
+  .document {
+    border: 1px solid var(--wb-divider);
+    border-radius: 0 0 16px 16px;
+  }
+  .toolbar {
+    min-height: 48px;
+    padding-inline: 8px;
+    gap: 2px;
+  }
+}

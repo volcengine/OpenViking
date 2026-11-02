@@ -25,6 +25,8 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 afterEach(() => {
   cleanup()
+  delete window.__OV_STUDIO_CONFIG__
+  localStorage.clear()
   health.mockReset()
   localStorage.removeItem('ov_console_connection')
   window.history.replaceState(null, '', '/')
@@ -130,3 +132,61 @@ vi.mock('#/features/connection/lib/credential-storage', () => ({
     localStorage.setItem(key, value),
   flushCredentialStorage: async () => {},
 }))
+
+it('does not discover or replace a hosted connection when the deployment disables gateway discovery', async () => {
+  const endpoint = 'https://cloud.example/ov'
+  window.__OV_STUDIO_CONFIG__ = {
+    edition: 'volcengine',
+    hostedApiBaseUrl: endpoint,
+  }
+  window.history.replaceState(null, '', '/studio/filesystem')
+  localStorage.setItem(
+    'ov_console_connection',
+    JSON.stringify({
+      baseUrl: endpoint,
+      serviceSelection: 'volcengine',
+      apiKey: 'synthetic-user',
+      adminApiKey: '',
+      accountId: '',
+      userId: '',
+    }),
+  )
+  health.mockImplementation(async (url: string) =>
+    url === window.location.origin
+      ? { service: 'openviking-gateway', auth_mode: 'api_key' }
+      : { auth_mode: 'api_key', role: 'user', version: 'test' },
+  )
+  let state!: ReturnType<typeof useAppConnection>
+  function Capture() {
+    state = useAppConnection()
+    return null
+  }
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const view = render(
+    <QueryClientProvider client={client}>
+      <AppConnectionProvider>
+        <Capture />
+      </AppConnectionProvider>
+    </QueryClientProvider>,
+  )
+  try {
+    await waitFor(() => expect(state.serverMode).toBe('api_key'))
+    expect(state.connection.baseUrl).toBe(endpoint)
+    expect(state.connection.apiKey).toBe('synthetic-user')
+    expect(state.isGatewayHost).toBe(false)
+    expect(health.mock.calls.every(([url]) => url === endpoint)).toBe(true)
+    expect(() =>
+      state.saveConnection({
+        ...state.connection,
+        baseUrl: window.location.origin,
+        serviceSelection: 'opensource',
+      }),
+    ).toThrow()
+    expect(state.connection.baseUrl).toBe(endpoint)
+  } finally {
+    view.unmount()
+    client.clear()
+  }
+})

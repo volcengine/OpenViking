@@ -32,7 +32,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import {
   fetchDirectoryLevelContent,
   fetchFileContent,
@@ -506,7 +506,7 @@ export function TerminalPanel({
   toolbarContainer: HTMLDivElement | null
 }) {
   const { t } = useTranslation('filesystem')
-  const { connectionRole, identityScopeKey } = useAppConnection()
+  const { connectionRole, identityScopeKey } = useConnectionAccess()
   const { invalidateAll } = useInvalidateVikingFs()
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
@@ -2646,7 +2646,7 @@ export function CompileTaskResult({
   onOpenResource: ResourceOpenHandler
 }) {
   const { t } = useTranslation('compile')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const { invalidateAll, invalidatePreview } = useInvalidateVikingFs()
   const refreshedTasksRef = useRef(new Set<string>())
   const query = useQuery({

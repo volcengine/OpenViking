@@ -1,5 +1,5 @@
-import type { ServiceSelection } from '#/shared/lib/studio-service'
-import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
+import type { ServiceSelection } from '#/platform/studio-contract'
+import { resolveConfiguredServiceProvider } from '#/platform/connection/service-provider'
 
 export type ApiKeyAuth = 'header' | 'bearer'
 

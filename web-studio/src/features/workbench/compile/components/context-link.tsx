@@ -1,4 +1,4 @@
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import {
   skillGuide,
   useCompileSkills,
@@ -36,7 +36,7 @@ export function ContextLink({
   className?: string
   resolveFile?: boolean
 }) {
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const { t } = useTranslation('compile')
   const {
     data: entry,

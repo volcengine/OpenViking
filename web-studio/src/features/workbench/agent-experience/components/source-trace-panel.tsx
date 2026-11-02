@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { LinkIcon, LoaderCircleIcon, RouteIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { Button } from '#/shared/ui/button'
 
 import { fetchSourceTrajectories } from '#/features/workbench/agent-experience/lib/api'
@@ -19,7 +19,7 @@ export function SourceTracePanel({
   onSelect: (trajectory: TrajectoryItem) => void
 }) {
   const { t } = useTranslation('agentExperiencePage')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const sourceQuery = useQuery({
     queryFn: ({ signal }) => fetchSourceTrajectories(experienceUri, signal),
     queryKey: ['agent-experience-sources', identityScopeKey, experienceUri],

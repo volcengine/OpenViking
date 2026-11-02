@@ -1,6 +1,6 @@
 import type { ConnectionDraft } from '#/features/connection/lib/types'
 import type { SessionHistorySource } from '#/features/workbench/sessions/lib/api'
-import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
+import { resolveConfiguredServiceProvider } from '#/platform/connection/service-provider'
 
 export function resolveSessionHistorySource(
   connection: ConnectionDraft,

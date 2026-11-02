@@ -1,22 +1,19 @@
 import { ErrorMessage } from '#/shared/components/error-message'
 import { SetupIdentityDirectory } from '#/features/connection/components/setup-identity-directory'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { flushCredentialStorage } from '#/features/connection/lib/credential-storage'
 import { formatHostedIdentity } from '#/features/connection/lib/identity-label'
 import {
-  CLOUD_SETUP_URL,
   StudioSetupError,
   StudioSetupRequestError,
-  verifyStudioSetup,
-} from '#/features/connection/lib/onboarding'
+} from '#/features/connection/lib/connection-errors'
 import type { ConnectionProfile } from '#/features/connection/lib/profiles'
 import {
   connectionProfileFingerprint,
   isValidConnectionUrl,
-  normalizeProfileConnection,
 } from '#/features/connection/lib/profiles'
 import { newConnectionPath } from '#/features/connection/lib/studio-mode'
 import { createRandomUuid } from '#/shared/lib/browser-crypto'
+import { getStudioExperience } from '#/platform/deployment/experience'
 import { PLAIN_INPUT_PROPS } from '#/shared/lib/form-input'
 import { Badge } from '#/shared/ui/badge'
 import { Button, buttonVariants } from '#/shared/ui/button'
@@ -70,6 +67,7 @@ export function groupedConnectionProfiles(
 }
 
 export function ConnectionProfilesList({ editorId }: { editorId?: string }) {
+  const services = getStudioExperience().auth.apiKey.services
   const { t } = useTranslation(['studio', 'settings'])
   const navigate = useNavigate()
   const {
@@ -77,7 +75,7 @@ export function ConnectionProfilesList({ editorId }: { editorId?: string }) {
     connection: currentConnection,
     studioMode,
     activeProfileId,
-    saveProfile,
+    submitProfile,
     activateProfile,
     deleteProfile,
   } = useAppConnection()
@@ -149,68 +147,39 @@ export function ConnectionProfilesList({ editorId }: { editorId?: string }) {
       setError(t('profiles.invalidUrl'))
       return
     }
-    let connection = normalizeProfileConnection(draft.connection)
-    const changed =
-      !original ||
-      connectionProfileFingerprint(original.connection) !==
-        connectionProfileFingerprint(connection)
-    if (
-      isNew ||
-      (changed && !(directoryIdentitySelected && !connection.apiKey.trim())) ||
-      (directoryIdentitySelected && connection.apiKey.trim())
-    ) {
-      const controller = new AbortController()
-      saveController.current = controller
-      setSaving(true)
-      setError('')
-      try {
-        const verified = await verifyStudioSetup(connection, controller.signal)
-        if (controller.signal.aborted || currentDraft.current !== draft) return
-        if (
-          directoryIdentitySelected &&
-          (verified.accountId !== connection.accountId ||
-            verified.userId !== connection.userId)
-        ) {
-          setError(t('onboarding:directoryIdentityMismatch'))
-          return
-        }
-        connection = verified
-      } catch (cause) {
-        if (!controller.signal.aborted && currentDraft.current === draft) {
-          setError(
-            cause instanceof StudioSetupError
-              ? t(`onboarding:${cause.code}`)
-              : cause instanceof StudioSetupRequestError
-                ? cause
-                : new StudioSetupRequestError('data', cause, connection),
-          )
-        }
-        return
-      } finally {
-        if (saveController.current === controller) {
-          saveController.current = null
-          setSaving(false)
-        }
+    const controller = new AbortController()
+    saveController.current = controller
+    setSaving(true)
+    setError('')
+    try {
+      await submitProfile(draft, {
+        signal: controller.signal,
+        selectedIdentity: directoryIdentitySelected
+          ? {
+              accountId: draft.connection.accountId,
+              userId: draft.connection.userId,
+            }
+          : undefined,
+      })
+      if (!controller.signal.aborted && currentDraft.current === draft)
+        closeEditor()
+    } catch (cause) {
+      if (!controller.signal.aborted && currentDraft.current === draft)
+        setError(
+          cause instanceof StudioSetupError
+            ? t(`onboarding:${cause.code}`)
+            : cause instanceof Error
+              ? cause
+              : new StudioSetupRequestError('data', cause, draft.connection),
+        )
+    } finally {
+      if (saveController.current === controller) {
+        saveController.current = null
+        setSaving(false)
       }
     }
-    saveProfile({
-      ...draft,
-      connection: {
-        ...connection,
-        adminApiKey:
-          connection.serviceSelection === 'volcengine'
-            ? ''
-            : connection.adminApiKey,
-      },
-    })
-    if (isNew) activateProfile(draft.id)
-    try {
-      await flushCredentialStorage()
-      closeEditor()
-    } catch {
-      setError(t('credentialStorage.saveError'))
-    }
   }
+
   const identityLabel = (profile: ConnectionProfile) =>
     studioMode === 'management'
       ? profile.connection.accountId
@@ -400,19 +369,15 @@ export function ConnectionProfilesList({ editorId }: { editorId?: string }) {
                     </FieldLabel>
                     <Select
                       value={draft.connection.serviceSelection}
-                      items={[
-                        {
-                          value: 'opensource',
-                          label: t('providers.opensource'),
-                        },
-                        {
-                          value: 'volcengine',
-                          label: t('providers.volcengine'),
-                        },
-                      ]}
+                      items={services.map(({ provider }) => ({
+                        value: provider,
+                        label: t(`providers.${provider}`),
+                      }))}
                       onValueChange={(value) => {
-                        if (value !== 'opensource' && value !== 'volcengine')
-                          return
+                        const service = services.find(
+                          (entry) => entry.provider === value,
+                        )
+                        if (!service) return
                         setDirectoryIdentitySelected(false)
                         if (
                           draft.connection.serviceSelection !== 'volcengine'
@@ -424,11 +389,12 @@ export function ConnectionProfilesList({ editorId }: { editorId?: string }) {
                           connection: {
                             ...draft.connection,
                             baseUrl:
-                              value === 'volcengine'
-                                ? CLOUD_SETUP_URL
+                              service.endpoint.kind === 'fixed'
+                                ? service.endpoint.url
                                 : openSourceUrlRef.current,
-                            serviceSelection: value,
+                            serviceSelection: service.provider,
                             apiKey: '',
+                            adminApiKey: '',
                           },
                         })
                       }}
@@ -440,12 +406,11 @@ export function ConnectionProfilesList({ editorId }: { editorId?: string }) {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent align="start">
-                        <SelectItem value="opensource">
-                          {t('providers.opensource')}
-                        </SelectItem>
-                        <SelectItem value="volcengine">
-                          {t('providers.volcengine')}
-                        </SelectItem>
+                        {services.map(({ provider }) => (
+                          <SelectItem key={provider} value={provider}>
+                            {t(`providers.${provider}`)}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </Field>

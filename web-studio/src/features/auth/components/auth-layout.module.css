@@ -1,0 +1,251 @@
+/* Layout and asset adapted from vikingdb-fe/apps/ov-workbench. */
+.layout {
+  height: 100%;
+  overflow-y: auto;
+  background: var(--background);
+  color: var(--foreground);
+}
+.header {
+  position: absolute;
+  z-index: 1;
+  inset: 0 0 auto;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px 0 10px;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 18px;
+  font-weight: 700;
+}
+.brand:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+.body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 100svh;
+}
+.content {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 96px clamp(32px, 8.333vw, 120px) 64px;
+}
+.form {
+  width: 100%;
+  max-width: 480px;
+}
+.visual {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  background: var(--wb-visual);
+  padding: 80px 0;
+}
+.illustration {
+  width: min(78.75%, 567px);
+  height: auto;
+  object-fit: contain;
+}
+.visual p {
+  margin: 0 24px;
+  color: var(--muted-foreground);
+  text-align: center;
+  font-size: 13px;
+  line-height: 22px;
+}
+.heading {
+  margin-bottom: 32px;
+}
+.heading h1 {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 32px;
+  margin: 0 0 12px;
+  letter-spacing: 0.072px;
+}
+.heading p {
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--muted-foreground);
+}
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.field label,
+.fields legend {
+  font-size: 13px;
+  line-height: 22px;
+  font-weight: 400;
+}
+.field input {
+  height: 44px;
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--background);
+}
+.field input:not(:focus-visible) {
+  box-shadow: none;
+}
+.field input[readonly] {
+  background: var(--wb-subtle);
+  color: var(--muted-foreground);
+}
+.services {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  margin-top: 8px;
+  border-radius: 10px;
+  background: var(--muted);
+}
+.service {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.service:has(:checked) {
+  background: var(--background);
+  border-color: var(--border);
+  color: var(--primary);
+}
+.service:has(:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.service input {
+  accent-color: var(--primary);
+}
+.password {
+  position: relative;
+}
+.password input {
+  padding-right: 48px;
+}
+.password button {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 44px;
+  width: 44px;
+  color: var(--muted-foreground);
+}
+.help {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 20px;
+}
+.submit {
+  margin-top: 40px;
+  height: 44px;
+  min-width: 120px;
+  padding-inline: 24px;
+  border-radius: 8px;
+}
+.submit:disabled {
+  background: var(--muted);
+  color: var(--muted-foreground);
+  opacity: 1;
+}
+.labelRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  color: var(--primary);
+  font-size: 13px;
+  line-height: 22px;
+  border-radius: 4px;
+  text-underline-offset: 4px;
+}
+.link:hover {
+  text-decoration: underline;
+}
+.link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+.alternative {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin-top: 24px;
+}
+.notice {
+  margin-top: 24px;
+  font-size: 13px;
+  line-height: 22px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.fieldError {
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--destructive);
+}
+@media (max-width: 900px) and (min-width: 761px) {
+  .content {
+    padding-inline: 32px;
+  }
+  .visual {
+    gap: 24px;
+  }
+  .illustration {
+    width: 90%;
+  }
+}
+@media (max-width: 760px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .content {
+    padding: 100px 24px 64px;
+  }
+  .visual {
+    display: none;
+  }
+  .header {
+    padding-inline: 16px;
+  }
+  .submit {
+    width: 100%;
+    margin-top: 32px;
+  }
+  .field input {
+    font-size: 16px;
+  }
+  .link {
+    min-height: 44px;
+  }
+}

@@ -1,8 +1,9 @@
+import { managementUnavailableDestination } from '#/platform/deployment/experience'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useStudioMode } from '#/features/connection/hooks/use-studio-mode'
 import { isConnectionSettingsPath } from '#/features/connection/lib/studio-mode'
 import { Button } from '#/shared/ui/button'
-import { Link, Outlet, useRouterState } from '@tanstack/react-router'
+import { Link, Navigate, Outlet, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 export function AdminRoute() {
@@ -10,6 +11,8 @@ export function AdminRoute() {
   const { canManage } = useStudioMode()
   const { isConnectionRoleLoading, isGatewayHost } = useAppConnection()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const managementRedirect = managementUnavailableDestination()
+  if (managementRedirect) return <Navigate replace to={managementRedirect} />
   // A standalone gateway keeps its independent /access authorization.
   const standaloneGateway =
     isGatewayHost &&

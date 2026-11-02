@@ -56,7 +56,7 @@ export function ContextExplorerHeader({
   const showProcessingTasks = hasTasks || isRefreshingTasks
 
   return (
-    <div className="border-b px-3 py-3">
+    <div className="border-b border-border/60 px-4 py-4">
       <div className="flex items-center gap-2">
         <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <FolderTreeIcon className="size-4" />
@@ -111,8 +111,8 @@ export function ContextExplorerHeader({
         <Button
           type="button"
           size="sm"
-          variant="outline"
-          className="mt-3 w-full justify-center gap-2"
+          variant="default"
+          className="mt-4 h-9 w-full justify-center gap-2 rounded-lg"
           onClick={onAddResource}
         >
           <PlusIcon className="size-4" />
@@ -185,7 +185,7 @@ export function ContextTree({
   )
 
   return (
-    <div className="h-full overflow-auto px-2 py-2 font-mono">
+    <div className="h-full overflow-auto px-3 py-3">
       {rootQuery.isLoading ? (
         <div className="flex h-7 items-center gap-2 px-1.5 text-xs text-muted-foreground">
           <Loader2Icon className="size-3 animate-spin" />
@@ -339,9 +339,9 @@ export function ContextTreeNode({
       <div
         ref={rowRef}
         className={cn(
-          'group relative z-10 h-7 select-none rounded-md text-xs transition-colors',
+          'group relative z-10 h-9 select-none rounded-lg text-[13px] transition-colors',
           isSelected
-            ? 'bg-muted text-foreground'
+            ? 'bg-accent font-medium text-accent-foreground'
             : 'text-muted-foreground hover:bg-muted/55 hover:text-foreground',
         )}
       >

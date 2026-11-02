@@ -5,7 +5,7 @@ import {
 } from '#/features/admin/vikingbot/api'
 import { Channels } from '#/features/admin/vikingbot/components/channels'
 import { PlatformHistory } from '#/features/admin/vikingbot/components/platform-history'
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { ConversationRow } from '#/shared/components/conversation-row'
 import { Button } from '#/shared/ui/button'
 import { Input } from '#/shared/ui/input'
@@ -19,7 +19,7 @@ const START_COMMAND = 'openviking-server --with-bot'
 
 export function BotManagementPage() {
   const { t } = useTranslation('appShell')
-  const { connectionRole, identityScopeKey } = useAppConnection()
+  const { connectionRole, identityScopeKey } = useConnectionAccess()
   if (connectionRole !== 'root') return <p>{t('modes.rootRequired')}</p>
   return (
     <BotManagementWorkspace key={identityScopeKey} scope={identityScopeKey} />

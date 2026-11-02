@@ -204,6 +204,33 @@ VITE_OV_BASE_URL=https://ov-api.example.com npm run build
 
 `VITE_OV_BASE_URL` is the initial OpenViking API origin used in the browser. Users can still change it in the connection dialog.
 
+Studio defaults to the self-hosted edition, including deployments on custom domains.
+Its `/login` page defaults to a service address and one API Key. The server determines
+the role: ROOT opens administration; Admin and User open their workbench. Admin
+can also manage its own Account. An ordinary User has no administration entry.
+
+Official hosted builds explicitly select their edition:
+
+```bash
+VITE_STUDIO_EDITION=volcengine npm run build
+```
+
+`VITE_STUDIO_HOSTED_API_URL` optionally overrides the fixed HTTPS hosted API endpoint.
+The official edition only accepts that endpoint and does not expose administration.
+The self-hosted edition can connect to either a self-hosted or hosted service.
+Runtime overrides and the current API Key scope are documented in
+[Studio deployment and login validation](docs/all-ov-studio-stage-0.md).
+Public authentication routes are available even with a saved connection:
+`/login`, `/login/api-key`, `/login/email`, `/forgot-password`, `/reset-password`,
+and `/invite`. `/login` defaults to API Key for self-hosted builds and email for
+the official hosted edition. API Key authentication remains functional; email,
+password recovery, and invitation pages currently provide frontend validation
+and service-unavailable states only. They do not send account requests, create
+sessions, send reset emails, or accept invitations. Account API integration and
+the complete invitation flow remain pending. See the
+[scoped UX migration record](docs/all-ov-studio-ux-migration.md) for current scope
+and validation evidence.
+
 ### 3. Serve from a Dedicated Host
 
 Example URL:

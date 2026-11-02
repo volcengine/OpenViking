@@ -1,4 +1,9 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
-// AppShell renders first-use onboarding before the connected workspace mounts.
-export const Route = createFileRoute('/onboarding')({ component: () => null })
+// Keep first-use bookmarks working with the explicit sign-in route.
+export const Route = createFileRoute('/onboarding')({
+  staticData: { studioPublic: true },
+  beforeLoad: () => {
+    throw redirect({ to: '/login', replace: true })
+  },
+})

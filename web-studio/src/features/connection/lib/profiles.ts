@@ -1,3 +1,4 @@
+import { isValidConnectionUrl } from '#/platform/connection/configuration'
 import type { WorkbenchIdentity } from '#/features/connection/lib/surface-context'
 import {
   readCredentialStorage,
@@ -5,7 +6,9 @@ import {
 } from '#/features/connection/lib/credential-storage'
 import type { ConnectionDraft } from '#/features/connection/lib/types'
 import { createRandomUuid } from '#/shared/lib/browser-crypto'
-import { resolveConfiguredServiceProvider } from '#/shared/lib/studio-service'
+import { resolveConfiguredServiceProvider } from '#/platform/connection/service-provider'
+
+export { isValidConnectionUrl } from '#/platform/connection/configuration'
 
 export const PROFILES_STORAGE_KEY = 'ov_console_connection_profiles'
 
@@ -110,19 +113,6 @@ export function groupProfilesByService(
     else groups.set(key, [profile])
   }
   return [...groups.values()]
-}
-
-export function isValidConnectionUrl(value: string): boolean {
-  try {
-    const url = new URL(value.trim())
-    return (
-      ['http:', 'https:'].includes(url.protocol) &&
-      !url.username &&
-      !url.password
-    )
-  } catch {
-    return false
-  }
 }
 
 // Display and runtime must use the same provider, including official hosted URLs.

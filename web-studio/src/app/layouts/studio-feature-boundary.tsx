@@ -1,3 +1,5 @@
+import { resolveDataAccess } from '#/platform/connection/configuration'
+import { managementUnavailableDestination } from '#/platform/deployment/experience'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useStudioCapabilities } from '#/features/connection/hooks/use-studio-capabilities'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
@@ -11,9 +13,9 @@ import {
   canManageStudioGateway,
   resolveStudioManagementCapabilities,
 } from '#/features/connection/lib/studio-permissions'
-import { featureForPath } from '#/shared/lib/studio-service'
+import { featureForPath } from '#/app/navigation/feature-path'
 import { Button } from '#/shared/ui/button'
-import { Link, useRouterState } from '@tanstack/react-router'
+import { Link, Navigate, useRouterState } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -35,6 +37,9 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     service.ready && service.provider === 'volcengine' && Boolean(probe)
   const capabilities = useStudioCapabilities()
   const capability = feature ? capabilities[feature.id] : undefined
+  const managementRedirect = managementUnavailableDestination()
+  if (managementRedirect && isManagementPath(pathname))
+    return <Navigate replace to={managementRedirect} />
   if (
     isConnectionSettingsPath(pathname) ||
     pathname === '/' ||
@@ -101,8 +106,7 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     !isManagementPath(pathname) &&
     !isSharedStudioPath(pathname) &&
     serverMode === 'api_key' &&
-    !connection.apiKey &&
-    connection.adminApiKey
+    resolveDataAccess(connection, serverMode) === 'control-only'
   )
     reason = 'managementRequired'
   if (!reason) return children

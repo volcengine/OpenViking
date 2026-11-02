@@ -3,7 +3,7 @@ import { ArrowLeftIcon, CompassIcon } from 'lucide-react'
 import { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { Thread } from '#/features/workbench/sessions/components/thread'
 import { ThreadList } from '#/features/workbench/sessions/components/thread-list'
@@ -21,7 +21,7 @@ export function SessionsPage() {
   const { t } = useTranslation('sessions')
   const { provider } = useStudioService()
   const { s: activeSessionId } = routeApi.useSearch()
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const navigate = useNavigate()
   const createSession = useCreateSession()
   const { setTitle } = useSessionTitles(identityScopeKey)

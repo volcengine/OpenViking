@@ -1,7 +1,7 @@
 import { ErrorMessage } from '#/shared/components/error-message'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { flushCredentialStorage } from '#/features/connection/lib/credential-storage'
-import { StudioSetupRequestError } from '#/features/connection/lib/onboarding'
+import { StudioSetupRequestError } from '#/features/connection/lib/connection-errors'
 import { UserKeyError, verifyUserKey } from '#/features/connection/lib/user-key'
 import { Button } from '#/shared/ui/button'
 import {

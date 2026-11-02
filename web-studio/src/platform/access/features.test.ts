@@ -3,11 +3,13 @@ import { resolveApiKeyAuth } from '#/shared/api/auth'
 import {
   classifyCapabilityError,
   classifyCapabilityResponse,
-  featureForPath,
+} from '#/features/connection/lib/capability-response'
+import { featureForPath } from '#/app/navigation/feature-path'
+import {
   identifyServiceProvider,
-  isStudioFeatureVisible,
   resolveConfiguredServiceProvider,
-} from '#/shared/lib/studio-service'
+} from '#/platform/connection/service-provider'
+import { isStudioFeatureVisible } from '#/platform/access/features'
 import { describe, expect, it } from 'vitest'
 
 describe('service and permission boundaries', () => {

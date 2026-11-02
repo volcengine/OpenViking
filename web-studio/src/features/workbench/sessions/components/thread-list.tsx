@@ -9,7 +9,7 @@ import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-titles'
 import {
@@ -39,7 +39,7 @@ interface ThreadListProps {
 export function ThreadList({ activeSessionId, className }: ThreadListProps) {
   const { i18n, t } = useTranslation('sessions')
   const { provider } = useStudioService()
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const navigate = useNavigate()
   const {
     data: sessions,

@@ -18,7 +18,7 @@ import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
+import { useConnectionAccess } from '#/features/connection/access'
 import { QueueStatusCard } from '#/features/workbench/monitoring/components/queue-status-card'
 import { commitSession } from '#/features/workbench/sessions/lib/api'
 import { TaskDetailSheet } from '#/features/workbench/tasks/components/task-detail-sheet'
@@ -89,7 +89,7 @@ const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
 export function TasksRoute() {
   const navigate = useNavigate()
   const { t } = useTranslation('tasksPage')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey } = useConnectionAccess()
   const queryClient = useQueryClient()
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)

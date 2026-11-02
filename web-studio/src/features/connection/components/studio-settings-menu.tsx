@@ -1,3 +1,4 @@
+import { StudioEntry } from '#/platform/entry/paths'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import type { StudioMode } from '#/features/connection/lib/studio-mode'
 import {
@@ -13,6 +14,7 @@ import {
   ChevronDownIcon,
   GithubIcon,
   LanguagesIcon,
+  LogInIcon,
   MoonIcon,
   PanelsTopLeftIcon,
   PlusIcon,
@@ -111,7 +113,7 @@ export function StudioSettingsMenu({
         {showUser ? (
           <span
             aria-hidden="true"
-            className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold ring-1 ring-border/70"
+            className="studio-user-avatar flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold ring-1 ring-border/70"
           >
             {initials}
           </span>
@@ -201,8 +203,17 @@ export function StudioSettingsMenu({
             <CableIcon className="size-4 text-muted-foreground" />
             {t('studioSettings.manageConnections')}
           </Link>
+          <Link
+            to={StudioEntry.ApiKeyLogin}
+            onClick={() => setOpen(false)}
+            className={MENU_ITEM}
+          >
+            <LogInIcon className="size-4 text-muted-foreground" />
+            {t('studioSettings.signIn')}
+          </Link>
         </div>
-        {canManage ? (
+        {canManage &&
+        !(serverMode === 'api_key' && connectionRole === 'root') ? (
           <div className="flex items-center justify-between gap-3 px-2.5 py-3">
             <span className="flex items-center gap-2.5 text-xs">
               <PanelsTopLeftIcon className="size-4 text-muted-foreground" />

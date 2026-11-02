@@ -19,10 +19,8 @@ import {
 } from '#/features/connection/lib/studio-mode'
 import { canManageStudioGateway } from '#/features/connection/lib/studio-permissions'
 import { CrossDeviceVerifyDialog } from '#/features/oauth/components/cross-device-verify-dialog'
-import {
-  featureForPath,
-  isStudioFeatureVisible,
-} from '#/shared/lib/studio-service'
+import { featureForPath } from '#/app/navigation/feature-path'
+import { isStudioFeatureVisible } from '#/platform/access/features'
 import { ScrollArea } from '#/shared/ui/scroll-area'
 import {
   Sidebar,
@@ -57,6 +55,8 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
+  const filesystemLayout = pathname.replace(/\/+$/, '') === '/filesystem'
+  const [filesystemNavOpen, setFilesystemNavOpen] = React.useState(false)
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
@@ -146,6 +146,9 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider
       defaultOpen
+      open={filesystemLayout ? filesystemNavOpen : undefined}
+      onOpenChange={filesystemLayout ? setFilesystemNavOpen : undefined}
+      data-ux-filesystem={filesystemLayout ? 'true' : undefined}
       className="flex h-svh min-h-0 flex-col overflow-hidden bg-sidebar"
     >
       <StudioHeader
@@ -325,12 +328,20 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
           </SidebarFooter>
         </Sidebar>
 
-        <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="flex w-full flex-col gap-6 px-4 py-6 md:px-6">
-              {children}
-            </div>
-          </ScrollArea>
+        <SidebarInset
+          className={`min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0 ${filesystemLayout ? 'workbench-filesystem-inset' : ''}`}
+        >
+          {filesystemLayout ? (
+            <div className="workbench-filesystem-content">{children}</div>
+          ) : (
+            <ScrollArea className="min-h-0 flex-1">
+              <div
+                className={`flex w-full flex-col gap-6 px-4 py-6 md:px-6 ${pathname === '/settings' || pathname.startsWith('/connections/') ? 'workbench-connection-content' : ''}`}
+              >
+                {children}
+              </div>
+            </ScrollArea>
+          )}
         </SidebarInset>
       </div>
 

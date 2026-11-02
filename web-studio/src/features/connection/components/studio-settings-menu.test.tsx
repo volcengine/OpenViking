@@ -112,6 +112,20 @@ it('activates a saved connection and closes the preferences menu', () => {
     screen.queryByRole('group', { name: 'studioSettings.connections' }),
   ).toBeNull()
 })
+it.each(['root', 'admin', 'user'])(
+  'offers explicit login for %s without activating another saved profile',
+  (role) => {
+    state.role = role
+    openMenu(role !== 'user', role === 'root')
+    const login = screen.getByRole('link', { name: 'studioSettings.signIn' })
+    expect(login.getAttribute('href')).toBe('/login/api-key')
+    fireEvent.click(login)
+    expect(state.activateProfile).not.toHaveBeenCalled()
+    expect(
+      screen.queryByRole('link', { name: 'studioSettings.signIn' }),
+    ).toBeNull()
+  },
+)
 it.each([
   [false, '/connections/new', '/settings'],
   [true, '/admin/connections/new', '/admin/settings'],
@@ -174,7 +188,8 @@ it('shows Root rather than a stale User ID when a Root connection has no data id
   ).toBe('studioSettings.root')
   expect(screen.queryByText('alice')).toBeNull()
 })
-it('persists the default entry and keeps language and appearance controls together', () => {
+it('persists the Admin default entry and keeps language and appearance controls together', () => {
+  state.role = 'admin'
   openMenu()
   const entries = within(
     screen.getByRole('group', { name: 'studioSettings.defaultEntry' }),
@@ -193,15 +208,11 @@ it('persists the default entry and keeps language and appearance controls togeth
   fireEvent.click(screen.getByRole('button', { name: 'studioSettings.dark' }))
   expect(state.setTheme).toHaveBeenCalledWith('dark')
 })
-it('requires a data identity before choosing workbench as the default', () => {
-  state.connection.apiKey = ''
+it('does not offer ROOT a personal-workbench default, even with a legacy data key', () => {
   openMenu()
-  expect(screen.queryByText('Root')).toBeNull()
   expect(
-    screen
-      .getByRole('button', { name: 'studioSettings.workbench' })
-      .hasAttribute('disabled'),
-  ).toBe(true)
+    screen.queryByRole('group', { name: 'studioSettings.defaultEntry' }),
+  ).toBeNull()
 })
 it('does not offer administration preferences to a user connection', () => {
   openMenu(false)

@@ -1,9 +1,6 @@
-import { useStudioMode } from '#/features/connection/hooks/use-studio-mode'
+import { resolveStudioEntry } from '#/platform/entry/resolve-entry'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
-import {
-  readPreferredMode,
-  resolveStudioEntry,
-} from '#/features/connection/lib/studio-mode'
+import { readPreferredMode } from '#/features/connection/lib/studio-mode'
 import { Navigate } from '@tanstack/react-router'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
@@ -13,11 +10,10 @@ export function IndexRoute() {
   const {
     isGatewayHost,
     connection,
+    accessContext,
     isConnectionRoleLoading,
-    serverMode,
     activeProfileId,
   } = useAppConnection()
-  const { canManage } = useStudioMode()
   if (isConnectionRoleLoading) return null
   return (
     <Navigate
@@ -26,11 +22,9 @@ export function IndexRoute() {
         isGatewayHost
           ? '/admin/gateway'
           : resolveStudioEntry({
-              canManage,
-              connection,
+              access: accessContext.entryAccess,
               provider,
               preferredMode: readPreferredMode(connection, activeProfileId),
-              serverMode,
             })
       }
     />

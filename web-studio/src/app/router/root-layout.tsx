@@ -4,6 +4,7 @@ import { RotateCcwIcon, TriangleAlertIcon } from 'lucide-react'
 import { lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { StudioRouteLayout } from '#/app/router/studio-route-layout'
 import { AppShell } from '#/app/layouts/app-shell'
 import { CredentialStorageNotice } from '#/features/connection/components/credential-storage-notice'
 import { Button } from '#/shared/ui/button'
@@ -17,6 +18,7 @@ import {
 } from '#/shared/ui/card'
 import { Toaster } from '#/shared/ui/sonner'
 import '#/styles.css'
+import '#/shared/styles/workbench-theme.css'
 
 const AppDevtools = import.meta.env.DEV
   ? lazy(() =>
@@ -30,7 +32,9 @@ export function RootComponent() {
   return (
     <>
       <AppShell>
-        <Outlet />
+        <StudioRouteLayout>
+          <Outlet />
+        </StudioRouteLayout>
       </AppShell>
       <Toaster />
       <CredentialStorageNotice />
