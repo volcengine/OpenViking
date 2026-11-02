@@ -3075,18 +3075,28 @@ async def test_project_oauth_dispatch_and_watch_replay(
     client = SimpleNamespace(submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"}))
     _install_connector_dependencies(monkeypatch, tracker, client)
     reference = {
-        "account_id": "cloud-account", "user_id": "cloud-user", "ov_user_id": "alice",
-        "platform": "feishu_project", "type": "oauth",
+        "account_id": "cloud-account",
+        "user_id": "cloud-user",
+        "ov_user_id": "alice",
+        "platform": "feishu_project",
+        "type": "oauth",
     }
-    fetch = Mock(side_effect=[
-        {"access_token": token, "account": {"id": "project-user"}} for token in ("first", "second")
-    ])
+    fetch = Mock(
+        side_effect=[
+            {"access_token": token, "account": {"id": "project-user"}}
+            for token in ("first", "second")
+        ]
+    )
     monkeypatch.setattr(auth.ConnectorClient, "get_oauth_access_token", fetch)
     args = {auth.OAUTH_REF_ARG: reference, "project_keys": ["project"]}
     path = "https://project.feishu.cn/project"
     delegate = service._connector
     state = await delegate.create_watch_auth_state(
-        api_key=ctx.api_key, account_id=ctx.account_id, add_type=add_type, path=path, connector_args=args
+        api_key=ctx.api_key,
+        account_id=ctx.account_id,
+        add_type=add_type,
+        path=path,
+        connector_args=args,
     )
     for token in ("first", "second"):
         api_key, restored_type, restored_args, _ = await delegate.restore_watch_request(
@@ -3094,7 +3104,11 @@ async def test_project_oauth_dispatch_and_watch_replay(
         )
         assert api_key == ctx.api_key
         await service.add_resource(
-            path=path, ctx=ctx, add_type=restored_type, to="viking://resources/kb/project", args=restored_args
+            path=path,
+            ctx=ctx,
+            add_type=restored_type,
+            to="viking://resources/kb/project",
+            args=restored_args,
         )
         request = client.submit_doc_add.call_args.kwargs
         assert request["auth_config"] == {"user_access_token": token, "user_key": "project-user"}
@@ -3176,7 +3190,8 @@ def _dingtalk_credential_ref(**changes):
         "account_id": "acct",
         "resource_id": "ov-resource",
         "user_id": "alice",
-        "ov_user_id": "ov-user",
+        "ov_user_id": "alice",
+        "ov_account_id": "acct",
         "type": "oauth",
         "platform": "dingtalk",
         "binding_version": 3,
@@ -3228,6 +3243,40 @@ async def test_dingtalk_import_resolves_managed_credential_reference(
     resolve.assert_awaited_once()
     forwarded_reference = resolve.await_args.args[0]
     assert forwarded_reference == _dingtalk_credential_ref()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("space", ["acct", "different-space"])
+async def test_dingtalk_import_checks_space_before_resolving_credential(
+    monkeypatch, connector_config, ctx, service, space
+):
+    connector_config.allowed_add_types.append("dingtalk")
+    client = SimpleNamespace(submit_doc_add=AsyncMock(return_value={"task_key": "C1"}))
+    _install_connector_dependencies(monkeypatch, _task_tracker(), client)
+    monkeypatch.setattr(auth, "credential_resolve_url", lambda: "https://connector.example/resolve")
+    fetch = Mock(return_value={"auth_config": _dingtalk_auth_config("live-token")})
+    monkeypatch.setattr(auth.ConnectorClient, "resolve_connector_credential", fetch)
+    request = {
+        "path": _DINGTALK_URL,
+        "ctx": ctx,
+        "add_type": "dingtalk",
+        "to": "viking://resources/docs",
+        "args": {"binding_version": 3},
+        "connector_auth_config": {
+            "openviking_credential_ref": _dingtalk_credential_ref(ov_account_id=space)
+        },
+    }
+    if space != ctx.account_id:
+        with pytest.raises(InvalidArgumentError, match="data space"):
+            await service.add_resource(**request)
+        fetch.assert_not_called()
+        client.submit_doc_add.assert_not_awaited()
+    else:
+        await service.add_resource(**request)
+        assert fetch.call_args.args[-1]["ov_account_id"] == space
+        assert client.submit_doc_add.await_args.kwargs["auth_config"] == _dingtalk_auth_config(
+            "live-token"
+        )
 
 
 @pytest.mark.asyncio
@@ -3302,7 +3351,9 @@ async def test_dingtalk_registry_type_rejects_managed_reference(
     # a managed reference on such a declared type is rejected.
     connector_config.allowed_add_types = ["git"]
     _install_connector_dependencies(monkeypatch, _task_tracker(), SimpleNamespace())
-    with pytest.raises(InvalidArgumentError, match="does not accept a managed credential reference"):
+    with pytest.raises(
+        InvalidArgumentError, match="does not accept a managed credential reference"
+    ):
         await service._connector.submit(
             path=_GIT_REPO_PREFIX + "org/repo",
             ctx=ctx,

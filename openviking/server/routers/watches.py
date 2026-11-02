@@ -12,7 +12,7 @@ import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.resource import watch_manager as wm_mod
@@ -39,6 +39,22 @@ router = APIRouter(prefix="/api/v1", tags=["watches"])
 _BACKGROUND_TRIGGER_TASKS: set[asyncio.Task] = set()
 
 
+class WatchCredentialState(BaseModel):
+    """Owner-bound lifecycle notification from the managed credential resolver."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str = Field(min_length=1)
+    resource_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    ov_user_id: str = Field(min_length=1)
+    ov_account_id: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+    platform: str = Field(min_length=1)
+    version: int = Field(gt=0, strict=True)
+    authorized: bool = Field(strict=True)
+
+
 class UpdateWatchRequest(BaseModel):
     """Partial-update body for PATCH /watches.
 
@@ -53,6 +69,16 @@ class UpdateWatchRequest(BaseModel):
     is_active: Optional[bool] = None
     reason: Optional[str] = None
     instruction: Optional[str] = None
+    credential_state: Optional[WatchCredentialState] = None
+
+    @model_validator(mode="after")
+    def _credential_update_is_separate(self):
+        if self.credential_state is not None and any(
+            value is not None
+            for value in (self.is_active, self.watch_interval, self.reason, self.instruction)
+        ):
+            raise ValueError("credential_state must be updated separately")
+        return self
 
     @field_validator("watch_interval")
     @classmethod
@@ -216,6 +242,7 @@ async def _patch_impl(target: WatchTask, body: UpdateWatchRequest, ctx: RequestC
             is_active=body.is_active,
             reason=body.reason,
             instruction=body.instruction,
+            credential_state=body.credential_state.model_dump() if body.credential_state else None,
         )
     except wm_mod.PermissionDeniedError as e:
         raise _translate_perm(e, target.to_uri or target.task_id) from e
